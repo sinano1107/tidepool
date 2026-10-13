@@ -6,7 +6,7 @@ import { whyInvalidSkillAllowlist } from "../src/skill-allowlist.js";
 import { createWorkspace } from "../src/workspace-create.js";
 import { seedTierNames } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
@@ -21,7 +21,7 @@ it.each([
   ["agent skills creation", "POST", "/api/agents", { ...agent, name: "new-agent", skills: ["foo*"] }, whyInvalidSkillAllowlist(["foo*"])],
   ["agent skills update", "PATCH", "/api/agents/deckhand", { ...agent, skills: ["foo*"] }, whyInvalidSkillAllowlist(["foo*"])],
 ] as const)("%s HTTP refusal includes the shared leaf reason", async (_name, method, path, body, reason) => {
-  const registry = { dir: await makeRegistry(), mode: "purely-local" as const };
+  const registry = { dir: await makeRegistry(), mode: "purely-local" as const, writeRef: writeUnannounced };
   const deps = { registry, tiers: () => seedTierNames };
   const workspacesBaseDir = await tempDir("tidepool-name-rule-");
   t = await bootTidepool({

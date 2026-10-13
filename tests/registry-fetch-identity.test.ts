@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import { GitHubAuth } from "../src/github-auth.js";
 import { refreshRegistry } from "../src/registry.js";
 import { type BrokerAnswer, type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 本物の `git` を PATH で差し替えて、盤面が実際に渡した argv と env を捕まえる。
@@ -106,7 +106,7 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
   restoreShim = shim.restore;
   const broker = await openBroker(() => issuedToken("installation-token"));
 
-  await refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url));
+  await refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url), writeUnannounced);
 
   // 網に出る2つ(原本の sha を読む ls-remote と、その sha の fetch)がどちらも同じ名義で撃たれる
   for (const [verb, command] of [
@@ -142,7 +142,7 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
   const shim = await gitShim();
   restoreShim = shim.restore;
 
-  await refreshRegistry(shim.cwd, undefined);
+  await refreshRegistry(shim.cwd, undefined, writeUnannounced);
 
   const lsRemote = observed(shim.record, "ls-remote");
   const fetch = observed(shim.record, "fetch");
@@ -163,7 +163,7 @@ it("fetch が実際に origin/main を更新し、token は process.env に残�
   const before = gitOut(registryDir, "rev-parse", "refs/remotes/origin/main");
   const merged = publish("agents/deckhand.md", "---\nname: deckhand\n---\nstub\n", "merged on remote");
 
-  const result = await refreshRegistry(registryDir, new GitHubAuth(await tokenFile("tok")));
+  const result = await refreshRegistry(registryDir, new GitHubAuth(await tokenFile("tok")), writeUnannounced);
 
   // 「落ちなかった」ではなく「**ref が動いた**」を見る: refspec を間違えても
   // exit 0 は返るので、available だけでは題目を検証したことにならない
@@ -183,7 +183,7 @@ it("仲介が token を出せなければ registry は到達不能として返�
   restoreShim = shim.restore;
   const broker = await openBroker(() => ({ status: 401, body: { error: "invalid_user_token" } }));
 
-  const result = await refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url));
+  const result = await refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url), writeUnannounced);
 
   expect({
     available: result.available,

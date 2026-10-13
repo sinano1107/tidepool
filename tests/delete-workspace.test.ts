@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { deleteWorkspace, RegistrySelfDeleteError } from "../src/workspace-create.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -29,7 +29,7 @@ describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", 
     const checkout = await deleteWorkspace(
       { name: "tidepool", confirm: true },
       {
-        registry: { dir: registryDir, mode: "purely-local" },
+        registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
         workspacesBaseDir: "/workspaces",
         ...NO_REFERENCES,
       },
@@ -51,7 +51,7 @@ describe("deleteWorkspace: 確認の門(issue #205 / ADR 0087)", () => {
       deleteWorkspace(
         { name: "tidepool" },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
         },
@@ -71,7 +71,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           unsettledTaskCount: 3,
@@ -92,7 +92,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           awaitingLandingTaskCount: 2,
@@ -114,7 +114,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "tidepool", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
           defaultWorkspaceName: "tidepool",
@@ -133,7 +133,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
     await deleteWorkspace(
       { name: "tidepool", confirm: true },
       {
-        registry: { dir: registryDir, mode: "purely-local" },
+        registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
         workspacesBaseDir: "/workspaces",
         ...NO_REFERENCES,
       },
@@ -157,7 +157,7 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
       deleteWorkspace(
         { name: "registry", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
         },

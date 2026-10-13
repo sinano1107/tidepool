@@ -16,9 +16,9 @@ import {
   normalizeProviderEntries,
   ownEntry,
   type Registry,
-  type RegistrySource,
   UnknownAgentError,
   UnknownAuthorityProfileError,
+  type WritableRegistry,
 } from "./registry.js";
 import {
   commitToRegistry,
@@ -94,7 +94,7 @@ export interface AgentAdminDeps {
    *  ClaudeWorkerOptions と共有する Data Clumps だった)。検証がこの `mode` に
    *  対して行われ、その直後に切る worktree も同じ ref から fork するので、
    *  両者が食い違うことはない。 */
-  registry: RegistrySource;
+  registry: WritableRegistry;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as WorkspaceAdminDeps. */

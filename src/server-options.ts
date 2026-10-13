@@ -81,6 +81,7 @@ import {
   type RegistrySource,
   type RosterAgent,
   refreshRegistry,
+  type WritableRegistry,
 } from "./registry.js";
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
@@ -92,12 +93,12 @@ import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
 import {
+  boardRefWriter,
   listRegisteredWorkspaces,
   pathIsRegistryClone,
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
-  writeBoardRef,
 } from "./workspace.js";
 import {
   createWorkspace,
@@ -489,7 +490,7 @@ function registryRefWriter(board: BoardComposition, db: Db): RefWriter {
     } catch (err) {
       console.warn("[workspace] the registry clone's workspace could not be resolved; writing without announcing", err);
     }
-    if (workspace) writeBoardRef(db, workspace, ref, newSha, write);
+    if (workspace) boardRefWriter(db, workspace)(ref, newSha, write);
     else write();
   };
 }
@@ -676,13 +677,12 @@ function workspaceAdmin(
   board: BoardComposition,
   github: ServerOptions["github"],
   db: Db,
-  writeRef: RefWriter,
+  registry: WritableRegistry | undefined,
 ): WorkspaceAdmin | undefined {
-  const registry = registrySource(board);
   if (!registry) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
   const deps = {
-    registry: { ...registry, writeRef },
+    registry,
     db,
     workspacesBaseDir: board.workspacesDir,
     githubAuth: board.githubAuth,
@@ -705,10 +705,9 @@ function workspaceAdmin(
  *  bound to this board's registry clone — the API layer only ever sees the
  *  finished callbacks. Without a registry there is nowhere to administer
  *  agents at all. */
-function agentAdmin(board: BoardComposition, db: Db, writeRef: RefWriter): AgentAdmin | undefined {
-  const registry = registrySource(board);
+function agentAdmin(board: BoardComposition, db: Db, registry: WritableRegistry | undefined): AgentAdmin | undefined {
   if (!registry) return undefined;
-  const deps = { registry: { ...registry, writeRef }, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
+  const deps = { registry, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -726,10 +725,9 @@ function agentAdmin(board: BoardComposition, db: Db, writeRef: RefWriter): Agent
  *  to this board's registry clone. The API layer runs the confirmation gate;
  *  these verbs only persist. Without a registry there is nowhere to administer
  *  profiles at all. */
-function profileAdmin(board: BoardComposition, writeRef: RefWriter): ProfileAdmin | undefined {
-  const registry = registrySource(board);
+function profileAdmin(board: BoardComposition, registry: WritableRegistry | undefined): ProfileAdmin | undefined {
   if (!registry) return undefined;
-  const deps = { registry: { ...registry, writeRef }, githubAuth: board.githubAuth };
+  const deps = { registry, githubAuth: board.githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -804,6 +802,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
   const writeRegistryRef = registryRefWriter(board, db);
+  const source = registrySource(board);
+  const writableRegistry = source && { ...source, writeRef: writeRegistryRef };
   await bootRefresh(board, writeRegistryRef);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
@@ -819,9 +819,9 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     workspace,
     resolveWorkspace: workspaceResolver(board),
     github,
-    workspaceAdmin: workspaceAdmin(board, github, db, writeRegistryRef),
-    agentAdmin: agentAdmin(board, db, writeRegistryRef),
-    profileAdmin: profileAdmin(board, writeRegistryRef),
+    workspaceAdmin: workspaceAdmin(board, github, db, writableRegistry),
+    agentAdmin: agentAdmin(board, db, writableRegistry),
+    profileAdmin: profileAdmin(board, writableRegistry),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),

@@ -43,7 +43,7 @@ import {
   releaseWorkspace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
-  writeBoardRef,
+  writeBoardRefs,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
@@ -101,7 +101,7 @@ function promotionFailures(board: Db, taskId: string) {
 
 /** 別タスクのセッションを盤面の書き込み `boardWrite` をまたいで走らせ、解放する。
  *  盤面の書き込みの予告と畳み(ADR 0243)が効くのはこの形だけである —— 書き込みの後に拾う
- *  セッションは pickup で全体を撮り直す。`workerForges` は、そのセッションの worker が
+ *  セッションは pickup で基準を全撮りする。`workerForges` は、そのセッションの worker が
  *  書き込みの前に偽造する ref。 */
 async function straddle(
   board: Db,
@@ -116,6 +116,28 @@ async function straddle(
   await boardWrite();
   commitWork(workspace.path, "straddler.txt", "work\n");
   releaseWorkspace(board, workspace, straddler, clock.now());
+}
+
+/** fake の push のたびに、転送の後で `effect` を撃つ —— push が失敗と報告されても撃つ。 */
+function afterEachPush(github: FakeGitHubClient, effect: () => void): void {
+  const prepare = github.preparePush.bind(github);
+  github.preparePush = async (input) => {
+    const push = await prepare(input);
+    return () => {
+      try {
+        push();
+      } finally {
+        effect();
+      }
+    };
+  };
+}
+
+/** 予告だけを残して落ちた盤面(ADR 0243 決定5): 口の書き込みの中で transaction を開き、畳みをその中に入れて捨てる ——
+ *  落ちた盤面の畳みはディスクに届かない。ref は動かさない(動かすなら呼び手が後で書く)。 */
+function announceThenCrash(board: Db, workspace: WorkspaceConfig, ref: string, newSha: string): void {
+  writeBoardRefs(board, workspace, [[ref, newSha]], () => board.exec("BEGIN"));
+  board.exec("ROLLBACK");
 }
 
 /** 収束を1回走らせ、`taskId` の根の verdict を返す。その回で扱わなかった(根でない・候補から外れた)なら undefined。 */
@@ -522,8 +544,8 @@ it("open PR を持つ work の修理は同じ PR の branch を更新する", as
   expect(github.pushes).toEqual([{ path: workspace.path, branch: `task/${task.id}` }]);
 });
 
-it("open PR 更新は盤面が動かした remote ref だけを再基準化する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-rebaseline");
+it("open PR 更新は盤面が動かした remote ref だけを予告して畳む", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-announce-fold");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
@@ -533,7 +555,7 @@ it("open PR 更新は盤面が動かした remote ref だけを再基準化す�
       type: "work",
       title: "repair an open PR",
       purpose: "push the repair without hiding another ref write",
-      completion_criteria: "only the board-written ref is rebaselined",
+      completion_criteria: "only the board-written ref is announced and folded",
     },
     clock.now(),
     ...HUMAN_WEBUI,
@@ -671,16 +693,6 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
-/** 盤面が持つ基準(ADR 0064 決定6 の綴り)。 */
-function baseline(board: Db, workspace: WorkspaceConfig): string {
-  return (board.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").get(workspace.name) as { ref_snapshot: string }).ref_snapshot;
-}
-
-/** 基準の中の `ref` の行。 */
-function baselineLine(board: Db, workspace: WorkspaceConfig, ref: string): string | undefined {
-  return baseline(board, workspace).split("\n").find((line) => line.endsWith(` ${ref}`));
-}
-
 /** 開いている PR を持つ根。fake の push は転送の**後**に失敗する —— 写しは動いたのに失敗と報告される形。 */
 async function openPrWhosePushFailsAfterTransfer(name: string) {
   const { workspace } = await makeRemoteBackedWorkspace(name);
@@ -713,8 +725,8 @@ async function openPrWhosePushFailsAfterTransfer(name: string) {
 }
 
 // ADR 0243 決定2: 畳みは ref を読み返した2択なので、失敗の報告のされ方に依らず、転送が済んでいれば押した値に畳む
-it("転送の後に失敗と報告された open PR branch の push は failure question を立て、基準を押した値に畳み、またいだセッションを quarantine しない", async () => {
-  const { workspace, db, clock, task, pushFailed, remoteTaskRef } = await openPrWhosePushFailsAfterTransfer("landing-push-failure");
+it("転送の後に失敗と報告された open PR branch の push は failure question を立て、またいだセッションを quarantine しない", async () => {
+  const { workspace, db, clock, task, pushFailed } = await openPrWhosePushFailsAfterTransfer("landing-push-failure");
 
   await straddle(db, clock, workspace, pushFailed);
 
@@ -722,34 +734,42 @@ it("転送の後に失敗と報告された open PR branch の push は failure 
     expect.objectContaining({ question_pending_pr_promotion_task_id: task.id }),
   );
   expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
-  expect(baselineLine(db, workspace, remoteTaskRef)).toBe(`${git(workspace.path, "rev-parse", `task/${task.id}`)} ${remoteTaskRef}`);
+});
+
+// 押した値の1値に畳む —— 2値の行のまま残れば、予告の前の値(写しが無い)へ戻った写しを解放が通してしまう
+it("転送の後に失敗と報告された push の後で写しが予告の前へ戻れば、またいだセッションは quarantine に落ち、基準の行は押した値の1値で名指しされる", async () => {
+  const { workspace, db, clock, task, pushFailed, remoteTaskRef } = await openPrWhosePushFailsAfterTransfer("landing-push-failure-reverted");
+
+  await straddle(db, clock, workspace, async () => {
+    await pushFailed();
+    git(workspace.path, "update-ref", "-d", remoteTaskRef);
+  });
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(
+    `was: ${git(workspace.path, "rev-parse", `task/${task.id}`)} ${remoteTaskRef}`,
+  );
 });
 
 // ADR 0243 決定2: 予告の窓で worker が偽造した値は基準に入らない —— 通るのは盤面が書こうとした値そのものだけ
 it("push の後・畳みの前に worker が写しを偽造すれば、偽造は基準に入らず、またいだセッションは quarantine に落ちる", async () => {
   const { workspace, db, clock, github, pushFailed, remoteTaskRef } = await openPrWhosePushFailsAfterTransfer("landing-push-forged");
-  const push = github.pushBranch.bind(github);
-  github.pushBranch = async (input) => {
-    try {
-      await push(input);
-    } finally {
-      git(workspace.path, "update-ref", remoteTaskRef, "HEAD");
-    }
-  };
+  afterEachPush(github, () => git(workspace.path, "update-ref", remoteTaskRef, "HEAD"));
 
   await straddle(db, clock, workspace, pushFailed);
 
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`now: ${git(workspace.path, "rev-parse", remoteTaskRef)} ${remoteTaskRef}`);
-  expect(baselineLine(db, workspace, remoteTaskRef)).toBeUndefined();
+  const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose;
+  expect(purpose).toContain(`now: ${git(workspace.path, "rev-parse", remoteTaskRef)} ${remoteTaskRef}`);
+  // 予告の前の値(写しが無い)に畳まれている —— 2値のまま残っていれば `was: |<押した値>` が載る
+  expect(purpose).not.toContain("was:");
 });
 
 // ADR 0243 決定1・5 / #1846: 盤面が予告した後・畳む前に落ちる(kill -9 でも子の push は完走する)。走っていた
 // セッションの解放は、残った2値の行のどちらの値も違反と読まず、3つ目の値だけを違反と読む
-it.each<[string, (path: string, ref: string, announced: string, elsewhere: string) => void, boolean]>([
-  ["予告した値へ動いた", (path, ref, announced) => git(path, "update-ref", ref, announced), false],
-  ["予告の前の値(無い)のまま", () => {}, false],
-  ["どちらでもない値へ動いた", (path, ref, _announced, elsewhere) => git(path, "update-ref", ref, elsewhere), true],
-])("予告だけを残して盤面が落ち、ref が%s解放は quarantine=%s", async (_, move, quarantined) => {
+it.each<[string, boolean, (path: string, ref: string, announced: string, elsewhere: string) => void]>([
+  ["予告した値へ動いた", false, (path, ref, announced) => git(path, "update-ref", ref, announced)],
+  ["予告の前の値(無い)のまま", false, () => {}],
+  ["どちらでもない値へ動いた", true, (path, ref, _announced, elsewhere) => git(path, "update-ref", ref, elsewhere)],
+])("予告だけを残して盤面が落ち、ref が%s解放は quarantine=%s", async (_, quarantined, move) => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-crash-after-announce");
   const { db, clock } = await openBoard();
   const ref = "refs/remotes/origin/task/pushed-by-the-board";
@@ -759,7 +779,7 @@ it.each<[string, (path: string, ref: string, announced: string, elsewhere: strin
   await prepareWorkspaceAtPickup(db, workspace, running, {});
 
   // 落ちた盤面: 予告は書かれ、書き込みは返らず、畳みは来ない
-  void writeBoardRef(db, workspace, ref, announced, () => new Promise<never>(() => {}));
+  announceThenCrash(db, workspace, ref, announced);
   move(workspace.path, ref, announced, elsewhere);
   commitWork(workspace.path, "running.txt", "work\n");
   releaseWorkspace(db, workspace, running, clock.now());
@@ -770,6 +790,21 @@ it.each<[string, (path: string, ref: string, announced: string, elsewhere: strin
   if (quarantined) expect(question?.purpose).toContain(`was: |${announced} ${ref}`);
 });
 
+// 畳みの失敗が書き込みの失敗を置き換えれば、人間に届く理由が git の理由ではなくなる
+it("書き込みが投げた後に畳みも落ちれば、口は書き込みの失敗のほうを投げる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-fold-fails");
+  const { db, clock } = await openBoard();
+  await prepareWorkspaceAtPickup(db, workspace, landingWork(db, clock), {});
+  const write = () => {
+    db.exec("CREATE TEMP TRIGGER fold_fails BEFORE UPDATE ON workspace_state BEGIN SELECT RAISE(ABORT, 'fold failed'); END");
+    throw new Error("push rejected");
+  };
+
+  expect(() => writeBoardRefs(db, workspace, [["refs/remotes/origin/task/x", git(workspace.path, "rev-parse", "HEAD")]], write)).toThrow(
+    "push rejected",
+  );
+});
+
 // ADR 0243 決定3: 写しを進める fetch は原本の sha を先に知ってから予告し、その sha だけを取って写しを書く
 it("収束前の保護ブランチの fetch は写しを原本の sha へ進め、基準をその1値に畳み、refs/ に写し以外の差を残さない", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("landing-split-fetch");
@@ -778,6 +813,7 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
   await prepareWorkspaceAtPickup(db, workspace, running, {});
   publish("merged.txt", "merged on GitHub\n", "merged outside");
   const copy = "refs/remotes/origin/main";
+  const pickedUp = git(workspace.path, "rev-parse", copy);
   const refsBesidesCopy = () => git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname)").split("\n").filter((line) => !line.endsWith(` ${copy}`));
   const before = refsBesidesCopy();
 
@@ -785,8 +821,12 @@ it("収束前の保護ブランチの fetch は写しを原本の sha へ進め�
 
   const original = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
   expect(git(workspace.path, "rev-parse", copy)).toBe(original);
-  expect(baselineLine(db, workspace, copy)).toBe(`${original} ${copy}`);
   expect(refsBesidesCopy()).toEqual(before);
+  // 原本の1値に畳まれている —— 2値の行のまま残れば、pickup の値へ戻った写しを解放が通してしまう
+  git(workspace.path, "update-ref", copy, pickedUp);
+  commitWork(workspace.path, "running.txt", "work\n");
+  releaseWorkspace(db, workspace, running, clock.now());
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${original} ${copy}`);
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
@@ -1503,7 +1543,7 @@ it("断念した根の PR が盤面の外で閉じられたと観測されてい
   expect(openPromotionQuestions(db, root.id)).toEqual([]);
 });
 
-it("閉じた PR を初めて読んだ根は、追いつきの merge も ref の撮り直しもせずにタスクブランチを残す", async () => {
+it("閉じた PR を初めて読んだ根は、追いつきの merge をせずにタスクブランチを残す", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-closed-no-catch-up");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
@@ -3204,17 +3244,21 @@ it("受理の検査がやり直した merge back は、盤面の基準を書き�
   const { workspace, db, clock, work } = pr;
   const earlier = landingWork(db, clock);
   await prepareWorkspaceAtPickup(db, workspace, earlier, {});
+  const pickedUp = git(workspace.path, "rev-parse", `task/${work.id}`);
   commitWork(workspace.path, "earlier.txt", "work\n");
   releaseWorkspace(db, workspace, earlier, clock.now());
   git(workspace.path, "checkout", `task/${work.id}`);
   const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
-  const before = baseline(db, workspace);
 
   await answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!);
 
   expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
-  expect(baseline(db, workspace)).toBe(before);
+  // 基準は earlier の pickup のまま —— その基準で解放をやり直すと、merge back が動かしたタスクブランチを pickup の値から
+  // 動いたと名指しする(merge back が基準を書き換えていれば名指ししない)
+  git(workspace.path, "checkout", `task/${earlier.id}`);
+  releaseWorkspace(db, workspace, earlier, clock.now());
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${pickedUp} refs/heads/task/${work.id}`);
 });
 
 it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
@@ -3524,11 +3568,7 @@ it("push の直後に写しが消えても、今 push した head に内容が�
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-after-push-no-copy", "escalate");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, work);
-  const pushBranch = github.pushBranch.bind(github);
-  github.pushBranch = async (input) => {
-    await pushBranch(input);
-    git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
-  };
+  afterEachPush(github, () => git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`));
 
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
   expect(promotionFailures(db, work.id)).toEqual([]);
@@ -3646,11 +3686,7 @@ it("push の後に積み残しが残っても、workspace の quarantine が抱�
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-quarantined", "escalate");
   settleRepairNotMergedBack(db, clock, workspace, work.id);
   finish(db, clock, work);
-  const pushBranch = github.pushBranch.bind(github);
-  github.pushBranch = async (input) => {
-    await pushBranch(input);
-    quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
-  };
+  afterEachPush(github, () => quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now()));
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({
     kind: "quarantined",
@@ -3668,12 +3704,10 @@ it.each([
   const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-unreadable-after-push", "escalate");
   commitWork(workspace.path, "repair.txt", "fixed\n");
   finish(db, clock, work);
-  const pushBranch = github.pushBranch.bind(github);
-  github.pushBranch = async (input) => {
-    await pushBranch(input);
+  afterEachPush(github, () => {
     breakPackedRefs(workspace);
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
-  };
+  });
 
   const verdict = await convergeOn(landing, work.id);
 
@@ -4091,7 +4125,7 @@ it.each([
   const running = landingWork(db, clock);
   await prepareWorkspaceAtPickup(db, workspace, running, {});
   const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
-  void writeBoardRef(db, workspace, "refs/heads/main", tip, () => new Promise<never>(() => {}));
+  announceThenCrash(db, workspace, "refs/heads/main", tip);
   if (written) git(workspace.path, "update-ref", "refs/heads/main", tip);
 
   await answerMerge(db, clock, workspace, question);

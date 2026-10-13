@@ -52,7 +52,7 @@ import {
   recordingSpawn,
 } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -2765,7 +2765,7 @@ describe("ClaudeCodeWorker", () => {
       `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
       "merged registry change",
     );
-    expect(await refreshRegistry(registryDir, undefined)).toEqual({ available: true });
+    expect(await refreshRegistry(registryDir, undefined, writeUnannounced)).toEqual({ available: true });
     expect(git("rev-parse", "main")).toBe(staleLocal);
 
     const db = openDb(":memory:");

@@ -30,6 +30,7 @@ import {
 import { activeTriageSession } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
+  boardRefWriter,
   branchMergeEffect,
   buildWorkspaceResolver,
   catchUpTaskBranch,
@@ -48,7 +49,6 @@ import {
   type WorkspaceConfig,
   type WorkspaceResolver,
   workspaceNeedsHuman,
-  writeBoardRef,
 } from "./workspace.js";
 
 export type LandingVerdict =
@@ -895,10 +895,10 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
-      const push = (sha: string) =>
-        writeBoardRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)), sha, () =>
-          github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) }),
-        );
+      const push = async (sha: string) => {
+        const pushBranch = await github.preparePush({ path: workspace.path, branch: taskBranch(task.id) });
+        boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
+      };
       if (task.pr_number !== null) {
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
         // 盤面の外で決着した PR は観測として1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。

@@ -15,6 +15,7 @@ import {
   fetchCommit,
   ownEntry,
   REGISTRY_BRANCH,
+  type RefWriter,
   type Registry,
   type RegistrySource,
   remoteTrackingRef,
@@ -473,9 +474,7 @@ function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefin
 export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
   await ensureWorkspaceToken(workspace, auth);
-  fetchBranchCopy(workspace.path, auth, protectedBranch(workspace), (ref, newSha, write) =>
-    writeBoardRef(db, workspace, ref, newSha, write),
-  );
+  fetchBranchCopy(workspace.path, auth, protectedBranch(workspace), boardRefWriter(db, workspace));
 }
 
 /** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
@@ -576,7 +575,7 @@ function storedRefs(db: Db, workspaceName: string): string {
 
 /** `"<値> <refname>"` の行の集まりを refname → 値 に。値は objectname、symref の行では `symref=<指し先>`、盤面が
  *  予告している行では `<old>|<new>`(ADR 0243 決定1)。無い側は空文字で綴る —— 作成の予告は `|<new>` になる。 */
-function refValues(snapshot: string): Map<string, string> {
+export function refValues(snapshot: string): Map<string, string> {
   return new Map(
     snapshot
       .split("\n")
@@ -656,14 +655,14 @@ function readRef(workspace: WorkspaceConfig, ref: string): string {
  *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
  *  落ちれば2値の行が残り、次の pickup の全撮りが消すまでどちらの値も違反と読まれない(決定5)。
  *
- *  `write()` が同期なら予告→書く→畳むは1つの同期区間で、盤面の他の書き込みと交差しない。Promise を返す書き込み
- *  (GitHub client の push)は settle してから畳む。 */
-export function writeBoardRefs<T>(
+ *  `write()` は同期に限る —— 予告→書く→畳むが1つの同期区間になり、盤面の他の書き込みと交差しない。token の取得
+ *  (仲介への往復)は呼び手が予告の前に済ませる。 */
+export function writeBoardRefs(
   db: Db,
   workspace: WorkspaceConfig,
   writes: ReadonlyArray<readonly [ref: string, newSha: string]>,
-  write: () => T,
-): T {
+  write: () => void,
+): void {
   const before = new Map<string, string>();
   const announced = updateBaseline(db, workspace, (values) => {
     for (const [ref, newSha] of writes) {
@@ -671,27 +670,31 @@ export function writeBoardRefs<T>(
       values.set(ref, `${before.get(ref)}|${newSha}`);
     }
   });
-  if (!announced) return write();
-  const fold = () => {
+  if (!announced) {
+    write();
+    return;
+  }
+  const fold = () =>
     updateBaseline(db, workspace, (values) => {
       for (const [ref, newSha] of writes) values.set(ref, readRef(workspace, ref) === newSha ? newSha : before.get(ref)!);
     });
-  };
-  let result: T;
   try {
-    result = write();
+    write();
   } catch (err) {
-    fold();
+    // 畳みの失敗で書き込みの失敗を置き換えない —— 畳めなかった行は2値のまま残り、落ちた盤面と同じに読まれる
+    try {
+      fold();
+    } catch (foldErr) {
+      console.warn(`[workspace] ${workspace.name}: folding the announced baseline failed after the write failed`, foldErr);
+    }
     throw err;
   }
-  if (result instanceof Promise) return result.finally(fold) as T;
   fold();
-  return result;
 }
 
-/** 1本の ref を書く口(`writeBoardRefs` の1本の形)。 */
-export function writeBoardRef<T>(db: Db, workspace: WorkspaceConfig, ref: string, newSha: string, write: () => T): T {
-  return writeBoardRefs(db, workspace, [[ref, newSha]], write);
+/** 1つの workspace の基準に束ねた1本の口(`writeBoardRefs` の1本の形)。 */
+export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
+  return (ref, newSha, write) => writeBoardRefs(db, workspace, [[ref, newSha]], write);
 }
 
 /** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
@@ -1214,7 +1217,7 @@ export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: st
     "-m",
     `Merge ${protectedRef} into ${branch}`,
   );
-  writeBoardRef(db, workspace, ref, merged, () => git(workspace.path, "update-ref", ref, merged, taskSha));
+  boardRefWriter(db, workspace)(ref, merged, () => git(workspace.path, "update-ref", ref, merged, taskSha));
 }
 
 /** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
@@ -1256,7 +1259,7 @@ function mergeIntoProtectedByPlumbing(
     "-m",
     `Merge ${task} into ${branch}`,
   );
-  writeBoardRef(db, workspace, ref, merged, () => git(workspace.path, "update-ref", ref, merged, protectedSha));
+  boardRefWriter(db, workspace)(ref, merged, () => git(workspace.path, "update-ref", ref, merged, protectedSha));
 }
 
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
@@ -1289,7 +1292,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
     if (fastForward) {
-      writeBoardRef(db, workspace, ref, git(workspace.path, "rev-parse", `refs/heads/${task}`), () =>
+      boardRefWriter(db, workspace)(ref, git(workspace.path, "rev-parse", `refs/heads/${task}`), () =>
         git(workspace.path, "fetch", ".", `${task}:${branch}`),
       );
     } else mergeIntoProtectedByPlumbing(db, workspace, branch, protectedSha, task);

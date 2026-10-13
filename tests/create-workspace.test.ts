@@ -14,7 +14,7 @@ import {
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -73,7 +73,7 @@ function placeMatchingOrphan(baseDir: string, name: string, upstream: string, re
 
 async function makeDeps(registryDir: string) {
   return {
-    registry: { dir: registryDir, mode: "purely-local" as const },
+    registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
     github: new FakeGitHubClient(),
   };
@@ -602,7 +602,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
   // 動いている形)と clone モードの ADR 0067 probe を差し込む版で引き続き押さえる。
   it("clone モードの repo-access probe の最中に registry クローンのブランチが動いても、着地先は影響を受けない(/code-review TOCTOU 指摘)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
     const upstream = await makeUpstream();
     // 規約どおりの場所に前回の孤児を置き、実 clone をネットワークへ出さずに
     // probe の先まで通す(冪等リトライは clone モードの別テストが単独で押さえている)
@@ -629,7 +629,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("registry クローンが registry-edit タスクのブランチに居ても、リモート main へエントリが着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
     const path = await makeLocalOnlyCheckout();
 
     await createWorkspace({ mode: "register", name: "sandbox", path }, deps);
@@ -643,7 +643,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("push が失敗すると致命 — リモートにもコミットが残らない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
     const path = await makeLocalOnlyCheckout();
 
     await expect(
@@ -655,7 +655,7 @@ describe("createWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("入口の fetch が失敗すると致命 — コミットを一切積まない", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "remote", "set-url", "origin", "/no/such/remote");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
 
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: "/tmp/sandbox" }, deps),

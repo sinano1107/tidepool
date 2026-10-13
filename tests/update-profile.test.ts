@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { updateProfile } from "../src/profile-create.js";
 import { loadRegistry, UnknownAuthorityProfileError } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -30,7 +30,7 @@ describe("updateProfile: 正常系(issue #76 — ファイル全体の書き直�
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     const profile = loadRegistry(registryDir, "purely-local").authority.standard;
@@ -63,7 +63,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registry: { dir: registryDir, mode: "remote-backed" } },
+      { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } },
     );
 
     expect(loadRegistry(registryDir, "remote-backed").authority.standard?.guidance).toBe(
@@ -89,7 +89,7 @@ describe("updateProfile: checkout の位置に依存しない書き込み(ADR 00
           allowed_workspaces: ["tidepool"],
           merge: "escalate",
         },
-        { registry: { dir: registryDir, mode: "remote-backed" } },
+        { registry: { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced } },
       ),
     ).rejects.toThrow(RegistryPushFailedError);
 
@@ -116,7 +116,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
     };
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await updateProfile(same, { registry: { dir: registryDir, mode: "purely-local" } });
+    await updateProfile(same, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
@@ -136,7 +136,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -157,7 +157,7 @@ describe("updateProfile: no-change 編集(issue #76 — updateAgent の porcelai
         allowed_workspaces: ["tidepool"],
         merge: "escalate",
       },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).not.toBe(before);
@@ -176,7 +176,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
 
     await updateProfile(
       { name: "roamer", guidance: "new guidance" },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     // strict + 全フィールド必須の authorityProfileSchema を通って読み戻せること
@@ -194,7 +194,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
     const registryDir = await makeMainRegistry(AUTO_MERGE_PROFILE);
     const before = git(registryDir, "rev-parse", "HEAD");
 
-    await updateProfile({ name: "roamer" }, { registry: { dir: registryDir, mode: "purely-local" } });
+    await updateProfile({ name: "roamer" }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } });
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });
@@ -204,7 +204,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
 
     await updateProfile(
       { name: "roamer", guidance: "", assignable_to: [] },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").authority.roamer).toEqual({
@@ -222,7 +222,7 @@ describe("updateProfile: 部分パッチ(issue #266 / ADR 0086 — absent は触
 
     await updateProfile(
       { name: "roamer", merge: "auto_if_ci_green", confirmDangerous: true },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -237,7 +237,7 @@ describe("updateProfile: 存在しないプロファイル(issue #76 — 編集�
     await expect(
       updateProfile(
         { name: "ghost", guidance: "g", assignable_to: ["*"], allowed_workspaces: ["*"], merge: "escalate" },
-        { registry: { dir: registryDir, mode: "purely-local" } },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
@@ -263,13 +263,13 @@ describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
       const before = git(registryDir, "rev-parse", "HEAD");
 
       await expect(
-        updateProfile({ name: "roamer", ...patch }, { registry: { dir: registryDir, mode: "purely-local" } }),
+        updateProfile({ name: "roamer", ...patch }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } }),
       ).rejects.toMatchObject({ name: "ProfileConfirmationRequiredError", reasons: [reason] });
       expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
 
       await updateProfile(
         { name: "roamer", ...patch, confirmDangerous: true },
-        { registry: { dir: registryDir, mode: "purely-local" } },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
       );
       expect(loadRegistry(registryDir, "purely-local").authority.roamer).toMatchObject(patch);
     });
@@ -283,7 +283,7 @@ describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
 
     await updateProfile(
       { name: "roamer", guidance: "new guidance" },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").authority.roamer?.guidance).toBe("new guidance");
@@ -295,7 +295,7 @@ describe("updateProfile: 危険な値の確認(ADR 0061 決定1 — 執行はド
     await expect(
       updateProfile(
         { name: "ghost", assignable_to: ["*"] },
-        { registry: { dir: registryDir, mode: "purely-local" } },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
       ),
     ).rejects.toThrow(UnknownAuthorityProfileError);
   });

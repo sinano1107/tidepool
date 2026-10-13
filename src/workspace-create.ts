@@ -12,9 +12,9 @@ import {
   assertValidWorkspaceName,
   loadRegistry,
   ownEntry,
-  type RegistrySource,
   remoteTrackingRef,
   type WorkspaceEntry,
+  type WritableRegistry,
 } from "./registry.js";
 import {
   commitToRegistry,
@@ -30,6 +30,7 @@ import {
   conventionCheckoutPath,
   entryCheckoutPath,
   originUrl,
+  refValues,
   resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspacesBaseDirSource,
@@ -81,7 +82,7 @@ export interface WorkspaceAdminDeps {
    *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
    *  (issue #210 レビュー — AgentAdminDeps / ProfileAdminDeps と共有する
    *  Data Clumps だった)。 */
-  registry: RegistrySource;
+  registry: WritableRegistry;
   workspacesBaseDir: string;
   /** ADR 0040 / issue #149: the board's own state paths (fixed for the whole
    *  process), threaded in by the composition root. The creation gate refuses
@@ -95,9 +96,6 @@ export interface WorkspaceAdminDeps {
    *  secrets file is configured — clones then run unauthenticated, the same
    *  fail-closed posture as the optional `github` client below. */
   githubAuth?: GitHubAuth;
-  /** 盤面の db —— publish が走っている session の基準へ写しの N 本を予告する(ADR 0243 / ADR 0066 決定4)。無ければ
-   *  予告せずに書く。 */
-  db?: Db;
 }
 
 /** 共通の dep に、**GitHub へ出ていく workspace 動詞**が要るものを1つ足した組:
@@ -110,18 +108,18 @@ export interface WorkspaceGitHubDeps extends WorkspaceAdminDeps {
   github?: GitHubClient;
 }
 
+/** publish の dep: push が写しを動かすので、走っている session の基準へ N 本を予告する盤面の db を足す(ADR 0243 /
+ *  ADR 0066 決定4)。 */
+export interface PublishWorkspaceDeps extends WorkspaceGitHubDeps {
+  db: Db;
+}
+
 /** 返すのは着地した checkout のパス(ADR 0082 決定1)。MCP の `create_workspace`
  *  は1回の呼び出しで登録まで進むので、「見せてから決める」形が無い —— 決めた後に
  *  どこへ落ちたかを返すことがその代わりである。 */
 export type CreateWorkspaceFn = (input: CreateWorkspaceInput) => Promise<string>;
 export type UpdateWorkspaceFn = (input: UpdateWorkspaceInput) => Promise<void>;
-/** 返すのは publish が push した remote-tracking ref(`refs/remotes/origin/<branch>`)
- *  である。ADR 0064 決定4 の再基準化は「盤面が**実際に書いた** ref の行だけ」を要求し、
- *  publish はその集合を **push の直前に checkout から読んで確定させる**唯一の場所だから
- *  である —— 事後に `refs/remotes/origin/*` を列挙し直す綴りだと、その間に worker が
- *  偽造した remote-tracking ref まで「盤面が書いた」に化け、ADR 0064 が閉じた潜在バグ
- *  (偽造 → 無実の次セッションへの誤帰属)がそのまま戻る。 */
-export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<string[]>;
+export type PublishWorkspaceFn = (input: PublishWorkspaceInput) => Promise<void>;
 /** 返すのは**残る** checkout の場所(ADR 0087 決定4): 消えるのは registry エントリ
  *  だけなので、応答はホスト上に残った checkout を名指しする。参照検査の事実を
  *  第2引数で受ける形は `DeleteAgentFn` と同じ。 */
@@ -467,12 +465,9 @@ export class CheckoutHasOriginError extends Error {
 }
 
 /** ADR 0066 決定2 の扉: purely-local な workspace に remote 正本を与える。
- *  `git remote add origin` → `git push --atomic --all` → registry エントリへ `repo`。
+ *  `git remote add origin` → `git push --atomic origin <sha>:<ref>…`(全ブランチ)→ registry エントリへ `repo`。
  *  checkout は動かさない(ADR 0064 の「走っているセッションの作業ツリーを奪わない」)。 */
-export async function publishWorkspace(
-  input: PublishWorkspaceInput,
-  deps: WorkspaceGitHubDeps,
-): Promise<string[]> {
+export async function publishWorkspace(input: PublishWorkspaceInput, deps: PublishWorkspaceDeps): Promise<void> {
   await refreshRegistryForWrite(deps.registry, deps.githubAuth);
   const registry = loadRegistry(deps.registry.dir, deps.registry.mode);
   const entry = ownEntry(registry.workspaces, input.name);
@@ -506,13 +501,12 @@ export async function publishWorkspace(
   if (!fresh) throw new UnknownWorkspaceError(input.name);
   if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
   git(dir, "remote", "add", "origin", input.repo);
-  // `--all` が送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**読み、その写しになる N 本を
-  // まとめて口に予告する(ADR 0243 / ADR 0066 決定4): 事後に `refs/remotes/origin/*` を列挙し直すと、その間に
+  // 送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**読み、読んだ値を `<sha>:<ref>` でそのまま押し、
+  // その写しになる N 本をまとめて口に予告する(ADR 0243 / ADR 0066 決定4): tip を読み直す push(`--all`)だと、走っている
+  // session のタスクブランチが進んだぶん押した写しが予告と食い違い、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
   // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
-  const writes = git(dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/")
-    .split("\n")
-    .filter((line) => line !== "")
-    .map((line) => [remoteTrackingRef(line.slice(line.indexOf(" ") + 1)), line.slice(0, line.indexOf(" "))] as const);
+  const branches = [...refValues(git(dir, "for-each-ref", "--format=%(objectname) %(refname)", "refs/heads/"))];
+  const writes = branches.map(([ref, sha]) => [remoteTrackingRef(ref.slice("refs/heads/".length)), sha] as const);
   const { githubAuth } = deps;
   // 巻き戻しも口の内側に置く —— 畳みは `remote remove` が写しを消した後の ref を読み、予告の前の値へ戻す
   const publish = () => {
@@ -521,9 +515,9 @@ export async function publishWorkspace(
       // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
       // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
       // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
-      // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
+      // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
       // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
-      authedGit(githubAuth, dir, destination, "push", "--atomic", "--all", "origin");
+      authedGit(githubAuth, dir, destination, "push", "--atomic", "origin", ...branches.map(([ref, sha]) => `${sha}:${ref}`));
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -541,9 +535,7 @@ export async function publishWorkspace(
       throw err;
     }
   };
-  if (deps.db) writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish);
-  else publish();
-  return writes.map(([ref]) => ref);
+  writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish);
 }
 
 /** Each mode's external half, ordered so the registry commit stays last. */

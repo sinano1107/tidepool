@@ -453,12 +453,12 @@ it("tokenRefusal は持っている token を答えにせず、扉のたびに�
   expect(await client.tokenRefusal(ref)).toContain("repo_unreachable");
 });
 
-it("pushBranch はタスクブランチを origin へ push する(PR 作成と切り離した1操作)", async () => {
+it("preparePush が返す push はタスクブランチを origin へ push する(PR 作成と切り離した1操作)", async () => {
   repoPath = await tempDir("tidepool-repo-");
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "repair.txt", "repair merged back into task/abc");
 
-  await new GhCliClient(await makeAuth()).pushBranch({ path: repoPath, branch: "task/abc" });
+  (await new GhCliClient(await makeAuth()).preparePush({ path: repoPath, branch: "task/abc" }))();
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });

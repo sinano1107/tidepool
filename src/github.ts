@@ -120,14 +120,17 @@ export class IssueGoneError extends Error {
  *  "unreported" past ADR 0227's grace — and only on the head that read was
  *  taken on (ADR 0231 決定1). */
 export interface GitHubClient {
-  /** push 済みのタスクブランチに PR を開く(`gh pr create` だけ)。push は呼び手が `pushBranch` で先に撃つ ——
+  /** push 済みのタスクブランチに PR を開く(`gh pr create` だけ)。push は呼び手が `preparePush` で先に撃つ ——
    *  盤面の push は基準への予告で包む口を通る(ADR 0243)。 */
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
    *  PR 作成の前段であると同時に、**既に開いている PR の更新**でもある: 付帯子の
    *  修理が merge back されたタスクブランチを押し直すと、その PR が黙って更新される
-   *  (ADR 0053 / issue #400)。 */
-  pushBranch(input: PushBranchInput): Promise<void>;
+   *  (ADR 0053 / issue #400)。
+   *
+   *  token の取得(仲介への往復)だけをここで済ませ、push そのものは返した同期の関数が撃つ —— 盤面は push を
+   *  基準への予告と畳みの同期区間の中で撃つ(ADR 0243)。 */
+  preparePush(input: PushBranchInput): Promise<() => void>;
   readPullRequest(ref: PrRef): Promise<PrStatus>;
   /** Merges only while the PR's head is still `head` — the one whose CI was
    *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
@@ -223,10 +226,10 @@ export class GhCliClient implements GitHubClient {
     return this.auth.env(repo);
   }
 
-  async pushBranch(input: PushBranchInput): Promise<void> {
+  async preparePush(input: PushBranchInput): Promise<() => void> {
     const repo = originRepo(input.path);
     await this.auth.ensureToken(repo);
-    authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
+    return () => authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {

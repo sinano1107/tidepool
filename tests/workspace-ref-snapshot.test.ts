@@ -3,8 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgent } from "../src/agent-create.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import type { RefWriter } from "../src/registry.js";
-import { type WorkspaceConfig, writeBoardRef } from "../src/workspace.js";
+import { boardRefWriter, type WorkspaceConfig } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
 import { seedTierNames } from "./fakes.js";
 import {
@@ -23,7 +22,7 @@ import {
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -41,11 +40,6 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
-}
-
-/** 合成 root が registry clone の workspace に束ねる口(ADR 0243)と同じ束ね。 */
-function boardRefWriter(workspace: WorkspaceConfig): RefWriter {
-  return (ref, newSha, write) => writeBoardRef(t.db, workspace, ref, newSha, write);
 }
 
 function commitOn(path: string, file: string, body: string, message: string): void {
@@ -187,10 +181,10 @@ it("refs/remotes の偽造は、偽造したセッション自身の解放で捕
   expect((await servedQuarantineQuestion(t, "workspace", "sandbox"))?.purpose).toContain("refs/remotes/origin/main");
 });
 
-// ADR 0064 決定4 の再基準化。**盤面自身がセッション実行中に同じ workspace の ref を
+// ADR 0243 の予告と畳み。**盤面自身がセッション実行中に同じ workspace の ref を
 // 書く**経路は、すべて人間面から入るので slot=1 でも並行する —— タスクA の着地 question に
 // 人間が答えた瞬間にタスクB が走っていれば、B の解放で不変条件が落ちる。無実のセッションの
-// quarantine である。盤面が書いた ref の行だけを撮り直すことでこれを防ぐ。
+// quarantine である。盤面が書く ref の行だけを、書く前に予告し書いた後に畳むことでこれを防ぐ。
 it("セッション中に盤面が保護ブランチを動かしても、そのセッションは quarantine されない", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
@@ -219,19 +213,21 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
   expect(git(ws.path, "show", `task/${running.id}:in-flight.txt`)).toBe("still working");
 });
 
-// 再基準化の5経路のうち3つは registry clone を触る。ADR 0064 決定4 が「**最も起きやすい**
+// 盤面が予告して畳む書き込みのうち、registry の fetch・push・update-ref は registry clone を触る。ADR 0064 が「**最も起きやすい**
 // のが registry clone であり、唯一の保護 workspace で不変条件が最も弱くなる」と名指しした
 // 経路であり、盤面の書き込みは人間面の settings から実行中のセッションと並行して入る。
 it("セッション中の registry 書き込みで、registry clone の workspace は quarantine されない", async () => {
   const registryDir = await makeRegistry();
   const workspace = { name: "registry", path: registryDir };
-  const registry = { dir: registryDir, mode: "purely-local" as const, writeRef: boardRefWriter(workspace) };
+  const registry = { dir: registryDir, mode: "purely-local" as const };
+  // 合成 root の束ねと同じく、registry clone の workspace の基準に束ねる(t は boot の後に決まる)
+  const writable = () => ({ ...registry, writeRef: boardRefWriter(t.db, workspace) });
   t = await bootTidepool({
     workspace,
     registry,
     boardState: { paths: [], listWorkspaces: () => [workspace] },
     agentAdmin: {
-      create: (input) => createAgent(input, { registry, tiers: () => seedTierNames }),
+      create: (input) => createAgent(input, { registry: writable(), tiers: () => seedTierNames }),
     },
   });
   const task = await registerWork(t, "runs in the registry clone");
@@ -280,10 +276,10 @@ it("違反メッセージは動いた ref を名指しし、消えた行と増�
 });
 
 // ADR 0081: `for-each-ref` は symref を**解決値で**出すので、盤面が `origin/main` を
-// 1本書くとスナップショット上は2行動く —— 外科的再基準化は名指しした1行しか撮り直さない
+// 1本書くとスナップショット上は2行動く —— 口(ADR 0243)は名指しした1行しか畳まない
 // ので、連動した `origin/HEAD` の行が古いまま取り残され、無実の quarantine になる。
 // 指し先で数えれば symref の行は指し先が動いても不変で、取り残しが生じない。
-it("盤面が origin/main を撮り直しても、連動する origin/HEAD で quarantine されない", async () => {
+it("盤面が origin/main を書いても、連動する origin/HEAD で quarantine されない", async () => {
   const { registryDir } = await makeRemoteBackedRegistry();
   // clone が持つ既定ブランチの symref(本番の registry clone と同じ姿)。push -u は
   // これを張らないので明示する
@@ -293,12 +289,14 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
     path: registryDir,
     repo: git(registryDir, "remote", "get-url", "origin"),
   };
-  const registry = { dir: registryDir, mode: "remote-backed" as const, writeRef: boardRefWriter(workspace) };
+  const registry = { dir: registryDir, mode: "remote-backed" as const };
+  // 合成 root の束ねと同じく、registry clone の workspace の基準に束ねる(t は boot の後に決まる)
+  const writable = () => ({ ...registry, writeRef: boardRefWriter(t.db, workspace) });
   t = await bootTidepool({
     workspace,
     registry,
     boardState: { paths: [], listWorkspaces: () => [workspace] },
-    agentAdmin: { create: (input) => createAgent(input, { registry, tiers: () => seedTierNames }) },
+    agentAdmin: { create: (input) => createAgent(input, { registry: writable(), tiers: () => seedTierNames }) },
   });
   const task = await registerWork(t, "runs in the registry clone");
   await t.clock.advance(HOUR);
@@ -383,10 +381,10 @@ it("worker が symref を新規に作れば quarantine に落ちる", async () =
   );
 });
 
-// ADR 0064 決定4 のテーブル**6行目**(ADR 0066 決定4 / issue #285): `publish` は
-// `refs/remotes/origin/*` を**新規に作る**唯一の経路である。checkout は動かさないので
-// ADR 0064 の「走っているセッションの作業ツリーを奪わない」線は無傷だが、再基準化
-// しなければ無実のセッションが解放時に quarantine へ落ちる。
+// ADR 0066 決定4 / issue #285: `publish` は `refs/remotes/origin/*` を**新規に作る**唯一の
+// 経路である。checkout は動かさないので ADR 0064 の「走っているセッションの作業ツリーを
+// 奪わない」線は無傷だが、N 本の写しを予告して畳まなければ(ADR 0243)無実のセッションが
+// 解放時に quarantine へ落ちる。
 async function publishableBoard(name: string): Promise<{
   ws: WorkspaceConfig;
   dest: string;
@@ -400,7 +398,7 @@ async function publishableBoard(name: string): Promise<{
   git(dest, "init", "--bare", "-b", "main");
   writeFileSync(join(tokenDir, "token"), "ghp_test\n");
   const deps = {
-    registry: { dir: registryDir, mode: "purely-local" as const },
+    registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
     workspacesBaseDir,
     githubAuth: new GitHubAuth(join(tokenDir, "token")),
   };
@@ -436,7 +434,7 @@ it("セッション中に publish しても、そのセッションは quarantin
   expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
 });
 
-// 外科的であることの裏側(ADR 0064 決定4): 全 ref を撮り直せば、その瞬間までに worker が
+// 盤面が書く行だけを予告して畳むことの裏側(ADR 0243): 全 ref を撮り直せば、その瞬間までに worker が
 // 動かした ref も新しい基準に飲み込まれ、解放時の比較が素通りする。publish が触るのは
 // `refs/remotes/origin/*` だけなので、`refs/heads/*` の逸脱は今までどおり捕まる。
 it("publish が触っていない ref を worker が動かせば、今までどおり quarantine に落ちる", async () => {
@@ -457,11 +455,11 @@ it("publish が触っていない ref を worker が動かせば、今までど�
   expect((await servedQuarantineQuestion(t, "workspace", "sandbox"))?.purpose).toContain("refs/heads/sibling");
 });
 
-// ADR 0064 決定4 の「盤面が**実際に書いた** ref の行だけ」。publish 後に checkout を
+// ADR 0243: 予告するのは盤面が**これから書く** ref の行だけ。publish 後に checkout を
 // 覗いて `refs/remotes/origin/*` を列挙すると、worker が窓の中で偽造した
 // remote-tracking ref まで「盤面が書いた」に化ける —— ADR 0064 が閉じたはずの
 // 潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)がそのまま戻る。
-// 撮り直す集合は push の直前に確定していなければならない。
+// 予告する集合は push の直前に確定していなければならない。
 it("publish が push していない origin ref を worker が偽造すれば quarantine に落ちる", async () => {
   const { ws, dest, boot } = await publishableBoard("sandbox");
   t = await bootTidepool(boot);

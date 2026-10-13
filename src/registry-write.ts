@@ -3,14 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./git.js";
 import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
-import {
-  REGISTRY_BRANCH,
-  type RegistrySource,
-  refreshRegistry,
-  registryRef,
-  remoteTrackingRef,
-  writeUnannounced,
-} from "./registry.js";
+import { REGISTRY_BRANCH, refreshRegistry, registryRef, remoteTrackingRef, type WritableRegistry } from "./registry.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
  *  push もできず、push 成功が「効いた」の定義である以上、その編集は最初から
@@ -32,7 +25,7 @@ export class RegistryFetchFailedError extends Error {
  *  すれば ref は動きうる —— その場合は worktree がより新しい内容から fork する
  *  だけで、着地時の fast-forward 検査(`commitToRegistry`)が壊れた状態を防ぐ。 */
 export async function refreshRegistryForWrite(
-  registry: RegistrySource,
+  registry: WritableRegistry,
   auth: GitHubAuth | undefined,
 ): Promise<void> {
   if (registry.mode !== "remote-backed") return;
@@ -128,7 +121,7 @@ export class RegistryPushFailedError extends Error {
  *  (別の書き込みが先に着地した)双方とも拒否するので、並行書き込みは黙って
  *  上書きされず、致命の再試行可能な失敗になる(issue #57 の冪等性)。 */
 export function commitToRegistry(
-  registry: RegistrySource,
+  registry: WritableRegistry,
   auth: GitHubAuth | undefined,
   write: (worktreeDir: string) => void,
   message: string,
@@ -158,8 +151,7 @@ export function commitToRegistry(
   }
 }
 
-function land(registry: RegistrySource, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
-  const writeRef = registry.writeRef ?? writeUnannounced;
+function land(registry: WritableRegistry, worktreeDir: string, baseSha: string, auth: GitHubAuth | undefined): void {
   try {
     const newSha = git(worktreeDir, "rev-parse", "HEAD");
     if (registry.mode === "remote-backed") {
@@ -167,11 +159,11 @@ function land(registry: RegistrySource, worktreeDir: string, baseSha: string, au
       // 既にこの repo の installation token を温めているからである(ADR 0066
       // 決定5 が要求する「publish の同期区間に await を入れない」の帰結)。
       // worktree は元の clone の config を共有するので origin は同じ1つ。push は写しも動かす
-      writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () =>
+      registry.writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () =>
         authedGit(auth, worktreeDir, originRepo(worktreeDir), "push", "origin", `HEAD:${REGISTRY_BRANCH}`),
       );
     } else {
-      writeRef(`refs/heads/${REGISTRY_BRANCH}`, newSha, () =>
+      registry.writeRef(`refs/heads/${REGISTRY_BRANCH}`, newSha, () =>
         git(registry.dir, "update-ref", `refs/heads/${REGISTRY_BRANCH}`, newSha, baseSha),
       );
       syncCheckoutIfOnBranch(registry.dir, REGISTRY_BRANCH, baseSha, newSha);

@@ -10,7 +10,7 @@ import {
   updateWorkspace,
   WorkspaceConfirmationRequiredError,
 } from "../src/workspace-create.js";
-import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** protected な一般 workspace を1つ足した fixture。 */
@@ -36,7 +36,7 @@ async function makeMainRegistry(files?: Record<string, string>): Promise<string>
 
 async function makeDeps(registryDir: string) {
   return {
-    registry: { dir: registryDir, mode: "purely-local" as const },
+    registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
     workspacesBaseDir: await tempDir("tidepool-ws-base-"),
   };
 }
@@ -241,7 +241,7 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("registry クローンが registry-edit タスクのブランチに居ても、編集がリモート main へ着地する", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "checkout", "-b", "task/registry-edit-1");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
 
     await updateWorkspace({ name: "tidepool", notes: "the registry clone itself" }, deps);
 
@@ -257,7 +257,7 @@ describe("updateWorkspace: checkout の位置に依存しない書き込み(ADR 
   it("push が失敗すると致命 — リモートに編集が残らない(ADR 0052 決定1)", async () => {
     const { registryDir } = await makeRemoteBackedRegistry();
     git(registryDir, "remote", "set-url", "--push", "origin", "/no/such/remote");
-    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const } };
+    const deps = { ...(await makeDeps(registryDir)), registry: { dir: registryDir, mode: "remote-backed" as const, writeRef: writeUnannounced } };
     const before = git(registryDir, "rev-parse", "refs/remotes/origin/main");
 
     await expect(

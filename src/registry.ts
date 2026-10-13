@@ -677,17 +677,17 @@ export type RegistryMode = "remote-backed" | "purely-local";
 export interface RegistrySource {
   dir: string;
   mode: RegistryMode;
-  /** registry clone の ref を書く口(ADR 0243)。registry clone が workspace として登録されていれば、合成 root が
-   *  その基準に束ねて渡す。無ければ予告せずに書く。 */
-  writeRef?: RefWriter;
+}
+
+/** registry を書く側が運ぶ組。書き込みは registry clone の ref を動かすので、その ref を書く口(ADR 0243 決定4)を
+ *  必ず連れる —— 合成 root が registry clone の workspace の基準に束ねて渡す。 */
+export interface WritableRegistry extends RegistrySource {
+  writeRef: RefWriter;
 }
 
 /** 盤面の ref の書き込みを、書く先の workspace の基準への予告と畳みで包む口(ADR 0243 決定4)。新しい値を引数に
  *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
 export type RefWriter = (ref: string, newSha: string, write: () => void) => void;
-
-/** 予告する基準を持たない書き込み。 */
-export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
 
 /** origin から commit を sha で1つ取る。`refs/` には何も書かない(FETCH_HEAD だけ)—— merge の門が head を取る fetch
  *  (ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
@@ -772,7 +772,7 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
-  writeRef: RefWriter = writeUnannounced,
+  writeRef: RefWriter,
 ): Promise<RegistryReachability> {
   try {
     await auth?.ensureToken(originRepo(dir));
