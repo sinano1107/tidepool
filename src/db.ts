@@ -91,6 +91,10 @@ export function openDb(path: string): Db {
       -- triggers decision-scoped abandon instead of ordinary unblock-to-head.
       -- Never set via MCP or JSON API; only failure-question registration does.
       question_cancel_option  TEXT,
+      -- system-internal only (ADR 0121 / ADR 0245 決定2・5): the decision a premise-breach
+      -- question stands in for. Its abandon keeps the decision-wide scope even for an
+      -- Interview pin child, whose failure question's scope stops at itself.
+      question_breached_decision INTEGER,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers
       -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.
