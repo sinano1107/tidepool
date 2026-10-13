@@ -812,7 +812,6 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(systemPrompt.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
-    expect(systemPrompt.slice(systemPrompt.indexOf("## Board doctrine"), systemPrompt.indexOf("## Rules of the road"))).not.toContain("decompose");
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules

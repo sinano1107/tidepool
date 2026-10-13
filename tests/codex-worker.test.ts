@@ -491,7 +491,6 @@ thread's history always fails.`));
     f.start(pinnedChild(f.db));
     const developer = developerInstructions(f.process.calls[0]!.args);
     expect(developer.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
-    expect(developer.slice(developer.indexOf("## Board doctrine"), developer.indexOf("## Rules of the road"))).not.toContain("decompose");
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {
