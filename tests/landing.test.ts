@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveExecutionAgent } from "../src/agent.js";
@@ -7,10 +7,10 @@ import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
+  contentLeftBehind,
   countTasksAwaitingLanding,
   countTasksAwaitingLandingInWorkspace,
   createLanding,
-  hasContentLeftBehind,
   type Landing,
   landingAnnotation,
   registerLocalMergeQuestion,
@@ -2774,15 +2774,15 @@ it("開いている PR への修理の push は盤面の名義の event に残�
 });
 
 // ADR 0231 決定4: 盤面の外で push された head の猶予は、盤面がその head を初めて読んだ時点から数える
-/** 盤面を通さずにタスクブランチへ commit を push し、PR #1 の head をその sha にする。 */
-async function pushOutsideBoard(workspace: WorkspaceConfig, github: FakeGitHubClient, taskId: string): Promise<string> {
+/** 盤面を通さず、別の clone からタスクブランチへ commit を push する —— `onto` を渡せば、その commit の上に作って
+ *  force-push する。PR の head はその sha になり、盤面の checkout の写しは動かない。 */
+async function pushOutsideBoard(workspace: WorkspaceConfig, taskId: string, onto?: string): Promise<string> {
   const clone = await tempDir("tidepool-outside-push-");
   git(clone, "clone", "--branch", `task/${taskId}`, git(workspace.path, "remote", "get-url", "origin"), ".");
+  if (onto) git(clone, "reset", "--hard", onto);
   commitWork(clone, "outside.txt", "pushed on GitHub\n");
-  git(clone, "push", "origin", `task/${taskId}`);
-  const sha = git(clone, "rev-parse", "HEAD");
-  github.scriptHead(1, sha);
-  return sha;
+  git(clone, "push", "--force", "origin", `task/${taskId}`);
+  return git(clone, "rev-parse", "HEAD");
 }
 
 it("PR を開いてから6分後に読んだ盤面の外の head が check 未報告なら、初めて読んでから5分間キューで待ち、過ぎれば merge question に倒れる。観測は1件だけ刻まれる", async () => {
@@ -2795,7 +2795,7 @@ it("PR を開いてから6分後に読んだ盤面の外の head が check 未�
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await landing.converge();
-  const outside = await pushOutsideBoard(workspace, github, work.id);
+  const outside = await pushOutsideBoard(workspace, work.id);
   github.scriptCiStatus("unreported");
 
   await clock.advance(6 * 60_000);
@@ -2824,7 +2824,7 @@ it("check が報告中(pending)の盤面の外の head も、読んだ時点で�
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await landing.converge();
-  const outside = await pushOutsideBoard(workspace, github, work.id);
+  const outside = await pushOutsideBoard(workspace, work.id);
   github.scriptCiStatus("pending");
 
   await landing.tick("auto_merge", clock.now());
@@ -3004,7 +3004,8 @@ async function openPushedPr(name: string, merge: MergeDial) {
   git(workspace.path, "checkout", "-b", `task/${work.id}`);
   commitWork(workspace.path, "feature.txt", "ready\n");
   git(workspace.path, "push", "-u", "origin", `task/${work.id}`);
-  recordPrOpenedViaWorker(db, work, 1, "worker", clock.now(), { authority: { merge } });
+  github.scriptPullRequestOnBranch(`task/${work.id}`);
+  recordPrOpened(db, work, 1, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), { merge }, undefined, "worker");
   const landing = createLanding({
     defaultAgentName: "tako",
     db,
@@ -3081,6 +3082,9 @@ function answerWorkspaceQuarantine(
 }
 
 const head = (workspace: WorkspaceConfig) => git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD");
+/** origin のタスクブランチの先端 —— GitHub が報告する PR の head。 */
+const originHead = (workspace: WorkspaceConfig, taskId: string) =>
+  git(workspace.path, "ls-remote", "origin", `refs/heads/task/${taskId}`).split("\t")[0]!;
 
 it("merge back の conflict を abort しただけの受理は、merge back をやり直して conflict し、取り消して休止位置へ戻し、2つの出口を示して拒む", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-conflict", "escalate");
@@ -3097,7 +3101,7 @@ it("merge back の conflict を abort しただけの受理は、merge back を�
 
   expect(head(workspace)).toBe("main");
   expect(git(workspace.path, "status", "--porcelain")).toBe("");
-  expect(hasContentLeftBehind(db, workspace, work.id)).toBe(true);
+  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([repair.id]);
   expect(getTask(db, question.id)!.status).toBe("todo");
 });
 
@@ -3144,7 +3148,7 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   expect(pollNow).toHaveBeenCalledOnce();
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
-  expect(hasContentLeftBehind(db, workspace, work.id)).toBe(false);
+  expect(await contentLeftBehind(db, workspace, work.id, originHead(workspace, work.id))).toEqual([]);
 });
 
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
@@ -3286,13 +3290,184 @@ it("盤面の外の push で origin 側だけが先へ進んでいるのは積�
   expect(mergeQuestions(db)).toEqual([]);
 });
 
-it("origin 側のタスクブランチが読めなければ積み残しとして無人 merge しない(fail-closed)", async () => {
-  const { workspace, github, work, landing, clock } = await openPushedPr("left-behind-unreadable", "auto_if_ci_green");
+// ADR 0242 決定1: merge の門は GitHub が報告した head と比べる —— 盤面の checkout の写しは読まない
+/** PR #1 の merge question に人間が「merge」と答える。 */
+function answerMergeQuestion({
+  db,
+  clock,
+  github,
+  workspace,
+}: { db: Db; clock: FakeClock; github: FakeGitHubClient; workspace: WorkspaceConfig }) {
+  const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
+  return submitAnswer(
+    { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
+    question,
+    ["merge"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
+}
+
+/** #1831 の形: 修理を merge back して収束が push した後、別の clone が PR のブランチを修理より前の commit の上へ
+ *  force-push する。 */
+async function dropRepairOutsideBoard(pr: Awaited<ReturnType<typeof openPushedPr>>) {
+  const { workspace, db, clock, work, landing } = pr;
+  const beforeRepair = git(workspace.path, "rev-parse", "HEAD");
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  git(workspace.path, "merge", "--no-edit", `task/${repair.id}`);
+  finish(db, clock, work);
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  await pushOutsideBoard(workspace, work.id, beforeRepair);
+}
+
+it("別の clone からの force-push で修理が消えた PR は、CI 緑でも無人 merge されない", async () => {
+  const pr = await openPushedPr("left-behind-dropped-outside", "auto_if_ci_green");
+  await dropRepairOutsideBoard(pr);
+
+  await pr.landing.tick("auto_merge", pr.clock.now());
+
+  expect(pr.github.merged).toEqual([]);
+});
+
+it("別の clone からの force-push で修理が消えた PR への人間の merge 回答は拒まれ、merge されない", async () => {
+  const pr = await openPushedPr("left-behind-dropped-outside-answer", "escalate");
+  await dropRepairOutsideBoard(pr);
+
+  await expect(answerMergeQuestion(pr)).rejects.toThrow(DomainError);
+
+  expect(pr.github.merged).toEqual([]);
+});
+
+/** 収束が PR #1 を開く(盤面自身の push)。`narrowRefspec` は #1778 の形 —— fetch の refspec を保護ブランチだけに絞った
+ *  checkout(`--single-branch` の clone)で、push しても写しが書かれない。 */
+async function openPrByConvergence(name: string, merge: MergeDial, { narrowRefspec = false } = {}) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  if (narrowRefspec) git(workspace.path, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github, () => profile(merge));
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  return { workspace, db, clock, github, work, landing };
+}
+
+it("refspec を保護ブランチだけに絞った checkout でも、収束が PR を開いて push した後の tick で無人 merge される", async () => {
+  const { github, landing, clock } = await openPrByConvergence("left-behind-narrow-refspec", "auto_if_ci_green", {
+    narrowRefspec: true,
+  });
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+it("refspec を絞った checkout の PR への人間の merge 回答は通り、PR を1回だけ読んで、その head で merge する", async () => {
+  const pr = await openPrByConvergence("left-behind-narrow-refspec-answer", "escalate", { narrowRefspec: true });
+
+  await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
+
+  expect(pr.github.ciChecks).toHaveLength(1);
+  expect(pr.github.mergedHeads).toEqual([originHead(pr.workspace, pr.work.id)]);
+});
+
+it("盤面自身が push した head は手元にあるので、origin に届かなくても fetch を撃たずに無人 merge される", async () => {
+  const { workspace, github, work, landing, clock } = await openPrByConvergence("left-behind-no-fetch", "auto_if_ci_green");
+  github.scriptHead(1, originHead(workspace, work.id));
+  git(workspace.path, "remote", "set-url", "origin", join(workspace.path, "unreachable"));
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged.map((pr) => pr.number)).toEqual([1]);
+});
+
+// ADR 0242 決定2: 収束は盤面が最後に push した head と比べる —— 写しは読まない
+it("写しが無くても、盤面が最後に push した head に内容が全部載っていれば、収束は push せず up_to_date を返す", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-converge-no-copy", "escalate");
+  finish(db, clock, work);
   git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "up_to_date", prNumber: 1 });
+  expect(github.pushes).toEqual([]);
+});
+
+it("push の直後に写しが消えても、今 push した head に内容が載っていれば着地し、失敗 question を立てない", async () => {
+  const { workspace, db, clock, github, work, landing } = await openPushedPr("left-behind-after-push-no-copy", "escalate");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, work);
+  const pushBranch = github.pushBranch.bind(github);
+  github.pushBranch = async (input) => {
+    await pushBranch(input);
+    git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+  };
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+// ADR 0242 決定3: 比べられなければ積み残し。人間の merge 回答は「運んでいる途中」でなく、比べられなかった事実と理由で拒む(#1854)
+const NOWHERE = "0123456789abcdef0123456789abcdef01234567";
+
+it("GitHub の head が手元にも origin にも無ければ、head の fetch が失敗して積み残しとなり、無人 merge されずキューに残る", async () => {
+  const { db, github, landing, clock } = await openPushedPr("left-behind-fetch-fails", "auto_if_ci_green");
+  github.scriptHead(1, NOWHERE);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([1]);
+});
+
+it("GitHub の head が手元にも origin にも無い PR への人間の merge 回答は、head の fetch が失敗したことを言って拒まれる", async () => {
+  const pr = await openPushedPr("left-behind-fetch-fails-answer", "escalate");
+  pr.github.scriptHead(1, NOWHERE);
+
+  const error = await answerMergeQuestion(pr).catch((err: unknown) => err);
+
+  expect(error).toBeInstanceOf(DomainError);
+  expect((error as Error).message).toMatch(
+    new RegExp(`^cannot merge: could not compare PR #1's head ${NOWHERE} with the task's content — .*git fetch`, "s"),
+  );
+  expect((error as Error).message).not.toContain(STILL_CARRYING);
+  expect(pr.github.merged).toEqual([]);
+});
+
+it("読めない PR への人間の merge 回答は、head を比べられなかったと言って拒まれる", async () => {
+  const pr = await openPushedPr("left-behind-unreadable-answer", "escalate");
+  pr.github.scriptUnreadable(1);
+
+  await expect(answerMergeQuestion(pr)).rejects.toThrow(
+    new DomainError("cannot merge: could not read PR #1, so its head could not be compared with the task's content"),
+  );
+});
+
+/** ref を読む git が exit 128 で落ちる checkout にする —— `rev-parse --verify --quiet` も「無い」(exit 1)とは答えない。 */
+const breakPackedRefs = (workspace: WorkspaceConfig) =>
+  appendFileSync(join(workspace.path, ".git", "packed-refs"), "not a packed ref\n");
+
+it("タスクブランチの有無を読む rev-parse が exit 1 以外で落ちれば積み残しとなり、無人 merge されない", async () => {
+  const { workspace, github, landing, clock } = await openPushedPr("left-behind-rev-parse-fails", "auto_if_ci_green");
+  breakPackedRefs(workspace);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+});
+
+it("タスクブランチの有無を読む rev-parse が exit 1 以外で落ちた PR への人間の merge 回答は、比べられなかったと言って拒まれ、運んでいる途中とは言わない", async () => {
+  const pr = await openPushedPr("left-behind-rev-parse-fails-answer", "escalate");
+  breakPackedRefs(pr.workspace);
+
+  const error = await answerMergeQuestion(pr).catch((err: unknown) => err);
+
+  expect(error).toBeInstanceOf(DomainError);
+  expect((error as Error).message).toMatch(/^cannot merge: could not compare PR #1's head [0-9a-f]{40} with the task's content — /);
+  expect((error as Error).message).not.toContain(STILL_CARRYING);
+  expect(pr.github.merged).toEqual([]);
 });
 
 // ADR 0241 決定7: push しても積み残しが消えなければ、着地したとは言わない。push はする
@@ -3370,7 +3545,7 @@ it.each([
   const pushBranch = github.pushBranch.bind(github);
   github.pushBranch = async (input) => {
     await pushBranch(input);
-    git(workspace.path, "update-ref", "-d", `refs/remotes/origin/task/${work.id}`);
+    breakPackedRefs(workspace);
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
   };
 
@@ -3428,19 +3603,10 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
   "積み残し(%s)のある PR への人間の merge 回答は拒まれ、拒否文は運ぶ面を名指しし、merge されず question は開いたまま残る",
   async (_, leaveBehind) => {
     const pr = await openPushedPr("left-behind-answer", "escalate");
-    const { db, clock, github, workspace } = pr;
+    const { db, github } = pr;
     const carrier = leaveBehind(pr);
-    const question = getTask(db, listBoard(db).find((q) => q.question_pending_merge_pr === 1)!.id)!;
-    await expect(
-      submitAnswer(
-        { db, pollNow: () => {}, landing: unusedLanding, workspace, github },
-        question,
-        ["merge"],
-        undefined,
-        () => clock.now(),
-        "webui",
-      ),
-    ).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
+    const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+    await expect(answerMergeQuestion(pr)).rejects.toThrow(new DomainError(`cannot merge yet: PR #1 does not carry all of the task's content yet — ${carrier}`));
     expect(github.merged).toEqual([]);
     expect(listBoard(db).find((q) => q.id === question.id)?.status).toBe("todo");
   },

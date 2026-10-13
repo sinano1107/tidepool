@@ -21,6 +21,7 @@ import {
   tierFieldDescriptions,
 } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
+import type { GitHubAuth } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
   answerInputSchema,
@@ -137,6 +138,7 @@ export interface ManagementMcpDeps {
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
+  githubAuth?: GitHubAuth;
   landing: Landing;
   draftClient?: DraftClient;
   pollNow: () => void;

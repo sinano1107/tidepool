@@ -448,8 +448,8 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
-  /** 本物と同じく、PR を開く前にタスクブランチを push する —— `refs/remotes/origin/<branch>` が
-   *  無いと積み残し(ADR 0231 決定2)を読めない。`pushes` には数えない(開いている PR への push の記録)。 */
+  /** 本物と同じく、PR を開く前にタスクブランチを push する —— PR の head は origin のブランチ先端から読む。
+   *  `pushes` には数えない(開いている PR への push の記録)。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
     execFileSync("git", ["push", "-u", "origin", input.branch], {
@@ -459,15 +459,7 @@ export class FakeGitHubClient implements GitHubClient {
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     this.prBranches.set(number, input.branch);
-    this.followPush(input);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
-  }
-
-  /** 盤面の push で PR の head はそのブランチの先端へ動く —— 動かなければ、盤面自身の push も記録に無い head と
-   *  読まれる(ADR 0231 決定4)。 */
-  private followPush(input: PushBranchInput): void {
-    const sha = execFileSync("git", ["rev-parse", input.branch], { cwd: input.path }).toString().trim();
-    for (const [number, branch] of this.prBranches) if (branch === input.branch) this.heads.set(number, sha);
   }
 
   /** 記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
@@ -479,7 +471,6 @@ export class FakeGitHubClient implements GitHubClient {
       cwd: input.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    this.followPush(input);
     // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形に
     // しないと、「失敗後に撮り直さない」(ADR 0064 決定4)を測る断言が旧コードでも通る
     if (this.pushFailure) throw this.pushFailure;
@@ -495,14 +486,18 @@ export class FakeGitHubClient implements GitHubClient {
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
-  private headOf(number: number): string {
-    return this.heads.get(number) ?? fakeHead(number);
+  /** PR の head は origin のそのブランチの先端 —— 盤面の push も、別の clone からの push も映る(ADR 0242)。
+   *  scriptHead で置いた head が先に立つ。ブランチを知らない PR は fakeHead。 */
+  private headOf(path: string, number: number): string {
+    const branch = this.prBranches.get(number);
+    if (this.heads.has(number) || branch === undefined) return this.heads.get(number) ?? fakeHead(number);
+    return execFileSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: path }).toString().split("\t")[0] || fakeHead(number);
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
     this.ciChecks.push(ref);
     if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
-    return { ci: this.ciStatus, state: this.stateOf(ref.number), head: this.headOf(ref.number) };
+    return { ci: this.ciStatus, state: this.stateOf(ref.number), head: this.headOf(ref.path, ref.number) };
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
@@ -512,7 +507,7 @@ export class FakeGitHubClient implements GitHubClient {
       throw new Error(`PR #${ref.number} is ${this.stateOf(ref.number).toLowerCase()}`);
     }
     // --match-head-commit: GitHub refuses a head that is no longer the PR's (ADR 0231 決定1)
-    if (head !== this.headOf(ref.number)) {
+    if (head !== this.headOf(ref.path, ref.number)) {
       throw new Error("Head branch was modified. Review and try the merge again.");
     }
     const failure = this.mergeFailures.get(ref.number);
@@ -521,7 +516,8 @@ export class FakeGitHubClient implements GitHubClient {
     this.mergedHeads.push(head);
   }
 
-  /** Moves one PR's head — a push onto its branch (ADR 0231 決定1). */
+  /** Pins one PR's head, over its branch's tip on origin — a push the fixture cannot make, or a sha that exists
+   *  nowhere (ADR 0231 決定1 / ADR 0242). */
   scriptHead(number: number, head: string): void {
     this.heads.set(number, head);
   }
@@ -530,7 +526,7 @@ export class FakeGitHubClient implements GitHubClient {
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
     if (this.findFailure) throw this.findFailure;
     for (const [number, branch] of this.prBranches) {
-      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(number) };
+      if (branch === input.branch) return { number, state: this.stateOf(number), head: this.headOf(input.path, number) };
     }
     return null;
   }

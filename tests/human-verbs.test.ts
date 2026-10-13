@@ -1,4 +1,7 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
@@ -25,19 +28,27 @@ import {
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { quarantineWorkspace, UnknownWorkspaceError } from "../src/workspace.js";
+import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
+  initWorkspaceCheckout,
   queuedForAutoMerge,
 } from "./harness.js";
 
 const NOW = new Date("2026-08-06T00:00:00.000Z");
 
 let db: Db;
+// merge 回答は積み残しを workspace の git で読む —— 読めない path は比べられず拒まれる(ADR 0242 決定3)ので、本物の checkout
+let PRODUCT: WorkspaceConfig;
+beforeAll(async () => {
+  const path = await mkdtemp(join(tmpdir(), "tidepool-human-verbs-product-"));
+  PRODUCT = await initWorkspaceCheckout(path, "product");
+  return () => rm(path, { recursive: true, force: true });
+});
 afterEach(() => {
   db?.close();
   vi.restoreAllMocks();
@@ -624,7 +635,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
       db,
       pollNow: () => {},
       github,
-      resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+      resolveWorkspace: (name) => (name === PRODUCT.name ? PRODUCT : { name: name!, path: `/workspaces/${name}` }),
       landing: unusedLanding,
     },
     question,
@@ -644,8 +655,8 @@ it("merge 回答は question の workspace で live CI を確認してから実 
     mergedEvent: listEvents(db, question.id).find((event) => event.kind === "pr_merged")?.payload,
     mergedBy: listEvents(db, question.id).find((event) => event.kind === "pr_merged")?.worker_id,
   }).toEqual({
-    ciChecks: [{ path: "/workspaces/product", number: 42 }],
-    merged: [{ path: "/workspaces/product", number: 42 }],
+    ciChecks: [{ path: PRODUCT.path, number: 42 }],
+    merged: [{ path: PRODUCT.path, number: 42 }],
     callOrder: ["live CI", "merge"],
     status: "done",
     answerCreatedAt: afterCi.toISOString(),
@@ -681,7 +692,7 @@ function openMergeQuestion(github: FakeGitHubClient) {
         db,
         pollNow: () => {},
         github,
-        resolveWorkspace: (name) => ({ name: name!, path: `/workspaces/${name}` }),
+        resolveWorkspace: (name) => (name === PRODUCT.name ? PRODUCT : { name: name!, path: `/workspaces/${name}` }),
         landing: unusedLanding,
       },
       onlyQuestion(db),
@@ -716,7 +727,7 @@ it("猶予の5分を過ぎても check 未報告の PR への merge 回答は、
   const { github, answer } = answerMergeOnUnreportedCi(5);
 
   await expect(answer).resolves.toMatchObject({ status: "done" });
-  expect(github.merged).toEqual([{ path: "/workspaces/product", number: 42 }]);
+  expect(github.merged).toEqual([{ path: PRODUCT.path, number: 42 }]);
 });
 
 // ADR 0231 決定4: escalate の PR はキューの行を持たない —— 盤面の外の head を回答が先に読めば、起点は回答が刻む
@@ -909,8 +920,6 @@ it("エントリはあるが定義が成立しない名前の agent quarantine �
   editThroughHumanDoor({ db }, work.id, { assignee: "tako" }, () => NOW, "webui");
   await expect(answer()).resolves.toMatchObject({ status: "done" });
 });
-
-const PRODUCT = { name: "product", path: "/workspaces/product" };
 
 // ADR 0229 決定4: 回答受理直前のバックストップは閉じた PR も観測する —— 回答の値に依らず、決定としては記録しない
 it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question に「%s」と答えると、merge せず閉じた観測として決着する", async (answer) => {
