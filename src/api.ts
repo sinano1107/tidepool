@@ -22,8 +22,7 @@ import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import { changeExecutionSettings, executionSettingsChangeSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
-import type { GitHubAuth } from "./github-auth.js";
-import { githubLoggedIn } from "./github-auth.js";
+import { type GitHubAuth, githubLoggedIn } from "./github-auth.js";
 import {
   addIssueCommentThroughHumanDoor,
   answerInputSchema,

@@ -490,9 +490,8 @@ export class FakeGitHubClient implements GitHubClient {
    *  scriptHead で置いた head が先に立つ。ブランチを知らない PR は fakeHead。 */
   private headOf(path: string, number: number): string {
     const branch = this.prBranches.get(number);
-    const tip = () =>
-      execFileSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: path }).toString().split("\t")[0];
-    return this.heads.get(number) ?? (branch === undefined ? fakeHead(number) : tip() || fakeHead(number));
+    if (this.heads.has(number) || branch === undefined) return this.heads.get(number) ?? fakeHead(number);
+    return execFileSync("git", ["ls-remote", "origin", `refs/heads/${branch}`], { cwd: path }).toString().split("\t")[0] || fakeHead(number);
   }
 
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
