@@ -1534,6 +1534,10 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
  *  subtrees from the same decomposition decision. Without such provenance,
  *  only the failed task's subtree is cancelled. Its parent returns to the
  *  queue head only when no unfinished children it waits for remain, as before.
+ *  An Interview pin child's abandon never moves the root to the head (ADR 0245
+ *  決定5); the root is cancelled instead when the answer was a premise breach's,
+ *  or when no done pin child and no unsettled child remain (ADR 0247 決定1・2) —
+ *  a pin child's approval question rejected last ends the root the same way.
  *
  *  Quarantine resolution (ADR 0137 決定3・4): a Confirmation question (declared
  *  by `question_quarantine_kind`, system-internal) takes any answer at all as a
