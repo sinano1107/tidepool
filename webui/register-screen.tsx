@@ -106,7 +106,7 @@ function InterviewTargetsField({ value, onChange, providers, tiers }: {
           <Input label="Model" mono value={t.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
           <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === t.effort || !TidepoolRules.whyInvalidEffort(t.provider, t.model, effort)).map((effort) => effort ?? { value: '', label: 'no effort' })}
             value={t.effort ?? ''} onChange={(e) => update(i, { effort: e.target.value || null })} />
-          <Select label="Tier" options={tiers.map((tier) => tier.name)} value={t.tier} onChange={(e) => update(i, { tier: e.target.value })} />
+          <Select label="Target tier" options={tiers.map((tier) => tier.name)} value={t.tier} onChange={(e) => update(i, { tier: e.target.value })} />
           <Button variant="ghost" size="sm" onClick={() => onChange(value.filter((_, j) => j !== i))} aria-label={`remove target ${i + 1}`}>Remove</Button>
         </div>
       ))}

@@ -1072,7 +1072,7 @@ function InterviewTargetsField({ value, onChange, providers, tiers }) {
       value: t.effort ?? "",
       onChange: (e) => update(i, { effort: e.target.value || null })
     }
-  ), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tiers.map((tier) => tier.name), value: t.tier, onChange: (e) => update(i, { tier: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(value.filter((_, j) => j !== i)), "aria-label": `remove target ${i + 1}` }, "Remove"))), /* @__PURE__ */ React.createElement(
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Target tier", options: tiers.map((tier) => tier.name), value: t.tier, onChange: (e) => update(i, { tier: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(value.filter((_, j) => j !== i)), "aria-label": `remove target ${i + 1}` }, "Remove"))), /* @__PURE__ */ React.createElement(
     Button,
     {
       variant: "secondary",
