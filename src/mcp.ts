@@ -78,6 +78,7 @@ import {
   type TaskType,
   taskHistoryRows,
   type Unstored,
+  withheldDecompositionVerb,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import {
@@ -500,6 +501,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
+  // ADR 0245 決定1・3: Interview の木では分解の verb を1つ登録しない(同じ task ごとの差し替え)
+  const withheld = attributedTaskId === null ? undefined : withheldDecompositionVerb(deps.db, attributedTaskId);
 
   server.registerTool(
     "get_current_task",
@@ -632,38 +635,40 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
-    "decompose",
-    {
-      description:
-        "Split the remaining work into child tasks in one decision: records the " +
-        "reason in the decision log, queues the children at the tail, blocks the " +
-        "current task until they all finish, and frees the slot. Once every child " +
-        "settles, the task becomes pickable again in normal queue order to " +
-        "integrate and complete for real. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: {
-        reason: requiredTextSchema,
-        children: decomposeChildrenSchema(deps.db),
+  if (withheld !== "decompose") {
+    server.registerTool(
+      "decompose",
+      {
+        description:
+          "Split the remaining work into child tasks in one decision: records the " +
+          "reason in the decision log, queues the children at the tail, blocks the " +
+          "current task until they all finish, and frees the slot. Once every child " +
+          "settles, the task becomes pickable again in normal queue order to " +
+          "integrate and complete for real. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          reason: requiredTextSchema,
+          children: decomposeChildrenSchema(deps.db),
+        },
       },
-    },
-    async (input) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        assertChildrenKnown(deps, input.children);
-        assertPinsRunnable(deps, task, input.children);
-        const children = decomposeTask(
-          deps.db,
-          task,
-          input,
-          workerId,
-          now,
-          attributedAuthorityOrQuarantine(deps, task),
-          deps.isProtectedWorkspace,
-          "worker",
-        );
-        return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
-      }),
-  );
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+          assertChildrenKnown(deps, input.children);
+          assertPinsRunnable(deps, task, input.children);
+          const children = decomposeTask(
+            deps.db,
+            task,
+            input,
+            workerId,
+            now,
+            attributedAuthorityOrQuarantine(deps, task),
+            deps.isProtectedWorkspace,
+            "worker",
+          );
+          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+        }),
+    );
+  }
 
   server.registerTool(
     "score_interview",
@@ -754,34 +759,36 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
-    "redecompose",
-    {
-      description:
-        "Answer a child's premise breach by replacing your decomposition decision in one call: " +
-        "cancels every unsettled child of the breached decision (done children stay), then " +
-        "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
-        "while a child of this task has an open premise breach. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) },
-    },
-    async (input) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-        assertChildrenKnown(deps, input.children);
-        assertPinsRunnable(deps, task, input.children);
-        const children = redecompose(
-          deps.db,
-          task,
-          input,
-          workerId,
-          now,
-          attributedAuthorityOrQuarantine(deps, task),
-          deps.isProtectedWorkspace,
-          "worker",
-        );
-        return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
-      }),
-  );
+  if (withheld !== "redecompose") {
+    server.registerTool(
+      "redecompose",
+      {
+        description:
+          "Answer a child's premise breach by replacing your decomposition decision in one call: " +
+          "cancels every unsettled child of the breached decision (done children stay), then " +
+          "decomposes the remaining work exactly as decompose does, and frees the slot. Only " +
+          "while a child of this task has an open premise breach. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+          assertChildrenKnown(deps, input.children);
+          assertPinsRunnable(deps, task, input.children);
+          const children = redecompose(
+            deps.db,
+            task,
+            input,
+            workerId,
+            now,
+            attributedAuthorityOrQuarantine(deps, task),
+            deps.isProtectedWorkspace,
+            "worker",
+          );
+          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+        }),
+    );
+  }
 
   if (subject === null) {
     server.registerTool(

@@ -21,11 +21,17 @@ interface DoctrineVocabulary {
   workflow: boolean;
 }
 
+const NOT_SPLIT = `This task is not split: complete it in this session. If it is
+larger than one session can finish, finish what you can and state in the
+handoff what remains.`;
+
 // injected into every spawned session's system prompt (issue #31 / ADR
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
 // each authority profile would drift, and "Agent tool"/"Workflow tool" are
-// vendor vocabulary the adapter translates the board's line into (ADR 0005)
-export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary): string {
+// vendor vocabulary the adapter translates the board's line into (ADR 0005).
+// `split` false は分けない task(Interview の pin の子、ADR 0245 決定2)で、decompose を指す文を
+// 1 session で完了せよという文に差し替える。Interview であることは書かない
+export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, split: boolean): string {
   const delegateAtSentenceStart = delegate[0]!.toUpperCase() + delegate.slice(1);
   // Claude の文面はバイト単位で不変(#695)で、2段落目の末尾だけ委譲先の語の最後の空白で折り返している
   const delegateAtLineEnd = delegate.replace(/ (?=\S+$)/, "\n");
@@ -33,17 +39,17 @@ export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary): strin
 
 Work that needs independent completion criteria, separate authority, its own
 risk, or survival across sessions must not be routed to ${delegate} —
-that is delegation smuggled past the board. Register that split with the
-tidepool MCP's decompose instead.
+that is delegation smuggled past the board. ${split ? `Register that split with the
+tidepool MCP's decompose instead.` : NOT_SPLIT}
 
 ${delegateAtSentenceStart} may only be used for labor-splitting that does not divide
 accountability (exploration, parallel research, mechanical edits): you carry
-full accountability for its output as the parent task. If another registry
-agent's capability is needed, use decompose with an assignee, not ${delegateAtLineEnd}.
+full accountability for its output as the parent task.${split ? ` If another registry
+agent's capability is needed, use decompose with an assignee, not ${delegateAtLineEnd}.` : ""}
 ${workflow ? `
 The Workflow tool is off-limits in task sessions: a workflow script is a
-decompose plan that never reached the board. If you find yourself wanting to
-write one, register that split with the tidepool MCP's decompose instead.
+${split ? "decompose plan" : "split"} that never reached the board.${split ? ` If you find yourself wanting to
+write one, register that split with the tidepool MCP's decompose instead.` : ""}
 ` : ""}
 Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
 is denied by the harness, not by an attacker. If a subagent reports that
