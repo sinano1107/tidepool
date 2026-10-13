@@ -2,14 +2,14 @@
 name: triage-sweep
 description: Triage the newest N needs-triage / needs-info issues unattended — related issues clustered, clusters investigated in parallel sub-agents, each issue left with a comment — a brief, grilling questions, findings, or a test-only PR pinning a verdict — and the auto-triaged label for the human to act on.
 disable-model-invocation: true
-argument-hint: "<N>"
+argument-hint: "<N> [low]"
 ---
 
 # Triage sweep
 
 `/triage`'s per-issue evaluation, run without the maintainer in the loop and stopped where the maintainer's judgement starts. Every issue it evaluates ends on `auto-triaged` with a comment; moving the state label is the maintainer's step ([triage-labels.md](../../../docs/agents/triage-labels.md)).
 
-`$ARGUMENTS` is N, the number of issues to process this run.
+`$ARGUMENTS` is N, the number of issues to process this run, optionally followed by `low` to sweep the `priority:low` issues instead of the regular queue.
 
 ## 1. Check the session
 
@@ -21,7 +21,7 @@ argument-hint: "<N>"
 
 ## 2. Pick the issues
 
-List open issues carrying `needs-triage` or `needs-info`, drop any carrying `auto-triaged`, `verify:production`, or `priority:low`, or with an open blocker (`gh api repos/{owner}/{repo}/issues/<n> --jq .issue_dependencies_summary.blocked_by` above 0). Order them: no `priority:*` label first, then `priority:high`, then `priority:medium`, each group by number descending ([triage-labels.md](../../../docs/agents/triage-labels.md) — `low` waits for the gate and is not evaluated until then). Take the first N. Fewer than N left means the queue is drained — take what there is.
+List open issues carrying `needs-triage` or `needs-info`, drop any carrying `auto-triaged` or `verify:production`, or with an open blocker (`gh api repos/{owner}/{repo}/issues/<n> --jq .issue_dependencies_summary.blocked_by` above 0). Without `low` in the arguments, also drop `priority:low` and order the rest: no `priority:*` label first, then `priority:high`, then `priority:medium`, each group by number descending ([triage-labels.md](../../../docs/agents/triage-labels.md) — `low` waits for the gate and is not evaluated until then). With `low`, keep only `priority:low`, by number descending — the maintainer asked for the deferred set on purpose. Take the first N. Fewer than N left means the queue is drained — take what there is.
 
 ## 3. Cluster
 

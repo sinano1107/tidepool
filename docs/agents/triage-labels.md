@@ -53,7 +53,8 @@ damage the repo, the wallet, or trust in real use. No sub-ranking inside `high`:
 with no open blocker.
 
 **Default is `low`.** Whoever files an issue labels it; raising it needs one line saying what it blocks.
-Readers: `/triage-sweep` orders its queue unlabeled → `high` → `medium` and leaves `low` out; the sweep
+Readers: `/triage-sweep` orders its queue unlabeled → `high` → `medium` and leaves `low` out unless invoked
+as `/triage-sweep <N> low`, which sweeps only the `low` set; the sweep
 applies the label itself (it is not a state move, so no approval is involved); filing steps in `/triage`,
 grilling, and `/to-tickets` label at creation; the maintainer picks from `high`.
 
