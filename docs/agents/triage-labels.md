@@ -46,13 +46,15 @@ the next gate on this line first, then relabel every open issue; until then the 
 
 Four mechanical tests put an issue on `high`: its implementation changes a table or column of the schema
 (no migrations before release — the board is rebuilt, and real-use records with it; an index can be added
-to a live DB and does not count); a known defect in what writes records
-(decision log, events, episodes, usage, PR outcome); the implementation or a known defect of a process
-that acts on its own (memory / routing meta-review, Interview, the learner); a known defect that would
-damage the repo, the wallet, or trust in real use. No sub-ranking inside `high`: take the oldest `high`
+to a live DB and does not count); a defect in what writes records
+(decision log, events, episodes, usage, PR outcome); the implementation or a defect of a process
+that acts on its own (memory / routing meta-review, Interview, the learner); a defect that would
+damage the repo, the wallet, or trust in real use. A defect here includes one not yet confirmed: a
+suspicion that would meet a test if true goes on `high`, its first step is the measurement, and it comes
+down (or closes) when the measurement says otherwise. No sub-ranking inside `high`: take the oldest `high`
 with no open blocker.
 
-**Default is `low`.** Whoever files an issue labels it; raising it needs one line saying what it blocks.
+**Default is `low`** when it is unclear whether a test applies. Whoever files an issue labels it; raising it needs one line saying what it blocks.
 Readers: `/triage-sweep` orders its queue unlabeled → `high` → `medium` and leaves `low` out unless invoked
 as `/triage-sweep <N> low`, which sweeps only the `low` set; the sweep
 applies the label itself (it is not a state move, so no approval is involved); filing steps in `/triage`,
