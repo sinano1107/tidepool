@@ -7,12 +7,12 @@ import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
+import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
   contentSourceFor,
   countUnsettledAttachedChildren,
   getTask,
-  isLandingQuestion,
   landingSurface,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -25,6 +25,7 @@ import {
   subtreeSql,
   type Task,
   type TaskType,
+  type TierRef,
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
@@ -227,20 +228,31 @@ export async function outsidePushDropNotice(
 
 export function landingAnnotation(
   db: Db,
-  task: Pick<
-    Task,
-    "question_pending_local_merge_task_id" | "question_pending_merge_pr" | "workspace"
-  >,
+  task: QuestionColumns<TierRef> & Pick<Task, "workspace">,
 ): { blocked_by: LandingBlock["kind"] | null } | null {
-  const local = task.question_pending_local_merge_task_id;
-  const pr = task.question_pending_merge_pr;
-  if (!isLandingQuestion(task)) return null;
+  const kind = questionKindOf(task);
   let landingTaskId: string;
-  try {
-    landingTaskId = local ?? taskIdForPr(db, pr as number, task.workspace);
-  } catch (error) {
-    if (!(error instanceof DomainError)) throw error;
-    return { blocked_by: "attached_children" };
+  switch (kind.kind) {
+    case "local_merge":
+      landingTaskId = kind.task_id;
+      break;
+    case "pr_merge":
+      try {
+        landingTaskId = taskIdForPr(db, kind.pr, task.workspace);
+      } catch (error) {
+        if (!(error instanceof DomainError)) throw error;
+        return { blocked_by: "attached_children" };
+      }
+      break;
+    case "escalation":
+    case "failure":
+    case "premise_breach":
+    case "approval":
+    case "pr_promotion_retry":
+    case "proposal":
+    case "quarantine":
+    case "cli_auth_expiry_warning":
+      return null;
   }
   return { blocked_by: landingBlock(db, landingTaskId)?.kind ?? null };
 }
@@ -420,7 +432,7 @@ function registerPrPromotionQuestion(
           recommendation: "retry",
         },
       ],
-      pending_pr_promotion_task_id: task.id,
+      question_kind: { kind: "pr_promotion_retry", task_id: task.id },
       workspace: task.workspace ?? undefined,
     },
     now,
@@ -518,7 +530,7 @@ export function registerLocalMergeQuestion(
       purpose,
       completion_criteria: "a human decides whether to land the completed task branch",
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation: "merge" }],
-      pending_local_merge_task_id: task.id,
+      question_kind: { kind: "local_merge", task_id: task.id },
       workspace: task.workspace ?? undefined,
     },
     now,

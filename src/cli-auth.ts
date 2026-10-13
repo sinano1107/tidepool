@@ -203,7 +203,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
           recommendation: "token rotated",
         },
       ],
-      cli_auth_expiry_warning: expiry,
+      question_kind: { kind: "cli_auth_expiry_warning", expiry },
     },
     now,
     BOARD_WORKER_ID,

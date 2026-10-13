@@ -1026,7 +1026,7 @@ it("提案を運ぶ question は着地の門で付帯子として数え、提案
 
   registerTask(
     db,
-    { ...question, proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } },
+    { ...question, question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } },
     at,
     ...HUMAN_WEBUI,
   );

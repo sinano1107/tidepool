@@ -140,14 +140,14 @@ function registerFailureQuestion(
     task,
     {
       // abandon's consequence is spelled out via abandonConsequence; it's
-      // declared via the system-internal cancel_option below, never exposed
+      // declared via the system-internal failure kind below, never exposed
       // to agents.
       context:
         `${reason}\n\n` +
         `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
         abandonConsequence(db, task),
       questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
-      cancel_option: "abandon",
+      question_kind: { kind: "failure", cancel_option: "abandon" },
     },
     BOARD_WORKER_ID,
     now,

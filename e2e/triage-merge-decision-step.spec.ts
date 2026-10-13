@@ -10,7 +10,7 @@ function landQuestion(t: Tidepool, taskId: string, title: string) {
     purpose: "the completed task branch awaits a merge decision",
     completion_criteria: "a human decides whether to land the completed task branch",
     question: [{ title, options: ["merge", "hold"], recommendation: "merge" }],
-    pending_local_merge_task_id: taskId,
+    question_kind: { kind: "local_merge", task_id: taskId },
   });
 }
 

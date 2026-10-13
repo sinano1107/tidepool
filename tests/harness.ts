@@ -817,7 +817,7 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
-/** `parentId` を主題とする失敗 question(retry / abandon、`cancel_option: "abandon"`)を1本立てる。 */
+/** `parentId` を主題とする失敗 question(retry / abandon、cancel option は abandon)を1本立てる。 */
 export function failureQuestion(db: Db, parentId: string, at: Date): Task {
   return registerTask(
     db,
@@ -828,7 +828,7 @@ export function failureQuestion(db: Db, parentId: string, at: Date): Task {
       completion_criteria: "answered",
       parent_id: parentId,
       question: [{ title: "next step", options: ["retry", "abandon"], recommendation: "retry" }],
-      cancel_option: "abandon",
+      question_kind: { kind: "failure", cancel_option: "abandon" },
     },
     at,
     ...HUMAN_WEBUI,

@@ -1895,7 +1895,10 @@ function mergeQuestion(
       purpose: "a human decides whether to land",
       completion_criteria: "the answer is recorded",
       question: [{ title: "land it", options: ["merge", "hold"], recommendation: "merge" }],
-      ...pending,
+      question_kind:
+        "pending_merge_pr" in pending
+          ? { kind: "pr_merge", pr: pending.pending_merge_pr }
+          : { kind: "local_merge", task_id: pending.pending_local_merge_task_id },
     },
     clock.now(),
     ...HUMAN_WEBUI,

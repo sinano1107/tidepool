@@ -31,6 +31,7 @@ import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryA
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import { openQuarantineQuestion, parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
+import { questionKindOf } from "./question-kind.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -897,7 +898,8 @@ export async function submitAnswer(
   // verify quarantine before answerQuestion eventually rejects the payload.
   answers = assertAnswerable(task, answers, comment);
   // 提案は段を id で持つ。修正値・書き込みは名前で喋るので、いまの名前に引いた形で読む(issue #1436)
-  const proposal = task.question_proposal && proposalTierNames(deps.db, task.question_proposal);
+  const kind = questionKindOf(task);
+  const proposal = kind.kind === "proposal" ? proposalTierNames(deps.db, kind.proposal) : null;
   // 修正値は approve だけが種別ごとの schema で受ける(ADR 0150 決定2・ADR 0152 決定2)。昇格 / 降格・candidate を持たない memory の提案(invalidate・既存の後継の consolidate)・reject の修正値も黙って捨てず断る
   let amended: ProposalAmendment | undefined;
   if (amendment !== undefined) {
@@ -915,137 +917,150 @@ export async function submitAnswer(
     assertMemoryReferencesKnown(deps, { addressee: amended && "addressee" in amended ? amended.addressee : named.addressee, workspace: named.scope });
   }
 
-  const promotionTaskId = task.question_pending_pr_promotion_task_id;
-  const wantsPromotionRetry =
-    promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0];
-  if (wantsPromotionRetry) {
-    const verdicts = await deps.landing.converge({ answering: task.id });
-    const error = promotionRetryError(verdicts.find((root) => root.taskId === promotionTaskId)?.verdict);
-    if (error) throw new DomainError(error);
-  }
-
-  const localMergeTaskId = task.question_pending_local_merge_task_id;
-  const wantsLocalMerge =
-    localMergeTaskId !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
-  if (wantsLocalMerge) {
-    assertLandingAllowed(deps.db, localMergeTaskId);
-    const mergeWorkspace = resolveWorkspaceForAnswer(
-      deps,
-      task.workspace,
-      "cannot land the task branch",
-    );
-    try {
-      mergeTaskToProtected(deps.db, mergeWorkspace, localMergeTaskId);
-    } catch (err) {
-      // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
-      // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
-      // しない —— question は開いたまま残り、人間は直してもう一度答えられる
-      if (err instanceof OutOfBandProtectedBranchError) {
-        quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
-      }
-      throw new DomainError(err instanceof Error ? err.message : String(err));
-    }
-  }
-
-  const mergePr = task.question_pending_merge_pr;
-  // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
-  // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
-  // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
-  // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
-  // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
-  if (await deps.landing.observePullRequestOutcome(task)) {
-    return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
-  }
-  const wantsMerge = mergePr !== null && answers[0] === MERGE_QUESTION_OPTIONS[0];
   let release: (() => void) | null = null;
+  let tierTarget: Tier | undefined;
+  let registryCommit: string | undefined;
   try {
-    if (wantsMerge) {
-      const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
-      assertLandingAllowed(deps.db, landingTaskId);
-      if (!deps.github) {
-        throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
+    // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
+    switch (kind.kind) {
+      case "pr_promotion_retry":
+        if (answers[0] === PR_PROMOTION_FAILURE_OPTIONS[0]) {
+          const verdicts = await deps.landing.converge({ answering: task.id });
+          const error = promotionRetryError(verdicts.find((root) => root.taskId === kind.task_id)?.verdict);
+          if (error) throw new DomainError(error);
+        }
+        break;
+      case "local_merge":
+        if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
+          assertLandingAllowed(deps.db, kind.task_id);
+          const mergeWorkspace = resolveWorkspaceForAnswer(
+            deps,
+            task.workspace,
+            "cannot land the task branch",
+          );
+          try {
+            mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id);
+          } catch (err) {
+            // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
+            // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
+            // しない —— question は開いたまま残り、人間は直してもう一度答えられる
+            if (err instanceof OutOfBandProtectedBranchError) {
+              quarantineWorkspace(deps.db, mergeWorkspace.name, err, now());
+            }
+            throw new DomainError(err instanceof Error ? err.message : String(err));
+          }
+        }
+        break;
+      case "pr_merge": {
+        const mergePr = kind.pr;
+        // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
+        // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
+        // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
+        // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
+        // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
+        if (await deps.landing.observePullRequestOutcome(task)) {
+          return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
+        }
+        if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
+          const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
+          assertLandingAllowed(deps.db, landingTaskId);
+          if (!deps.github) {
+            throw new DomainError("no GitHub/workspace configured — cannot check CI or merge");
+          }
+          const mergeWorkspace = resolveWorkspaceForAnswer(
+            deps,
+            task.workspace,
+            "cannot check CI or merge",
+            "GitHub/workspace",
+          );
+          // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
+          const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
+          // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
+          if (pr.state === "unreadable") {
+            throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
+          }
+          // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
+          observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
+          // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
+          let left: string[];
+          try {
+            left = await contentLeftBehind(deps.db, mergeWorkspace, landingTaskId, pr.head, { auth: deps.githubAuth });
+          } catch (err) {
+            throw new DomainError(
+              `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
+                (err instanceof Error ? err.message : String(err)),
+            );
+          }
+          if (left.length > 0) {
+            // ADR 0242 決定4: 盤面の外の push が落とした内容は盤面が運べない —— その事実と直す手段を言う
+            const dropped = await outsidePushDropNotice(deps.db, mergeWorkspace, landingTaskId, left, { number: mergePr, head: pr.head });
+            if (dropped) throw new DomainError(`cannot merge: ${dropped}; then answer again`);
+            // ADR 0240 決定5: 運ぶ面を名指しする
+            const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
+            const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
+            const carrier = quarantineQuestionId
+              ? `the open workspace quarantine question (${quarantineQuestionId})`
+              : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
+            throw new DomainError(
+              `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — ` +
+                (carrier
+                  ? `${carrier} carries it; answer that question first, then answer again`
+                  : "the board is still carrying it; answer again later"),
+            );
+          }
+          // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
+          if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
+            throw new DomainError(
+              `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
+                `${UNREPORTED_CI_GRACE_TEXT} after ${UNREPORTED_CI_GRACE_ORIGIN_TEXT}`,
+            );
+          }
+          if (pr.ci !== "success" && pr.ci !== "unreported") {
+            throw new DomainError(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
+          }
+          // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
+          // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
+          release = deps.landing.takeInFlightMark(task.workspace, mergePr);
+          if (!release) {
+            throw new DomainError(`PR #${mergePr} is being merged by the board right now — answer again in a moment`);
+          }
+          // External merge precedes the persisted answer. If it fails, the question
+          // stays open and the human can retry instead of being stranded as done.
+          // CI を読んだ head に固定する(ADR 0231 決定1)
+          // 失敗は文面で分けずすべて DomainError に包む —— ローカル着地(ADR 0103 決定4)と同じ形で、WebUI は 409 で理由を見られる
+          try {
+            await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
+          } catch (err) {
+            throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+        break;
       }
-      const mergeWorkspace = resolveWorkspaceForAnswer(
-        deps,
-        task.workspace,
-        "cannot check CI or merge",
-        "GitHub/workspace",
-      );
-      // ADR 0242 決定1: head を1回だけ読み、同じ head で積み残し・CI・merge を通す
-      const pr = await deps.github.readPullRequest({ path: mergeWorkspace.path, number: mergePr });
-      // ADR 0242 決定3: 比べられなければ積み残し —— 拒否文は「運んでいる途中」でなく、比べられなかった事実と理由を言う(#1854)
-      if (pr.state === "unreadable") {
-        throw new DomainError(`cannot merge: could not read PR #${mergePr}, so its head could not be compared with the task's content`);
+      case "quarantine": {
+        // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the
+        // kind's check runs immediately before accepting, and a board that cannot
+        // check that kind refuses the answer rather than accepting it unverified.
+        const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
+        if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
+        await check(kind.value);
+        break;
       }
-      // 記録に無い head は拒否より前に刻む —— escalate の PR はキューの行を持たないので、起点はここで残す(ADR 0231 決定4)
-      observePrHead(deps.db, landingTaskId, mergePr, pr.head, now());
-      // ADR 0231 決定3: 積み残しは門の検査と同じ時点で、門とは別に読む
-      let left: string[];
-      try {
-        left = await contentLeftBehind(deps.db, mergeWorkspace, landingTaskId, pr.head, { auth: deps.githubAuth });
-      } catch (err) {
-        throw new DomainError(
-          `cannot merge: could not compare PR #${mergePr}'s head ${pr.head} with the task's content — ` +
-            (err instanceof Error ? err.message : String(err)),
-        );
-      }
-      if (left.length > 0) {
-        // ADR 0242 決定4: 盤面の外の push が落とした内容は盤面が運べない —— その事実と直す手段を言う
-        const dropped = await outsidePushDropNotice(deps.db, mergeWorkspace, landingTaskId, left, { number: mergePr, head: pr.head });
-        if (dropped) throw new DomainError(`cannot merge: ${dropped}; then answer again`);
-        // ADR 0240 決定5: 運ぶ面を名指しする
-        const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
-        const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
-        const carrier = quarantineQuestionId
-          ? `the open workspace quarantine question (${quarantineQuestionId})`
-          : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
-        throw new DomainError(
-          `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — ` +
-            (carrier
-              ? `${carrier} carries it; answer that question first, then answer again`
-              : "the board is still carrying it; answer again later"),
-        );
-      }
-      // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
-      if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {
-        throw new DomainError(
-          `CI checks on PR #${mergePr} have not reported yet — answer again once they report, or ` +
-            `${UNREPORTED_CI_GRACE_TEXT} after ${UNREPORTED_CI_GRACE_ORIGIN_TEXT}`,
-        );
-      }
-      if (pr.ci !== "success" && pr.ci !== "unreported") {
-        throw new DomainError(`CI is not green yet (status: ${pr.ci}) — cannot merge`);
-      }
-      // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
-      // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
-      release = deps.landing.takeInFlightMark(task.workspace, mergePr);
-      if (!release) {
-        throw new DomainError(`PR #${mergePr} is being merged by the board right now — answer again in a moment`);
-      }
-      // External merge precedes the persisted answer. If it fails, the question
-      // stays open and the human can retry instead of being stranded as done.
-      // CI を読んだ head に固定する(ADR 0231 決定1)
-      // 失敗は文面で分けずすべて DomainError に包む —— ローカル着地(ADR 0103 決定4)と同じ形で、WebUI は 409 で理由を見られる
-      try {
-        await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
-      } catch (err) {
-        throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
+      case "proposal":
+        // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
+        if (proposal?.kind === "registry" && answers[0] === "approve") {
+          tierTarget = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
+          registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
+        }
+        break;
+      case "escalation":
+      case "failure":
+      case "premise_breach":
+      case "approval":
+      case "cli_auth_expiry_warning":
+        break;
+      default:
+        kind satisfies never;
     }
-
-    // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the
-    // kind's check runs immediately before accepting, and a board that cannot
-    // check that kind refuses the answer rather than accepting it unverified.
-    const quarantineKind = task.question_quarantine_kind;
-    if (quarantineKind) {
-      const check = deps.quarantineChecks?.[quarantineKind as QuarantineKind];
-      if (!check) throw new DomainError(`this board cannot verify a ${quarantineKind} repair`);
-      await check(task.question_quarantine_value);
-    }
-
-    // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
-    const tierTarget = proposal?.kind === "registry" && answers[0] === "approve" ? ((amended as { to: Tier } | undefined)?.to ?? proposal.to) : undefined;
-    const registryCommit = tierTarget && proposal?.kind === "registry" ? await landAgentTier(deps, task.id, task.question_proposal as RegistryProposal, tierTarget, now) : undefined;
 
     // An answer during triage is durable immediately, but its parent unblock is
     // staged until commit. The activity touch also defers the timeout close.
@@ -1093,23 +1108,23 @@ export async function submitAnswer(
       }
       return answered;
     })();
-    if (wantsMerge) {
+    if (kind.kind === "pr_merge" && answers[0] === MERGE_QUESTION_OPTIONS[0]) {
       appendEvent(deps.db, {
         taskId: task.id,
         workerId: HUMAN_WORKER_ID,
         origin,
-        payload: { kind: "pr_merged", pr_number: mergePr! },
+        payload: { kind: "pr_merged", pr_number: kind.pr },
         at: now(),
       });
     }
     // Giving up promotion otherwise leaves no trace beyond a settled question;
     // preserve the reason on the immutable decision log of that question.
     // 断念した内容(その時点の head)は盤面名義の事実としてタスクに刻む(ADR 0225 決定1)
-    if (promotionTaskId !== null && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
+    if (kind.kind === "pr_promotion_retry" && answers[0] === PR_PROMOTION_FAILURE_OPTIONS[1]) {
       logDecision(
         deps.db,
         question,
-        `PR promotion abandoned for task ${promotionTaskId} — this content stays on its task branch; a later change to the branch asks again`,
+        `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a later change to the branch asks again`,
         HUMAN_WORKER_ID,
         now(),
         origin,
@@ -1118,7 +1133,7 @@ export async function submitAnswer(
         deps.db,
         buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
         task.workspace,
-        promotionTaskId,
+        kind.task_id,
         now(),
       );
     }
@@ -1126,7 +1141,7 @@ export async function submitAnswer(
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
     // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
     // など)では no-op。
-    if (quarantineKind === "containment") deps.reclaim?.acceptReclaimed();
+    if (kind.kind === "quarantine" && kind.quarantine === "containment") deps.reclaim?.acceptReclaimed();
     // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
     if (!session) deps.pollNow();

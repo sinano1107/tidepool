@@ -155,7 +155,7 @@ it("answering a proposal question does not return its parent to the queue head(i
       completion_criteria: "answered",
       parent_id: parent.id,
       question: [{ title: "approve?", options: ["approve", "reject"], recommendation: "approve" }],
-      proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] },
+      question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } },
     },
     new Date(2),
     ...HUMAN_WEBUI,

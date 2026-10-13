@@ -27,7 +27,7 @@ function board() {
       ...HUMAN_WEBUI,
     );
   const approval = (title: string, child: { risk_flag?: boolean; assignee?: string } = {}) =>
-    question({ pending_child: { title, purpose: "p", completion_criteria: "c", ...child } });
+    question({ question_kind: { kind: "approval", pending_child: { title, purpose: "p", completion_criteria: "c", ...child } } });
   return { db, parent, question, approval };
 }
 
@@ -64,10 +64,10 @@ it("assignee だけが理由の子(risk_flag なし)の承認 question は、親
 
 it("理由必須の選択肢 needs_comment は memory 提案で reject と defer、routing / registry 提案と承認 question で reject、ほかは空", () => {
   const { question, approval } = board();
-  const memory = question({ proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } });
-  const routing = question({ proposal: { kind: "routing", op: "promote", pin: { promoted: false } } });
+  const memory = question({ question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } });
+  const routing = question({ question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", pin: { promoted: false } } } });
   const registry = question({
-    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] }, // 段は id(種の economy / standard)
+    question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
   });
 
   expect(needsComment(memory)).toEqual(["reject", "defer"]);

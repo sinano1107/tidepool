@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildHumanTaskPushPayload, buildQuestionPushPayload } from "../src/push.js";
+import { questionColumns } from "../src/question-kind.js";
 import type { Task } from "../src/tasks.js";
 
 function questionTask(overrides: Partial<Task> = {}): Task {
@@ -22,12 +23,7 @@ function questionTask(overrides: Partial<Task> = {}): Task {
       { title: "workspace を quarantine 解除していい?", options: ["approve", "reject"], recommendation: "approve" },
     ],
     question_answer: null,
-    question_cancel_option: null,
-    question_pending_child: null,
-    question_pending_merge_pr: null,
-    question_pending_local_merge_task_id: null,
-    question_quarantine_kind: null,
-    question_quarantine_value: null,
+    ...questionColumns({ kind: "escalation" }),
     created_at: new Date(0).toISOString(),
     ...overrides,
   } as Task;

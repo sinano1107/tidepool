@@ -129,17 +129,17 @@ it("comment が空白だけの承認 question の reject は HTTP で 409 にな
 // 理由必須の門(ADR 0179 決定1〜4)は domain 層の answerQuestion に置く —— どの扉から来ても同じ。
 const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
-  memory: { options: ["approve", "reject", "defer"], proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } },
-  routing: { options: ["approve", "reject"], proposal: { kind: "routing", op: "promote", pin: { promoted: false } } },
+  memory: { options: ["approve", "reject", "defer"], question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } },
+  routing: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", pin: { promoted: false } } } },
   registry: {
     options: ["approve", "reject"],
-    proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] }, // 段は id(種の economy / standard)
+    question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)
   },
-  approval: { options: ["approve", "reject"], pending_child: { title: "B", purpose: "p", completion_criteria: "c" } },
+  approval: { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
   escalation: { options: ["a", "b"] },
-  failure: { options: ["retry", "abandon"], cancel_option: "abandon" },
-  merge: { options: ["merge", "hold"], pending_merge_pr: 7 },
-  promotion: { options: ["retry", "abandon promotion"], pending_pr_promotion_task_id: "t-1" },
+  failure: { options: ["retry", "abandon"], question_kind: { kind: "failure", cancel_option: "abandon" } },
+  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7 } },
+  promotion: { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1" } },
 } satisfies Record<string, Partial<RegisterTaskInput> & { options: string[] }>;
 
 function domainQuestion(kind: keyof typeof QUESTIONS) {

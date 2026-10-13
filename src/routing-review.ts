@@ -466,7 +466,7 @@ export function proposeRoutingChange(
       completion_criteria: "a human answer is recorded",
       parent_id: metaReviewId,
       question: [{ title, detail, options: ["approve", "reject"], recommendation: "approve" }],
-      proposal,
+      question_kind: { kind: "proposal", proposal },
     },
     now,
     workerId,

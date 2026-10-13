@@ -413,7 +413,7 @@ export function registerQuarantine(
       question: question ?? [
         { title: prose.title, options: ["repaired by hand"], recommendation: "repaired by hand" },
       ],
-      quarantine: { kind, value },
+      question_kind: { kind: "quarantine", quarantine: kind, value },
     },
     now,
     BOARD_WORKER_ID,

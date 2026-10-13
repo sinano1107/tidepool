@@ -123,12 +123,12 @@ it("承認経由で実体化した子と未回答の承認 question は同じ分
       parent_id: parent.id,
       based_on_decision: 48,
       question: [{ title: "approve B", options: ["approve", "reject"], recommendation: "approve" }],
-      pending_child: {
+      question_kind: { kind: "approval", pending_child: {
         title: "B",
         purpose: "purpose of B",
         completion_criteria: "criteria of B",
         based_on_decision: 48,
-      },
+      } },
     },
     at,
     ...HUMAN_WEBUI,
@@ -145,12 +145,12 @@ it("承認経由で実体化した子と未回答の承認 question は同じ分
       parent_id: parent.id,
       based_on_decision: 48,
       question: [{ title: "approve C", options: ["approve", "reject"], recommendation: "approve" }],
-      pending_child: {
+      question_kind: { kind: "approval", pending_child: {
         title: "C",
         purpose: "purpose of C",
         completion_criteria: "criteria of C",
         based_on_decision: 48,
-      },
+      } },
     },
     at,
     ...HUMAN_WEBUI,
