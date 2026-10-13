@@ -205,11 +205,11 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
   expect(tierNames(db)).not.toContain("trial");
 });
 
-/** 1回の分解で pin した子を `count` 個走らせて完了させる(spawn は pin の値と対象の段で記録される)。 */
-function ranChildren(db: Db, root: Task, count = 1, pin = opusHigh) {
-  const children = Array.from({ length: count }, () => ({ ...CHILD, interview_pin: pin }));
+/** 1回の分解で opusHigh を pin した子を `count` 個走らせて完了させる(spawn は pin の値と対象の段で記録される)。 */
+function ranChildren(db: Db, root: Task, count = 1) {
+  const children = Array.from({ length: count }, () => ({ ...CHILD, interview_pin: opusHigh }));
   return decomposeTaskViaWorker(db, root, { reason: "r", children }, "auditor", new Date(0)).map((child) => {
-    const spawned = { ...WORKER_SPAWNED, advisor: null, model: pin.model, effort: pin.effort, tier_id: tierIdOf(db, pin.tier) };
+    const spawned = { ...WORKER_SPAWNED, advisor: null, model: opusHigh.model, effort: opusHigh.effort, tier_id: tierIdOf(db, opusHigh.tier) };
     appendEvent(db, { taskId: child.id, workerId: "tako", origin: "board", at: new Date(0), payload: spawned });
     return completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
   });
