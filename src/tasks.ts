@@ -475,11 +475,12 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
 
 /** decompose の照合(ADR 0199 決定3): 子の pin を root の対象の id に引く。4欄の完全一致で、effort の null も値として比べる
  *  (ADR 0218 決定5)。pin の子は対象で走り、使い捨てブランチで採点されるので、完了時レビューも別の要求も持たない ——
- *  要求ティアは対象の段になる。 */
-function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec): DecomposeChild {
+ *  要求ティアは対象の段になる。Interview の子は全部 pin を持つ(ADR 0245 決定4)。 */
+function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec, interview: boolean): DecomposeChild {
   const { interview_pin: pin, ...rest } = child;
-  if (!pin) return child;
-  if (interviewTargets(db, parent.id) === null) throw new DomainError("only an Interview's children carry interview_pin");
+  if (!pin && !interview) return child;
+  if (!pin) throw new DomainError("every child of an Interview carries interview_pin: run each target as its own child pinned to one of the Interview's targets");
+  if (!interview) throw new DomainError("only an Interview's children carry interview_pin");
   if (child.review_flag || child.risk_flag || child.tier !== undefined || child.priority !== undefined) {
     throw new DomainError("an Interview child runs at its pin on a branch that never lands, so it takes no review_flag, risk_flag, tier or priority");
   }
@@ -496,6 +497,14 @@ export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget):
     )
     .get(rootId, pin.provider, pin.model, pin.effort, pin.tier) as { id: number } | undefined;
   return target?.id;
+}
+
+/** Interview の木で登録しない分解の verb(ADR 0245 決定1・3、ADR 0122 決定2 の task ごとの差し替え)。
+ *  pin の子は分解の verb を両方、Interview の root は redecompose。worker MCP の登録と Codex の宣言が同じここを引く。 */
+export function withheldDecompositionVerbs(db: Db, taskId: string): readonly ("decompose" | "redecompose")[] {
+  if (getTask(db, taskId)?.interview_target_id != null) return ["decompose", "redecompose"];
+  if (interviewTargets(db, taskId) !== null) return ["redecompose"];
+  return [];
 }
 
 /** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
@@ -1756,6 +1765,13 @@ export function redecompose(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
+  // ADR 0245 決定3: Interview の root は作り直さない
+  if (interviewTargets(db, parent.id) !== null) {
+    throw new DomainError(
+      "an Interview is not redecomposed: keep its decomposition with continue_decomposition, " +
+        "or escalate so a human can abandon it and register the Interview again with a fixed probe",
+    );
+  }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return db.transaction(() => {
     for (const id of abandonScopeIds(db, declarerId)) {
@@ -2189,6 +2205,11 @@ export function decomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
+  // ADR 0245 決定1: pin の子の下は分けない(人間の扉も redecompose もここを通る)
+  if (parent.interview_target_id !== null) {
+    throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
+  }
+  const interview = interviewTargets(db, parent.id) !== null;
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -2197,14 +2218,16 @@ export function decomposeTask(
         if (child[field] !== undefined) child[field] = normalizeText(child[field]);
       }
       if (child.review_by) child.review_by = child.review_by.map(normalizeText);
-      return resolveInterviewPin(db, parent, child);
+      return resolveInterviewPin(db, parent, child, interview);
     }),
   };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
+    throw new DomainError(
+      `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
+    );
   }
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only

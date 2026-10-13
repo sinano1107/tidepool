@@ -15,6 +15,7 @@ import {
   HOUR,
   makeWorkspace,
   managementMcpClient,
+  mcpClient,
   questions,
   runNow,
   type Tidepool,
@@ -75,6 +76,25 @@ it("Interview の root は対象を読んで decompose し、一覧に無い pin
   const decompose = (pin: object) => callAsTask(t, root.id, "decompose", { reason: "one child per target", children: [{ ...CHILD, interview_pin: pin }] });
   expect((await decompose({ ...opus46, effort: "medium" })).isError).toBe(true);
   for (const pin of [sol, ghost]) expect((await decompose(pin)).content[0].text).toContain("cannot run as fake-worker");
+});
+
+it("worker MCP の tool 一覧から、pin の子は分解の verb が両方、Interview の root は redecompose が抜け、普通の work は両方を持つ(ADR 0245 決定1・3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = JSON.parse((await callAsTask(t, root.id, "decompose", { reason: "r", children: [{ ...CHILD, interview_pin: opus46 }] })).content[0].text).child_ids;
+  const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  const tools = async (taskId: string) => {
+    const client = await mcpClient(t.mcpBaseUrl, taskId);
+    try {
+      return (await client.listTools()).tools.map((tool) => tool.name);
+    } finally {
+      await client.close();
+    }
+  };
+  const ordinary = await tools(work.id);
+  expect(ordinary).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
+  expect(await tools(childId)).toEqual(ordinary.filter((name) => name !== "decompose" && name !== "redecompose"));
+  expect(await tools(root.id)).toEqual(ordinary.filter((name) => name !== "redecompose"));
 });
 
 it("pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点する", async () => {

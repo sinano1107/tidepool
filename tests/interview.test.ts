@@ -6,9 +6,9 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { completeTask, countUnsettledTasksReferencing, getTask, interviewTargets, listChildren, registerTask, scoreInterview, type Task, taskHistoryRows } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
-import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
 
@@ -74,6 +74,33 @@ it("承認 question に変わった pin の子は、approve で同じ pin のま
   answerQuestionViaWebui(db, question, ["approve"], new Date(0));
   const child = listChildren(db, root.id).find((task) => task.type === "work")!;
   expect(pinOf(db, child.id)).toEqual({ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier_id: tierIdOf(db, "standard"), source: "interview" });
+});
+
+it("pin の子は分解できない —— agent の decompose も人間の扉も拒み、承認 question も含めて何も登録されない(ADR 0245 決定1)", () => {
+  const { db, root } = registerInterview();
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
+  const before = listBoard(db).length;
+  const split = { reason: "too large for one session", children: [{ ...CHILD, assignee: "deckhand" }] };
+  expect(() => decomposeTaskViaWorker(db, child!, split, "tako", new Date(0), { authority: { assignable_to: [] } })).toThrow(/this task is not split/);
+  expect(() => humanDecomposeTaskViaWebui(db, child!, split, new Date(0))).toThrow(/this task is not split/);
+  expect(listBoard(db)).toHaveLength(before);
+});
+
+it("Interview の root の子は全部 pin を持つ —— pin の無い子を混ぜた decompose は、人間の扉でも何も登録せず拒まれる(ADR 0245 決定4)", () => {
+  const { db, root } = registerInterview();
+  const unpinned = { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }, CHILD] };
+  expect(() => decomposeTaskViaWorker(db, root, unpinned, "auditor", new Date(0))).toThrow(/every child of an Interview carries interview_pin/);
+  expect(() => humanDecomposeTaskViaWebui(db, root, { reason: "r", children: [CHILD] }, new Date(0))).toThrow(/every child of an Interview carries interview_pin/);
+  expect(listChildren(db, root.id)).toEqual([]);
+});
+
+it("Interview の root は作り直せない —— 子の前提の破綻を受けた root の redecompose は拒まれ、子は cancel されず何も登録されない(ADR 0245 決定3)", () => {
+  const { db, root } = registerInterview();
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
+  declarePremiseBreach(db, child!, "the probe is broken", "tako", new Date(0), "worker");
+  const replan = { reason: "a fixed probe", children: [{ ...CHILD, interview_pin: opusHigh }] };
+  expect(() => redecompose(db, getTask(db, root.id)!, replan, "auditor", new Date(0), undefined, undefined, "worker")).toThrow(/continue_decomposition/);
+  expect(listChildren(db, root.id).map(({ id, status }) => ({ id, status }))).toEqual([{ id: child!.id, status: "todo" }]);
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */

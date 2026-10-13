@@ -4,6 +4,7 @@ import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { boardDoctrine } from "../src/board-prose.js";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
@@ -19,7 +20,7 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
-import { bootTidepool, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { bootTidepool, decomposeTaskViaWorker, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -49,6 +50,23 @@ function metaReviewTask(db: ReturnType<typeof openDb>, subject: "memory" | "rout
     completion_criteria: "it is reviewed",
     meta_review_subject: subject,
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+}
+
+/** Interview の root(openai の対象1つ)と、それを pin した子 —— 分解の verb と doctrine はこの2つでだけ形が変わる(ADR 0245)。 */
+const SOL = { provider: "openai", model: "gpt-5.6-sol", effort: "high", tier: "standard" };
+function interviewRoot(db: ReturnType<typeof openDb>) {
+  return registerTask(db, {
+    type: "review",
+    assignee: "codex-agent",
+    title: "interview",
+    purpose: "the original task",
+    completion_criteria: "every target scored",
+    interview_targets: [SOL],
+  }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+}
+function pinnedChild(db: ReturnType<typeof openDb>) {
+  const children = [{ title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable", interview_pin: SOL }];
+  return decomposeTaskViaWorker(db, interviewRoot(db), { reason: "one child per target", children }, "auditor", new Date("2026-08-24T00:00:00.000Z"))[0]!;
 }
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
@@ -356,6 +374,8 @@ describe("CodexWorker (ADR 0098)", () => {
     ["work", task],
     ["主題 memory の meta-review", metaReviewTask],
     ["主題 routing の meta-review", (db: ReturnType<typeof openDb>) => metaReviewTask(db, "routing")],
+    ["Interview の root", interviewRoot],
+    ["Interview の pin の子", pinnedChild],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.start(register(f.db));
@@ -444,27 +464,17 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(task(f.db, "codex-doctrine"));
     const developer = developerInstructions(f.process.calls[0]!.args);
     const doctrine = developer.slice(developer.indexOf("## Board doctrine"), developer.indexOf("## Rules of the road"));
-    // 文面の一致は語で見る —— 折り返しの位置は Claude の文面に従う(#695)
-    const words = (text: string) => text.replace(/\s+/g, " ").trim();
-    expect(words(doctrine)).toBe(words(`## Board doctrine
-
-Work that needs independent completion criteria, separate authority, its own
-risk, or survival across sessions must not be routed to a subagent — that is
-delegation smuggled past the board. Register that split with the tidepool
-MCP's decompose instead.
-
-A subagent may only be used for labor-splitting that does not divide
-accountability (exploration, parallel research, mechanical edits): you carry
-full accountability for its output as the parent task. If another registry
-agent's capability is needed, use decompose with an assignee, not a subagent.
-
-Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
-is denied by the harness, not by an attacker. If a subagent reports that
-denial, make the call yourself from the main thread. Spawn subagents with
-fork_turns: "none"; this session keeps no rollout, so forking the parent
-thread's history always fails.`));
+    // 文面そのものは tests/board-prose.test.ts が固定する。ここは Codex の語の配線と末尾の1文だけ
+    expect(doctrine).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, true));
     expect(developer).not.toContain("Workflow");
     expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
+  });
+
+  it("Interview の pin の子の developer_instructions には、Claude と同じ分けない doctrine が載る(ADR 0245 決定2)", async () => {
+    const f = await fixture();
+    f.start(pinnedChild(f.db));
+    const developer = developerInstructions(f.process.calls[0]!.args);
+    expect(developer.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {

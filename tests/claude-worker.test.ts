@@ -32,7 +32,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, listBoard, nextSlotTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, listBoard, nextSlotTask, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -51,7 +51,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { decomposeTaskViaWorker, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -800,6 +800,18 @@ describe("ClaudeCodeWorker", () => {
     // ADR 0010 追補の受け入れ基準: 教義自体にオーケストレーション禁止の1行が含まれる
     // (--disallowedTools でツールを塞ぐのとは別に、教義の文言としても明示する)
     expect(systemPrompt).toContain("Workflow tool");
+  });
+
+  it("Interview の pin の子の system prompt には、分けない doctrine が載る(ADR 0245 決定2)", async () => {
+    const { worker, setting, slot, calls, db } = await makeWorker();
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
+    const root = registerTask(db, { type: "review", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ title: "probe", purpose: "p", completion_criteria: "c", interview_pin: target }] }, "auditor", new Date(0));
+    slot.occupy(child!.id);
+    worker.start(child!, setting(child!));
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(systemPrompt.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules

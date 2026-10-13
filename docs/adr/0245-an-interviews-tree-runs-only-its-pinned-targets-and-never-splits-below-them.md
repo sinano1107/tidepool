@@ -36,3 +36,5 @@
 
 - pin の子の下に入る経路は triage の修理子(objection の修理)と、Agent tool の subagent が残る。前者は #1886、後者は
   #1887 で扱う。
+- board doctrine は task ごとにも変わる(分けるか否か)。ADR 0157 決定3 のスロット2つは Harness の語の数で、この分岐は
+  Harness の語ではない別の入力として足す。
