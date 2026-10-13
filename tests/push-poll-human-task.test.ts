@@ -98,12 +98,12 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
         question: [
           { title: "人間に委譲していい?", options: ["approve", "reject"], recommendation: "approve" },
         ],
-        pending_child: {
+        question_kind: { kind: "approval", pending_child: {
           title: "現地で確認して",
           purpose: "センサーでは分からない",
           completion_criteria: "確認済み",
           assignee: "human",
-        },
+        } },
       },
       at,
       "planner",

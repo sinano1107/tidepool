@@ -1008,7 +1008,7 @@ it("cancel_task は open failure question を迂回できない(issue #192)", as
     completion_criteria: "a human answers",
     parent_id: task.id,
     question: [{ title: "retry or abandon?", options: ["retry", "abandon"], recommendation: "retry" }],
-    cancel_option: "abandon",
+    question_kind: { kind: "failure", cancel_option: "abandon" },
   });
   const client = await managementMcpClient(t.baseUrl);
   try {

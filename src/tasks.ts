@@ -9,6 +9,7 @@ import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
+import { type QuestionKind, questionColumns } from "./question-kind.js";
 import { PROVIDER_VALUES } from "./provider.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -400,41 +401,14 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   /** 1-4 question items (issue #30) — a single-item array is the degenerate
    *  case, not a distinct shape. */
   question?: QuestionItem[];
-  /** System-internal only (ADR 0006 / 0048): answering with this option
-   *  triggers decision-scoped abandon instead of ordinary unblock-to-head
-   *  (an Interview pin child's failure abandon stops at itself, ADR 0245 決定5).
-   *  Must be one of the question's options. Never set via MCP or JSON API;
-   *  only the watchdog's failure-question registration sets it. */
-  cancel_option?: string;
-  /** System-internal only (ADR 0121): set only by declarePremiseBreach's question. */
-  breached_decision?: number;
-  /** System-internal only (issue #11): the would-be child of a pending-child
-   *  approval question, materialized by answerQuestion on an "approve"
-   *  answer. Never set via MCP or the JSON API — only decomposeTask sets
-   *  this. */
-  pending_child?: PendingChildSpec;
-  /** System-internal only (issue #11): the PR number a merge-decision
-   *  question stands in for. Never set via MCP or the JSON API — only
-   *  recordPrOpened's `escalate` branch sets this. */
-  pending_merge_pr?: number;
-  /** System-internal only (ADR 0053): the completed work task whose
-   *  purely-local branch awaits a merge/hold answer. */
-  pending_local_merge_task_id?: string;
-  /** System-internal only (issue #66): the completed work task whose failed
-   *  PR promotion this question can retry. */
-  pending_pr_promotion_task_id?: string;
-  /** System-internal only (ADR 0137 決定2): the Quarantine this
-   *  Confirmation question stands in for. Never set via MCP or the JSON API —
-   *  only the Quarantine module's registration sets this. */
-  quarantine?: { kind: string; value: string | null };
-  /** System-internal only (ADR 0075): the warned configured expiry epoch. */
-  cli_auth_expiry_warning?: number;
+  /** System-internal only (ADR 0246 決定2): the question's kind and its payload, written to the kind's columns by
+   *  `questionColumns`. Absent → an escalation. Never set via MCP or the JSON API — only the board's own
+   *  registrations (watchdog, landing, quarantine, decompose, proposals …) pass a kind. A cancel option
+   *  (failure / premise breach) must be one of the question's options. */
+  question_kind?: QuestionKind;
   /** Board-internal only (ADR 0120 決定2 / issue #618): この task が主題の周期 meta-review であること。
    *  MCP / JSON API からは書けない —— registerMetaReview だけが渡す。 */
   meta_review_subject?: "memory" | "routing";
-  /** Board-internal only (ADR 0120 決定4 / issue #620): 提案 question の提案と pin。MCP / JSON API からは書けない ——
-   *  proposeMemoryChange だけが渡す。 */
-  proposal?: QuestionProposal;
   /** Decision-log entry (event id) this task rests on — set by decompose. */
   based_on_decision?: number;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -531,29 +505,31 @@ export function interviewTargets(db: Db, taskId: string): InterviewTarget[] | nu
  *  safety valve (#17).
  *
  *  An item's option floor relaxes to 1 only for an actual quarantine
- *  Confirmation question (issue #21, CONTEXT.md) — `quarantine` set, which
+ *  Confirmation question (issue #21, CONTEXT.md) — a `quarantine` kind, which
  *  only the Quarantine module's registration ever does: it asks for a
  *  completion confirmation, not a choice, and a fake second option would be
  *  filler with no effect of its own. This is deliberately keyed on that field
  *  rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a
  *  worker's id is operator-configured and could collide with BOARD_WORKER_ID
  *  by accident, which would otherwise let an ordinary agent question sneak
- *  past the 2-4 floor. `quarantine` is never reachable from MCP or the JSON
+ *  past the 2-4 floor. A question kind is never reachable from MCP or the JSON
  *  API (unlike an assignee/worker id), so this floor can't be gamed the same
  *  way — an agent's question is always a real 2-4-way choice. */
 function assertQuestionSpec(input: RegisterTaskInput): void {
+  const kind = input.question_kind;
+  const cancelOption = kind?.kind === "failure" || kind?.kind === "premise_breach" ? kind.cancel_option : undefined;
   if (input.type !== "question") {
     if (input.question) throw new DomainError("only a question task carries options");
-    if (input.cancel_option) throw new DomainError("only a question task carries a cancel option");
+    if (cancelOption) throw new DomainError("only a question task carries a cancel option");
     return;
   }
   const items = input.question;
   // 表の編集でだけ決着する Quarantine の question は項目を持たない(ADR 0218 決定6)
-  const takesNoAnswer = input.quarantine !== undefined && items?.length === 0;
+  const takesNoAnswer = kind?.kind === "quarantine" && items?.length === 0;
   if (!takesNoAnswer && (!items || items.length < 1 || items.length > 4)) {
     throw new DomainError("a question carries 1 to 4 items");
   }
-  const minOptions = input.quarantine ? 1 : 2;
+  const minOptions = kind?.kind === "quarantine" ? 1 : 2;
   for (const item of items) {
     if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
     if (item.detail !== undefined && whyBlank(item.detail)) throw new DomainError("a supplied question detail cannot be blank");
@@ -567,8 +543,8 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
       );
     }
   }
-  if (input.cancel_option !== undefined) {
-    if (!items[0]!.options.includes(input.cancel_option)) {
+  if (cancelOption !== undefined) {
+    if (!items[0]!.options.includes(cancelOption)) {
       throw new DomainError("a cancel option must be one of the question's options");
     }
     // the abandon cascade (answerQuestion) walks up from the question's own
@@ -851,7 +827,10 @@ export function registerTask(
       recommendation: normalizeText(item.recommendation),
     }));
   }
-  if (input.cancel_option !== undefined) input.cancel_option = normalizeText(input.cancel_option);
+  const kind = input.question_kind;
+  if (kind?.kind === "failure" || kind?.kind === "premise_breach") {
+    input.question_kind = { ...kind, cancel_option: normalizeText(kind.cancel_option) };
+  }
   assertQuestionSpec(input);
   assertGithubRef(input);
   assertExecutionRequest(db, input);
@@ -900,16 +879,7 @@ export function registerTask(
     question_items: input.question ?? null,
     question_answer: null,
     question_answer_comment: null,
-    question_cancel_option: input.cancel_option ?? null,
-    question_breached_decision: input.breached_decision ?? null,
-    question_pending_child: input.pending_child ?? null,
-    question_proposal: input.proposal ?? null,
-    question_pending_merge_pr: input.pending_merge_pr ?? null,
-    question_pending_local_merge_task_id: input.pending_local_merge_task_id ?? null,
-    question_pending_pr_promotion_task_id: input.pending_pr_promotion_task_id ?? null,
-    question_quarantine_kind: input.quarantine?.kind ?? null,
-    question_quarantine_value: input.quarantine?.value ?? null,
-    question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
+    ...questionColumns(input.question_kind ?? { kind: "escalation" }),
     github_issue_number: input.github_issue_number ?? null,
     meta_review_subject: input.meta_review_subject ?? null,
     interview_target_id: input.interview_target_id ?? null,
@@ -1212,12 +1182,9 @@ interface EscalateInput {
   context: string;
   /** 1-4 question items, whichever door escalate enters by. */
   questions: QuestionItem[];
-  /** System-internal only (ADR 0006) — absent from the MCP tool schema and
-   *  the JSON API; only the watchdog's failure-question path sets this.
-   *  Meaningful only for a single-item bundle (the item it targets). */
-  cancel_option?: string;
-  /** System-internal only (ADR 0121): set only by declarePremiseBreach. */
-  breached_decision?: number;
+  /** System-internal only — absent from the MCP tool schema and the JSON API: the failure question's and the
+   *  premise breach's cancel option (ADR 0006 / 0121), meaningful only for a single-item bundle. */
+  question_kind?: QuestionKind;
 }
 
 /** Escalation: a question child carrying a bundle of 1-4 items, each with
@@ -1247,8 +1214,7 @@ export function escalateTask(
         completion_criteria: "a human answer is recorded",
         parent_id: parent.id,
         question: input.questions,
-        cancel_option: input.cancel_option,
-        breached_decision: input.breached_decision,
+        question_kind: input.question_kind,
       },
       now,
       workerId,
@@ -1726,8 +1692,7 @@ export function declarePremiseBreach(
         questions: [
           { title: `premise breach: ${task.title}`, options: ["continue", "abandon"], recommendation: "continue" },
         ],
-        cancel_option: "abandon",
-        breached_decision: decision,
+        question_kind: { kind: "premise_breach", cancel_option: "abandon", breached_decision: decision },
       },
       BOARD_WORKER_ID,
       now,
@@ -1963,7 +1928,7 @@ export function registerMergeQuestion(
       purpose,
       completion_criteria: "a human decides whether to merge",
       question: [{ title, options: [...MERGE_QUESTION_OPTIONS], recommendation }],
-      pending_merge_pr: prNumber,
+      question_kind: { kind: "pr_merge", pr: prNumber },
       // carries the originating work task's execution workspace (issue #26 /
       // ADR 0009), so submitAnswer's live CI check and the auto-merge
       // poll both resolve the right registry entry, not just the board's
@@ -2304,7 +2269,7 @@ export function decomposeTask(
             question: [
               { title: questionTitle, options: [...PENDING_CHILD_OPTIONS], recommendation: "approve" },
             ],
-            pending_child: {
+            question_kind: { kind: "approval", pending_child: {
               title: child.title,
               purpose: child.purpose,
               completion_criteria: child.completion_criteria,
@@ -2318,7 +2283,7 @@ export function decomposeTask(
               priority: child.priority,
               interview_target_id: child.interview_target_id,
               based_on_decision: decisionId,
-            },
+            } },
             based_on_decision: decisionId,
           },
           now,

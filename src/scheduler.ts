@@ -508,7 +508,7 @@ export function startScheduler(deps: {
                 recommendation: "retry",
               },
             ],
-            cancel_option: "abandon",
+            question_kind: { kind: "failure", cancel_option: "abandon" },
           },
           BOARD_WORKER_ID,
           clock.now(),

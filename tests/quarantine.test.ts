@@ -219,7 +219,7 @@ it("行の effort の Quarantine の値は、model id に `/` があっても (p
 it("Quarantine の question は項目を0個で持てる(回答の道を持たない種類、ADR 0218 決定6)—— Quarantine でない question は持てない", () => {
   const db = openDb(":memory:");
   const zeroItems = { type: "question" as const, title: "t", purpose: "p", completion_criteria: "c", question: [] };
-  const question = registerTask(db, { ...zeroItems, quarantine: { kind: "tableRowEffort", value: "anthropic/claude-haiku-4-5/high" } }, NOW, ...HUMAN_WEBUI);
+  const question = registerTask(db, { ...zeroItems, question_kind: { kind: "quarantine", quarantine: "tableRowEffort", value: "anthropic/claude-haiku-4-5/high" } }, NOW, ...HUMAN_WEBUI);
   expect(question.question_items).toEqual([]);
   expect(() => registerTask(db, zeroItems, NOW, ...HUMAN_WEBUI)).toThrow("a question carries 1 to 4 items");
 });

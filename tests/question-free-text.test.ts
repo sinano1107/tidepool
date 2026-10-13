@@ -10,14 +10,14 @@ import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
-  merge: { options: ["merge", "hold"], pending_merge_pr: 7 },
-  "local merge": { options: ["merge", "hold"], pending_local_merge_task_id: "t-1" },
-  "PR promotion": { options: ["retry", "abandon promotion"], pending_pr_promotion_task_id: "t-1" },
-  "pending child": { options: ["approve", "reject"], pending_child: { title: "B", purpose: "p", completion_criteria: "c" } },
-  proposal: { options: ["approve", "reject"], proposal: { kind: "routing", op: "promote", pin: { promoted: false } } },
-  "cancel option": { options: ["retry", "abandon"], cancel_option: "abandon" },
+  merge: { options: ["merge", "hold"], question_kind: { kind: "pr_merge", pr: 7 } },
+  "local merge": { options: ["merge", "hold"], question_kind: { kind: "local_merge", task_id: "t-1" } },
+  "PR promotion": { options: ["retry", "abandon promotion"], question_kind: { kind: "pr_promotion_retry", task_id: "t-1" } },
+  "pending child": { options: ["approve", "reject"], question_kind: { kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c" } } },
+  proposal: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", pin: { promoted: false } } } },
+  "cancel option": { options: ["retry", "abandon"], question_kind: { kind: "failure", cancel_option: "abandon" } },
   escalate: { options: ["a", "b"] },
-  quarantine: { options: ["repaired by hand"], quarantine: { kind: "agent", value: "navigator" } },
+  quarantine: { options: ["repaired by hand"], question_kind: { kind: "quarantine", quarantine: "agent", value: "navigator" } },
 } satisfies Record<string, Partial<RegisterTaskInput> & { options: string[] }>;
 
 function freeTextOf(kind: keyof typeof QUESTIONS) {

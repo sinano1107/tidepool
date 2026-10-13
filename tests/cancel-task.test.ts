@@ -98,7 +98,7 @@ it("そのタスクを主題とする未回答の failure question が開いて�
     completion_criteria: "a human answers",
     parent_id: task.id,
     question: [{ title: "retry or abandon?", options: ["retry", "abandon"], recommendation: "retry" }],
-    cancel_option: "abandon",
+    question_kind: { kind: "failure", cancel_option: "abandon" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});
@@ -118,7 +118,7 @@ it("そのタスクの資源に対する未回答の quarantine 確認が開い�
     purpose: "tree rule failed",
     completion_criteria: "repaired by hand",
     question: [{ title: "repaired?", options: ["repaired by hand"], recommendation: "repaired by hand" }],
-    quarantine: { kind: "workspace", value: "home" },
+    question_kind: { kind: "quarantine", quarantine: "workspace", value: "home" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});
@@ -140,7 +140,7 @@ it("assignee 未設定の question だけを含む subtree は、default agent �
     purpose: "agent quarantine",
     completion_criteria: "repaired by hand",
     question: [{ title: "repaired?", options: ["repaired by hand"], recommendation: "repaired by hand" }],
-    quarantine: { kind: "agent", value: "quarantined-agent" },
+    question_kind: { kind: "quarantine", quarantine: "agent", value: "quarantined-agent" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/cancel`, {});
@@ -157,7 +157,7 @@ it("default agent に解決される task を含む subtree は、quarantine 中
     purpose: "agent quarantine",
     completion_criteria: "repaired by hand",
     question: [{ title: "repaired?", options: ["repaired by hand"], recommendation: "repaired by hand" }],
-    quarantine: { kind: "agent", value: "quarantined-agent" },
+    question_kind: { kind: "quarantine", quarantine: "agent", value: "quarantined-agent" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${parent.id}/cancel`, {});
@@ -178,7 +178,7 @@ it("provider 認証の quarantine 確認が開いている間は、その provid
     question: [
       { title: "restored?", options: ["authentication restored"], recommendation: "authentication restored" },
     ],
-    quarantine: { kind: "providerAuth", value: "moonshot" },
+    question_kind: { kind: "quarantine", quarantine: "providerAuth", value: "moonshot" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});
@@ -197,7 +197,7 @@ it("provider 認証の quarantine 確認が開いていても、別の provider 
     question: [
       { title: "restored?", options: ["authentication restored"], recommendation: "authentication restored" },
     ],
-    quarantine: { kind: "providerAuth", value: "moonshot" },
+    question_kind: { kind: "quarantine", quarantine: "providerAuth", value: "moonshot" },
   });
 
   const res = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/cancel`, {});

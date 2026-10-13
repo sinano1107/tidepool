@@ -139,7 +139,7 @@ const failureQuestion = (db: Db, parent: Task) =>
   escalateTask(
     db,
     parent,
-    { context: "the worker died", questions: [{ title: "failed", options: ["retry", "abandon"], recommendation: "retry" }], cancel_option: "abandon" },
+    { context: "the worker died", questions: [{ title: "failed", options: ["retry", "abandon"], recommendation: "retry" }], question_kind: { kind: "failure", cancel_option: "abandon" } },
     BOARD_WORKER_ID,
     at,
     "board",

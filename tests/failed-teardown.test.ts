@@ -87,7 +87,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
       {
         context: "the task hit its work time limit",
         questions: [{ title: "watchdog killed task: one", options: ["retry", "abandon"], recommendation: "retry" }],
-        cancel_option: "abandon",
+        question_kind: { kind: "failure", cancel_option: "abandon" },
       },
       BOARD_WORKER_ID,
       clock.now(),

@@ -206,7 +206,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
       completion_criteria: "a human answer is recorded",
       parent_id: parent,
       question: [{ title: "t", detail: "d", options: ["approve", "reject"], recommendation: "approve" }],
-      proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard"), rows: [] }, evidence: [1] },
+      question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: tierIdOf(db, "economy"), pin: { tier: tierIdOf(db, "standard"), rows: [] }, evidence: [1] } },
     },
     at,
     "auditor",
