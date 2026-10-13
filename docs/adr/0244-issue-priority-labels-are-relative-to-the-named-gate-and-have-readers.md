@@ -13,8 +13,8 @@
    実運用を始める」(#1879: Lima VM の盤面で tidepool 自身を workspace に、`ready-for-agent` の issue 1件が task →
    PR → 朝の triage で merge まで通り、かつ `priority:high` が空)。門を越えたら次の門を書いてから open 全件を
    付け直す —— 2026-07 の意味が腐ったのは、門が消えても意味を書き直さなかったからである。
-2. **3段と無印。** `high` = 門を塞ぐ。機械的テストは4つ: 実装が schema(DDL)を変える(リリース前は migration を
-   書かず盤面を作り直すので、実運用後に残すと記録を失う)/ 記録を書く側(decision log・event・episode・usage・
+2. **3段と無印。** `high` = 門を塞ぐ。機械的テストは4つ: 実装が schema の表・列を変える(リリース前は migration を
+   書かず盤面を作り直すので、実運用後に残すと記録を失う。索引は生きた DB に足せるので数えない —— #1031)/ 記録を書く側(decision log・event・episode・usage・
    PR 決着)の既知の誤り / 自律的に動く最適化プロセス(memory・routing meta-review、Interview、学習器)の実装と
    既知の誤り / 実運用で repo・財布・信頼を壊す既知の欠陥。`medium` = 門は塞がないが、実運用の最初の数週で自分が
    踏む摩擦。`low` = 門の後に見る。無印 = 付け忘れ。high の中に細分は作らず、取るのは blocker の無い high のうち
