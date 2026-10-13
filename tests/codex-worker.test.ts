@@ -68,6 +68,7 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
   const children = [{ title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable", interview_pin: SOL }];
   return decomposeTaskViaWorker(db, interviewRoot(db), { reason: "one child per target", children }, "auditor", new Date("2026-08-24T00:00:00.000Z"))[0]!;
 }
+const decomposedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, pinnedChild(db).parent_id!)!;
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
 function configValue<T>(args: string[], prefix: string): T {
@@ -376,6 +377,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["主題 routing の meta-review", (db: ReturnType<typeof openDb>) => metaReviewTask(db, "routing")],
     ["Interview の root", interviewRoot],
     ["Interview の pin の子", pinnedChild],
+    ["分解した Interview の root", decomposedInterviewRoot],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.start(register(f.db));
