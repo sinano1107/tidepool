@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { deleteProfile } from "../src/profile-create.js";
 import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -28,7 +28,7 @@ describe("deleteProfile: 正常系(issue #205 / ADR 0087 決定1)", () => {
 
     await deleteProfile(
       { name: "unused", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" } },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
     );
 
     expect(loadRegistry(registryDir, "purely-local").authority.unused).toBeUndefined();
@@ -44,7 +44,7 @@ describe("deleteProfile: 確認の門(issue #205 / ADR 0087)", () => {
     const before = git(registryDir, "rev-parse", "HEAD");
 
     await expect(
-      deleteProfile({ name: "unused" }, { registry: { dir: registryDir, mode: "purely-local" } }),
+      deleteProfile({ name: "unused" }, { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } }),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
     expect(loadRegistry(registryDir, "purely-local").authority.unused).toBeDefined();
@@ -59,7 +59,7 @@ describe("deleteProfile: 確認で買えない拒否(ADR 0087 決定2)", () => {
     await expect(
       deleteProfile(
         { name: "standard", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" } },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",

@@ -30,6 +30,7 @@ import {
 import { activeTriageSession } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
+  boardRefWriter,
   branchMergeEffect,
   buildWorkspaceResolver,
   catchUpTaskBranch,
@@ -38,7 +39,6 @@ import {
   protectedBranch,
   protectedBranchRef,
   quarantineWorkspace,
-  rebaselineRef,
   refreshProtectedBranch,
   resolveOrQuarantine,
   resolveTaskBranchLineage,
@@ -891,9 +891,13 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 追いつきは PR の状態を読んだ後に置く —— 閉じた・merge 済みの PR の根のタスクブランチは動かさない
       const catchUp = () => {
-        if (outlivedForkSource && catchUpTaskBranch(workspace, task.id)) {
-          rebaselineRef(deps.db, workspace, `refs/heads/${taskBranch(task.id)}`);
-        }
+        if (outlivedForkSource) catchUpTaskBranch(deps.db, workspace, task.id);
+      };
+      // 盤面の push は写しを動かすので、口を通す(ADR 0243)
+      const { github } = deps;
+      const push = async (sha: string) => {
+        const pushBranch = await github.preparePush({ path: workspace.path, branch: taskBranch(task.id) });
+        boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
       };
       if (task.pr_number !== null) {
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
@@ -917,10 +921,9 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
-        await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
+        await push(sha);
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
-        rebaselineRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)));
         return await afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
       }
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
@@ -944,24 +947,22 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
-      try {
-        if (found) {
-          // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
-          await deps.github.pushBranch({ path: workspace.path, branch: taskBranch(task.id) });
-          prNumber = found.number;
-        } else {
-          const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
-          const created = await deps.github.createPullRequest({
-            path: workspace.path,
-            branch: taskBranch(task.id),
-            base: protectedBranch(workspace),
-            title,
-            body: prBody(task.handoff_doc, task.github_issue_number),
-          });
-          prNumber = created.number;
-        }
-      } finally {
-        rebaselineRef(deps.db, workspace, remoteTrackingRef(taskBranch(task.id)));
+      if (found) {
+        // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
+        await push(sha);
+        prNumber = found.number;
+      } else {
+        const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
+        // PR の作成は push 済みのブランチに `gh pr create` だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
+        await push(sha);
+        const created = await deps.github.createPullRequest({
+          path: workspace.path,
+          branch: taskBranch(task.id),
+          base: protectedBranch(workspace),
+          title,
+          body: prBody(task.handoff_doc, task.github_issue_number),
+        });
+        prNumber = created.number;
       }
       recordPrOpened(
         deps.db,

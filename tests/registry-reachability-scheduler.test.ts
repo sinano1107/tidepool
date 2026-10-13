@@ -8,7 +8,7 @@ import { listBoard, registerTask, type Task } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import { FakeClock, fakeContainers, healthyUsageText, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
-import { makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 
 // ここが測るのは**ゲートが spawn の手前で実際に fetch を撃つこと**である。worker は
 // fake なので、実 worker がどの ref を読むかはここでは測れない —— それは
@@ -47,7 +47,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     onSpawnFailed: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
-    registryReachability: async () => refreshRegistry(registryDir, undefined),
+    registryReachability: async () => refreshRegistry(registryDir, undefined, writeUnannounced),
   });
   registerTask(
     db,

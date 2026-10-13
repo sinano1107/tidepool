@@ -6,7 +6,7 @@ import { loadRegistry, registryAtCommit } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })
@@ -29,7 +29,7 @@ describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
 
     await deleteAgent(
       { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeUndefined();
@@ -45,7 +45,7 @@ describe("deleteAgent: 確認の門(issue #205 / ADR 0087)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand" },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES },
       ),
     ).rejects.toThrow(DeletionConfirmationRequiredError);
 
@@ -61,7 +61,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, unsettledTaskCount: 2 },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES, unsettledTaskCount: 2 },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -77,7 +77,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "deckhand", confirm: true },
-        { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES, awaitingLandingTaskCount: 2 },
+        { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES, awaitingLandingTaskCount: 2 },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -95,7 +95,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
         '---\nversion: "2"\nauthority: standard\ndescription: My own auditor.\nprovider: anthropic\nskills: []\n---\nYou are my fugu.\n',
     });
     git(registryDir, "branch", "-M", "main");
-    const registry = { dir: registryDir, mode: "purely-local" } as const;
+    const registry = { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } as const;
 
     await expect(
       deleteAgent(
@@ -122,7 +122,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           ...NO_REFERENCES,
           defaultAgentName: "deckhand",
         },
@@ -140,7 +140,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           ...NO_REFERENCES,
           auditorName: "deckhand",
         },
@@ -158,7 +158,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
       deleteAgent(
         { name: "deckhand", confirm: true },
         {
-          registry: { dir: registryDir, mode: "purely-local" },
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           ...NO_REFERENCES,
           defaultAgentName: "deckhand",
           auditorName: "deckhand",
@@ -184,7 +184,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
 
     await deleteAgent(
       { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES },
     );
 
     expect(loadRegistry(registryDir, "purely-local").agents.deckhand).toBeUndefined();
@@ -202,7 +202,7 @@ describe("deleteAgent: 記録は git が保つ(ADR 0087 決定1)", () => {
 
     await deleteAgent(
       { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local" }, ...NO_REFERENCES },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES },
     );
 
     // 過去タスクの自己 RCA が読む経路(ADR 0020 / board-prose.ts)

@@ -9,8 +9,8 @@ import {
   authorityProfileSchema,
   loadRegistry,
   ownEntry,
-  type RegistrySource,
   UnknownAuthorityProfileError,
+  type WritableRegistry,
 } from "./registry.js";
 import {
   commitToRegistry,
@@ -96,7 +96,7 @@ export interface ProfileAdminDeps {
   /** どの registry clone を検証・一覧・書き込みに使うか、そのクローンが remote
    *  正本を持つか(ADR 0052 決定1)の組 — 必ず一緒に運ばれるので1つの型にした
    *  (issue #210 レビュー — AgentAdminDeps と共有する Data Clumps だった)。 */
-  registry: RegistrySource;
+  registry: WritableRegistry;
   /** The board's GitHub identity (ADR 0024) for the registry push (ADR 0052
    *  決定1: 失敗は致命 — #210), absent when no secrets file is configured —
    *  same shape as AgentAdminDeps. */

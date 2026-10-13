@@ -47,12 +47,10 @@ import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } fr
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
-  REGISTRY_BRANCH,
   type RegistryCandidates,
   type RegistryReachabilityCheck,
   type RegistrySource,
   type RosterAgent,
-  remoteTrackingRef,
 } from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
@@ -77,94 +75,10 @@ import {
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
   buildWorkspaceResolver,
-  pathIsRegistryClone,
-  rebaselinePublishedRefs,
-  rebaselineRef,
   restoreWorkspaceProjectSettingsAtBoot,
   type WorkspaceConfig,
 } from "./workspace.js";
-import type { PublishWorkspaceFn, WorkspaceAdmin } from "./workspace-create.js";
-
-/** ADR 0064 決定4 の再基準化のうち、**registry clone を触る経路**ぶん。動く ref は
- *  `mode` で1本に決まる —— remote-backed の fetch も push も
- *  `refs/remotes/origin/<REGISTRY_BRANCH>` を、purely-local の `update-ref` は
- *  `refs/heads/<REGISTRY_BRANCH>` を動かす —— ので、包むのは「registry を書く/読む
- *  口」だけでよく、経路ごとに綴りを持ち回る必要がない。
- *
- *  組めるのはここだけである: `db` は `startServer` が開き、registry の宣言と登録済み
- *  workspace の列挙は options として届く。registry clone が workspace として登録されて
- *  いなければ撮り直す先が無いので no-op になる(ADR 0064 決定4 の条件列)。 */
-function registryRebaseliner(db: Db, options: ServerOptions): () => void {
-  const registry = options.registry;
-  const listWorkspaces = options.boardState?.listWorkspaces;
-  if (!registry || !listWorkspaces) return () => {};
-  const ref =
-    registry.mode === "remote-backed"
-      ? remoteTrackingRef(REGISTRY_BRANCH)
-      : `refs/heads/${REGISTRY_BRANCH}`;
-  return () => {
-    // 列挙は投げうる(口の定義どおり)。撃つのが finally の中なので、ここで漏らすと
-    // 盤面の書き込みが返した値や、その書き込み自身が投げた本当の失敗を置き換えてしまう。
-    // 撮り直せなかった結果は次の解放が誤検知の quarantine として loud に出す
-    try {
-      const workspace = listWorkspaces().find((w) => pathIsRegistryClone(w.path, registry.dir));
-      if (workspace) rebaselineRef(db, workspace, ref);
-    } catch (err) {
-      console.warn("[workspace] registry ref rebaseline skipped (non-fatal)", err);
-    }
-  };
-}
-
-/** ADR 0064 決定4 の再基準化のうち、**publish が push した workspace を触る**ぶん
- *  (テーブル6行目 / ADR 0066 決定4)。registry ぶんの `rebaselineAfter` を内側に敷いた
- *  上で、publish 固有の1層を足す —— 違いは2点だけである:
- *
- *  - 動くのは1本ではなく **N 本**。どの N 本かは `publishWorkspace` が push の直前に
- *    確定させて戻り値で渡す(ここで checkout を覗いて列挙し直してはならない)。
- *  - **成功したときにしか撃たない**。`finally` で撃つ registry ぶんと違い、拒否や push
- *    失敗の後に撮り直すと、worker が偽造した `refs/remotes/origin/*` を基準へ迎えて
- *    しまう —— 違反を飲み込む静かな穴そのものである。 */
-function publishRebaseliner(
-  db: Db,
-  options: ServerOptions,
-  rebaselineRegistry: () => void,
-): PublishWorkspaceFn | undefined {
-  // registry の再基準化は publish でも要る(エントリのコミットが registry clone の ref を
-  // 動かす)ので、create / update と同じ `finally` の層をそのまま共有する
-  const publish = rebaselineAfter(options.workspaceAdmin?.publish, rebaselineRegistry);
-  if (!publish) return undefined;
-  const listWorkspaces = options.boardState?.listWorkspaces;
-  return async (input) => {
-    const pushed = await publish(input);
-    // 列挙は投げうる(registryRebaseliner と同じ口の定義)。publish 自体は既に成功して
-    // いるので、ここで漏らすと成功が失敗に化ける —— 撮り直せなかった結果は次の解放が
-    // 誤検知の quarantine として loud に出す
-    try {
-      const workspace = listWorkspaces?.().find((w) => w.name === input.name);
-      if (workspace) rebaselinePublishedRefs(db, workspace, pushed);
-    } catch (err) {
-      console.warn("[workspace] published ref rebaseline skipped (non-fatal)", err);
-    }
-    return pushed;
-  };
-}
-
-/** 盤面の書き込みが**失敗しても** ref は既に動いている(入口の fetch は済んでいて
- *  push が落ちた、など)ので finally で撃つ。admin verb(入力1つ・戻り値なし)と
- *  reachability(入力なし・到達性を返す)の両方が同じ1つの綴りを共有する。 */
-function rebaselineAfter<A extends unknown[], R>(
-  call: ((...args: A) => Promise<R>) | undefined,
-  rebaseline: () => void,
-): ((...args: A) => Promise<R>) | undefined {
-  if (!call) return undefined;
-  return async (...args) => {
-    try {
-      return await call(...args);
-    } finally {
-      rebaseline();
-    }
-  };
-}
+import type { WorkspaceAdmin } from "./workspace-create.js";
 
 /** The real adapter needs the board's own db and clock, which are created in
  *  here — so the worker arrives as a factory fed with them. `containers` は
@@ -455,34 +369,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   if (!runtimePreflight.available && !options.harnessContainment) {
     quarantineContainment(db, runtimePreflight.reason, options.clock.now());
   }
-  // ADR 0064 決定4: registry clone の ref を動かす口を1本残らず包む。3つの admin verb
-  // (入口の fetch と着地の push / update-ref)と、回答時の reachability の再 fetch ——
-  // どれもセッション実行中に人間面から入りうるので、包み忘れた口は無実のセッションを
-  // quarantine する形で(静かにではなく)露見する。
-  const rebaselineRegistry = registryRebaseliner(db, options);
-  const workspaceAdmin = options.workspaceAdmin && {
-    ...options.workspaceAdmin,
-    create: rebaselineAfter(options.workspaceAdmin.create, rebaselineRegistry),
-    update: rebaselineAfter(options.workspaceAdmin.update, rebaselineRegistry),
-    publish: publishRebaseliner(db, options, rebaselineRegistry),
-    // ADR 0087 の削除も registry clone の ref を動かす口なので、同じ層で包む
-    delete: rebaselineAfter(options.workspaceAdmin.delete, rebaselineRegistry),
-  };
-  const agentAdmin = options.agentAdmin && {
-    ...options.agentAdmin,
-    create: rebaselineAfter(options.agentAdmin.create, rebaselineRegistry),
-    update: rebaselineAfter(options.agentAdmin.update, rebaselineRegistry),
-    delete: rebaselineAfter(options.agentAdmin.delete, rebaselineRegistry),
-    changeTier: rebaselineAfter(options.agentAdmin.changeTier, rebaselineRegistry),
-    renameTier: rebaselineAfter(options.agentAdmin.renameTier, rebaselineRegistry),
-  };
-  const profileAdmin = options.profileAdmin && {
-    ...options.profileAdmin,
-    create: rebaselineAfter(options.profileAdmin.create, rebaselineRegistry),
-    update: rebaselineAfter(options.profileAdmin.update, rebaselineRegistry),
-    delete: rebaselineAfter(options.profileAdmin.delete, rebaselineRegistry),
-  };
-  const registryReachability = rebaselineAfter(options.registryReachability, rebaselineRegistry);
+  const { workspaceAdmin, agentAdmin, profileAdmin, registryReachability } = options;
   // ADR 0052 決定2 の起動時 refresh は**ここには無い**。合成 root
   // (`buildServerOptions`)が registry を読む前に撃つ —— そこより後ろに置くと、
   // remote-tracking ref が欠けた盤面では合成側の読みが先に落ち、fail-open が

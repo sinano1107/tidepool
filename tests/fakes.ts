@@ -420,6 +420,7 @@ export const fakeHead = (prNumber: number) => `head-of-pr-${prNumber}`;
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
+  /** 開いている PR への push(PR を開く前段の push は数えない)。 */
   readonly pushes: PushBranchInput[] = [];
   readonly issueFetches: IssueRef[] = [];
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
@@ -448,32 +449,33 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
-  /** 本物と同じく、PR を開く前にタスクブランチを push する —— PR の head は origin のブランチ先端から読む。
-   *  `pushes` には数えない(開いている PR への push の記録)。 */
+  /** 本物と同じく push はしない —— 呼び手が先に `preparePush` で押したブランチに PR を開く。PR の head は origin の
+   *  ブランチ先端から読む。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
-    execFileSync("git", ["push", "-u", "origin", input.branch], {
-      cwd: input.path,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // 作成の前段の push は開いている PR への push ではない —— そのブランチの最後の push を `pushes` から外す
+    const last = this.pushes.map((push) => push.branch).lastIndexOf(input.branch);
+    if (last !== -1) this.pushes.splice(last, 1);
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     this.prBranches.set(number, input.branch);
     return { url: `https://github.com/example/repo/pull/${number}`, number };
   }
 
-  /** 記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
-   *  なければ、盤面が自分の書き込みを撮り直したか(ADR 0064 決定4)を測れない。
+  /** 返す push は記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
+   *  なければ、盤面が自分の書き込みを基準に畳んだか(ADR 0243)を測れない。
    *  origin を持たない checkout(purely-local)には呼ばれない。 */
-  async pushBranch(input: PushBranchInput): Promise<void> {
-    this.pushes.push(input);
-    execFileSync("git", ["push", "-u", "origin", input.branch], {
-      cwd: input.path,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形に
-    // しないと、「失敗後に撮り直さない」(ADR 0064 決定4)を測る断言が旧コードでも通る
-    if (this.pushFailure) throw this.pushFailure;
+  async preparePush(input: PushBranchInput): Promise<() => void> {
+    return () => {
+      this.pushes.push(input);
+      execFileSync("git", ["push", "-u", "origin", input.branch], {
+        cwd: input.path,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形 —— 畳みが失敗の
+      // 報告ではなく ref の読み返しで決まること(ADR 0243 決定2)を測る
+      if (this.pushFailure) throw this.pushFailure;
+    };
   }
 
   /** push だけを失敗させる —— token を失ったリモート、非 ff の拒否。 */

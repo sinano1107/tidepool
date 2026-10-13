@@ -2,9 +2,12 @@ import { execFileSync } from "node:child_process";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
+import { registerTask } from "../src/tasks.js";
+import { prepareWorkspaceAtPickup, releaseWorkspace } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
@@ -13,8 +16,9 @@ import {
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeGitHubClient } from "./fakes.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
+import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -33,8 +37,10 @@ function git(cwd: string, ...args: string[]): string {
  *  代役も一緒に立てる —— テストの push 先は file:// なので token そのものは
  *  使われない。 */
 const brokers: FakeBroker[] = [];
+const dbs: Db[] = [];
 afterEach(async () => {
   for (const broker of brokers.splice(0)) await broker.close();
+  for (const db of dbs.splice(0)) db.close();
 });
 
 async function makeGitHubAuth(): Promise<GitHubAuth> {
@@ -48,15 +54,7 @@ async function makeGitHubAuth(): Promise<GitHubAuth> {
 }
 
 /** purely-local な workspace を1つ持つ registry と、その checkout。 */
-async function makeBoard(entries?: string): Promise<{
-  registryDir: string;
-  deps: {
-    registry: { dir: string; mode: "purely-local" };
-    workspacesBaseDir: string;
-    githubAuth: GitHubAuth;
-  };
-  checkout: string;
-}> {
+async function makeBoard(entries?: string) {
   const checkout = await tempDir("tidepool-sandbox-");
   git(checkout, "init", "-b", "main");
   await writeFile(join(checkout, "README.md"), "sandbox\n");
@@ -69,15 +67,32 @@ async function makeBoard(entries?: string): Promise<{
   path: ${checkout}
 `,
   });
+  const db = openDb(join(await tempDir("tidepool-board-"), "board.sqlite"));
+  dbs.push(db);
   return {
     registryDir,
     deps: {
-      registry: { dir: registryDir, mode: "purely-local" as const },
+      registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
       workspacesBaseDir: await tempDir("tidepool-ws-base-"),
       githubAuth: await makeGitHubAuth(),
+      db,
     },
     checkout,
   };
+}
+
+/** publish の最中に走っているセッション —— checkout を pickup した状態。 */
+async function runningSession(db: Db, checkout: string) {
+  const clock = new FakeClock();
+  const task = registerTask(
+    db,
+    { type: "work", title: "runs while the human publishes", purpose: "keep working", completion_criteria: "done" },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  const workspace = { name: "sandbox", path: checkout };
+  await prepareWorkspaceAtPickup(db, workspace, task, {});
+  return { release: () => releaseWorkspace(db, workspace, task, clock.now()) };
 }
 
 /** 人間が用意する宛先(ADR 0066 決定2): 盤面は repo を作らないので、テストでも
@@ -113,7 +128,7 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     git(checkout, "tag", "v0.1.0");
     const dest = await makeDestination();
 
-    const pushed = await publishWorkspace({ name: "sandbox", repo: dest }, deps);
+    await publishWorkspace({ name: "sandbox", repo: dest }, deps);
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBe(dest);
     expect(git(registryDir, "log", "-1", "--format=%an %s")).toBe(
@@ -122,11 +137,54 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
     expect(remoteBranches(dest).sort()).toEqual(["main", "task/abc123"]);
     expect(git(dest, "ls-remote", "--tags", dest)).toBe("");
     expect(git(checkout, "remote", "get-url", "origin")).toBe(dest);
-    // ADR 0064 決定4 の6行目が撮り直す集合 —— push の直前に確定した「盤面が書いた ref」
-    expect(pushed.sort()).toEqual([
-      "refs/remotes/origin/main",
-      "refs/remotes/origin/task/abc123",
-    ]);
+  });
+
+  // ADR 0243 / ADR 0066 決定4: push する N 本の写しはまとめて予告され、押した値か予告の前(行が無い)の1値に畳まれる ——
+  // 2値の行のまま残れば、もう片方の値へ動いた写しを解放が通してしまう。atomic に拒まれた push は写しを作らない
+  it.each([
+    ["通った", false],
+    ["宛先に拒まれた", true],
+  ])("publish の push が%sとき、走っているセッションの解放は写しが畳まれなかった側の値へ動いたことを違反と読む", async (_, rejected) => {
+    const { deps, checkout } = await makeBoard();
+    git(checkout, "branch", "task/abc123");
+    const session = await runningSession(deps.db, checkout);
+    const dest = await makeDestination();
+    if (rejected) await seedDestination(dest);
+
+    const published = publishWorkspace({ name: "sandbox", repo: dest }, deps);
+    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toBeUndefined());
+    // 押した写しは消し、拒まれた写しは予告した値で作る
+    const copy = "refs/remotes/origin/main";
+    const main = git(checkout, "rev-parse", "main");
+    git(checkout, "update-ref", ...(rejected ? [copy, main] : ["-d", copy]));
+    session.release();
+
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")?.purpose).toContain(
+      rejected ? `now: ${main} ${copy}` : `was: ${main} ${copy}`,
+    );
+  });
+
+  // 巻き戻しは口の内側にある: push が通った後に registry のコミットが落ちれば、`remote remove` が写しを消した後に畳むので、
+  // 基準は予告の前(行が無い)へ戻る
+  it("push が通った後に registry のコミットが落ちて巻き戻っても、走っているセッションの解放は違反にならない", async () => {
+    const { deps, checkout } = await makeBoard();
+    const session = await runningSession(deps.db, checkout);
+    const dest = await makeDestination();
+    const registry = {
+      ...deps.registry,
+      writeRef: () => {
+        throw new Error("registry landing failed");
+      },
+    };
+
+    await expect(publishWorkspace({ name: "sandbox", repo: dest }, { ...deps, registry })).rejects.toThrow(
+      "registry landing failed",
+    );
+    expect(remoteBranches(dest)).toContain("main");
+    expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+    session.release();
+
+    expect(quarantineQuestion(deps.db, "workspace", "sandbox")).toBeUndefined();
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち

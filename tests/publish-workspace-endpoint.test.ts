@@ -22,7 +22,6 @@ it("POST /api/workspaces/:name/publish は宛先を publish オーケストレ�
     workspaceAdmin: {
       publish: async (input) => {
         calls.push(input);
-        return [];
       },
     },
   });
@@ -53,7 +52,6 @@ it("宛先が空文字なら 400 で、オーケストレーションを呼ば�
     workspaceAdmin: {
       publish: async (input) => {
         calls.push(input);
-        return [];
       },
     },
   });

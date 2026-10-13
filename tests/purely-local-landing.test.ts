@@ -204,7 +204,7 @@ it("走行中の slot を占めたまま来た非 ff の着地は、ref だけ�
     "the running session's work in progress\n",
   );
   expect(await servedQuarantineQuestion(t, "workspace", "sandbox")).toBeUndefined();
-  // ADR 0064 決定4: 盤面が進めた行は撮り直されているので、走っていたセッションの解放は
+  // ADR 0243: 盤面が進めた行は予告して畳まれているので、走っていたセッションの解放は
   // 盤面自身のこの2度の書き込みを違反として読まない
   commitWork(workspace.path, "wip.txt", "the running session's work in progress\n");
   await completeViaMcp(t, third.id);

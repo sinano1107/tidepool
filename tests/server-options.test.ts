@@ -18,7 +18,7 @@ import {
 import type { Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { containerHarness, FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
-import { bootTidepool, TEST_CREDENTIAL } from "./harness.js";
+import { bootTidepool, HOUR, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
 
 /** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
@@ -565,4 +565,37 @@ it("既定 agent が組み込みに解決される盤面は起動しない —�
   await expect(bootTidepool({ workerAdapter: buildWorkerFactory(board) })).rejects.toThrow(
     "agent fugu: the built-in agent runs reviews only",
   );
+});
+
+// ADR 0243 決定3・4 / spec #1870: 起動時の registry fetch と到達性 quarantine の受理検査の fetch は、合成 root が registry
+// clone の workspace に束ねた同じ口を通る。落ちた時点で registry clone にセッションが走っていた盤面が、起動時の fetch で
+// 写しを動かしても、再起動の後始末はそれを違反と読まない
+it("落ちた時点で registry clone で走っていたセッションは、起動時の registry fetch が写しを動かしても再起動の後始末で quarantine されない", async () => {
+  const { registryDir, publish } = await makeRemoteBackedRegistry();
+  const repo = execFileSync("git", ["remote", "get-url", "origin"], { cwd: registryDir }).toString().trim();
+  const workspace = { name: "registry", path: registryDir, repo };
+  // 合成 root が registry から読む「registry clone も workspace である」宣言
+  publish("workspaces.yaml", `registry:\n  path: ${registryDir}\n  repo: ${repo}\n`, "register the registry clone");
+  execFileSync("git", ["fetch", "--quiet", "origin"], { cwd: registryDir });
+  const boot = {
+    workspace,
+    registry: { dir: registryDir, mode: "remote-backed" as const },
+    boardState: { paths: [], listWorkspaces: () => [workspace] },
+  };
+  let t = await bootTidepool(boot);
+  try {
+    await registerWork(t, "runs in the registry clone when the board dies");
+    await t.clock.advance(HOUR);
+    await t.stopServer();
+    publish("notes.md", "merged on GitHub\n", "merged while the board was down");
+
+    const db = openDb(join(t.dir, "board.sqlite"));
+    await buildServerOptions({ ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "registry" }, db);
+    db.close();
+    t = await bootTidepool({ ...boot, dir: t.dir });
+
+    expect(await servedQuarantineQuestion(t, "workspace", "registry")).toBeUndefined();
+  } finally {
+    await t.stop();
+  }
 });
