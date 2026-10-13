@@ -67,22 +67,18 @@ async function makeBoard(entries?: string) {
   path: ${checkout}
 `,
   });
+  const db = openDb(join(await tempDir("tidepool-board-"), "board.sqlite"));
+  dbs.push(db);
   return {
     registryDir,
     deps: {
       registry: { dir: registryDir, mode: "purely-local" as const, writeRef: writeUnannounced },
       workspacesBaseDir: await tempDir("tidepool-ws-base-"),
       githubAuth: await makeGitHubAuth(),
-      db: openBoardDb(await tempDir("tidepool-board-")),
+      db,
     },
     checkout,
   };
-}
-
-function openBoardDb(dir: string): Db {
-  const db = openDb(join(dir, "board.sqlite"));
-  dbs.push(db);
-  return db;
 }
 
 /** publish の最中に走っているセッション —— checkout を pickup した状態。 */
