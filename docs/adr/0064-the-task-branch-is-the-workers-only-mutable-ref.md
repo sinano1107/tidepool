@@ -1,5 +1,7 @@
 # タスクブランチは worker の唯一の可変 ref である
 
+**Status 追記: 決定4 の「書いた後に撮り直す」と「成功したときにしか撮り直さない」は [ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) で「書く前に基準へ予告し、書いた後に2択で畳む」に置き換わった(2026-10-13)。決定1〜3・5〜7 はそのまま。**
+
 issue #234 のグリリング(2026-08-10)で決定。実運用テストで、worker が Tidepool の checkout した
 `task/<id>` から別ブランチへ移動する挙動が観測された。終了時の HEAD 確認だけで「タスクブランチ以外を
 変更できない」という境界を本当に保証できているかを測り、必要なら強化する、というのが元の射程である。
