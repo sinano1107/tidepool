@@ -479,6 +479,14 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(developer.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
   });
 
+  it("分解した Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
+    const f = await fixture();
+    f.start(decomposedInterviewRoot(f.db));
+    const developer = developerInstructions(f.process.calls[0]!.args).replace(/\s+/g, " ");
+    expect(developer).toContain("This task is not split: complete it in this session.");
+    expect(developer).not.toContain("Register that split with the tidepool MCP's decompose instead.");
+  });
+
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {
     const open = await fixture();
     open.start(task(open.db, "codex-network-open"));

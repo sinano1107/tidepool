@@ -1067,6 +1067,18 @@ export function completeTask(
   if (hasUnfinishedChildren(db, task.id)) {
     throw new DomainError("a task with unfinished children cannot complete");
   }
+  // ADR 0247 決定4: Interview の root は done の答案を全部採点してから完了する(pin の子は Interview の root にしか居ない)
+  const unscored = db
+    .prepare(
+      `SELECT id FROM tasks c WHERE parent_id = ? AND interview_target_id IS NOT NULL AND status = 'done'
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = c.id AND e.kind = 'interview_scored') ORDER BY sort_key`,
+    )
+    .all(task.id) as Array<{ id: string }>;
+  if (unscored.length > 0) {
+    throw new DomainError(
+      `an Interview completes only after every done child is scored — score each with score_interview (accepted or rejected); unscored: ${unscored.map(({ id }) => id).join(", ")}`,
+    );
+  }
   const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
   const handoffDoc = rendered === "" ? null : rendered;
   db.transaction(() => {
@@ -1271,9 +1283,9 @@ function cancelUnsettledSubtree(
 }
 
 /** Cancel a task and every unfinished descendant via an abandon answer (ADR
- *  0006): the failure question the abandon came from is named on every
- *  cancelled task. Internal only — answerQuestion's abandon branch is the sole
- *  caller; no MCP or JSON API surface. */
+ *  0006), or an Interview root via the answer that ended it (ADR 0247): the
+ *  question the answer came from is named on every cancelled task. Internal
+ *  only — answerQuestion is the sole caller; no MCP or JSON API surface. */
 function cancelTask(
   db: Db,
   task: Task,
@@ -1604,8 +1616,10 @@ export function answerQuestion(
           for (const id of abandonScopeIds(db, failed.id, breach)) {
             cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
           }
-          // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)
-          if (failed.interview_target_id === null || breach) unblockTarget = plan;
+          if (failed.interview_target_id === null) unblockTarget = plan;
+          // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)。破綻した probe か、
+          // 採点できる答案も未決着の子も残らない Interview は、この答えで終える(ADR 0247 決定1・2)
+          else if (breach || interviewLeftEmpty(db, plan.id)) cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin);
         } else {
           cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
         }
@@ -1641,6 +1655,10 @@ export function answerQuestion(
               at: now,
             });
           }
+        } else if (pending.interview_target_id !== undefined && interviewLeftEmpty(db, question.parent_id!)) {
+          // ADR 0247 決定1: 最後の対象を断った答えで Interview を終える
+          cancelTask(db, getTask(db, question.parent_id!)!, question.id, HUMAN_WORKER_ID, now, origin);
+          break;
         }
         unblockTarget = blockedParent();
         break;
@@ -1667,6 +1685,13 @@ export function answerQuestion(
     }
   })();
   return getTask(db, question.id)!;
+}
+
+/** 採点できる答案(done の pin の子)も未決着の子も残っていない Interview の root か(ADR 0247 決定1)。 */
+function interviewLeftEmpty(db: Db, rootId: string): boolean {
+  return db
+    .prepare(`SELECT 1 FROM tasks WHERE parent_id = ? AND ((interview_target_id IS NOT NULL AND status = 'done') OR ${unsettledSql("status")}) LIMIT 1`)
+    .get(rootId) === undefined;
 }
 
 /** The scope shared by abandon and held (ADR 0048): the failed task itself,
@@ -1836,12 +1861,21 @@ function resolvePremiseBreach(
 export function abandonConsequence(db: Db, task: Task, breach = false): string {
   // derived from the cancel/held scope so the wording cannot drift
   const siblingCount = abandonScopeIds(db, task.id, breach).filter((id) => id !== task.id).length;
+  const siblings = `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same decomposition decision`;
+  // ADR 0247 決定1・2: pin の子の abandon は Interview を終えうる。失敗は兄弟の行方を登録時に知らないので条件付き
+  if (task.interview_target_id !== null) {
+    return breach
+      ? `"abandon" ends this Interview — it cancels this task's remaining work${siblingCount > 0 ? ` plus ${siblings}` : ""} ` +
+          `and the Interview itself, so no answer to this probe is scored; a human registers the Interview again with a fixed probe.`
+      : `"abandon" cancels this task and its remaining work. ${INTERVIEW_ENDS_IF_EMPTY}`;
+  }
   return siblingCount > 0
-    ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
-        `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
-        `decomposition decision — and returns the parent to the queue head to replan.`
+    ? `"abandon" discards this decomposition decision — this task's remaining work plus ${siblings} — ` +
+        `and returns the parent to the queue head to replan.`
     : `"abandon" cancels this task and its remaining work.`;
 }
+
+const INTERVIEW_ENDS_IF_EMPTY = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
 
 /** The ids in `failedId`'s abandon scope, shared by the abandon cascade, redecompose, and abandon's wording. */
 function abandonScopeIds(db: Db, failedId: string, breach: boolean): string[] {
@@ -2306,7 +2340,8 @@ export function decomposeTask(
             title: questionTitle,
             purpose:
               `"${child.title}" ${reasons.join("; ")} — outside ${workerId}'s authority to ` +
-              `register unapproved. ${child.purpose}`,
+              `register unapproved. ${child.purpose}` +
+              (child.interview_target_id === undefined ? "" : `\n\n"reject" leaves this target unregistered. ${INTERVIEW_ENDS_IF_EMPTY}`),
             completion_criteria: "a human approves or rejects the child registration",
             parent_id: parent.id,
             question: [

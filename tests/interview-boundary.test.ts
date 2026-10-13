@@ -157,6 +157,10 @@ it("pin の子の pickup は、学習器が昇格していない盤面でも sha
   const [childId] = JSON.parse((await callAsTask(t, root.id, "decompose", { reason: "r", children: [{ ...CHILD, interview_pin: opus46 }] })).content[0].text).child_ids;
   await completeMetaReviews(t);
   expect(t.worker.started.at(-1)!.id).toBe(childId);
+  // runNow は slot の root も完了させるので、先に答案を採点しておく(ADR 0247 決定4)
+  await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
+  await t.clock.advance(HOUR);
+  await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" });
   registerMetaReview(t.db, "routing", t.clock.now());
   const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
   await runNow(t, review.id);

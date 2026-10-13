@@ -412,9 +412,9 @@ function tomlInline(value: Record<string, unknown>): string {
 }
 
 /** ADR 0157 決定2・3: Codex の委譲先は subagent。Workflow tool に当たる機構は無いので禁止の段落は出さない。
- *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。pin の子は分けない(ADR 0245 決定2)。 */
-function codexDoctrine(task: Task): string {
-  return `${boardDoctrine({ delegate: "a subagent", workflow: false }, task.interview_target_id === null)} ` +
+ *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。`split` は decompose を持つ task か(ADR 0247 決定3)。 */
+function codexDoctrine(split: boolean): string {
+  return `${boardDoctrine({ delegate: "a subagent", workflow: false }, split)} ` +
     "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.";
 }
 
@@ -1048,7 +1048,7 @@ export class CodexWorker implements WorkerAdapter {
           task,
           systemPrompt: agent.definition.systemPrompt,
           profile: agent.profile,
-          doctrine: codexDoctrine(task),
+          doctrine: codexDoctrine(!withheld.includes("decompose")),
           allowedDomains: workspace.allowed_domains,
           memorySection: memory.section ?? material?.section ?? null,
         })}\n\n`,
