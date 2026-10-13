@@ -15,7 +15,8 @@ import {
 } from "./registry.js";
 import { AUTHORITY_WILDCARD, getTask, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task } from "./tasks.js";
 
-/** doctrine のスロット(ADR 0157 決定3)。スロットは「委譲先の語」と「Workflow 段落の有無」の2つだけ。 */
+/** doctrine の Harness の語のスロット(ADR 0157 決定3)。「委譲先の語」と「Workflow 段落の有無」の2つだけ。
+ *  task ごとに変わるのは別の引数 `split`(ADR 0245 決定2)で、Harness の語ではない。 */
 interface DoctrineVocabulary {
   delegate: string;
   workflow: boolean;
@@ -48,7 +49,7 @@ full accountability for its output as the parent task.${split ? ` If another reg
 agent's capability is needed, use decompose with an assignee, not ${delegateAtLineEnd}.` : ""}
 ${workflow ? `
 The Workflow tool is off-limits in task sessions: a workflow script is a
-${split ? "decompose plan" : "split"} that never reached the board.${split ? ` If you find yourself wanting to
+${split ? "decompose plan" : "delegation"} that never reached the board.${split ? ` If you find yourself wanting to
 write one, register that split with the tidepool MCP's decompose instead.` : ""}
 ` : ""}
 Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call

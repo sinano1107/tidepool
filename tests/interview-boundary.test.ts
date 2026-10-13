@@ -78,7 +78,7 @@ it("Interview の root は対象を読んで decompose し、一覧に無い pin
   for (const pin of [sol, ghost]) expect((await decompose(pin)).content[0].text).toContain("cannot run as fake-worker");
 });
 
-it("worker MCP の tool 一覧から、pin の子は decompose が、Interview の root は redecompose が抜け、普通の work は両方を持つ(ADR 0245 決定1・3)", async () => {
+it("worker MCP の tool 一覧から、pin の子は分解の verb が両方、Interview の root は redecompose が抜け、普通の work は両方を持つ(ADR 0245 決定1・3)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = JSON.parse((await callAsTask(t, root.id, "decompose", { reason: "r", children: [{ ...CHILD, interview_pin: opus46 }] })).content[0].text).child_ids;
@@ -93,7 +93,7 @@ it("worker MCP の tool 一覧から、pin の子は decompose が、Interview �
   };
   const ordinary = await tools(work.id);
   expect(ordinary).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
-  expect(await tools(childId)).toEqual(ordinary.filter((name) => name !== "decompose"));
+  expect(await tools(childId)).toEqual(ordinary.filter((name) => name !== "decompose" && name !== "redecompose"));
   expect(await tools(root.id)).toEqual(ordinary.filter((name) => name !== "redecompose"));
 });
 

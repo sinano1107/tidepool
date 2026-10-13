@@ -500,11 +500,11 @@ export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget):
 }
 
 /** Interview の木で登録しない分解の verb(ADR 0245 決定1・3、ADR 0122 決定2 の task ごとの差し替え)。
- *  pin の子は decompose、Interview の root は redecompose。worker MCP の登録と Codex の宣言が同じここを引く。 */
-export function withheldDecompositionVerb(db: Db, taskId: string): "decompose" | "redecompose" | undefined {
-  if (getTask(db, taskId)?.interview_target_id != null) return "decompose";
-  if (interviewTargets(db, taskId) !== null) return "redecompose";
-  return undefined;
+ *  pin の子は分解の verb を両方、Interview の root は redecompose。worker MCP の登録と Codex の宣言が同じここを引く。 */
+export function withheldDecompositionVerbs(db: Db, taskId: string): readonly ("decompose" | "redecompose")[] {
+  if (getTask(db, taskId)?.interview_target_id != null) return ["decompose", "redecompose"];
+  if (interviewTargets(db, taskId) !== null) return ["redecompose"];
+  return [];
 }
 
 /** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
@@ -2207,7 +2207,7 @@ export function decomposeTask(
 ): Task[] {
   // ADR 0245 決定1: pin の子の下は分けない(人間の扉も redecompose もここを通る)
   if (parent.interview_target_id !== null) {
-    throw new DomainError("an Interview child is not split: complete it as one task and state in its handoff what remains");
+    throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
   }
   const interview = interviewTargets(db, parent.id) !== null;
   input = {
@@ -2225,7 +2225,9 @@ export function decomposeTask(
     throw new DomainError("a decomposition carries at least one child task");
   }
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
+    throw new DomainError(
+      `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
+    );
   }
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only

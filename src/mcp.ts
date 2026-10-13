@@ -78,7 +78,7 @@ import {
   type TaskType,
   taskHistoryRows,
   type Unstored,
-  withheldDecompositionVerb,
+  withheldDecompositionVerbs,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import {
@@ -501,8 +501,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
-  // ADR 0245 決定1・3: Interview の木では分解の verb を1つ登録しない(同じ task ごとの差し替え)
-  const withheld = attributedTaskId === null ? undefined : withheldDecompositionVerb(deps.db, attributedTaskId);
+  // ADR 0245 決定1・3: Interview の木では分解の verb を登録しない(同じ task ごとの差し替え)
+  const withheld = attributedTaskId === null ? [] : withheldDecompositionVerbs(deps.db, attributedTaskId);
 
   server.registerTool(
     "get_current_task",
@@ -635,7 +635,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  if (withheld !== "decompose") {
+  if (!withheld.includes("decompose")) {
     server.registerTool(
       "decompose",
       {
@@ -759,7 +759,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  if (withheld !== "redecompose") {
+  if (!withheld.includes("redecompose")) {
     server.registerTool(
       "redecompose",
       {

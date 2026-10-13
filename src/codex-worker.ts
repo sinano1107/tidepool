@@ -29,7 +29,7 @@ import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
-import { resolveTaskAgent, type Task, withheldDecompositionVerb } from "./tasks.js";
+import { resolveTaskAgent, type Task, withheldDecompositionVerbs } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import type { Transcript, TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
@@ -1032,7 +1032,7 @@ export class CodexWorker implements WorkerAdapter {
     try {
       const hook = installBoardHook(this.options.codexHome);
       const subject = metaReviewSubjectOf(this.options.db, task.id);
-      const withheld = withheldDecompositionVerb(this.options.db, task.id);
+      const withheld: readonly string[] = withheldDecompositionVerbs(this.options.db, task.id);
       const taskMcpUrl = new URL(this.options.mcpUrl);
       taskMcpUrl.searchParams.set("task", task.id);
       const config = spawnConfig({
@@ -1058,7 +1058,7 @@ export class CodexWorker implements WorkerAdapter {
         enabledTools: (subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
           : BOARD_VERBS
-        ).filter((verb) => verb !== withheld),
+        ).filter((verb) => !withheld.includes(verb)),
         workspace: workspace.path,
         allowedDomains: workspace.allowed_domains ?? [],
         taskTemp,

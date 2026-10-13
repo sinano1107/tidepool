@@ -81,8 +81,8 @@ it("pin の子は分解できない —— agent の decompose も人間の扉�
   const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
   const before = listBoard(db).length;
   const split = { reason: "too large for one session", children: [{ ...CHILD, assignee: "deckhand" }] };
-  expect(() => decomposeTaskViaWorker(db, child!, split, "tako", new Date(0), { authority: { assignable_to: [] } })).toThrow(/an Interview child is not split/);
-  expect(() => humanDecomposeTaskViaWebui(db, child!, split, new Date(0))).toThrow(/an Interview child is not split/);
+  expect(() => decomposeTaskViaWorker(db, child!, split, "tako", new Date(0), { authority: { assignable_to: [] } })).toThrow(/this task is not split/);
+  expect(() => humanDecomposeTaskViaWebui(db, child!, split, new Date(0))).toThrow(/this task is not split/);
   expect(listBoard(db)).toHaveLength(before);
 });
 

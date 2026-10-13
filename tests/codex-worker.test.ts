@@ -4,6 +4,7 @@ import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { boardDoctrine } from "../src/board-prose.js";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
@@ -463,25 +464,8 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(task(f.db, "codex-doctrine"));
     const developer = developerInstructions(f.process.calls[0]!.args);
     const doctrine = developer.slice(developer.indexOf("## Board doctrine"), developer.indexOf("## Rules of the road"));
-    // 文面の一致は語で見る —— 折り返しの位置は Claude の文面に従う(#695)
-    const words = (text: string) => text.replace(/\s+/g, " ").trim();
-    expect(words(doctrine)).toBe(words(`## Board doctrine
-
-Work that needs independent completion criteria, separate authority, its own
-risk, or survival across sessions must not be routed to a subagent — that is
-delegation smuggled past the board. Register that split with the tidepool
-MCP's decompose instead.
-
-A subagent may only be used for labor-splitting that does not divide
-accountability (exploration, parallel research, mechanical edits): you carry
-full accountability for its output as the parent task. If another registry
-agent's capability is needed, use decompose with an assignee, not a subagent.
-
-Board verbs (the tidepool MCP tools) are main-thread only: a subagent's call
-is denied by the harness, not by an attacker. If a subagent reports that
-denial, make the call yourself from the main thread. Spawn subagents with
-fork_turns: "none"; this session keeps no rollout, so forking the parent
-thread's history always fails.`));
+    // 文面そのものは tests/board-prose.test.ts が固定する。ここは Codex の語の配線と末尾の1文だけ
+    expect(doctrine).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, true));
     expect(developer).not.toContain("Workflow");
     expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
   });
