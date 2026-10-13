@@ -3342,8 +3342,9 @@ it("別の clone からの force-push で修理が消えた PR は、CI 緑で�
 });
 
 it("別の clone からの force-push で修理が消えた PR への人間の merge 回答は、head が盤面の外で push され修理の内容を持たないと言って拒まれ、merge されず question は開いたまま", async () => {
-  const pr = await openPushedPr("left-behind-dropped-outside-answer", "escalate");
+  const pr = await openPushedPr("left-behind-dropped-outside-answer", "auto_if_ci_green");
   const repair = await dropRepairOutsideBoard(pr);
+  await pr.landing.tick("auto_merge", pr.clock.now());
   const head = originHead(pr.workspace, pr.work.id);
   const question = listBoard(pr.db).find((q) => q.question_pending_merge_pr === 1)!;
 

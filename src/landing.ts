@@ -205,21 +205,23 @@ function lastPushedHead(db: Db, taskId: string): string | undefined {
   return row?.sha ?? undefined;
 }
 
-/** ADR 0242 決定4: GitHub の head に無い内容(`left`)が、盤面が最後に push した head には全部載っていれば、盤面の外の push が
- *  落としたもので盤面には運ぶ手が無い。そのとき、届いていない子孫のブランチ(子孫が無ければ着地するタスク自身)と直す手段
- *  2つ(ADR 0239 帰結)を言う文を返す。最後に push した head とも比べられなければ、落としたとは読まない(盤面がまだ運ぶ側) */
-export async function droppedByOutsidePush(
+/** ADR 0242 決定4: GitHub の head に無い内容(`left`)があり、盤面が最後に push した head と比べれば積み残しが無いなら、
+ *  盤面の外の push が落としたもので盤面には運ぶ手が無い。そのとき、外の push の事実・届いていない子孫のブランチ(子孫が
+ *  無ければ着地するタスク自身)・直す手段2つ(ADR 0239 帰結)を言う文を返す。最後に push した head とも比べられなければ、
+ *  落としたとは読まない(盤面がまだ運ぶ側) */
+export async function outsidePushDropNotice(
   db: Db,
   workspace: WorkspaceConfig,
   taskId: string,
   left: string[],
+  pr: { number: number; head: string },
 ): Promise<string | undefined> {
   if (left.length === 0 || (await hasContentLeftBehind(db, workspace, taskId, lastPushedHead(db, taskId)))) return undefined;
   const descendants = left.filter((id) => id !== taskId);
   const branches = (descendants.length > 0 ? descendants : left).map(taskBranch).join(", ");
   return (
-    `lacks the content of ${branches} — push that content back onto ${taskBranch(taskId)}, or, to discard it, ` +
-    `record \`git merge -s ours\` of it in the workspace and push`
+    `PR #${pr.number}'s head ${pr.head} was pushed outside the board and lacks the content of ${branches} — push that ` +
+    `content back onto ${taskBranch(taskId)}, or, to discard it, record \`git merge -s ours\` of it in the workspace and push`
   );
 }
 
@@ -1157,12 +1159,9 @@ export function createLanding(deps: LandingDeps): Landing {
               ? await contentLeftBehind(deps.db, workspace, task_id, head, { auth: deps.githubAuth }).catch(() => null)
               : [];
           // 盤面の外の push が落とした内容は、キューを外して推奨 hold の question に倒す(ADR 0242 決定4)
-          const dropped = left && (await droppedByOutsidePush(deps.db, workspace, task_id, left));
+          const dropped = left && (await outsidePushDropNotice(deps.db, workspace, task_id, left, { number: pr_number, head }));
           const askDropped = dropped
-            ? hold(
-                `"${task.title}"'s auto_if_ci_green auto-merge found that PR #${pr_number}'s head ${head} was pushed ` +
-                  `outside the board and ${dropped}; then merge, or hold?`,
-              )
+            ? hold(`"${task.title}"'s auto_if_ci_green auto-merge found that ${dropped}; then merge, or hold?`)
             : undefined;
           // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、外の push が落とした内容は
           // その question、それ以外は推奨 merge の面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも
