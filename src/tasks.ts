@@ -9,8 +9,8 @@ import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
-import { type QuestionKind, questionColumns } from "./question-kind.js";
 import { PROVIDER_VALUES } from "./provider.js";
+import { type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
@@ -1432,11 +1432,22 @@ export function assertAnswerable(question: Task, answers: string[], comment: str
   return answers;
 }
 
-/** 着地 question(PR マージ・ローカル着地)か。push の遷移先(buildQuestionPushPayload)と読み口の着地注記(landingAnnotation)が共有する(ADR 0190)。 */
-export function isLandingQuestion(
-  task: Pick<Task, "question_pending_merge_pr" | "question_pending_local_merge_task_id">,
-): boolean {
-  return task.question_pending_merge_pr !== null || task.question_pending_local_merge_task_id !== null;
+/** 着地 question(PR マージ・ローカル着地)か。push の遷移先(buildQuestionPushPayload)が使う(ADR 0190)。 */
+export function isLandingQuestion(task: QuestionColumns<TierRef>): boolean {
+  switch (questionKindOf(task).kind) {
+    case "pr_merge":
+    case "local_merge":
+      return true;
+    case "escalation":
+    case "failure":
+    case "premise_breach":
+    case "approval":
+    case "pr_promotion_retry":
+    case "proposal":
+    case "quarantine":
+    case "cli_auth_expiry_warning":
+      return false;
+  }
 }
 
 /** 選択肢にない回答を断る固定選択肢の question か。門(assertAnswerable)と読み口(questionAnnotations の `free_text`)が使う(issue #1309)。
@@ -1451,30 +1462,41 @@ export function isLandingQuestion(
  *  feature (escalate.test.ts), and a Confirmation question (quarantine
  *  resolution), which takes any answer text as a repair note (CONTEXT.md's
  *  Quarantine) — neither carries this kind of consequence. */
-export function isFixedChoiceQuestion(
-  question: Pick<
-    Task,
-    | "question_pending_merge_pr"
-    | "question_pending_local_merge_task_id"
-    | "question_pending_pr_promotion_task_id"
-    | "question_pending_child"
-    | "question_cancel_option"
-  > & { question_proposal: QuestionProposal<TierRef> | null },
-): boolean {
-  return (
-    question.question_pending_merge_pr !== null ||
-    question.question_pending_local_merge_task_id !== null ||
-    question.question_pending_pr_promotion_task_id !== null ||
-    question.question_pending_child !== null ||
-    question.question_proposal !== null ||
-    question.question_cancel_option !== null
-  );
+export function isFixedChoiceQuestion(question: QuestionColumns<TierRef>): boolean {
+  switch (questionKindOf(question).kind) {
+    case "failure":
+    case "premise_breach":
+    case "approval":
+    case "pr_merge":
+    case "local_merge":
+    case "pr_promotion_retry":
+    case "proposal":
+      return true;
+    case "escalation":
+    case "quarantine":
+    case "cli_auth_expiry_warning":
+      return false;
+  }
 }
 
 /** この question で理由の comment が要る選択肢(ADR 0179 決定1〜4)。門(assertAnswerable)と読み口(questionAnnotations)が使う。 */
-export function needsComment(question: Pick<Task, "question_pending_child"> & { question_proposal: QuestionProposal<TierRef> | null }): string[] {
-  if (question.question_proposal?.kind === "memory") return ["reject", "defer"];
-  return question.question_proposal || question.question_pending_child ? ["reject"] : [];
+export function needsComment(question: QuestionColumns<TierRef>): string[] {
+  const kind = questionKindOf(question);
+  switch (kind.kind) {
+    case "proposal":
+      return kind.proposal.kind === "memory" ? ["reject", "defer"] : ["reject"];
+    case "approval":
+      return ["reject"];
+    case "escalation":
+    case "failure":
+    case "premise_breach":
+    case "pr_merge":
+    case "local_merge":
+    case "pr_promotion_retry":
+    case "quarantine":
+    case "cli_auth_expiry_warning":
+      return [];
+  }
 }
 
 /** The human steering channel: answer a question from the WebUI. One answer
@@ -1552,66 +1574,87 @@ export function answerQuestion(
       at: now,
     });
 
-    const quarantine = question.question_quarantine_kind;
-    if (quarantine) {
-      appendEvent(db, {
-        taskId: question.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "quarantine_released", quarantine, value: question.question_quarantine_value },
-        at: now,
-      });
-      return;
-    }
-
-    let unblockTarget: Task | undefined;
-    if (answer === question.question_cancel_option) {
-      const failed = getTask(db, question.parent_id!)!;
-      const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
-      if (plan) {
-        const breach = question.question_breached_decision !== null;
-        for (const id of abandonScopeIds(db, failed.id, breach)) {
-          cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
-        }
-        // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)
-        if (failed.interview_target_id === null || breach) unblockTarget = plan;
-      } else {
-        cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
-      }
-    } else {
-      // pending-child approval question (issue #11): the child (out-of-
-      // authority on risk and/or assignee) was never registered at decompose
-      // time. "approve" materializes it now, for real, and — only if it
-      // actually carries risk beyond its parent — raises the parent's own
-      // risk flag to match (upward propagation). A "reject" answer leaves it
-      // unregistered.
-      const pending = question.question_pending_child;
-      if (pending && answer === "approve") {
-        registerTask(
-          db,
-          { type: "work", ...pending, parent_id: question.parent_id! },
-          now,
-          HUMAN_WORKER_ID,
-          origin,
-        );
-        // "beyond its parent" is evaluated against the parent's current risk
-        // flag, not a decompose-time snapshot: a second, unrelated (e.g.
-        // assignee-only) approval on an already-risky parent propagates
-        // nothing new and must not re-fire the audit event.
-        if (raisesParentRisk(pending, getTask(db, question.parent_id!)!)) {
-          db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
-          appendEvent(db, {
-            taskId: question.parent_id!,
-            workerId: HUMAN_WORKER_ID,
-            origin,
-            payload: { kind: "risk_flag_raised", origin_question_id: question.id },
-            at: now,
-          });
-        }
-      }
-      // awaitedChildSql がこの question を付帯子と判定すれば親はこの回答を待っていないので先頭へ戻さない(ADR 0049 / ADR 0120 決定3)
+    const kind = questionKindOf(question);
+    // awaitedChildSql がこの question を付帯子と判定すれば親はこの回答を待っていないので先頭へ戻さない(ADR 0049 / ADR 0120 決定3)
+    const blockedParent = () => {
       const blockedParentId = questionBlocking(db, question.id);
-      unblockTarget = blockedParentId ? getTask(db, blockedParentId) : undefined;
+      return blockedParentId ? getTask(db, blockedParentId) : undefined;
+    };
+    let unblockTarget: Task | undefined;
+    switch (kind.kind) {
+      case "quarantine":
+        appendEvent(db, {
+          taskId: question.id,
+          workerId: HUMAN_WORKER_ID,
+          origin,
+          payload: { kind: "quarantine_released", quarantine: kind.quarantine, value: kind.value },
+          at: now,
+        });
+        return;
+      case "failure":
+      case "premise_breach": {
+        if (answer !== kind.cancel_option) {
+          unblockTarget = blockedParent();
+          break;
+        }
+        const failed = getTask(db, question.parent_id!)!;
+        const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
+        if (plan) {
+          const breach = kind.kind === "premise_breach";
+          for (const id of abandonScopeIds(db, failed.id, breach)) {
+            cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
+          }
+          // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)
+          if (failed.interview_target_id === null || breach) unblockTarget = plan;
+        } else {
+          cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
+        }
+        break;
+      }
+      case "approval": {
+        // pending-child approval question (issue #11): the child (out-of-
+        // authority on risk and/or assignee) was never registered at decompose
+        // time. "approve" materializes it now, for real, and — only if it
+        // actually carries risk beyond its parent — raises the parent's own
+        // risk flag to match (upward propagation). A "reject" answer leaves it
+        // unregistered.
+        const pending = kind.pending_child;
+        if (answer === "approve") {
+          registerTask(
+            db,
+            { type: "work", ...pending, parent_id: question.parent_id! },
+            now,
+            HUMAN_WORKER_ID,
+            origin,
+          );
+          // "beyond its parent" is evaluated against the parent's current risk
+          // flag, not a decompose-time snapshot: a second, unrelated (e.g.
+          // assignee-only) approval on an already-risky parent propagates
+          // nothing new and must not re-fire the audit event.
+          if (raisesParentRisk(pending, getTask(db, question.parent_id!)!)) {
+            db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
+            appendEvent(db, {
+              taskId: question.parent_id!,
+              workerId: HUMAN_WORKER_ID,
+              origin,
+              payload: { kind: "risk_flag_raised", origin_question_id: question.id },
+              at: now,
+            });
+          }
+        }
+        unblockTarget = blockedParent();
+        break;
+      }
+      case "escalation":
+      case "pr_merge":
+      case "local_merge":
+      case "pr_promotion_retry":
+      case "proposal":
+      case "cli_auth_expiry_warning":
+        unblockTarget = blockedParent();
+        break;
+      default:
+        kind satisfies never;
     }
 
     if (
@@ -2819,11 +2862,23 @@ export function raisesParentRisk(child: { risk_flag?: boolean }, parent: Pick<Ta
  *  判定は盤面側、WebUI は描画だけ(`landingAnnotation` と同じ分担)。 */
 export function approvalAnnotation(
   db: Db,
-  task: Pick<Task, "question_pending_child" | "parent_id">,
+  task: QuestionColumns<TierRef> & Pick<Task, "parent_id">,
 ): { raises_parent_risk: boolean } | null {
-  const pending = task.question_pending_child;
-  if (pending === null) return null;
-  return { raises_parent_risk: raisesParentRisk(pending, getTask(db, task.parent_id!)!) };
+  const kind = questionKindOf(task);
+  switch (kind.kind) {
+    case "approval":
+      return { raises_parent_risk: raisesParentRisk(kind.pending_child, getTask(db, task.parent_id!)!) };
+    case "escalation":
+    case "failure":
+    case "premise_breach":
+    case "pr_merge":
+    case "local_merge":
+    case "pr_promotion_retry":
+    case "proposal":
+    case "quarantine":
+    case "cli_auth_expiry_warning":
+      return null;
+  }
 }
 
 /** question が塞いでいる親の id、塞がなければ null(issue #935)— `listYourTasks` の
