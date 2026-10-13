@@ -29,13 +29,32 @@ untriaged, and #1416 sat outside every queue after its blocker #1419 closed.
 
 ## Priority labels
 
-Orthogonal to the five roles above: a `ready-for-agent` issue additionally carries at most one `priority:*` label, ranking it for pickup. The 2026-07-17 triage ranked by what unblocks Tidepool developing Tidepool itself (deliverable integrity and trust foundations first, guardrails and tooling next, ops/UX last).
+Orthogonal to the five roles above: every open issue carries exactly one `priority:*` label, whatever
+its state role. The meaning is relative to a **named gate** (ADR 0244) — the label ranks what stands
+between the repo and that gate, not urgency in the abstract. This is the tracker's "issue priority";
+the board's 「優先順位」 (a task's `quality` / `cost` key, ADR 0114) is a different thing.
 
-| Label             | Meaning                                                        |
-| ----------------- | -------------------------------------------------------------- |
-| `priority:high`   | Work this first — blocks trusting agents with development work |
-| `priority:medium` | Guardrails and quality tooling — next after high               |
-| `priority:low`    | Ops and UX — not a prerequisite for agent-driven development   |
+**Current gate: start real use on the maintainer's own Mac — #1879.** When the gate is passed, write
+the next gate on this line first, then relabel every open issue; until then the old labels are not read.
+
+| Label             | Meaning                                                                                                   |
+| ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `priority:high`   | Blocks the gate. Also a blocker of the gate issue (`high` ⇔ blocked-by edge on #1879).                     |
+| `priority:medium` | Does not block the gate, but friction the maintainer will hit in the first weeks of real use.             |
+| `priority:low`    | Looked at after the gate. Not in any human queue until then.                                              |
+| (none)            | Forgotten. The sweep picks these first and labels them.                                                   |
+
+Four mechanical tests put an issue on `high`: its implementation changes the schema (no migrations before
+release — the board is rebuilt, and real-use records with it); a known defect in what writes records
+(decision log, events, episodes, usage, PR outcome); the implementation or a known defect of a process
+that acts on its own (memory / routing meta-review, Interview, the learner); a known defect that would
+damage the repo, the wallet, or trust in real use. No sub-ranking inside `high`: take the oldest `high`
+with no open blocker.
+
+**Default is `low`.** Whoever files an issue labels it; raising it needs one line saying what it blocks.
+Readers: `/triage-sweep` orders its queue unlabeled → `high` → `medium` and leaves `low` out; the sweep
+applies the label itself (it is not a state move, so no approval is involved); filing steps in `/triage`,
+grilling, and `/to-tickets` label at creation; the maintainer picks from `high`.
 
 Same colon-namespaced shape as `model:*` (e.g. `model:opus`, which pins the model an issue's worker should run on).
 
