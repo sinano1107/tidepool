@@ -1299,28 +1299,24 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // 休止中の merge は checkout を動かすので口を通らない(ADR 0243 決定4)。ただし帯域外の判定(決定1)は次の pickup より
   // 前に記録を読む —— 直列の2件目の回答が1件目の着地を帯域外と読まないよう、盤面のこの書き込みの位置を記録に写す。
   // 走っている session は無いので、読み返した値に worker の偽造は入らない
-  const recordLanding = () =>
-    updateBaseline(db, workspace, (values) => {
-      values.set(ref, readRef(workspace, ref));
-    });
-  if (fastForward) {
-    git(workspace.path, "merge", "--ff-only", task);
-    recordLanding();
-    return;
-  }
-  try {
-    // `--no-edit` は環境の `merge.edit` に負けないため —— 盤面の git は誰の端末も持たない
-    git(workspace.path, "merge", "--no-edit", "-m", `Merge ${task} into ${branch}`, task);
-  } catch (err) {
-    // コンフリクトなら merge が中断状態で残り、`--abort` がツリーを元へ戻す。始まる前に
-    // 落ちた失敗(汚れたツリー等)は中断状態を作らないので `--abort` 自体が拒み、その git の
-    // 理由をそのまま人間へ返す —— どちらも quarantine ではない(ADR 0103 決定4)
+  if (fastForward) git(workspace.path, "merge", "--ff-only", task);
+  else {
     try {
-      git(workspace.path, "merge", "--abort");
-    } catch {
-      throw err;
+      // `--no-edit` は環境の `merge.edit` に負けないため —— 盤面の git は誰の端末も持たない
+      git(workspace.path, "merge", "--no-edit", "-m", `Merge ${task} into ${branch}`, task);
+    } catch (err) {
+      // コンフリクトなら merge が中断状態で残り、`--abort` がツリーを元へ戻す。始まる前に
+      // 落ちた失敗(汚れたツリー等)は中断状態を作らないので `--abort` 自体が拒み、その git の
+      // 理由をそのまま人間へ返す —— どちらも quarantine ではない(ADR 0103 決定4)
+      try {
+        git(workspace.path, "merge", "--abort");
+      } catch {
+        throw err;
+      }
+      throw landingConflict(workspace, branch, task);
     }
-    throw landingConflict(workspace, branch, task);
   }
-  recordLanding();
+  updateBaseline(db, workspace, (values) => {
+    values.set(ref, readRef(workspace, ref));
+  });
 }
