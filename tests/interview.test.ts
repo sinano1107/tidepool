@@ -6,7 +6,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { completeTask, getTask, interviewTargets, listChildren, registerTask, scoreInterview, type Task } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, getTask, interviewTargets, listChildren, registerTask, scoreInterview, type Task, taskHistoryRows } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
@@ -132,7 +132,7 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
   const change = (setting: object) => applyExecutionSettingsChange(db, setting as never, "webui", new Date(0));
   change({ setting: "insert_tier", name: "trial", description: "A tier being measured.", position: 0 });
   const { root } = registerInterview(db, [{ ...opusHigh, tier: "trial" }]);
-  expect(() => change({ setting: "delete_tier", name: "trial" })).toThrow(`unsettled Interviews target it: ${root.id}`);
+  expect(() => change({ setting: "delete_tier", name: "trial" })).toThrow(`unsettled tasks request it: ${root.id}`);
   completeTask(db, root, undefined, "auditor", new Date(0), "worker");
   change({ setting: "delete_tier", name: "trial" });
   expect(tierNames(db)).not.toContain("trial");
@@ -181,4 +181,20 @@ it("shadow 行の両セルの実績は、本番と Interview の内訳を運ぶ(
   const { shadow } = selectorBranch({ promoted: false, candidates: [opus], ...observedInTier(episodes, 1, "reef") });
   const record = { accepted: 2, rejected: 1, interview: { accepted: 1, rejected: 1 } };
   expect(shadow.actual_record).toEqual({ board: record, workspace: record });
+});
+
+it("着地しない pin の子は、workspace の削除の扉が数える「着地し直す祖先」にならない(ADR 0234 決定1)", () => {
+  const { db, root } = registerInterview();
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, workspace: "reef", interview_pin: opusHigh }] }, "auditor", new Date(0));
+  completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
+  registerTask(db, { type: "work", ...CHILD, parent_id: child!.id, workspace: "other" }, new Date(0), ...HUMAN_WEBUI);
+  expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
+});
+
+it("Interview の root の history で、pin の子は採点のための id を持ち、走った agent も model も持たない(伏せた handoff)", () => {
+  const { db, root } = registerInterview();
+  const child = ranChild(db, root);
+  const [entry] = taskHistoryRows(db, root.id).map((row) => row.entry).filter((entry) => "children" in entry);
+  expect(entry).toEqual({ decision: "r", children: [expect.objectContaining({ id: child.id, title: CHILD.title, handoff_doc: child.handoff_doc })] });
+  expect(Object.keys((entry as { children: object[] }).children[0]!).sort()).toEqual(["completion_criteria", "handoff_doc", "id", "purpose", "status", "title"]);
 });

@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -458,7 +458,7 @@ export interface InterviewTarget {
 
 /** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
  *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。 */
-function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
+export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
   if (input.interview_targets === undefined) return;
   if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
   if (input.interview_targets.length === 0) throw new DomainError("an Interview names at least one target");
@@ -476,20 +476,26 @@ function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | 
 /** decompose の照合(ADR 0199 決定3): 子の pin を root の対象の id に引く。4欄の完全一致で、effort の null も値として比べる
  *  (ADR 0218 決定5)。pin の子は対象で走り、使い捨てブランチで採点されるので、完了時レビューも別の要求も持たない ——
  *  要求ティアは対象の段になる。 */
-function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec): ChildSpec & { interview_target_id?: number } {
+function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec): DecomposeChild {
   const { interview_pin: pin, ...rest } = child;
   if (!pin) return child;
   if (interviewTargets(db, parent.id) === null) throw new DomainError("only an Interview's children carry interview_pin");
   if (child.review_flag || child.risk_flag || child.tier !== undefined || child.priority !== undefined) {
     throw new DomainError("an Interview child runs at its pin on a branch that never lands, so it takes no review_flag, risk_flag, tier or priority");
   }
+  const id = interviewTargetId(db, parent.id, pin);
+  if (id === undefined) throw new DomainError(`interview_pin ${JSON.stringify(pin)} is not one of this Interview's targets`);
+  return { ...rest, tier: pin.tier, interview_target_id: id };
+}
+
+/** pin と4欄一致する root の対象の id(ADR 0199 決定3)。effort の null も値として比べる(ADR 0218 決定5)。無ければ undefined。 */
+export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget): number | undefined {
   const target = db
     .prepare(
       `SELECT id FROM interview_targets WHERE task_id = ? AND provider = ? AND model = ? AND effort IS ? AND tier_id = ${liveTierId("?")}`,
     )
-    .get(parent.id, pin.provider, pin.model, pin.effort, pin.tier) as { id: number } | undefined;
-  if (!target) throw new DomainError(`interview_pin ${JSON.stringify(pin)} is not one of this Interview's targets`);
-  return { ...rest, tier: pin.tier, interview_target_id: target.id };
+    .get(rootId, pin.provider, pin.model, pin.effort, pin.tier) as { id: number } | undefined;
+  return target?.id;
 }
 
 /** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
@@ -671,13 +677,13 @@ function taskHasLandedSql(taskRef: string): string {
 }
 
 /** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
- *  完了した work の祖先の workspace も参照する。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
+ *  完了した work の祖先の workspace も参照する。着地しない Interview の子(pin を持つ work)は祖先に数えない(ADR 0199)。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
 function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   const row = db
     .prepare(
       `WITH RECURSIVE under_relanding(id) AS (
          SELECT p.id FROM tasks p
-          WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done'
+          WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done' AND p.interview_target_id IS NULL
             AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
          UNION
          SELECT c.id FROM tasks c JOIN under_relanding r ON c.parent_id = r.id)
@@ -1845,7 +1851,7 @@ export function scoreInterview(
   db: Db,
   root: Task,
   childId: string,
-  outcome: "accepted" | "rejected",
+  outcome: InterviewOutcome,
   workerId: string,
   now: Date,
   origin: EventOrigin,
@@ -2153,10 +2159,12 @@ export function assigneeNeedsApproval(
  *  this exact pair rather than a free-form escalation. */
 const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
+/** decompose の1子。`interview_target_id` は pin の照合(`resolveInterviewPin`)が埋める。 */
+type DecomposeChild = ChildSpec & { interview_target_id?: number };
+
 interface DecomposeInput {
   reason: string;
-  /** `interview_target_id` は pin の照合(`resolveInterviewPin`)が埋める。 */
-  children: Array<ChildSpec & { interview_target_id?: number }>;
+  children: DecomposeChild[];
 }
 
 /** Decomposition: one decision splits the remaining work into child tasks.

@@ -81,7 +81,7 @@ export const HOURLY = 60 * 60 * 1000;
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
-export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier"> & Partial<Pick<Task, "interview_target_id">>;
+export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
 /** この task の entry が**すべて**除外されているか(ADR 0110 決定3 / issue #544)。

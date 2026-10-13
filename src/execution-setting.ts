@@ -146,14 +146,14 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
   const defaults = db.prepare("SELECT default_tier_id, judgement_tier_id FROM execution_defaults").get() as { default_tier_id: number; judgement_tier_id: number };
   if (defaults.default_tier_id === id) reasons.push("it is the board's default tier");
   if (defaults.judgement_tier_id === id) reasons.push("it is the board's judgement tier");
+  // Interview の root は対象の段を要求している
   const tasks = db
-    .prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")} AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid`)
-    .all(id, id) as { id: string }[];
+    .prepare(
+      `SELECT id FROM tasks WHERE ${unsettledSql("status")}
+         AND (tier_id = @id OR review_tier_id = @id OR id IN (SELECT task_id FROM interview_targets WHERE tier_id = @id)) ORDER BY rowid`,
+    )
+    .all({ id }) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
-  const interviews = db
-    .prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")} AND id IN (SELECT task_id FROM interview_targets WHERE tier_id = ?) ORDER BY rowid`)
-    .all(id) as { id: string }[];
-  if (interviews.length > 0) reasons.push(`unsettled Interviews target it: ${interviews.map((task) => task.id).join(", ")}`);
   if (listAgents) {
     let agents: ReturnType<ListAgentTiers>;
     try {
@@ -367,9 +367,18 @@ function withAdvisor<M extends { model: string }>(
   return [{ main, ...derived }, ...(downgraded ? [{ main, advisor: downgraded.advisor, source: "window_downgraded" as const }] : [])];
 }
 
+/** Interview の対象の綴り(ADR 0199 決定2): 人間の登録の扉の一覧と、子の pin が同じ形を通る。値の検査は domain(registerTask /
+ *  decomposeTask)が言う。 */
+export const interviewTargetSchema = z
+  .object({ provider: requiredTextSchema, model: requiredTextSchema, effort: requiredTextSchema.nullable(), tier: requiredTextSchema })
+  .strict();
+
+/** pin が指す対象の行(段は id)。 */
+type PinnedTarget = { provider: Provider; model: string; effort: string | null; tier_id: TierId };
+
 /** Interview の子の候補(ADR 0199 決定2): selector の並びを通らず、pin した対象の (provider, model, effort) と対象の段で走る。
  *  advisor は本番と同じ導出で、表も段も読まない。pin の Provider の entry を持たない agent には候補が無い。 */
-function pinnedCandidates(request: SelectorInput, pin: { provider: Provider; model: string; effort: string | null; tier_id: TierId }): ExecutionSetting[] {
+function pinnedCandidates(request: SelectorInput, pin: PinnedTarget): ExecutionSetting[] {
   const entry = request.entries.find((e) => e.provider === pin.provider);
   if (!entry) return [];
   return withAdvisor(entry, pin, request.advisorCeiling).map(({ advisor, source }) => ({
@@ -922,7 +931,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
 }
 
 /** selector が読む task の断面(要求の列と、review か否か)。 */
-type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier"> & Partial<Pick<Task, "interview_target_id">>;
+type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 
 /** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
  *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
@@ -966,10 +975,9 @@ export function executionSettingsFor(
   task: SelectorTask | undefined,
 ): ExecutionSetting[] {
   const input = selectorInputFor(db, definition, task);
-  const pin =
-    task?.interview_target_id != null &&
-    (db.prepare("SELECT provider, model, effort, tier_id FROM interview_targets WHERE id = ?").get(task.interview_target_id) as Parameters<typeof pinnedCandidates>[1]);
-  return pin ? pinnedCandidates(input, pin) : executionSettingCandidates(input, runnableTable(db));
+  if (task === undefined || task.interview_target_id === null) return executionSettingCandidates(input, runnableTable(db));
+  const pin = db.prepare("SELECT provider, model, effort, tier_id FROM interview_targets WHERE id = ?").get(task.interview_target_id) as PinnedTarget;
+  return pinnedCandidates(input, pin);
 }
 
 /** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。「この行で走れるか」の

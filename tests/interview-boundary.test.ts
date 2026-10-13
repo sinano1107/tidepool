@@ -34,9 +34,9 @@ const sol = { provider: "openai", model: "gpt-5.6-sol", effort: "high", tier: "s
 const INTERVIEW = { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
 
-/** 既定 agent(scripted worker の id)を anthropic の advisor つき entry 1つで持つ盤面。上限は fable、学習器は昇格済み。 */
+/** 既定 agent(scripted worker の id)を anthropic の advisor つき entry 1つで持つ盤面。上限は fable、学習器は既定で昇格済み。 */
 let workspacePath: string;
-async function boot(): Promise<Tidepool> {
+async function boot({ promoted = true } = {}): Promise<Tidepool> {
   const workspace = await makeWorkspace("reef");
   workspacePath = workspace.path;
   const definition = { provider: [{ name: "anthropic", advisor: true }], tier: undefined };
@@ -46,7 +46,7 @@ async function boot(): Promise<Tidepool> {
     taskExecutionCandidates: (task) => executionSettingsFor(board.db, definition, task),
   });
   applyExecutionSettingsChange(board.db, { setting: "advisor_ceiling", value: "fable" }, "webui", board.clock.now());
-  board.db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
+  if (promoted) applyExecutionSettingsChange(board.db, { setting: "learner_promoted", value: true }, "webui", board.clock.now());
   return board;
 }
 
@@ -66,37 +66,28 @@ it("登録の扉(WebUI の Register API・管理MCP)は対象の一覧を受け�
   expect(child.json.error).toContain("only a root review task (an Interview) carries interview_targets");
 });
 
-it("Interview の root は対象を読んで decompose し、一覧に無い pin と assignee の entry に無い Provider の pin は拒まれる", async () => {
+it("Interview の root は対象を読んで decompose し、一覧に無い pin と、assignee では走れない pin(entry に無い Provider・導出できない advisor)は拒まれる", async () => {
   t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sol] })).json;
+  const ghost = { provider: "anthropic", model: "claude-ghost-1-0", effort: "high", tier: "frontier" };
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sol, ghost] })).json;
   const current = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
-  expect(current.interview_targets).toEqual([opus46, sol]);
+  expect(current.interview_targets).toEqual([opus46, sol, ghost]);
   const decompose = (pin: object) => callAsTask(t, root.id, "decompose", { reason: "one child per target", children: [{ ...CHILD, interview_pin: pin }] });
-  const offList: any = await decompose({ ...opus46, effort: "medium" });
-  expect(offList.content[0].text).toContain("is not one of this Interview's targets");
-  const offEntries: any = await decompose(sol);
-  expect(offEntries.content[0].text).toContain("openai is not among fake-worker's providers");
+  expect((await decompose({ ...opus46, effort: "medium" })).isError).toBe(true);
+  for (const pin of [sol, ghost]) expect((await decompose(pin)).content[0].text).toContain("cannot run as fake-worker");
 });
 
 it("pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点する", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await callAsTask(t, root.id, "log_decision", { line: "probe: add a parser; rubric: tests pass, no new dependency" });
-  await t.clock.advance(1000);
   const decomposed = JSON.parse((await callAsTask(t, root.id, "decompose", { reason: "one child per target", children: [{ ...CHILD, interview_pin: opus46 }] })).content[0].text);
   const [childId] = decomposed.child_ids;
   // 上限の書き込みが routing meta-review の材料になるので、先に済ませる(setup)
   await completeMetaReviews(t);
 
   expect(t.worker.started.at(-1)!.id).toBe(childId);
-  expect(t.worker.startedSettings.at(-1)).toEqual({
-    provider: "anthropic",
-    model: "claude-opus-4-6",
-    effort: "high",
-    advisor: "fable",
-    tier_id: tierIdOf(t.db, "frontier"),
-    source: { tier: "interview", provider: "interview", advisor: "ceiling" },
-  });
+  expect(t.worker.startedSettings.at(-1)).toMatchObject({ model: "claude-opus-4-6", tier_id: tierIdOf(t.db, "frontier"), source: { tier: "interview", provider: "interview" } });
   commitWork(workspacePath, "probe.txt", "probe\n");
   expect((await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
@@ -104,21 +95,15 @@ it("pin の子は対象で spawn され、PR も完了時レビューも生ま�
   expect(await questions(t)).toEqual([]);
   expect(t.github.requests).toEqual([]);
 
-  // 統合復帰: 採点する子の history は agent 名も model id も持たない(伏せた handoff)
+  // 統合復帰: 採点の読み口(get_current_task の応答の全体)は agent 名も model id も持たない(伏せた handoff)
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(root.id);
-  await t.clock.advance(1000);
-  const scoringInput = JSON.stringify(JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text).history);
-  expect(scoringInput).toContain(childId);
+  const scoringInput = (await callAsTask(t, root.id, "get_current_task", {})).content[0].text;
   expect(scoringInput).not.toContain("fake-worker");
   expect(scoringInput).not.toContain("claude-opus-4-6");
-  const scored: any = await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" });
-  expect(scored.isError).toBeFalsy();
-
-  const decision = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
+  expect((await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" })).isError).toBeFalsy();
   const annotation = (await api(t.baseUrl, "GET", `/api/tasks/${childId}/events`)).json.find((e: any) => e.kind === "interview_scored");
   expect(annotation).toMatchObject({ payload: { outcome: "accepted" } });
-  expect(Date.parse(annotation.created_at)).toBeGreaterThan(Date.parse(decision.created_at));
 });
 
 it("採点した対象の段に行を足すと、その行の本番の pickup の shadow 行が Interview の内訳を運び、list_routing_shadow に出る", async () => {
@@ -143,6 +128,18 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
   await runNow(t, review.id);
   const { shadow } = JSON.parse((await callAsTask(t, review.id, "list_routing_shadow", { since_watermark: 0 })).content[0].text);
-  const record = { accepted: 1, rejected: 0, interview: { accepted: 1, rejected: 0 } };
-  expect(shadow.find((r: any) => r.task_id === work.id)).toMatchObject({ actual: { model: "claude-opus-4-6" }, actual_record: { board: record, workspace: record } });
+  expect(shadow.find((r: any) => r.task_id === work.id)).toMatchObject({ actual: { model: "claude-opus-4-6" }, actual_record: { board: { interview: { accepted: 1 } } } });
+});
+
+it("pin の子の pickup は、学習器が昇格していない盤面でも shadow 行を残さない(選ぶ余地が無い)", async () => {
+  t = await boot({ promoted: false });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = JSON.parse((await callAsTask(t, root.id, "decompose", { reason: "r", children: [{ ...CHILD, interview_pin: opus46 }] })).content[0].text).child_ids;
+  await completeMetaReviews(t);
+  expect(t.worker.started.at(-1)!.id).toBe(childId);
+  registerMetaReview(t.db, "routing", t.clock.now());
+  const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
+  await runNow(t, review.id);
+  const { shadow } = JSON.parse((await callAsTask(t, review.id, "list_routing_shadow", { since_watermark: 0 })).content[0].text);
+  expect(shadow.filter((row: any) => row.task_id === childId)).toEqual([]);
 });

@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
+import { type EventPayload, type EventRow, type InterviewOutcome, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task } from "./tasks.js";
@@ -208,7 +208,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
        FROM tasks
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
-    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number; score: "accepted" | "rejected" | null }>;
+    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number; score: InterviewOutcome | null }>;
   // work task だけに絞る(spawn を持つ work task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
   const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));

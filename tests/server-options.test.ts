@@ -98,7 +98,7 @@ Codex agent.
     defaultAgentName: "codex-agent",
   });
 
-  expect(options.taskExecutionCandidates?.({ assignee: null } as Task)).toMatchObject([
+  expect(options.taskExecutionCandidates?.({ assignee: null, interview_target_id: null } as Task)).toMatchObject([
     { provider: "openai", model: "gpt-5.6-terra" },
   ]);
 });
@@ -482,7 +482,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   expect(() => options.resolveAuthority?.("fugu", "work")).toThrow(InvalidAgentDefinitionError);
   // ADR 0110 決定3: model は agent の宣言ではなく盤面の表から来る —— fixture の
   // agent は tier を書いていないので盤面既定の行になる。
-  expect(options.taskExecutionCandidates({ assignee: "deckhand" } as any)).toMatchObject([
+  expect(options.taskExecutionCandidates({ assignee: "deckhand", interview_target_id: null } as any)).toMatchObject([
     { provider: "anthropic", model: "claude-sonnet-5-5" },
   ]);
   expect(callers?.openaiUsage).toBeTypeOf("function");

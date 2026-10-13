@@ -16,6 +16,7 @@ import { getLogCursor, listEvents } from "./events.js";
 import {
   changeExecutionSettings,
   executionSettingsChangeSchema,
+  interviewTargetSchema,
   PRIORITY_FIELD_DESCRIPTION,
   readExecutionSettingsWithQuarantine,
   tierFieldDescriptions,
@@ -37,7 +38,6 @@ import {
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
-  interviewTargetSchema,
   JUDGED_AFTER_THE_EDIT,
   MEMORY_BRANCHES_DESCRIPTION,
   ONLY_WHERE_COMPLETION_REVIEW_FIRES,
