@@ -81,7 +81,8 @@ async function fakeGh(logPath: string): Promise<string> {
   return dir;
 }
 
-it("gh pr create の前にタスクブランチを origin へ push する", async () => {
+// ADR 0243: push は呼び手が基準への予告で包んで先に撃つ —— PR の作成は gh pr create だけで、ref を書かない
+it("PR の作成は push 済みのブランチに gh pr create だけを撃ち、自分ではタスクブランチを push しない", async () => {
   repoPath = await tempDir("tidepool-repo-");
   remotePath = await tempDir("tidepool-remote-");
   repoOnTaskBranch(repoPath, remotePath, "notes.txt", "WIP: task abc");
@@ -102,10 +103,7 @@ it("gh pr create の前にタスクブランチを origin へ push する", asyn
 
   expect(result).toEqual({ url: "https://github.com/example/repo/pull/42", number: 42 });
 
-  // push が実際に起きたことを、リモート(bare repo)側のブランチの実体で確認する
-  const remoteTaskCommit = git(remotePath, "rev-parse", "task/abc");
-  const localTaskCommit = git(repoPath, "rev-parse", "task/abc");
-  expect(remoteTaskCommit).toBe(localTaskCommit);
+  expect(git(remotePath, "branch", "--list", "task/abc")).toBe("");
 
   const invocations = await readFile(logPath, "utf8");
   expect(invocations).toContain("pr create");

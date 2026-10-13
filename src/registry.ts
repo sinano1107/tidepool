@@ -5,6 +5,7 @@ import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { git } from "./git.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -676,6 +677,39 @@ export type RegistryMode = "remote-backed" | "purely-local";
 export interface RegistrySource {
   dir: string;
   mode: RegistryMode;
+  /** registry clone の ref を書く口(ADR 0243)。registry clone が workspace として登録されていれば、合成 root が
+   *  その基準に束ねて渡す。無ければ予告せずに書く。 */
+  writeRef?: RefWriter;
+}
+
+/** 盤面の ref の書き込みを、書く先の workspace の基準への予告と畳みで包む口(ADR 0243 決定4)。新しい値を引数に
+ *  要求する —— 値を知らずに書く書き込みは口を通れない。 */
+export type RefWriter = (ref: string, newSha: string, write: () => void) => void;
+
+/** 予告する基準を持たない書き込み。 */
+export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
+
+/** origin から commit を sha で1つ取る。`refs/` には何も書かない(FETCH_HEAD だけ)—— merge の門が head を取る fetch
+ *  (ADR 0242)と、写しを進める fetch(下の `fetchBranchCopy`)が共有する綴り。 */
+export function fetchCommit(dir: string, auth: GitHubAuth | undefined, sha: string): void {
+  authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", sha);
+}
+
+/** ADR 0243 決定3: 写し `refs/remotes/origin/<branch>` を原本へ進める。`ls-remote` で原本の sha を知ってから口に予告し、
+ *  その sha を取り、`update-ref` で写しを書く。原本にブランチが無ければ fetch の失敗と同じく投げる(fail-closed)。
+ *  token は呼び手が温めておく。 */
+export function fetchBranchCopy(dir: string, auth: GitHubAuth | undefined, branch: string, writeRef: RefWriter): void {
+  const head = `refs/heads/${branch}`;
+  const sha = authedGitBounded(auth, dir, originRepo(dir), GIT_NETWORK_TIMEOUT_MS, "ls-remote", "origin", head)
+    .split("\n")
+    .map((line) => line.split("\t"))
+    .find(([, name]) => name === head)?.[0];
+  if (!sha) throw new Error(`origin has no branch ${branch}`);
+  const copy = remoteTrackingRef(branch);
+  writeRef(copy, sha, () => {
+    fetchCommit(dir, auth, sha);
+    git(dir, "update-ref", copy, sha);
+  });
 }
 
 /** リモート側のブランチを指す remote-tracking ref の**綴り**。ADR 0052 のもとで
@@ -738,20 +772,11 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 export async function refreshRegistry(
   dir: string,
   auth: GitHubAuth | undefined,
+  writeRef: RefWriter = writeUnannounced,
 ): Promise<RegistryReachability> {
   try {
-    const repo = originRepo(dir);
-    await auth?.ensureToken(repo);
-    authedGitBounded(
-      auth,
-      dir,
-      repo,
-      GIT_NETWORK_TIMEOUT_MS,
-      "fetch",
-      "--quiet",
-      "origin",
-      REGISTRY_BRANCH,
-    );
+    await auth?.ensureToken(originRepo(dir));
+    fetchBranchCopy(dir, auth, REGISTRY_BRANCH, writeRef);
     return { available: true };
   } catch (err) {
     return {

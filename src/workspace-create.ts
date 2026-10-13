@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
+import type { Db } from "./db.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth, repoKey } from "./github-auth.js";
@@ -12,6 +13,7 @@ import {
   loadRegistry,
   ownEntry,
   type RegistrySource,
+  remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
 import {
@@ -31,6 +33,7 @@ import {
   resolvesToRegistryClone,
   UnknownWorkspaceError,
   type WorkspacesBaseDirSource,
+  writeBoardRefs,
 } from "./workspace.js";
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
@@ -92,6 +95,9 @@ export interface WorkspaceAdminDeps {
    *  secrets file is configured — clones then run unauthenticated, the same
    *  fail-closed posture as the optional `github` client below. */
   githubAuth?: GitHubAuth;
+  /** 盤面の db —— publish が走っている session の基準へ写しの N 本を予告する(ADR 0243 / ADR 0066 決定4)。無ければ
+   *  予告せずに書く。 */
+  db?: Db;
 }
 
 /** 共通の dep に、**GitHub へ出ていく workspace 動詞**が要るものを1つ足した組:
@@ -500,38 +506,44 @@ export async function publishWorkspace(
   if (!fresh) throw new UnknownWorkspaceError(input.name);
   if (fresh.repo !== undefined) throw new WorkspaceAlreadyPublishedError(input.name, fresh.repo);
   git(dir, "remote", "add", "origin", input.repo);
-  try {
-    // `--all` が送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**
-    // 読むのが要件である(ADR 0064 決定4): 撮り直す ref の集合は盤面が書いたものだけに
-    // 確定していなければならず、事後に `refs/remotes/origin/*` を列挙し直すと、その間に
-    // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
-    const branches = git(dir, "for-each-ref", "--format=%(refname:strip=2)", "refs/heads/")
-      .split("\n")
-      .filter((branch) => branch !== "");
-    // `--atomic` は必須(ADR 0066 決定6): 宛先が「Add a README」つきの非空 repo
-    // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
-    // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
-    // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
-    // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
-    // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
-    authedGit(deps.githubAuth, dir, destination, "push", "--atomic", "--all", "origin");
-    commitWorkspaceEntry(
-      deps,
-      input.name,
-      { ...fresh, repo: input.repo },
-      `publish workspace ${input.name} via WebUI`,
-    );
-    return branches.map((branch) => `refs/remotes/origin/${branch}`);
-  } catch (err) {
-    // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
-    // その線を引いている)。最も起きる人為ミスは「repo は作ったが App を install し
-    // 忘れた」で、経路は remote add(成功)→ push(失敗)→ registry コミット未実行。
-    // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
-    // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
-    // up-to-date で通る。
-    git(dir, "remote", "remove", "origin");
-    throw err;
-  }
+  // `--all` が送る集合 = そのとき checkout にある `refs/heads/*`。**push の直前に**読み、その写しになる N 本を
+  // まとめて口に予告する(ADR 0243 / ADR 0066 決定4): 事後に `refs/remotes/origin/*` を列挙し直すと、その間に
+  // worker が偽造した remote-tracking ref を基準へ迎え入れてしまう。
+  const writes = git(dir, "for-each-ref", "--format=%(objectname) %(refname:strip=2)", "refs/heads/")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => [remoteTrackingRef(line.slice(line.indexOf(" ") + 1)), line.slice(0, line.indexOf(" "))] as const);
+  const { githubAuth } = deps;
+  // 巻き戻しも口の内側に置く —— 畳みは `remote remove` が写しを消した後の ref を読み、予告の前の値へ戻す
+  const publish = () => {
+    try {
+      // `--atomic` は必須(ADR 0066 決定6): 宛先が「Add a README」つきの非空 repo
+      // だと `main` だけが non-fast-forward で落ち、`task/*` は宛先に存在しないので
+      // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
+      // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
+      // `--all` は `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
+      // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
+      authedGit(githubAuth, dir, destination, "push", "--atomic", "--all", "origin");
+      commitWorkspaceEntry(
+        deps,
+        input.name,
+        { ...fresh, repo: input.repo },
+        `publish workspace ${input.name} via WebUI`,
+      );
+    } catch (err) {
+      // 巻き戻すのは**自分が足した origin だけ**(上の CheckoutHasOriginError が
+      // その線を引いている)。最も起きる人為ミスは「repo は作ったが App を install し
+      // 忘れた」で、経路は remote add(成功)→ push(失敗)→ registry コミット未実行。
+      // registry コミットが落ちた場合もここへ来る: 宣言の無い workspace に origin が
+      // 残るほうが ADR 0052 のずれそのものであり、再送は同一 ref の push なので
+      // up-to-date で通る。
+      git(dir, "remote", "remove", "origin");
+      throw err;
+    }
+  };
+  if (deps.db) writeBoardRefs(deps.db, { name: input.name, path: dir }, writes, publish);
+  else publish();
+  return writes.map(([ref]) => ref);
 }
 
 /** Each mode's external half, ordered so the registry commit stays last. */

@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgent } from "../src/agent-create.js";
 import { GitHubAuth } from "../src/github-auth.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
+import type { RefWriter } from "../src/registry.js";
+import { type WorkspaceConfig, writeBoardRef } from "../src/workspace.js";
 import { publishWorkspace } from "../src/workspace-create.js";
 import { seedTierNames } from "./fakes.js";
 import {
@@ -40,6 +41,11 @@ async function complete(board: Tidepool, taskId: string): Promise<void> {
   });
   expect(res.isError ?? false).toBe(false);
   await client.close();
+}
+
+/** 合成 root が registry clone の workspace に束ねる口(ADR 0243)と同じ束ね。 */
+function boardRefWriter(workspace: WorkspaceConfig): RefWriter {
+  return (ref, newSha, write) => writeBoardRef(t.db, workspace, ref, newSha, write);
 }
 
 function commitOn(path: string, file: string, body: string, message: string): void {
@@ -219,12 +225,13 @@ it("セッション中に盤面が保護ブランチを動かしても、その�
 it("セッション中の registry 書き込みで、registry clone の workspace は quarantine されない", async () => {
   const registryDir = await makeRegistry();
   const workspace = { name: "registry", path: registryDir };
+  const registry = { dir: registryDir, mode: "purely-local" as const, writeRef: boardRefWriter(workspace) };
   t = await bootTidepool({
     workspace,
-    registry: { dir: registryDir, mode: "purely-local" },
+    registry,
     boardState: { paths: [], listWorkspaces: () => [workspace] },
     agentAdmin: {
-      create: (input) => createAgent(input, { registry: { dir: registryDir, mode: "purely-local" }, tiers: () => seedTierNames }),
+      create: (input) => createAgent(input, { registry, tiers: () => seedTierNames }),
     },
   });
   const task = await registerWork(t, "runs in the registry clone");
@@ -286,7 +293,7 @@ it("盤面が origin/main を撮り直しても、連動する origin/HEAD で q
     path: registryDir,
     repo: git(registryDir, "remote", "get-url", "origin"),
   };
-  const registry = { dir: registryDir, mode: "remote-backed" as const };
+  const registry = { dir: registryDir, mode: "remote-backed" as const, writeRef: boardRefWriter(workspace) };
   t = await bootTidepool({
     workspace,
     registry,
@@ -402,7 +409,7 @@ async function publishableBoard(name: string): Promise<{
     dest,
     boot: {
       workspace: ws,
-      workspaceAdmin: { publish: (input) => publishWorkspace(input, deps) },
+      workspaceAdmin: { publish: (input) => publishWorkspace(input, { ...deps, db: t.db }) },
       boardState: { paths: [], listWorkspaces: () => [ws] },
     },
   };

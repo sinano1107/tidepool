@@ -26,7 +26,8 @@ async function gitShim(): Promise<{ cwd: string; record: string; restore: () => 
   // 返すだけで記録しない —— 観測したいのは fetch のほうである
   writeFileSync(
     join(dir, "git"),
-    `#!/bin/sh\nif [ "$1" = "config" ]; then echo "https://github.com/acme/registry.git"; exit 0; fi\nfor arg in "$@"; do echo "arg=$arg" >> "$TIDEPOOL_GIT_SHIM_RECORD"; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\nexit 0\n`,
+    // 呼び出しごとに区切り、`ls-remote` には原本の sha を答える(ADR 0243 決定3: fetch はその sha を取る)
+    `#!/bin/sh\nif [ "$1" = "config" ]; then echo "https://github.com/acme/registry.git"; exit 0; fi\necho "---" >> "$TIDEPOOL_GIT_SHIM_RECORD"\nfor arg in "$@"; do echo "arg=$arg" >> "$TIDEPOOL_GIT_SHIM_RECORD"; [ "$arg" = "ls-remote" ] && printf '${ORIGIN_SHA}\\trefs/heads/main\\n'; done\necho "GH_TOKEN=\${GH_TOKEN-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\necho "GIT_TERMINAL_PROMPT=\${GIT_TERMINAL_PROMPT-}" >> "$TIDEPOOL_GIT_SHIM_RECORD"\nexit 0\n`,
   );
   chmodSync(join(dir, "git"), 0o755);
   const path = process.env.PATH;
@@ -49,15 +50,24 @@ function gitOut(cwd: string, ...args: string[]): string {
     .trim();
 }
 
-function observed(record: string): { args: string[]; env: Record<string, string> } {
-  const lines = readFileSync(record, "utf8").split("\n").filter(Boolean);
-  const args = lines.filter((l) => l.startsWith("arg=")).map((l) => l.slice("arg=".length));
-  const env: Record<string, string> = {};
-  for (const line of lines.filter((l) => !l.startsWith("arg="))) {
-    const eq = line.indexOf("=");
-    env[line.slice(0, eq)] = line.slice(eq + 1);
-  }
-  return { args, env };
+/** shim が答える原本の sha。 */
+const ORIGIN_SHA = "1".repeat(40);
+
+/** `verb` を撃った呼び出し1回ぶんの argv と env。 */
+function observed(record: string, verb: string): { args: string[]; env: Record<string, string> } {
+  const invocations = readFileSync(record, "utf8")
+    .split("---\n")
+    .map((block) => {
+      const lines = block.split("\n").filter(Boolean);
+      const args = lines.filter((l) => l.startsWith("arg=")).map((l) => l.slice("arg=".length));
+      const env: Record<string, string> = {};
+      for (const line of lines.filter((l) => !l.startsWith("arg="))) {
+        const eq = line.indexOf("=");
+        env[line.slice(0, eq)] = line.slice(eq + 1);
+      }
+      return { args, env };
+    });
+  return invocations.find(({ args }) => args.includes(verb))!;
 }
 
 const brokers: FakeBroker[] = [];
@@ -98,25 +108,31 @@ it("盤面の registry fetch は仲介の installation token で撃たれ、ホ�
 
   await refreshRegistry(shim.cwd, new GitHubAuth(await tokenFile("gho_user"), broker.url));
 
-  const { args, env } = observed(shim.record);
-  // 空の helper が先頭に来ることが要点である。これは「認証を足す」だけでなく
-  // osxkeychain や `gh auth setup-git` —— Pi に実在する人間の identity —— を
-  // **消す**引数であり、独立性はこれ1つに掛かっている。
-  expect(args.indexOf("credential.helper=")).toBeLessThan(args.indexOf("fetch"));
-  expect({
-    clearsAmbientHelper: args.includes("credential.helper="),
-    servesToken: args.some((a) => a.includes("password=$GH_TOKEN")),
-    fetch: args.slice(-4),
-    token: env.GH_TOKEN,
-    // 悪い token を「ユーザ名プロンプトで固まる」ではなく即座の失敗にする
-    noPrompt: env.GIT_TERMINAL_PROMPT,
-  }).toEqual({
-    clearsAmbientHelper: true,
-    servesToken: true,
-    fetch: ["fetch", "--quiet", "origin", "main"],
-    token: "installation-token",
-    noPrompt: "0",
-  });
+  // 網に出る2つ(原本の sha を読む ls-remote と、その sha の fetch)がどちらも同じ名義で撃たれる
+  for (const [verb, command] of [
+    ["ls-remote", ["ls-remote", "origin", "refs/heads/main"]],
+    ["fetch", ["fetch", "--quiet", "origin", ORIGIN_SHA]],
+  ] as const) {
+    const { args, env } = observed(shim.record, verb);
+    // 空の helper が先頭に来ることが要点である。これは「認証を足す」だけでなく
+    // osxkeychain や `gh auth setup-git` —— Pi に実在する人間の identity —— を
+    // **消す**引数であり、独立性はこれ1つに掛かっている。
+    expect(args.indexOf("credential.helper=")).toBeLessThan(args.indexOf(verb));
+    expect({
+      clearsAmbientHelper: args.includes("credential.helper="),
+      servesToken: args.some((a) => a.includes("password=$GH_TOKEN")),
+      command: args.slice(args.indexOf(verb)),
+      token: env.GH_TOKEN,
+      // 悪い token を「ユーザ名プロンプトで固まる」ではなく即座の失敗にする
+      noPrompt: env.GIT_TERMINAL_PROMPT,
+    }).toEqual({
+      clearsAmbientHelper: true,
+      servesToken: true,
+      command,
+      token: "installation-token",
+      noPrompt: "0",
+    });
+  }
 });
 
 // 身元の不在は宣言であって暗黙のフォールバックではない(ADR 0041)。ここで credential
@@ -128,11 +144,15 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
 
   await refreshRegistry(shim.cwd, undefined);
 
-  const { args, env } = observed(shim.record);
-  expect({ args, token: env.GH_TOKEN }).toEqual({
-    args: ["fetch", "--quiet", "origin", "main"],
-    token: "",
-  });
+  const lsRemote = observed(shim.record, "ls-remote");
+  const fetch = observed(shim.record, "fetch");
+  expect([
+    { args: lsRemote.args, token: lsRemote.env.GH_TOKEN },
+    { args: fetch.args, token: fetch.env.GH_TOKEN },
+  ]).toEqual([
+    { args: ["ls-remote", "origin", "refs/heads/main"], token: "" },
+    { args: ["fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
+  ]);
 });
 
 // 実物の git でも通ること。ローカル remote は GitHub ではないので token は要求

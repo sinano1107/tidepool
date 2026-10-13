@@ -74,6 +74,7 @@ import {
   InvalidAgentDefinitionError,
   loadRegistry,
   ownEntry,
+  type RefWriter,
   type RegistryCandidates,
   type RegistryMode,
   type RegistryReachability,
@@ -92,9 +93,11 @@ import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
 import {
   listRegisteredWorkspaces,
+  pathIsRegistryClone,
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,
+  writeBoardRef,
 } from "./workspace.js";
 import {
   createWorkspace,
@@ -444,10 +447,10 @@ function registrySource(board: BoardComposition): RegistrySource | undefined {
  *  以前からの姿勢であって、ここが決めていることではない —— この関数が変えるのは
  *  「諦める前に1回 fetch を試す」ことと、git の生のエラーより先に理由が journal に
  *  出ることである。 */
-async function bootRefresh(board: BoardComposition): Promise<void> {
+async function bootRefresh(board: BoardComposition, writeRef: RefWriter): Promise<void> {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return;
-  const reachability = await refreshRegistry(registryDir, board.githubAuth);
+  const reachability = await refreshRegistry(registryDir, board.githubAuth, writeRef);
   if (reachability.available) return;
   console.error(
     "[registry] startup refresh failed; the board is starting anyway and the next pickup " +
@@ -466,10 +469,29 @@ function remoteBackedRegistryDir(board: BoardComposition): string | undefined {
  *  盤面には fetch する先が無いので、口ごと不在になる(ADR 0041)。 */
 function registryReachabilityCheck(
   board: BoardComposition,
+  writeRef: RefWriter,
 ): (() => Promise<RegistryReachability>) | undefined {
   const registryDir = remoteBackedRegistryDir(board);
   if (!registryDir) return undefined;
-  return () => refreshRegistry(registryDir, board.githubAuth);
+  return () => refreshRegistry(registryDir, board.githubAuth, writeRef);
+}
+
+/** ADR 0243 決定4: registry clone の ref を書く口。registry clone が workspace として登録されていればその基準に束ねる ——
+ *  起動時・人間面の書き込み・到達性の検査(pickup のゲートと quarantine の受理)がすべてこの1つの束ねを通る。登録が
+ *  読めなければ予告せずに書く(説明の欠けは次の解放が誤検知の quarantine として大きな音で出す)。 */
+function registryRefWriter(board: BoardComposition, db: Db): RefWriter {
+  return (ref, newSha, write) => {
+    let workspace: WorkspaceConfig | undefined;
+    try {
+      workspace = registeredWorkspaces(board).find(
+        (candidate) => board.registryDir !== undefined && pathIsRegistryClone(candidate.path, board.registryDir),
+      );
+    } catch (err) {
+      console.warn("[workspace] the registry clone's workspace could not be resolved; writing without announcing", err);
+    }
+    if (workspace) writeBoardRef(db, workspace, ref, newSha, write);
+    else write();
+  };
 }
 
 /** The board's own view of the workspace (branch discipline + tree rule):
@@ -653,12 +675,15 @@ function draftClientFactory(board: BoardComposition, call: BoardCall, db: Db): D
 function workspaceAdmin(
   board: BoardComposition,
   github: ServerOptions["github"],
+  db: Db,
+  writeRef: RefWriter,
 ): WorkspaceAdmin | undefined {
   const registry = registrySource(board);
   if (!registry) return undefined;
   // ADR 0040: 登録の門。床は pickup 側にあるが、正確な検査なので門で弾いてよい
   const deps = {
-    registry,
+    registry: { ...registry, writeRef },
+    db,
     workspacesBaseDir: board.workspacesDir,
     githubAuth: board.githubAuth,
     boardState: board.boardState,
@@ -680,10 +705,10 @@ function workspaceAdmin(
  *  bound to this board's registry clone — the API layer only ever sees the
  *  finished callbacks. Without a registry there is nowhere to administer
  *  agents at all. */
-function agentAdmin(board: BoardComposition, db: Db): AgentAdmin | undefined {
+function agentAdmin(board: BoardComposition, db: Db, writeRef: RefWriter): AgentAdmin | undefined {
   const registry = registrySource(board);
   if (!registry) return undefined;
-  const deps = { registry, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
+  const deps = { registry: { ...registry, writeRef }, githubAuth: board.githubAuth, tiers: () => tierNames(db) };
   return {
     create: (input) => createAgent(input, deps),
     list: () => listAgentViews(deps),
@@ -701,10 +726,10 @@ function agentAdmin(board: BoardComposition, db: Db): AgentAdmin | undefined {
  *  to this board's registry clone. The API layer runs the confirmation gate;
  *  these verbs only persist. Without a registry there is nowhere to administer
  *  profiles at all. */
-function profileAdmin(board: BoardComposition): ProfileAdmin | undefined {
+function profileAdmin(board: BoardComposition, writeRef: RefWriter): ProfileAdmin | undefined {
   const registry = registrySource(board);
   if (!registry) return undefined;
-  const deps = { registry, githubAuth: board.githubAuth };
+  const deps = { registry: { ...registry, writeRef }, githubAuth: board.githubAuth };
   return {
     create: (input) => createProfile(input, deps),
     list: () => listProfileViews(deps),
@@ -778,7 +803,8 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
 export async function buildServerOptions(board: BoardComposition, db: Db): Promise<ServerOptions> {
   // ADR 0052 決定2: **registry を読む前に**起動時 refresh を撃つ。下の resolver
   // 群のうち `workspace` と draft の candidates はその場で読むので、順序が要件。
-  await bootRefresh(board);
+  const writeRegistryRef = registryRefWriter(board, db);
+  await bootRefresh(board, writeRegistryRef);
   // ADR 0024 / issue #50: token が無ければ識別情報も無く、GitHub 機能は
   // すべて fail-closed で off(以下の `github` が undefined になる)。
   const github = board.githubAuth && new GhCliClient(board.githubAuth);
@@ -793,9 +819,9 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     workspace,
     resolveWorkspace: workspaceResolver(board),
     github,
-    workspaceAdmin: workspaceAdmin(board, github),
-    agentAdmin: agentAdmin(board, db),
-    profileAdmin: profileAdmin(board),
+    workspaceAdmin: workspaceAdmin(board, github, db, writeRegistryRef),
+    agentAdmin: agentAdmin(board, db, writeRegistryRef),
+    profileAdmin: profileAdmin(board, writeRegistryRef),
     resolveAuthority: authorityResolver(board, db),
     agentRegistered: agentRegisteredChecker(board),
     agentDefinitionFailure: agentDefinitionFailureChecker(board, db),
@@ -831,7 +857,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
       openai: () => codexLoginAbsence(board.codexHome),
     },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
-    registryReachability: registryReachabilityCheck(board),
+    registryReachability: registryReachabilityCheck(board, writeRegistryRef),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
     // `tidepool-board[bot]` 名義で撃つ。落とすと private な remote の workspace が黙って

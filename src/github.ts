@@ -120,6 +120,8 @@ export class IssueGoneError extends Error {
  *  "unreported" past ADR 0227's grace — and only on the head that read was
  *  taken on (ADR 0231 決定1). */
 export interface GitHubClient {
+  /** push 済みのタスクブランチに PR を開く(`gh pr create` だけ)。push は呼び手が `pushBranch` で先に撃つ ——
+   *  盤面の push は基準への予告で包む口を通る(ADR 0243)。 */
   createPullRequest(input: CreatePrInput): Promise<PrResult>;
   /** タスクブランチを `origin` へ push する —— 盤面がタスクブランチをリモートへ書く唯一の操作。
    *  PR 作成の前段であると同時に、**既に開いている PR の更新**でもある: 付帯子の
@@ -228,10 +230,6 @@ export class GhCliClient implements GitHubClient {
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
-    // `gh pr create --head <branch>` needs the branch to already exist on the
-    // remote — run non-interactively, it cannot fall back to its "push now?"
-    // prompt.
-    await this.pushBranch(input);
     const url = execFileSync(
       "gh",
       [

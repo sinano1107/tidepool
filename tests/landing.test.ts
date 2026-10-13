@@ -39,9 +39,11 @@ import {
   OutOfBandProtectedBranchError,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  refreshProtectedBranch,
   releaseWorkspace,
   UnknownWorkspaceError,
   type WorkspaceConfig,
+  writeBoardRef,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
 import {
@@ -98,7 +100,7 @@ function promotionFailures(board: Db, taskId: string) {
 }
 
 /** 別タスクのセッションを盤面の書き込み `boardWrite` をまたいで走らせ、解放する。
- *  ADR 0064 決定4 の撮り直しが効くのはこの形だけである —— 書き込みの後に拾う
+ *  盤面の書き込みの予告と畳み(ADR 0243)が効くのはこの形だけである —— 書き込みの後に拾う
  *  セッションは pickup で全体を撮り直す。`workerForges` は、そのセッションの worker が
  *  書き込みの前に偽造する ref。 */
 async function straddle(
@@ -669,8 +671,19 @@ it("執行側が印を取っている閉じた PR は、収束が観測を刻ま
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
-it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure question を立てる", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-push-failure");
+/** 盤面が持つ基準(ADR 0064 決定6 の綴り)。 */
+function baseline(board: Db, workspace: WorkspaceConfig): string {
+  return (board.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").get(workspace.name) as { ref_snapshot: string }).ref_snapshot;
+}
+
+/** 基準の中の `ref` の行。 */
+function baselineLine(board: Db, workspace: WorkspaceConfig, ref: string): string | undefined {
+  return baseline(board, workspace).split("\n").find((line) => line.endsWith(` ${ref}`));
+}
+
+/** 開いている PR を持つ根。fake の push は転送の**後**に失敗する —— 写しは動いたのに失敗と報告される形。 */
+async function openPrWhosePushFailsAfterTransfer(name: string) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   github.scriptPushFailure(new Error("push rejected"));
@@ -690,27 +703,90 @@ it("open PR branch の push 失敗は既存の着地痕跡で隠さず failure q
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, task);
   recordPrOpenedViaWorker(db, task, 1, "worker", clock.now());
-  const remoteTaskRef = `refs/remotes/origin/task/${task.id}`;
+  const pushFailed = () =>
+    expect(convergeOn(landing, task.id)).resolves.toEqual({
+      kind: "failed",
+      reason: "promotion_failed",
+      error: "push rejected",
+    });
+  return { workspace, db, clock, github, task, pushFailed, remoteTaskRef: `refs/remotes/origin/task/${task.id}` };
+}
 
-  // 失敗した push の後に撮り直すと、またいだセッションの worker が偽造した ref まで
-  // 基準に飲まれる(ADR 0064 決定4)。fake の push は転送の後に失敗するので、偽造が
-  // 無くても quarantine にはなる —— 偽造は筋書きと理由文のため
-  await straddle(
-    db,
-    clock,
-    workspace,
-    () =>
-      expect(convergeOn(landing, task.id)).resolves.toEqual({
-        kind: "failed",
-        reason: "promotion_failed",
-        error: "push rejected",
-      }),
-    remoteTaskRef,
-  );
+// ADR 0243 決定2: 畳みは ref を読み返した2択なので、失敗の報告のされ方に依らず、転送が済んでいれば押した値に畳む
+it("転送の後に失敗と報告された open PR branch の push は failure question を立て、基準を押した値に畳み、またいだセッションを quarantine しない", async () => {
+  const { workspace, db, clock, task, pushFailed, remoteTaskRef } = await openPrWhosePushFailsAfterTransfer("landing-push-failure");
+
+  await straddle(db, clock, workspace, pushFailed);
+
   expect(listBoard(db)).toContainEqual(
     expect.objectContaining({ question_pending_pr_promotion_task_id: task.id }),
   );
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(remoteTaskRef);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
+  expect(baselineLine(db, workspace, remoteTaskRef)).toBe(`${git(workspace.path, "rev-parse", `task/${task.id}`)} ${remoteTaskRef}`);
+});
+
+// ADR 0243 決定2: 予告の窓で worker が偽造した値は基準に入らない —— 通るのは盤面が書こうとした値そのものだけ
+it("push の後・畳みの前に worker が写しを偽造すれば、偽造は基準に入らず、またいだセッションは quarantine に落ちる", async () => {
+  const { workspace, db, clock, github, pushFailed, remoteTaskRef } = await openPrWhosePushFailsAfterTransfer("landing-push-forged");
+  const push = github.pushBranch.bind(github);
+  github.pushBranch = async (input) => {
+    try {
+      await push(input);
+    } finally {
+      git(workspace.path, "update-ref", remoteTaskRef, "HEAD");
+    }
+  };
+
+  await straddle(db, clock, workspace, pushFailed);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`now: ${git(workspace.path, "rev-parse", remoteTaskRef)} ${remoteTaskRef}`);
+  expect(baselineLine(db, workspace, remoteTaskRef)).toBeUndefined();
+});
+
+// ADR 0243 決定1・5 / #1846: 盤面が予告した後・畳む前に落ちる(kill -9 でも子の push は完走する)。走っていた
+// セッションの解放は、残った2値の行のどちらの値も違反と読まず、3つ目の値だけを違反と読む
+it.each<[string, (path: string, ref: string, announced: string, elsewhere: string) => void, boolean]>([
+  ["予告した値へ動いた", (path, ref, announced) => git(path, "update-ref", ref, announced), false],
+  ["予告の前の値(無い)のまま", () => {}, false],
+  ["どちらでもない値へ動いた", (path, ref, _announced, elsewhere) => git(path, "update-ref", ref, elsewhere), true],
+])("予告だけを残して盤面が落ち、ref が%s解放は quarantine=%s", async (_, move, quarantined) => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-crash-after-announce");
+  const { db, clock } = await openBoard();
+  const ref = "refs/remotes/origin/task/pushed-by-the-board";
+  const announced = git(workspace.path, "rev-parse", "HEAD");
+  const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
+  const running = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, running, {});
+
+  // 落ちた盤面: 予告は書かれ、書き込みは返らず、畳みは来ない
+  void writeBoardRef(db, workspace, ref, announced, () => new Promise<never>(() => {}));
+  move(workspace.path, ref, announced, elsewhere);
+  commitWork(workspace.path, "running.txt", "work\n");
+  releaseWorkspace(db, workspace, running, clock.now());
+
+  const question = quarantineQuestion(db, "workspace", workspace.name);
+  expect(question !== undefined).toBe(quarantined);
+  // 動いた ref は2値の行のまま名指しされる(ADR 0243 / spec #1870)
+  if (quarantined) expect(question?.purpose).toContain(`was: |${announced} ${ref}`);
+});
+
+// ADR 0243 決定3: 写しを進める fetch は原本の sha を先に知ってから予告し、その sha だけを取って写しを書く
+it("収束前の保護ブランチの fetch は写しを原本の sha へ進め、基準をその1値に畳み、refs/ に写し以外の差を残さない", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("landing-split-fetch");
+  const { db, clock } = await openBoard();
+  const running = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, running, {});
+  publish("merged.txt", "merged on GitHub\n", "merged outside");
+  const copy = "refs/remotes/origin/main";
+  const refsBesidesCopy = () => git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname)").split("\n").filter((line) => !line.endsWith(` ${copy}`));
+  const before = refsBesidesCopy();
+
+  await refreshProtectedBranch(db, workspace, undefined);
+
+  const original = git(workspace.path, "ls-remote", "origin", "refs/heads/main").split("\t")[0];
+  expect(git(workspace.path, "rev-parse", copy)).toBe(original);
+  expect(baselineLine(db, workspace, copy)).toBe(`${original} ${copy}`);
+  expect(refsBesidesCopy()).toEqual(before);
 });
 
 it("PR 作成の失敗は閉じた理由で返して failure question を立てる", async () => {
@@ -3121,6 +3197,26 @@ it("merge back が走らなかった修理は、受理の検査が帰り先へ m
   expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
 });
 
+// ADR 0243 決定4: 受理の merge back は走っている session が無いときだけ checkout を動かす書き込みなので、基準に触らない ——
+// 次の pickup の全撮りが作り直す
+it("受理の検査がやり直した merge back は、盤面の基準を書き換えない", async () => {
+  const pr = await openPushedPr("redo-merge-back-baseline", "escalate");
+  const { workspace, db, clock, work } = pr;
+  const earlier = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, earlier, {});
+  commitWork(workspace.path, "earlier.txt", "work\n");
+  releaseWorkspace(db, workspace, earlier, clock.now());
+  git(workspace.path, "checkout", `task/${work.id}`);
+  const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
+  const before = baseline(db, workspace);
+
+  await answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!);
+
+  expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
+  expect(baseline(db, workspace)).toBe(before);
+});
+
 it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
   [
     "手で merge を解いた",
@@ -3980,6 +4076,30 @@ it("記録に保護ブランチの行が無ければ、位置が動いていな�
 
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow("no recorded position");
   expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(before);
+});
+
+// ADR 0243 決定2: 帯域外の判定も、予告中の行は2値のどちらとも一致で通す。走行中の merge の回答の途中で落ちた盤面が
+// 残した行の上で、人間が同じ question に答え直す
+it.each([
+  ["書く前に落ちた(保護ブランチは記録の位置のまま)", false],
+  ["書いた後に落ちた(保護ブランチは予告した位置)", true],
+])("merge の回答の途中で%s盤面の2値の記録の上で答え直すと、帯域外と読まずに保護ブランチをタスクブランチへ進める", async (_shape, written) => {
+  const workspace = await makeWorkspace("landing-answer-over-announced");
+  const { db, clock } = await openBoard();
+  const work = await recordedWork(db, clock, workspace);
+  const question = mergeQuestion(db, clock, { pending_local_merge_task_id: work.id });
+  const running = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, running, {});
+  const tip = git(workspace.path, "rev-parse", `task/${work.id}`);
+  void writeBoardRef(db, workspace, "refs/heads/main", tip, () => new Promise<never>(() => {}));
+  if (written) git(workspace.path, "update-ref", "refs/heads/main", tip);
+
+  await answerMerge(db, clock, workspace, question);
+  commitWork(workspace.path, "running.txt", "work\n");
+  releaseWorkspace(db, workspace, running, clock.now());
+
+  expect(git(workspace.path, "rev-parse", "refs/heads/main")).toBe(tip);
+  expect(quarantineQuestion(db, "workspace", workspace.name)).toBeUndefined();
 });
 
 it.each([

@@ -11,6 +11,8 @@ import {
 } from "./github-auth.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import {
+  fetchBranchCopy,
+  fetchCommit,
   ownEntry,
   REGISTRY_BRANCH,
   type Registry,
@@ -462,33 +464,29 @@ export async function ensureWorkspaceToken(
  *  原則がそのまま適用できる(ADR 0052 決定5)。 */
 function refreshWorkspace(workspace: WorkspaceConfig, auth: GitHubAuth | undefined): void {
   if (!isRemoteBacked(workspace)) return;
-  fetchFromOrigin(workspace, auth, protectedBranch(workspace));
+  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", protectedBranch(workspace));
 }
 
-/** origin から認証付き・時間制限付きで1つ fetch する —— 保護ブランチの fetch と、merge の門の sha の fetch が共有する形。 */
-function fetchFromOrigin(workspace: WorkspaceConfig, auth: GitHubAuth | undefined, refspec: string): void {
-  authedGitBounded(auth, workspace.path, originRepo(workspace.path), GIT_NETWORK_TIMEOUT_MS, "fetch", "--quiet", "origin", refspec);
-}
-
-/** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを pickup と同じ fetch で
- *  進める —— 写しは pickup と後始末の fetch でしか動かず、merge の直後はまだ merge された内容を持たない。盤面が動かした
- *  ref だけを撮り直す(ADR 0064 決定4)。失敗は投げる(呼び手の根の失敗になる)。 */
+/** ADR 0241 決定1: 収束が merge 済みの根を保護ブランチと比べる前に、保護ブランチの写しを進める —— 写しは pickup と
+ *  後始末の fetch でしか動かず、merge の直後はまだ merge された内容を持たない。走っている session の基準の下で写しを
+ *  動かすので、原本の sha を先に知ってから口を通して書く(ADR 0243 決定3)。失敗は投げる(呼び手の根の失敗になる)。 */
 export async function refreshProtectedBranch(db: Db, workspace: WorkspaceConfig, auth: GitHubAuth | undefined): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
   await ensureWorkspaceToken(workspace, auth);
-  refreshWorkspace(workspace, auth);
-  rebaselineRef(db, workspace, protectedBranchRef(workspace));
+  fetchBranchCopy(workspace.path, auth, protectedBranch(workspace), (ref, newSha, write) =>
+    writeBoardRef(db, workspace, ref, newSha, write),
+  );
 }
 
-/** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、保護ブランチの fetch と同じ形で origin から sha で
- *  取る。sha の fetch は `refs/` に何も書かない(FETCH_HEAD だけ)ので撮り直しは要らない。失敗は投げる。 */
+/** ADR 0242 決定1: merge の門が比べる GitHub の head が手元に無ければ、origin から sha で取る。sha の fetch は `refs/` に
+ *  何も書かない(FETCH_HEAD だけ)ので口は要らない。失敗は投げる。 */
 export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: string, auth: GitHubAuth | undefined): Promise<void> {
   try {
     git(workspace.path, "cat-file", "-e", `${sha}^{commit}`);
     return;
   } catch {}
   await ensureWorkspaceToken(workspace, auth);
-  fetchFromOrigin(workspace, auth, sha);
+  fetchCommit(workspace.path, auth, sha);
 }
 
 /** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
@@ -542,11 +540,11 @@ export async function prepareWorkspaceAtPickup(
  *  `for-each-ref` の出力は refname 順に並んでいるので、そのまま1本のテキストとして
  *  持てる(決定6)。比較は行の集合差分で撮るので順序そのものには依らないが、
  *  決定2 が要求する「動いた ref の名指し」が行差分でそのまま取れるのはこの形ゆえで
- *  あり、再基準化も同じ refname 順を保つ(`rebaselineRef`)。
+ *  あり、盤面の書き込みの予告と畳みも同じ refname 順を保つ(`writeBoardRefs`)。
  *
  *  ADR 0081: symref の行だけは解決値ではなく**指し先**を持つ。`for-each-ref` の
  *  既定は symref を解決値で出すので、盤面が `origin/main` を1本書くと `origin/HEAD`
- *  の行まで動き、外科的再基準化(決定4)が名指しした1行しか撮り直さないぶんが
+ *  の行まで動き、盤面の書き込みの口(ADR 0243)が名指しした1行しか畳まないぶんが
  *  取り残されて無実の quarantine になる。指し先で数えれば行は不変で、symref 自身の
  *  可動部(付け替え・削除・新規作成)は行差分に残る。 */
 function currentRefs(workspace: WorkspaceConfig): string {
@@ -559,7 +557,7 @@ function currentRefs(workspace: WorkspaceConfig): string {
 
 /** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
  *  撮るのは pickup の1回だけで、ここから先は盤面自身が書いた ref の行だけが
- *  外科的に更新される(`rebaselineRef`)。 */
+ *  書く前の予告と書いた後の畳みで更新される(`writeBoardRefs`)。 */
 function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
@@ -576,92 +574,124 @@ function storedRefs(db: Db, workspaceName: string): string {
   return row?.ref_snapshot ?? "";
 }
 
-/** `"<値> <refname>"`(値は objectname、symref の行では `symref=<指し先>`)の
- *  refname 側。 */
-function refName(line: string): string {
-  return line.slice(line.indexOf(" ") + 1);
+/** `"<値> <refname>"` の行の集まりを refname → 値 に。値は objectname、symref の行では `symref=<指し先>`、盤面が
+ *  予告している行では `<old>|<new>`(ADR 0243 決定1)。無い側は空文字で綴る —— 作成の予告は `|<new>` になる。 */
+function refValues(snapshot: string): Map<string, string> {
+  return new Map(
+    snapshot
+      .split("\n")
+      .filter((line) => line !== "")
+      .map((line) => [line.slice(line.indexOf(" ") + 1), line.slice(0, line.indexOf(" "))]),
+  );
 }
 
-function refLines(snapshot: string, exceptRef: string): string[] {
-  return snapshot
-    .split("\n")
-    .filter((line) => line !== "" && !line.endsWith(` ${exceptRef}`));
+/** 基準の行の値が、今の ref の値を「動いていない」と読むか。基準を読む2つの側(解放時の比較 —— ADR 0064 決定2、
+ *  着地の帯域外判定 —— ADR 0103 決定1)はどちらもこれで解く: 予告中の行は2値のどちらとも一致で通す(ADR 0243 決定2)。
+ *  行が無いことと ref が無いことは、どちらも空文字として突き合わせる。 */
+function baselineAllows(recorded: string | undefined, actual: string | undefined): boolean {
+  return (recorded ?? "").split("|").includes(actual ?? "");
 }
 
-/** 盤面自身の記録が持つ `ref` の位置、記録に行が無ければ undefined。行の**有無**を
+/** 盤面自身の記録が持つ `ref` の値、記録に行が無ければ undefined。行の**有無**を
  *  呼び出し側に返すのは、着地の帯域外判定(ADR 0103 決定1)が「記録に無い」を不一致
  *  として扱いつつ、人間へ返す理由をそこで書き分けるためである。 */
 function recordedRef(db: Db, workspaceName: string, ref: string): string | undefined {
-  const line = storedRefs(db, workspaceName)
-    .split("\n")
-    .find((candidate) => candidate !== "" && refName(candidate) === ref);
-  return line?.slice(0, line.indexOf(" "));
+  return refValues(storedRefs(db, workspaceName)).get(ref);
 }
 
 /** ADR 0064 の不変条件そのもの: **タスクブランチは worker の唯一の可変 ref である**。
- *  自分のタスクブランチの行を両側から落として、残りの集合が一致することを要求する ——
+ *  自分のタスクブランチを両側から落として、残りの ref がすべて基準の値のままであることを要求する ——
  *  移動・削除・新規作成のいずれも違反で、削除が最も静かな破壊であるからこそ「動いた
  *  ものだけを見る」綴りは選ばない(決定2)。
  *
  *  メッセージは**動いた ref を名指しする**。quarantine の確認 question の本文に載り、
- *  人間の修理手順がそのまま読める形になる。 */
+ *  人間の修理手順がそのまま読める形になる。予告中の行は2値のまま載る。 */
 function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: string): void {
   const except = `refs/heads/${taskBranch(taskId)}`;
-  const before = refLines(storedRefs(db, workspace.name), except);
-  const after = refLines(currentRefs(workspace), except);
-  const gone = before.filter((line) => !after.includes(line));
-  const added = after.filter((line) => !before.includes(line));
-  if (gone.length === 0 && added.length === 0) return;
+  const before = refValues(storedRefs(db, workspace.name));
+  const after = refValues(currentRefs(workspace));
+  const moved = [...new Set([...before.keys(), ...after.keys()])].filter(
+    (ref) => ref !== except && !baselineAllows(before.get(ref), after.get(ref)),
+  );
+  if (moved.length === 0) return;
   throw new Error(
     `workspace ${workspace.name}: refs other than ${except} changed during the session — ` +
-      [...gone.map((line) => `was: ${line}`), ...added.map((line) => `now: ${line}`)].join(", "),
+      [
+        ...moved.filter((ref) => before.has(ref)).map((ref) => `was: ${before.get(ref)} ${ref}`),
+        ...moved.filter((ref) => after.has(ref)).map((ref) => `now: ${after.get(ref)} ${ref}`),
+      ].join(", "),
   );
 }
 
-/** ADR 0064 決定4 の外科的な再基準化: 盤面自身が `ref` を書いた直後に、**その1行だけ**を
- *  スナップショット上で更新する。全 ref を撮り直すと、その瞬間までに worker が動かした
- *  ref まで新しい基準に入り、解放時の比較が素通りする —— 違反を飲み込む静かな穴になる。
- *
- *  スナップショットを持たない workspace には**何もしない**(行を作らない)。次の pickup が
- *  全体の基準を撮る。検査側に NULL 経路を作らない決定6 とは別の話である。 */
-export function rebaselineRef(db: Db, workspace: WorkspaceConfig, ref: string): void {
+/** 基準を書き換える。基準を持たない workspace(一度も拾われていない)には何もしない —— 行を作らず、次の pickup が
+ *  全体を撮る。保存値の綴りは常に「`for-each-ref` のソート済み出力」= **refname 順**である(ADR 0064 決定6)。 */
+function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<string, string>) => void): boolean {
   const stored = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
     .get(workspace.name) as { ref_snapshot: string | null } | undefined;
-  if (!stored?.ref_snapshot) return;
-  const lines = refLines(stored.ref_snapshot, ref);
-  let sha: string | undefined;
-  try {
-    sha = git(workspace.path, "rev-parse", "--verify", "--quiet", ref);
-  } catch {
-    sha = undefined; // 盤面が消した ref —— 行ごと落ちるのが正しい姿
-  }
-  if (sha) lines.push(`${sha} ${ref}`);
-  // 保存値の綴りは常に「`for-each-ref` のソート済み出力」= **refname 順**である
-  // (ADR 0064 決定6)。行頭は refname ではなく値なので素の sort は値の順に並べてしまい、
-  // 再基準化のたびに列の契約が崩れる —— 今日の比較は集合差分で順序に依らないが、
-  // 保存値の形が pickup の1枚と再基準化後で別物になる理由は無い
+  if (!stored?.ref_snapshot) return false;
+  const values = refValues(stored.ref_snapshot);
+  edit(values);
   db.prepare("UPDATE workspace_state SET ref_snapshot = ? WHERE name = ?").run(
-    lines.sort((a, b) => (refName(a) < refName(b) ? -1 : 1)).join("\n"),
+    [...values]
+      .filter(([, value]) => value !== "")
+      .sort(([a], [b]) => (a < b ? -1 : 1))
+      .map(([ref, value]) => `${value} ${ref}`)
+      .join("\n"),
     workspace.name,
   );
+  return true;
 }
 
-/** ADR 0064 決定4 のテーブル6行目(ADR 0066 決定4 / issue #285): `publish` が push した
- *  ぶんの `refs/remotes/origin/*` を撮り直す。ADR 0064 本文の「盤面が書いた ref は
- *  どの経路でも**1本に確定**している」は、publish が初めて複数本を書く経路なので
- *  「**N 本だが確定している**」へ改訂される —— 外科的である(全 ref を撮り直さない)
- *  という機構そのものは無変更である。
+function readRef(workspace: WorkspaceConfig, ref: string): string {
+  try {
+    return git(workspace.path, "rev-parse", "--verify", "--quiet", ref);
+  } catch {
+    return "";
+  }
+}
+
+/** ADR 0243 の口: 盤面が session 中に ref **だけ**を書くときは、すべてここを通る。書く前に基準のその行を
+ *  `<old>|<new>` に予告し、`write()` を撃ち、ref を読み返して `new` なら `{new}`、違えば `{old}` に畳む —— 読み返した
+ *  値そのものを基準に入れることは無い(決定2)。`write()` が投げても畳んでから投げ直す。予告と畳みの間で盤面が
+ *  落ちれば2値の行が残り、次の pickup の全撮りが消すまでどちらの値も違反と読まれない(決定5)。
  *
- *  **`refs` は publish が push の直前に確定させた集合でなければならない**
- *  (`publishWorkspace` の戻り値)。ここで checkout を覗いて列挙し直すと、その間に
- *  worker が偽造した remote-tracking ref まで基準へ迎え入れることになり、ADR 0064 が
- *  閉じた潜在バグ(偽造 `refs/remotes` → 無実の次セッションへの誤帰属)が戻る。
- *
- *  **成功した publish の直後にだけ呼ぶこと。** 失敗した publish は `remote remove` で
- *  巻き戻るので、撮り直す対象もそもそも残らない。 */
-export function rebaselinePublishedRefs(db: Db, workspace: WorkspaceConfig, refs: string[]): void {
-  for (const ref of refs) rebaselineRef(db, workspace, ref);
+ *  `write()` が同期なら予告→書く→畳むは1つの同期区間で、盤面の他の書き込みと交差しない。Promise を返す書き込み
+ *  (GitHub client の push)は settle してから畳む。 */
+export function writeBoardRefs<T>(
+  db: Db,
+  workspace: WorkspaceConfig,
+  writes: ReadonlyArray<readonly [ref: string, newSha: string]>,
+  write: () => T,
+): T {
+  const before = new Map<string, string>();
+  const announced = updateBaseline(db, workspace, (values) => {
+    for (const [ref, newSha] of writes) {
+      before.set(ref, values.get(ref) ?? "");
+      values.set(ref, `${before.get(ref)}|${newSha}`);
+    }
+  });
+  if (!announced) return write();
+  const fold = () => {
+    updateBaseline(db, workspace, (values) => {
+      for (const [ref, newSha] of writes) values.set(ref, readRef(workspace, ref) === newSha ? newSha : before.get(ref)!);
+    });
+  };
+  let result: T;
+  try {
+    result = write();
+  } catch (err) {
+    fold();
+    throw err;
+  }
+  if (result instanceof Promise) return result.finally(fold) as T;
+  fold();
+  return result;
+}
+
+/** 1本の ref を書く口(`writeBoardRefs` の1本の形)。 */
+export function writeBoardRef<T>(db: Db, workspace: WorkspaceConfig, ref: string, newSha: string, write: () => T): T {
+  return writeBoardRefs(db, workspace, [[ref, newSha]], write);
 }
 
 /** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
@@ -1074,8 +1104,8 @@ function undeliveredMergeBacks(
 /** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
  *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
  *  後始末と同じ fetch → 帰り先へ merge → 休止位置へ戻す、を踏む。conflict は merge を取り消して休止位置へ戻し、出口を
- *  2つ示して投げる(ADR 0239 帰結)。merge で動かした帰り先は撮り直す(ADR 0064 決定4)。保護ブランチは撮り直さない ——
- *  purely-local では休止は ref を書かず、撮り直すと帯域外の移動を記録に飲み込む(ADR 0103)。 */
+ *  2つ示して投げる(ADR 0239 帰結)。merge は checkout を動かす書き込みなので口を通らず、基準にも触らない —— 次の
+ *  pickup の全撮りが作り直す(ADR 0243 決定4)。 */
 export async function redoMergeBacks(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1115,7 +1145,6 @@ export async function redoMergeBacks(
             "then answer again",
         );
       }
-      rebaselineRef(db, workspace, `refs/heads/${next.target}`);
     }
   } catch (error) {
     failure = { error };
@@ -1160,11 +1189,11 @@ function isAncestor(workspace: WorkspaceConfig, ancestor: string, descendant: st
  *  catches its task branch up to the protected ref without touching HEAD,
  *  the index, or the worktree. Parent order preserves the task branch as the
  *  first-parent history and records the protected ref as the second parent. */
-export function catchUpTaskBranch(workspace: WorkspaceConfig, taskId: string): boolean {
+export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: string): void {
   const branch = taskBranch(taskId);
   const ref = `refs/heads/${branch}`;
   const protectedRef = protectedBranchRef(workspace);
-  if (isAncestor(workspace, protectedRef, ref)) return false;
+  if (isAncestor(workspace, protectedRef, ref)) return;
   const tree = writeMergeTree(workspace, ref, protectedRef);
   if (tree === undefined) {
     throw new Error(
@@ -1185,8 +1214,7 @@ export function catchUpTaskBranch(workspace: WorkspaceConfig, taskId: string): b
     "-m",
     `Merge ${protectedRef} into ${branch}`,
   );
-  git(workspace.path, "update-ref", ref, merged, taskSha);
-  return true;
+  writeBoardRef(db, workspace, ref, merged, () => git(workspace.path, "update-ref", ref, merged, taskSha));
 }
 
 /** ADR 0103 決定4: 自動では合わない、と分かっただけの状態。タスクブランチも保護
@@ -1205,8 +1233,9 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
  *  安価な CAS で、記録との突き合わせから書き込みまでの隙に保護ブランチが動いていれば
  *  ここで落ちる。落ち方が隔離ではなく回答の拒否なのは、この隙の移動が帯域外とは
  *  限らないため —— 同じ workspace への2枚の着地回答が競えば、負けた側がここで落ちる。
- *  再回答が決定1 の判定を、撮り直された記録に対してもう一度走らせる。 */
+ *  再回答が決定1 の判定を、畳まれた記録に対してもう一度走らせる。 */
 function mergeIntoProtectedByPlumbing(
+  db: Db,
   workspace: WorkspaceConfig,
   branch: string,
   protectedSha: string,
@@ -1227,13 +1256,13 @@ function mergeIntoProtectedByPlumbing(
     "-m",
     `Merge ${task} into ${branch}`,
   );
-  git(workspace.path, "update-ref", ref, merged, protectedSha);
+  writeBoardRef(db, workspace, ref, merged, () => git(workspace.path, "update-ref", ref, merged, protectedSha));
 }
 
 /** ADR 0053 決定3 / ADR 0103: 承認された purely-local の着地を実行する。
  *
  *  帯域外の判定は ff の成否ではなく**盤面自身の記録との突き合わせ**で下す(決定1)。
- *  盤面が自分で進めた保護ブランチは rebaseline 済みなので記録と一致し、一致しない
+ *  盤面が自分で進めた保護ブランチは記録に写されている(走行中は口の畳み、休止中は着地の後)ので記録と一致し、一致しない
  *  位置は帯域外の書き込みだけが作る —— ff が黙って飲み込んでいた巻き戻しもこれで
  *  捕まる。記録に行が無い場合も不一致として扱う(ADR 0064 決定6 と同じ fail-closed)。
  *
@@ -1248,7 +1277,7 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   const ref = `refs/heads/${branch}`;
   const protectedSha = git(workspace.path, "rev-parse", ref);
   const recorded = recordedRef(db, workspace.name, ref);
-  if (recorded !== protectedSha) {
+  if (!baselineAllows(recorded, protectedSha)) {
     throw new OutOfBandProtectedBranchError(workspace.name, branch, recorded, protectedSha);
   }
 
@@ -1259,13 +1288,24 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
   // —— 休止中(HEAD が保護ブランチ)でなければ ref だけを進める。
   if (git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") !== branch) {
-    if (fastForward) git(workspace.path, "fetch", ".", `${task}:${branch}`);
-    else mergeIntoProtectedByPlumbing(workspace, branch, protectedSha, task);
+    if (fastForward) {
+      writeBoardRef(db, workspace, ref, git(workspace.path, "rev-parse", `refs/heads/${task}`), () =>
+        git(workspace.path, "fetch", ".", `${task}:${branch}`),
+      );
+    } else mergeIntoProtectedByPlumbing(db, workspace, branch, protectedSha, task);
     return;
   }
   git(workspace.path, "checkout", branch);
+  // 休止中の merge は checkout を動かすので口を通らない(ADR 0243 決定4)。ただし帯域外の判定(決定1)は次の pickup より
+  // 前に記録を読む —— 直列の2件目の回答が1件目の着地を帯域外と読まないよう、盤面のこの書き込みの位置を記録に写す。
+  // 走っている session は無いので、読み返した値に worker の偽造は入らない
+  const recordLanding = () =>
+    updateBaseline(db, workspace, (values) => {
+      values.set(ref, readRef(workspace, ref));
+    });
   if (fastForward) {
     git(workspace.path, "merge", "--ff-only", task);
+    recordLanding();
     return;
   }
   try {
@@ -1282,4 +1322,5 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
     }
     throw landingConflict(workspace, branch, task);
   }
+  recordLanding();
 }

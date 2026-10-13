@@ -420,6 +420,7 @@ export const fakeHead = (prNumber: number) => `head-of-pr-${prNumber}`;
  *  without touching a real GitHub API. */
 export class FakeGitHubClient implements GitHubClient {
   readonly requests: CreatePrInput[] = [];
+  /** 開いている PR への push(PR を開く前段の push は数えない)。 */
   readonly pushes: PushBranchInput[] = [];
   readonly issueFetches: IssueRef[] = [];
   readonly issueComments: Array<{ ref: IssueRef; body: string }> = [];
@@ -448,14 +449,12 @@ export class FakeGitHubClient implements GitHubClient {
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
 
-  /** 本物と同じく、PR を開く前にタスクブランチを push する —— PR の head は origin のブランチ先端から読む。
-   *  `pushes` には数えない(開いている PR への push の記録)。 */
+  /** 本物と同じく push はしない —— 呼び手が先に `pushBranch` で押したブランチに PR を開く。PR の head は origin の
+   *  ブランチ先端から読む。 */
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
     this.requests.push(input);
-    execFileSync("git", ["push", "-u", "origin", input.branch], {
-      cwd: input.path,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // 作成の前段の push は開いている PR への push ではない —— `pushes` から外す
+    if (this.pushes.at(-1)?.branch === input.branch) this.pushes.pop();
     if (this.failure) throw this.failure;
     const number = this.nextNumber++;
     this.prBranches.set(number, input.branch);
@@ -463,7 +462,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   /** 記録するだけでなく**実際に push する** —— `refs/remotes/origin/<branch>` が動か
-   *  なければ、盤面が自分の書き込みを撮り直したか(ADR 0064 決定4)を測れない。
+   *  なければ、盤面が自分の書き込みを基準に畳んだか(ADR 0243)を測れない。
    *  origin を持たない checkout(purely-local)には呼ばれない。 */
   async pushBranch(input: PushBranchInput): Promise<void> {
     this.pushes.push(input);
@@ -471,8 +470,8 @@ export class FakeGitHubClient implements GitHubClient {
       cwd: input.path,
       stdio: ["ignore", "pipe", "pipe"],
     });
-    // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形に
-    // しないと、「失敗後に撮り直さない」(ADR 0064 決定4)を測る断言が旧コードでも通る
+    // 失敗は転送の**後**に起こす: remote-tracking ref が動いた状態で失敗が報告される形 —— 畳みが失敗の
+    // 報告ではなく ref の読み返しで決まること(ADR 0243 決定2)を測る
     if (this.pushFailure) throw this.pushFailure;
   }
 

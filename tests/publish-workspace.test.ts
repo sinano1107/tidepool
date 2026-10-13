@@ -2,9 +2,12 @@ import { execFileSync } from "node:child_process";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
+import { registerTask } from "../src/tasks.js";
+import { prepareWorkspaceAtPickup } from "../src/workspace.js";
 import {
   CheckoutHasOriginError,
   GitHubIdentityMissingError,
@@ -13,7 +16,8 @@ import {
   WorkspaceAlreadyPublishedError,
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
-import { FakeGitHubClient } from "./fakes.js";
+import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { HUMAN_WEBUI } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -127,6 +131,42 @@ describe("publishWorkspace: 遷移そのもの(ADR 0066 決定2/6)", () => {
       "refs/remotes/origin/main",
       "refs/remotes/origin/task/abc123",
     ]);
+  });
+
+  // ADR 0243 / ADR 0066 決定4: push する N 本の写しはまとめて予告され、押した値に畳まれる。atomic に拒まれた push は
+  // `remote remove` が写しを消した後に畳むので、予告の前(行が無い)へ戻る
+  it.each([
+    ["通った", false],
+    ["宛先に拒まれた", true],
+  ])("走っているセッションの基準は、publish の push が%sとき写しの行を押した値か予告の前に畳む", async (_, rejected) => {
+    const { deps, checkout } = await makeBoard();
+    git(checkout, "branch", "task/abc123");
+    const db = openDb(join(await tempDir("tidepool-board-"), "board.sqlite"));
+    const clock = new FakeClock();
+    const running = registerTask(
+      db,
+      { type: "work", title: "runs while the human publishes", purpose: "keep working", completion_criteria: "done" },
+      clock.now(),
+      ...HUMAN_WEBUI,
+    );
+    await prepareWorkspaceAtPickup(db, { name: "sandbox", path: checkout }, running, {});
+    const dest = await makeDestination();
+    if (rejected) await seedDestination(dest);
+
+    const published = publishWorkspace({ name: "sandbox", repo: dest }, { ...deps, db });
+    await (rejected ? expect(published).rejects.toThrow() : expect(published).resolves.toBeDefined());
+
+    const copies = (db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").get("sandbox") as { ref_snapshot: string })
+      .ref_snapshot.split("\n")
+      .filter((line) => line.includes(" refs/remotes/origin/"));
+    expect(copies).toEqual(
+      rejected
+        ? []
+        : ["main", "task/abc123", `task/${running.id}`]
+            .map((branch) => `${git(checkout, "rev-parse", branch)} refs/remotes/origin/${branch}`)
+            .sort((a, b) => (a.split(" ")[1]! < b.split(" ")[1]! ? -1 : 1)),
+    );
+    db.close();
   });
 
   // ADR 0066 決定5 + issue #285 やること2/4: 最も起きやすい2つの人為ミスのうち
