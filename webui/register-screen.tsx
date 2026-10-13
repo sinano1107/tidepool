@@ -49,6 +49,8 @@ interface RegisterScreenManualFields {
   /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
   tier?: string;
   review_tier?: string;
+  /** Interview の対象(ADR 0199 決定3): root の review だけが持ち、1つ以上あるときだけ送る。 */
+  interview_targets?: InterviewTargetDraft[];
   /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
   github_issue_number?: never;
   parent_id?: string;
@@ -83,6 +85,37 @@ function ReviewerPicker({ candidates, value, onChange }: {
   );
 }
 
+/** Interview の対象1つ(POST /api/tasks の `interview_targets` の要素)。effort の null は「無い」(ADR 0218 決定5)。 */
+interface InterviewTargetDraft { provider: string; model: string; effort: string | null; tier: string }
+
+/** Interview の対象の行を足し引きする欄(ADR 0199 決定3)。値の検査は登録の扉が言う —— 拒否は登録の失敗として出る。
+ *  effort の選択肢は表の行の欄と同じ述語で model ごとに絞る。 */
+function InterviewTargetsField({ value, onChange, providers, tiers }: {
+  value: InterviewTargetDraft[]; onChange: (v: InterviewTargetDraft[]) => void; providers: string[]; tiers: SettingsExecution['tiers'];
+}) {
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const update = (i: number, patch: Partial<InterviewTargetDraft>) => onChange(value.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  return (
+    <div data-testid="interview-targets" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
+        Interview targets — measure each (provider, model, effort, tier) without putting it in the table; leave empty for an ordinary review
+      </span>
+      {value.map((t, i) => (
+        <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end' }}>
+          <Select label="Provider" options={providers} value={t.provider} onChange={(e) => update(i, { provider: e.target.value })} />
+          <Input label="Model" mono value={t.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
+          <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === t.effort || !TidepoolRules.whyInvalidEffort(t.provider, t.model, effort)).map((effort) => effort ?? { value: '', label: 'no effort' })}
+            value={t.effort ?? ''} onChange={(e) => update(i, { effort: e.target.value || null })} />
+          <Select label="Target tier" options={tiers.map((tier) => tier.name)} value={t.tier} onChange={(e) => update(i, { tier: e.target.value })} />
+          <Button variant="ghost" size="sm" onClick={() => onChange(value.filter((_, j) => j !== i))} aria-label={`remove target ${i + 1}`}>Remove</Button>
+        </div>
+      ))}
+      <Button variant="secondary" size="sm" disabled={!providers.length || !tiers.length}
+        onClick={() => onChange([...value, { provider: providers[0]!, model: '', effort: 'high', tier: tiers[0]!.name }])}>Add target</Button>
+    </div>
+  );
+}
+
 /** 登録の門の 422 本文(src/human-verbs.ts の issue_rejected)+ 検査した要求そのもの。 */
 type RegisterScreenGate = WireContract['POST /api/tasks 422'] & { fields: RegisterScreenIssueFields };
 interface RegisterScreenProps {
@@ -109,6 +142,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState<string[]>([]);
+  const [targets, setTargets] = React.useState<InterviewTargetDraft[]>([]);
   const [reason, setReason] = React.useState('');
   const [issueNumber, setIssueNumber] = React.useState('');
   const [gate, setGate] = React.useState<RegisterScreenGate | null>(null);
@@ -128,8 +162,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   }, []);
   // the board's tiers with their descriptions (ADR 0200 決定3) — the registrant reads them to request one
   const [tiers, setTiers] = React.useState<SettingsExecution['tiers']>([]);
+  const [providers, setProviders] = React.useState<string[]>([]);
   React.useEffect(() => {
-    api('GET /api/settings/execution').then((d) => setTiers(d.tiers)).catch(() => {});
+    api('GET /api/settings/execution').then((d) => { setTiers(d.tiers); setProviders(d.providers.map((p) => p.value)); }).catch(() => {});
   }, []);
   const issueMode = !childMode && source === 'github issue';
   // the parent_id/decompose_reason pair every childMode request (draft and
@@ -199,6 +234,8 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
   const reviewTierField = showReviewBy && reviewTier ? { review_tier: reviewTier } : {};
+  // Interview は root の review(ADR 0199 決定3)—— 子追加は常に work なので出ない
+  const showTargets = !childMode && type === 'review';
   const fields = (): RegisterScreenFields =>
     issueMode
       ? {
@@ -223,6 +260,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...reviewTierField,
           ...reviewByField,
+          ...(showTargets && targets.length ? { interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })) } : {}),
           ...childExtras(),
         };
   // the decompose reason is left alone: it sits outside the dump / plain form
@@ -232,7 +270,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setDump(''); setDrafted(false); setPlainFormActive(false);
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
     setAssignee(''); setWorkspace(''); setTier(''); setReviewTier(''); setIssueNumber('');
-    setRisk(false); setReview(false); setReviewBy([]);
+    setRisk(false); setReview(false); setReviewBy([]); setTargets([]);
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
     setSelectedDumpId(null);
@@ -452,6 +490,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             )}
             {reviewTierSelect}
             {reviewerPicker}
+            {showTargets && <InterviewTargetsField value={targets} onChange={setTargets} providers={providers} tiers={tiers} />}
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>

@@ -74,7 +74,7 @@ function board() {
 
 const judge = { provider: "anthropic" as const, model: "claude-fable-5-1", effort: "high" };
 
-const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
+const none = { board: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } } };
 /** recordShadow へ渡す組(setup のみ): 実績は空、候補は2行。 */
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, basis: "prior" | "data") => ({
   recommended,

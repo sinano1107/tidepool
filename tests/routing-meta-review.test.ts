@@ -28,7 +28,7 @@ afterEach(() => t?.stop());
 
 const DAY = 24 * HOUR;
 const ROUTING_READS = ["list_routing_shadow", "list_allocations", "list_routing_cells", "read_routing_settings"];
-const TRACK = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 } };
+const TRACK = { board: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } } };
 
 /** routing の材料を1つ(setup —— 人間が優先順位の既定を変える)。 */
 async function material(tp: Tidepool, value: "cost" | "quality" = "cost") {

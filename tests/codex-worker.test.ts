@@ -297,7 +297,7 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(task(f.db));
     f.start(metaReviewTask(f.db));
 
-    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
+    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "score_interview", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
     expect(enabledTools(f.process.calls[1]!.args)).toEqual([
       ...base,

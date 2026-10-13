@@ -1,12 +1,15 @@
 import { randomUUID } from "node:crypto";
+import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { whyInvalidEffort } from "./effort.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
+import { PROVIDER_VALUES } from "./provider.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
@@ -158,6 +161,8 @@ export interface Task {
    *  is the periodic meta-review for, or null for an ordinary task. Never
    *  written from MCP / the JSON API. */
   meta_review_subject: "memory" | "routing" | null;
+  /** Interview の子の pin(ADR 0199 決定3): root の対象の行の id。decompose だけが書く。 */
+  interview_target_id: number | null;
   created_at: string;
 }
 
@@ -274,6 +279,8 @@ interface PendingChildSpec extends TaskContent {
    *  same line as `review_flag` above. */
   tier?: string;
   priority?: string;
+  /** Interview の子の pin。pin を持つ子が approval question に変わっても落とさない。 */
+  interview_target_id?: number;
 }
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
@@ -434,6 +441,69 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  type here would only move that statement into each door's zod schema. */
   tier?: string;
   priority?: string;
+  /** Interview の対象の一覧(ADR 0199 決定3): root review だけが持つ。人間の登録の扉が渡す。 */
+  interview_targets?: InterviewTarget[];
+  /** Interview の子の pin(対象の行の id)。decompose が照合してから渡す。 */
+  interview_target_id?: number;
+}
+
+/** Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2): (provider, model, effort, tier)。表の行でなくてよく、advisor は
+ *  名指さない。effort の null は「無い」という値(ADR 0218 決定5)。名前で喋る形で、盤面は段を id で持つ。 */
+export interface InterviewTarget {
+  provider: string;
+  model: string;
+  effort: string | null;
+  tier: Tier;
+}
+
+/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
+ *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。 */
+export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
+  if (input.interview_targets === undefined) return;
+  if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
+  if (input.interview_targets.length === 0) throw new DomainError("an Interview names at least one target");
+  for (const { provider, model, effort, tier } of input.interview_targets) {
+    if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) throw new DomainError(`unknown provider "${provider}" — one of ${PROVIDER_VALUES.join(", ")}`);
+    if (provider === "anthropic" && isClaudeModelAlias(model)) {
+      throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; an Interview target takes a concrete model id (e.g. claude-opus-5-5)`);
+    }
+    const effortProblem = whyInvalidEffort(provider, model, effort);
+    if (effortProblem) throw new DomainError(effortProblem);
+    assertKnownTier(db, "tier", tier);
+  }
+}
+
+/** decompose の照合(ADR 0199 決定3): 子の pin を root の対象の id に引く。4欄の完全一致で、effort の null も値として比べる
+ *  (ADR 0218 決定5)。pin の子は対象で走り、使い捨てブランチで採点されるので、完了時レビューも別の要求も持たない ——
+ *  要求ティアは対象の段になる。 */
+function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec): DecomposeChild {
+  const { interview_pin: pin, ...rest } = child;
+  if (!pin) return child;
+  if (interviewTargets(db, parent.id) === null) throw new DomainError("only an Interview's children carry interview_pin");
+  if (child.review_flag || child.risk_flag || child.tier !== undefined || child.priority !== undefined) {
+    throw new DomainError("an Interview child runs at its pin on a branch that never lands, so it takes no review_flag, risk_flag, tier or priority");
+  }
+  const id = interviewTargetId(db, parent.id, pin);
+  if (id === undefined) throw new DomainError(`interview_pin ${JSON.stringify(pin)} is not one of this Interview's targets`);
+  return { ...rest, tier: pin.tier, interview_target_id: id };
+}
+
+/** pin と4欄一致する root の対象の id(ADR 0199 決定3)。effort の null も値として比べる(ADR 0218 決定5)。無ければ undefined。 */
+export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget): number | undefined {
+  const target = db
+    .prepare(
+      `SELECT id FROM interview_targets WHERE task_id = ? AND provider = ? AND model = ? AND effort IS ? AND tier_id = ${liveTierId("?")}`,
+    )
+    .get(rootId, pin.provider, pin.model, pin.effort, pin.tier) as { id: number } | undefined;
+  return target?.id;
+}
+
+/** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
+export function interviewTargets(db: Db, taskId: string): InterviewTarget[] | null {
+  const rows = db
+    .prepare("SELECT provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
+    .all(taskId) as InterviewTarget[];
+  return rows.length ? rows : null;
 }
 
 /** Every question carries 1-4 items (issue #30) — a quarantine question may carry none, when only a table edit settles
@@ -607,13 +677,13 @@ function taskHasLandedSql(taskRef: string): string {
 }
 
 /** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
- *  完了した work の祖先の workspace も参照する。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
+ *  完了した work の祖先の workspace も参照する。着地しない Interview の子(pin を持つ work)は祖先に数えない(ADR 0199)。その祖先すべてから一度に子孫をたどり、各タスクを一度だけ数える。 */
 function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   const row = db
     .prepare(
       `WITH RECURSIVE under_relanding(id) AS (
          SELECT p.id FROM tasks p
-          WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done'
+          WHERE p.workspace = @name AND p.type = 'work' AND p.status = 'done' AND p.interview_target_id IS NULL
             AND (p.pr_number IS NOT NULL OR NOT ${taskHasLandedSql("p.id")})
          UNION
          SELECT c.id FROM tasks c JOIN under_relanding r ON c.parent_id = r.id)
@@ -772,6 +842,7 @@ export function registerTask(
   assertExecutionRequest(db, input);
   assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
+  assertInterviewTargets(db, input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -825,6 +896,7 @@ export function registerTask(
     question_cli_auth_expiry_warning: input.cli_auth_expiry_warning ?? null,
     github_issue_number: input.github_issue_number ?? null,
     meta_review_subject: input.meta_review_subject ?? null,
+    interview_target_id: input.interview_target_id ?? null,
     created_at: now.toISOString(),
   };
   db.transaction(() => {
@@ -833,12 +905,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
-         question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, created_at)
+         question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
-         @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @created_at)`,
+         @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -854,6 +926,11 @@ export function registerTask(
         task.question_pending_child && JSON.stringify(task.question_pending_child),
       question_proposal: task.question_proposal && JSON.stringify(task.question_proposal),
     });
+    for (const target of input.interview_targets ?? []) {
+      db.prepare(`INSERT INTO interview_targets (task_id, provider, model, effort, tier_id) VALUES (?, ?, ?, ?, ${liveTierId("?")})`).run(
+        task.id, target.provider, target.model, target.effort, target.tier,
+      );
+    }
     appendEvent(db, {
       taskId: task.id,
       workerId,
@@ -1768,6 +1845,23 @@ export function logDecision(
   });
 }
 
+/** Interview の採点の注釈(ADR 0199 / ADR 0181 決定4): root が統合復帰で、決着した自分の pin の子の outcome を残す。
+ *  採り直しは後の注釈が有効。 */
+export function scoreInterview(
+  db: Db,
+  root: Task,
+  childId: string,
+  outcome: InterviewOutcome,
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): number {
+  const child = getTask(db, childId);
+  if (!child || child.parent_id !== root.id || child.interview_target_id === null) throw new DomainError(`task ${childId} is not an Interview child of this task`);
+  if (child.status !== "done") throw new DomainError("only a done child is scored");
+  return appendEvent(db, { taskId: child.id, workerId, origin, payload: { kind: "interview_scored", outcome }, at: now });
+}
+
 export interface ChildSpec extends TaskContent {
   review_by?: string[];
   review_tier?: string;
@@ -1795,6 +1889,8 @@ export interface ChildSpec extends TaskContent {
    *  child's own pickup. Same open-string posture as RegisterTaskInput. */
   tier?: string;
   priority?: string;
+  /** Interview の対象のどれか1つ(ADR 0199 決定3)。root の一覧と4欄一致しなければ拒む。 */
+  interview_pin?: InterviewTarget;
 }
 
 /** The registering worker's authority, resolved by the caller (the MCP layer)
@@ -2063,9 +2159,12 @@ export function assigneeNeedsApproval(
  *  this exact pair rather than a free-form escalation. */
 const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
+/** decompose の1子。`interview_target_id` は pin の照合(`resolveInterviewPin`)が埋める。 */
+type DecomposeChild = ChildSpec & { interview_target_id?: number };
+
 interface DecomposeInput {
   reason: string;
-  children: ChildSpec[];
+  children: DecomposeChild[];
 }
 
 /** Decomposition: one decision splits the remaining work into child tasks.
@@ -2098,7 +2197,7 @@ export function decomposeTask(
         if (child[field] !== undefined) child[field] = normalizeText(child[field]);
       }
       if (child.review_by) child.review_by = child.review_by.map(normalizeText);
-      return child;
+      return resolveInterviewPin(db, parent, child);
     }),
   };
   if (input.children.length === 0) {
@@ -2179,6 +2278,7 @@ export function decomposeTask(
               review_tier: child.review_tier,
               tier: child.tier,
               priority: child.priority,
+              interview_target_id: child.interview_target_id,
               based_on_decision: decisionId,
             },
             based_on_decision: decisionId,
@@ -2966,6 +3066,8 @@ type HistoryChildContext = TaskContent &
   Omit<SettledChildContext, "title" | "status"> & {
     status: BoardTask["status"];
     you?: true;
+    /** Interview の子だけ: score_interview が名指す id。 */
+    id?: string;
     /** この子が宣言して、まだ閉じていない前提の破綻の理由(ADR 0121)。 */
     premise_breach?: string;
   };
@@ -3037,6 +3139,8 @@ export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string):
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === currentTaskId && { you: true as const }),
+      // Interview の子は採点のために id を持つ。誰がどの model で走ったかは載せない(伏せた handoff、ADR 0199)
+      ...(child.interview_target_id !== null && { id: child.id }),
       ...(child.premise_breach_decision !== null && { premise_breach: premiseBreachReason(db, child.id) }),
       ...(child.status === "done" && child.type === "work"
         ? { handoff_doc: child.handoff_doc }

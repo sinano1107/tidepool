@@ -39,6 +39,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import {
   answerQuestion,
   assertAnswerable,
+  assertInterviewTargets,
   assertNoUnsettledIssueRef,
   assertUnsettledNotInProgress,
   type BoardTask,
@@ -313,6 +314,8 @@ export async function registerThroughHumanDoor(
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");
     }
+    // 子の登録は decompose を通り registerTask の検査に届かないので、同じ検査をここで呼ぶ
+    if (isHumanDecomposeChild) assertInterviewTargets(deps.db, input);
     if (isHumanDecomposeChild) {
       const result = decomposeThroughHumanDoor(
         deps,

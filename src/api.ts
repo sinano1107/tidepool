@@ -20,7 +20,7 @@ import {
 import { DomainError } from "./domain-error.js";
 import type { ChildDraftContext, DraftClient } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
-import { changeExecutionSettings, executionSettingsChangeSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
+import { changeExecutionSettings, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
 import { type GitHubAuth, githubLoggedIn } from "./github-auth.js";
 import {
@@ -218,6 +218,8 @@ const registerTaskSchema = z.object({
   // human decompose (ADR 0047 decision 7): the reason is required for a
   // `parent_id` child and checked at the shared human door; roots do not need one.
   decompose_reason: z.string().optional(),
+  // an Interview's targets (ADR 0199 決定3): which values exist is the domain's to say (registerTask)
+  interview_targets: z.array(interviewTargetSchema).optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
   question: z

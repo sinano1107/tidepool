@@ -1061,6 +1061,28 @@ function ReviewerPicker({ candidates, value, onChange }) {
     if (e.target.value) onChange([...value, e.target.value]);
   } }), value.map((n) => /* @__PURE__ */ React.createElement("div", { key: n, style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement(AgentChip, { name: n, icon: candidates.icons[n] }), /* @__PURE__ */ React.createElement(IconButton, { label: `remove ${n}`, size: "sm", onClick: () => onChange(value.filter((x) => x !== n)) }, /* @__PURE__ */ React.createElement("i", { "data-lucide": "x", style: { width: 16, height: 16 } })))), /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "none \u2192 board auditor"));
 }
+function InterviewTargetsField({ value, onChange, providers, tiers }) {
+  const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const update = (i, patch) => onChange(value.map((t, j) => j === i ? { ...t, ...patch } : t));
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "interview-targets", style: { display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "Interview targets \u2014 measure each (provider, model, effort, tier) without putting it in the table; leave empty for an ordinary review"), value.map((t, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))", gap: 8, alignItems: "end" } }, /* @__PURE__ */ React.createElement(Select, { label: "Provider", options: providers, value: t.provider, onChange: (e) => update(i, { provider: e.target.value }) }), /* @__PURE__ */ React.createElement(Input, { label: "Model", mono: true, value: t.model, onChange: (e) => update(i, { model: e.target.value }), placeholder: "concrete model id \u2014 e.g. claude-opus-5-5" }), /* @__PURE__ */ React.createElement(
+    Select,
+    {
+      label: "Effort",
+      options: [null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === t.effort || !TidepoolRules.whyInvalidEffort(t.provider, t.model, effort)).map((effort) => effort ?? { value: "", label: "no effort" }),
+      value: t.effort ?? "",
+      onChange: (e) => update(i, { effort: e.target.value || null })
+    }
+  ), /* @__PURE__ */ React.createElement(Select, { label: "Target tier", options: tiers.map((tier) => tier.name), value: t.tier, onChange: (e) => update(i, { tier: e.target.value }) }), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange(value.filter((_, j) => j !== i)), "aria-label": `remove target ${i + 1}` }, "Remove"))), /* @__PURE__ */ React.createElement(
+    Button,
+    {
+      variant: "secondary",
+      size: "sm",
+      disabled: !providers.length || !tiers.length,
+      onClick: () => onChange([...value, { provider: providers[0], model: "", effort: "high", tier: tiers[0].name }])
+    },
+    "Add target"
+  ));
+}
 function RegisterScreen({ onRegister, parentTask, onClose }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
@@ -1076,6 +1098,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const [risk, setRisk] = React.useState(false);
   const [review, setReview] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState([]);
+  const [targets, setTargets] = React.useState([]);
   const [reason, setReason] = React.useState("");
   const [issueNumber, setIssueNumber] = React.useState("");
   const [gate, setGate] = React.useState(null);
@@ -1090,8 +1113,12 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     });
   }, []);
   const [tiers, setTiers] = React.useState([]);
+  const [providers, setProviders] = React.useState([]);
   React.useEffect(() => {
-    api("GET /api/settings/execution").then((d) => setTiers(d.tiers)).catch(() => {
+    api("GET /api/settings/execution").then((d) => {
+      setTiers(d.tiers);
+      setProviders(d.providers.map((p) => p.value));
+    }).catch(() => {
     });
   }, []);
   const issueMode = !childMode && source === "github issue";
@@ -1139,6 +1166,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
   const showReviewBy = TidepoolRules.completionReviewFires(ruleSubject);
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
   const reviewTierField = showReviewBy && reviewTier ? { review_tier: reviewTier } : {};
+  const showTargets = !childMode && type === "review";
   const fields = () => issueMode ? {
     type: "work",
     workspace: workspace.trim(),
@@ -1166,6 +1194,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     ...tier ? type === "review" ? { review_tier: tier } : { tier } : {},
     ...reviewTierField,
     ...reviewByField,
+    ...showTargets && targets.length ? { interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })) } : {},
     ...childExtras()
   };
   const resetContent = () => {
@@ -1184,6 +1213,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     setRisk(false);
     setReview(false);
     setReviewBy([]);
+    setTargets([]);
     setSelectedDumpId(null);
   };
   const submitFields = async (f) => {
@@ -1304,7 +1334,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     const next = e.target.value === "review" ? "review" : "work";
     setType(next);
     if (!canTake(assignee, next)) setAssignee("");
-  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
+  } }), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, assigneeSelect, /* @__PURE__ */ React.createElement(Select, { label: "Workspace", options: workspaceOptions, value: workspace, onChange: (e) => setWorkspace(e.target.value) })), /* @__PURE__ */ React.createElement(Select, { label: "Tier", options: tierOptions(tiers, "(agent's tier, then board default)"), value: tier, onChange: (e) => setTier(e.target.value) }), riskCheckbox, showReviewFlag && /* @__PURE__ */ React.createElement(Checkbox, { label: "review flag \u2014 request an on-completion review", checked: review, onChange: () => setReview(!review) }), reviewTierSelect, reviewerPicker, showTargets && /* @__PURE__ */ React.createElement(InterviewTargetsField, { value: targets, onChange: setTargets, providers, tiers })), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: primaryAction.disabled, onClick: primaryAction.onClick }, primaryAction.label), childMode && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Cancel")), !issueMode && /* @__PURE__ */ React.createElement(
     "button",
     {
       onClick: togglePlainForm,

@@ -778,6 +778,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       isProtectedWorkspace: options.isProtectedWorkspace,
       listAgents: options.listAgents,
       agentAdmin,
+      taskExecutionCandidates: options.taskExecutionCandidates,
       pollNow,
     }),
   );

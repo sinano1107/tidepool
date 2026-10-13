@@ -81,7 +81,7 @@ export const HOURLY = 60 * 60 * 1000;
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
-export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier">;
+export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
 /** この task の entry が**すべて**除外されているか(ADR 0110 決定3 / issue #544)。
@@ -652,7 +652,8 @@ export function startScheduler(deps: {
       const pick = (task: Task): ExecutionSetting | null => {
         const pool = selectable(candidates, entryExcluded);
         branched = undefined;
-        if (promoted && task.type === "work" && pool.length > 0) {
+        // Interview の子は pin で走り、学習器は選ばない —— 出所 interview を learner で上書きしない(ADR 0199 決定2)
+        if (promoted && task.type === "work" && task.interview_target_id === null && pool.length > 0) {
           // 学習器が倒れたら表の先頭で走る —— 出所は表のままなので記録は偽らず、盤面も止まらない
           try {
             branched = branch(task, pool);
@@ -763,9 +764,10 @@ export function startScheduler(deps: {
       // 表の先頭)を並べて1行残す。review task は学習器を参照しない(ADR 0111 決定3)。昇格前の記録は選択に介入しない ——
       // 学習器が倒れても pickup は進む
       // 昇格中に学習器が倒れた pickup は shadow の組が無いので残さない
-      // 行は pickup が成立してから書く —— await の窓で取りやめた pickup(issue #972)に shadow を残さない
+      // 行は pickup が成立してから書く —— await の窓で取りやめた pickup(issue #972)に shadow を残さない。
+      // pin で走る Interview の子は選ぶ余地を持たないので残さない
       const recordShadowRow = () => {
-        if (head.type !== "work" || !(branched || !promoted)) return;
+        if (head.type !== "work" || head.interview_target_id !== null || !(branched || !promoted)) return;
         try {
           recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now());
         } catch (err) {
