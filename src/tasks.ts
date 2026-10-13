@@ -1823,7 +1823,8 @@ function resolvePremiseBreach(
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
  *  rule and count only when unfinished same-decision siblings are in the abandon scope. */
 export function abandonConsequence(db: Db, task: Task, breach = false): string {
-  const siblingCount = unfinishedDecisionSiblingCount(db, task, breach);
+  // derived from the cancel/held scope so the wording cannot drift
+  const siblingCount = abandonScopeIds(db, task.id, breach).filter((id) => id !== task.id).length;
   return siblingCount > 0
     ? `"abandon" discards this decomposition decision — this task's remaining work plus ` +
         `${siblingCount} unfinished ${siblingCount === 1 ? "sibling" : "siblings"} from the same ` +
@@ -1831,7 +1832,7 @@ export function abandonConsequence(db: Db, task: Task, breach = false): string {
     : `"abandon" cancels this task and its remaining work.`;
 }
 
-/** The ids in `failedId`'s abandon scope, shared by the abandon cascade and redecompose. */
+/** The ids in `failedId`'s abandon scope, shared by the abandon cascade, redecompose, and abandon's wording. */
 function abandonScopeIds(db: Db, failedId: string, breach: boolean): string[] {
   return (
     db
@@ -1842,21 +1843,6 @@ function abandonScopeIds(db: Db, failedId: string, breach: boolean): string[] {
       )
       .all(failedId) as Array<{ id: string }>
   ).map(({ id }) => id);
-}
-
-/** Count of unfinished same-decision siblings baked into abandon's human-facing
- *  text. Derived from the cancel/held scope so the wording cannot drift. */
-function unfinishedDecisionSiblingCount(db: Db, failed: Task, breach: boolean): number {
-  if (failed.parent_id === null) return 0;
-  const { count } = db
-    .prepare(
-      `SELECT COUNT(*) AS count
-       FROM tasks candidate JOIN tasks failed ON failed.id = ?
-       WHERE candidate.id <> failed.id
-         AND ${abandonScopeSql("failed", "candidate", breach ? "1" : "0")}`,
-    )
-    .get(failed.id) as { count: number };
-  return count;
 }
 
 /** Record an in-authority decision as one log line and move on. The log is the

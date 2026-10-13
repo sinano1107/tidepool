@@ -143,14 +143,12 @@ it("Interview でない task は、子を全部 abandon されて起きたあと
   expect(withheldDecompositionVerbs(db, plain.id)).toEqual([]);
 });
 
-/** 対象2つの Interview の root を、対象ごとの pin の子2つに分解する。 */
-function twoPinnedChildren(byHuman = false) {
+/** 対象2つの Interview の root を、人間が対象ごとの pin の子2つに分解する(書き手が人間なので前提の破綻は question になる)。 */
+function twoPinnedChildren() {
   const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
   const { db, root } = registerInterview(undefined, [opusHigh, haiku]);
   const split = { reason: "one child per target", children: [{ ...CHILD, interview_pin: opusHigh }, { ...CHILD, interview_pin: haiku as never }] };
-  const [failed, sibling] = byHuman
-    ? humanDecomposeTaskViaWebui(db, root, split, new Date(0))
-    : decomposeTaskViaWorker(db, root, split, "auditor", new Date(0));
+  const [failed, sibling] = humanDecomposeTaskViaWebui(db, root, split, new Date(0));
   return { db, root, failed: failed!, sibling: sibling! };
 }
 
@@ -174,7 +172,7 @@ it("pin の子の failure question の abandon の文は、分解判断の破棄
 });
 
 it("pin の子の前提の破綻の question は、これまでどおり兄弟の pin の子を held にし、その abandon は兄弟も cancel する(ADR 0245 決定2)", () => {
-  const { db, failed, sibling } = twoPinnedChildren(true);
+  const { db, failed, sibling } = twoPinnedChildren();
   const question = declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker")!;
   expect(question.purpose).toContain("1 unfinished sibling from the same decomposition decision");
   expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("held");
