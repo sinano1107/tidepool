@@ -1184,7 +1184,7 @@ interface EscalateInput {
   questions: QuestionItem[];
   /** System-internal only — absent from the MCP tool schema and the JSON API: the failure question's and the
    *  premise breach's cancel option (ADR 0006 / 0121), meaningful only for a single-item bundle. */
-  question_kind?: QuestionKind;
+  question_kind?: Extract<QuestionKind, { kind: "failure" | "premise_breach" }>;
 }
 
 /** Escalation: a question child carrying a bundle of 1-4 items, each with
