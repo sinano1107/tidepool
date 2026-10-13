@@ -500,10 +500,10 @@ export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget):
 }
 
 /** Interview の木で登録しない分解の verb(ADR 0245 決定1・3、ADR 0122 決定2 の task ごとの差し替え)。
- *  pin の子は分解の verb を両方、Interview の root は redecompose。worker MCP の登録と Codex の宣言が同じここを引く。 */
+ *  pin の子は分解の verb を両方、Interview の root は redecompose を、最初の分解の後は両方。worker MCP の登録と Codex の宣言が同じここを引く。 */
 export function withheldDecompositionVerbs(db: Db, taskId: string): readonly ("decompose" | "redecompose")[] {
   if (getTask(db, taskId)?.interview_target_id != null) return ["decompose", "redecompose"];
-  if (interviewTargets(db, taskId) !== null) return ["redecompose"];
+  if (interviewTargets(db, taskId) !== null) return hasDecomposed(db, taskId) ? ["decompose", "redecompose"] : ["redecompose"];
   return [];
 }
 
@@ -1731,6 +1731,12 @@ function openPremiseBreachChildId(db: Db, parentId: string): string | undefined 
   return row?.id;
 }
 
+/** Whether `parentId` has ever been decomposed: only a decomposition gives a child (or its approval question) a
+ *  `based_on_decision`, and the row stays whatever becomes of it — cancelled or rejected. */
+function hasDecomposed(db: Db, parentId: string): boolean {
+  return db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND based_on_decision IS NOT NULL LIMIT 1").get(parentId) !== undefined;
+}
+
 function requireOpenPremiseBreachChildId(db: Db, parentId: string): string {
   const id = openPremiseBreachChildId(db, parentId);
   if (id === undefined) throw new DomainError("no child of this task has an open premise breach");
@@ -2210,6 +2216,18 @@ export function decomposeTask(
     throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
   }
   const interview = interviewTargets(db, parent.id) !== null;
+  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
+    throw new DomainError(
+      `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
+    );
+  }
+  // ADR 0245 決定3: probe を確定するのは Interview 1件につき1回。pin の照合より前に置き、外れた pin で対象を探らせない
+  if (interview && hasDecomposed(db, parent.id)) {
+    throw new DomainError(
+      "this Interview has already been split once and is not split again: score its done children with score_interview and complete, " +
+        "or escalate so a human abandons it and registers the Interview again with a fixed probe",
+    );
+  }
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -2223,11 +2241,6 @@ export function decomposeTask(
   };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
-  }
-  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError(
-      `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
-    );
   }
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only

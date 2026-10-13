@@ -6,9 +6,9 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows } from "../src/tasks.js";
+import { completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, withheldDecompositionVerbs } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
-import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
 
@@ -103,6 +103,46 @@ it("Interview の root は作り直せない —— 子の前提の破綻を受�
   expect(listChildren(db, root.id).map(({ id, status }) => ({ id, status }))).toEqual([{ id: child!.id, status: "todo" }]);
 });
 
+it("Interview の root は2回分解できない —— pin の子を失敗 question の abandon で全部 cancel して起きた root の decompose は拒まれ、何も登録されない。分解の verb は最初の分解の後に両方伏せる(ADR 0245 決定3)", () => {
+  const { db, root } = registerInterview();
+  expect(withheldDecompositionVerbs(db, root.id)).toEqual(["redecompose"]);
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
+  answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
+  const before = listChildren(db, root.id);
+  const again = { reason: "a second probe", children: [{ ...CHILD, interview_pin: opusHigh }] };
+  expect(() => decomposeTaskViaWorker(db, getTask(db, root.id)!, again, "auditor", new Date(0))).toThrow(/score_interview/);
+  // 外れた pin も同じ文で拒まれ、対象を探る手がかりにならない
+  const guessed = { ...again, children: [{ ...CHILD, interview_pin: { ...opusHigh, effort: "low" } }] };
+  expect(() => decomposeTaskViaWorker(db, getTask(db, root.id)!, guessed, "auditor", new Date(0))).toThrow(/score_interview/);
+  expect(listChildren(db, root.id)).toEqual(before);
+  expect(withheldDecompositionVerbs(db, root.id)).toEqual(["decompose", "redecompose"]);
+});
+
+it("pin の子の承認 question を reject して起きた root も、pin の子が1つも居ないまま2回目の decompose を拒まれ、何も登録されない(ADR 0245 決定3)", () => {
+  const { db, root } = registerInterview();
+  const outside = { reason: "r", children: [{ ...CHILD, assignee: "deckhand", interview_pin: opusHigh }] };
+  decomposeTaskViaWorker(db, root, outside, "auditor", new Date(0), { authority: { assignable_to: [] } });
+  const [question] = listChildren(db, root.id);
+  answerQuestionViaWebui(db, question!, ["reject"], new Date(0), { comment: "not this assignee" });
+  const again = { reason: "a second probe", children: [{ ...CHILD, interview_pin: opusHigh }] };
+  expect(() => decomposeTaskViaWorker(db, getTask(db, root.id)!, again, "auditor", new Date(0))).toThrow(/score_interview/);
+  expect(listChildren(db, root.id).map(({ id }) => id)).toEqual([question!.id]);
+  expect(withheldDecompositionVerbs(db, root.id)).toEqual(["decompose", "redecompose"]);
+});
+
+it("Interview でない task は、子を全部 abandon されて起きたあとも decompose で分け直せる", () => {
+  const db = openDb(":memory:");
+  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const [child] = decomposeTaskViaWorker(db, plain, { reason: "r", children: [CHILD] }, "tako", new Date(0));
+  answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
+  const [again] = decomposeTaskViaWorker(db, getTask(db, plain.id)!, { reason: "another split", children: [CHILD] }, "tako", new Date(0));
+  expect(listChildren(db, plain.id).filter((task) => task.type === "work").map(({ id, status }) => ({ id, status }))).toEqual([
+    { id: child!.id, status: "cancelled" },
+    { id: again!.id, status: "todo" },
+  ]);
+  expect(withheldDecompositionVerbs(db, plain.id)).toEqual([]);
+});
+
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
 function pinnedChild(target: Record<string, unknown>, ceiling: AdvisorCeiling = "off") {
   const { db, root } = registerInterview(undefined, [target]);
@@ -165,19 +205,19 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
   expect(tierNames(db)).not.toContain("trial");
 });
 
-/** pin した子を1つ走らせて完了させる(spawn は pin の値と対象の段で記録される)。 */
-function ranChild(db: Db, root: Task, pin = opusHigh) {
-  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: pin }] }, "auditor", new Date(0));
-  const spawned = { ...WORKER_SPAWNED, advisor: null, model: pin.model, effort: pin.effort, tier_id: tierIdOf(db, pin.tier) };
-  appendEvent(db, { taskId: child!.id, workerId: "tako", origin: "board", at: new Date(0), payload: spawned });
-  return completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
+/** 1回の分解で pin した子を `count` 個走らせて完了させる(spawn は pin の値と対象の段で記録される)。 */
+function ranChildren(db: Db, root: Task, count = 1, pin = opusHigh) {
+  const children = Array.from({ length: count }, () => ({ ...CHILD, interview_pin: pin }));
+  return decomposeTaskViaWorker(db, root, { reason: "r", children }, "auditor", new Date(0)).map((child) => {
+    const spawned = { ...WORKER_SPAWNED, advisor: null, model: pin.model, effort: pin.effort, tier_id: tierIdOf(db, pin.tier) };
+    appendEvent(db, { taskId: child.id, workerId: "tako", origin: "board", at: new Date(0), payload: spawned });
+    return completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  });
 }
 
 it("学習器は Interview の子の採点を、同じセル・同じ段の観測として本番の episode と並べて数え、種別は episode に残る(ADR 0181 決定4 / ADR 0210 決定4)", () => {
   const { db, root } = registerInterview();
-  const accepted = ranChild(db, root);
-  const rejected = ranChild(db, root);
-  const unscored = ranChild(db, root);
+  const [accepted, rejected, unscored] = ranChildren(db, root, 3) as [Task, Task, Task];
   scoreInterview(db, root, accepted.id, "accepted", "auditor", new Date(1), "worker");
   scoreInterview(db, root, rejected.id, "rejected", "auditor", new Date(1), "worker");
   const episodes = loadEpisodes(db);
@@ -196,7 +236,7 @@ it("採点は Interview の root が、決着した自分の pin の子にだけ
   const [open] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
   expect(() => scoreInterview(db, root, open!.id, "accepted", "auditor", new Date(0), "worker")).toThrow(/only a done child/);
   const other = registerInterview(db).root;
-  const done = ranChild(db, other);
+  const [done] = ranChildren(db, other) as [Task];
   expect(() => scoreInterview(db, root, done.id, "accepted", "auditor", new Date(0), "worker")).toThrow(/not an Interview child of this task/);
 });
 
@@ -220,7 +260,7 @@ it("着地しない pin の子は、workspace の削除の扉が数える「着�
 
 it("Interview の root の history で、pin の子は採点のための id を持ち、走った agent も model も持たない(伏せた handoff)", () => {
   const { db, root } = registerInterview();
-  const child = ranChild(db, root);
+  const [child] = ranChildren(db, root) as [Task];
   const [entry] = taskHistoryRows(db, root.id).map((row) => row.entry).filter((entry) => "children" in entry);
   expect(entry).toEqual({ decision: "r", children: [expect.objectContaining({ id: child.id, title: CHILD.title, handoff_doc: child.handoff_doc })] });
   expect(Object.keys((entry as { children: object[] }).children[0]!).sort()).toEqual(["completion_criteria", "handoff_doc", "id", "purpose", "status", "title"]);
