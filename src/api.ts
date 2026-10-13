@@ -38,6 +38,7 @@ import {
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace, type Landing } from "./landing.js";
+import { interviewTargetSchema } from "./mcp.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -218,6 +219,8 @@ const registerTaskSchema = z.object({
   // human decompose (ADR 0047 decision 7): the reason is required for a
   // `parent_id` child and checked at the shared human door; roots do not need one.
   decompose_reason: z.string().optional(),
+  // Interview の対象の一覧(ADR 0199 決定3): 値の検査は domain(registerTask)
+  interview_targets: z.array(interviewTargetSchema).optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
   question: z

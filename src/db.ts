@@ -140,6 +140,8 @@ export function openDb(path: string): Db {
       -- board-internal only (ADR 0120 決定2 / issue #618): この task が主題 X の周期 meta-review であること。
       -- 盤面の登録関数だけが書き、MCP / JSON API からは書けない。
       meta_review_subject TEXT CHECK (meta_review_subject IN ('memory', 'routing')),
+      -- Interview の子の pin(ADR 0199 決定3): root の対象の1つ。pin を持つ子は selector を通らず対象で走り、着地しない。
+      interview_target_id INTEGER REFERENCES interview_targets(id),
       created_at          TEXT NOT NULL,
       -- ADR 0109 決定5: 後始末の未了は再起動をまたぐ事実である。最終 verb が着地した
       -- 時刻を持ち、後始末が完走した時点で null に戻る —— in-memory の callback は
@@ -497,6 +499,17 @@ export function openDb(path: string): Db {
     -- candidates: 除外を当てた後の候補の行数 —— 1 なら推薦は必ず表と一致する(ADR 0181 決定5)。
     -- event_watermark: 書いた時点の events の最大 id。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
     -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
+    -- Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2・3): root review が持つ (provider, model, effort, tier) の一覧。
+    -- 表の行でなくてよく、価格を持たない。effort の NULL は「無い」という値(ADR 0218 決定5)。段は id で指す(ADR 0200 決定2)。
+    CREATE TABLE IF NOT EXISTS interview_targets (
+      id       INTEGER PRIMARY KEY,
+      task_id  TEXT NOT NULL REFERENCES tasks(id),
+      provider TEXT NOT NULL,
+      model    TEXT NOT NULL,
+      effort   TEXT,
+      tier_id  INTEGER NOT NULL REFERENCES tiers(id)
+    );
+
     CREATE TABLE IF NOT EXISTS learner_shadow (
       id               INTEGER PRIMARY KEY,
       task_id          TEXT NOT NULL REFERENCES tasks(id),

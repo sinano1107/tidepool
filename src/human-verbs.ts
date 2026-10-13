@@ -313,6 +313,9 @@ export async function registerThroughHumanDoor(
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");
     }
+    if (isHumanDecomposeChild && input.interview_targets !== undefined) {
+      throw new DomainError("only a root review task (an Interview) carries interview_targets");
+    }
     if (isHumanDecomposeChild) {
       const result = decomposeThroughHumanDoor(
         deps,

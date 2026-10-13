@@ -46,6 +46,7 @@ const BOARD_VERBS = [
   "list_agents",
   "complete_task",
   "log_decision",
+  "score_interview",
   "decompose",
   "escalate",
   "declare_premise_breach",

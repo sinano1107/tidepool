@@ -37,6 +37,7 @@ import {
 } from "./human-verbs.js";
 import type { Landing } from "./landing.js";
 import {
+  interviewTargetSchema,
   JUDGED_AFTER_THE_EDIT,
   MEMORY_BRANCHES_DESCRIPTION,
   ONLY_WHERE_COMPLETION_REVIEW_FIRES,
@@ -1105,6 +1106,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
         priority: z.string().optional().describe(`${PRIORITY_FIELD_DESCRIPTION}\n${WORK_TASKS_ONLY}`),
         decompose_reason: z.string().optional(),
+        interview_targets: z
+          .array(interviewTargetSchema)
+          .optional()
+          .describe(
+            "Root review tasks only: makes the review an Interview, which measures each target without staking production work on it. " +
+              "A target is the provider, model, effort and tier it is measured at; it need not be an execution-setting row, and effort " +
+              "null means the model takes no effort. The review's children may each pin one of these targets.",
+          ),
       },
     },
     async (input) => {

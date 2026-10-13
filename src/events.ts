@@ -141,6 +141,9 @@ export type EventPayload =
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string } }
   | { kind: "decision_logged"; line: string }
+  // Interview の採点(ADR 0199 / ADR 0181 決定4): root review が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
+  // 採点された pin の子、worker は review の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
+  | { kind: "interview_scored"; outcome: "accepted" | "rejected" }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
   | { kind: "task_moved"; after: string | null }

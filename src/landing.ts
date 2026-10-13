@@ -272,7 +272,7 @@ function prMergedSql(t: string): string {
  *  子孫である —— 子孫はその根が運ぶ。PR が開いている根の子孫は候補に残し、lineage に任せる —— 盤面の外の merge を
  *  盤面が観測していない間(`external` のダイヤルは観測しない)、記録の上で「開いている」根の子孫は、merge の後に完了して
  *  自分で根になっている。人間が担当した work は盤面のタスクブランチに内容を持たないので、根にしない(人間の完了は祖先の
- *  着地の契機である)。lineage が祖先のブランチへ帰る done の work は根ではない。workspace を解決できない候補と lineage が
+ *  着地の契機である)。Interview の子(pin を持つ work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。lineage が祖先のブランチへ帰る done の work は根ではない。workspace を解決できない候補と lineage が
  *  読めない候補は根かどうか分からないので根として返し、撃つ側がその根の失敗として人間に見せる。後始末が未了の木は、
  *  撃つ直前に根ごとに読む(`landRoot`)。 */
 function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
@@ -290,6 +290,7 @@ function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): Lan
            SELECT c.id FROM tasks c JOIN carried p ON c.parent_id = p.id)
        SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
+          AND t.interview_target_id IS NULL
           AND t.id NOT IN (SELECT id FROM carried)
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id
                             AND e.kind IN ('landing_finished', 'nothing_to_land', 'pr_close_observed'))

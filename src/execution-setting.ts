@@ -58,13 +58,14 @@ export const PRIORITY_FIELD_DESCRIPTION =
 /** 解決されたティアが**誰の要求だったか**(ADR 0110 決定3)。events 側の
  *  `worker_spawned.source` と同じ union を2箇所に書くと必ず片方だけ動くので、
  *  綴りはここ1つにして events.ts は型として取り込む。 */
-export type TierSource = "task" | "review_tier" | "agent" | "board";
+export type TierSource = "task" | "review_tier" | "agent" | "board" | "interview";
 
 /** 選ばれた Provider が**なぜその Provider だったか**(ADR 0110 決定3 / 決定5、
  *  ADR 0114 決定4)。`"only"` は agent が entry を1つしか宣言していなかった、
  *  `"rank"` は残った候補から Provider 順位で選んだ、`"cost"` は優先順位(task の、または盤面の
- *  既定)が cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。 */
-export type ProviderSource = "only" | "rank" | "cost" | "learner";
+ *  既定)が cost で価格が Provider を決めた、`"learner"` は昇格した学習器が選んだ(ADR 0150 決定3)。`"interview"` は
+ *  ティアにも Provider にも使い、Interview の子の pin が決めた(ADR 0199 決定2)。 */
+export type ProviderSource = "only" | "rank" | "cost" | "learner" | "interview";
 
 /** 優先順位の既定の、さらに既定(ADR 0114 決定1 / ADR 0111 追記10): 盤面設定 `execution_defaults.priority`・
  *  `review_priority` が未設定のときの値。work task は task の優先順位 → 盤面設定の work 用の既定 → この定数、
@@ -134,7 +135,8 @@ function placeTier(db: Db, others: readonly number[], id: number, position: numb
   [...others.slice(0, position), id, ...others.slice(position)].forEach((tier, index) => set.run(index, tier));
 }
 
-/** 段を消せない理由(ADR 0200 決定2 / 追記 2026-10-06): 行がある・盤面設定が指す・未決着の task が要求している・registry の
+/** 段を消せない理由(ADR 0200 決定2 / 追記 2026-10-06): 行がある・盤面設定が指す・未決着の task が要求している・未決着の
+ *  Interview の対象が名指している(ADR 0199)・registry の
  *  agent.md が名指している。空 = 消せる。`listAgents` は手元の clone を同期で読む(fetch しない)。無い = registry の無い盤面で、
  *  照合しない。読めなければ「名指していない」と見なさず削除ごと拒む。 */
 function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListAgentTiers): string[] {
@@ -148,6 +150,10 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
     .prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")} AND (tier_id = ? OR review_tier_id = ?) ORDER BY rowid`)
     .all(id, id) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
+  const interviews = db
+    .prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")} AND id IN (SELECT task_id FROM interview_targets WHERE tier_id = ?) ORDER BY rowid`)
+    .all(id) as { id: string }[];
+  if (interviews.length > 0) reasons.push(`unsettled Interviews target it: ${interviews.map((task) => task.id).join(", ")}`);
   if (listAgents) {
     let agents: ReturnType<ListAgentTiers>;
     try {
@@ -346,6 +352,36 @@ export function anthropicBoardCallRow(db: Db, tier: Tier, windowClosed: (model: 
   return row;
 }
 
+/** 1つの main に付く advisor の候補(ADR 0208): 真の entry だけが main と盤面の上限から導出する。導出できない main
+ *  (`undefined`)は候補にならず、上限の `off` と main が上限より上は advisor 無しで残る。fable_then_opus は `fable` の advisor の
+ *  隣に、Fable の窓で外れたときの下げ先を並べる(決定5)—— どちらが残るかは除外の式(`selectable`)が決める。表の行の候補と
+ *  Interview の pin の候補が同じこの1本を通る(ADR 0199 決定2)。 */
+function withAdvisor<M extends { model: string }>(
+  entry: { advisor: boolean },
+  main: M,
+  ceiling: AdvisorCeiling,
+): { main: M; advisor: string | undefined; source?: AdvisorSource }[] {
+  const derived = entry.advisor ? claudeAdvisorFor(main.model, ceiling) : { advisor: undefined };
+  if (!derived) return [];
+  const downgraded = ceiling === "fable_then_opus" && derived.advisor === "fable" && claudeAdvisorFor(main.model, "opus");
+  return [{ main, ...derived }, ...(downgraded ? [{ main, advisor: downgraded.advisor, source: "window_downgraded" as const }] : [])];
+}
+
+/** Interview の子の候補(ADR 0199 決定2): selector の並びを通らず、pin した対象の (provider, model, effort) と対象の段で走る。
+ *  advisor は本番と同じ導出で、表も段も読まない。pin の Provider の entry を持たない agent には候補が無い。 */
+function pinnedCandidates(request: SelectorInput, pin: { provider: Provider; model: string; effort: string | null; tier_id: TierId }): ExecutionSetting[] {
+  const entry = request.entries.find((e) => e.provider === pin.provider);
+  if (!entry) return [];
+  return withAdvisor(entry, pin, request.advisorCeiling).map(({ advisor, source }) => ({
+    provider: pin.provider,
+    model: pin.model,
+    effort: pin.effort,
+    advisor,
+    tier_id: pin.tier_id,
+    source: { tier: "interview", provider: "interview", ...(source && { advisor: source }) },
+  }));
+}
+
 /** entry 集合から要求ティアの行を全部集め、優先順位の鍵で並べる(ADR 0110 決定3 /
  *  ADR 0114 決定3・4)。**除外は当てない** —— 除外は観測のたびに育つので、盤面境界が
  *  候補を1度作り、除外が増えるたびに `selectable` を引き直す形にしてある。
@@ -375,17 +411,7 @@ function executionSettingCandidates(
     request.providerRank.indexOf(a.provider) - request.providerRank.indexOf(b.provider);
   return request.entries
     .flatMap((entry) =>
-      rowsFor(table, entry.provider, tier).flatMap((main) => {
-        const derived: { advisor: string | undefined; source?: AdvisorSource } | undefined = entry.advisor
-          ? claudeAdvisorFor(main.model, request.advisorCeiling)
-          : { advisor: undefined };
-        if (!derived) return [];
-        // fable_then_opus: `fable` の advisor の隣に、Fable の窓で外れたときの下げ先を並べる(ADR 0208 決定5)。
-        // どちらが残るかは除外の式(`selectable`)が決める —— 候補は除外を知らずに1度だけ作られる
-        const downgraded =
-          request.advisorCeiling === "fable_then_opus" && derived.advisor === "fable" && claudeAdvisorFor(main.model, "opus");
-        return [{ main, ...derived }, ...(downgraded ? [{ main, advisor: downgraded.advisor, source: "window_downgraded" as const }] : [])];
-      }),
+      rowsFor(table, entry.provider, tier).flatMap((main) => withAdvisor(entry, main, request.advisorCeiling)),
     )
     .sort((a, b) =>
       priority === "cost" ? byPrice(a.main, b.main) || byRank(a.main, b.main) : byRank(a.main, b.main) || byPrice(a.main, b.main),
@@ -896,7 +922,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
 }
 
 /** selector が読む task の断面(要求の列と、review か否か)。 */
-type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier">;
+type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier"> & Partial<Pick<Task, "interview_target_id">>;
 
 /** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
  *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
@@ -939,7 +965,11 @@ export function executionSettingsFor(
   definition: Pick<AgentDefinition, "provider" | "tier">,
   task: SelectorTask | undefined,
 ): ExecutionSetting[] {
-  return executionSettingCandidates(selectorInputFor(db, definition, task), runnableTable(db));
+  const input = selectorInputFor(db, definition, task);
+  const pin =
+    task?.interview_target_id != null &&
+    (db.prepare("SELECT provider, model, effort, tier_id FROM interview_targets WHERE id = ?").get(task.interview_target_id) as Parameters<typeof pinnedCandidates>[1]);
+  return pin ? pinnedCandidates(input, pin) : executionSettingCandidates(input, runnableTable(db));
 }
 
 /** 表から、行の Quarantine(行の拒否、ADR 0184 決定2)が開いている行を外したもの。「この行で走れるか」の

@@ -23,13 +23,15 @@ export interface Cell {
 /** 1つの worker session を学習器が読む形(Precedent の `Episode` と同じ session
  *  単位だが、transcript を持たず outcome だけを持つ)。文脈のうち持つのは workspace
  *  (プーリングの段)と走った段(`tier_id`、ADR 0210 決定3 —— 行は段を移るので、候補集合だけでは段が決まらない)。
- *  優先順位は selector の並びに入っている。agent / interview 種別はセルを割らず、読み手が生えたら tasks と
- *  events から引ける。費用と時間は session ごとの観測で、推薦の鍵にはならない
+ *  優先順位は selector の並びに入っている。agent / interview 種別はセルを割らない —— interview 種別は episode が
+ *  持ち(ADR 0181 決定4)、集計が本番と分けて数える。費用と時間は session ごとの観測で、推薦の鍵にはならない
  *  (routing meta-review の shadow 行の読み口が読む、ADR 0183)。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」(ADR 0115 決定5)
  *  「pin の行が仕事をしていない」(main の差し替え、ADR 0215 決定4)の3つで、受理率の分母に入らない。 */
 export interface LearnerEpisode {
   cell: Cell;
+  /** Interview の子の episode か(ADR 0181 決定4): outcome は採点の注釈で、読み手が本番と分けて読む。 */
+  interview: boolean;
   tier_id: TierId;
   workspace: string | null;
   outcome: "accepted" | "rejected" | "excluded";
@@ -48,12 +50,15 @@ export interface LearnerEpisode {
  *  仕事をしたのは表に無い model で、どちらでも pin の行の実績にすると比較が歪む(ADR 0215 決定4)。 */
 export function episodeOutcome(facts: {
   accepted: boolean;
+  /** Interview の採点が却下(ADR 0181 決定4)。受理は `accepted` に入る。 */
+  scoredRejected?: boolean;
   causes: readonly Cause[];
   allocations: readonly { allocation: Allocation; cause: Cause }[];
   swapped: boolean;
 }): LearnerEpisode["outcome"] {
   if (facts.swapped) return "excluded";
   if (
+    facts.scoredRejected ||
     facts.causes.includes("capability") ||
     facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")
   ) {
@@ -62,11 +67,13 @@ export function episodeOutcome(facts: {
   return facts.accepted ? "accepted" : "excluded";
 }
 
-/** セルごとの集計: 受理数と却下数。 */
-export interface CellStats {
+/** 受理数と却下数。 */
+type Counts = { accepted: number; rejected: number };
+
+/** セルごとの集計: 受理数と却下数と、そのうち Interview の子の分(ADR 0181 決定4・5)。 */
+export interface CellStats extends Counts {
   cell: Cell;
-  accepted: number;
-  rejected: number;
+  interview: Counts;
 }
 
 export interface Recommendation {
@@ -92,8 +99,9 @@ function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
   for (const e of episodes) {
     if (e.outcome === "excluded") continue;
     const key = cellJson(e.cell);
-    const stats = byKey.get(key) ?? { cell: e.cell, accepted: 0, rejected: 0 };
+    const stats = byKey.get(key) ?? { cell: e.cell, accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } };
     stats[e.outcome]++;
+    if (e.interview) stats.interview[e.outcome]++;
     byKey.set(key, stats);
   }
   return [...byKey.values()];
@@ -117,11 +125,17 @@ function cellMatches(candidate: ExecutionSetting, cell: Cell): boolean {
   );
 }
 
-/** 候補行1つの1段の実績: その段の集計のうち行に当たるセルの受理数と却下数(疑似観測を含まない)。 */
-type Tally = { accepted: number; rejected: number };
+/** 候補行1つの1段の実績: その段の集計のうち行に当たるセルの受理数と却下数(疑似観測を含まない)と、そのうち Interview の子の分
+ *  —— shadow 行が本番 / Interview の内訳を運ぶ(ADR 0181 決定5)。 */
+type Tally = Counts & { interview: Counts };
 const tally = (candidate: ExecutionSetting, stats: readonly CellStats[]): Tally => {
   const matched = stats.filter((s) => cellMatches(candidate, s.cell));
-  return { accepted: matched.reduce((n, s) => n + s.accepted, 0), rejected: matched.reduce((n, s) => n + s.rejected, 0) };
+  const sum = (count: (s: CellStats) => number) => matched.reduce((n, s) => n + count(s), 0);
+  return {
+    accepted: sum((s) => s.accepted),
+    rejected: sum((s) => s.rejected),
+    interview: { accepted: sum((s) => s.interview.accepted), rejected: sum((s) => s.interview.rejected) },
+  };
 };
 
 /** 候補行1つの、推薦が数えた実績(盤面の段と workspace の段を分けたまま)。shadow 行が両セルについて運ぶ(ADR 0181 決定5)。 */
@@ -189,10 +203,12 @@ export interface RoutingEpisode extends LearnerEpisode {
 export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(
-      `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted FROM tasks
+      `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted, interview_target_id IS NOT NULL AS interview,
+         (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored' ORDER BY id DESC LIMIT 1) AS score
+       FROM tasks
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
-    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number }>;
+    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number; score: "accepted" | "rejected" | null }>;
   // work task だけに絞る(spawn を持つ work task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
   const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
@@ -226,10 +242,13 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         effort: spawned.payload.effort,
         advisor: spawned.payload.advisor,
       },
+      interview: task.interview === 1,
       tier_id: spawned.payload.tier_id,
       workspace: task.workspace,
+      // Interview の子の受理は統合点レビューではなく root の採点(ADR 0181 決定4)。受理と同じく task の最後の session にだけ付く
       outcome: episodeOutcome({
-        accepted: task.accepted === 1 && !hasNextSpawn,
+        accepted: (task.interview ? task.score === "accepted" : task.accepted === 1) && !hasNextSpawn,
+        scoredRejected: task.score === "rejected" && !hasNextSpawn,
         causes,
         allocations,
         swapped: usage?.model_swaps.some(swapsMain) ?? false,

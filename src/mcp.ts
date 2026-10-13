@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
-import type { AgentAdmin } from "./agent-create.js";
+import { type AgentAdmin, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
@@ -64,10 +64,12 @@ import {
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
+  interviewTargets,
   joinHistory,
   logDecision,
   redecompose,
   resolveTaskAgent,
+  scoreInterview,
   type Task,
   type TaskType,
   taskHistoryRows,
@@ -423,6 +425,25 @@ export const JUDGED_AFTER_THE_EDIT =
   "applied, stored values otherwise — so an edit that would leave a stored review_flag or review_by with no " +
   "effect (dropping a child's flags, or assigning human) is refused.";
 
+/** Interview の対象の綴り(ADR 0199 決定2): 人間の登録の扉の一覧と、子の pin が同じ形を通る。値の検査は domain が言う。 */
+export const interviewTargetSchema = z
+  .object({ provider: requiredTextSchema, model: requiredTextSchema, effort: requiredTextSchema.nullable(), tier: requiredTextSchema })
+  .strict();
+
+/** pin の Provider は子の assignee の entry になければならない(ADR 0199)。registry の無い盤面の entry は anthropic だけ。 */
+function assertPinsRunnable(deps: McpDeps, children: z.infer<ReturnType<typeof decomposeChildrenSchema>>): void {
+  for (const { interview_pin: pin, assignee } of children) {
+    if (!pin) continue;
+    const name = assignee ?? deps.defaultAgentName;
+    const list = deps.agentAdmin?.list;
+    const view = list?.().find((agent) => agent.name === name);
+    const providers = list ? (view ? agentViewProviders(view) : []) : ["anthropic"];
+    if (!providers.includes(pin.provider)) {
+      throw new DomainError(`interview_pin's provider ${pin.provider} is not among ${name}'s providers (${providers.join(", ") || "none"})`);
+    }
+  }
+}
+
 /** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */
 function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
@@ -453,6 +474,13 @@ function decomposeChildrenSchema(db: Db) {
         .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
       review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
+      interview_pin: interviewTargetSchema
+        .optional()
+        .describe(
+          "Interview only: the one target this child runs on, copied with all four fields from get_current_task's interview_targets (present only on an Interview). " +
+            "The child skips the board's model selection, runs on a branch that never lands, and takes no review_flag, risk_flag, tier or " +
+            "priority; its provider must be among its assignee's providers. Log the probe and its rubric with log_decision before decomposing.",
+        ),
     }),
   );
 }
@@ -494,10 +522,15 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
+        const interviewTargetsOf = (t: Task) => {
+          const targets = interviewTargets(deps.db, t.id);
+          return targets && { interview_targets: targets };
+        };
         const envelope =
           read.at === undefined && {
             ...(await taskContext(deps, task)),
             type: task.type,
+            ...(interviewTargetsOf(task) ?? {}),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
@@ -615,6 +648,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         assertChildrenKnown(deps, input.children);
+        assertPinsRunnable(deps, input.children);
         const children = decomposeTask(
           deps.db,
           task,
@@ -626,6 +660,23 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "worker",
         );
         return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+      }),
+  );
+
+  server.registerTool(
+    "score_interview",
+    {
+      description:
+        "Interview only: score one of this Interview's done children against the rubric you logged before decomposing, from its " +
+        "handoff alone — the board withholds which agent and model ran it. child_id is the id the child carries in " +
+        "get_current_task's history. accepted when the deliverable meets the rubric, rejected " +
+        "when it does not. Scoring a child again replaces its earlier score.",
+      inputSchema: { child_id: requiredTextSchema, outcome: z.enum(["accepted", "rejected"]) },
+    },
+    async ({ child_id, outcome }) =>
+      runVerb(deps, attributedTaskId, (task) => {
+        const eventId = scoreInterview(deps.db, task, child_id, outcome, attributedWorkerId(deps, task), deps.clock.now(), "worker");
+        return { scored: true, event_id: eventId };
       }),
   );
 
@@ -715,6 +766,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
         assertChildrenKnown(deps, input.children);
+        assertPinsRunnable(deps, input.children);
         const children = redecompose(
           deps.db,
           task,
@@ -925,7 +977,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
         "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
-        "workspace stage), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
+        "workspace stage, each with the part of them that Interview children scored under interview), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
         "learner was promoted and chose what ran, and recommended is what the table would have chosen instead. Rows come oldest first. " +
         nextDescription("list_routing_shadow", "rows"),

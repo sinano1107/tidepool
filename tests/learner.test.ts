@@ -23,6 +23,7 @@ const sol = executionSetting("openai", "gpt-5.6-sol");
 function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
   return {
     cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null },
+    interview: false,
     tier_id: 1,
     workspace: "tidepool",
     outcome: "accepted",
@@ -370,7 +371,7 @@ it("workspace 未指定の未着手タスクの実績は、既定 workspace の�
   await b.clock.advance(HOUR);
 
   const row = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
-  expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 } });
+  expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 1, rejected: 0, interview: { accepted: 0, rejected: 0 } } });
 }, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
@@ -458,7 +459,7 @@ it("effort「無い」の episode は1つのセルに集まり、表の行との
   const model = "claude-haiku-4-5-20251001";
   const noEffort = { provider: "anthropic", model, effort: null, advisor: null } as const;
   const episodes = [episode({ cell: noEffort, outcome: "rejected" }), episode({ cell: noEffort, outcome: "rejected" }), solAccepted];
-  expect(observedInTier(episodes, 1, "tidepool").board).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2 });
+  expect(observedInTier(episodes, 1, "tidepool").board).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2, interview: { accepted: 0, rejected: 0 } });
   expect(recommendFor(episodes, [executionSetting("anthropic", model, { effort: null }), sol])).toEqual({ recommended: sol, basis: "data" });
   const high = executionSetting("anthropic", model);
   expect(recommendFor(episodes, [high, sol])).toEqual({ recommended: high, basis: "data" });
