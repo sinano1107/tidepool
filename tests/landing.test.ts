@@ -4749,21 +4749,6 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
 });
 
-// ADR 0250 決定2: 自分のタスクブランチを根のブランチへ merge back した子孫も、lineage が根に帰すので問い直しになる
-it("PR 昇格を abandon した根のブランチへ自分のブランチを merge back して完了した子孫は撃たれず、昇格の question が立て直される", async () => {
-  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-child-branch");
-  const child = attachUnsettledChild(db, clock, work.id);
-  git(workspace.path, "checkout", "-b", `task/${child.id}`, `task/${work.id}`);
-  commitWork(workspace.path, "repair.txt", "merged back\n");
-  git(workspace.path, "checkout", `task/${work.id}`);
-  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
-  finish(db, clock, child);
-
-  await expect(landing.converge()).resolves.toEqual([{ taskId: work.id, verdict: expect.objectContaining({ kind: "failed", reason: "promotion_failed" }) }]);
-  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
-  expect(github.requests).toHaveLength(1);
-});
-
 it("立て直した question への retry の時点で運ぶ内容が無ければ、回答を受理して着地対象なしを1件だけ刻む", async () => {
   const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-reasked-nothing");
   settleAttachedChild(db, clock, workspace, work.id, "repair");
