@@ -29,3 +29,9 @@ root には AI の判断の余地が無く、escalation の答えは何も cance
 - **root を起こし、文面で「採点 0 のまま完了」または「escalate」を指示する** —— 判断の余地の無い作業に slot を使う。
   escalate は答えても何も cancel しないので、人間の手が1つ増える。
 - **分解済みの root 専用の doctrine の文を足す** —— 文が仕組みと別の判定を持つ限り、またずれる。
+
+## 追記(2026-10-14 の triage / grilling、issue #1899)
+
+決定2 の question は、ADR 0248 で pin の子の前提の破綻すべて(初回を含む)の question になり、abandon の隣に retry が並ぶ。
+retry も root ごと cancel するのは abandon と同じで、そのうえで盤面が同じ対象の Interview を人間名義で登録する。決定2 の
+「登録し直すのは人間(ADR 0245 決定3)」は retry の答えに移った。

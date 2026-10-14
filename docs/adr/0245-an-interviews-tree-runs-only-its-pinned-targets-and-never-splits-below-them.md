@@ -45,3 +45,9 @@
   #1887 で扱う。
 - board doctrine は task ごとにも変わる(分けるか否か)。ADR 0157 決定3 のスロット2つは Harness の語の数で、この分岐は
   Harness の語ではない別の入力として足す。
+
+## 追記(2026-10-14 の triage / grilling、issue #1899)
+
+決定3 の「breach を受けた root は `continue_decomposition` で続行させるか、escalate で人間に上げ、人間が abandon して直した
+probe で登録し直す」は ADR 0248 に置き換わった —— pin の子の前提の破綻は root を起こさず初回から人間の question になり、
+人間はその場で retry(同じ対象で登録し直す)を選べる。root を作り直さない線は変わらない。
