@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { AdvisorCeiling } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
@@ -103,11 +103,10 @@ it("Interview の root は作り直せない —— 子の前提の破綻を受�
   expect(listChildren(db, root.id).map(({ id, status }) => ({ id, status }))).toEqual([{ id: child!.id, status: "todo" }]);
 });
 
-it("Interview の root は2回分解できない —— pin の子を失敗 question の abandon で全部 cancel して起きた root の decompose は拒まれ、何も登録されない。分解の verb は最初の分解の後に両方伏せる(ADR 0245 決定3)", () => {
+it("Interview の root は2回分解できない —— 分解の直後から decompose は拒まれ、外れた pin も同じ文で拒まれ、何も登録されない。分解の verb は最初の分解の後に両方伏せる(ADR 0245 決定3)", () => {
   const { db, root } = registerInterview();
   expect(withheldDecompositionVerbs(db, root.id)).toEqual(["redecompose"]);
-  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
-  answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
+  decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
   const before = listChildren(db, root.id);
   const again = { reason: "a second probe", children: [{ ...CHILD, interview_pin: opusHigh }] };
   expect(() => decomposeTaskViaWorker(db, getTask(db, root.id)!, again, "auditor", new Date(0))).toThrow(/score_interview/);
@@ -118,16 +117,40 @@ it("Interview の root は2回分解できない —— pin の子を失敗 ques
   expect(withheldDecompositionVerbs(db, root.id)).toEqual(["decompose", "redecompose"]);
 });
 
-it("pin の子の承認 question を reject して起きた root も、pin の子が1つも居ないまま2回目の decompose を拒まれ、何も登録されない(ADR 0245 決定3)", () => {
+/** root の task_cancelled が出自に名指す question の id。 */
+const cancelledBy = (db: Db, taskId: string) =>
+  listEvents(db, taskId).flatMap(({ payload }) => (payload.kind === "task_cancelled" && "origin_question_id" in payload ? [payload.origin_question_id] : []));
+
+it("pin の子を失敗 question の abandon で全部 cancel すると、root は起きずにその question を出自に cancel される(ADR 0247 決定1)", () => {
+  const { db, root } = registerInterview();
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
+  const question = failureQuestion(db, child!.id, new Date(0));
+  answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
+  expect(getTask(db, root.id)!.status).toBe("cancelled");
+  expect(cancelledBy(db, root.id)).toEqual([question.id]);
+  expect(nextSlotTask(db)).toBeUndefined();
+});
+
+it("pin の子の承認 question を全部 reject すると、root は起きずに最後の question を出自に cancel される(ADR 0247 決定1)", () => {
   const { db, root } = registerInterview();
   const outside = { reason: "r", children: [{ ...CHILD, assignee: "deckhand", interview_pin: opusHigh }] };
   decomposeTaskViaWorker(db, root, outside, "auditor", new Date(0), { authority: { assignable_to: [] } });
   const [question] = listChildren(db, root.id);
   answerQuestionViaWebui(db, question!, ["reject"], new Date(0), { comment: "not this assignee" });
-  const again = { reason: "a second probe", children: [{ ...CHILD, interview_pin: opusHigh }] };
-  expect(() => decomposeTaskViaWorker(db, getTask(db, root.id)!, again, "auditor", new Date(0))).toThrow(/score_interview/);
-  expect(listChildren(db, root.id).map(({ id }) => id)).toEqual([question!.id]);
-  expect(withheldDecompositionVerbs(db, root.id)).toEqual(["decompose", "redecompose"]);
+  expect(getTask(db, root.id)!.status).toBe("cancelled");
+  expect(cancelledBy(db, root.id)).toEqual([question!.id]);
+});
+
+it("failure の abandon と承認の reject が混ざっても、最後の1つを断った答えで root が cancel される —— 未回答の承認 question が残るあいだは cancel されない(ADR 0247 決定1)", () => {
+  const { db, root } = registerInterview();
+  const mixed = { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh }, { ...CHILD, assignee: "deckhand", interview_pin: opusHigh }] };
+  const [child] = decomposeTaskViaWorker(db, root, mixed, "auditor", new Date(0), { authority: { assignable_to: [] } });
+  const approval = listChildren(db, root.id).find((task) => task.type === "question")!;
+  answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
+  expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
+  answerQuestionViaWebui(db, getTask(db, approval.id)!, ["reject"], new Date(0), { comment: "not this assignee" });
+  expect(getTask(db, root.id)!.status).toBe("cancelled");
+  expect(cancelledBy(db, root.id)).toEqual([approval.id]);
 });
 
 it("Interview でない task は、子を全部 abandon されて起きたあとも decompose で分け直せる", () => {
@@ -166,26 +189,57 @@ it("pin の子の failure question への abandon は、その子だけを cance
   expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
 });
 
-it("最後の pin の子の failure question への abandon は root を先頭へ動かさない —— 親は動かさず、通常どおり起きる(ADR 0245 決定5)", () => {
+it("done の兄弟が居れば、最後の pin の子の failure question への abandon は root を cancel せず先頭へも動かさない —— 通常どおり起きる(ADR 0245 決定5 / ADR 0247 決定1)", () => {
   const { db, root, failed, sibling } = twoPinnedChildren();
   completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
   const before = getTask(db, root.id)!.sort_key;
   answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
+  expect(presentTask(db, getTask(db, root.id)!).status).toBe("todo");
   expect(getTask(db, root.id)!.sort_key).toBe(before);
 });
 
-it("pin の子の failure question の abandon の文は、分解判断の破棄も兄弟の件数も言わない(ADR 0245 決定5)", () => {
+it("pin の子の failure question の abandon の文は、分解判断の破棄も兄弟の件数も言わず、他の対象が残らなければ Interview も終わると条件付きで言う(ADR 0245 決定5 / ADR 0247 決定1)", () => {
   const { db, failed } = twoPinnedChildren();
-  expect(abandonConsequence(db, failed)).toBe(`"abandon" cancels this task and its remaining work.`);
+  expect(abandonConsequence(db, failed)).toBe(
+    `"abandon" cancels this task and its remaining work. If no other target of this Interview is done or still unsettled, the Interview ends too.`,
+  );
 });
 
-it("pin の子の前提の破綻の question は、これまでどおり兄弟の pin の子を held にし、その abandon は兄弟も cancel する(ADR 0245 決定2)", () => {
-  const { db, failed, sibling } = twoPinnedChildren();
+it("pin の子の前提の破綻の abandon の文は、親を先頭へ戻すと言わず、Interview ごと終わり登録し直すのは人間だと言う(ADR 0247 決定2)", () => {
+  const { db, failed } = twoPinnedChildren();
+  const consequence = abandonConsequence(db, failed, true);
+  expect(consequence).toContain("1 unfinished sibling from the same decomposition decision");
+  expect(consequence).toContain("ends this Interview");
+  expect(consequence).toContain("a human registers the Interview again with a fixed probe");
+  expect(consequence).not.toContain("queue head");
+});
+
+it("pin の子の承認 question は、reject で他の対象が残らなければ Interview も終わると条件付きで言う(ADR 0247 決定1)", () => {
+  const { db, root } = registerInterview();
+  decomposeTaskViaWorker(db, root, { reason: "r", children: [{ ...CHILD, assignee: "deckhand", interview_pin: opusHigh }] }, "auditor", new Date(0), {
+    authority: { assignable_to: [] },
+  });
+  const [question] = listChildren(db, root.id);
+  expect(question!.purpose).toContain(`"reject" leaves this target unregistered. If no other target of this Interview is done or still unsettled, the Interview ends too.`);
+});
+
+it("pin の子の前提の破綻の question は、これまでどおり兄弟の pin の子を held にし、その abandon は兄弟も root も cancel する(ADR 0245 決定2 / ADR 0247 決定2)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
   const question = declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker")!;
   expect(question.purpose).toContain("1 unfinished sibling from the same decomposition decision");
   expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("held");
   answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
-  expect([getTask(db, failed.id)!.status, getTask(db, sibling.id)!.status]).toEqual(["cancelled", "cancelled"]);
+  expect([failed.id, sibling.id, root.id].map((id) => getTask(db, id)!.status)).toEqual(["cancelled", "cancelled", "cancelled"]);
+  expect(cancelledBy(db, root.id)).toEqual([question.id]);
+});
+
+it("done の兄弟が居ても、pin の子の前提の破綻の abandon は root ごと cancel する —— done の答案はそのまま残り、root は起きない(ADR 0247 決定2)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
+  completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
+  const question = declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker")!;
+  answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
+  expect([failed.id, sibling.id, root.id].map((id) => getTask(db, id)!.status)).toEqual(["cancelled", "done", "cancelled"]);
+  expect(nextSlotTask(db)).toBeUndefined();
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
@@ -274,6 +328,17 @@ it("学習器は Interview の子の採点を、同じセル・同じ段の観�
   const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
   expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([{ cell, accepted: 1, rejected: 1, interview: { accepted: 1, rejected: 1 } }]);
   expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([]);
+});
+
+it("採点の無い done の pin の子が残るあいだ root は完了できず、拒否は score_interview と未採点の子を名指す —— accepted でも rejected でも全部採点すれば完了できる(ADR 0247 決定4)", () => {
+  const { db, root } = registerInterview();
+  const [accepted, rejected] = ranChildren(db, root, 2) as [Task, Task];
+  scoreInterview(db, root, accepted.id, "accepted", "auditor", new Date(1), "worker");
+  const complete = () => completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(1), "worker");
+  expect(complete).toThrow(/score_interview/);
+  expect(complete).toThrow(new RegExp(`unscored: ${rejected.id}$`));
+  scoreInterview(db, root, rejected.id, "rejected", "auditor", new Date(1), "worker");
+  expect(complete().status).toBe("done");
 });
 
 it("採点は Interview の root が、決着した自分の pin の子にだけ付けられる", () => {

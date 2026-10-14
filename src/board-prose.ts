@@ -30,7 +30,7 @@ handoff what remains.`;
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
 // each authority profile would drift, and "Agent tool"/"Workflow tool" are
 // vendor vocabulary the adapter translates the board's line into (ADR 0005).
-// `split` false は分けない task(Interview の pin の子、ADR 0245 決定2)で、decompose を指す文を
+// `split` false は分けない task(decompose を伏せた task —— Interview の pin の子と分解済みの root、ADR 0245 決定2 / ADR 0247 決定3)で、decompose を指す文を
 // 1 session で完了せよという文に差し替える。Interview であることは書かない
 export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, split: boolean): string {
   const delegateAtSentenceStart = delegate[0]!.toUpperCase() + delegate.slice(1);

@@ -815,6 +815,19 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
   });
 
+  it("分解した Interview の root の system prompt には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
+    const { worker, setting, slot, calls, db } = await makeWorker();
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
+    const root = registerTask(db, { type: "review", assignee: "deckhand", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    decomposeTaskViaWorker(db, root, { reason: "r", children: [{ title: "probe", purpose: "p", completion_criteria: "c", interview_pin: target }] }, "auditor", new Date(0));
+    slot.occupy(root.id);
+    worker.start(root, setting(root));
+    const args = calls[0]!.args;
+    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!.replace(/\s+/g, " ");
+    expect(systemPrompt).toContain("This task is not split: complete it in this session.");
+    expect(systemPrompt).not.toContain("Register that split with the tidepool MCP's decompose instead.");
+  });
+
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules
   // of the road)は盤面がコード側で全ワーカーに注入する。本文が空の正規形エージェント
   // (tako)でも、cwd=workspace・side channel 禁止・escalate をためらわない posture が

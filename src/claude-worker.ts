@@ -45,6 +45,7 @@ import {
 import {
   resolveTaskAgent,
   type Task,
+  withheldDecompositionVerbs,
 } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import type { TranscriptStore } from "./transcript-store.js";
@@ -2136,8 +2137,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           task,
           systemPrompt: definition.systemPrompt,
           profile,
-          // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。pin の子は分けない(ADR 0245 決定2)
-          doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, task.interview_target_id === null),
+          // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
+          doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, !withheldDecompositionVerbs(this.options.db, task.id).includes("decompose")),
           allowedDomains: workspace.allowed_domains,
           memorySection: memory.section ?? material?.section ?? null,
         }),
