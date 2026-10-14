@@ -26,6 +26,8 @@ it is decided enough to build — the maintainer approves that, as with the bloc
 `/to-tickets` publishes — and `needs-triage` only when something is left to decide. Not `needs-info`:
 that waits on an observation, not another issue. No label is no answer — an unlabeled issue reads as
 untriaged, and #1416 sat outside every queue after its blocker #1419 closed.
+The exception is an originating issue a grilling wrote up through `/to-spec`: its spec or tickets hold
+the queue place and the implementation PR closes it ([workflow.md](./workflow.md)).
 
 ## Priority labels
 
