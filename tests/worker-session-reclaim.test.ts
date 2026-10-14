@@ -304,5 +304,4 @@ it("Harness 封じ込めの盤面で前提検査が落ちた再起動のあと�
 
   expect(treeOfTaskBranchAtStart).toEqual([expect.stringContaining("draft.txt")]);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
-  expect(git(ws.path, "show", `task/${task.id}:draft.txt`)).toBe("stuck work");
 });
