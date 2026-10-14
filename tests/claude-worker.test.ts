@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
@@ -258,6 +259,9 @@ async function makeWorker(
         .catch(() => {});
     }
   });
+  // 多くの test が exit を撃たないまま終わる —— task temp の後始末は exit / spawn-error 経路止まりなので、
+  // 本番と同じ exit 経路で消す(ADR 0257。Codex 側の issue #1001 と同じ形)。上の待ちより先に走る
+  onTestFinished(() => recorder.emitExit(0, null));
   const worker = new ClaudeCodeWorker({
     db,
     clock,
@@ -1174,6 +1178,7 @@ describe("ClaudeCodeWorker", () => {
   // 全部見えるので ADR 0107 の最下位 seam であるここに置く。
   const skillEnumOnFakeContainers = async () => {
     const recorder = recordingSpawn();
+    onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const worker = await makeWorker(
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
@@ -1287,7 +1292,7 @@ describe("ClaudeCodeWorker", () => {
     // 起動できなかった場合の fail-open ハッチも閉じる(ベンダー既定は「警告して
     // 裸で走る」— ADR 0033 が唯一拒む状態)
     expect(sandbox.failIfUnavailable).toBe(true);
-    expect(sandbox.filesystem.denyRead).toEqual(["~/"]);
+    expect(sandbox.filesystem.denyRead).toEqual(["/"]);
     expect(sandbox.filesystem.allowRead).toContain("/srv/pi/work/tidepool");
   });
 
@@ -1310,10 +1315,10 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
-  it("review タスクは allowWrite が空の profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {
+  it("review タスクは allowWrite が task temp だけの profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-review", null, "deckhand", "review");
-    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([]);
+    expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([calls[0]!.env.TMPDIR]);
   });
 
   it("work タスクは workspace 内書き込みを許す profile で走る", async () => {
@@ -1321,7 +1326,63 @@ describe("ClaudeCodeWorker", () => {
     start("task-sbx-work", null, "deckhand", "work");
     expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
       "/srv/pi/work/tidepool",
+      calls[0]!.env.TMPDIR,
     ]);
+  });
+
+  // ADR 0257 決定2: CLI のプロセスの TMPDIR が task temp を指さないと、proxy の中継 socket が閉じた /tmp に
+  // 置かれて許可ドメインに届かない。先例は tests/codex-worker.test.ts の issue #705 の task temp のテスト。
+  it("spawn env の TMPDIR と CLAUDE_CODE_TMPDIR は同じ task temp を指し、それが settings の allowRead と allowWrite に入る(ADR 0257)", async () => {
+    const { start, calls, logDir } = await makeWorker();
+    for (const type of ["work", "review"] as const) {
+      start(`task-temp-${type}`, null, "deckhand", type);
+    }
+    for (const call of calls) {
+      const taskTemp = call.env.TMPDIR!;
+      expect(call.env.CLAUDE_CODE_TMPDIR).toBe(taskTemp);
+      expect(existsSync(taskTemp)).toBe(true);
+      const { allowRead, allowWrite } = sandboxSettings(call.args, logDir).filesystem;
+      expect(allowRead).toContain(taskTemp);
+      expect(allowWrite).toContain(taskTemp);
+    }
+  });
+
+  it("task temp は task ごとに別のパスになる(ADR 0257)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-temp-a");
+    start("task-temp-b");
+    expect(calls[0]!.env.TMPDIR).not.toBe(calls[1]!.env.TMPDIR);
+  });
+
+  it("worker の exit(0 / 非0 / signal)の後、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
+    const { start, calls, emitExitAt } = await makeWorker();
+    const exits = [[0, null], [2, null], [null, "SIGKILL"]] as const;
+    exits.forEach((_, i) => start(`task-temp-exit-${i}`));
+    const taskTemps = calls.map((call) => call.env.TMPDIR!);
+    expect(taskTemps.every((dir) => existsSync(dir))).toBe(true);
+
+    exits.forEach(([code, signal], i) => emitExitAt(i, code, signal));
+    expect(taskTemps.filter((dir) => existsSync(dir))).toEqual([]);
+  });
+
+  it("spawn の失敗(exit が来ないことがある)の後も、task temp は残らない(ADR 0257)", async () => {
+    const { start, calls, emitError } = await makeWorker();
+    start("task-temp-spawn-error");
+    const taskTemp = calls[0]!.env.TMPDIR!;
+
+    emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
+    expect(existsSync(taskTemp)).toBe(false);
+  });
+
+  it("spawn までの間に例外が出たら start はそれを投げ直し、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
+    const { start } = await makeWorker({}, {
+      containers: passthroughContainers(() => {
+        throw new Error("spawn blew up");
+      }),
+    });
+
+    expect(() => start("task-temp-sync-throw")).toThrow("spawn blew up");
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
   });
 
   it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {
@@ -1649,6 +1710,7 @@ describe("ClaudeCodeWorker", () => {
     // session を終わらせる経路が2つある以上、回収の書き方が2つあってはならない。
     // adapter が signal を直に撃たないことまで含めてここで測る。
     const recorder = recordingSpawn();
+    onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const { start } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
     const task = start("task-init-container-kill", null, "deckhand", "work");
@@ -1854,6 +1916,7 @@ describe("ClaudeCodeWorker", () => {
     try {
       const db = openDb(":memory:");
       const recorder = recordingSpawn();
+      onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
       const worker = new ClaudeCodeWorker({
         db,
         clock: new FakeClock(),
@@ -2807,6 +2870,7 @@ describe("ClaudeCodeWorker", () => {
 
     const db = openDb(":memory:");
     const recorder = recordingSpawn();
+    onTestFinished(() => recorder.emitExit(0, null)); // task temp の後始末(ADR 0257)
     const worker = new ClaudeCodeWorker({
       db,
       clock: new FakeClock(),
@@ -4047,7 +4111,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     // ANTHROPIC_MODEL は anthropic spawn では元々効いていない — 実効挙動は不変。
     // それ以外は導入前どおり: process.env の継承 + timeout ピン + advisor 閉じ +
     // GIT_* の名義注入だけが載る(回帰ゼロ — issue #443 user story 4)。後から足したのは
-    // 自動更新の停止(ADR 0186 決定4)だけである。
+    // 自動更新の停止(ADR 0186 決定4)と、task temp を指す2つの temp 変数(ADR 0257 決定2)だけである。
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://api.moonshot.ai/anthropic");
     vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "sk-leaked-moonshot-token");
     vi.stubEnv("ANTHROPIC_MODEL", "kimi-k3[1m]");
@@ -4061,6 +4125,8 @@ You are Kipper, the tidepool board's Kimi work agent.
         API_TIMEOUT_MS: "600000",
         DISABLE_AUTOUPDATER: "1",
         CLAUDE_CODE_DISABLE_ADVISOR_TOOL: "1",
+        TMPDIR: calls[0]!.env.TMPDIR,
+        CLAUDE_CODE_TMPDIR: calls[0]!.env.TMPDIR,
         GIT_AUTHOR_NAME: "deckhand",
         GIT_AUTHOR_EMAIL: "deckhand@tidepool.invalid",
         GIT_COMMITTER_NAME: "deckhand",

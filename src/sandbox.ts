@@ -126,6 +126,13 @@ export interface WorkerSessionSettings {
  *  nothing. */
 const TOOLCHAIN_READ = ["~/.gitconfig", "~/.config/git"];
 
+/** ADR 0257 決定1: the OS and toolchain locations re-opened under `denyRead: ["/"]`
+ *  (Linux only — darwin runs no worker, ADR 0100 決定6). Deliberately *not* here:
+ *  where data can live (`/home` `/root` `/Users` `/mnt` `/media` `/srv` `/opt`
+ *  `/var` `/tmp` `/run` `/snap` `/sys` `/boot`) — a mount added to the host later
+ *  must arrive closed. `/lib64` rides only when the caller saw it exist. */
+const OS_READ = ["/usr", "/bin", "/lib", "/sbin", "/etc", "/proc", "/dev"];
+
 /** ADR 0069: files created in the workspace while sandbox-runtime#139 shadows
  *  protected home paths:
  *  https://github.com/anthropic-experimental/sandbox-runtime/issues/139
@@ -371,16 +378,22 @@ export interface WorkerSessionSettingsInput {
   permittedSkills: string[] | "all";
   /** ADR 0072: workspace-scoped egress. Absent keeps the allowlist empty. */
   allowedDomains?: string[];
+  /** ADR 0257 決定2: this session's own temp directory, readable and writable on
+   *  both profiles. The CLI process's `TMPDIR` must point here too, or its proxy
+   *  socket stays under the closed `/tmp` and allowed domains go unreachable. */
+  taskTemp: string;
+  /** Whether `/lib64` exists on this host — checked by the caller so this stays pure. */
+  lib64: boolean;
 }
 
 /** ADR 0033's two profiles as one code constant (ADR 0013: the floor lives in
  *  code, never in registry data).
  *
- *  **The read half is the floor this change actually delivers**, on both
- *  platforms and for both profiles: `allowRead` takes precedence over
- *  `denyRead` (confirmed by running the CLI), so "deny the home tree, re-allow
- *  the workspace" expresses it directly and a workspace-external read becomes
- *  an OS refusal — ADR 0033 line 11's whole point.
+ *  **The read half is the floor this change actually delivers**, for both
+ *  profiles: `allowRead` takes precedence over `denyRead` (confirmed by running
+ *  the CLI), so "deny everything, re-allow the workspace, the task temp and the
+ *  OS" expresses it directly and a workspace-external read becomes an OS
+ *  refusal — ADR 0033 line 11's whole point, made default-deny by ADR 0257.
  *
  *  **The write half deliberately does not use `denyWrite` to build a floor —
  *  only to punch two holes in one.** ADR 0037 added `denyWrite` for the two
@@ -394,8 +407,9 @@ export interface WorkerSessionSettingsInput {
  *  1. `allowWrite` does *not* take precedence over `denyWrite` (macOS 2.1.220),
  *     so the natural "deny `~/`, re-allow the workspace" shape leaves the
  *     workspace unwritable. It isn't needed anyway — the sandbox's own default
- *     already confines writes to the session cwd, refusing `/tmp` and the rest
- *     of the home tree without tidepool naming anything.
+ *     already confines writes to the session cwd and the paths `allowWrite`
+ *     names (the task temp since ADR 0257), refusing the rest of `/tmp` and the
+ *     home tree without tidepool naming anything.
  *  2. `denyWrite: [workspace]` — the shape that *would* have made a review
  *     session read-only at the OS layer — cannot work on the Linux (bwrap)
  *     backend at all (confirmed on the production Pi, 2.1.207). bwrap has to
@@ -406,10 +420,10 @@ export interface WorkerSessionSettingsInput {
  *     <workspace>/.gitconfig: Read-only file system`. That is the backend's
  *     architecture, not a version bug.
  *
- *  So review carries `allowWrite: []` and no workspace-wide `denyWrite`. A
- *  macOS-only `denyWrite` was rejected on ADR 0033 line 22's dev/prod parity:
- *  production must never be the weaker side, and a rule that runs only on the
- *  dev machine is exactly that.
+ *  So review's `allowWrite` names only its task temp (ADR 0257) and there is no
+ *  workspace-wide `denyWrite`. A macOS-only `denyWrite` was rejected on ADR 0033
+ *  line 22's dev/prod parity: production must never be the weaker side, and a
+ *  rule that runs only on the dev machine is exactly that.
  *
  *  **Where review's write floor actually lives (ADR 0035 / issue #144), and how
  *  the layers divide.** Not four independent walls — the first one steps aside
@@ -417,7 +431,7 @@ export interface WorkerSessionSettingsInput {
  *
  *  1. This sandbox — read visibility, network, and the write *radius* of
  *     whatever the permission layer does allow (an `npm test` may run arbitrary
- *     code; its writes still can't leave the workspace).
+ *     code; its writes still can't leave the workspace and the task temp).
  *  2. The permission layer (`--permission-mode manual`, claude-worker.ts) — the
  *     write floor proper: redirections, interpreters and wrappers, the shapes
  *     issue #59's enumeration could never reach. **Live only because
@@ -432,7 +446,7 @@ export interface WorkerSessionSettingsInput {
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
-  const { taskType, workspacePath, permittedSkills, allowedDomains } = input;
+  const { taskType, workspacePath, permittedSkills, allowedDomains, taskTemp, lib64 } = input;
   const readOnly = taskType === "review";
   return {
     // issue #378: not keyed on the profile — a subagent can smuggle a board
@@ -451,16 +465,19 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       // sandbox would otherwise wave Bash past it entirely.
       ...(readOnly && { autoAllowBashIfSandboxed: false as const }),
       filesystem: {
-        denyRead: ["~/"],
+        denyRead: ["/"],
         allowRead: [
           workspacePath,
+          taskTemp,
           ...TOOLCHAIN_READ,
           ...skillReadPaths(permittedSkills, workspacePath),
+          ...OS_READ,
+          ...(lib64 ? ["/lib64"] : []),
         ],
-        allowWrite: readOnly ? [] : [workspacePath],
+        allowWrite: readOnly ? [taskTemp] : [workspacePath, taskTemp],
         // ADR 0037: on both profiles, and file-level for a reason — see
-        // settingsDenyWrite. review cannot write anyway, but the floor does not
-        // ask which profile is running (ADR 0013).
+        // settingsDenyWrite. review's permission layer refuses these writes
+        // anyway, but the floor does not ask which profile is running (ADR 0013).
         denyWrite: settingsDenyWrite(workspacePath),
       },
       // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of

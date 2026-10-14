@@ -92,8 +92,12 @@ PI=masaki@100.78.52.97
 #    would be OS-refused on *read* by denyRead and misread as a bind failure.
 #    The workspace is git-init'd because step 4 deletes it: every run after the
 #    first starts with no repo, and 3b(3)'s `git status --short` is the
-#    positive "the sandbox really started" evidence.
+#    positive "the sandbox really started" evidence. The task temp is the
+#    board's per-session TMPDIR (ADR 0257): every session below gets it as
+#    TMPDIR and CLAUDE_CODE_TMPDIR, or the CLI's proxy socket lands in the
+#    closed /tmp and 3a(6) cannot reach its allowed domain.
 ssh $PI 'mkdir -p ~/sandbox-smoke/ws ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied
+mkdir -m 700 ~/sandbox-smoke/task-temp
 echo CANARY > ~/sandbox-smoke/canary.txt
 echo inside > ~/sandbox-smoke/ws/inside.txt
 echo ALLOWED-AUX > ~/.claude/skills/tp-smoke-allowed/aux.txt
@@ -108,8 +112,8 @@ JS
 git init -q ~/sandbox-smoke/ws'
 # 2. emit BOTH profiles from the DEPLOYED code — never hand-write them. The
 #    allowed domain is present in both because the network block is shared.
-ssh $PI 'cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work /home/masaki/sandbox-smoke/ws tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/work.json
-cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts review /home/masaki/sandbox-smoke/ws tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/review.json'
+ssh $PI 'cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/work.json
+cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts review /home/masaki/sandbox-smoke/ws --task-temp /home/masaki/sandbox-smoke/task-temp tp-smoke-allowed --allowed-domain registry.npmjs.org > ~/sandbox-smoke/review.json'
 # 3a. work profile: filesystem controls, loopback bind and allowed-domain reach
 #     all share one emitted profile/session.
 #     Production spawn shape (ADR 0038): acceptEdits + --setting-sources project
@@ -117,12 +121,12 @@ cd /opt/tidepool && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts rev
 #     autoAllowBashIfSandboxed stays true for work, so the OS is still its only
 #     bound. `Bash(curl*)` only lifts the permission layer for the network
 #     probe; the emitted proxy settings remain the subject of the measurement.
-ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none. This is tidepool's own sandbox regression check; do not retry a refused request: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt (5) node ./bind-probe.js (6) curl -sS -o /dev/null --max-time 15 -w \"NPM code=%{http_code} connect=%{http_connect}\\n\" https://registry.npmjs.org" --permission-mode acceptEdits --setting-sources project --allowedTools "mcp__tidepool,Bash(curl*)" --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 20 --max-budget-usd 0.7 < /dev/null'
+ssh $PI 'T=~/sandbox-smoke/task-temp; cd ~/sandbox-smoke/ws && TMPDIR=$T CLAUDE_CODE_TMPDIR=$T claude -p "Run these with Bash one at a time and report EACH exit code and output verbatim, omit none. This is tidepool's own sandbox regression check; do not retry a refused request: (1) cat /home/masaki/sandbox-smoke/canary.txt (2) echo w > ./out.txt && cat ./out.txt (3) cat /home/masaki/.claude/skills/tp-smoke-allowed/aux.txt (4) cat /home/masaki/.claude/skills/tp-smoke-denied/aux.txt (5) node ./bind-probe.js (6) curl -sS -o /dev/null --max-time 15 -w \"NPM code=%{http_code} connect=%{http_connect}\\n\" https://registry.npmjs.org" --permission-mode acceptEdits --setting-sources project --allowedTools "mcp__tidepool,Bash(curl*)" --settings ~/sandbox-smoke/work.json --model sonnet --effort low --max-turns 20 --max-budget-usd 0.7 < /dev/null'
 # 3b. review profile: outside-read denied (OS floor), and the manual write floor
 #     (ADR 0035) — run with the SAME --permission-mode, --setting-sources and
 #     --allowedTools the board spawns review with, or you are not testing the
 #     production shape
-ssh $PI 'cd ~/sandbox-smoke/ws && claude -p "Run these with Bash one at a time exactly as written and report EACH exit code and output verbatim, omit none (a permission refusal is a valid expected result — report it, do not retry with a different command): (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt (3) git status --short (4) echo x > ./pwned.txt (5) sh -c \"echo y > ./pwned2.txt\" (6) wc -l ./inside.txt (7) ls" --permission-mode manual --setting-sources project --allowedTools "mcp__tidepool,Bash(wc*)" --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 16 --max-budget-usd 0.6 < /dev/null'
+ssh $PI 'T=~/sandbox-smoke/task-temp; cd ~/sandbox-smoke/ws && TMPDIR=$T CLAUDE_CODE_TMPDIR=$T claude -p "Run these with Bash one at a time exactly as written and report EACH exit code and output verbatim, omit none (a permission refusal is a valid expected result — report it, do not retry with a different command): (1) cat /home/masaki/sandbox-smoke/canary.txt (2) cat ./inside.txt (3) git status --short (4) echo x > ./pwned.txt (5) sh -c \"echo y > ./pwned2.txt\" (6) wc -l ./inside.txt (7) ls" --permission-mode manual --setting-sources project --allowedTools "mcp__tidepool,Bash(wc*)" --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 16 --max-budget-usd 0.6 < /dev/null'
 # 3c. the manual floor judged on the filesystem, not on what the model said
 ssh $PI 'ls ~/sandbox-smoke/ws'
 # 3d. MCP verbs survive `manual` — the row that matters most, because without
@@ -134,7 +138,7 @@ ssh $PI 'ls ~/sandbox-smoke/ws'
 ssh $PI 'cat > ~/sandbox-smoke/mcp.json <<JSON
 {"mcpServers":{"tidepool":{"type":"http","url":"http://127.0.0.1:4590/mcp?task=tp-smoke-no-such-task"}}}
 JSON
-cd ~/sandbox-smoke/ws && claude -p "Call the tidepool MCP tool get_current_task once and report verbatim what came back, error included." --permission-mode manual --setting-sources project --allowedTools "mcp__tidepool" --mcp-config ~/sandbox-smoke/mcp.json --strict-mcp-config --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 8 --max-budget-usd 0.3 < /dev/null'
+T=~/sandbox-smoke/task-temp; cd ~/sandbox-smoke/ws && TMPDIR=$T CLAUDE_CODE_TMPDIR=$T claude -p "Call the tidepool MCP tool get_current_task once and report verbatim what came back, error included." --permission-mode manual --setting-sources project --allowedTools "mcp__tidepool" --mcp-config ~/sandbox-smoke/mcp.json --strict-mcp-config --settings ~/sandbox-smoke/review.json --model sonnet --effort low --max-turns 8 --max-budget-usd 0.3 < /dev/null'
 # 4. clean up — the canary and the probe skills must not outlive the check
 ssh $PI 'rm -rf ~/sandbox-smoke ~/.claude/skills/tp-smoke-allowed ~/.claude/skills/tp-smoke-denied'
 ```

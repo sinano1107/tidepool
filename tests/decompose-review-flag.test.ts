@@ -1,6 +1,5 @@
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
@@ -8,7 +7,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeClock, FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -400,16 +399,13 @@ it.each([
       "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
     });
     const logDir = await tempDir("review-tier-logs-");
+    const proc = recordingSpawn();
+    onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
     t = await bootTidepool({
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>
         executionSettingsFor(t.db, loadRegistry(registryDir, "purely-local").agents.tako!, task),
-      containerRuntime: new FakeContainerRuntime(() => ({
-        stdout: new PassThrough(),
-        stderr: new PassThrough(),
-        kill() {},
-        on() {},
-      })),
+      containerRuntime: new FakeContainerRuntime(proc.spawn),
       workerAdapter: ({ db, clock, containers, boardCall }) => {
         const worker = new ClaudeCodeWorker({
           db,

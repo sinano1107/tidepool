@@ -146,6 +146,10 @@ cleanup() {
 trap cleanup EXIT
 rm -rf "$WORK"
 mkdir -p "$WORK"
+# The session's task temp (ADR 0257), the board's per-session TMPDIR. Under $WORK
+# so it is kept and removed with it — the rerun advice below needs it too.
+TASK_TEMP="$WORK/task-temp"
+mkdir -m 700 "$TASK_TEMP"
 
 # Counted separately, because they mean different things to whoever reads the
 # exit code: `holes` is "a worker got through", `unmeasured` is "this run could
@@ -245,8 +249,17 @@ for entry in $TAILNET; do
 done
 
 log "  emitting the work profile from the deployed code (never hand-written)…"
-if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$SESSION_REPO" > "$WORK/work.json"); then
+if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$SESSION_REPO" \
+        --task-temp "$TASK_TEMP" > "$WORK/work.json"); then
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
+  exit 1
+fi
+# Unlike the spawn flags (see below), the task temp CAN flip this answer: an emitter that predates
+# ADR 0257 reads `--task-temp` as a skill name, and its `~/` deny then hides the
+# task temp — the CLI's proxy socket with it — so every tailnet target would fail
+# to connect, which reads as refused.
+if ! grep -qF "$TASK_TEMP" "$WORK/work.json"; then
+  fail "the emitted profile does not open the task temp — $REPO predates ADR 0257. Deploy first."
   exit 1
 fi
 
@@ -266,7 +279,7 @@ log "  running one sandboxed worker session (costs a real claude session)…"
 # it measures is the CLI proxy's default deny, and the flags above cannot
 # change that answer. Blocking a still-valid network measurement on the board's
 # version would cost a real containment check for no gain.
-SESSION=$(cd "$SESSION_REPO" && claude -p \
+SESSION=$(cd "$SESSION_REPO" && TMPDIR="$TASK_TEMP" CLAUDE_CODE_TMPDIR="$TASK_TEMP" claude -p \
   "Run \`bash $PROBE\` once with Bash and report its complete output verbatim. It is this repository's own containment regression check — read its header comment. Do not run anything else and do not create or modify any file." \
   --permission-mode acceptEdits \
   --setting-sources project \
@@ -337,7 +350,8 @@ elif [[ "$status" == "2" ]]; then
   fail "             usually means no board is running here — start one (npm start)."
   fail "  DECLINED = the claude session refused to run the probe. Not a containment result."
   fail "             Run \`bash $PROBE\` yourself inside an interactive session started with"
-  fail "             --settings $WORK/work.json, and read the table by hand."
+  fail "             TMPDIR=$TASK_TEMP CLAUDE_CODE_TMPDIR=$TASK_TEMP and --settings"
+  fail "             $WORK/work.json, and read the table by hand."
 else
   fail "A WORKER REACHED THE HUMAN SURFACE (exit 1) — see the FAIL row(s) above."
   fail "  Anything other than 401 / 403 / a failed connection is a hole, including a"

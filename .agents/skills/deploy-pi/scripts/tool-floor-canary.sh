@@ -192,6 +192,10 @@ mode_of()    { [[ "$1" == "live" ]] && echo "acceptEdits" || echo "auto"; }
 
 rm -rf "$WORK"
 mkdir -p "$OUTSIDE"
+# The sessions' task temp (ADR 0257), the board's per-session TMPDIR — one per
+# run, shared by every role. Under $WORK so it lives and dies with it.
+TASK_TEMP="$WORK/task-temp"
+mkdir -m 700 "$TASK_TEMP"
 
 holes=0
 unmeasured=0
@@ -238,7 +242,7 @@ for op in read write; do
     # protected paths, `.git/config.lock` among them.
     git init -q "$ws"
     if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$ws" \
-            > "$(profile_of "$op" "$role")"); then
+            --task-temp "$TASK_TEMP" > "$(profile_of "$op" "$role")"); then
       fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
       exit 1
     fi
@@ -301,7 +305,7 @@ run_row() {
   # because ADR 0035/0038 measured that naming an allowlist does NOT flip these
   # modes into a strict deny-everything-else — the pair has to be measured in the
   # shape production actually spawns.
-  out=$(cd "$ws" && claude -p "$(prompt_for "$op" "$role")" \
+  out=$(cd "$ws" && TMPDIR="$TASK_TEMP" CLAUDE_CODE_TMPDIR="$TASK_TEMP" claude -p "$(prompt_for "$op" "$role")" \
     --permission-mode "$mode" \
     --setting-sources project \
     --allowedTools "mcp__tidepool" \

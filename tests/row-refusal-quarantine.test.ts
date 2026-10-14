@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
@@ -53,6 +53,7 @@ const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${
 async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>> } = {}) {
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   const registryDir = await makeRegistry();
   const logDir = await tempDir("row-refusal-logs-");
   const moonshotApiKeyFile = join(logDir, "moonshot-api-key");

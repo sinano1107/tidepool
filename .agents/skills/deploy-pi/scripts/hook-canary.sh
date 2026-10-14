@@ -324,6 +324,10 @@ rule_refused_in() {
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
+# The sessions' task temp (ADR 0257), the board's per-session TMPDIR — one per
+# run, shared by every role. Under $WORK so it lives and dies with it.
+TASK_TEMP="$WORK/task-temp"
+mkdir -m 700 "$TASK_TEMP"
 
 holes=0
 unmeasured=0
@@ -353,7 +357,7 @@ record() {
 log "emitting the work profile from the deployed code…"
 for r in live control memory memory-control; do
   if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$(ws_of "$r")" \
-          > "$(profile_of "$r")"); then
+          --task-temp "$TASK_TEMP" > "$(profile_of "$r")"); then
     fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
     exit 1
   fi
@@ -558,7 +562,7 @@ run_session() {
   # are the board-side drift guard. Measuring the OLD `auto` shape would measure a
   # session the board no longer spawns, and `acceptEdits` also removes the
   # classifier from the deny row entirely (ADR 0038: no worker session runs auto).
-  SESSION_OUT=$(cd "$ws" && claude -p "$(prompt_for "$role")" \
+  SESSION_OUT=$(cd "$ws" && TMPDIR="$TASK_TEMP" CLAUDE_CODE_TMPDIR="$TASK_TEMP" claude -p "$(prompt_for "$role")" \
     --permission-mode acceptEdits \
     --setting-sources project \
     --allowedTools "mcp__tidepool" \

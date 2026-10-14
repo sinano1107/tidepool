@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -420,6 +420,7 @@ async function bootWithAdapter(
   provider: Provider = "anthropic",
 ) {
   const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   t = await bootTidepool({
     watchdog: WATCHDOG,
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える

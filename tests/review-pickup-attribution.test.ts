@@ -1,11 +1,9 @@
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { listEvents } from "../src/events.js";
-import type { ContainerSpawn } from "../src/process-container.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -19,6 +17,7 @@ import {
   fakeContainers,
   noRetrospectiveCalls,
   pinnedCliVersions,
+  recordingSpawn,
   ScriptedWorker,
   withHealthyUsage,
 } from "./fakes.js";
@@ -34,17 +33,6 @@ afterEach(async () => {
   await server?.stop();
   server = undefined;
 });
-
-const spawn: ContainerSpawn = () => {
-  const stdout = new PassThrough();
-  const stderr = new PassThrough();
-  return {
-    stdout,
-    stderr,
-    kill() {},
-    on() {},
-  };
-};
 
 it("assignee 未指定の review を pickup すると、pickup と spawn の両イベントが Auditor に帰属する(issue #223)", async () => {
   const workspace = await makeWorkspace("review-pickup-attribution");
@@ -78,6 +66,8 @@ You are Fugu.
   const clock = new FakeClock();
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));
+  const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   server = await startServer({
     db: boardDb,
     taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
@@ -86,7 +76,7 @@ You are Fugu.
     credential: TEST_CREDENTIAL,
     clock,
     auditorName: "fugu",
-    containerRuntime: new FakeContainerRuntime(spawn),
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts: new TranscriptStore(logDir),
     checkHarnessCliVersion: pinnedCliVersions,
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
