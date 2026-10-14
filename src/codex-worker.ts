@@ -356,13 +356,9 @@ export function listedSkillPaths(result: unknown): string[] {
 
 /** 閉じた設定を当てた `skills/list` の `result` から、まだ有効と報告された skill の名前を拾う(ADR 0259 決定3)。 */
 export function enabledSkillNames(result: unknown): string[] {
-  return [
-    ...new Set(
-      skillsListResponse.parse(result).data.flatMap((entry) =>
-        entry.skills.filter((skill) => skill.enabled).map((skill) => skill.name)
-      ),
-    ),
-  ];
+  return skillsListResponse.parse(result).data.flatMap((entry) =>
+    entry.skills.filter((skill) => skill.enabled).map((skill) => skill.name)
+  );
 }
 
 export interface CodexCapabilityObservation {
