@@ -282,31 +282,20 @@ function prMergedSql(t: string): string {
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
  *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
  *  比例させ、盤面の歴史の長さには比例させない。候補から外すのは、着地が終わった根(`landing_finished` /
- *  `nothing_to_land`)、盤面の外で閉じた PR の根、ローカル着地の question を持つ根、閉じた PR の根と断念した根の
- *  子孫である —— 子孫はその根が運ぶ。PR が開いている根の子孫は候補に残し、lineage に任せる —— 盤面の外の merge を
- *  盤面が観測していない間(`external` のダイヤルは観測しない)、記録の上で「開いている」根の子孫は、merge の後に完了して
- *  自分で根になっている。人間が担当した work は盤面のタスクブランチに内容を持たないので、根にしない(人間の完了は祖先の
- *  着地の契機である)。Interview の子(pin を持つ work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。
- *  lineage が祖先のブランチへ帰る done の work は根ではない。workspace を解決できない候補と lineage が
- *  読めない候補は根かどうか分からないので根として返し、撃つ側がその根の失敗として人間に見せる。後始末が未了の木は、
- *  撃つ直前に根ごとに読む(`landRoot`)。 */
+ *  `nothing_to_land`)、盤面の外で閉じた PR の根、ローカル着地の question を持つ根である。着地の終わっていない根
+ *  (PR が開いている・閉じた・断念した)の子孫は記録で外さず、lineage に任せる(ADR 0250)—— 根の内容が別の経路で
+ *  保護ブランチに届いた後(`external` のダイヤルは盤面の外の merge を観測しない)に完了した子孫は、自分で根になっている。
+ *  閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
+ *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
+ *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。lineage が祖先のブランチへ帰る done の work
+ *  は根ではない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側が
+ *  その根の失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
 function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
   const ids = db
     .prepare(
-      `WITH RECURSIVE
-         carried(id) AS (
-           SELECT c.id FROM tasks c JOIN tasks r ON c.parent_id = r.id
-            WHERE r.type = 'work' AND r.status = 'done'
-              AND (EXISTS (SELECT 1 FROM events x WHERE x.task_id = r.id AND x.kind = 'pr_close_observed')
-                   OR EXISTS (SELECT 1 FROM events a WHERE a.task_id = r.id AND a.kind = 'pr_promotion_abandoned'
-                                AND NOT EXISTS (SELECT 1 FROM events l WHERE l.task_id = r.id
-                                                  AND l.kind IN ('pr_opened', 'pr_branch_pushed') AND l.id > a.id)))
-           UNION
-           SELECT c.id FROM tasks c JOIN carried p ON c.parent_id = p.id)
-       SELECT t.id FROM tasks t
+      `SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
-          AND t.id NOT IN (SELECT id FROM carried)
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id
                             AND e.kind IN ('landing_finished', 'nothing_to_land', 'pr_close_observed'))
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
