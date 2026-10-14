@@ -1374,17 +1374,15 @@ describe("ClaudeCodeWorker", () => {
     expect(existsSync(taskTemp)).toBe(false);
   });
 
-  it("transcript が開けず start が投げても、task temp は残らない(ADR 0257 / ADR 0149 決定2)", async () => {
+  it("spawn までの間に例外が出たら start はそれを投げ直し、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
     const { start } = await makeWorker({}, {
-      transcripts: new (class extends TranscriptStore {
-        override open(): never {
-          throw new Error("transcript blew up");
-        }
-      })(tmpdir()),
+      containers: passthroughContainers(() => {
+        throw new Error("spawn blew up");
+      }),
     });
 
-    expect(() => start("task-temp-transcript-throw")).toThrow("transcript blew up");
-    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-transcript-throw-"))).toEqual([]);
+    expect(() => start("task-temp-sync-throw")).toThrow("spawn blew up");
+    expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
   });
 
   it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {

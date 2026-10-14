@@ -22,7 +22,7 @@ import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, typ
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
-import type { ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
+import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import {
   loadRegistry,
   ownEntry,
@@ -48,7 +48,7 @@ import {
   taskVerbSwap,
 } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import type { TranscriptStore } from "./transcript-store.js";
+import type { Transcript, TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
@@ -633,7 +633,7 @@ export interface ProviderRouting extends ExecutionSetting {
 }
 
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Three **independent** concerns, deliberately not named for the
+ *  identity vars. Five **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
@@ -663,6 +663,12 @@ export interface ProviderRouting extends ExecutionSetting {
  *     invisible to both the registry and the board's code.
  *  3. `SWAP_DISABLE_ENVS` — always deleted, so a refusal's same-model retry
  *     and model swap stay allowed whatever the host exports (ADR 0215 決定1).
+ *  4. `AUTOUPDATER_DISABLE_ENV` — the CLI never updates itself under the board
+ *     (ADR 0186 決定4).
+ *  5. `TMPDIR` and `CLAUDE_CODE_TMPDIR`, both at the session's task temp (ADR
+ *     0257 決定2). The CLI process's own `TMPDIR` is what moves its proxy socket
+ *     out of the closed `/tmp`; `CLAUDE_CODE_TMPDIR` alone left allowed domains
+ *     unreachable (#1950).
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -678,11 +684,7 @@ export interface ProviderRouting extends ExecutionSetting {
  *  (PATH, proxies, SSH, locale) is host-dependent, open, and silently fatal
  *  when a need goes missing. Enumerate the side you can enumerate.
  *  Nothing more is pinned: effort mapping and context-window knobs are #447's
- *  measurements, not guesses to bake in here.
- *
- *  ADR 0257 決定2: both temp variables point at the session's task temp. The
- *  CLI process's own `TMPDIR` is what moves its proxy socket out of the closed
- *  `/tmp`; `CLAUDE_CODE_TMPDIR` alone left allowed domains unreachable (#1950). */
+ *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
   advisor: string | undefined,
   routing: ProviderRouting,
@@ -1942,86 +1944,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
       }),
     );
-    const prompt =
-      `You are picking up tidepool task ${task.id}. ` +
-      "Call get_current_task first, then work it to completion through the tidepool MCP verbs.";
-    // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
-    // issue #31): "Workflow" is always denied. Per-skill denies (ADR 0025 point
-    // 3: per-skill deny is the only enforcement primitive) ride the same flag,
-    // one Skill(name) token each. Confirmed against the installed CLI that both
-    // "Workflow" and "Skill(名前)" are the tool names a headless session honors.
-    // review タスクの harness deny(ADR 0013 追記 / issue #59)も同じ
-    // --disallowedTools に折り込む — task.type だけで決まるので誰の assignee
-    // でも(self RCA も含め)外れない。comma 区切り(CLI は comma/space どちらも
-    // 受け付ける、--help): "Bash(git push*)" のように内部に space を含む
-    // トークンを space 区切りで畳むと1トークンが誤分割される。
-    const disallowedTools = [
-      "Workflow",
-      ...enforcement.deny.map((s) => `Skill(${s})`),
-      ...reviewToolDenials(task.type),
-    ].join(",");
-    // ADR 0035 / 0038: what has to be lifted back out of the mode's floor. Same
-    // comma join as the deny above, for the same reason — a `Bash(npm test*)`
-    // token carries an internal space. Never empty now: the MCP server rides
-    // both profiles.
-    const allowedTools = spawnAllowedTools(
-      task.type,
-      workspace.review_allowed_commands ?? [],
-    ).join(",");
-    const cliVersion = typeof this.options.cliVersion === "function"
-      ? this.options.cliVersion()
-      : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
-    const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
-    // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
-    const material = buildMetaReviewMaterial(this.options.db, task.id);
-    // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
-    // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
-    // transcript / stderr のファイル名をセッションごとに一意にする。イベント
-    // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
-    // まで先に書く(ADR 0149 決定2: transcript の open と spawn より先)。
-    const spawnedEventId = appendEvent(this.options.db, {
-      taskId: task.id,
-      // attributed to whichever agent actually got spawned (ADR 0012 / issue
-      // #36) — not this worker's configured default, which a pre-set
-      // delegation may override
-      workerId: agent.name,
-      origin: "board",
-      // issue #127: this records the *attempt* to spawn, not a successful
-      // session — it is written before the transcript open and spawn()
-      // (ADR 0149), and either can still fail after this write so that the
-      // process never comes into being. That is not a false
-      // record: every fact this event carries (the resolved definition, the
-      // registry commit read) is true regardless of whether the process
-      // starts. spawn_failed, when it follows, closes the pair honestly
-      // rather than this event needing to be walked back.
-      payload: {
-        kind: "worker_spawned",
-        registry_commit: registry.commit,
-        definition_version: definition.version,
-        // issue #33 判断6: what the board pinned, not what the frontmatter said
-        // — the two differ under the board's advisor ceiling, and only the
-        // frontmatter is recoverable from registry_commit above.
-        advisor: routing.advisor ?? null,
-        // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
-        provider: routing.provider,
-        model: routing.model,
-        effort: routing.effort,
-        tier_id: routing.tier_id,
-        source: routing.source,
-        harness: "claude-code",
-        cli_version: cliVersion,
-      },
-      at: this.options.clock.now(),
-    });
-    recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
-    if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
-    // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
-    // process は1つも起きない(ADR 0118 の族)
-    const transcript = this.options.transcripts.open(task.id, spawnedEventId);
-    const transcriptPath = transcript.streamPath;
-    // ADR 0257 決定2: the session's task temp, made after everything that can throw
-    // on the way here (transcript open included) so those paths leave nothing behind.
-    // Removed at settle and on a spawn failure; a failed removal only logs (issue #705).
+    // ADR 0257 決定2: the session's task temp. Removed at settle, on a spawn
+    // failure, and on any throw between here and the spawn; a failed removal only
+    // logs, never stopping the rest of the cleanup (issue #705).
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-claude-${task.id}-`)));
     const removeTaskTemp = () => {
       try {
@@ -2030,156 +1955,241 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         console.error(`[worker] could not remove ${taskTemp}:`, error);
       }
     };
-    // ADR 0033: every worker session — review and work alike — runs its Bash
-    // inside the CLI's own sandbox, confined to the workspace. Written per task
-    // next to the MCP config above, the same shape and lifetime; the profile
-    // itself is a code constant (src/sandbox.ts), never registry data.
-    const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
-    writeFileSync(
-      sandboxSettingsPath,
-      JSON.stringify(
-        buildSandboxSettings({
-          taskType: task.type,
-          workspacePath: workspace.path,
-          permittedSkills: enforcement.permittedSkills,
-          allowedDomains: workspace.allowed_domains,
-          taskTemp,
-          lib64: existsSync("/lib64"),
-        }),
-      ),
-    );
-    // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
-    // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
-    // reclaimed の相手が居ない session は生まれない。
-    // ponytail: spawn が同期で投げると開いた2本の fd は閉じず、task temp も残る(ADR 0118 の
-    // question が1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy / remove する。
-    const child = this.containers.open(task.id).spawn(
-      "claude",
-      [
-        "-p",
-        prompt,
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        // A FLOOR IS A RESIDUAL DEFAULT (ADR 0038). Headless sessions cannot
-        // answer a permission prompt, so what a mode does with the operations
-        // its rules say nothing about *is* the floor: `auto` answers them with
-        // the classifier's self-approval (a model's judgment, which ADR 0033
-        // refuses to count), the other modes answer them by asking — and with
-        // nobody there, asking *is* the refusal.
-        //
-        // The tool layer (Read / Write / Edit / Glob / Grep …) runs in-process,
-        // where ADR 0033's sandbox does not reach: while `work` ran `auto`, its
-        // residual was "yes" and a worker could read everything readable on the
-        // host and write everywhere writable (issue #151). `acceptEdits` is
-        // exactly one notch looser than `manual`: edits pass, so work can still
-        // work, and only outside-cwd is closed. `review` stays `manual` (ADR
-        // 0035), where every side effect asks. No worker session runs `auto`.
-        //
-        // Bash is untouched by this: the sandbox profile leaves
-        // `autoAllowBashIfSandboxed` at its `true` default for work (it is off
-        // for review, which is what makes review's write floor hold), so
-        // sandboxed Bash never reaches this layer in a work session and the OS
-        // remains its only bound.
-        "--permission-mode",
-        task.type === "review" ? "manual" : "acceptEdits",
-        // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
-        // is flag tier, but permission *merges* across tiers: an `allow` in the
-        // host human's `~/.claude/settings.json` or in the workspace's
-        // gitignored `settings.local.json` lifts the boundary this mode draws —
-        // measured with controls on both. Neither tier buys a worker anything
-        // (the board hands over everything it needs through `--settings`
-        // below), and the local one grows on its own via "don't ask again"
-        // without ever passing a human's review. `project` and not `""`/`user`:
-        // the workspace's own CLAUDE.md and skills ride the project tier, and
-        // ADR 0037 measured the other two taking them down. The cost is that
-        // the host's personal `~/.claude/skills` and plugin skills no longer
-        // reach a worker — deliberate: the board does not carry what it does
-        // not manage into a session (ADR 0033).
-        "--setting-sources",
-        "project",
-        "--disallowedTools",
-        disallowedTools,
-        // Neither mode above lets the MCP verbs through on their own, so every
-        // spawn carries this flag (ADR 0038); review additionally names its
-        // `review_allowed_commands` (ADR 0035). Unconditional on purpose — a
-        // spawn with no allowlist is a session that cannot reach the board.
-        "--allowedTools",
-        allowedTools,
-        // A DEFAULT-DENY ALLOWLIST (ADR 0039). The mode above is the floor for
-        // whatever the permission layer sees — but the non-file in-process tools
-        // are not permission subjects at all, so nothing residual reaches them:
-        // `CronCreate` executed under `acceptEdits` + this exact flag set with no
-        // approval asked (測定2). `--tools` closes that layer the other way round,
-        // by naming everything the session may have and nothing else, so a tool
-        // the vendor adds later arrives *closed* (an enumerated deny would let it
-        // in open). Only the built-in surface is affected — MCP verbs and skills
-        // survive it untouched (測定5), which is what makes this compatible with
-        // `--allowedTools mcp__tidepool` above and ADR 0025's skill machinery.
-        //
-        // Never conditional, never empty: `--tools ""` is the CLI's spelling for
-        // "disable all tools" (--help), so an empty join would silently produce a
-        // session that cannot call anything rather than an error. The value sits
-        // immediately before the next `--flag` because the option is variadic
-        // (`--tools <tools...>`) — a bare token after it would be swallowed.
-        "--tools",
-        spawnTools(task.type, enforcement.disableSlashCommands).join(","),
-        // the empty-allowlist shape: one flag disables every slash command
-        // (skills included), so no per-skill enumeration is needed (ADR 0025
-        // point 5).
-        ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
-        ...pinnedModelFlags(routing.model, routing.effort),
-        // issue #33: spelled here and not inside pinnedModelFlags — that helper
-        // is shared with the board's own draft/translation CLI calls, which must
-        // never acquire an advisor. Absence is not spelled by omission; see
-        // advisorSpawnFlags.
-        ...advisorSpawnFlags(routing.advisor),
-        "--mcp-config",
-        mcpConfigPath,
-        "--strict-mcp-config",
-        // ADR 0033: the OS floor under the tool layer above. Note the CLI
-        // silently ignores a --settings file that fails validation under -p
-        // (documented in its own --help), so this flag alone is not evidence
-        // the sandbox is on — that is what the deploy-time canary smoke and
-        // the capability check are for.
-        "--settings",
+    let spawnedEventId: number;
+    let transcript: Transcript;
+    let child: ContainedProcess;
+    try {
+      // ADR 0033: every worker session — review and work alike — runs its Bash
+      // inside the CLI's own sandbox, confined to the workspace. Written per task
+      // next to the MCP config above, the same shape and lifetime; the profile
+      // itself is a code constant (src/sandbox.ts), never registry data.
+      const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
+      writeFileSync(
         sandboxSettingsPath,
-        // who the agent is (registry definition body) and what this task type's
-        // authority sounds like (ADR 0056: review overrides the registry profile),
-        // stitched at spawn time. A party review (self RCA) additionally carries
-        // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
-        // (spec #586 C) comes last.
-        "--append-system-prompt",
-        boardProse({
-          db: this.options.db,
-          registryDir: this.options.registry.dir,
-          registry,
-          task,
-          systemPrompt: definition.systemPrompt,
-          profile,
-          // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
-          doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, taskVerbSwap(this.options.db, task.id)),
-          allowedDomains: workspace.allowed_domains,
-          memorySection: memory.section ?? material?.section ?? null,
-        }),
-      ],
-      // the agent's own commits are stamped with the agent's identity (issue
-      // #53), merged over the inherited env — never a token (ADR 0024). The
-      // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
-      // "no advisor" and the #69238 stream timeouts, both pinned here rather
-      // than left to the host's environment file (ADR 0005).
-      {
-        cwd: workspace.path,
-        // workerSpawnEnv builds over process.env and may *delete* the advisor
-        // kill var (ADR 0044 決定4), so it is the base here rather than an
-        // overlay — a spread on top of it could not have removed a key. The git
-        // identity carries no key it touches, so layering it after is safe.
-        env: {
-          ...workerSpawnEnv(routing.advisor, routing, taskTemp),
-          ...agentGitIdentityEnv(agent.name),
+        JSON.stringify(
+          buildSandboxSettings({
+            taskType: task.type,
+            workspacePath: workspace.path,
+            permittedSkills: enforcement.permittedSkills,
+            allowedDomains: workspace.allowed_domains,
+            taskTemp,
+            lib64: existsSync("/lib64"),
+          }),
+        ),
+      );
+      const prompt =
+        `You are picking up tidepool task ${task.id}. ` +
+        "Call get_current_task first, then work it to completion through the tidepool MCP verbs.";
+      // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
+      // issue #31): "Workflow" is always denied. Per-skill denies (ADR 0025 point
+      // 3: per-skill deny is the only enforcement primitive) ride the same flag,
+      // one Skill(name) token each. Confirmed against the installed CLI that both
+      // "Workflow" and "Skill(名前)" are the tool names a headless session honors.
+      // review タスクの harness deny(ADR 0013 追記 / issue #59)も同じ
+      // --disallowedTools に折り込む — task.type だけで決まるので誰の assignee
+      // でも(self RCA も含め)外れない。comma 区切り(CLI は comma/space どちらも
+      // 受け付ける、--help): "Bash(git push*)" のように内部に space を含む
+      // トークンを space 区切りで畳むと1トークンが誤分割される。
+      const disallowedTools = [
+        "Workflow",
+        ...enforcement.deny.map((s) => `Skill(${s})`),
+        ...reviewToolDenials(task.type),
+      ].join(",");
+      // ADR 0035 / 0038: what has to be lifted back out of the mode's floor. Same
+      // comma join as the deny above, for the same reason — a `Bash(npm test*)`
+      // token carries an internal space. Never empty now: the MCP server rides
+      // both profiles.
+      const allowedTools = spawnAllowedTools(
+        task.type,
+        workspace.review_allowed_commands ?? [],
+      ).join(",");
+      const cliVersion = typeof this.options.cliVersion === "function"
+        ? this.options.cliVersion()
+        : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
+      const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
+      // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
+      const material = buildMetaReviewMaterial(this.options.db, task.id);
+      // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
+      // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
+      // transcript / stderr のファイル名をセッションごとに一意にする。イベント
+      // は監査ログの正本として元々書いていたもの — ファイル名を確定できる位置
+      // まで先に書く(ADR 0149 決定2: transcript の open と spawn より先)。
+      spawnedEventId = appendEvent(this.options.db, {
+        taskId: task.id,
+        // attributed to whichever agent actually got spawned (ADR 0012 / issue
+        // #36) — not this worker's configured default, which a pre-set
+        // delegation may override
+        workerId: agent.name,
+        origin: "board",
+        // issue #127: this records the *attempt* to spawn, not a successful
+        // session — it is written before the transcript open and spawn()
+        // (ADR 0149), and either can still fail after this write so that the
+        // process never comes into being. That is not a false
+        // record: every fact this event carries (the resolved definition, the
+        // registry commit read) is true regardless of whether the process
+        // starts. spawn_failed, when it follows, closes the pair honestly
+        // rather than this event needing to be walked back.
+        payload: {
+          kind: "worker_spawned",
+          registry_commit: registry.commit,
+          definition_version: definition.version,
+          // issue #33 判断6: what the board pinned, not what the frontmatter said
+          // — the two differ under the board's advisor ceiling, and only the
+          // frontmatter is recoverable from registry_commit above.
+          advisor: routing.advisor ?? null,
+          // ADR 0110 決定3: 選んだ実行設定とその出所(advisor の出所も —— ADR 0208 決定6)。
+          provider: routing.provider,
+          model: routing.model,
+          effort: routing.effort,
+          tier_id: routing.tier_id,
+          source: routing.source,
+          harness: "claude-code",
+          cli_version: cliVersion,
         },
-      },
-    );
+        at: this.options.clock.now(),
+      });
+      recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
+      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
+      // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
+      // process は1つも起きない(ADR 0118 の族)
+      transcript = this.options.transcripts.open(task.id, spawnedEventId);
+      // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
+      // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
+      // reclaimed の相手が居ない session は生まれない。
+      // ponytail: spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の question が
+      // 1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
+      child = this.containers.open(task.id).spawn(
+        "claude",
+        [
+          "-p",
+          prompt,
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          // A FLOOR IS A RESIDUAL DEFAULT (ADR 0038). Headless sessions cannot
+          // answer a permission prompt, so what a mode does with the operations
+          // its rules say nothing about *is* the floor: `auto` answers them with
+          // the classifier's self-approval (a model's judgment, which ADR 0033
+          // refuses to count), the other modes answer them by asking — and with
+          // nobody there, asking *is* the refusal.
+          //
+          // The tool layer (Read / Write / Edit / Glob / Grep …) runs in-process,
+          // where ADR 0033's sandbox does not reach: while `work` ran `auto`, its
+          // residual was "yes" and a worker could read everything readable on the
+          // host and write everywhere writable (issue #151). `acceptEdits` is
+          // exactly one notch looser than `manual`: edits pass, so work can still
+          // work, and only outside-cwd is closed. `review` stays `manual` (ADR
+          // 0035), where every side effect asks. No worker session runs `auto`.
+          //
+          // Bash is untouched by this: the sandbox profile leaves
+          // `autoAllowBashIfSandboxed` at its `true` default for work (it is off
+          // for review, which is what makes review's write floor hold), so
+          // sandboxed Bash never reaches this layer in a work session and the OS
+          // remains its only bound.
+          "--permission-mode",
+          task.type === "review" ? "manual" : "acceptEdits",
+          // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
+          // is flag tier, but permission *merges* across tiers: an `allow` in the
+          // host human's `~/.claude/settings.json` or in the workspace's
+          // gitignored `settings.local.json` lifts the boundary this mode draws —
+          // measured with controls on both. Neither tier buys a worker anything
+          // (the board hands over everything it needs through `--settings`
+          // below), and the local one grows on its own via "don't ask again"
+          // without ever passing a human's review. `project` and not `""`/`user`:
+          // the workspace's own CLAUDE.md and skills ride the project tier, and
+          // ADR 0037 measured the other two taking them down. The cost is that
+          // the host's personal `~/.claude/skills` and plugin skills no longer
+          // reach a worker — deliberate: the board does not carry what it does
+          // not manage into a session (ADR 0033).
+          "--setting-sources",
+          "project",
+          "--disallowedTools",
+          disallowedTools,
+          // Neither mode above lets the MCP verbs through on their own, so every
+          // spawn carries this flag (ADR 0038); review additionally names its
+          // `review_allowed_commands` (ADR 0035). Unconditional on purpose — a
+          // spawn with no allowlist is a session that cannot reach the board.
+          "--allowedTools",
+          allowedTools,
+          // A DEFAULT-DENY ALLOWLIST (ADR 0039). The mode above is the floor for
+          // whatever the permission layer sees — but the non-file in-process tools
+          // are not permission subjects at all, so nothing residual reaches them:
+          // `CronCreate` executed under `acceptEdits` + this exact flag set with no
+          // approval asked (測定2). `--tools` closes that layer the other way round,
+          // by naming everything the session may have and nothing else, so a tool
+          // the vendor adds later arrives *closed* (an enumerated deny would let it
+          // in open). Only the built-in surface is affected — MCP verbs and skills
+          // survive it untouched (測定5), which is what makes this compatible with
+          // `--allowedTools mcp__tidepool` above and ADR 0025's skill machinery.
+          //
+          // Never conditional, never empty: `--tools ""` is the CLI's spelling for
+          // "disable all tools" (--help), so an empty join would silently produce a
+          // session that cannot call anything rather than an error. The value sits
+          // immediately before the next `--flag` because the option is variadic
+          // (`--tools <tools...>`) — a bare token after it would be swallowed.
+          "--tools",
+          spawnTools(task.type, enforcement.disableSlashCommands).join(","),
+          // the empty-allowlist shape: one flag disables every slash command
+          // (skills included), so no per-skill enumeration is needed (ADR 0025
+          // point 5).
+          ...(enforcement.disableSlashCommands ? ["--disable-slash-commands"] : []),
+          ...pinnedModelFlags(routing.model, routing.effort),
+          // issue #33: spelled here and not inside pinnedModelFlags — that helper
+          // is shared with the board's own draft/translation CLI calls, which must
+          // never acquire an advisor. Absence is not spelled by omission; see
+          // advisorSpawnFlags.
+          ...advisorSpawnFlags(routing.advisor),
+          "--mcp-config",
+          mcpConfigPath,
+          "--strict-mcp-config",
+          // ADR 0033: the OS floor under the tool layer above. Note the CLI
+          // silently ignores a --settings file that fails validation under -p
+          // (documented in its own --help), so this flag alone is not evidence
+          // the sandbox is on — that is what the deploy-time canary smoke and
+          // the capability check are for.
+          "--settings",
+          sandboxSettingsPath,
+          // who the agent is (registry definition body) and what this task type's
+          // authority sounds like (ADR 0056: review overrides the registry profile),
+          // stitched at spawn time. A party review (self RCA) additionally carries
+          // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
+          // (spec #586 C) comes last.
+          "--append-system-prompt",
+          boardProse({
+            db: this.options.db,
+            registryDir: this.options.registry.dir,
+            registry,
+            task,
+            systemPrompt: definition.systemPrompt,
+            profile,
+            // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
+            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, taskVerbSwap(this.options.db, task.id)),
+            allowedDomains: workspace.allowed_domains,
+            memorySection: memory.section ?? material?.section ?? null,
+          }),
+        ],
+        // the agent's own commits are stamped with the agent's identity (issue
+        // #53), merged over the inherited env — never a token (ADR 0024). The
+        // the spawn-tier env knobs (issue #33) ride the same merge: the explicit
+        // "no advisor" and the #69238 stream timeouts, both pinned here rather
+        // than left to the host's environment file (ADR 0005).
+        {
+          cwd: workspace.path,
+          // workerSpawnEnv builds over process.env and may *delete* the advisor
+          // kill var (ADR 0044 決定4), so it is the base here rather than an
+          // overlay — a spread on top of it could not have removed a key. The git
+          // identity carries no key it touches, so layering it after is safe.
+          env: {
+            ...workerSpawnEnv(routing.advisor, routing, taskTemp),
+            ...agentGitIdentityEnv(agent.name),
+          },
+        },
+      );
+    } catch (error) {
+      removeTaskTemp();
+      throw error;
+    }
+    const transcriptPath = transcript.streamPath;
     // the whole stream-json session is kept verbatim: the audit trail of what
     // the agent actually did, not just what it wrote back to the board
     child.stdout.pipe(transcript.stream);

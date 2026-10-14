@@ -407,8 +407,9 @@ export interface WorkerSessionSettingsInput {
  *  1. `allowWrite` does *not* take precedence over `denyWrite` (macOS 2.1.220),
  *     so the natural "deny `~/`, re-allow the workspace" shape leaves the
  *     workspace unwritable. It isn't needed anyway — the sandbox's own default
- *     already confines writes to the session cwd, refusing `/tmp` and the rest
- *     of the home tree without tidepool naming anything.
+ *     already confines writes to the session cwd and the paths `allowWrite`
+ *     names (the task temp since ADR 0257), refusing the rest of `/tmp` and the
+ *     home tree without tidepool naming anything.
  *  2. `denyWrite: [workspace]` — the shape that *would* have made a review
  *     session read-only at the OS layer — cannot work on the Linux (bwrap)
  *     backend at all (confirmed on the production Pi, 2.1.207). bwrap has to
@@ -430,7 +431,7 @@ export interface WorkerSessionSettingsInput {
  *
  *  1. This sandbox — read visibility, network, and the write *radius* of
  *     whatever the permission layer does allow (an `npm test` may run arbitrary
- *     code; its writes still can't leave the workspace).
+ *     code; its writes still can't leave the workspace and the task temp).
  *  2. The permission layer (`--permission-mode manual`, claude-worker.ts) — the
  *     write floor proper: redirections, interpreters and wrappers, the shapes
  *     issue #59's enumeration could never reach. **Live only because
@@ -475,8 +476,8 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
         ],
         allowWrite: readOnly ? [taskTemp] : [workspacePath, taskTemp],
         // ADR 0037: on both profiles, and file-level for a reason — see
-        // settingsDenyWrite. review cannot write anyway, but the floor does not
-        // ask which profile is running (ADR 0013).
+        // settingsDenyWrite. review's permission layer refuses these writes
+        // anyway, but the floor does not ask which profile is running (ADR 0013).
         denyWrite: settingsDenyWrite(workspacePath),
       },
       // ADR 0033 追記 / issue #146: not keyed on the profile — a worker of

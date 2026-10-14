@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
@@ -20,11 +20,7 @@ import { tempDir } from "./temp-dir.js";
  *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに queue の先頭へ戻る。 */
 
 let t: Tidepool;
-/** 最後に建てた盤面の fake の子。止める前に exit させ、task temp を本番と同じ経路で消す(ADR 0257)。 */
-let spawned: ReturnType<typeof recordingSpawn> | undefined;
 afterEach(async () => {
-  spawned?.emitExit(0, null);
-  spawned = undefined;
   await t?.stop();
 });
 
@@ -57,7 +53,7 @@ const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${
 async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>> } = {}) {
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
-  spawned = proc;
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   const registryDir = await makeRegistry();
   const logDir = await tempDir("row-refusal-logs-");
   const moonshotApiKeyFile = join(logDir, "moonshot-api-key");

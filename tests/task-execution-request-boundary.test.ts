@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
@@ -214,6 +214,7 @@ You are Tako.
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));
   const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   server = await startServer({
     db: boardDb,
     taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
@@ -259,5 +260,4 @@ You are Tako.
     model: "claude-fable-5-1",
     source: { tier: "task", provider: "only" },
   });
-  proc.emitExit(0, null); // task temp の後始末(ADR 0257)
 });

@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { rmSync } from "node:fs";
+import { basename } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
 import type {
@@ -1111,7 +1113,16 @@ export function recordingSpawn() {
   const emitError = (err: Error) => {
     for (const listener of errorListeners) listener(err);
   };
-  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError };
+  /** Claude worker の task temp(ADR 0257)を、子を exit させずに消す。盤面を止めた後の
+   *  `onTestFinished` から呼べる —— exit を撃つと閉じた DB に後始末が書きにいく。 */
+  const removeClaudeTaskTemps = () => {
+    for (const { env } of calls) {
+      if (env.TMPDIR && basename(env.TMPDIR).startsWith("tidepool-claude-")) {
+        rmSync(env.TMPDIR, { recursive: true, force: true });
+      }
+    }
+  };
+  return { calls, processes, killed, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTemps };
 }
 
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`

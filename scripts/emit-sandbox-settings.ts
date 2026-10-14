@@ -27,15 +27,16 @@ const permittedSkills: string[] = [];
 const allowedDomains: string[] = [];
 let taskTemp: string | undefined;
 for (let i = 0; i < rest.length; i += 1) {
-  const flag = rest[i];
-  if (flag === "--allowed-domain" || flag === "--task-temp") {
-    const value = rest[++i];
-    if (!value) {
+  if (rest[i] === "--task-temp") {
+    // a missing value falls through to the required check below
+    taskTemp = rest[++i];
+  } else if (rest[i] === "--allowed-domain") {
+    const domain = rest[++i];
+    if (!domain) {
       console.error(USAGE);
       process.exit(2);
     }
-    if (flag === "--task-temp") taskTemp = value;
-    else allowedDomains.push(value);
+    allowedDomains.push(domain);
   } else {
     permittedSkills.push(rest[i]!);
   }

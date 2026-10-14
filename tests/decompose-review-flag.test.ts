@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
@@ -400,6 +400,7 @@ it.each([
     });
     const logDir = await tempDir("review-tier-logs-");
     const proc = recordingSpawn();
+    onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
     t = await bootTidepool({
       // agent の tier を読むのは盤面の選択(ADR 0110 決定3)。adapter は選ばれた設定で走るだけ
       taskExecutionCandidates: (task) =>
@@ -439,7 +440,6 @@ it.each([
       provider: "anthropic",
       source: { tier: source, provider: "only" },
     });
-    proc.emitExit(0, null); // task temp の後始末(ADR 0257)
   },
 );
 

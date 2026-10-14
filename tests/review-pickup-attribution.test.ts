@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
@@ -67,6 +67,7 @@ You are Fugu.
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));
   const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   server = await startServer({
     db: boardDb,
     taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
@@ -116,7 +117,6 @@ You are Fugu.
     { kind: "task_picked_up", worker_id: "fugu" },
     { kind: "worker_spawned", worker_id: "fugu" },
   ]);
-  proc.emitExit(0, null); // task temp の後始末(ADR 0257)
 });
 
 it("startScheduler を直接構築しても、省略された Auditor は既定ポインタへ解決される(issue #223)", async () => {
