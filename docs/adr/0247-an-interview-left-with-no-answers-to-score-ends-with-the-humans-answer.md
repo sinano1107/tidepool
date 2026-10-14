@@ -35,3 +35,9 @@ root には AI の判断の余地が無く、escalation の答えは何も cance
 決定2 の question は、ADR 0248 で pin の子の前提の破綻すべて(初回を含む)の question になり、abandon の隣に retry が並ぶ。
 retry も root ごと cancel するのは abandon と同じで、そのうえで盤面が同じ対象の Interview を人間名義で登録する。決定2 の
 「登録し直すのは人間(ADR 0245 決定3)」は retry の答えに移った。
+
+## 追記(2026-10-14 の triage / grilling、issue #1902)
+
+決定4 の「進めない事情は escalate で上げる」は、probe が壊れていたという事情については ADR 0251 の probe の破綻の報告に
+置き換わった。決定2 の「done の答案を採点しない」は、ADR 0251 決定4 で「cancelled の Interview の採点は学習器が数えない」
+に広がった —— 報告の前に付けた採点も入らない。
