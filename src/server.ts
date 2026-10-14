@@ -617,6 +617,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     // 受理が動かすのは slot だけなので watchdog にしか用は無い —— Board call の
     // 未回収は `pendingReclaim` が容器を読み直した時点で解ける。
     acceptReclaimed: () => watchdog?.acceptReclaimed(),
+    resumeTeardown: () => watchdog?.resumeTeardown(),
   };
   // ADR 0137 決定5: 解除の門の map は WebUI と管理 MCP が共有する1つだけ
   const checks = quarantineChecks({

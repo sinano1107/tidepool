@@ -304,6 +304,27 @@ it("梯子の底に落ちた後で届いた回収済み観測は解放しない 
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
+it("Harness Containment の受理の経路は、この run で待っている回収を解放しない —— 容器が空になっていても、解放の門は Containment question だけ(issue #1937)", async () => {
+  const f = await sessionInTeardown();
+  await fallToTheBottom(f);
+  f.runtime.fireEmpty(f.task.id);
+  await settle();
+
+  f.watchdog.resumeTeardown();
+  await settle();
+
+  expect(f.watchdog.heldForContainment(f.task.id)).toBe(true);
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(f.triggered).toEqual([]);
+
+  // 確認回答の受理なら同じ待ちが解ける
+  f.watchdog.acceptReclaimed();
+  await settle();
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(f.slot.currentTaskId).toBeNull();
+});
+
 it("報告なき exit が梯子の底に落ちた後で届いた回収済み観測は解放しない —— 確認回答で tree rule が走る(issue #1380)", async () => {
   const f = await sessionInTeardown("exit");
   await writeFile(`${f.ws.path}/wip.txt`, "unfinished work\n");

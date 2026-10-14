@@ -1,8 +1,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { markTeardown } from "../src/teardown.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, queueWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -253,4 +254,57 @@ it("回収 timeout のあと再起動して前提検査が通ると、回答よ�
   expect(accepted.status).toBe(200);
   await t.clock.advance(HOUR);
   await pickedUp(second);
+});
+
+it("Harness 封じ込めの盤面で前提検査が落ちた再起動のあと、Harness Containment question への確認回答が後始末の印の残る session の後始末を走らせる —— 中断のタスクは todo に戻り、完走より前に次の pickup は起きない(issue #1937)", async () => {
+  const ws = await makeWorkspace("sandbox");
+  const harnessContainment = async () => ({ available: true }) as const;
+  t = await bootTidepool({ workspace: ws, watchdog, harnessContainment });
+  const task = queueWork(t, "interrupted by cap");
+  queueWork(t, "next");
+  await t.clock.advance(HOUR);
+  await pickedUp(task);
+  writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
+  // 上限到達による中断を adapter が観測した瞬間の行(tests/teardown.test.ts と同じ setup)。
+  // 梯子には落ちていないので盤面全体の Containment question は無く、残るのは後始末の印だけ
+  markTeardown(t.db, task.id, t.clock.now());
+  await t.stopServer();
+
+  // 前提検査が落ちた起動: 起動時の復旧は枠を握らず、盤面全体の Containment ではなく Harness ごとの question が立つ
+  const restarted = new FakeContainerRuntime();
+  restarted.scriptPreflight("previous session may still be alive");
+  t = await bootTidepool({ dir: t.dir, workspace: ws, containerRuntime: restarted, watchdog, harnessContainment });
+  const [claude, codex] = await vi.waitFor(async () => {
+    const both = await Promise.all([
+      servedQuarantineQuestion(t, "harnessContainment", "claude-code"),
+      servedQuarantineQuestion(t, "harnessContainment", "codex"),
+    ]);
+    expect(both).not.toContain(undefined);
+    return both;
+  });
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.halts).toEqual([]);
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id, settlement: "interrupted" });
+  // 次に走り出す session の瞬間に、作業ツリーが清潔で WIP がタスクブランチにあるかを見る
+  const atStart: Array<{ id: string; dirty: string; taskBranch: string }> = [];
+  const start = t.worker.start.bind(t.worker);
+  t.worker.start = (started, ...rest) => {
+    atStart.push({
+      id: started.id,
+      dirty: git(ws.path, "status", "--porcelain"),
+      taskBranch: git(ws.path, "ls-tree", "--name-only", `task/${task.id}`),
+    });
+    start(started, ...rest);
+  };
+
+  restarted.scriptPreflight(); // 修理済み
+  for (const question of [claude, codex]) {
+    const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+    expect(answered.status).toBe(200);
+  }
+  await t.clock.advance(HOUR);
+  await vi.waitFor(() => expect(atStart).toHaveLength(1));
+
+  // 後始末が完走して todo に戻ったタスク自身が次の pickup になり、その時点で WIP はタスクブランチに退避済み
+  expect(atStart[0]).toMatchObject({ id: task.id, dirty: "", taskBranch: expect.stringContaining("wip.txt") });
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
 });
