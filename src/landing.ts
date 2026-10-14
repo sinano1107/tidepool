@@ -208,8 +208,8 @@ function lastPushedHead(db: Db, taskId: string): string | undefined {
 
 /** ADR 0242 決定4: GitHub の head に無い内容(`left`)があり、盤面が最後に push した head と比べれば積み残しが無いなら、
  *  盤面の外の push が落としたもので盤面には運ぶ手が無い。そのとき、外の push の事実・届いていない子孫のブランチ(子孫が
- *  無ければ着地するタスク自身)・直す手段2つ(ADR 0239 帰結)を言う文を返す。最後に push した head とも比べられなければ、
- *  落としたとは読まない(盤面がまだ運ぶ側) */
+ *  無ければ着地するタスク自身)・直す手段2つ(捨てる側は GitHub の head から始め直す)を言う文を返す。最後に push した
+ *  head とも比べられなければ、落としたとは読まない(盤面がまだ運ぶ側) */
 export async function outsidePushDropNotice(
   db: Db,
   workspace: WorkspaceConfig,
@@ -222,7 +222,9 @@ export async function outsidePushDropNotice(
   const branches = (descendants.length > 0 ? descendants : left).map(taskBranch).join(", ");
   return (
     `PR #${pr.number}'s head ${pr.head} was pushed outside the board and lacks the content of ${branches} — push that ` +
-    `content back onto ${taskBranch(taskId)}, or, to discard it, record \`git merge -s ours\` of it in the workspace and push`
+    `content back onto ${taskBranch(taskId)}, or, to discard it, reset ${taskBranch(taskId)} in the workspace to that head ` +
+    `(\`git fetch origin\` then \`git reset --hard origin/${taskBranch(taskId)}\`), record \`git merge -s ours\` of it there ` +
+    `and push`
   );
 }
 
