@@ -20,7 +20,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
-import { workspaceContainment } from "./harness-containment.js";
+import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -1743,7 +1743,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    const contained = workspaceContainment("claude-code", workspace.path);
+    const contained = claudeWorkspaceContainment(workspace.path);
     if (!contained.available) {
       registerQuarantine(
         this.options.db,

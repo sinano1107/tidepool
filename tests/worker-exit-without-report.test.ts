@@ -8,7 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
-import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -476,6 +476,7 @@ async function bootCodex() {
         codexHome,
         cliVersion: "codex-cli 0.147.0",
         executable: "/opt/tidepool/bin/codex",
+        boardCall: closedCodexSkillsCall(),
       }),
     "openai",
   );

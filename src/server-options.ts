@@ -48,6 +48,7 @@ import {
   CODEX_CLI_VERSION,
   CodexWorker,
   createCodexCapabilityCheck,
+  createCodexWorkspaceCheck,
 } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
@@ -339,6 +340,8 @@ export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
           codexHome: board.codexHome,
           executable: board.codexExecutable,
           cliVersion: CODEX_CLI_VERSION,
+          // ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る口
+          boardCall,
           boardState: board.boardState,
           onSpawnFailed,
           onWorkerExited,
@@ -765,6 +768,12 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
       executable: board.codexExecutable,
       codexHome: board.codexHome,
       command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
+    }),
+    // ADR 0259 決定5: (codex, workspace) の組の question への回答時の検査
+    codexWorkspaceContainment: createCodexWorkspaceCheck({
+      executable: board.codexExecutable,
+      codexHome: board.codexHome,
+      call,
     }),
     harnessContainment: board.registryDir
       ? (harness: Harness) => harness === "codex"

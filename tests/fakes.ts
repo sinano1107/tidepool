@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { rmSync } from "node:fs";
+import { once } from "node:events";
+import { readFileSync, realpathSync, rmSync } from "node:fs";
 import { basename } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
@@ -8,7 +9,7 @@ import type {
   AllocationJudgment,
   AllocationReviewInput,
 } from "../src/allocation-review.js";
-import { type BoardCall, createBoardCalls } from "../src/board-call.js";
+import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { createCodexCapabilityCheck } from "../src/codex-worker.js";
@@ -1051,6 +1052,52 @@ export const healthyOpenai = async (now: Date): Promise<CodexAppServerProbeResul
   ],
 });
 
+/** 実物の `skills/list` 応答の `result`(codex-cli 0.147.0)。採り方は codex-containment.test.ts の読み取りのテストの上。
+ *  無印は列挙、closed / one-enabled は閉じた設定を当てた観測。 */
+export function codexSkillsList(variant?: "closed" | "one-enabled"): unknown {
+  return JSON.parse(
+    readFileSync(new URL(`fixtures/codex-skills-list${variant ? `-${variant}` : ""}.json`, import.meta.url), "utf8"),
+  );
+}
+
+/** 実物の応答の workspace B の entry を、要求された cwd ごとの entry として返す —— 読み手は要求した cwd の entry を要る。 */
+export function codexSkillsListAt(cwds: readonly string[], variant?: "closed" | "one-enabled"): unknown {
+  const [entry] = (codexSkillsList(variant) as { data: object[] }).data;
+  return { data: cwds.map((cwd) => ({ ...entry, cwd })) };
+}
+
+/** `codexSkillsListAt` の answer —— 列挙には実物の応答、観測には `observed` の応答を返す。 */
+export const answerSkillsList =
+  (observed: "closed" | "one-enabled") => (args: readonly string[], cwds: readonly string[]) =>
+    codexSkillsListAt(cwds, args.includes("--strict-config") ? observed : undefined);
+
+/** Codex app-server に答える fake の Board call(ADR 0259 の skill の列挙と観測)。要求ごとの `result` は
+ *  `answer(args, cwds)` が返す —— args に `--strict-config` があれば観測、無ければ列挙。cwds は要求の `params.cwds`。
+ *  null を返すと口が答えを返さなかった(上限到達)ことにする。`calls` に注文と、stdin に流れた要求(initialize を除く)を残す。 */
+export function fakeAppServerCall(answer: (args: readonly string[], cwds: readonly string[]) => unknown) {
+  const calls: Array<{ spec: BoardCallSpec; requests: Array<{ method: string; params: any }> }> = [];
+  const call = (async (spec: BoardCallSpec, read: (proc: ContainedProcess, done: () => void) => (code: number | null) => unknown) => {
+    const io = { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough() };
+    const finish = read(io as unknown as ContainedProcess, () => {});
+    const requests = String(io.stdin.read())
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line))
+      .filter((request) => request.id > 1);
+    calls.push({ spec, requests });
+    const results = requests.map((request) => ({ id: request.id, result: answer(spec.args, request.params.cwds) }));
+    if (results.some(({ result }) => result === null)) return null;
+    io.stdout.end([{ id: 1, result: {} }, ...results].map((line) => `${JSON.stringify(line)}\n`).join(""));
+    await once(io.stdout, "end");
+    return finish(0);
+  }) as BoardCall;
+  return { call, calls };
+}
+
+/** 列挙には実物の応答を、観測には全部閉じた実物の応答を返す app-server の口 —— skill の閉鎖を駆動しない Codex adapter の
+ *  テストが渡す(ADR 0259)。 */
+export const closedCodexSkillsCall = (): BoardCall => fakeAppServerCall(answerSkillsList("closed")).call;
+
 /** 1回の spawn の記録(command / args / cwd / env)。 */
 export interface SpawnCall {
   command: string;
@@ -1125,40 +1172,49 @@ export function recordingSpawn() {
   return { calls, processes, killed, spawn, emitExit, emitExitAt, emitExitOnlyAt, emitCloseAt, emitError, removeClaudeTaskTemps };
 }
 
+/** preflight の skills/list(段 1)の app-server の stdout。 */
+export const skillsListAnswer = (result: unknown) => `{"id":1,"result":{}}\n${JSON.stringify({ id: 2, result })}\n`;
+/** skill を持たない cwd の skills/list の `result`。 */
+export const emptySkillsList = (cwd: string) => ({ data: [{ cwd, skills: [], errors: [] }] });
+
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
  *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
- *  prompt-input(1)・features list(2)・sandbox probe ×2(3, 4)・work app-server(5)・
- *  review app-server(6)。停止点までの段は exit 0 で通す — prompt-input は JSON を読まれる
- *  ので空配列を返し、review まで進めるときだけ work app-server(hooks/list)に登録一致の
- *  応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
+ *  skills/list(1)・prompt-input(2)・features list(3)・sandbox probe ×2(4, 5)・work app-server(6)・
+ *  review app-server(7)。停止点までの段は exit 0 で通す — skills/list は `skillsList(cwd)`(既定は skill 無し)を
+ *  返し、prompt-input は JSON を読まれるので空配列を返し、review まで進めるときだけ work app-server
+ *  (hooks/list)に登録一致の応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
  *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
  *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
  *  work 側の index は `index - 1`。 */
 export async function driveCodexPreflight(
   stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
-  overrides: { codexHome?: string; codexSystemDir?: string; workspace?: string; allowedDomains?: readonly string[] } = {},
+  overrides: { codexHome?: string; workspace?: string; allowedDomains?: readonly string[]; skillsList?: (cwd: string) => unknown } = {},
 ) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
+  const workspace = overrides.workspace ?? await tempDir("tidepool-codex-preflight-ws-");
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: overrides.codexHome ?? await tempDir("tidepool-codex-home-"),
-    codexSystemDir: overrides.codexSystemDir,
-    workspace: overrides.workspace ?? await tempDir("tidepool-codex-preflight-ws-"),
+    workspace,
     allowedDomains: overrides.allowedDomains ?? [],
     call: boardCall,
   })();
 
-  const before = stop === "sandboxProbe" ? [0, 1, 2] : [0, 1, 2, 3, 4];
+  const answers: Record<number, string> = {
+    1: skillsListAnswer((overrides.skillsList ?? emptySkillsList)(realpathSync(workspace))),
+    2: "[]",
+  };
+  const before = stop === "sandboxProbe" ? [0, 1, 2, 3] : [0, 1, 2, 3, 4, 5];
   for (const i of before) {
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    if (i === 1) spawn.processes[1]!.stdout.write("[]");
+    if (answers[i]) spawn.processes[i]!.stdout.write(answers[i]);
     spawn.emitExitAt(i, 0, null);
   }
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(before.length + 1));
 
   if (stop === "reviewAppServer") {
-    const workIndex = before.length; // 5: work app-server
+    const workIndex = before.length; // 6: work app-server
     spawn.processes[workIndex]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n');
     spawn.emitExitAt(workIndex, 0, null);
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));

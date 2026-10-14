@@ -25,7 +25,11 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import { type HarnessContainmentCheck, workspaceContainment } from "./harness-containment.js";
+import {
+  type CodexWorkspaceCheck,
+  claudeWorkspaceContainment,
+  type HarnessContainmentCheck,
+} from "./harness-containment.js";
 import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -493,6 +497,8 @@ export interface QuarantineCheckDeps {
   clock?: Clock;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0259 決定5: (codex, workspace) の組の検査。Absent → その組への回答は拒まれる。 */
+  codexWorkspaceContainment?: CodexWorkspaceCheck;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
@@ -579,7 +585,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspaceContainment: async (value) => {
       const { harness, workspace } = parseWorkspaceContainmentValue(value!);
       const target = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
-      const capability = workspaceContainment(harness, target.path);
+      const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
+        throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
+      });
+      const capability = harness === "codex" ? await codex(target) : claudeWorkspaceContainment(target.path);
       if (!capability.available) {
         throw new DomainError(
           `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,
