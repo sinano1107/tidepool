@@ -458,15 +458,18 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
 }
 
 export interface TaskVerbSwap {
-  withheld: readonly ("decompose" | "redecompose")[];
-  added: readonly "pose_probe"[];
+  withheld: readonly ("decompose" | "redecompose" | "complete_task")[];
+  added: readonly ("pose_probe" | "complete_interview")[];
 }
 
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
- *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、出題前の root にだけ出題の verb を足す。 */
+ *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、root は complete_task も伏せて、出題前は出題の verb を、
+ *  出題済みは採点完了の verb を足す(ADR 0253 決定4)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose"], added: [] };
-  if (interviewTargets(db, taskId) !== null) return { withheld: ["decompose", "redecompose"], added: interviewProbe(db, taskId) === null ? ["pose_probe"] : [] };
+  if (interviewTargets(db, taskId) !== null) {
+    return { withheld: ["decompose", "redecompose", "complete_task"], added: [interviewProbe(db, taskId) === null ? "pose_probe" : "complete_interview"] };
+  }
   return { withheld: [], added: [] };
 }
 
@@ -1053,6 +1056,22 @@ export function completeTask(
   now: Date,
   origin: EventOrigin,
 ): Task {
+  // ADR 0253 決定5: Interview の root は扉を問わず採点完了でだけ終わる —— 子0のまま完了する経路もここで閉じる
+  if (interviewTargets(db, task.id) !== null) {
+    throw new DomainError("an Interview root completes only with complete_interview: score every done child and write the findings in one call");
+  }
+  return finishTask(db, task, handoff, workerId, now, origin);
+}
+
+/** 完了の処理の本体: completeTask と採点完了(completeInterview)が通る。 */
+function finishTask(
+  db: Db,
+  task: Task,
+  handoff: Partial<HandoffDoc> | undefined,
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
   if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
     const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
     if (missing.length > 0) {
@@ -1067,18 +1086,6 @@ export function completeTask(
   // integrates, then completes)
   if (hasUnfinishedChildren(db, task.id)) {
     throw new DomainError("a task with unfinished children cannot complete");
-  }
-  // ADR 0247 決定4: Interview の root は done の答案を全部採点してから完了する(pin の子は Interview の root にしか居ない)
-  const unscored = db
-    .prepare(
-      `SELECT id FROM tasks c WHERE parent_id = ? AND interview_target_id IS NOT NULL AND status = 'done'
-         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = c.id AND e.kind = 'interview_scored') ORDER BY sort_key`,
-    )
-    .all(task.id) as Array<{ id: string }>;
-  if (unscored.length > 0) {
-    throw new DomainError(
-      `an Interview completes only after every done child is scored — score each with score_interview (accepted or rejected); unscored: ${unscored.map(({ id }) => id).join(", ")}`,
-    );
   }
   const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
   const handoffDoc = rendered === "" ? null : rendered;
@@ -1963,21 +1970,43 @@ function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
   return null;
 }
 
-/** Interview の採点の注釈(ADR 0199 / ADR 0181 決定4): root が統合復帰で、決着した自分の pin の子の outcome を残す。
- *  採り直しは後の注釈が有効。 */
-export function scoreInterview(
+export interface InterviewScore {
+  child_id: string;
+  outcome: InterviewOutcome;
+}
+
+/** 採点完了(ADR 0253 決定4 / ADR 0199 / ADR 0181 決定4): 出題済みの Interview の root が、決着した pin の子のうち done の子
+ *  全部をちょうど1回ずつ採点し、findings の handoff(outcome 必須)と一度に渡す。1つの transaction で各子に採点の注釈を書き、
+ *  今の完了の処理で root を done にする。どの拒否でも何も書かない。 */
+export function completeInterview(
   db: Db,
   root: Task,
-  childId: string,
-  outcome: InterviewOutcome,
+  { scores, handoff }: { scores: InterviewScore[]; handoff: Partial<HandoffDoc> | undefined },
   workerId: string,
   now: Date,
   origin: EventOrigin,
-): number {
-  const child = getTask(db, childId);
-  if (!child || child.parent_id !== root.id || child.interview_target_id === null) throw new DomainError(`task ${childId} is not an Interview child of this task`);
-  if (child.status !== "done") throw new DomainError("only a done child is scored");
-  return appendEvent(db, { taskId: child.id, workerId, origin, payload: { kind: "interview_scored", outcome }, at: now });
+): Task {
+  if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root completes with complete_interview");
+  if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview has no probe to score yet: pose it with pose_probe first");
+  if (hasUnfinishedChildren(db, root.id)) throw new DomainError("a task with unfinished children cannot complete: every child must settle first");
+  if (handoff?.outcome === undefined || whyBlank(handoff.outcome)) throw new DomainError("complete_interview requires the findings in handoff.outcome");
+  const done = new Set(listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done").map(({ id }) => id));
+  const scored = new Set<string>();
+  for (const { child_id } of scores) {
+    const child = getTask(db, child_id);
+    if (!child || child.parent_id !== root.id || child.interview_target_id === null) throw new DomainError(`${child_id} is not a child of this Interview`);
+    if (!done.has(child_id)) throw new DomainError(`${child_id} is not done: only a done child is scored`);
+    if (scored.has(child_id)) throw new DomainError(`${child_id} is scored more than once: score each done child exactly once`);
+    scored.add(child_id);
+  }
+  const unscored = [...done].filter((id) => !scored.has(id));
+  if (unscored.length > 0) throw new DomainError(`score every done child exactly once; unscored: ${unscored.join(", ")}`);
+  return db.transaction(() => {
+    for (const { child_id, outcome } of scores) {
+      appendEvent(db, { taskId: child_id, workerId, origin, payload: { kind: "interview_scored", outcome }, at: now });
+    }
+    return finishTask(db, root, handoff, workerId, now, origin);
+  })();
 }
 
 export interface ChildSpec extends TaskContent {
@@ -3202,7 +3231,7 @@ type HistoryChildContext = TaskContent &
   Omit<SettledChildContext, "title" | "status"> & {
     status: BoardTask["status"];
     you?: true;
-    /** Interview の子だけ: score_interview が名指す id。 */
+    /** Interview の子だけ: complete_interview の採点が名指す id。 */
     id?: string;
     /** この子が宣言して、まだ閉じていない前提の破綻の理由(ADR 0121)。 */
     premise_breach?: string;

@@ -22,7 +22,7 @@ import {
   WORKER_SPAWNED,
 } from "./harness.js";
 
-// Interview の盤面境界(登録 → 出題 → 統合復帰 → 注釈)。振る舞いは interview.test.ts の domain 層で一度ずつ言い、
+// Interview の盤面境界(登録 → 出題 → 統合復帰 → 採点完了)。振る舞いは interview.test.ts の domain 層で一度ずつ言い、
 // ここは扉の写像だけを言う(ADR 0107)。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -34,6 +34,7 @@ const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high"
 const sol = { provider: "openai", model: "gpt-5.6-sol", effort: "high", tier: "standard" };
 const INTERVIEW = { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
+const FINDINGS = { outcome: "the parser probe separates the targets" };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
 /** root が出題し、立った pin の子の id を返す。 */
 const pose = async (rootId: string): Promise<[string, ...string[]]> => JSON.parse((await callAsTask(t, rootId, "pose_probe", POSE)).content[0].text).child_ids;
@@ -98,7 +99,7 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id)).toEqual([]);
 });
 
-it("worker MCP の tool 一覧は taskVerbSwap に従う —— 出題前の Interview の root は pose_probe を持ち分解の verb を持たず、出題済みの root と pin の子は3つとも持たず、普通の work は分解の verb を持ち pose_probe を持たない(ADR 0253 決定5)", async () => {
+it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview を持つ。pin の子は分解の verb だけを持たず、普通の work は分解の verb を持ち、pin の子と普通の work はどちらの差し替えの verb も持たない(ADR 0253 決定4・5)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -111,18 +112,19 @@ it("worker MCP の tool 一覧は taskVerbSwap に従う —— 出題前の Int
     }
   };
   const ordinary = await tools(work.id);
-  expect(ordinary).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
-  expect(ordinary).not.toContain("pose_probe");
+  expect(ordinary).toEqual(expect.arrayContaining(["decompose", "redecompose", "complete_task"]));
+  for (const verb of ["pose_probe", "complete_interview", "score_interview"]) expect(ordinary).not.toContain(verb);
   const unsplit = ordinary.filter((name) => name !== "decompose" && name !== "redecompose");
-  expect((await tools(root.id)).sort()).toEqual([...unsplit, "pose_probe"].sort());
+  const rootVerbs = unsplit.filter((name) => name !== "complete_task");
+  expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "pose_probe"].sort());
   // 出題の前に対象の一覧を読める(#1924 User Story 3)
   expect(JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text).interview_targets).toEqual([opus46]);
   const [childId] = await pose(root.id);
-  expect(await tools(root.id)).toEqual(unsplit);
+  expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "complete_interview"].sort());
   expect(await tools(childId)).toEqual(unsplit);
 });
 
-it("出題で立った pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点して完了する", async () => {
+it("出題で立った pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
@@ -144,11 +146,11 @@ it("出題で立った pin の子は対象で spawn され、PR も完了時レ�
   const scoringInput = (await callAsTask(t, root.id, "get_current_task", {})).content[0].text;
   expect(scoringInput).not.toContain("fake-worker");
   expect(scoringInput).not.toContain("claude-opus-4-6");
-  expect((await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" })).isError).toBeFalsy();
+  const completed: any = await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
+  expect(completed.isError).toBeFalsy();
   const annotation = (await api(t.baseUrl, "GET", `/api/tasks/${childId}/events`)).json.find((e: any) => e.kind === "interview_scored");
   expect(annotation).toMatchObject({ payload: { outcome: "accepted" } });
-  expect((await callAsTask(t, root.id, "complete_task", {})).isError).toBeFalsy();
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.map((e: any) => e.kind)).toContain("task_completed");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "task_completed")).toMatchObject({ payload: { result: FINDINGS.outcome } });
 });
 
 it("採点した対象の段に行を足すと、その行の本番の pickup の shadow 行が Interview の内訳を運び、list_routing_shadow に出る", async () => {
@@ -161,8 +163,7 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
-  await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" });
-  await callAsTask(t, root.id, "complete_task", {});
+  await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
   const row = { setting: "row", row: { ...opus46, price_in: 1, price_out: 5 } };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", row)).status).toBe(200);
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, tier: "frontier" })).json;
@@ -182,10 +183,10 @@ it("pin の子の pickup は、学習器が昇格していない盤面でも sha
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
   expect(t.worker.started.at(-1)!.id).toBe(childId);
-  // runNow は slot の root も完了させるので、先に答案を採点しておく(ADR 0247 決定4)
+  // root を採点完了で終わらせて slot を空けてから meta-review を走らせる
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
-  await callAsTask(t, root.id, "score_interview", { child_id: childId, outcome: "accepted" });
+  await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
   registerMetaReview(t.db, "routing", t.clock.now());
   const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
   await runNow(t, review.id);

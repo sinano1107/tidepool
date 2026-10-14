@@ -8,10 +8,11 @@ const CODEX = { delegate: "a subagent", workflow: false };
 const NOT_SPLIT =
   "This task is not split: complete it in this session. If it is larger than one session can finish, finish what you can and state in the handoff what remains.";
 const words = (text: string) => text.replace(/\s+/g, " ");
-/** task ごとの verb の差し替え(taskVerbSwap の値): 普通の task、分けない task、出題前の Interview の root。 */
+/** task ごとの verb の差し替え(taskVerbSwap の値): 普通の task、分けない task(pin の子)、出題前と出題済みの Interview の root。 */
 const SPLIT = { withheld: [], added: [] };
 const NOT_SPLIT_SWAP = { withheld: ["decompose", "redecompose"] as const, added: [] };
-const POSE = { withheld: ["decompose", "redecompose"] as const, added: ["pose_probe"] as const };
+const POSE = { withheld: ["decompose", "redecompose", "complete_task"] as const, added: ["pose_probe"] as const };
+const POSED = { withheld: ["decompose", "redecompose", "complete_task"] as const, added: ["complete_interview"] as const };
 
 it("分ける task の doctrine はバイト単位で不変(#695)", () => {
   expect(boardDoctrine(CLAUDE, SPLIT)).toBe(
@@ -39,4 +40,8 @@ it("出題前の Interview の root の doctrine は出題の verb を指し、d
     expect(doctrine).not.toContain("decompose");
     expect(words(doctrine)).not.toContain("complete it in this session");
   }
+});
+
+it("出題済みの Interview の root の doctrine は、採点完了の verb を足しても分けない task の doctrine のまま(ADR 0253 決定4 / ADR 0247 決定3)", () => {
+  for (const vocabulary of [CLAUDE, CODEX]) expect(boardDoctrine(vocabulary, POSED)).toBe(boardDoctrine(vocabulary, NOT_SPLIT_SWAP));
 });
