@@ -37,11 +37,13 @@ import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-wr
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
+import type { TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
   assertAnswerable,
   assertInterviewTargets,
   assertNoUnsettledIssueRef,
+  assertTargetsRunnable,
   assertUnsettledNotInProgress,
   type BoardTask,
   type CancelDefaults,
@@ -96,6 +98,8 @@ export interface RegisterThroughHumanDoorDeps {
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
+  /** Interview の対象を既定 agent が走らせられるかの判定の口(ADR 0253 決定3)。Absent → 検査しない。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
 }
 
 export interface HumanRegisterInput extends RegisterTaskInput {
@@ -411,7 +415,14 @@ export async function registerThroughHumanDoor(
         }
       }
     }
-    const task = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
+    const task = deps.db.transaction(() => {
+      const registered = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
+      // ADR 0253 決定3: 対象は行の id を得てから判定するので、拒否は登録ごと巻き戻す
+      if (input.interview_targets && deps.taskExecutionCandidates) {
+        assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
+      }
+      return registered;
+    })();
     deps.pollNow();
     return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {

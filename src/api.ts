@@ -732,6 +732,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         pollNow,
         defaultAgentName,
         auditorName,
+        taskExecutionCandidates,
       },
       parsed.data,
       () => clock.now(),

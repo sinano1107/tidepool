@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -13,6 +13,7 @@ import { PROVIDER_VALUES } from "./provider.js";
 import { type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
+import type { TaskExecutionCandidates } from "./scheduler.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
 import {
@@ -283,8 +284,6 @@ export interface PendingChildSpec extends TaskContent {
    *  same line as `review_flag` above. */
   tier?: string;
   priority?: string;
-  /** Interview の子の pin。pin を持つ子が approval question に変わっても落とさない。 */
-  interview_target_id?: number;
 }
 
 /** The SQLite shape of a task: items/answer/pending-child are JSON TEXT
@@ -423,7 +422,7 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
   priority?: string;
   /** Interview の対象の一覧(ADR 0199 決定3): root review だけが持つ。人間の登録の扉が渡す。 */
   interview_targets?: InterviewTarget[];
-  /** Interview の子の pin(対象の行の id)。decompose が照合してから渡す。 */
+  /** Interview の子の pin(対象の行の id)。出題が渡す(ADR 0253 決定1)。 */
   interview_target_id?: number;
 }
 
@@ -458,63 +457,43 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
   }
 }
 
-/** decompose の照合(ADR 0199 決定3): 子の pin を root の対象の id に引く。4欄の完全一致で、effort の null も値として比べる
- *  (ADR 0218 決定5)。pin の子は対象で走り、使い捨てブランチで採点されるので、完了時レビューも別の要求も持たない ——
- *  要求ティアは対象の段になる。Interview の子は全部 pin を持つ(ADR 0245 決定4)。 */
-function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec, interview: boolean): DecomposeChild {
-  const { interview_pin: pin, ...rest } = child;
-  if (!pin && !interview) return child;
-  if (!pin) throw new DomainError("every child of an Interview carries interview_pin: run each target as its own child pinned to one of the Interview's targets");
-  if (!interview) throw new DomainError("only an Interview's children carry interview_pin");
-  if (child.review_flag || child.risk_flag || child.tier !== undefined || child.priority !== undefined) {
-    throw new DomainError("an Interview child runs at its pin on a branch that never lands, so it takes no review_flag, risk_flag, tier or priority");
-  }
-  const id = interviewTargetId(db, parent.id, pin);
-  if (id === undefined) throw new DomainError(`interview_pin ${JSON.stringify(pin)} is not one of this Interview's targets`);
-  return { ...rest, tier: pin.tier, interview_target_id: id };
+export interface TaskVerbSwap {
+  withheld: readonly ("decompose" | "redecompose")[];
+  added: readonly "pose_probe"[];
 }
 
-/** Interview の分解は一覧の各対象にちょうど1つの子を置く(ADR 0249 決定1): 欠けた対象と重なった対象を4欄で名指して拒む。
- *  権限外で承認 question になる子も、ここではまだ子として数える。 */
-function assertCoversTargetsOnce(db: Db, rootId: string, targets: InterviewTarget[], children: DecomposeChild[]): void {
-  const missing: string[] = [];
-  const doubled: string[] = [];
-  for (const target of targets) {
-    const id = interviewTargetId(db, rootId, target);
-    const count = children.filter((child) => child.interview_target_id === id).length;
-    if (count === 0) missing.push(JSON.stringify(target));
-    if (count > 1) doubled.push(JSON.stringify(target));
-  }
-  const problems: string[] = [];
-  if (missing.length) problems.push(`no child pins ${missing.join(", ")}`);
-  if (doubled.length) problems.push(`more than one child pins ${doubled.join(", ")}`);
-  if (problems.length) throw new DomainError(`an Interview runs exactly one child per target: ${problems.join("; ")}`);
-}
-
-/** pin と4欄一致する root の対象の id(ADR 0199 決定3)。effort の null も値として比べる(ADR 0218 決定5)。無ければ undefined。 */
-export function interviewTargetId(db: Db, rootId: string, pin: InterviewTarget): number | undefined {
-  const target = db
-    .prepare(
-      `SELECT id FROM interview_targets WHERE task_id = ? AND provider = ? AND model = ? AND effort IS ? AND tier_id = ${liveTierId("?")}`,
-    )
-    .get(rootId, pin.provider, pin.model, pin.effort, pin.tier) as { id: number } | undefined;
-  return target?.id;
-}
-
-/** Interview の木で登録しない分解の verb(ADR 0245 決定1・3、ADR 0122 決定2 の task ごとの差し替え)。
- *  pin の子は分解の verb を両方、Interview の root は redecompose を、最初の分解の後は両方。worker MCP の登録と Codex の宣言が同じここを引く。 */
-export function withheldDecompositionVerbs(db: Db, taskId: string): readonly ("decompose" | "redecompose")[] {
-  if (getTask(db, taskId)?.interview_target_id != null) return ["decompose", "redecompose"];
-  if (interviewTargets(db, taskId) !== null) return hasDecomposed(db, taskId) ? ["decompose", "redecompose"] : ["redecompose"];
-  return [];
+/** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
+ *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、出題前の root にだけ出題の verb を足す。 */
+export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
+  if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose"], added: [] };
+  if (interviewTargets(db, taskId) !== null) return { withheld: ["decompose", "redecompose"], added: interviewProbe(db, taskId) === null ? ["pose_probe"] : [] };
+  return { withheld: [], added: [] };
 }
 
 /** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
 export function interviewTargets(db: Db, taskId: string): InterviewTarget[] | null {
-  const rows = db
-    .prepare("SELECT provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
-    .all(taskId) as InterviewTarget[];
+  const rows = targetRows(db, taskId).map(({ id: _, ...target }) => target);
   return rows.length ? rows : null;
+}
+
+/** 対象の行(一覧の順)。出題と走れるかの検査は pin の子が持つ行の id を要る。 */
+function targetRows(db: Db, taskId: string): Array<InterviewTarget & { id: number }> {
+  return db
+    .prepare("SELECT id, provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
+    .all(taskId) as Array<InterviewTarget & { id: number }>;
+}
+
+/** 既定 agent が走らせられない対象を名指して拒む(ADR 0253 決定3): pin の Provider が既定 agent の entry に無いか、advisor の
+ *  entry で advisor を導出できない(ADR 0208)対象は、spawn の候補が空で走れない。判定は pickup と同じ候補の口に assignee 未指定の
+ *  pin の子を渡す(registry の無い盤面の暗黙の entry を含む)。登録の扉と出題が引き、`remedy` は呼び手が直し方を足す。 */
+export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskExecutionCandidates, agentName = "the default agent", remedy = ""): void {
+  for (const { id, ...target } of targetRows(db, rootId)) {
+    if (candidates({ type: "work", assignee: null, tier: null, priority: null, review_tier: null, interview_target_id: id }).length > 0) continue;
+    throw new DomainError(
+      `target ${JSON.stringify(target)} cannot run as ${agentName}: its provider is not among ${agentName}'s providers, ` +
+        `or ${agentName} has an advisor that cannot be derived for this model under the board's advisor ceiling${remedy}`,
+    );
+  }
 }
 
 /** Every question carries 1-4 items (issue #30) — a quarantine question may carry none, when only a table edit settles
@@ -1681,10 +1660,6 @@ export function answerQuestion(
               at: now,
             });
           }
-        } else if (pending.interview_target_id !== undefined && interviewLeftEmpty(db, question.parent_id!)) {
-          // ADR 0247 決定1: 最後の対象を断った答えで Interview を終える
-          cancelTask(db, getTask(db, question.parent_id!)!, question.id, HUMAN_WORKER_ID, now, origin);
-          break;
         }
         unblockTarget = blockedParent();
         break;
@@ -1806,12 +1781,6 @@ function openPremiseBreachChildId(db: Db, parentId: string): string | undefined 
   return row?.id;
 }
 
-/** Whether `parentId` has ever been decomposed: only a decomposition gives a child (or its approval question) a
- *  `based_on_decision`, and the row stays whatever becomes of it — cancelled or rejected. */
-function hasDecomposed(db: Db, parentId: string): boolean {
-  return db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND based_on_decision IS NOT NULL LIMIT 1").get(parentId) !== undefined;
-}
-
 function requireOpenPremiseBreachChildId(db: Db, parentId: string): string {
   const id = openPremiseBreachChildId(db, parentId);
   if (id === undefined) throw new DomainError("no child of this task has an open premise breach");
@@ -1881,9 +1850,6 @@ function resolvePremiseBreach(
   });
 }
 
-/** pin の子の abandon / reject が Interview を終えうることの条件付きの文(ADR 0247 決定1)。question は登録時に兄弟の行方を知らない。 */
-const INTERVIEW_ENDS_IF_EMPTY = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
-
 /** Canonical English abandon consequence baked into failure questions
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
  *  rule and count only when unfinished same-decision siblings are in the abandon scope; an Interview pin child's
@@ -1897,7 +1863,7 @@ export function abandonConsequence(db: Db, task: Task, breach = false): string {
     return breach
       ? `"abandon" ends this Interview — it cancels this task's remaining work${siblingCount > 0 ? ` plus ${siblings}` : ""} ` +
           `and the Interview itself, so no answer to this probe is scored; a human registers the Interview again with a fixed probe.`
-      : `"abandon" cancels this task and its remaining work. ${INTERVIEW_ENDS_IF_EMPTY}`;
+      : `"abandon" cancels this task and its remaining work. If no other target of this Interview is done or still unsettled, the Interview ends too.`;
   }
   return siblingCount > 0
     ? `"abandon" discards this decomposition decision — this task's remaining work plus ${siblings} — ` +
@@ -1937,6 +1903,63 @@ export function logDecision(
     payload: { kind: "decision_logged", line },
     at: now,
   });
+}
+
+/** 出題(ADR 0253 決定1・3): Interview の root が題・probe・完了基準・rubric を一度に書く。1つの transaction で、型つきの欄を持つ
+ *  判断ログの1件と、一覧の対象ごとに pin の子を一覧の順に1つ入れ、root を blocked にする。子は全部同じ出題の値で、assignee は
+ *  未指定(既定 agent)、workspace は親から、登録者は root の agent。決裁権の検査は通らない —— root が子ごとに選ぶものが無い。 */
+export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin): Task[] {
+  if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root poses a probe");
+  if (interviewProbe(db, root.id) !== null) {
+    throw new DomainError("this Interview's probe is already posed and is not posed again: escalate so a human abandons it and registers the Interview again");
+  }
+  const probe = { ...input };
+  for (const field of ["title", "probe", "completion_criteria", "rubric"] as const) {
+    if (whyBlank(probe[field])) throw new DomainError(`a probe requires a ${field}`);
+    probe[field] = normalizeText(probe[field]);
+  }
+  return db.transaction(() => {
+    const decisionId = appendEvent(db, {
+      taskId: root.id,
+      workerId,
+      origin,
+      payload: {
+        kind: "decision_logged",
+        line: `Posed the Interview probe "${probe.title}". Probe: ${probe.probe} Completion criteria: ${probe.completion_criteria} Rubric: ${probe.rubric}`,
+        interview_probe: probe,
+      },
+      at: now,
+    });
+    const children = targetRows(db, root.id).map(({ id, tier }) =>
+      registerTask(
+        db,
+        {
+          type: "work",
+          title: probe.title,
+          purpose: probe.probe,
+          completion_criteria: probe.completion_criteria,
+          tier,
+          workspace: root.workspace ?? undefined,
+          parent_id: root.id,
+          based_on_decision: decisionId,
+          interview_target_id: id,
+        },
+        now,
+        workerId,
+        origin,
+      ),
+    );
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(root.id);
+    return children;
+  })();
+}
+
+/** Interview の root の出題の型つきの欄(ADR 0253 決定1)。出題前・Interview でない task は null。 */
+export function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
+  for (const { payload } of taskDecisionLog(db, rootId)) {
+    if (payload.kind === "decision_logged" && payload.interview_probe) return payload.interview_probe;
+  }
+  return null;
 }
 
 /** Interview の採点の注釈(ADR 0199 / ADR 0181 決定4): root が統合復帰で、決着した自分の pin の子の outcome を残す。
@@ -1983,8 +2006,6 @@ export interface ChildSpec extends TaskContent {
    *  child's own pickup. Same open-string posture as RegisterTaskInput. */
   tier?: string;
   priority?: string;
-  /** Interview の対象のどれか1つ(ADR 0199 決定3)。root の一覧と4欄一致しなければ拒む。 */
-  interview_pin?: InterviewTarget;
 }
 
 /** The registering worker's authority, resolved by the caller (the MCP layer)
@@ -2253,12 +2274,9 @@ export function assigneeNeedsApproval(
  *  this exact pair rather than a free-form escalation. */
 const PENDING_CHILD_OPTIONS = ["approve", "reject"] as const;
 
-/** decompose の1子。`interview_target_id` は pin の照合(`resolveInterviewPin`)が埋める。 */
-type DecomposeChild = ChildSpec & { interview_target_id?: number };
-
 interface DecomposeInput {
   reason: string;
-  children: DecomposeChild[];
+  children: ChildSpec[];
 }
 
 /** Decomposition: one decision splits the remaining work into child tasks.
@@ -2287,19 +2305,12 @@ export function decomposeTask(
   if (parent.interview_target_id !== null) {
     throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
   }
-  const targets = interviewTargets(db, parent.id);
-  const interview = targets !== null;
-  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
-    throw new DomainError(
-      `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
-    );
+  // ADR 0253 決定1・5: Interview の root は分けない —— 出題で進む
+  if (interviewTargets(db, parent.id) !== null) {
+    throw new DomainError("an Interview root is not decomposed: pose its probe with pose_probe and the board registers one child per target");
   }
-  // ADR 0245 決定3: probe を確定するのは Interview 1件につき1回。pin の照合より前に置き、外れた pin で対象を探らせない
-  if (interview && hasDecomposed(db, parent.id)) {
-    throw new DomainError(
-      "this Interview has already been split once and is not split again: score its done children with score_interview and complete, " +
-        "or escalate so a human abandons it and registers the Interview again with a fixed probe",
-    );
+  if (openPremiseBreachChildId(db, parent.id) !== undefined) {
+    throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
   input = {
     ...input,
@@ -2309,13 +2320,12 @@ export function decomposeTask(
         if (child[field] !== undefined) child[field] = normalizeText(child[field]);
       }
       if (child.review_by) child.review_by = child.review_by.map(normalizeText);
-      return resolveInterviewPin(db, parent, child, interview);
+      return child;
     }),
   };
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
-  if (targets) assertCoversTargetsOnce(db, parent.id, targets, input.children);
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
@@ -2370,8 +2380,7 @@ export function decomposeTask(
             title: questionTitle,
             purpose:
               `"${child.title}" ${reasons.join("; ")} — outside ${workerId}'s authority to ` +
-              `register unapproved. ${child.purpose}` +
-              (child.interview_target_id === undefined ? "" : `\n\n"reject" leaves this target unregistered. ${INTERVIEW_ENDS_IF_EMPTY}`),
+              `register unapproved. ${child.purpose}`,
             completion_criteria: "a human approves or rejects the child registration",
             parent_id: parent.id,
             question: [
@@ -2389,7 +2398,6 @@ export function decomposeTask(
               review_tier: child.review_tier,
               tier: child.tier,
               priority: child.priority,
-              interview_target_id: child.interview_target_id,
               based_on_decision: decisionId,
             } },
             based_on_decision: decisionId,
@@ -2533,6 +2541,8 @@ export function humanDecomposeTask(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
+  // ADR 0253 決定5 / ADR 0111 決定6: probe の著者は常に agent
+  if (interviewTargets(db, parent.id) !== null) throw new DomainError("a human does not split an Interview root — the root's agent poses the probe");
   assertHumanDecomposable(db, parent);
   return decomposeTask(
     db,
@@ -3238,8 +3248,12 @@ export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string):
   const decisions = new Map<number, WorkingDecision>();
   for (const event of taskDecisionLog(db, taskId)) {
     if (event.payload.kind === "decision_logged") {
+      const probe = event.payload.interview_probe;
       const decision = {
-        decision: event.payload.line,
+        // 子が読む出題の行は rubric も Interview であることも書かない(ADR 0253 決定2 / ADR 0245 決定2)
+        decision: probe && currentTaskId !== undefined
+          ? `Registered the same task for each child: "${probe.title}". Purpose: ${probe.probe} Completion criteria: ${probe.completion_criteria}`
+          : event.payload.line,
         children: [],
       };
       decisions.set(event.id, decision);
