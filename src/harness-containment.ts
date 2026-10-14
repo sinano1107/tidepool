@@ -3,6 +3,7 @@ import type { Db } from "./db.js";
 import { quarantineUnlessClear } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import { workspaceSettingsDisposition } from "./sandbox.js";
+import type { WorkspaceConfig } from "./workspace.js";
 
 export type HarnessContainmentCheck = (harness: Harness) => Promise<ContainmentCapability>;
 
@@ -17,11 +18,10 @@ export function harnessContainmentPickupBlocked(
   return quarantineUnlessClear(db, "harnessContainment", harness, () => check(harness), now);
 }
 
-/** 組の検査の入口(ADR 0259 決定1・5): この workspace の checkout で、この Harness の worker を封じ込められるか。
- *  worker の起動と、workspace の封じ込めの question への回答時の検査が、同じこれを呼ぶ。 */
-export function workspaceContainment(harness: Harness, workspacePath: string): ContainmentCapability {
-  // ponytail: Codex の skill の列挙と観測は #1967 が足す。それまで Codex の組は常に成立する
-  if (harness === "codex") return { available: true };
+/** 組の検査(ADR 0259 決定1・5): この workspace の checkout で、この Harness の worker を封じ込められるか。Harness ごとに
+ *  1つあり、worker の起動と workspace の封じ込めの question への回答時の検査が、同じそれを呼ぶ。Claude はこれ、Codex は
+ *  skill の列挙と観測(`codexWorkspaceContainment`)—— 回答時は `CodexWorkspaceCheck` の形で受け取る。 */
+export function claudeWorkspaceContainment(workspacePath: string): ContainmentCapability {
   // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158
   const { overriding } = workspaceSettingsDisposition(workspacePath);
   if (overriding.length === 0) return { available: true };
@@ -35,3 +35,6 @@ export function workspaceContainment(harness: Harness, workspacePath: string): C
       "(or those blocks) from this checkout",
   };
 }
+
+/** 回答時の (codex, workspace) の検査。Board call の口から組む(`createCodexWorkspaceCheck`)。 */
+export type CodexWorkspaceCheck = (workspace: WorkspaceConfig) => Promise<ContainmentCapability>;

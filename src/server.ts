@@ -31,6 +31,7 @@ import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import {
+  type CodexWorkspaceCheck,
   type HarnessContainmentCheck,
   harnessContainmentPickupBlocked,
 } from "./harness-containment.js";
@@ -215,6 +216,8 @@ export interface ServerOptions {
    *  prepended to each Harness result, and the four questions are re-run at
    *  boot, pickup, and its Confirmation answer time. */
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0259 決定5: (codex, workspace) の組の question への回答時に撃ち直す検査。Absent → その回答は拒まれる。 */
+  codexWorkspaceContainment?: CodexWorkspaceCheck;
   /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
    *  **省略できない** —— 渡し忘れで版の門が開かないように。 */
   checkHarnessCliVersion: HarnessContainmentCheck;
@@ -318,6 +321,7 @@ export type BoardCallers = Pick<
   | "behaviorDraftClient"
   | "openaiUsage"
   | "harnessContainment"
+  | "codexWorkspaceContainment"
   | "cliAuth"
   | "providerCliAuth"
   | "modelProbes"
@@ -640,6 +644,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     modelProbes,
     clock: options.clock,
     harnessContainment,
+    codexWorkspaceContainment: options.codexWorkspaceContainment,
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
     // 床と同じ1つの配列(3箇所で別々に組み立てない)
     boardState: options.boardState?.paths,

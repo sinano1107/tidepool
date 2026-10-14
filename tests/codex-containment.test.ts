@@ -10,6 +10,8 @@ import {
   type CodexCapabilityObservation,
   checkCodexCapability,
   createCodexCapabilityCheck,
+  enabledSkillNames,
+  listedSkillPaths,
   observedAgentsMdLayer,
   observedDeveloperMarkers,
   observedHooks,
@@ -19,6 +21,7 @@ import {
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { ProcessContainers } from "../src/process-container.js";
 import {
+  codexSkillsList,
   containerHarness,
   driveCodexPreflight,
   FakeClock,
@@ -93,16 +96,32 @@ it("workspace を cwd にする preflight の呼び出しは、容器が空に�
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
   spawn.emitExitAt(0, 0, null);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(2));
-  expect(spawn.calls[1]!.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
-  runtime.hold(runtime.created[1]!); // force では空にならないホスト
+  spawn.processes[1]!.stdout.write('{"id":1,"result":{}}\n{"id":2,"result":{"data":[]}}\n'); // skills/list
   spawn.emitExitAt(1, 0, null);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
+  expect(spawn.calls[2]!.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
+  runtime.hold(runtime.created[2]!); // force では空にならないホスト
+  spawn.emitExitAt(2, 0, null);
   await new Promise((resolve) => setImmediate(resolve));
 
-  expect(spawn.calls).toHaveLength(2);
+  expect(spawn.calls).toHaveLength(3);
 
-  runtime.fireEmpty(runtime.created[1]!);
-  await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
+  runtime.fireEmpty(runtime.created[2]!);
+  await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
   await clock.advance(60_000);
+  expect((await capability).available).toBe(false);
+});
+
+it("preflight の prompt-input と features list は、skills/list が返したすべての path を閉じた skills.config で走る(ADR 0259 決定2)", async () => {
+  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe", { skillsList: codexSkillsList() });
+  const closed = `skills.config=[${listedSkillPaths(codexSkillsList()).map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(",")}]`;
+
+  expect(spawn.calls[1]!.args).toEqual(["app-server"]);
+  const [promptInput, features] = [spawn.calls[index - 2]!, spawn.calls[index - 1]!];
+  expect(promptInput.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
+  expect(features.args.slice(0, 2)).toEqual(["features", "list"]);
+  for (const call of [promptInput, features]) expect(call.args).toContain(closed);
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
 });
 
@@ -370,6 +389,36 @@ it("hooks/list の応答から、vendor 診断(errors / warnings)を cwd を跨�
   delete bare.data[0].errors;
   delete bare.data[0].warnings;
   expect(observedHooks(bare)).toEqual({ hooks: [BOARD_HOOK_REGISTRATION], hookDiagnostics: [] });
+});
+
+// 実物の `skills/list` 応答の `result`(codex-cli 0.147.0。空の CODEX_HOME・HOME で、app-server を空の cwd に起こし
+// `initialize` → `initialized` → `skills/list {"cwds":[B, P/sub], "forceReload":true}` を流したもの —— #1948 の実測 2)。
+// B は `.agents/skills/flat`・入れ子の `pack/inner`・symlink の `linked -> ../../vendor/linked` を、親 repo P は
+// `.agents/skills/ancestor` を持ち、HOME は `.agents/skills/home-skill` を持つ。closed / one-enabled は同じ要求を
+// `--strict-config -c skills.config=[…]` で流したもの(one-enabled は flat だけ閉じない)。scratch のパスだけ `/board/fixture` へ置換してある。
+it("skills/list の応答から、scope を問わず返った path を cwd を跨いで重ねずに取り出す —— symlink は実体の path で返る(ADR 0259 決定2)", () => {
+  expect(listedSkillPaths(codexSkillsList())).toEqual([
+    "/board/fixture/ws/B/.agents/skills/flat/SKILL.md",
+    "/board/fixture/ws/B/.agents/skills/pack/inner/SKILL.md",
+    "/board/fixture/ws/B/vendor/linked/SKILL.md",
+    "/board/fixture/home/.agents/skills/home-skill/SKILL.md",
+    "/board/fixture/codex-home/skills/.system/imagegen/SKILL.md",
+    "/board/fixture/codex-home/skills/.system/openai-docs/SKILL.md",
+    "/board/fixture/codex-home/skills/.system/plugin-creator/SKILL.md",
+    // 暗黙の呼び出しを許さない system skill —— prompt-input の一覧には出ない
+    "/board/fixture/codex-home/skills/.system/review-agent/SKILL.md",
+    "/board/fixture/codex-home/skills/.system/skill-creator/SKILL.md",
+    "/board/fixture/codex-home/skills/.system/skill-installer/SKILL.md",
+    "/board/fixture/ws/P/.agents/skills/ancestor/SKILL.md",
+  ]);
+  // 読めない応答は投げる —— 列挙の失敗として spawn_failed に倒れる(決定6)
+  expect(() => listedSkillPaths({ data: [{ cwd: "/board/fixture/ws/B" }] })).toThrow();
+});
+
+it("閉じた設定を当てた skills/list の応答から、まだ有効と報告された skill の名前だけを拾う(ADR 0259 決定3)", () => {
+  expect(enabledSkillNames(codexSkillsList("closed"))).toEqual([]);
+  expect(enabledSkillNames(codexSkillsList("one-enabled"))).toEqual(["flat"]);
+  expect(() => enabledSkillNames({})).toThrow();
 });
 
 it.each([

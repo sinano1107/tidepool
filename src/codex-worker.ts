@@ -4,13 +4,13 @@ import {
   constants as fsConstants,
   mkdirSync,
   mkdtempSync,
-  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse } from "./board-prose.js";
@@ -18,12 +18,18 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
-import { CODEX_APP_SERVER_VERSION, callAppServer, codexCommandThrough } from "./codex-app-server.js";
+import {
+  CODEX_APP_SERVER_VERSION,
+  type CodexCliCommand,
+  callAppServer,
+  codexCommandThrough,
+} from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
+import type { CodexWorkspaceCheck } from "./harness-containment.js";
 import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
@@ -35,6 +41,7 @@ import {
 import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
+import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { tierNames } from "./tier.js";
@@ -113,7 +120,7 @@ const UNSETTABLE_FEATURES = [
  *
  * 採取条件(pin の版で実測。採り直しも必ず pin と同じ版で): venue は Lima VM `tidepool`
  * (Linux aarch64 musl) —— preflight が走るのはそちら。Mac(darwin arm64)の出力と1行も違わず、
- * CODEX_HOME が新規の空でもログイン済みでも同一(auth 非依存)。`skillConfig()` の有無でも同一なので
+ * CODEX_HOME が新規の空でもログイン済みでも同一(auth 非依存)。`skills.config` の有無でも同一なので
  * 採取時は付けていない(probe は付ける)。`-c` は closedSurfaceConfig() と同じ導出 —— どちらかを
  * 動かしたらこの定数も動く。
  *
@@ -252,7 +259,6 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
       : "false";
   } & Record<string, "true" | "false">
 > = FEATURE_STATES;
-const SYSTEM_SKILLS = ["imagegen", "openai-docs", "plugin-creator", "skill-creator", "skill-installer"];
 const SECRET_ENV = [
   "OPENAI_API_KEY",
   "CODEX_API_KEY",
@@ -287,9 +293,8 @@ export interface CodexWorkerOptions {
   executable: string;
   /** Board-owned worker-session container supervisor (ADR 0099). */
   containers: ProcessContainers;
-  /** Codex の system config のディレクトリ。既定は vendor の Unix 既定 `/etc/codex`
-   *  (`codex-rs/config/src/loader/mod.rs:55`、rust-v0.147.0)。テストで差し替える。 */
-  codexSystemDir?: string;
+  /** ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る Board call の口。 */
+  boardCall: BoardCall;
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
@@ -336,6 +341,28 @@ export function observedHooks(
       ...(entry.warnings ?? []).map((warning) => `warning: ${warning}`),
     ]),
   };
+}
+
+// cwd ごとの entry の `errors[]` は読まない —— 読めなかった skill は返らないので、閉じる対象にも観測にも現れない
+const skillsListResponse = z.object({
+  data: z.array(z.object({ skills: z.array(z.object({ name: z.string(), path: z.string(), enabled: z.boolean() })) })),
+});
+
+/** `skills/list` の `result` から、返った skill の path を cwd を跨いで重ねずに取り出す(ADR 0259 決定2)。scope は見ない。
+ *  形が崩れていれば投げる —— 列挙の失敗として spawn_failed に倒れる(決定6)。 */
+export function listedSkillPaths(result: unknown): string[] {
+  return [...new Set(skillsListResponse.parse(result).data.flatMap((entry) => entry.skills.map((skill) => skill.path)))];
+}
+
+/** 閉じた設定を当てた `skills/list` の `result` から、まだ有効と報告された skill の名前を拾う(ADR 0259 決定3)。 */
+export function enabledSkillNames(result: unknown): string[] {
+  return [
+    ...new Set(
+      skillsListResponse.parse(result).data.flatMap((entry) =>
+        entry.skills.filter((skill) => skill.enabled).map((skill) => skill.name)
+      ),
+    ),
+  ];
 }
 
 export interface CodexCapabilityObservation {
@@ -527,28 +554,8 @@ function hookConfig(hook: string): string[] {
   ];
 }
 
-function skillConfig(codexHome: string, workspace: string, codexSystemDir = "/etc/codex"): string {
-  const userSkills = join(codexHome, "skills");
-  const paths = SYSTEM_SKILLS.map((name) => join(userSkills, ".system", name, "SKILL.md"));
-  // ADR 0147 決定3: pin した Codex が探索する root はすべて閉じる —— 漏れた skill を user config が
-  // disable すると probe だけが見失い、fail-open になる。`$CODEX_HOME/skills/.system` は上で名指ししているので除く
-  for (const root of [
-    join(workspace, ".agents", "skills"),
-    join(workspace, ".codex", "skills"),
-    join(homedir(), ".agents", "skills"),
-    userSkills,
-    join(codexSystemDir, "skills"),
-  ]) {
-    try {
-      for (const entry of readdirSync(root, { withFileTypes: true })) {
-        if (entry.isDirectory() && !(root === userSkills && entry.name === ".system")) {
-          paths.push(join(root, entry.name, "SKILL.md"));
-        }
-      }
-    } catch {
-      // 無い root は何も足さない —— workspace も codexHome も system config も skill を持たなくてよい
-    }
-  }
+/** 列挙した path をすべて閉じる `skills.config`(ADR 0259 決定2)。scope は問わない。 */
+function closedSkillsConfig(paths: readonly string[]): string {
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
 }
 
@@ -564,8 +571,8 @@ function spawnConfig(input: {
   allowedDomains: readonly string[];
   taskTemp: string;
   executable: string;
-  codexHome: string;
-  codexSystemDir?: string;
+  /** `closedSkillsConfig()` の1行 —— Codex 自身の列挙から作る(ADR 0259 決定2)。 */
+  skills: string;
   hook: string;
 }): string[] {
   return [
@@ -581,7 +588,7 @@ function spawnConfig(input: {
     'mcp_servers.tidepool.default_tools_approval_mode="approve"',
     // ADR 0134 決定3: この key は版に依らず効く —— 絞るのではなく本数の意味を固定する
     "agents.max_concurrent_threads_per_session=3",
-    skillConfig(input.codexHome, input.workspace, input.codexSystemDir),
+    input.skills,
     ...hookConfig(input.hook),
   ];
 }
@@ -622,6 +629,57 @@ async function runFile(
     throw new Error(`${command} ${args[0]} exited ${output.exitCode}${output.stderr ? `: ${output.stderr.trim()}` : ""}`);
   }
   return output.stdout;
+}
+
+/** `cwds` には workspace の実体の path を、キャッシュは使わずに読み直す(ADR 0259 決定2)。 */
+function skillsListRequest(workspace: string) {
+  return { method: "skills/list", params: { cwds: [workspace], forceReload: true } };
+}
+
+/** workspace の skill を Codex 自身に列挙させ、返った path をすべて閉じる1行を返す(ADR 0259 決定2)。
+ *  app-server は `command` が空の新しい cwd で起こす(ADR 0206)。失敗は投げる(決定6)。 */
+async function enumerateSkills(
+  command: CodexCliCommand,
+  executable: string,
+  env: NodeJS.ProcessEnv,
+  workspace: string,
+): Promise<string> {
+  const [listed] = await callAppServer(command, executable, env, [], [skillsListRequest(workspace)]);
+  return closedSkillsConfig(listedSkillPaths(listed));
+}
+
+/** (codex, workspace) の組の検査(ADR 0259 決定1・3・5): 列挙した skill を閉じた spawn の設定を `--strict-config` で
+ *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は spawn の設定で、回答時の検査は
+ *  placeholder の設定で、同じこれを撃つ。列挙・観測そのものの失敗は投げる(決定6)。 */
+export async function codexWorkspaceContainment(options: {
+  call: BoardCall;
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  /** 実体の path(realpath 済み)。 */
+  workspace: string;
+  config: (skills: string) => string[];
+}): Promise<{ config: string[]; capability: ContainmentCapability }> {
+  const command = codexCommandThrough(options.call, "Codex skill enumeration", CODEX_PREFLIGHT_LIMIT_MS);
+  const config = options.config(await enumerateSkills(command, options.executable, options.env, options.workspace));
+  const [observed] = await callAppServer(
+    command,
+    options.executable,
+    options.env,
+    ["--strict-config", ...configArgs(config)],
+    [skillsListRequest(options.workspace)],
+  );
+  const enabled = enabledSkillNames(observed);
+  return {
+    config,
+    capability: enabled.length === 0
+      ? { available: true }
+      : {
+          available: false,
+          reason:
+            `Codex still reports these skills enabled after the board disabled every skill its skills/list returned: ` +
+            `${enabled.join(", ")} — remove them from the checkout and the directories above it that Codex searches`,
+        },
+  };
 }
 
 /** Resolve once at composition time. Worker spawn uses the returned absolute path,
@@ -820,10 +878,25 @@ async function probePermission(
   }
 }
 
+/** 形の正しい placeholder の spawn 設定(ADR 0142 決定2)。preflight の strict parse と回答時の組の検査が問うのは、
+ *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。 */
+function placeholderSpawnConfig(
+  taskType: Task["type"],
+  input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook">,
+): string[] {
+  return spawnConfig({
+    taskType,
+    effort: "high",
+    developerInstructions: CODEX_DEVELOPER_MARKER,
+    mcpUrl: "http://127.0.0.1/mcp",
+    enabledTools: BOARD_VERBS,
+    ...input,
+  });
+}
+
 async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
-  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -832,12 +905,16 @@ async function actualCodexCapability(options: {
   const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
   const workspace = realpathSync(options.workspace);
   const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
-  const config = [
-    ...closedSurfaceConfig(),
-    skillConfig(options.codexHome, workspace, options.codexSystemDir),
-  ];
   try {
     const cliVersion = (await runFile(call, options.executable, ["--version"], { env })).trim();
+    // ADR 0259 決定2: 閉じる skill は worker と同じく Codex 自身の列挙から(cwd を縮めるのは #1968)
+    const skills = await enumerateSkills(
+      codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS),
+      options.executable,
+      env,
+      workspace,
+    );
+    const config = [...closedSurfaceConfig(), skills];
     const promptInput = await runFile(
       call,
       options.executable,
@@ -867,19 +944,12 @@ async function actualCodexCapability(options: {
       developerMarkers: observedDeveloperMarkers(promptInput),
       agentsMdLayer: observedAgentsMdLayer(promptInput),
       ...await probeHookRegistration(call, options.executable, env, (taskType) =>
-        // 問うのは parse だけ —— 値は形の正しい placeholder(ADR 0142 決定2)
-        spawnConfig({
-          taskType,
-          effort: "high",
-          developerInstructions: CODEX_DEVELOPER_MARKER,
-          mcpUrl: "http://127.0.0.1/mcp",
-          enabledTools: BOARD_VERBS,
+        placeholderSpawnConfig(taskType, {
           workspace,
           allowedDomains: options.allowedDomains,
           taskTemp,
           executable: options.executable,
-          codexHome: options.codexHome,
-          codexSystemDir: options.codexSystemDir,
+          skills,
           hook,
         })),
       features: observedFeatures,
@@ -894,7 +964,6 @@ export function createCodexCapabilityCheck(options: {
   /** `resolveCodexExecutable` の結果。false なら probe を起こさない。 */
   onPath?: boolean;
   codexHome: string;
-  codexSystemDir?: string;
   workspace: string;
   allowedDomains: readonly string[];
   call: BoardCall;
@@ -906,6 +975,41 @@ export function createCodexCapabilityCheck(options: {
     () => actualCodexCapability(options),
     boardHookPath(options.codexHome),
   );
+}
+
+/** 回答時の (codex, workspace) の検査(ADR 0259 決定5)。worker の起動と同じ検査を placeholder の spawn 設定で撃ち、
+ *  列挙・観測の失敗も不成立として返す —— 回答は拒まれ、question は開いたまま残る。 */
+export function createCodexWorkspaceCheck(options: {
+  executable: string;
+  codexHome: string;
+  call: BoardCall;
+}): CodexWorkspaceCheck {
+  return async (target) => {
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-workspace-check-")));
+    try {
+      const workspace = realpathSync(target.path);
+      const { capability } = await codexWorkspaceContainment({
+        call: options.call,
+        executable: options.executable,
+        env: workerEnv(options.executable, options.codexHome, taskTemp, "tidepool"),
+        workspace,
+        config: (skills) =>
+          placeholderSpawnConfig("work", {
+            workspace,
+            allowedDomains: target.allowed_domains ?? [],
+            taskTemp,
+            executable: options.executable,
+            skills,
+            hook: boardHookPath(options.codexHome),
+          }),
+      });
+      return capability;
+    } catch (error) {
+      return { available: false, reason: `Codex skill enumeration failed: ${String(error)}` };
+    } finally {
+      rmSync(taskTemp, { recursive: true, force: true });
+    }
+  };
 }
 
 function workerEnv(
@@ -988,7 +1092,7 @@ export class CodexWorker implements WorkerAdapter {
     mkdirSync(options.codexHome, { recursive: true });
   }
 
-  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void {
+  start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
     const workspace = resolveOrQuarantine(
       this.options.db,
@@ -1023,8 +1127,46 @@ export class CodexWorker implements WorkerAdapter {
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
     const material = buildMetaReviewMaterial(this.options.db, task.id);
-    // preflight と同じ実体の綴りで filesystem 表・skills・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
+    // preflight と同じ実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
     const workspacePath = realpathSync(workspace.path);
+    const hook = installBoardHook(this.options.codexHome);
+    const subject = metaReviewSubjectOf(this.options.db, task.id);
+    const verbs = taskVerbSwap(this.options.db, task.id);
+    const withheld: readonly string[] = verbs.withheld;
+    const taskMcpUrl = new URL(this.options.mcpUrl);
+    taskMcpUrl.searchParams.set("task", task.id);
+    const input = {
+      taskType: task.type,
+      // openai の行は「無い」を取らない —— 書く入口が拒む(ADR 0218 決定5)
+      effort: setting.effort!,
+      // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から組む。Codex は次の
+      // part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
+      developerInstructions: `${boardProse({
+        db: this.options.db,
+        registryDir: this.options.registry.dir,
+        registry,
+        task,
+        systemPrompt: agent.definition.systemPrompt,
+        profile: agent.profile,
+        doctrine: codexDoctrine(verbs),
+        allowedDomains: workspace.allowed_domains,
+        memorySection: memory.section ?? material?.section ?? null,
+      })}\n\n`,
+      mcpUrl: taskMcpUrl.toString(),
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
+      enabledTools: [
+        ...(subject
+          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
+          : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
+        ).filter((verb) => !withheld.includes(verb)),
+        ...verbs.added,
+      ],
+      workspace: workspacePath,
+      allowedDomains: workspace.allowed_domains ?? [],
+      executable: this.options.executable,
+      hook,
+    };
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     // 削除の失敗で session の後始末を止めない(issue #705)
     const removeTaskTemp = () => {
@@ -1034,122 +1176,9 @@ export class CodexWorker implements WorkerAdapter {
         console.error(`[codex-worker] could not remove ${taskTemp}:`, error);
       }
     };
-    let child: ContainedProcess;
-    let spawned: number;
-    let transcript: Transcript;
-    try {
-      const hook = installBoardHook(this.options.codexHome);
-      const subject = metaReviewSubjectOf(this.options.db, task.id);
-      const verbs = taskVerbSwap(this.options.db, task.id);
-      const withheld: readonly string[] = verbs.withheld;
-      const taskMcpUrl = new URL(this.options.mcpUrl);
-      taskMcpUrl.searchParams.set("task", task.id);
-      const config = spawnConfig({
-        taskType: task.type,
-        // openai の行は「無い」を取らない —— 書く入口が拒む(ADR 0218 決定5)
-        effort: setting.effort!,
-        // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から組む。Codex は次の
-        // part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
-        developerInstructions: `${boardProse({
-          db: this.options.db,
-          registryDir: this.options.registry.dir,
-          registry,
-          task,
-          systemPrompt: agent.definition.systemPrompt,
-          profile: agent.profile,
-          doctrine: codexDoctrine(verbs),
-          allowedDomains: workspace.allowed_domains,
-          memorySection: memory.section ?? material?.section ?? null,
-        })}\n\n`,
-        mcpUrl: taskMcpUrl.toString(),
-        // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
-        // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-        enabledTools: [
-          ...(subject
-            ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-            : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
-          ).filter((verb) => !withheld.includes(verb)),
-          ...verbs.added,
-        ],
-        workspace: workspacePath,
-        allowedDomains: workspace.allowed_domains ?? [],
-        taskTemp,
-        executable: this.options.executable,
-        codexHome: this.options.codexHome,
-        codexSystemDir: this.options.codexSystemDir,
-        hook,
-      });
-      // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
-      spawned = appendEvent(this.options.db, {
-        taskId: task.id,
-        workerId: agent.name,
-        origin: "board",
-        payload: {
-          kind: "worker_spawned",
-          registry_commit: registry.commit,
-          definition_version: agent.definition.version,
-          // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
-          // 実行設定に advisor は決して載らない
-          advisor: null,
-          provider: setting.provider,
-          model: setting.model,
-          effort: setting.effort,
-          tier_id: setting.tier_id,
-          source: setting.source,
-          harness: "codex",
-          cli_version: this.options.cliVersion,
-        },
-        at: this.options.clock.now(),
-      });
-      recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
-      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
-      transcript = this.options.transcripts.open(task.id, spawned);
-      child = this.containers.open(task.id).spawn(
-        this.options.executable,
-        [
-          "--ask-for-approval", "never",
-          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-          "--strict-config", "--dangerously-bypass-hook-trust",
-          "-C", workspacePath,
-          "-m", setting.model,
-          ...config.flatMap((entry) => ["-c", entry]),
-          taskPrompt(task),
-        ],
-        {
-          cwd: workspacePath,
-          env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
-        },
-      );
-    } catch (error) {
-      // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
-      // 稀な経路)。積み上がりが観測されたらここで destroy する。
+    // ADR 0118: worker が1度も走らなかった pickup の観測点(skill の列挙・観測、spawn までの同期 throw、spawn の error)は同じ形で記録する
+    const spawnFailed = (failure: { error_code: string | null; message: string }) => {
       removeTaskTemp();
-      throw error;
-    }
-    child.stdout.pipe(transcript.stream);
-    child.stderr.pipe(transcript.stderr);
-    let usage: CodexUsage | null = null;
-    let reportedError: string | null = null;
-    let lastMessage: string | null = null;
-    const observe = (event: unknown) => {
-      usage = readUsage(event) ?? usage;
-      reportedError = readTurnFailure(event) ?? reportedError;
-      lastMessage = readAgentMessage(event) ?? lastMessage;
-    };
-    const flushStdout = readLines(child.stdout, (line) => observe(parseJsonl(line)));
-    const finishStderrTail = readStderrTail(child.stderr);
-    this.running.set(task.id, child);
-    child.on("error", (error) => {
-      const errno = error as NodeJS.ErrnoException;
-      // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさず、
-      // worker が1度も走らなかった事実も書かない(Claude adapter と同じ、ADR 0118)
-      if (!errno.syscall?.startsWith("spawn")) {
-        console.error(`[codex-worker] error on task ${task.id}:`, error);
-        return;
-      }
-      this.running.delete(task.id);
-      removeTaskTemp();
-      const failure = { error_code: errno.code ?? null, message: error.message };
       appendEvent(this.options.db, {
         taskId: task.id,
         workerId: agent.name,
@@ -1158,55 +1187,166 @@ export class CodexWorker implements WorkerAdapter {
         at: this.options.clock.now(),
       });
       this.options.onSpawnFailed?.(task.id, failure);
-    });
-    // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
-    const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
-      this.running.delete(task.id);
-      flushStdout();
-      const exit: WorkerExit = {
-        exit_code: code,
-        signal,
-        stderr_tail: finishStderrTail(),
-        reported_error: reportedError,
-        last_message: lastMessage,
-      };
-      const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
-        ? {
-            input_tokens: usage.input_tokens,
-            output_tokens: usage.output_tokens,
-            cache_read_tokens: usage.cached_input_tokens,
-            cache_creation_tokens: 0,
-            estimated_cost_usd: null,
-            advisor: null,
-            model_swaps: [],
-            refusals: [],
-          }
-        : null;
-      appendEvent(this.options.db, {
-        taskId: task.id,
-        workerId: agent.name,
-        origin: "board",
-        payload: {
-          kind: "worker_exited",
-          ...exit,
-          worker_spawned_event_id: spawned,
-          output_closed: outputClosed,
-          usage: normalized,
-        },
-        at: this.options.clock.now(),
-      });
-      removeTaskTemp();
-      this.options.onWorkerExited?.(task.id, exit);
-      // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
-      projectWhenTranscriptCloses(this.options.db, transcript.stream, {
-        workerSpawnedEventId: spawned,
-        transcriptPath: transcript.streamPath,
-        taskId: task.id,
-      });
     };
-    // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
-    // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
-    settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+    const env = workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name);
+    // ADR 0259 決定2・3・6: spawn の前に Codex 自身の列挙で skill を閉じ、閉じた設定の下で観測する。ここから先は
+    // scheduler の catch の外なので、失敗は自分で spawn_failed に落とす(Claude adapter の skill 列挙と同じ形)
+    return (async () => {
+      let closure: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
+      try {
+        closure = await codexWorkspaceContainment({
+          call: this.options.boardCall,
+          executable: this.options.executable,
+          env,
+          workspace: workspacePath,
+          config: (skills) => spawnConfig({ ...input, taskTemp, skills }),
+        });
+      } catch (error) {
+        spawnFailed({
+          error_code: null,
+          message:
+            "Codex skill enumeration failed, so the skills to close could not be decided and the worker was " +
+            `not spawned (no fail-open): ${String(error)}`,
+        });
+        return;
+      }
+      if (!closure.capability.available) {
+        removeTaskTemp();
+        // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
+        registerQuarantine(
+          this.options.db,
+          "workspaceContainment",
+          workspaceContainmentValue("codex", workspace.name),
+          closure.capability.reason,
+          this.options.clock.now(),
+        );
+        return;
+      }
+      let child: ContainedProcess;
+      let spawned: number;
+      let transcript: Transcript;
+      try {
+        // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
+        spawned = appendEvent(this.options.db, {
+          taskId: task.id,
+          workerId: agent.name,
+          origin: "board",
+          payload: {
+            kind: "worker_spawned",
+            registry_commit: registry.commit,
+            definition_version: agent.definition.version,
+            // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
+            // 実行設定に advisor は決して載らない
+            advisor: null,
+            provider: setting.provider,
+            model: setting.model,
+            effort: setting.effort,
+            tier_id: setting.tier_id,
+            source: setting.source,
+            harness: "codex",
+            cli_version: this.options.cliVersion,
+          },
+          at: this.options.clock.now(),
+        });
+        recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
+        if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
+        transcript = this.options.transcripts.open(task.id, spawned);
+        child = this.containers.open(task.id).spawn(
+          this.options.executable,
+          [
+            "--ask-for-approval", "never",
+            "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+            "--strict-config", "--dangerously-bypass-hook-trust",
+            "-C", workspacePath,
+            "-m", setting.model,
+            ...configArgs(closure.config),
+            taskPrompt(task),
+          ],
+          { cwd: workspacePath, env },
+        );
+      } catch (error) {
+        // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
+        // 稀な経路)。積み上がりが観測されたらここで destroy する。
+        // ADR 0149 決定6: scheduler の catch の外なので、spawn までの同期 throw も spawn_failed に落とす
+        spawnFailed({
+          error_code: (error as NodeJS.ErrnoException).code ?? null,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      }
+      child.stdout.pipe(transcript.stream);
+      child.stderr.pipe(transcript.stderr);
+      let usage: CodexUsage | null = null;
+      let reportedError: string | null = null;
+      let lastMessage: string | null = null;
+      const observe = (event: unknown) => {
+        usage = readUsage(event) ?? usage;
+        reportedError = readTurnFailure(event) ?? reportedError;
+        lastMessage = readAgentMessage(event) ?? lastMessage;
+      };
+      const flushStdout = readLines(child.stdout, (line) => observe(parseJsonl(line)));
+      const finishStderrTail = readStderrTail(child.stderr);
+      this.running.set(task.id, child);
+      child.on("error", (error) => {
+        const errno = error as NodeJS.ErrnoException;
+        // "error" は spawn 専用ではない(kill の失敗も撃つ)—— 走っている session を落とさず、
+        // worker が1度も走らなかった事実も書かない(Claude adapter と同じ、ADR 0118)
+        if (!errno.syscall?.startsWith("spawn")) {
+          console.error(`[codex-worker] error on task ${task.id}:`, error);
+          return;
+        }
+        this.running.delete(task.id);
+        spawnFailed({ error_code: errno.code ?? null, message: error.message });
+      });
+      // ADR 0201: 確定点は exit でなく root の出力の読み切り(see settleOnOutputClose)。
+      const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
+        this.running.delete(task.id);
+        flushStdout();
+        const exit: WorkerExit = {
+          exit_code: code,
+          signal,
+          stderr_tail: finishStderrTail(),
+          reported_error: reportedError,
+          last_message: lastMessage,
+        };
+        const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
+          ? {
+              input_tokens: usage.input_tokens,
+              output_tokens: usage.output_tokens,
+              cache_read_tokens: usage.cached_input_tokens,
+              cache_creation_tokens: 0,
+              estimated_cost_usd: null,
+              advisor: null,
+              model_swaps: [],
+              refusals: [],
+            }
+          : null;
+        appendEvent(this.options.db, {
+          taskId: task.id,
+          workerId: agent.name,
+          origin: "board",
+          payload: {
+            kind: "worker_exited",
+            ...exit,
+            worker_spawned_event_id: spawned,
+            output_closed: outputClosed,
+            usage: normalized,
+          },
+          at: this.options.clock.now(),
+        });
+        removeTaskTemp();
+        this.options.onWorkerExited?.(task.id, exit);
+        // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
+        projectWhenTranscriptCloses(this.options.db, transcript.stream, {
+          workerSpawnedEventId: spawned,
+          transcriptPath: transcript.streamPath,
+          taskId: task.id,
+        });
+      };
+      // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
+      // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
+      settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+    })();
   }
 
   /** Codex folds up on SIGINT; force/reclaimed belong to ProcessContainers. */

@@ -1,6 +1,7 @@
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -11,7 +12,16 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, healthyOpenai, healthyUsageText, noRetrospectiveCalls, passthroughContainers, unusedLanding } from "./fakes.js";
+import {
+  codexSkillsList,
+  FakeClock,
+  fakeAppServerCall,
+  healthyOpenai,
+  healthyUsageText,
+  noRetrospectiveCalls,
+  passthroughContainers,
+  unusedLanding,
+} from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -109,6 +119,41 @@ it("組の question への回答は、組の検査がまだ不成立なら拒ま
     quarantine: "workspaceContainment",
     value: "claude-code/B",
   });
+});
+
+it("(codex, B) の question への回答は、その workspace の skill の列挙と観測をもう一度走らせ、閉じきれないうちは拒まれて開いたまま残り、閉じきれれば受理される(ADR 0259 決定5)", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const path = await realpath(await tempDir("tidepool-ws-"));
+  let leaking = true;
+  const appServer = fakeAppServerCall((args) =>
+    codexSkillsList(args.includes("--strict-config") ? (leaking ? "one-enabled" : "closed") : undefined)
+  );
+  registerQuarantine(db, "workspaceContainment", "codex/B", "flat stays enabled", clock.now());
+  const question = quarantineQuestion(db, "workspaceContainment", "codex/B")!;
+  const deps = {
+    db,
+    pollNow() {},
+    landing: unusedLanding,
+    quarantineChecks: quarantineChecks({
+      db,
+      resolveWorkspace: (name) => ({ name: name!, path, branch: "main" }),
+      codexWorkspaceContainment: createCodexWorkspaceCheck({
+        executable: "/opt/tidepool/bin/codex",
+        codexHome: await tempDir("tidepool-codex-home-"),
+        call: appServer.call,
+      }),
+    }),
+  };
+  const answer = () => submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui");
+
+  await expect(answer()).rejects.toThrow("codex containment in workspace B is still not established");
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(appServer.calls.map(({ requests }) => requests[0]!.params.cwds)).toEqual([[path], [path]]);
+
+  leaking = false;
+  await answer();
+  expect(getTask(db, question.id)?.status).toBe("done");
 });
 
 let t: Tidepool | undefined;
