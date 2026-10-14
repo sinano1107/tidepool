@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,8 +34,16 @@ allowed_workspaces:
 merge: external
 `;
 
+/** 既定の workspace の実在する checkout。launch が workspace の path を実体化するので(issue #1954)、
+ *  無いパスでは spawn に届かない。中身は空で、実体のパスで持つ(macOS の tmpdir は symlink)。
+ *  全テストファイルが共有する固定のディレクトリなので読み取り専用にし、書き込むテストは
+ *  無いパスだった頃と同じく音を立てて落ちる(黙って他のテストへ漏れない)。 */
+export const FIXTURE_WORKSPACE = join(realpathSync(tmpdir()), "tidepool-fixture-workspace");
+mkdirSync(FIXTURE_WORKSPACE, { recursive: true });
+chmodSync(FIXTURE_WORKSPACE, 0o555);
+
 const WORKSPACES_YAML = `tidepool:
-  path: /srv/pi/work/tidepool
+  path: ${FIXTURE_WORKSPACE}
   repo: https://github.com/sinano1107/tidepool.git
   notes: run npm install before first use
 `;
