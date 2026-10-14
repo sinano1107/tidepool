@@ -437,12 +437,17 @@ export interface InterviewTarget {
 }
 
 /** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
- *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。 */
+ *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
+ *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
 export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
   if (input.interview_targets === undefined) return;
   if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
   if (input.interview_targets.length === 0) throw new DomainError("an Interview names at least one target");
+  const seen = new Set<string>();
   for (const { provider, model, effort, tier } of input.interview_targets) {
+    const target = JSON.stringify({ provider, model, effort, tier });
+    if (seen.has(target)) throw new DomainError(`target ${target} appears more than once: an Interview's targets are not duplicated`);
+    seen.add(target);
     if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) throw new DomainError(`unknown provider "${provider}" — one of ${PROVIDER_VALUES.join(", ")}`);
     if (provider === "anthropic" && isClaudeModelAlias(model)) {
       throw new DomainError(`"${model}" is a Claude CLI alias whose target moves with CLI updates; an Interview target takes a concrete model id (e.g. claude-opus-5-5)`);
@@ -467,6 +472,24 @@ function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec, interview: 
   const id = interviewTargetId(db, parent.id, pin);
   if (id === undefined) throw new DomainError(`interview_pin ${JSON.stringify(pin)} is not one of this Interview's targets`);
   return { ...rest, tier: pin.tier, interview_target_id: id };
+}
+
+/** Interview の分解は一覧の各対象にちょうど1つの子を置く(ADR 0249 決定1): 欠けた対象と重なった対象を4欄で名指して拒む。
+ *  権限外で承認 question になる子も、ここではまだ子として数える。 */
+function assertCoversTargetsOnce(db: Db, rootId: string, children: DecomposeChild[]): void {
+  const missing: string[] = [];
+  const doubled: string[] = [];
+  for (const target of interviewTargets(db, rootId)!) {
+    const id = interviewTargetId(db, rootId, target);
+    const count = children.filter((child) => child.interview_target_id === id).length;
+    if (count === 0) missing.push(JSON.stringify(target));
+    if (count > 1) doubled.push(JSON.stringify(target));
+  }
+  const problems = [
+    ...(missing.length ? [`no child pins ${missing.join(", ")}`] : []),
+    ...(doubled.length ? [`more than one child pins ${doubled.join(", ")}`] : []),
+  ];
+  if (problems.length) throw new DomainError(`an Interview runs exactly one child per target: ${problems.join("; ")}`);
 }
 
 /** pin と4欄一致する root の対象の id(ADR 0199 決定3)。effort の null も値として比べる(ADR 0218 決定5)。無ければ undefined。 */
@@ -2292,6 +2315,7 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
+  if (interview) assertCoversTargetsOnce(db, parent.id, input.children);
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
