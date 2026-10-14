@@ -1970,36 +1970,31 @@ function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
   return null;
 }
 
-export interface InterviewScore {
-  child_id: string;
-  outcome: InterviewOutcome;
-}
-
 /** 採点完了(ADR 0253 決定4 / ADR 0199 / ADR 0181 決定4): 出題済みの Interview の root が、決着した pin の子のうち done の子
  *  全部をちょうど1回ずつ採点し、findings の handoff(outcome 必須)と一度に渡す。1つの transaction で各子に採点の注釈を書き、
  *  今の完了の処理で root を done にする。どの拒否でも何も書かない。 */
 export function completeInterview(
   db: Db,
   root: Task,
-  { scores, handoff }: { scores: InterviewScore[]; handoff: Partial<HandoffDoc> | undefined },
+  { scores, handoff }: { scores: Array<{ child_id: string; outcome: InterviewOutcome }>; handoff: Partial<HandoffDoc> | undefined },
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root completes with complete_interview");
   if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview has no probe to score yet: pose it with pose_probe first");
-  if (hasUnfinishedChildren(db, root.id)) throw new DomainError("a task with unfinished children cannot complete: every child must settle first");
   if (handoff?.outcome === undefined || whyBlank(handoff.outcome)) throw new DomainError("complete_interview requires the findings in handoff.outcome");
-  const done = new Set(listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done").map(({ id }) => id));
+  const pins = new Map(listChildren(db, root.id).flatMap((child) => (child.interview_target_id === null ? [] : [[child.id, child] as const])));
   const scored = new Set<string>();
   for (const { child_id } of scores) {
-    const child = getTask(db, child_id);
-    if (!child || child.parent_id !== root.id || child.interview_target_id === null) throw new DomainError(`${child_id} is not a child of this Interview`);
-    if (!done.has(child_id)) throw new DomainError(`${child_id} is not done: only a done child is scored`);
+    const child = pins.get(child_id);
+    if (!child) throw new DomainError(`${child_id} is not a child of this Interview`);
+    if (child.status !== "done") throw new DomainError(`${child_id} is not done: only a done child is scored`);
     if (scored.has(child_id)) throw new DomainError(`${child_id} is scored more than once: score each done child exactly once`);
     scored.add(child_id);
   }
-  const unscored = [...done].filter((id) => !scored.has(id));
+  // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
+  const unscored = [...pins.values()].filter((child) => child.status === "done" && !scored.has(child.id)).map(({ id }) => id);
   if (unscored.length > 0) throw new DomainError(`score every done child exactly once; unscored: ${unscored.join(", ")}`);
   return db.transaction(() => {
     for (const { child_id, outcome } of scores) {
