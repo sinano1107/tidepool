@@ -68,7 +68,7 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
   return poseProbe(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker")[0]!;
 }
-const decomposedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, pinnedChild(db).parent_id!)!;
+const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, pinnedChild(db).parent_id!)!;
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
 function configValue<T>(args: string[], prefix: string): T {
@@ -377,7 +377,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["主題 routing の meta-review", (db: ReturnType<typeof openDb>) => metaReviewTask(db, "routing")],
     ["Interview の root", interviewRoot],
     ["Interview の pin の子", pinnedChild],
-    ["出題済みの Interview の root", decomposedInterviewRoot],
+    ["出題済みの Interview の root", posedInterviewRoot],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.start(register(f.db));
@@ -476,21 +476,20 @@ describe("CodexWorker (ADR 0098)", () => {
     const f = await fixture();
     f.start(pinnedChild(f.db));
     const developer = developerInstructions(f.process.calls[0]!.args);
-    expect(developer.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
+    // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
+    expect(developer).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: [] }));
   });
 
-  it("出題前の Interview の root の developer_instructions には、Claude と同じ出題を指す doctrine が載る(ADR 0253 決定5)", async () => {
+  it("出題前の Interview の root の developer_instructions には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
     const f = await fixture();
     f.start(interviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args).replace(/\s+/g, " ")).toContain("pose its probe with the tidepool MCP's pose_probe instead");
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: ["pose_probe"] }));
   });
 
   it("出題済みの Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const f = await fixture();
-    f.start(decomposedInterviewRoot(f.db));
-    const developer = developerInstructions(f.process.calls[0]!.args).replace(/\s+/g, " ");
-    expect(developer).toContain("This task is not split: complete it in this session.");
-    expect(developer).not.toContain("Register that split with the tidepool MCP's decompose instead.");
+    f.start(posedInterviewRoot(f.db));
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: [] }));
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {

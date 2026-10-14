@@ -166,7 +166,7 @@ export interface Task {
    *  is the periodic meta-review for, or null for an ordinary task. Never
    *  written from MCP / the JSON API. */
   meta_review_subject: "memory" | "routing" | null;
-  /** Interview の子の pin(ADR 0199 決定3): root の対象の行の id。decompose だけが書く。 */
+  /** Interview の子の pin(ADR 0199 決定3): root の対象の行の id。出題(poseProbe)だけが書く。 */
   interview_target_id: number | null;
   created_at: string;
 }
@@ -1956,7 +1956,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
 }
 
 /** Interview の root の出題の型つきの欄(ADR 0253 決定1)。出題前・Interview でない task は null。 */
-export function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
+function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
   for (const { payload } of taskDecisionLog(db, rootId)) {
     if (payload.kind === "decision_logged" && payload.interview_probe) return payload.interview_probe;
   }
@@ -3236,8 +3236,8 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
 
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
- *  分解外の子は1行で、`id` はそれぞれの event。 */
-export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string): HistoryRow[] {
+ *  分解外の子は1行で、`id` はそれぞれの event。`readingChildId` は親の history を読む子: その子に `you` を付け、出題の行から rubric を伏せる(ADR 0253 決定2)。 */
+export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
     children: Array<{ eventId: number; child: HistoryChildContext }>;
@@ -3252,7 +3252,7 @@ export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string):
       const probe = event.payload.interview_probe;
       const decision = {
         // 子が読む出題の行は rubric も Interview であることも書かない(ADR 0253 決定2 / ADR 0245 決定2)
-        decision: probe && currentTaskId !== undefined
+        decision: probe && readingChildId !== undefined
           ? `Registered the same task for each child: "${probe.title}". Purpose: ${probe.probe} Completion criteria: ${probe.completion_criteria}`
           : event.payload.line,
         children: [],
@@ -3278,7 +3278,7 @@ export function taskHistoryRows(db: Db, taskId: string, currentTaskId?: string):
       purpose: child.purpose,
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
-      ...(child.id === currentTaskId && { you: true as const }),
+      ...(child.id === readingChildId && { you: true as const }),
       // Interview の子は採点のために id を持つ。誰がどの model で走ったかは載せない(伏せた handoff、ADR 0199)
       ...(child.interview_target_id !== null && { id: child.id }),
       ...(child.premise_breach_decision !== null && { premise_breach: premiseBreachReason(db, child.id) }),

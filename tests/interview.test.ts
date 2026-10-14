@@ -6,7 +6,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeTask, continueDecomposition, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewProbe, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeTask, continueDecomposition, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
@@ -366,13 +366,6 @@ it("2度目の出題・Interview でない task・pin の子への出題は拒�
   expect(() => poseProbe(db, child!, POSE, "tako", new Date(0), "worker")).toThrow(/only an Interview root poses a probe/);
   expect(listBoard(db)).toHaveLength(before);
   expect(listEvents(db, root.id).filter((event) => event.kind === "decision_logged")).toHaveLength(1);
-});
-
-it("probe の読み口は出題の型つきの欄を返し、出題前は null(ADR 0253)", () => {
-  const { db, root } = registerInterview();
-  expect(interviewProbe(db, root.id)).toBeNull();
-  poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
-  expect(interviewProbe(db, root.id)).toEqual(POSE);
 });
 
 it("pin の子が読む親の history の出題の行は rubric も「Interview」の語も持たず、root 自身の history と人間の判断ログは全部を持つ(ADR 0253 決定2)", () => {

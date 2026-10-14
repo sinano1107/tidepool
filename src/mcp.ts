@@ -195,7 +195,7 @@ export interface McpDeps {
   listAgents?: () => RosterAgent[];
   /** registry の agent 一覧(issue #920): routing meta-review の tier の提案が agent の定義を読む。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
-  /** pickup と同じ候補の口(ADR 0110 決定3): decompose が pin の子の走れる候補を確かめる(ADR 0199)。Absent → 確かめない。 */
+  /** pickup と同じ候補の口(ADR 0110 決定3): 出題と Interview の登録が対象の走れる候補を確かめる(ADR 0253 決定3)。Absent → 確かめない。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
 }
 

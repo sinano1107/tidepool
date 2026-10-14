@@ -115,6 +115,8 @@ it("worker MCP の tool 一覧は taskVerbSwap に従う —— 出題前の Int
   expect(ordinary).not.toContain("pose_probe");
   const unsplit = ordinary.filter((name) => name !== "decompose" && name !== "redecompose");
   expect((await tools(root.id)).sort()).toEqual([...unsplit, "pose_probe"].sort());
+  // 出題の前に対象の一覧を読める(#1924 User Story 3)
+  expect(JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text).interview_targets).toEqual([opus46]);
   const [childId] = await pose(root.id);
   expect(await tools(root.id)).toEqual(unsplit);
   expect(await tools(childId)).toEqual(unsplit);
