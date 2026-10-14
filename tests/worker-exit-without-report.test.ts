@@ -29,7 +29,11 @@ import { tempDir } from "./temp-dir.js";
  *  failure question を立てて後始末へ入る —— タスク種別の時間制限まで枠を握らない。 */
 
 let t: Tidepool;
+/** 最後に建てた盤面の fake の子。止める前に exit させ、task temp を本番と同じ経路で消す(ADR 0257)。 */
+let spawned: ReturnType<typeof recordingSpawn> | undefined;
 afterEach(async () => {
+  spawned?.emitExit(0, null);
+  spawned = undefined;
   await t?.stop();
 });
 
@@ -420,6 +424,7 @@ async function bootWithAdapter(
   provider: Provider = "anthropic",
 ) {
   const proc = recordingSpawn();
+  spawned = proc;
   t = await bootTidepool({
     watchdog: WATCHDOG,
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える

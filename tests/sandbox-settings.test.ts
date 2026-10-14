@@ -3,6 +3,11 @@ import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
 
+/** 呼び出し側が渡すホストの事実(ADR 0257): task temp のパスと `/lib64` の有無。関数は純粋なまま、
+ *  在るかの判定は呼び出し側が持つ。 */
+const TASK_TEMP = "/tmp/tidepool-claude-task-1-Ab12Cd";
+const HOST = { taskTemp: TASK_TEMP, lib64: false };
+
 /** ADR 0033: worker セッションの Bash はハーネス内蔵サンドボックス(macOS
  *  Seatbelt / Linux bubblewrap)で workspace に封じる。この純関数はその
  *  `--settings` JSON の組み立てだけを担う — 実際に OS が拒否することの確認は
@@ -13,19 +18,20 @@ import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
  *  4キー、`~` 展開、そして「allowRead は denyRead に勝つが、allowWrite は
  *  denyWrite に勝たない」という非対称。 */
 describe("buildSandboxSettings", () => {
-  it("work プロファイル: workspace は読み書き可、ホーム配下の読みは deny、裸コマンドへの fail-open ハッチは閉じる", () => {
+  it("work プロファイル: workspace は読み書き可、読みは既定拒否、裸コマンドへの fail-open ハッチは閉じる", () => {
     expect(
       buildSandboxSettings({
         taskType: "work",
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).sandbox,
     ).toMatchObject({
       enabled: true,
       allowUnsandboxedCommands: false,
       filesystem: {
-        denyRead: ["~/"],
-        allowWrite: ["/home/pi/work/tidepool"],
+        denyRead: ["/"],
+        allowWrite: ["/home/pi/work/tidepool", TASK_TEMP],
       },
     });
   });
@@ -36,6 +42,7 @@ describe("buildSandboxSettings", () => {
       taskType: "work",
       workspacePath: "/home/pi/work/tidepool",
       permittedSkills: "all",
+      ...HOST,
     }).sandbox.filesystem;
     expect(allowRead).toContain("~/.gitconfig");
     expect(allowRead).toContain("~/.config/git");
@@ -45,13 +52,14 @@ describe("buildSandboxSettings", () => {
     expect(allowRead).not.toContain("~/.netrc");
   });
 
-  it("review プロファイル: allowWrite は空(ただし OS 強制の書き込み拒否ではない — 下のコメント参照)", () => {
+  it("review プロファイル: allowWrite は task temp だけ(workspace の書き込み拒否は OS 強制ではない — 下のコメント参照)", () => {
     const { filesystem } = buildSandboxSettings({
       taskType: "review",
       workspacePath: "/home/pi/work/tidepool",
       permittedSkills: "all",
+      ...HOST,
     }).sandbox;
-    expect(filesystem.allowWrite).toEqual([]);
+    expect(filesystem.allowWrite).toEqual([TASK_TEMP]);
     // 読みは review でも workspace に開く(「書けないが読める」— ADR 0013)
     expect(filesystem.allowRead).toContain("/home/pi/work/tidepool");
   });
@@ -75,6 +83,7 @@ describe("buildSandboxSettings", () => {
         taskType,
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).sandbox;
       // 期待値は独立した literal(実測 G 表でこの2本が両プラットフォームで
       // 堅牢だった形)。配列まるごと置くので、ディレクトリが1つ紛れ込めば落ちる。
@@ -95,8 +104,71 @@ describe("buildSandboxSettings", () => {
         taskType: "work",
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).sandbox.failIfUnavailable,
     ).toBe(true);
+  });
+});
+
+/** ADR 0257: 読みは既定拒否。`/` を閉じ、開け直すのは workspace・task temp・git config・skill のパス・
+ *  OS とツール一式の置き場所だけ。期待値は ADR 0257 決定1 が名指す組を literal で置く。 */
+describe("buildSandboxSettings の読みの範囲(ADR 0257)", () => {
+  const OS_LOCATIONS = ["/usr", "/bin", "/lib", "/sbin", "/etc", "/proc", "/dev"];
+  const DATA_LOCATIONS = ["/home", "/root", "/Users", "/mnt", "/media", "/srv", "/opt", "/var", "/tmp", "/run", "/snap", "/sys", "/boot"];
+  const settingsOf = (taskType: "work" | "review", lib64 = false) =>
+    buildSandboxSettings({
+      taskType,
+      workspacePath: "/home/pi/work/tidepool",
+      permittedSkills: ["tdd"],
+      taskTemp: TASK_TEMP,
+      lib64,
+    }).sandbox.filesystem;
+
+  it("work / review とも denyRead は / だけ", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(settingsOf(taskType).denyRead).toEqual(["/"]);
+    }
+  });
+
+  it("allowRead は workspace・task temp・git config・許可された skill のパス・OS の置き場所からなる", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect([...settingsOf(taskType).allowRead].sort()).toEqual(
+        [
+          "/home/pi/work/tidepool",
+          TASK_TEMP,
+          "~/.gitconfig",
+          "~/.config/git",
+          "/home/pi/work/tidepool/.claude/skills/tdd",
+          "~/.claude/skills/tdd",
+          ...OS_LOCATIONS,
+        ].sort(),
+      );
+    }
+  });
+
+  it("/lib64 は入力で「在る」と渡したときだけ開け直す", () => {
+    for (const taskType of ["work", "review"] as const) {
+      expect(settingsOf(taskType, true).allowRead).toContain("/lib64");
+      expect(settingsOf(taskType, false).allowRead).not.toContain("/lib64");
+    }
+  });
+
+  it("task temp は work でも review でも読み書きの両方に開く", () => {
+    for (const taskType of ["work", "review"] as const) {
+      const { allowRead, allowWrite } = settingsOf(taskType);
+      expect(allowRead).toContain(TASK_TEMP);
+      expect(allowWrite).toContain(TASK_TEMP);
+    }
+  });
+
+  it("データの置き場所は allowRead にも allowWrite にも現れない", () => {
+    for (const taskType of ["work", "review"] as const) {
+      const { allowRead, allowWrite } = settingsOf(taskType, true);
+      for (const location of DATA_LOCATIONS) {
+        expect(allowRead).not.toContain(location);
+        expect(allowWrite).not.toContain(location);
+      }
+    }
   });
 });
 
@@ -158,6 +230,7 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
         taskType: "review",
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).sandbox.autoAllowBashIfSandboxed,
     ).toBe(false);
   });
@@ -168,6 +241,7 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
         taskType: "work",
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).sandbox.autoAllowBashIfSandboxed,
     ).toBeUndefined();
   });
@@ -196,6 +270,7 @@ describe("buildSandboxSettings の hooks(issue #378: 盤面 verb は親スレッ
             taskType,
             workspacePath: "/home/pi/work/tidepool",
             permittedSkills: "all",
+            ...HOST,
           }),
       ).toBe(false);
     }
@@ -207,6 +282,7 @@ describe("buildSandboxSettings の hooks(issue #378: 盤面 verb は親スレッ
         taskType,
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       });
       expect(hooks.PreToolUse).toHaveLength(1);
       expect(hooks.PreToolUse[0]?.matcher).toBe("mcp__tidepool__.*");
@@ -253,6 +329,7 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
         taskType: "work",
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       }).permissions,
     ).toEqual({
       deny: [
@@ -265,7 +342,7 @@ describe("buildSandboxSettings の permissions.deny(ADR 0037)", () => {
 
   it("エントリは workspace 相対 — deny は literal path で判定されるので、workspace が変わっても同じ配列になる", () => {
     const at = (workspacePath: string) =>
-      buildSandboxSettings({ taskType: "review", workspacePath, permittedSkills: "all" })
+      buildSandboxSettings({ taskType: "review", workspacePath, permittedSkills: "all", ...HOST })
         .permissions.deny;
     expect(at("/home/pi/work/tidepool")).toEqual(at("/some/other/checkout"));
   });
@@ -283,6 +360,7 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
         taskType,
         workspacePath: "/home/pi/work/tidepool",
         permittedSkills: "all",
+        ...HOST,
       });
       expect(settings.autoMemoryEnabled).toBe(false);
       expect(settings.autoMemoryDirectory).toBe(fixed);
@@ -302,6 +380,7 @@ describe("盤面 verb deny hook の挙動(issue #378)", () => {
       taskType: "work",
       workspacePath: "/home/pi/work/tidepool",
       permittedSkills: "all",
+      ...HOST,
     }).hooks.PreToolUse[0].hooks[0].command;
 
   const runHook = (stdin: string) => {
@@ -372,6 +451,7 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 013
           taskType,
           workspacePath: "/home/pi/work/tidepool",
           permittedSkills: "all",
+          ...HOST,
         }).sandbox.network,
       ).toEqual({
         allowLocalBinding: true,
@@ -388,6 +468,7 @@ describe("buildSandboxSettings の network(ADR 0033 追記 / issue #146, ADR 013
           taskType,
           workspacePath: "/home/pi/work/tidepool",
           permittedSkills: "all",
+          ...HOST,
           allowedDomains: ["registry.npmjs.org"],
         }).sandbox.network,
       ).toEqual({

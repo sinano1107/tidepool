@@ -1,14 +1,12 @@
 import { join } from "node:path";
-import { PassThrough } from "node:stream";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
-import type { ContainerSpawn } from "../src/process-container.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, FakeContainerRuntime, pinnedCliVersions, withHealthyUsage } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -193,13 +191,6 @@ afterEach(async () => {
   server = undefined;
 });
 
-const spawn: ContainerSpawn = () => ({
-  stdout: new PassThrough(),
-  stderr: new PassThrough(),
-  kill() {},
-  on() {},
-});
-
 it("要求のある task はその要求のモデルで spawn され、worker_spawned の出所は task(ADR 0110 決定3)", async () => {
   const workspace = await makeWorkspace("task-execution-request");
   const registryDir = await makeRegistry({
@@ -222,6 +213,7 @@ You are Tako.
   const clock = new FakeClock();
 
   const boardDb = openDb(join(boardDir, "board.sqlite"));
+  const proc = recordingSpawn();
   server = await startServer({
     db: boardDb,
     taskExecutionCandidates: implicitTaskExecutionCandidates(boardDb),
@@ -229,7 +221,7 @@ You are Tako.
     mcpPort: 0,
     credential: TEST_CREDENTIAL,
     clock,
-    containerRuntime: new FakeContainerRuntime(spawn),
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
     transcripts: new TranscriptStore(logDir),
     checkHarnessCliVersion: pinnedCliVersions,
     worker: ({ db, containers, boardCall }): WorkerAdapter => {
@@ -267,4 +259,5 @@ You are Tako.
     model: "claude-fable-5-1",
     source: { tier: "task", provider: "only" },
   });
+  proc.emitExit(0, null); // task temp の後始末(ADR 0257)
 });

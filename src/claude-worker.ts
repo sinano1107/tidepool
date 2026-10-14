@@ -1,6 +1,6 @@
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
@@ -678,13 +678,20 @@ export interface ProviderRouting extends ExecutionSetting {
  *  (PATH, proxies, SSH, locale) is host-dependent, open, and silently fatal
  *  when a need goes missing. Enumerate the side you can enumerate.
  *  Nothing more is pinned: effort mapping and context-window knobs are #447's
- *  measurements, not guesses to bake in here. */
+ *  measurements, not guesses to bake in here.
+ *
+ *  ADR 0257 決定2: both temp variables point at the session's task temp. The
+ *  CLI process's own `TMPDIR` is what moves its proxy socket out of the closed
+ *  `/tmp`; `CLAUDE_CODE_TMPDIR` alone left allowed domains unreachable (#1950). */
 export function workerSpawnEnv(
   advisor: string | undefined,
   routing: ProviderRouting,
+  taskTemp: string,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    TMPDIR: taskTemp,
+    CLAUDE_CODE_TMPDIR: taskTemp,
     CLAUDE_STREAM_IDLE_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     API_TIMEOUT_MS: String(STREAM_IDLE_TIMEOUT_MS),
     [AUTOUPDATER_DISABLE_ENV]: "1",
@@ -1935,22 +1942,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
       }),
     );
-    // ADR 0033: every worker session — review and work alike — runs its Bash
-    // inside the CLI's own sandbox, confined to the workspace. Written per task
-    // next to the MCP config above, the same shape and lifetime; the profile
-    // itself is a code constant (src/sandbox.ts), never registry data.
-    const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
-    writeFileSync(
-      sandboxSettingsPath,
-      JSON.stringify(
-        buildSandboxSettings({
-          taskType: task.type,
-          workspacePath: workspace.path,
-          permittedSkills: enforcement.permittedSkills,
-          allowedDomains: workspace.allowed_domains,
-        }),
-      ),
-    );
     const prompt =
       `You are picking up tidepool task ${task.id}. ` +
       "Call get_current_task first, then work it to completion through the tidepool MCP verbs.";
@@ -2028,11 +2019,40 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // process は1つも起きない(ADR 0118 の族)
     const transcript = this.options.transcripts.open(task.id, spawnedEventId);
     const transcriptPath = transcript.streamPath;
+    // ADR 0257 決定2: the session's task temp, made after everything that can throw
+    // on the way here (transcript open included) so those paths leave nothing behind.
+    // Removed at settle and on a spawn failure; a failed removal only logs (issue #705).
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-claude-${task.id}-`)));
+    const removeTaskTemp = () => {
+      try {
+        rmSync(taskTemp, { recursive: true, force: true });
+      } catch (error) {
+        console.error(`[worker] could not remove ${taskTemp}:`, error);
+      }
+    };
+    // ADR 0033: every worker session — review and work alike — runs its Bash
+    // inside the CLI's own sandbox, confined to the workspace. Written per task
+    // next to the MCP config above, the same shape and lifetime; the profile
+    // itself is a code constant (src/sandbox.ts), never registry data.
+    const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
+    writeFileSync(
+      sandboxSettingsPath,
+      JSON.stringify(
+        buildSandboxSettings({
+          taskType: task.type,
+          workspacePath: workspace.path,
+          permittedSkills: enforcement.permittedSkills,
+          allowedDomains: workspace.allowed_domains,
+          taskTemp,
+          lib64: existsSync("/lib64"),
+        }),
+      ),
+    );
     // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
     // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
     // reclaimed の相手が居ない session は生まれない。
-    // ponytail: spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の question が
-    // 1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
+    // ponytail: spawn が同期で投げると開いた2本の fd は閉じず、task temp も残る(ADR 0118 の
+    // question が1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy / remove する。
     const child = this.containers.open(task.id).spawn(
       "claude",
       [
@@ -2155,7 +2175,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // overlay — a spread on top of it could not have removed a key. The git
         // identity carries no key it touches, so layering it after is safe.
         env: {
-          ...workerSpawnEnv(routing.advisor, routing),
+          ...workerSpawnEnv(routing.advisor, routing, taskTemp),
           ...agentGitIdentityEnv(agent.name),
         },
       },
@@ -2224,6 +2244,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         return;
       }
       this.running.delete(task.id);
+      removeTaskTemp();
       console.error(`[worker] failed to spawn claude for task ${task.id}:`, err);
       this.recordSpawnFailed(task, agent, { error_code: errno.code ?? null, message: err.message });
     });
@@ -2270,6 +2291,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         },
         at: this.options.clock.now(),
       });
+      removeTaskTemp();
       // ADR 0104 決定1: 上限到達による中断は失敗ではない —— failure question を
       // 立てず、タスクを `todo` の先頭へ戻して slot を解放する。**解放は容器が
       // 空になった観測のあと**(ADR 0099 決定3): exit は root process の話で
