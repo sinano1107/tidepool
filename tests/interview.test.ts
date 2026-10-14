@@ -6,7 +6,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, withheldDecompositionVerbs } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, withheldDecompositionVerbs } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
@@ -356,6 +356,7 @@ it("学習器は Interview の子の採点を、同じセル・同じ段の観�
   const [accepted, rejected, unscored] = roots.map((root) => ranChildren(db, root)[0]) as [Task, Task, Task];
   scoreInterview(db, roots[0]!, accepted.id, "accepted", "auditor", new Date(1), "worker");
   scoreInterview(db, roots[1]!, rejected.id, "rejected", "auditor", new Date(1), "worker");
+  for (const root of roots.slice(0, 2)) completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(1), "worker");
   const episodes = loadEpisodes(db);
   expect(episodes.map(({ task_id, outcome, interview }) => ({ task_id, outcome, interview }))).toEqual([
     { task_id: accepted.id, outcome: "accepted", interview: true },
@@ -365,6 +366,25 @@ it("学習器は Interview の子の採点を、同じセル・同じ段の観�
   const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
   expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([{ cell, accepted: 1, rejected: 1, interview: { accepted: 1, rejected: 1 } }]);
   expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([]);
+});
+
+it("学習器は root が done の Interview の採点だけを数える —— root が cancelled や未決着の子の採点は、採点の無い子と同じく excluded(ADR 0251 決定4)", () => {
+  const db = openDb(":memory:");
+  const scored = ["done", "cancelled", "unsettled"].map((settle) => {
+    const { root } = registerInterview(db, [opusHigh, haikuNull]);
+    const children = ranChildren(db, root) as [Task, Task];
+    scoreInterview(db, root, children[0].id, "accepted", "auditor", new Date(1), "worker");
+    scoreInterview(db, root, children[1].id, "rejected", "auditor", new Date(1), "worker");
+    if (settle === "done") completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(1), "worker");
+    if (settle === "cancelled") cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui");
+    return children;
+  });
+  const episodes = loadEpisodes(db);
+  expect(episodes.map(({ outcome }) => outcome)).toEqual(["accepted", "rejected", "excluded", "excluded", "excluded", "excluded"]);
+  expect(episodes.map(({ task_id }) => task_id)).toEqual(scored.flat().map(({ id }) => id));
+  const record = (accepted: number, rejected: number) => ({ accepted, rejected, interview: { accepted, rejected } });
+  expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([{ cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null }, ...record(1, 0) }]);
+  expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([{ cell: { provider: "anthropic", model: "claude-haiku-4-5", effort: null, advisor: null }, ...record(0, 1) }]);
 });
 
 it("採点の無い done の pin の子が残るあいだ root は完了できず、拒否は score_interview と未採点の子を名指す —— accepted でも rejected でも全部採点すれば完了できる(ADR 0247 決定4)", () => {
