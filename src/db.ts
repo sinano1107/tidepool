@@ -483,7 +483,7 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS episode_markers (
       episode_id      INTEGER NOT NULL REFERENCES episodes(id),
       seq             INTEGER NOT NULL,
-      kind            TEXT NOT NULL CHECK (kind IN ('decision', 'compaction', 'commit', 'advisor', 'memory')),
+      kind            TEXT NOT NULL CHECK (kind IN ('decision', 'compaction', 'commit', 'advisor', 'memory', 'memory_write')),
       position        INTEGER,
       event_id        INTEGER,
       missing_reason  TEXT CHECK (missing_reason IN ('no_event_id', 'unmatched')),

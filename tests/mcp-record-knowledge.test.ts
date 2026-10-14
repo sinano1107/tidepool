@@ -9,7 +9,7 @@ afterEach(() => t?.stop());
 
 const text = (result: any): string => result.content[0].text;
 
-it("record_knowledge は attributed task の workspace をスコープ、worker verb + agent 名を書き手にして書き、entry id と event id を返す", async () => {
+it("record_knowledge は attributed task の workspace をスコープ、worker verb + agent 名を書き手にして書き、entry id を返す", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "index the tide charts", "charts");
   await t.clock.advance(HOUR);
@@ -26,11 +26,11 @@ it("record_knowledge は attributed task の workspace をスコープ、worker 
       },
     });
     expect(result.isError).toBeFalsy();
-    const { entry_id, event_id } = JSON.parse(text(result));
+    const { entry_id } = JSON.parse(text(result));
     expect(await memoryEntries(t, "?state=approved")).toMatchObject([
       {
         id: entry_id,
-        version: event_id,
+        version: entry_id,
         scope: "charts",
         author: { activity: "worker_verb", name: t.worker.id },
       },

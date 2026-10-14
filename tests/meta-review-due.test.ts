@@ -17,7 +17,8 @@ import {
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI, writerTask } from "./harness.js";
+
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
 const at = new Date("2026-09-24T00:00:00.000Z");
@@ -94,10 +95,10 @@ it("memory meta-review の直接書き込み(define・fold・move・invalidate)�
   const definition = defineMemoryBranch(db, { scope: null, path: "build", text: "How it builds.", author: deckhand }, "worker", at).entry_id;
   previousReview(db, "memory");
 
-  defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How the board builds.", supersedes: [definition], author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How the board builds.", supersedes: [definition], author: metaReview }, "worker", at, writerTask(db));
   foldMemory(db, task.id, { scope: null, path: "build", title: "Folded", text: "Folded.", replaces: [a, b], based_on_decision: decision, author: metaReview }, "worker", at);
-  moveMemoryByMetaReview(db, { entry_id: moved, scope: null, path: "toolchain", mover: metaReview }, "worker", at);
-  invalidateMemoryByMetaReview(db, { entry_id: invalidated, reason: "environment" }, "auditor", "worker", at);
+  moveMemoryByMetaReview(db, { entry_id: moved, scope: null, path: "toolchain", mover: metaReview }, "worker", at, writerTask(db));
+  invalidateMemoryByMetaReview(db, { entry_id: invalidated, reason: "environment" }, "auditor", "worker", at, writerTask(db));
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(0);

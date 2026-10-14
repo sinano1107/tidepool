@@ -15,8 +15,9 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, listChildren, registerTask, type Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
+import { commitTriage, raiseObjection } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { driveCodexPreflight, FakeClock, passthroughContainers, recordingSpawn } from "./fakes.js";
@@ -69,6 +70,17 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
   return decomposeTaskViaWorker(db, interviewRoot(db), { reason: "one child per target", children }, "auditor", new Date("2026-08-24T00:00:00.000Z"))[0]!;
 }
 const decomposedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, pinnedChild(db).parent_id!)!;
+
+/** 記憶の書き込みの行への異議の修理 task —— 記憶の修理 verb はこれにだけ足される(ADR 0252 決定4)。 */
+function writeRepairTask(db: ReturnType<typeof openDb>) {
+  const at = new Date("2026-08-24T00:00:00.000Z");
+  const objected = task(db, "wrote a note");
+  const author = { activity: "worker_verb" as const, name: "codex-agent" };
+  const { event_id } = recordKnowledge(db, { scope: "work", path: "build", title: "t", text: "x.", source: { commit: "0a46a46" }, author }, "worker", at, objected.id);
+  raiseObjection(db, event_id, "undo it", at);
+  commitTriage(db, at);
+  return listChildren(db, objected.id).find((child) => child.type === "work")!;
+}
 
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
 function configValue<T>(args: string[], prefix: string): T {
@@ -378,6 +390,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の root", interviewRoot],
     ["Interview の pin の子", pinnedChild],
     ["分解した Interview の root", decomposedInterviewRoot],
+    ["書き込みの行への異議の修理", writeRepairTask],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     f.start(register(f.db));

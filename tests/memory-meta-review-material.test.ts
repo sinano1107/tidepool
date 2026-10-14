@@ -26,7 +26,8 @@ import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.j
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -98,10 +99,10 @@ it("店の変更: 前回の登録より後に worker が書いた Knowledge と�
   const written = knowledge(db, "written");
   invalidateMemoryEntry(db, { entry_id: toDrop, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
   const decision = logDecision(db, getTask(db, previous)!, "these say the same", "auditor", at, "worker");
-  defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How it builds.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How it builds.", author: metaReview }, "worker", at, writerTask(db));
   foldMemory(db, previous, { scope: "tidepool", path: "folded", title: "Folded", text: "Folded.", replaces: [toFold], based_on_decision: decision, author: metaReview }, "worker", at);
-  moveMemoryByMetaReview(db, { entry_id: toMove, scope: "tidepool", path: "moved", mover: metaReview }, "worker", at);
-  invalidateMemoryByMetaReview(db, { entry_id: toRetire, reason: "environment" }, "auditor", "worker", at);
+  moveMemoryByMetaReview(db, { entry_id: toMove, scope: "tidepool", path: "moved", mover: metaReview }, "worker", at, writerTask(db));
+  invalidateMemoryByMetaReview(db, { entry_id: toRetire, reason: "environment" }, "auditor", "worker", at, writerTask(db));
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: toAmend, replaces: [] }, "question-1", "webui", at, { text: "Keep notes to one line." });
   const review = register(db, "memory");
   knowledge(db, "after");
@@ -126,7 +127,7 @@ it("店の変更: 人間が移したエントリは複製の行だけで path_mo
   const copy = moveMemory(db, { entry_id: moved, scope: null, path: "elsewhere", mover: human }, "webui", at).entry_id;
   const edit = recordKnowledge(db, { ...humanEntryInput(db, { workspace: "tidepool", path: "edited", title: "edited", text: "Edited." }), supersedes: [edited] }, "webui", at).entry_id;
   const fresh = knowledge(db, "fresh");
-  const freshCopy = moveMemoryByMetaReview(db, { entry_id: fresh, scope: "tidepool", path: "settled", mover: metaReview }, "worker", at).entry_id;
+  const freshCopy = moveMemoryByMetaReview(db, { entry_id: fresh, scope: "tidepool", path: "settled", mover: metaReview }, "worker", at, writerTask(db)).entry_id;
   const review = register(db, "memory");
 
   const { parts } = memoryMaterialOf(db, review);
@@ -199,7 +200,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   const rejected = propose(answered!);
   answer(rejected);
   const settled = propose(stale!);
-  invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at);
+  invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at, writerTask(db));
   propose(open!);
   const lateQuestion = propose(late2!);
   defineMemoryBranch(db, humanEntryInput(db, { workspace: "tidepool", path: "tools", text: "Tools.", original_text: "道具" }), "webui", at);

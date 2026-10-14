@@ -81,7 +81,7 @@ it("browse_memory / search_memory / read_memory は attributed task の workspac
   }
 });
 
-it("define_memory_branch は attributed task の workspace をスコープ、worker verb + agent 名を書き手にして定義を書き、entry id と event id を返す。拒否は domain error の tool error", async () => {
+it("define_memory_branch は attributed task の workspace をスコープ、worker verb + agent 名を書き手にして定義を書き、entry id を返す。拒否は domain error の tool error", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "index the tide charts", "charts");
   await t.clock.advance(HOUR);
@@ -90,9 +90,9 @@ it("define_memory_branch は attributed task の workspace をスコープ、wor
   try {
     const result = await client.callTool({ name: "define_memory_branch", arguments: { prefix: "build", definition: "How charts is built." } });
     expect(result.isError).toBeFalsy();
-    const { entry_id, event_id } = body(result);
+    const { entry_id } = body(result);
     expect(await memoryEntries(t, "?state=approved")).toMatchObject([
-      { id: entry_id, version: event_id, kind: "definition", path: "build", text: "How charts is built.", scope: "charts", author: { activity: "worker_verb", name: t.worker.id } },
+      { id: entry_id, version: entry_id, kind: "definition", path: "build", text: "How charts is built.", scope: "charts", author: { activity: "worker_verb", name: t.worker.id } },
     ]);
 
     const rejected = await client.callTool({ name: "define_memory_branch", arguments: { prefix: "deploy", definition: "Two\nlines." } });

@@ -34,13 +34,15 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-i
  *  定義本文・model 名・価格は渡さない —— 判断に要らず、配分評価の線と同じ。
  *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
  *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
- *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。 */
+ *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
+ *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。 */
 export interface AttributionInput {
   entry_id: number;
   entry: string;
   steering: string[];
   decision_log: string[];
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
+  written?: AttributionInput["memory_read"];
   rca_findings?: string[];
 }
 
@@ -211,6 +213,7 @@ export async function attributeObjections(
         steering: o.comments,
         decision_log: decisionLogText(db, o.entry.task_id),
         memory_read: memoryRead(db, o.entry),
+        ...writtenBodies(db, o.entry),
       };
       try {
         judgments.set(o.entry.id, gate(await call.client.judge(input, call.setting), input.memory_read));
@@ -431,6 +434,7 @@ function objectionInput(
     steering: objectionsById(db, entry.id, attribution.objection_event_ids).map((o) => o.comment),
     decision_log: decisionLogText(db, entry.task_id, attribution.id),
     memory_read: memoryRead(db, entry),
+    ...writtenBodies(db, entry),
   };
 }
 
@@ -444,9 +448,18 @@ function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_r
   const ids = new Set(
     events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.payload.verb === "read_memory" && e.id < entry.id && inSession(e) ? e.payload.returned_ids : [])),
   );
+  return memoryBodies(db, [...ids]);
+}
+
+/** 記憶の書き込みの行(memory_written)が作った・無効化したエントリの本文。他の行は欄を持たない。 */
+function writtenBodies(db: Db, entry: DecisionLogEntry): Pick<AttributionInput, "written"> {
+  return entry.payload.kind === "memory_written" ? { written: memoryBodies(db, [...entry.payload.created, ...entry.payload.invalidated]) } : {};
+}
+
+function memoryBodies(db: Db, ids: number[]): AttributionInput["memory_read"] {
   // ponytail: 数件の id を引くのに記憶の全件を読む。記憶が数万に育って commit が重くなったら id で引く読み口を足す
   const byId = new Map(listMemoryEntries(db, {}).map((m) => [m.id, m]));
-  return [...ids].map((id) => {
+  return ids.map((id) => {
     const { kind, title, text } = byId.get(id)!;
     return { id, kind, title, text };
   });
@@ -607,7 +620,7 @@ export function proposeFromObjection(
     author: { activity: "rca" as const, name: author },
   };
   return target.kind === "knowledge"
-    ? recordKnowledge(db, entryInput, "worker", now)
+    ? recordKnowledge(db, entryInput, "worker", now, reviewId)
     : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
 }
 

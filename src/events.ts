@@ -558,6 +558,10 @@ export type EventPayload =
       candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;
       dropped?: Array<{ id: number; reason: InvalidationReason; successor: number | null }>;
     }
+  // ADR 0252 決定2・3 / issue #632: AI が直接適用した記憶の書き込み1回(verb の呼び出し1回、書き手の task 帰属)。決定ログの1行で、
+  // line は盤面が同じ transaction の店の event から組む。created / invalidated はその呼び出しが作った・無効化したエントリの id
+  // (作成の event id = エントリの id)。event id は tool 結果に載り、Precedent の memory_write マーカーになる。
+  | { kind: "memory_written"; line: string; created: number[]; invalidated: number[] }
   // spec #586 G: エントリ表と FTS を events から作り直した。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
@@ -675,7 +679,7 @@ export function appendEvent(
 /** The decision log is not its own entity: it is the events table narrowed to
  *  the kinds a human skims (issue #5). Kinds join this list; no table is added.
  *  satisfies は listLog の inner join の前提(どれも盤面スコープでない)を型で断言する(issue #927)。 */
-export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached"] as const satisfies readonly Exclude<
+export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise_breached", "memory_written"] as const satisfies readonly Exclude<
   EventKind,
   BoardScopedKind
 >[];

@@ -751,6 +751,8 @@ const toLogEntryShape = (e, openSessionId) => ({
   cause: e.cause ?? void 0,
   causeEntries: e.entries ?? void 0,
   causeEvidence: e.evidence ?? void 0,
+  // 記憶の書き込みの行は触ったエントリへのリンクを持つ(ADR 0252 決定3)
+  memoryEntries: e.payload.kind === "memory_written" ? [...e.payload.created, ...e.payload.invalidated] : void 0,
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment)
 });
