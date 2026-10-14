@@ -26,6 +26,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   agent: ["deckhand", "bosun"],
   providerAuth: ["anthropic", "openai"],
   harnessContainment: ["claude-code", "codex"],
+  workspaceContainment: ["claude-code/sandbox", "codex/sandbox"],
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
   registryReachability: [null],

@@ -20,9 +20,11 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
+import { workspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
+import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import {
   loadRegistry,
   ownEntry,
@@ -1738,24 +1740,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now());
       return;
     }
-    const settings = workspaceSettingsDisposition(workspace.path);
-    const overriding = settings.overriding;
-    if (overriding.length > 0) {
-      // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158
-      quarantineWorkspace(
+    // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
+    const contained = workspaceContainment("claude-code", workspace.path);
+    if (!contained.available) {
+      registerQuarantine(
         this.options.db,
-        workspace.name,
-        new Error(
-          `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is unreadable, ` +
-            "or it is a local or untracked settings file that is invalid JSON or declares " +
-            "sandbox/permissions/hooks — the board can hide " +
-            "only a Git-tracked .claude/settings.json, so make the file readable or remove it " +
-            "(or those blocks) from this checkout",
-        ),
+        "workspaceContainment",
+        workspaceContainmentValue("claude-code", workspace.name),
+        contained.reason,
         this.options.clock.now(),
       );
       return;
     }
+    const settings = workspaceSettingsDisposition(workspace.path);
     if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;

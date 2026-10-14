@@ -1446,16 +1446,21 @@ describe("ClaudeCodeWorker", () => {
       JSON.stringify({ permissions: { allow: ["Bash(*)"] } }),
     ],
     ["壊れた untracked settings.json", "settings.json", "{ not json"],
-  ])("%s は spawn せず workspace を quarantine する", async (_case, name, body) => {
+    // 読めないファイル: ディレクトリなら root で走る CI でも読み取りが失敗する
+    ["読めない settings.local.json", "settings.local.json", null],
+  ])("%s は spawn せず (claude-code, workspace) の組を quarantine する —— workspace は止めない(ADR 0259)", async (_case, name, body) => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude"), { recursive: true });
-    await writeFile(join(wsDir, ".claude", name), body);
+    if (body === null) await mkdir(join(wsDir, ".claude", name));
+    else await writeFile(join(wsDir, ".claude", name), body);
     const { start, calls, db } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
     start("task-sbx-override");
     expect(calls).toEqual([]);
-    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    const question = quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool");
+    expect(question?.purpose).toContain(`.claude/${name}`);
   });
 
   it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {

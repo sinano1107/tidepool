@@ -25,12 +25,12 @@ import {
 } from "./execution-setting.js";
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
-import type { HarnessContainmentCheck } from "./harness-containment.js";
+import { type HarnessContainmentCheck, workspaceContainment } from "./harness-containment.js";
 import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { openQuarantineQuestion, parseTableRowEffortValue, parseTableRowValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
+import { openQuarantineQuestion, parseTableRowEffortValue, parseTableRowValue, parseWorkspaceContainmentValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -573,6 +573,17 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         );
       } catch (err) {
         throw new DomainError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    // ADR 0259 決定5: worker の起動と同じ組の検査を撃ち直す。workspace は今の registry で引き直す
+    workspaceContainment: async (value) => {
+      const { harness, workspace } = parseWorkspaceContainmentValue(value!);
+      const target = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
+      const capability = workspaceContainment(harness, target.path);
+      if (!capability.available) {
+        throw new DomainError(
+          `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,
+        );
       }
     },
     ...(containment && {
