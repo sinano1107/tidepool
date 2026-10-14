@@ -582,7 +582,8 @@ export interface ApiRouterDeps {
   agentRegistered?: (name: string) => boolean;
   /** その名前がいま組み込み agent に解決されるか(ADR 0228)。Absent → registry の無い盤面。 */
   resolvesToBuiltIn?: (name: string) => boolean;
-  /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
+  /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
+   *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;

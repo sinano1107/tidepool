@@ -1149,7 +1149,7 @@ export async function submitAnswer(
     // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
     // 解放と対で走る。再起動を越えて後始末の印だけが残っていれば、その後始末を走らせる
-    // (ADR 0254 決定2)。待っている回収も残った印も無い Containment quarantine(ツール面のずれなど)では no-op。
+    // (ADR 0254 決定2)。待っている回収も残った印も無い Containment quarantine では no-op。
     // Harness Containment の受理も同じ前提検査を読み直すので、再起動を越えた印の後始末だけは走らせる ——
     // `harnessContainment` を持つ盤面では前提検査の不成立が Harness ごとの question に畳まれ、
     // Containment question が立たない(issue #1937)。待っている回収は解放しない(上の唯一の門)。
