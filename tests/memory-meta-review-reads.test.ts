@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, getEvent, latestEventOfTask, listEvents } from "../src/events.js";
+import { appendEvent, getEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   approveMemoryProposal,
   createBehaviorCandidate,
@@ -30,7 +30,8 @@ import {
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -177,7 +178,9 @@ it("list_memory_proposals は過去の memory 提案を approve・修正つき a
   const merged = propose({ op: "consolidate", successor_id: approved!, replaces: [replaced!], rationale: "r" });
   answer(merged, "approve");
   const settled = propose({ op: "approve", candidate_id: stale!, rationale: "r" });
-  const retired = invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at);
+  invalidateMemoryByMetaReview(db, { entry_id: stale!, reason: "rejected" }, "auditor", "worker", at, writerTask(db));
+  // 返り値は書き込みの記録なので、陳腐化が観測した店の無効化の event を引く
+  const retired = listEventsOfKinds(db, ["memory_entry_invalidated"]).find((e) => e.payload.entry_id === stale)!.id;
 
   const pulled = pullMemoryProposals(db, reader, {}, at);
   expect(pulled.proposals).toEqual([
@@ -261,7 +264,7 @@ it("無効化済みのエントリは書き手の印 invalidated_by を持つ �
   const [byHuman, byMetaReview, bySettings, open] = ["Short notes", "Long notes", "Loud notes", "Quiet notes"].map((title) => behavior({ title }));
   const refused = propose({ op: "approve", candidate_id: byHuman!, rationale: "r" });
   answer(refused, "reject", { comment: "Notes are not about length." });
-  invalidateMemoryByMetaReview(db, { entry_id: byMetaReview!, reason: "rejected" }, "auditor", "worker", at);
+  invalidateMemoryByMetaReview(db, { entry_id: byMetaReview!, reason: "rejected" }, "auditor", "worker", at, writerTask(db));
   invalidateMemoryEntry(db, { entry_id: bySettings!, reason: "environment" }, "human", "webui", at);
 
   expect(listMemoryEntries(db, {}).map((e) => [e.id, e.invalidation_reason, e.invalidated_by])).toEqual([
@@ -593,7 +596,7 @@ it("read_memory_entries は superseded と理由コードで無効化された i
   const successor = knowledge("tidepool", "notes/short");
   invalidateMemoryEntry(db, { entry_id: replaced, reason: "superseded", successor_id: successor }, "human", "webui", at);
   const retired = knowledge("tidepool", "tools");
-  invalidateMemoryByMetaReview(db, { entry_id: retired, reason: "capability" }, "auditor", "worker", at);
+  invalidateMemoryByMetaReview(db, { entry_id: retired, reason: "capability" }, "auditor", "worker", at, writerTask(db));
 
   const { entries } = readMemoryEntries(db, reader, { ids: [replaced, retired] }, at);
 

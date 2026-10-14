@@ -34,6 +34,12 @@ import {
   readMemory,
   readMemoryEntries,
   recordKnowledge,
+  repairableEntries,
+  repairInvalidate,
+  repairMove,
+  repairMoveBranchBack,
+  repairReplace,
+  repairRestore,
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
@@ -826,6 +832,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             },
             "worker",
             deps.clock.now(),
+            task.id,
           ),
         ),
     );
@@ -857,6 +864,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     registerMetaReviewVerbs(server, deps, attributedTaskId, subject);
     return server;
   }
+  // ADR 0252 決定4: 書き込みの行への異議の修理 task にだけ記憶の修理 verb を足す
+  if (attributedTaskId !== null && repairableEntries(deps.db, attributedTaskId).size > 0) registerMemoryRepairVerbs(server, deps, attributedTaskId);
 
   server.registerTool(
     "define_memory_branch",
@@ -881,6 +890,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           },
           "worker",
           deps.clock.now(),
+          task.id,
         ),
       ),
   );
@@ -941,6 +951,79 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   return server;
 }
 
+/** 記憶の修理 verb(ADR 0252 決定4)。対象の範囲と門は domain が呼び出し時に持つ。 */
+function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string): void {
+  const run = (verb: (repairer: { taskId: string; agent: string }, now: Date) => unknown) =>
+    runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+  const scope =
+    "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
+
+  server.registerTool(
+    "invalidate_memory",
+    {
+      description:
+        "Repair only: drop an entry the objected memory write created as a new entry, with no successor. A copy that write moved is not dropped: move it back. " +
+        `reason is capability / environment / requirement_change. ${scope}`,
+      inputSchema: invalidationSchema.extend({ entry_id: z.number().int() }),
+    },
+    async (input) => run((repairer, now) => repairInvalidate(deps.db, repairer, input, now)),
+  );
+
+  server.registerTool(
+    "restore_memory",
+    {
+      description:
+        "Repair only: restore an entry the objected memory write dropped — the board copies it back as it was, to its own scope and path. " +
+        `Refused while its successor is live: drop the successor first when the write created it. ${scope}`,
+      inputSchema: { entry_id: z.number().int() },
+    },
+    async (input) => run((repairer, now) => repairRestore(deps.db, repairer, input, now)),
+  );
+
+  server.registerTool(
+    "move_memory",
+    {
+      description:
+        "Repair only: move an entry the objected memory write touched to path in scope (a registry workspace name, or null for the whole board). " +
+        "Moving it back to where that write moved it from always works; any other move stays in the entry's scope or widens it to the whole board. " +
+        scope,
+      inputSchema: { entry_id: z.number().int(), scope: requiredTextSchema.nullable(), path: requiredTextSchema },
+    },
+    async (input) => run((repairer, now) => repairMove(deps.db, repairer, { ...input, scope: registeredScope(deps, input.scope) }, now)),
+  );
+
+  server.registerTool(
+    "move_memory_branch",
+    {
+      description:
+        "Repair only: undo the objected memory write's branch move in one step. Every entry that write moved and that now lives at path or under it " +
+        "in scope (null for the whole board) goes back to the scope and path it had before that write, Definitions included; entries that arrived " +
+        "under path later stay. Returns how many entries were moved back.",
+      inputSchema: { scope: requiredTextSchema.nullable(), path: requiredTextSchema },
+    },
+    async (input) => run((repairer, now) => repairMoveBranchBack(deps.db, repairer, input, now)),
+  );
+
+  server.registerTool(
+    "replace_memory",
+    {
+      description:
+        "Repair only: replace a Knowledge entry or a Definition the objected memory write touched with a new body at the same scope and path; the old one is superseded. " +
+        "A Knowledge entry takes title, text and source, exactly one of {event_id} or {commit} as with record_knowledge; a Definition takes text only, one line. " +
+        "Behaviors and Exemplars are not replaced here. " +
+        scope +
+        BOARD_WRITE_LANGUAGE_RULE,
+      inputSchema: {
+        entry_id: z.number().int(),
+        title: requiredTextSchema.optional(),
+        text: requiredTextSchema,
+        source: z.object({ event_id: z.number().int().optional(), commit: z.string().optional() }).optional(),
+      },
+    },
+    async (input) => run((repairer, now) => repairReplace(deps.db, repairer, input, now)),
+  );
+}
+
 /** 直接適用の scope(ADR 0122 決定1): null = 盤面全体は常に可、workspace 名は registry と照合する。registry の無い盤面
  *  では照合できないので名前を拒む(buildWorkspaceResolver の固定 workspace への fallback はどの名前も通すので使わない)。 */
 function registeredScope(deps: McpDeps, scope: string | null): string | null {
@@ -965,7 +1048,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
     "list_precedents",
     {
       description:
-        "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
+        "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
         "Defaults to objections since the previous completed meta-review of your subject; pass since_watermark (an event id) to look further back. " +
@@ -1203,6 +1286,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
           },
           "worker",
           now,
+          reader.taskId,
         ),
       ),
   );
@@ -1243,7 +1327,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       inputSchema: { entry_id: z.number().int(), scope, path: requiredTextSchema },
     },
     async (input) =>
-      run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now)),
+      run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now, reader.taskId)),
   );
 
   server.registerTool(
@@ -1264,8 +1348,8 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
     async (input) =>
       run((reader, now) => {
-        const { moved, folded } = moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now);
-        return { moved: moved.length, folded: folded.length, to_scope: input.to_scope, to_path: input.to_path };
+        const { moved, folded, event_id } = moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now, reader.taskId);
+        return { moved: moved.length, folded: folded.length, to_scope: input.to_scope, to_path: input.to_path, event_id };
       }),
   );
 
@@ -1279,7 +1363,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
       inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
     },
-    async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now) })),
+    async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now, reader.taskId) })),
   );
 
   server.registerTool(

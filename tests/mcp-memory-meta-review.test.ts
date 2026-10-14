@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
-import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
+import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
+import { MEMORY_META_REVIEW_VERBS, WORKER_MEMORY_VERBS } from "../src/meta-review.js";
 import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
 import {
@@ -263,7 +263,7 @@ it("move_memory_branch は枝を to_scope の to_path へ移して件数と行�
     const moved = await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: null, to_path: "toolchain" });
 
     // 移るのは material と定義の2件
-    expect(moved).toEqual({ isError: false, body: { moved: 2, folded: 0, to_scope: null, to_path: "toolchain" } });
+    expect(moved).toEqual({ isError: false, body: { moved: 2, folded: 0, to_scope: null, to_path: "toolchain", event_id: expect.any(Number) } });
   } finally {
     await client.close();
   }
@@ -278,7 +278,7 @@ it("move_memory_branch の merge は domain に届き、移される定義を行
     // material は移り、build の定義は toolchain の定義へ畳まれる
     expect(await call("move_memory_branch", { scope: "sandbox", path: "build", to_scope: "sandbox", to_path: "toolchain", merge: true })).toEqual({
       isError: false,
-      body: { moved: 1, folded: 1, to_scope: "sandbox", to_path: "toolchain" },
+      body: { moved: 1, folded: 1, to_scope: "sandbox", to_path: "toolchain", event_id: expect.any(Number) },
     });
   } finally {
     await client.close();

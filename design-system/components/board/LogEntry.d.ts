@@ -27,6 +27,9 @@ export interface LogEntryProps {
     causeEntries?: number[];
     /** The latest attribution's evidence, rendered beside the cause. */
     causeEvidence?: string;
+    /** A memory write row: the ids of the entries it created or dropped,
+     *  each rendered as a link on its own line below the text. */
+    memoryEntries?: number[];
     /** Teal unread bar (entries since last skim). */
     unread?: boolean;
   };
@@ -36,7 +39,7 @@ export interface LogEntryProps {
   onObject?: () => void;
   /** Completion handoff toggle, kept separate from the row's Object affordance. */
   onExpand?: () => void;
-  /** A `causeEntries` link was followed; it never triggers the row's Object. */
+  /** A `causeEntries` or `memoryEntries` link was followed; it never triggers the row's Object. */
   onOpenMemoryEntry?: (id: number) => void;
   /** Objection composer open for this row (coral tint + "objecting…" marker). */
   active?: boolean;

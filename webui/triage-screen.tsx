@@ -669,6 +669,8 @@ const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], ope
   cause: e.cause ?? undefined,
   causeEntries: e.entries ?? undefined,
   causeEvidence: e.evidence ?? undefined,
+  // 記憶の書き込みの行は触ったエントリへのリンクを持つ(ADR 0252 決定3)
+  memoryEntries: e.payload.kind === 'memory_written' ? [...e.payload.created, ...e.payload.invalidated] : undefined,
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
 });

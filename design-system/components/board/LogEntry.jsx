@@ -9,19 +9,19 @@ const kindColors = {
 };
 
 export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, causeEntries = [], causeEvidence, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, human = false, kind = 'decision', text, objection, bundledObjection, cause, causeEntries = [], causeEvidence, memoryEntries = [], unread = false } = entry;
   const completion = kind === 'completion';
   const clickable = !!onObject;
   const causeText = cause === 'uncertain' ? 'cause: not yet determined (uncertain)' : cause ? `cause: ${cause}` : null;
-  // memory の帰責は名指された entry へのリンクを添える
+  // memory の帰責は名指された entry へ、記憶の書き込みの行は触った entry へのリンクを添える
   // リンクの間は実際の空白で置く(折り返し位置になる)—— #id は番号の途中で割れない
-  const causeLinks = causeEntries.map((id) => (
+  const entryLinks = (ids) => ids.map((id) => (
     <React.Fragment key={id}>{' '}<a href={`#memory-entry-${id}`} onClick={(e) => { e.preventDefault(); onOpenMemoryEntry?.(id); }}
       style={{ color: 'var(--tide-4)' }}>{`#${id}`}</a></React.Fragment>
   ));
   // 判定の根拠(ADR 0213 決定4)は異議コメントの下の、帯の幅いっぱいの独立した行に置く(issue #1113)
   const causeNote = causeText && (
-    <span style={{ color: 'var(--text-muted)' }}><span>{causeText}</span>{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
+    <span style={{ color: 'var(--text-muted)' }}><span>{causeText}</span>{entryLinks(causeEntries)}{causeEvidence && ` — ${causeEvidence}`}</span>
   );
   const band = { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に
@@ -68,6 +68,11 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
           onClick={onExpand}
           style={{ padding: '2px 4px', border: 'none', background: 'none', color: 'var(--text-secondary)', cursor: 'pointer', fontSize: 'var(--text-sm)', lineHeight: 1 }}
         >⌄</button>
+      )}
+      {memoryEntries.length > 0 && (
+        <div style={{ gridColumn: '1 / -1', fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          <span>entries:</span>{entryLinks(memoryEntries)}
+        </div>
       )}
       {(objection || bundledObjection) && (
         <div style={{ gridColumn: '1 / -1' }}>

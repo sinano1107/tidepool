@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, latestEventOfTask, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -307,11 +307,58 @@ function inheritedOriginal(original: EntryInput["original"], replaced: MemoryEnt
   return { title, text, language: declared ? language : copiedOriginalLanguage({ title, text }, replaced.map((r) => r.original), language) };
 }
 
-/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。 */
-export function recordKnowledge(db: Db, input: EntryInput & { supersedes?: number[] }, origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
+/** 書き込みの記録(ADR 0252 決定2・3): AI の直接適用の verb 呼び出し1回を write ごと1 transaction で走らせ、その間に店へ入った作成・
+ *  無効化から行の文を組んで書き手の task に1つ追記する。返り値の event_id は記録の id —— tool 結果に載り Episode のマーカーに結ぶ。
+ *  畳み・移動が内側で呼ぶ書き込みは writer を渡さないので、記録は外側の1つだけ。 */
+function withWriteRecord<T extends object>(db: Db, writer: { taskId: string; agent: string }, at: Date, write: () => T): T & { event_id: number } {
+  return db.transaction(() => {
+    const since = memoryWatermark(db);
+    const result = write();
+    const events = listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"], { after: since });
+    const created = events.filter((e) => e.payload.kind === "memory_entry_created").map((e) => e.id);
+    const invalidated = events.flatMap((e) => (e.payload.kind === "memory_entry_invalidated" ? [e.payload.entry_id] : []));
+    const payload = { kind: "memory_written" as const, line: writeLine(events), created, invalidated };
+    return { ...result, event_id: appendEvent(db, { taskId: writer.taskId, workerId: writer.agent, origin: "worker", payload, at }) };
+  })();
+}
+
+/** 書き込みの記録の行の文(ADR 0083 決定8 —— 自己申告でなく構造から): 店の event ごとに1句。移動の複製の作成は移動の句が言う。 */
+function writeLine(events: readonly EventRow[]): string {
+  const place = (entry: MemoryEntryFields) => `${entry.path} (${entry.scope ?? "whole board"})`;
+  const copies = new Set(events.flatMap(({ payload: p }) => (p.kind === "memory_entry_invalidated" && p.reason === "path_moved" ? [p.successor_id] : [])));
+  const entries = new Map(events.flatMap(({ id, payload: p }) => (p.kind === "memory_entry_created" ? [[id, p.entry]] : [])));
+  return events
+    .flatMap(({ id, payload: p }) => {
+      if (p.kind === "memory_entry_created") {
+        if (copies.has(id)) return [];
+        return [p.restored_from ? `restored #${p.restored_from} as #${id} at ${place(p.entry)}` : `wrote ${p.entry.kind} #${id} ${JSON.stringify(p.entry.title)} at ${place(p.entry)}`];
+      }
+      if (p.kind !== "memory_entry_invalidated") return [];
+      if (p.reason === "path_moved") return [`moved #${p.entry_id} to ${place(entries.get(p.successor_id!)!)} as #${p.successor_id}`];
+      if (p.reason === "superseded") return [`folded #${p.entry_id} into #${p.successor_id}`];
+      return [`dropped #${p.entry_id} (${p.reason})`];
+    })
+    .join("; ");
+}
+
+/** writer(書き手の task —— AI の直接適用)を渡せば書き込みの記録で包む(withWriteRecord)。人間の面は渡さない。 */
+function withOptionalWriteRecord<T extends object>(db: Db, writer: string | undefined, agent: string, at: Date, write: () => T): T {
+  return writer === undefined ? write() : withWriteRecord(db, { taskId: writer, agent }, at, write);
+}
+
+/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。writer は書き手の task(withOptionalWriteRecord)。 */
+export function recordKnowledge(
+  db: Db,
+  input: EntryInput & { supersedes?: number[] },
+  origin: EventOrigin,
+  at: Date,
+  writer?: string,
+): { entry_id: number; event_id: number } {
   const { supersedes, ...fields } = input;
-  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
-    createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
+  return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
+    writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
+      createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
+    ),
   );
 }
 
@@ -324,23 +371,32 @@ export function defineMemoryBranch(
   input: Omit<EntryInput, "title"> & { supersedes?: number[] },
   origin: EventOrigin,
   at: Date,
+  writer?: string,
 ): { entry_id: number; event_id: number } {
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...rest } = input;
   const fields = { ...rest, path: checkedPath(rest.path) };
-  return writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
-    const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
-    if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-    return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
-  });
+  return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
+    writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
+      const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
+      if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
+      return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
+    }),
+  );
 }
 
 /** meta-review の `define_memory`(ADR 0161 追記7): defineMemoryBranch に覆いの門を掛ける。Definition は宛先を持たないので
  *  門は scope だけを見る —— 別 path の定義を置き換えない線は foldMemoryEntries が両方の面に持つ(ADR 0177 決定6)。人間の面は
  *  defineMemoryBranch を直接呼ぶ。 */
-export function defineMemoryByMetaReview(db: Db, input: Parameters<typeof defineMemoryBranch>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
+export function defineMemoryByMetaReview(
+  db: Db,
+  input: Parameters<typeof defineMemoryBranch>[1],
+  origin: EventOrigin,
+  at: Date,
+  writer: string,
+): { entry_id: number; event_id: number } {
   requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
-  return defineMemoryBranch(db, input, origin, at);
+  return defineMemoryBranch(db, input, origin, at, writer);
 }
 
 /** 既にある後継への畳み(ADR 0162 決定1・2): replaces(1つ以上、approved も candidate も)を successor_id の superseded にする。
@@ -398,12 +454,12 @@ export function foldMemory(
   },
   origin: EventOrigin,
   at: Date,
-): { entry_id: number; event_ids: number[] } {
+): { entry_id: number; event_ids: number[]; event_id: number } {
   const { replaces, successor_id, author, ...draft } = input;
   if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
   }
-  return db.transaction(() => {
+  return withWriteRecord(db, { taskId: metaReviewId, agent: author.name }, at, () => {
     const replaced = replaces.map((id) => requireNotApprovedBehaviorOrExemplar(db, id));
     let successor = successor_id;
     if (successor === undefined) {
@@ -415,7 +471,7 @@ export function foldMemory(
     }
     requireCovers(requireEntry(db, successor), replaced);
     return foldMemoryEntries(db, { replaces, successor_id: successor, author }, origin, at);
-  })();
+  });
 }
 
 type Actor = MemoryEntryFields["author"];
@@ -605,12 +661,20 @@ function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; p
 /** meta-review の `move_memory`(ADR 0176 決定1〜4): 4種別の approved / candidate を同じ scope の中で直接移せ、scope を跨ぐのは
  *  盤面全体へ広げる向きだけ(requireWidening)。書き手は継ぎ、移した meta-review は activity に載るので自身の移動は次の周期の
  *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。 */
-export function moveMemoryByMetaReview(db: Db, input: Parameters<typeof moveMemory>[1], origin: EventOrigin, at: Date): { entry_id: number; event_id: number } {
-  return db.transaction(() => {
-    const old = requireEntry(db, input.entry_id);
-    requireWidening(db, [old], old.scope, input.scope);
-    return moveMemory(db, input, origin, at);
-  })();
+export function moveMemoryByMetaReview(
+  db: Db,
+  input: Parameters<typeof moveMemory>[1],
+  origin: EventOrigin,
+  at: Date,
+  writer: string,
+): { entry_id: number; event_id: number } {
+  return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
+    db.transaction(() => {
+      const old = requireEntry(db, input.entry_id);
+      requireWidening(db, [old], old.scope, input.scope);
+      return moveMemory(db, input, origin, at);
+    })(),
+  );
 }
 
 /** meta-review の `move_memory_branch`(ADR 0176 決定1・5 / ADR 0177 決定5): 移す行すべて(盤面全体 → 盤面全体で運ぶ workspace の行も)
@@ -620,11 +684,14 @@ export function moveMemoryBranchByMetaReview(
   input: Parameters<typeof moveMemoryBranch>[1],
   origin: EventOrigin,
   at: Date,
-): ReturnType<typeof moveMemoryBranch> {
-  return db.transaction(() => {
-    requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
-    return moveMemoryBranch(db, input, origin, at);
-  })();
+  writer: string,
+): ReturnType<typeof moveMemoryBranch> & { event_id: number } {
+  return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
+    db.transaction(() => {
+      requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
+      return moveMemoryBranch(db, input, origin, at);
+    })(),
+  );
 }
 
 /** meta-review の scope の門(ADR 0176 決定2〜5): 行き先の scope は移動元と同じか盤面全体だけ。scope が変わるなら、approved の
@@ -633,7 +700,7 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
   if (to === from) return;
   if (to !== null) {
     throw new DomainError(
-      `a meta-review moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's — say so with log_decision and leave the entries in place`,
+      `a meta-review or a repair moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's — say so with log_decision and leave the entries in place`,
     );
   }
   const blocked = rows.flatMap((row) => {
@@ -643,8 +710,130 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
     return [];
   });
   if (blocked.length > 0) {
-    throw new DomainError(`a meta-review cannot change the scope of ${blocked.join(", ")}: say so with log_decision and leave the entries in place`);
+    throw new DomainError(`a meta-review or a repair cannot change the scope of ${blocked.join(", ")}: say so with log_decision and leave the entries in place`);
   }
+}
+
+/** 修理 task の書き手(ADR 0252 決定4): 修理 task の id と agent 名。修理の書き込みも書き込みの記録になる(書き手は worker_verb)。 */
+type Repairer = { taskId: string; agent: string };
+
+/** 異議された書き込み1つがしたこと(ADR 0252 決定4): 新しく作ったエントリ、移したエントリ(`path_moved` の旧 —— 複製は旧の鎖が持つ)、
+ *  落としたエントリ(それ以外の無効化)。 */
+type WriteTouch = { created: number[]; moved: number[]; dropped: number[] };
+
+/** 修理 task の束が異議した記憶の書き込み(task_registered の objection_event_ids → 異議の entry_id → memory_written)。
+ *  修理 task(work)でなければ空 —— RCA の review 子も同じ欄を持つ。 */
+function objectedWrites(db: Db, taskId: string): WriteTouch[] {
+  if (getTask(db, taskId)?.type !== "work") return [];
+  return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
+    const objection = getEvent(db, id)?.payload;
+    const row = objection?.kind === "objection_raised" ? getEvent(db, objection.entry_id)?.payload : undefined;
+    if (row?.kind !== "memory_written") return [];
+    const moved = row.invalidated.map((id) => requireEntry(db, id)).filter((old) => old.invalidation_reason === "path_moved");
+    const copies = new Set(moved.map((old) => old.successor_id));
+    const movedIds = moved.map((old) => old.id);
+    return [{ created: row.created.filter((id) => !copies.has(id)), moved: movedIds, dropped: row.invalidated.filter((id) => !movedIds.includes(id)) }];
+  });
+}
+
+/** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */
+const withMovedCopies = (db: Db, ids: number[]) => ids.flatMap((id) => sameBodyChain(db, requireEntry(db, id)).map((row) => row.id));
+
+/** 修理 verb が受けるエントリ(ADR 0252 決定4): 異議された書き込みが作った・移したエントリ(と、その後に移された複製)と落としたエントリ。
+ *  空なら修理 verb を登録しない。 */
+export function repairableEntries(db: Db, taskId: string): Set<number> {
+  return new Set(objectedWrites(db, taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]));
+}
+
+/** 修理の書き込み1回: 書き込みの記録で包み、異議された書き込みが無ければ拒む。 */
+function repairWrite<T extends object>(db: Db, repairer: Repairer, at: Date, write: (writes: WriteTouch[]) => T): T & { event_id: number } {
+  return withWriteRecord(db, repairer, at, () => {
+    const writes = objectedWrites(db, repairer.taskId);
+    if (writes.length === 0) throw new DomainError("memory repair verbs are only for a repair task opened on an objection to a memory write");
+    return write(writes);
+  });
+}
+
+/** 対象が reach(異議された書き込みがしたことのうち、その操作が戻せるもの)に入っていることを確かめて行を返す。 */
+function requireReach(db: Db, entryId: number, reach: number[], refusal: string): EntryRow {
+  if (!reach.includes(entryId)) throw new DomainError(`memory entry ${entryId} ${refusal}`);
+  return requireEntry(db, entryId);
+}
+
+/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて。 */
+const requireTouched = (db: Db, repairer: Repairer, entryId: number) =>
+  requireReach(db, entryId, [...repairableEntries(db, repairer.taskId)], "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
+
+const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", name: repairer.agent });
+
+/** 逆操作 —— 書き込みが新しく作ったエントリ(その後に移された複製も)の無効化。門は掛けない。移動の複製は移し戻しで戻す。 */
+export function repairInvalidate(db: Db, repairer: Repairer, input: { entry_id: number; reason: z.infer<typeof invalidationSchema>["reason"] }, at: Date): { event_id: number } {
+  return repairWrite(db, repairer, at, (writes) => {
+    requireReach(db, input.entry_id, writes.flatMap((w) => withMovedCopies(db, w.created)), "was not created by the objected memory write: a repair drops only an entry that write created — move a moved entry back instead");
+    invalidateMemoryEntry(db, input, repairer.agent, "worker", at, { activity: "worker_verb" });
+    return {};
+  });
+}
+
+/** 逆操作 —— 書き込みが落としたエントリの復元(ADR 0163 の門はそのまま: 後継が生きている間は拒む)。 */
+export function repairRestore(db: Db, repairer: Repairer, input: { entry_id: number }, at: Date): { entry_id: number; event_id: number } {
+  return repairWrite(db, repairer, at, (writes) => {
+    requireReach(db, input.entry_id, writes.flatMap((w) => w.dropped), "was not invalidated by the objected memory write: a repair restores only an entry that write dropped");
+    return restoreMemoryEntry(db, { entry_id: input.entry_id, restorer: repairActor(repairer) }, "worker", at);
+  });
+}
+
+/** 移動: 書き込みが移したエントリを移す前の置き場へ戻すのは逆操作なので門を掛けず、それ以外は meta-review と同じ scope の門(ADR 0176)。 */
+export function repairMove(db: Db, repairer: Repairer, input: { entry_id: number; scope: string | null; path: string }, at: Date): { entry_id: number; event_id: number } {
+  return repairWrite(db, repairer, at, (writes) => {
+    const row = requireTouched(db, repairer, input.entry_id);
+    const path = checkedPath(input.path);
+    const back = writes
+      .flatMap((w) => w.moved.map((id) => requireEntry(db, id)))
+      .some((old) => old.scope === input.scope && old.path === path && movedTail(db, old.id).id === row.id);
+    if (!back) requireWidening(db, [row], row.scope, input.scope);
+    return moveMemory(db, { ...input, mover: repairActor(repairer) }, "worker", at);
+  });
+}
+
+/** 枝ごとの移し戻し(逆操作、門は掛けない): 異議された書き込みが移したエントリのうち、今 scope の path かその配下に生きている複製を、
+ *  定義も含めてそれぞれの書き込みの前の scope / path へ1 transaction で戻す。後から枝に入ったエントリは動かさない。盤面全体の枝では、
+ *  書き込みが scope を変えずに運んだ workspace のエントリも戻す。 */
+export function repairMoveBranchBack(db: Db, repairer: Repairer, input: { scope: string | null; path: string }, at: Date): { moved: number; event_id: number } {
+  return repairWrite(db, repairer, at, (writes) => {
+    const path = checkedPath(input.path);
+    const moves = writes
+      .flatMap((w) => w.moved.map((id) => requireEntry(db, id)))
+      .flatMap((old) => {
+        const tail = movedTail(db, old.id);
+        const here = tail.invalidation_reason === null && atOrUnder(tail.path, path) && (tail.scope === input.scope || (input.scope === null && tail.scope === old.scope));
+        return here ? [{ old: tail, scope: old.scope, path: old.path }] : [];
+      });
+    if (moves.length === 0) throw new DomainError(`the objected memory write moved no entry that now lives at ${path} or under it in this scope`);
+    return { moved: moveEntries(db, moves, repairActor(repairer), "worker", at).moved.length };
+  });
+}
+
+/** 置き換え: Knowledge / Definition だけを同じ scope / path の新しい本文に(出所の規則は worker の record_knowledge と同じ)。
+ *  Behavior / Exemplar の本文を AI が変える経路は candidate → question のまま。 */
+export function repairReplace(
+  db: Db,
+  repairer: Repairer,
+  input: { entry_id: number; title?: string; text: string; source?: SourceInput },
+  at: Date,
+): { entry_id: number; event_id: number } {
+  return repairWrite(db, repairer, at, () => {
+    const row = requireTouched(db, repairer, input.entry_id);
+    const { title, text, source } = input;
+    const fields = { scope: row.scope, path: row.path, text, supersedes: [row.id], author: repairActor(repairer) };
+    if (row.kind === "knowledge") {
+      if (title === undefined) throw new DomainError("replacing a knowledge entry needs a title");
+      return recordKnowledge(db, { ...fields, title, source }, "worker", at);
+    }
+    if (row.kind !== "definition") throw new DomainError(`memory entry ${row.id} is a ${row.kind}: only knowledge entries and definitions are replaced here`);
+    if (title !== undefined || source !== undefined) throw new DomainError("a definition takes neither a title nor a source: it is one line, the writer's own declaration");
+    return defineMemoryBranch(db, fields, "worker", at);
+  });
 }
 
 /** LLM が合成した本文の出所 = 書き手が log_decision で書いた推論(meta-review の畳みと統合、RCA の Knowledge —— ADR 0115 追記)。
@@ -950,20 +1139,24 @@ function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
 }
 
 /** meta-review の無効化(ADR 0122 決定1 / ADR 0160 決定1 / ADR 0161 決定2): 後継なしで落とすだけ —— 置き換えは `fold_memory`・
- *  `define_memory` の supersedes・`moveMemory`・`moveMemoryBranch` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。 */
+ *  `define_memory` の supersedes・`moveMemory`・`moveMemoryBranch` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。
+ *  writer は meta-review の task で、返り値はその書き込みの記録の id。 */
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
   workerId: string,
   origin: EventOrigin,
   at: Date,
+  writer: string,
 ): number {
   if (input.reason === "superseded" || input.reason === "path_moved") {
     throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes, move_memory or move_memory_branch`);
   }
-  const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
-  if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
-  return invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" });
+  return withWriteRecord(db, { taskId: writer, agent: workerId }, at, () => {
+    const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
+    if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
+    return { event_id: invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" }) };
+  }).event_id;
 }
 
 /** この entry を pin する open な提案 question の id(陳腐化の hook と、同じ entry への二重提案の拒否が読む)。既存の後継は
@@ -1844,7 +2037,8 @@ function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRe
     `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
   );
   return listEpisodes(db, {}).flatMap((episode) => {
-    const objected = episode.markers.filter((m) => m.kind === "decision" && objectedIn.get(m.eventId, after, upTo) !== undefined);
+    // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
+    const objected = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objectedIn.get(m.eventId, after, upTo) !== undefined);
     const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
     return objected.map((m) => ({
       task_id: episode.taskId,
@@ -2318,9 +2512,6 @@ export function changeMemorySettings(
   })();
 }
 
-/** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS`(meta-review.ts)に置き換わる
- *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
-export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"] as const;
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、
  *  索引の版を今の版に刻む。無効化済みの行(理由コード・後継 id)も再生で戻る。 */

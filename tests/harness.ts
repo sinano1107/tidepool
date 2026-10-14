@@ -818,6 +818,16 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
+/** 直接適用の書き込みの記録が帰属する task(盤面ごとに1本)。書き込みの記録を読まない検査の setup が、書き手の task として渡す。 */
+const writers = new WeakMap<Db, string>();
+export function writerTask(db: Db): string {
+  const known = writers.get(db);
+  if (known) return known;
+  const id = registerTask(db, { type: "work", title: "memory writer", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI).id;
+  writers.set(db, id);
+  return id;
+}
+
 /** `parentId` を主題とする失敗 question(retry / abandon、cancel option は abandon)を1本立てる。 */
 export function failureQuestion(db: Db, parentId: string, at: Date): Task {
   return registerTask(
