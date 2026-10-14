@@ -29,6 +29,8 @@ import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
+  openQuarantineValues,
+  parseWorkspaceContainmentValue,
   quarantineAgent,
   quarantineExcludedProviders,
   quarantineStops,
@@ -84,6 +86,23 @@ export const HOURLY = 60 * 60 * 1000;
 export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
+/** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、task の実行 workspace と
+ *  行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
+ *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。 */
+function withoutStoppedPairs(
+  db: Db,
+  candidates: TaskExecutionCandidates,
+  defaultWorkspaceName: string | undefined,
+): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => ExecutionSetting[] {
+  const pairs = (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
+  return (task) => {
+    const workspace = task.workspace ?? defaultWorkspaceName;
+    return candidates(task).filter(
+      (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
+    );
+  };
+}
+
 /** この task の entry が**すべて**除外されているか(ADR 0110 決定3 / issue #544)。
  *  scheduler の pickup ゲートも、queue の skipped 表示も、move route の Pickable
  *  head もこの1つの述語を通る —— 「走る」と「skipped と表示する」が退化して
@@ -115,9 +134,11 @@ export function allEntriesExcluded(
 export function entryExclusionPredicate(
   db: Db,
   candidates: TaskExecutionCandidates,
-): (task: ExecutionCandidateTarget) => boolean {
+  defaultWorkspaceName: string | undefined,
+): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => boolean {
   const excluded = pickupExclusions(db);
-  return (task) => allEntriesExcluded(task, excluded, candidates);
+  const pairFiltered = withoutStoppedPairs(db, candidates, defaultWorkspaceName);
+  return (task) => allEntriesExcluded(task, excluded, () => pairFiltered(task));
 }
 
 /** **pickup の除外条件を組む1つの式**(ADR 0110 決定3 / issue #544)。scheduler の
@@ -629,6 +650,7 @@ export function startScheduler(deps: {
       // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
       const excludedTasks: string[] = [];
       let entryExcluded = pickupExclusions(db, false);
+      const pairFiltered = withoutStoppedPairs(db, taskExecutionCandidates, workspace?.name);
       let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
@@ -667,7 +689,7 @@ export function startScheduler(deps: {
        *  —— 呼び手はその head を飛ばす(ADR 0097 決定1/3)。引き直し(ADR 0184 決定3)も同じ口を通る(issue #1713) */
       const loadCandidates = (task: Task): boolean => {
         try {
-          candidates = taskExecutionCandidates(task);
+          candidates = pairFiltered(task);
           return true;
         } catch (error) {
           if (!isUnresolvableAgentError(error)) throw error;

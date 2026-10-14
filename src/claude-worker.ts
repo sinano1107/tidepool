@@ -20,9 +20,11 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
+import { workspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
+import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import {
   loadRegistry,
   ownEntry,
@@ -1716,17 +1718,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
     // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see workspaceSettingsDisposition). A workspace whose
-    // local or untracked settings redefine the floor is a broken resource —
-    // quarantined like a dirty tree, since sparse-checkout cannot safely hide
-    // them, and no session starts in it meanwhile. A tracked
+    // floor (both measured — see workspaceSettingsDisposition). A checkout whose
+    // local or untracked settings redefine the floor stops the (claude-code,
+    // workspace) pair — sparse-checkout cannot safely hide them, and only the
+    // claude CLI reads them, so the workspace's Codex tasks keep running
+    // (ADR 0259 決定1). A tracked
     // settings.json is hidden for the session instead, whatever it holds (ADR 0158).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
     // 迂回)。危険なのはその workspace で走る worker だけなので、封じ込め能力の
-    // ような盤面全体停止ではなく workspace quarantine — 直下の settings ガードと
-    // 同じ形・同じ場所。
+    // ような盤面全体停止ではなく workspace quarantine。Harness に依らず盤面を
+    // 損なうので、直下の settings ガードのような (Harness, workspace) の組には
+    // 狭めない(ADR 0259)。
     //
     // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
     // checkout を workspace 登録した」瞬間で、その checkout は自分の
@@ -1738,24 +1742,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now());
       return;
     }
-    const settings = workspaceSettingsDisposition(workspace.path);
-    const overriding = settings.overriding;
-    if (overriding.length > 0) {
-      // 隠せない設定ファイルの拒否は ADR 0033 / ADR 0035 / ADR 0158
-      quarantineWorkspace(
+    // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
+    const contained = workspaceContainment("claude-code", workspace.path);
+    if (!contained.available) {
+      registerQuarantine(
         this.options.db,
-        workspace.name,
-        new Error(
-          `workspace carries unsafe .claude/${overriding.join(", .claude/")}: it is unreadable, ` +
-            "or it is a local or untracked settings file that is invalid JSON or declares " +
-            "sandbox/permissions/hooks — the board can hide " +
-            "only a Git-tracked .claude/settings.json, so make the file readable or remove it " +
-            "(or those blocks) from this checkout",
-        ),
+        "workspaceContainment",
+        workspaceContainmentValue("claude-code", workspace.name),
+        contained.reason,
         this.options.clock.now(),
       );
       return;
     }
+    const settings = workspaceSettingsDisposition(workspace.path);
     if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;

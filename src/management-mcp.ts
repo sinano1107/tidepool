@@ -353,7 +353,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   // no banner channel to fill the gap.
   /** queue の skipped 表示を scheduler のゲートと同じ式から導く(ADR 0110 決定3)。 */
   const skippedByEntries = (deps: ManagementMcpDeps) =>
-    entryExclusionPredicate(deps.db, deps.taskExecutionCandidates);
+    entryExclusionPredicate(deps.db, deps.taskExecutionCandidates, deps.workspace?.name);
 
   server.registerTool(
     "list_queue",

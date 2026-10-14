@@ -116,8 +116,9 @@ export function openDb(path: string): Db {
       question_proposal TEXT,
       -- system-internal only (ADR 0137 決定2): the Quarantine kind a
       -- Confirmation question stands in for, and the value it is keyed on — a
-      -- workspace name, agent name, Provider, Harness, or the id of the task
-      -- whose teardown threw; NULL for a board-wide kind that names nothing.
+      -- workspace name, agent name, Provider, Harness, a harness/workspace
+      -- pair (ADR 0259), or the id of the task whose teardown threw; NULL for a
+      -- board-wide kind that names nothing.
       -- Set only by the Quarantine module's registration; never via MCP or the
       -- JSON API.
       question_quarantine_kind TEXT,

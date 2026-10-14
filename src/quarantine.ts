@@ -10,7 +10,7 @@ import type { Db } from "./db.js";
 import { appendEvent, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
-import { canonicalHarness } from "./registry.js";
+import { canonicalHarness, type Harness } from "./registry.js";
 import { type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
@@ -49,6 +49,17 @@ export function tableRowValue(provider: Provider, model: string): string {
 export function parseTableRowValue(value: string): { provider: Provider; model: string } {
   const at = value.indexOf("/");
   return { provider: value.slice(0, at) as Provider, model: value.slice(at + 1) };
+}
+
+/** workspace の封じ込めの Quarantine の値(ADR 0259 決定1): `harness/workspace`。Harness は閉じた列挙で `/` を含まないので、
+ *  最初の `/` で割れば組は一意に戻る。 */
+export function workspaceContainmentValue(harness: Harness, workspace: string): string {
+  return `${harness}/${workspace}`;
+}
+
+export function parseWorkspaceContainmentValue(value: string): { harness: Harness; workspace: string } {
+  const at = value.indexOf("/");
+  return { harness: value.slice(0, at) as Harness, workspace: value.slice(at + 1) };
 }
 
 /** 行の effort の Quarantine の値(ADR 0218 決定2): `provider/model/effort`。Provider と effort(閉じた5値、ADR 0216)は
@@ -245,6 +256,25 @@ export const QUARANTINES = [
     }),
   },
   {
+    // 値は `workspaceContainmentValue` の綴り。Harness 名として読む箇所(停止の読み口・Harness の文面と検査・resolver)は
+    // `harnessContainment` の kind で引くので、この種類は混ざらない
+    kind: "workspaceContainment",
+    scope: "pair",
+    prose: (value: string | null, reason: string): QuarantineProse => {
+      const { harness, workspace } = parseWorkspaceContainmentValue(value!);
+      return {
+        title: `${harness} workers cannot be contained in workspace ${workspace}`,
+        purpose:
+          `${reason}. Tasks in workspace ${workspace} stay off the ${harness} route until this is repaired; ` +
+          `other Harnesses in this workspace and ${harness} in other workspaces keep running. ` +
+          "Repair the checkout as described above, then answer — the board re-runs the " +
+          `${harness} check on workspace ${workspace} before it accepts the answer, and refuses it while ` +
+          "the check still fails. Any answer text is kept as a repair note.",
+        completion_criteria: `the ${harness} containment in workspace ${workspace} is repaired by hand`,
+      };
+    },
+  },
+  {
     // 行の拒否(CONTEXT.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)——
     // 例外は CLI の版の古さで、構造化された証拠が区別するので原因を名指す(ADR 0187 決定3)。原因は値に
     // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
@@ -287,8 +317,9 @@ export const QUARANTINES = [
 ] as const satisfies ReadonlyArray<{
   kind: string;
   /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク /
-   *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)。 */
-  scope: "board" | "workspace" | "assignees" | "row";
+   *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)/
+   *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)。 */
+  scope: "board" | "workspace" | "assignees" | "row" | "pair";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
   resolveAssignees?: (values: string[]) => string[];
@@ -315,7 +346,7 @@ export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope === "board" || row.scope === "row") continue;
+    if (row.scope === "board" || row.scope === "row" || row.scope === "pair") continue;
     const values = openQuarantineValues(db, row.kind) as string[];
     if (values.length === 0) continue;
     if (row.scope === "workspace") {
