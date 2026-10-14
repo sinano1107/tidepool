@@ -233,7 +233,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
       "Diverged shadow rows",
       `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
         `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
-        "and a row with one candidate always matches. Each track record's interview is the part of it that Interview children scored. Read the matched rows, and rows before this window, with list_routing_shadow.",
+        "and a row with one candidate always matches. Each track record's interview is the part of it that Interview children scored, counted only once their Interview's root is done. Read the matched rows, and rows before this window, with list_routing_shadow.",
       parts.shadow.map(({ id: _, ...row }) => row),
       "no diverged shadow rows",
     ],
