@@ -84,8 +84,8 @@ const OPEN_FEATURES = [
   "multi_agent",
   // 閉じると shell tool 自体が Disabled になり、unified_exec も道連れに落ちる
   "shell_tool",
-  // code mode の session provider —— pin 同梱の gpt-5.6 系は metadata が code_mode_only と読め、
-  // 閉じると Direct への fallback が無い(source 読み、runtime は #762)
+  // code mode の session provider —— gpt-5.6 系は metadata が code_mode_only で、runtime も code mode で走る
+  // (`code_mode=false` でも、#762 で観測)。閉じると Direct への fallback が無い
   "code_mode_host",
   // 閉じると ShellCommand へ降格するだけ —— 必須機能の実装の切り替え(ADR 0135 決定2)
   "unified_exec",
