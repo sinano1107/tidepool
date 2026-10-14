@@ -1023,6 +1023,8 @@ export class CodexWorker implements WorkerAdapter {
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
     const material = buildMetaReviewMaterial(this.options.db, task.id);
+    // preflight と同じ実体の綴りで filesystem 表・skills・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
+    const workspacePath = realpathSync(workspace.path);
     const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
     // 削除の失敗で session の後始末を止めない(issue #705)
     const removeTaskTemp = () => {
@@ -1069,7 +1071,7 @@ export class CodexWorker implements WorkerAdapter {
           ).filter((verb) => !withheld.includes(verb)),
           ...verbs.added,
         ],
-        workspace: workspace.path,
+        workspace: workspacePath,
         allowedDomains: workspace.allowed_domains ?? [],
         taskTemp,
         executable: this.options.executable,
@@ -1108,13 +1110,13 @@ export class CodexWorker implements WorkerAdapter {
           "--ask-for-approval", "never",
           "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
           "--strict-config", "--dangerously-bypass-hook-trust",
-          "-C", workspace.path,
+          "-C", workspacePath,
           "-m", setting.model,
           ...config.flatMap((entry) => ["-c", entry]),
           taskPrompt(task),
         ],
         {
-          cwd: workspace.path,
+          cwd: workspacePath,
           env: workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name),
         },
       );
