@@ -62,12 +62,6 @@ export function parseWorkspaceContainmentValue(value: string): { harness: Harnes
   return { harness: value.slice(0, at) as Harness, workspace: value.slice(at + 1) };
 }
 
-/** 開いた workspace の封じ込めの組。止めるのはその workspace の task の、その Harness の行だけなので、
- *  `ResourceStops` にも poll 全体の除外にも入らない —— 候補の側で引く(scheduler.ts)。 */
-export function stoppedWorkspaceContainments(db: Db): Array<{ harness: Harness; workspace: string }> {
-  return (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
-}
-
 /** 行の effort の Quarantine の値(ADR 0218 決定2): `provider/model/effort`。Provider と effort(閉じた5値、ADR 0216)は
  *  `/` を含まないので、最初と最後の `/` で割れば model id に `/` があっても組は一意に戻る。effort「無い」の行(ADR 0218 決定5)は
  *  最後の欄を空で綴る —— 5値はどれも空でないので取り違えない。 */
