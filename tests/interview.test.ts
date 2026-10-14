@@ -322,15 +322,18 @@ it("採点完了は欠け・重複・done でない子・他の root の子・ou
 });
 
 it("採点完了は Interview の root でない task・出題前の root・未決着の子が残る root を拒み、何も入れない(ADR 0253 決定4)", () => {
-  const { db, root } = registerInterview();
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
-  const complete = (task: Task) => () => completeInterview(db, task, { scores: [], handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  const complete = (task: Task, scores: Array<{ child_id: string; outcome: "accepted" }> = []) => () =>
+    completeInterview(db, task, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   expect(complete(plain)).toThrow(/only an Interview root/);
   expect(complete(getTask(db, root.id)!)).toThrow(/pose_probe/);
-  const [open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
-  expect(complete(open!)).toThrow(/only an Interview root/);
-  expect(complete(getTask(db, root.id)!)).toThrow(/unfinished children/);
-  expect([root, plain, open!].flatMap((task) => listEvents(db, task.id)).map((event) => event.kind)).not.toContain("interview_scored");
+  const [done, open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task];
+  completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
+  expect(complete(open)).toThrow(/only an Interview root/);
+  // done の子の採点を渡しても、未決着の子が残れば採点ごと入らない
+  expect(complete(getTask(db, root.id)!, [{ child_id: done.id, outcome: "accepted" }])).toThrow(/unfinished children/);
+  expect([root, plain, done, open].flatMap((task) => listEvents(db, task.id)).map((event) => event.kind)).not.toContain("interview_scored");
   expect([getTask(db, root.id)!.status, getTask(db, plain.id)!.status]).not.toContain("done");
 });
 
