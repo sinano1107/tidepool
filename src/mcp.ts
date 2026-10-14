@@ -62,6 +62,7 @@ import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } 
 import {
   assertTargetsRunnable,
   assigneeNeedsApproval,
+  completeInterview,
   completeTask,
   contentSourceFor,
   continueDecomposition,
@@ -80,7 +81,6 @@ import {
   poseProbe,
   redecompose,
   resolveTaskAgent,
-  scoreInterview,
   type Task,
   type TaskType,
   taskHistoryRows,
@@ -484,7 +484,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
-  // ADR 0245 決定1・3 / ADR 0253 決定5: Interview の木では分解の verb を登録せず、出題前の root にだけ出題の verb を登録する(同じ task ごとの差し替え)
+  // ADR 0245 決定1・3 / ADR 0253 決定4・5: Interview の木では分解の verb を登録せず、root には complete_task の代わりに出題前は出題の、
+  // 出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -559,40 +560,42 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
-    "complete_task",
-    {
-      description:
-        "Complete the current task. Work tasks require the full handoff doc (" +
-        describeHandoffFields() +
-        ") and a committed work tree — commit your changes before calling this. " +
-        "resume_context is what the next session needs to pick the work back up — " +
-        "do not describe landing state (push / PR / merge): the board lands the " +
-        "branch after you complete, and you cannot observe that. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      // the schema stays permissive: a missing field is enforced inside the verb
-      // (a domain error), but an unknown key is rejected by the schema itself
-      // (a protocol error)
-      inputSchema: {
-        handoff: z
-          .partialRecord(z.enum(HANDOFF_FIELDS), z.string())
-          .optional(),
-      },
-    },
-    async ({ handoff }) =>
-      // 着地(PR 昇格)は後始末の中、**merge-back の後**に走る(ADR 0109 決定1):
-      // 待たずに PR を開くと tree rule / merge-back より先に昇格が走り、昇格は古い
-      // remote-tracking ref を読む。response はここで先に返る。
-      runReleasingVerb(
-        deps,
-        attributedTaskId,
-        (task, workerId, now) => {
-          const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
-          return { id: done.id, status: done.status };
+  if (!withheld.includes("complete_task")) {
+    server.registerTool(
+      "complete_task",
+      {
+        description:
+          "Complete the current task. Work tasks require the full handoff doc (" +
+          describeHandoffFields() +
+          ") and a committed work tree — commit your changes before calling this. " +
+          "resume_context is what the next session needs to pick the work back up — " +
+          "do not describe landing state (push / PR / merge): the board lands the " +
+          "branch after you complete, and you cannot observe that. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        // the schema stays permissive: a missing field is enforced inside the verb
+        // (a domain error), but an unknown key is rejected by the schema itself
+        // (a protocol error)
+        inputSchema: {
+          handoff: z
+            .partialRecord(z.enum(HANDOFF_FIELDS), z.string())
+            .optional(),
         },
-        (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
-      ),
-  );
+      },
+      async ({ handoff }) =>
+        // 着地(PR 昇格)は後始末の中、**merge-back の後**に走る(ADR 0109 決定1):
+        // 待たずに PR を開くと tree rule / merge-back より先に昇格が走り、昇格は古い
+        // remote-tracking ref を読む。response はここで先に返る。
+        runReleasingVerb(
+          deps,
+          attributedTaskId,
+          (task, workerId, now) => {
+            const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
+            return { id: done.id, status: done.status };
+          },
+          (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
+        ),
+    );
+  }
 
   server.registerTool(
     "log_decision",
@@ -661,7 +664,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "criteria and the rubric you will score the answers against. The board logs all four as one decision, registers one " +
           "child per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
           "completion criteria, blocks this task until every child settles, and frees the slot. The children never read the " +
-          "rubric. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
+          "rubric. Once every child settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
           title: requiredTextSchema,
@@ -681,22 +684,31 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
-  server.registerTool(
-    "score_interview",
-    {
-      description:
-        "Interview only: score one of this Interview's done children against the rubric you posed with its probe, from its " +
-        "handoff alone — the board withholds which agent and model ran it. child_id is the id the child carries in " +
-        "get_current_task's history. accepted when the deliverable meets the rubric, rejected " +
-        "when it does not. Scoring a child again replaces its earlier score.",
-      inputSchema: { child_id: requiredTextSchema, outcome: z.enum(INTERVIEW_OUTCOMES) },
-    },
-    async ({ child_id, outcome }) =>
-      runVerb(deps, attributedTaskId, (task) => {
-        const eventId = scoreInterview(deps.db, task, child_id, outcome, attributedWorkerId(deps, task), deps.clock.now(), "worker");
-        return { scored: true, event_id: eventId };
-      }),
-  );
+  if (added.includes("complete_interview")) {
+    server.registerTool(
+      "complete_interview",
+      {
+        description:
+          "Complete this Interview once every child has settled, in one call: score each done child against the rubric you " +
+          "posed with its probe, from its handoff alone — the board withholds which agent and model ran it — and write your " +
+          "findings in handoff.outcome. scores lists every done child exactly once: child_id is the id the child carries in " +
+          "get_current_task's history, and outcome is accepted when the deliverable meets the rubric, rejected when it does " +
+          "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
+          "and nothing is recorded. The handoff " +
+          `takes the same fields as complete_task (${describeHandoffFields()}); only outcome is required. ` +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          scores: z.array(z.object({ child_id: requiredTextSchema, outcome: z.enum(INTERVIEW_OUTCOMES) })),
+          handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+        },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+          const done = completeInterview(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }),
+    );
+  }
 
   server.registerTool(
     "escalate",

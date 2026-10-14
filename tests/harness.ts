@@ -444,6 +444,7 @@ const RELEASING_VERBS = new Set([
   "continue_decomposition",
   "redecompose",
   "pose_probe",
+  "complete_interview",
 ]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */

@@ -328,7 +328,7 @@ describe("CodexWorker (ADR 0098)", () => {
     f.start(task(f.db));
     f.start(metaReviewTask(f.db));
 
-    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "score_interview", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
+    const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
     expect(enabledTools(f.process.calls[1]!.args)).toEqual([
       ...base,
@@ -496,13 +496,13 @@ describe("CodexWorker (ADR 0098)", () => {
   it("出題前の Interview の root の developer_instructions には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
     const f = await fixture();
     f.start(interviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: ["pose_probe"] }));
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
   });
 
   it("出題済みの Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const f = await fixture();
     f.start(posedInterviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: [] }));
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] }));
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {

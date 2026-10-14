@@ -1,12 +1,13 @@
 import { expect, it } from "vitest";
 import type { AdvisorCeiling } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeTask, continueDecomposition, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, scoreInterview, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, continueDecomposition, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
@@ -58,11 +59,11 @@ it("pin の子は分解できない —— agent の decompose も人間の扉�
   expect(listBoard(db)).toHaveLength(before);
 });
 
-it("task ごとの verb の差し替え —— Interview の root は分解の verb を両方伏せ、出題の verb は出題前だけ足す。pin の子は分解の verb を伏せ出題の verb を持たない(ADR 0253 決定5 / ADR 0245 決定1)", () => {
+it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb を足す。pin の子は分解の verb だけを伏せる(ADR 0253 決定4・5 / ADR 0245 決定1)", () => {
   const { db, root } = registerInterview();
-  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose"], added: ["pose_probe"] });
+  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] });
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
-  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] });
   expect(taskVerbSwap(db, child!.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
 });
 
@@ -232,7 +233,7 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
   change({ setting: "insert_tier", name: "trial", description: "A tier being measured.", position: 0 });
   const { root } = registerInterview(db, [{ ...opusHigh, tier: "trial" }]);
   expect(() => change({ setting: "delete_tier", name: "trial" })).toThrow(`unsettled tasks request it: ${root.id}`);
-  completeTask(db, root, undefined, "auditor", new Date(0), "worker");
+  cancelTaskDirectly(db, root, null, new Date(0), {}, "webui");
   change({ setting: "delete_tier", name: "trial" });
   expect(tierNames(db)).not.toContain("trial");
 });
@@ -248,14 +249,14 @@ function ranChildren(db: Db, root: Task) {
   });
 }
 
-it("学習器は Interview の子の採点を、同じセル・同じ段の観測として本番の episode と並べて数え、種別は episode に残る(ADR 0181 決定4 / ADR 0210 決定4)", () => {
+it("学習器は採点完了で入った Interview の子の採点を、同じセル・同じ段の観測として本番の episode と並べて数え、種別は episode に残る(ADR 0181 決定4 / ADR 0210 決定4)", () => {
   // 同じ対象は1つの一覧に2つ置けない(ADR 0249 決定2)ので、同じセルの答案3つは Interview 3件から取る
   const db = openDb(":memory:");
   const roots = [1, 2, 3].map(() => registerInterview(db).root);
   const [accepted, rejected, unscored] = roots.map((root) => ranChildren(db, root)[0]) as [Task, Task, Task];
-  scoreInterview(db, roots[0]!, accepted.id, "accepted", "auditor", new Date(1), "worker");
-  scoreInterview(db, roots[1]!, rejected.id, "rejected", "auditor", new Date(1), "worker");
-  for (const root of roots.slice(0, 2)) completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(1), "worker");
+  for (const [root, child, outcome] of [[roots[0]!, accepted, "accepted"], [roots[1]!, rejected, "rejected"]] as const) {
+    completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child.id, outcome }], handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  }
   const episodes = loadEpisodes(db);
   expect(episodes.map(({ task_id, outcome, interview }) => ({ task_id, outcome, interview }))).toEqual([
     { task_id: accepted.id, outcome: "accepted", interview: true },
@@ -272,8 +273,10 @@ it("root が cancelled や未決着の Interview の子の採点は、採点の�
   const scored = [true, false].map((cancelled) => {
     const { root } = registerInterview(db, [opusHigh, haikuNull]);
     const children = ranChildren(db, root) as [Task, Task];
-    scoreInterview(db, root, children[0].id, "accepted", "auditor", new Date(1), "worker");
-    scoreInterview(db, root, children[1].id, "rejected", "auditor", new Date(1), "worker");
+    // 採点完了は採点と完了を一度に入れるので、この状態は verb では作れない —— 学習器の読みの規則だけを event で釘付けする
+    for (const [child, outcome] of [[children[0], "accepted"], [children[1], "rejected"]] as const) {
+      appendEvent(db, { taskId: child.id, workerId: "auditor", origin: "worker", at: new Date(1), payload: { kind: "interview_scored", outcome } });
+    }
     if (cancelled) cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui");
     return children;
   });
@@ -283,24 +286,64 @@ it("root が cancelled や未決着の Interview の子の採点は、採点の�
   expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([]);
 });
 
-it("採点の無い done の pin の子が残るあいだ root は完了できず、拒否は score_interview と未採点の子を名指す —— accepted でも rejected でも全部採点すれば完了できる(ADR 0247 決定4)", () => {
+const FINDINGS = { outcome: "the parser probe separates the targets" };
+
+it("採点完了は done の子全部をちょうど1回ずつ採点すると、各子の採点と root の完了を一度に入れる(ADR 0253 決定4)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const [accepted, rejected] = ranChildren(db, root) as [Task, Task];
-  scoreInterview(db, root, accepted.id, "accepted", "auditor", new Date(1), "worker");
-  const complete = () => completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(1), "worker");
-  expect(complete).toThrow(/score_interview/);
-  expect(complete).toThrow(new RegExp(`unscored: ${rejected.id}$`));
-  scoreInterview(db, root, rejected.id, "rejected", "auditor", new Date(1), "worker");
-  expect(complete().status).toBe("done");
+  const scores = [{ child_id: rejected.id, outcome: "rejected" as const }, { child_id: accepted.id, outcome: "accepted" as const }];
+  expect(completeInterview(db, getTask(db, root.id)!, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker").status).toBe("done");
+  const scoreOf = (task: Task) => listEvents(db, task.id).flatMap(({ payload }) => (payload.kind === "interview_scored" ? [payload.outcome] : []));
+  expect([scoreOf(accepted), scoreOf(rejected)]).toEqual([["accepted"], ["rejected"]]);
+  expect(listEvents(db, root.id).find((event) => event.kind === "task_completed")!.payload).toMatchObject({ result: FINDINGS.outcome });
 });
 
-it("採点は Interview の root が、決着した自分の pin の子にだけ付けられる", () => {
+it("採点完了は欠け・重複・done でない子・他の root の子・outcome 無しを DomainError で拒み、採点も完了も入れない(ADR 0253 決定4)", () => {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh]);
+  const [a, b, cancelled] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task, Task];
+  for (const child of [a, b]) completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  answerQuestionViaWebui(db, failureQuestion(db, cancelled.id, new Date(0)), ["abandon"], new Date(0));
+  const [otherRootsChild] = ranChildren(db, registerInterview(db).root) as [Task];
+  const tasks = [root, a, b, cancelled, otherRootsChild];
+  const written = () => tasks.flatMap((task) => listEvents(db, task.id)).length;
+  const before = written();
+  const score = (...children: Task[]) => children.map((child) => ({ child_id: child.id, outcome: "accepted" as const }));
+  const complete = (scores: ReturnType<typeof score>, handoff: Record<string, string> = FINDINGS) => () =>
+    completeInterview(db, getTask(db, root.id)!, { scores, handoff }, "auditor", new Date(1), "worker");
+  expect(complete(score(a))).toThrow(new RegExp(`unscored: ${b.id}`));
+  expect(complete(score(a, b, a))).toThrow(new RegExp(`${a.id} is scored more than once`));
+  expect(complete(score(a, b, cancelled))).toThrow(new RegExp(`${cancelled.id} is not done`));
+  expect(complete(score(a, b, otherRootsChild))).toThrow(new RegExp(`${otherRootsChild.id} is not a child of this Interview`));
+  expect(complete(score(a, b), {})).toThrow(/outcome/);
+  expect(complete(score(a, b), { outcome: "  " })).toThrow(/outcome/);
+  for (const refused of [complete(score(a)), complete(score(a, b), {})]) expect(refused).toThrow(DomainError);
+  expect(written()).toBe(before);
+  expect(getTask(db, root.id)!.status).not.toBe("done");
+});
+
+it("採点完了は Interview の root でない task・出題前の root・未決着の子が残る root を拒み、何も入れない(ADR 0253 決定4)", () => {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const complete = (task: Task, scores: Array<{ child_id: string; outcome: "accepted" }> = []) => () =>
+    completeInterview(db, task, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  expect(complete(plain)).toThrow(/only an Interview root/);
+  expect(complete(getTask(db, root.id)!)).toThrow(/pose_probe/);
+  const [done, open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task];
+  completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
+  expect(complete(open)).toThrow(/only an Interview root/);
+  // done の子の採点を渡しても、未決着の子が残れば採点ごと入らない
+  expect(complete(getTask(db, root.id)!, [{ child_id: done.id, outcome: "accepted" }])).toThrow(/unfinished children/);
+  expect([root, plain, done, open].flatMap((task) => listEvents(db, task.id)).map((event) => event.kind)).not.toContain("interview_scored");
+  expect([getTask(db, root.id)!.status, getTask(db, plain.id)!.status]).not.toContain("done");
+});
+
+it("completeTask は Interview の root を出題の前も後も拒み、採点完了の verb を指す —— 子0のまま完了できない(ADR 0253 決定5)", () => {
   const { db, root } = registerInterview();
-  const [open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
-  expect(() => scoreInterview(db, root, open!.id, "accepted", "auditor", new Date(0), "worker")).toThrow(/only a done child/);
-  const other = registerInterview(db).root;
-  const [done] = ranChildren(db, other) as [Task];
-  expect(() => scoreInterview(db, root, done.id, "accepted", "auditor", new Date(0), "worker")).toThrow(/not an Interview child of this task/);
+  const complete = () => completeTask(db, getTask(db, root.id)!, FINDINGS, "auditor", new Date(1), "worker");
+  expect(complete).toThrow(/complete_interview/);
+  ranChildren(db, root);
+  expect(complete).toThrow(/complete_interview/);
+  expect(getTask(db, root.id)!.status).not.toBe("done");
 });
 
 it("shadow 行の両セルの実績は、本番と Interview の内訳を運ぶ(ADR 0181 決定5)", () => {
@@ -318,9 +361,8 @@ it("着地しない pin の子は、workspace の削除の扉が数える「着�
   const root = registerTask(db, { ...ROOT, workspace: "reef", interview_targets: [opusHigh] }, new Date(0), ...HUMAN_WEBUI);
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
-  // root も reef を指すので、採点して完了させてから数える
-  scoreInterview(db, root, child!.id, "accepted", "auditor", new Date(0), "worker");
-  completeTask(db, getTask(db, root.id)!, undefined, "auditor", new Date(0), "worker");
+  // root も reef を指すので、採点完了させてから数える
+  completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child!.id, outcome: "accepted" }], handoff: FINDINGS }, "auditor", new Date(0), "worker");
   registerTask(db, { type: "work", ...CHILD, parent_id: child!.id, workspace: "other" }, new Date(0), ...HUMAN_WEBUI);
   expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
 });

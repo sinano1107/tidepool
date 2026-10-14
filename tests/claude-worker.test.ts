@@ -824,7 +824,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(root, setting(root));
     const args = calls[0]!.args;
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose"], added: ["pose_probe"] }));
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
   });
 
   it("出題済みの Interview の root の system prompt には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
@@ -835,7 +835,7 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose"], added: [] }));
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] }));
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules
