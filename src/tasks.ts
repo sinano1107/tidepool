@@ -485,10 +485,7 @@ function assertCoversTargetsOnce(db: Db, rootId: string, children: DecomposeChil
     if (count === 0) missing.push(JSON.stringify(target));
     if (count > 1) doubled.push(JSON.stringify(target));
   }
-  const problems = [
-    ...(missing.length ? [`no child pins ${missing.join(", ")}`] : []),
-    ...(doubled.length ? [`more than one child pins ${doubled.join(", ")}`] : []),
-  ];
+  const problems = [missing.length && `no child pins ${missing.join(", ")}`, doubled.length && `more than one child pins ${doubled.join(", ")}`].filter(Boolean);
   if (problems.length) throw new DomainError(`an Interview runs exactly one child per target: ${problems.join("; ")}`);
 }
 
