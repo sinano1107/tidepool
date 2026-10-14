@@ -222,3 +222,35 @@ it("容器機構の前提は pickup と quarantine 回答時にも読み直さ�
   await t.clock.advance(HOUR);
   await vi.waitFor(() => expect(t.worker.started).toHaveLength(1));
 });
+
+it("回収 timeout のあと再起動して前提検査が通ると、回答より前に WIP が退避される —— それでも pickup は確認 question に答えるまで止まる(issue #648)", async () => {
+  const containers = new FakeContainerRuntime();
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws, containerRuntime: containers, watchdog });
+  const task = queueWork(t, "long haul");
+  await t.clock.advance(HOUR);
+  containers.hold(task.id);
+  writeFileSync(join(ws.path, "draft.txt"), "stuck work\n");
+  await forceReclaimed(task);
+  await t.clock.advance(RECLAIM_TIMEOUT);
+  await t.stopServer();
+
+  t = await bootTidepool({ dir: t.dir, workspace: ws, watchdog, harnessContainment: async () => ({ available: true }) });
+  await vi.waitFor(() => expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main"));
+
+  // 起動時の復旧が後始末を完走させた: tree rule は回答を待たずに走っている
+  expect(git(ws.path, "status", "--porcelain")).toBe("");
+  expect(git(ws.path, "show", `task/${task.id}:draft.txt`)).toBe("stuck work");
+  // 確認 question は開いたまま pickup を止める —— 門であることは pickup について変わらない
+  const second = queueWork(t, "long haul");
+  await t.clock.advance(HOUR);
+  expect(t.worker.started).toEqual([]);
+
+  const quarantine = await containmentQuestion();
+  const accepted = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, {
+    answers: ["repaired by hand"],
+  });
+  expect(accepted.status).toBe(200);
+  await t.clock.advance(HOUR);
+  await pickedUp(second);
+});

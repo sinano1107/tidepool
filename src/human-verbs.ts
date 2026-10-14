@@ -1148,8 +1148,8 @@ export async function submitAnswer(
     }
     // 受理された確認回答が slot を解放する唯一の門(ADR 0099 決定3)。空の再観測は
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
-    // 解放と対で走る。待っている回収を持たない Containment quarantine(ツール面のずれ
-    // など)では no-op。
+    // 解放と対で走る。再起動を越えて後始末の印だけが残っていれば、その後始末を走らせる
+    // (ADR 0254 決定2)。待っている回収も残った印も無い Containment quarantine(ツール面のずれなど)では no-op。
     if (kind.kind === "quarantine" && kind.quarantine === "containment") deps.reclaim?.acceptReclaimed();
     // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)

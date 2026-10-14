@@ -43,7 +43,7 @@ import { type ContainerRuntime, ProcessContainers } from "./process-container.js
 import type { ProfileAdmin } from "./profile-create.js";
 import type { Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
+import { type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
@@ -56,7 +56,7 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -522,11 +522,9 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 「前の盤面のプロセスは残っていない」を証明してから**残りを完走させる —— 証明の前に
   // 進めば、生き残った process の居る workspace を盤面が書く(#382 が sparse-checkout の
   // 復元で踏んだのと同じ形で、置き場所も同じ)。検査が通らない間は Containment
-  // quarantine が pickup を止めており、未了は行に残ったまま次の起動を待つ。
-  //
-  // ADR 0112 決定4: ただし落ちた後始末の question が開いているなら撃ち直さない ——
-  // 撃てば同じ所で落ちて無言に戻る。枠も占めない: question が pickup を止めている
-  // 以上、枠を握らせる理由が無い。門を**行**に持つので、この判断は再起動を越える。
+  // quarantine が pickup を止めており、未了は行に残ったまま次の起動か、その question の確認回答の
+  // 受理(受理の検査が同じ前提検査を読み直す。ADR 0254 決定2)を待つ。
+  // 撃たない条件(ADR 0112 決定4)は `resumeUnfinishedTeardown` が持つ。
   //
   // 起動時復旧と、落ちた後始末の受理の門(ADR 0112 決定3)が通る後始末は同じものである。
   const teardownDeps: TeardownDeps = {
@@ -537,19 +535,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     pollNow,
   };
-  const unfinishedTeardown = sessionInTeardown(db);
-  let teardownRecovery: Promise<void> | undefined;
-  if (unfinishedTeardown && runtimePreflight.available && openQuarantineValues(db, "failedTeardown").length === 0) {
-    // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
-    // 走り切るまで pickup は進まない
-    slot.occupy(unfinishedTeardown.taskId);
-    slot.enterTeardown();
-    teardownRecovery = runTeardown(
-      teardownDeps,
-      unfinishedTeardown.taskId,
-      teardownStep(db, unfinishedTeardown.taskId),
-    );
-  }
+  const teardownRecovery = runtimePreflight.available ? resumeUnfinishedTeardown(teardownDeps) : undefined;
   // `harnessContainment` is the one production option. startServer prepends
   // the shared container/human-surface result to each adapter's sandbox/tool
   // result, so a common failure becomes one quarantine per Harness rather than

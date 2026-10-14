@@ -10,6 +10,7 @@ import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, returnToQueueHead, type Task, type TaskType } from "./tasks.js";
 import {
   markTeardown,
+  resumeUnfinishedTeardown,
   runTeardown,
   runTreeRule,
   sessionInTeardown,
@@ -49,7 +50,8 @@ export interface PendingReclaim {
    *  2つあり(ADR 0136)、読み手の文面が単位ごとに違うからである。 */
   pendingReclaim: () => string | undefined;
   /** 空を再観測できた回収を受理する: slot-release tree rule を走らせ、
-   *  slot を解放する。待っている回収が無い / まだ populated なら no-op。 */
+   *  slot を解放する。まだ populated なら no-op。この run で待っている回収が無くても、
+   *  再起動を越えて後始末の印が残り枠が空いていれば、その後始末を走らせる(ADR 0254 決定2)。 */
   acceptReclaimed: () => void;
 }
 
@@ -74,8 +76,8 @@ interface WatchRecord {
   pickup: number;
   stopSentAt?: number;
   forceSentAt?: number;
-  /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは
-   *  `onTeardownReclaimTimeout` だけ —— 立たなければ以後の tick ごとに containment の
+  /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは梯子の底の2つ
+   *  (`onTeardownReclaimTimeout` と、後始末へ入る `onReclaimTimeout`)—— 立たなければ以後の tick ごとに containment の
    *  quarantine を撃ち直す(開いている間は `quarantine_refired` を積み、回答後は question を
    *  刷り直す)。 */
   settled: boolean;
@@ -325,15 +327,16 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
-    // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。
+    // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。回収 timeout で
+    // 後始末へ入った session に遅れて届いた空の観測もここで外れる —— 外れなければ quarantine へ
+    // 倒れた slot を黙って解放する(解放の門は確認 question ただ1つ)。後始末の側に届く観測を
+    // 弾くのは `heldForContainment`
     if (sessionInTeardown(db)?.taskId === taskId) return;
     // 後始末が持っていた門を、記録が先へ出た分だけこちらで読む —— 枠の主が変わっていれば
     // 他人の session に failure question を立ててしまう
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     const task = getTask(db, taskId);
-    // 回収 timeout の後に遅れて届いた空の観測はここで外れる —— failure question が status を
-    // `todo` へ動かしている。外れなければ quarantine へ倒れた slot を黙って解放する
-    // (解放の門は確認 question ただ1つ)。後始末の側に届く観測を弾くのは `heldForContainment`
+    // 決着済みのタスクに failure question を立てない
     if (task?.status !== "in_progress") return;
     const now = clock.now();
     registerFailureQuestion(
@@ -352,32 +355,38 @@ export function startWatchdog(deps: {
     void runTeardown(teardown, taskId, teardownStep(db, taskId));
   }
 
-  /** 空を観測できないまま timeout。失敗の記録は残すが slot は解放しない —
-   *  tree rule も走らせない(まだ生きている process が書いている作業ツリーを
-   *  退避しても、退避そのものが競合する)。 */
+  /** 空を観測できないまま timeout。失敗の記録を置いてから後始末へ入る(ADR 0254 決定1)が、
+   *  slot は解放しない — tree rule も走らせない(まだ生きている process が書いている作業ツリーを
+   *  退避しても、退避そのものが競合する)。tree rule は確認 question の受理まで待つ
+   *  (ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)。後始末の印が待ちを再起動の先へ運ぶ。 */
   function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
     pending = task.id;
-    failTask(
-      db,
-      task,
-      `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
-        `force-reclaimed, but the board could not observe the container going empty within ` +
-        `${reclaimTimeout}ms. No self-report is possible.` +
-        exitSections(rec.exit),
-      // tree rule はここでは走らない: slot が解放される瞬間 — 確認 question の
-      // 受理 — まで待つ(ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)
-      undefined,
-      clock.now(),
-    );
-    // 回収を観測できないときに slot を塞いだままにするのは ADR 0099
-    quarantineContainment(
-      db,
-      `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
-        "so processes from that session may still be running against this host and its " +
-        "workspaces. The execution slot stays occupied until this is answered",
-      clock.now(),
-    );
+    rec.settled = true;
+    const now = clock.now();
+    // 同じ transaction に置く —— 間で落ちると、status は決着したのに印の無い session が残り、
+    // 起動時の復旧も再起動後の受理も後始末を走らせない(#648 の形に戻る)
+    db.transaction(() => {
+      registerFailureQuestion(
+        db,
+        task,
+        `watchdog killed task: ${task.title}`,
+        `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
+          `force-reclaimed, but the board could not observe the container going empty within ` +
+          `${reclaimTimeout}ms. No self-report is possible.` +
+          exitSections(rec.exit),
+        now,
+      );
+      // 回収を観測できないときに slot を塞いだままにするのは ADR 0099
+      quarantineContainment(
+        db,
+        `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
+          "so processes from that session may still be running against this host and its " +
+          "workspaces. The execution slot stays occupied until this is answered",
+        now,
+      );
+      markTeardown(db, task.id, now);
+    })();
+    slot.enterTeardown();
   }
 
   /** 後始末に入った時刻からの backstop。最終 verb 後は強制回収 → 回収 timeout の
@@ -511,7 +520,13 @@ export function startWatchdog(deps: {
         ? `the container for task ${pending}`
         : undefined,
     acceptReclaimed: () => {
-      if (pending === null) return;
+      if (pending === null) {
+        // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
+        // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
+        // 起動時の復旧と同じ門を通して走らせる
+        void resumeUnfinishedTeardown(teardown);
+        return;
+      }
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
       // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
       if (containers.pendingReclaim(pending)) return;
