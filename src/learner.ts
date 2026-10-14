@@ -204,7 +204,8 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(
       `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted, interview_target_id IS NOT NULL AS interview,
-         (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored' ORDER BY id DESC LIMIT 1) AS score
+         (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored'
+            AND (SELECT status FROM tasks root WHERE root.id = tasks.parent_id) = 'done' ORDER BY id DESC LIMIT 1) AS score
        FROM tasks
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
@@ -245,7 +246,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       interview: task.interview === 1,
       tier_id: spawned.payload.tier_id,
       workspace: task.workspace,
-      // Interview の子の受理は統合点レビューではなく root の採点(ADR 0181 決定4)。受理と同じく task の最後の session にだけ付く
+      // Interview の子の受理は統合点レビューではなく root の採点(ADR 0181 決定4)で、root の完了で確定する(ADR 0251 決定4)。受理と同じく task の最後の session にだけ付く
       outcome: episodeOutcome({
         accepted: (task.interview ? task.score === "accepted" : task.accepted === 1) && !hasNextSpawn,
         scoredRejected: task.score === "rejected" && !hasNextSpawn,

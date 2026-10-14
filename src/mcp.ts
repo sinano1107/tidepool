@@ -987,7 +987,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
         "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
-        "workspace stage, each with the part of them that Interview children scored under interview), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
+        "workspace stage, each with the part of them that Interview children scored under interview, counted only once their Interview's root is done), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
         "learner was promoted and chose what ran, and recommended is what the table would have chosen instead. Rows come oldest first. " +
         nextDescription("list_routing_shadow", "rows"),
