@@ -257,7 +257,7 @@ SESSION=$(cd "$WS" && TMPDIR="$TASK_TEMP" CLAUDE_CODE_TMPDIR="$TASK_TEMP" claude
 echo "$SESSION"
 
 VERDICTS=()
-ROW_FMT='%-16s %-9s %-80s %s\n'
+ROW_FMT='%-17s %-9s %-80s %s\n'
 # shellcheck disable=SC2059  # ROW_FMT is this script's own literal, not input
 printf -v TABLE "$ROW_FMT" "ROW" "BASELINE" "OBSERVED" "VERDICT"
 record() {
