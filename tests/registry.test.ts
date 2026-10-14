@@ -18,7 +18,7 @@ import {
   refreshRegistry,
 } from "../src/registry.js";
 import { seedTierNames } from "./fakes.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function makeMinimalRegistry(workspaceNames: string[]): Registry {
   return {
@@ -397,7 +397,7 @@ describe("loadRegistry", () => {
     const dir = await makeRegistry();
     const registry = loadRegistry(dir, "purely-local");
     const ws = registry.workspaces.tidepool!;
-    expect(ws.path).toBe("/srv/pi/work/tidepool");
+    expect(ws.path).toBe(FIXTURE_WORKSPACE);
     expect(ws.repo).toBe("https://github.com/sinano1107/tidepool.git");
     expect(ws.notes).toContain("npm install");
   });
@@ -483,7 +483,7 @@ describe("loadRegistry", () => {
       `tidepool:\n  path: /tmp/hijacked\n  branch: attacker\n`,
     );
     const registry = loadRegistry(dir, "purely-local");
-    expect(registry.workspaces.tidepool!.path).toBe("/srv/pi/work/tidepool");
+    expect(registry.workspaces.tidepool!.path).toBe(FIXTURE_WORKSPACE);
     expect(registry.workspaces.tidepool!.branch).toBeUndefined();
   });
 });

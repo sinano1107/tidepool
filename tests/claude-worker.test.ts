@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -54,7 +54,7 @@ import {
   recordingSpawn,
 } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
-import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
+import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -412,7 +412,7 @@ describe("ClaudeCodeWorker", () => {
     const call = calls[0]!;
     expect(call.command).toBe("claude");
     // cwd comes from the registry's workspaces.yaml, not from tidepool itself
-    expect(call.cwd).toBe("/srv/pi/work/tidepool");
+    expect(call.cwd).toBe(FIXTURE_WORKSPACE);
     expect(call.args.join(" ")).toContain("--output-format stream-json");
     // headless: nobody is present to answer a permission prompt, so the mode's
     // residual answer is the floor (ADR 0038). work runs acceptEdits — edits
@@ -474,21 +474,22 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("task.workspace が設定されていれば、コンストラクタの workspace より優先して cwd に使う(issue #26)", async () => {
+    const prod = await realpath(await tempDir("tidepool-prod-"));
     const { start, calls } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: /srv/pi/work/tidepool\nprod:\n  path: /srv/pi/work/prod\n`,
+      "workspaces.yaml": `tidepool:\n  path: ${FIXTURE_WORKSPACE}\nprod:\n  path: ${prod}\n`,
     });
     start("task-prod", "prod");
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.cwd).toBe("/srv/pi/work/prod");
+    expect(calls[0]!.cwd).toBe(prod);
   });
 
   it("task.workspace が null なら、これまで通りコンストラクタの workspace を cwd に使う", async () => {
     const { start, calls } = await makeWorker({
-      "workspaces.yaml": `tidepool:\n  path: /srv/pi/work/tidepool\nprod:\n  path: /srv/pi/work/prod\n`,
+      "workspaces.yaml": `tidepool:\n  path: ${FIXTURE_WORKSPACE}\nprod:\n  path: /srv/pi/work/prod\n`,
     });
     start("task-default", null);
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.cwd).toBe("/srv/pi/work/tidepool");
+    expect(calls[0]!.cwd).toBe(FIXTURE_WORKSPACE);
   });
 
   it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn しない(issue #26 / ADR 0009)", async () => {
@@ -884,7 +885,7 @@ describe("ClaudeCodeWorker", () => {
   it("許可ドメインがある session は実効 egress とリトライ禁止を英語で伝える(ADR 0072)", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /srv/pi/work/tidepool
+  path: ${FIXTURE_WORKSPACE}
   allowed_domains:
     - registry.npmjs.org
 `,
@@ -1065,7 +1066,7 @@ describe("ClaudeCodeWorker", () => {
   it("workspace の review_allowed_commands が review spawn の --allowedTools に Bash パターンとして畳まれる", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /srv/pi/work/tidepool
+  path: ${FIXTURE_WORKSPACE}
   review_allowed_commands:
     - npm test
 `,
@@ -1088,7 +1089,7 @@ describe("ClaudeCodeWorker", () => {
   it("review_allowed_commands は work の spawn には効かない(allowlist は MCP サーバだけ)", async () => {
     const { start, calls } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /srv/pi/work/tidepool
+  path: ${FIXTURE_WORKSPACE}
   review_allowed_commands:
     - npm test
 `,
@@ -1137,7 +1138,7 @@ describe("ClaudeCodeWorker", () => {
     start();
     // ping はタスクの workspace cwd で走る
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(rec.calls).toEqual(["/srv/pi/work/tidepool"]);
+    expect(rec.calls).toEqual([FIXTURE_WORKSPACE]);
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Workflow");
     expect(deny).toContain("Skill(tdd)");
@@ -1293,13 +1294,33 @@ describe("ClaudeCodeWorker", () => {
     // 裸で走る」— ADR 0033 が唯一拒む状態)
     expect(sandbox.failIfUnavailable).toBe(true);
     expect(sandbox.filesystem.denyRead).toEqual(["/"]);
-    expect(sandbox.filesystem.allowRead).toContain("/srv/pi/work/tidepool");
+    expect(sandbox.filesystem.allowRead).toContain(FIXTURE_WORKSPACE);
+  });
+
+  it.each([
+    ["シンボリックリンク経由で登録した workspace は、実体のパス", true],
+    ["シンボリックリンクでない workspace は、登録したパスのまま", false],
+  ])("%sで sandbox settings の workspace 由来の行と spawn の cwd を書く(issue #1954)", async (_, link) => {
+    const real = await realpath(await tempDir("tidepool-claude-ws-"));
+    const registered = link ? join(await tempDir("tidepool-claude-link-"), "tidepool") : real;
+    if (link) await symlink(real, registered);
+    const { start, calls, logDir } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${registered}\n` });
+
+    start("task-sbx-workspace-path");
+
+    const { allowRead, allowWrite, denyWrite } = sandboxSettings(calls[0]!.args, logDir).filesystem;
+    expect(allowRead).toContain(real);
+    expect(allowRead).toContain(join(real, ".claude", "skills"));
+    expect(allowWrite).toEqual([real, calls[0]!.env.TMPDIR]);
+    expect(denyWrite).toEqual([join(real, ".claude", "settings.json"), join(real, ".claude", "settings.local.json")]);
+    expect(calls[0]!.cwd).toBe(real);
+    if (link) expect(JSON.stringify({ allowRead, allowWrite, denyWrite })).not.toContain(registered);
   });
 
   it("registry の allowed_domains が実 spawn の network.allowedDomains に届く(ADR 0072)", async () => {
     const { start, calls, logDir } = await makeWorker({
       "workspaces.yaml": `tidepool:
-  path: /srv/pi/work/tidepool
+  path: ${FIXTURE_WORKSPACE}
   allowed_domains:
     - registry.npmjs.org
 `,
@@ -1325,7 +1346,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-work", null, "deckhand", "work");
     expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
-      "/srv/pi/work/tidepool",
+      FIXTURE_WORKSPACE,
       calls[0]!.env.TMPDIR,
     ]);
   });

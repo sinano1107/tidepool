@@ -1933,6 +1933,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     query: InjectionQuery | undefined,
   ): void {
     const { definition, profile } = agent;
+    // sandbox settings と cwd を実体の綴りで書く(issue #1954、Codex 側は #864)。無い checkout は
+    // 何も作る前にここで投げ、spawn_failed に落ちる(scheduler の catch / ADR 0149 決定6)
+    const workspacePath = realpathSync(workspace.path);
     // the ?task= param is the attribution the MCP router checks against the
     // slot — a stray call from a stale process fails that check and is refused
     const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
@@ -1969,7 +1972,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         JSON.stringify(
           buildSandboxSettings({
             taskType: task.type,
-            workspacePath: workspace.path,
+            workspacePath,
             permittedSkills: enforcement.permittedSkills,
             allowedDomains: workspace.allowed_domains,
             taskTemp,
@@ -2174,7 +2177,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // "no advisor" and the #69238 stream timeouts, both pinned here rather
         // than left to the host's environment file (ADR 0005).
         {
-          cwd: workspace.path,
+          cwd: workspacePath,
           // workerSpawnEnv builds over process.env and may *delete* the advisor
           // kill var (ADR 0044 決定4), so it is the base here rather than an
           // overlay — a spread on top of it could not have removed a key. The git
