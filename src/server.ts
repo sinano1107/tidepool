@@ -522,7 +522,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 「前の盤面のプロセスは残っていない」を証明してから**残りを完走させる —— 証明の前に
   // 進めば、生き残った process の居る workspace を盤面が書く(#382 が sparse-checkout の
   // 復元で踏んだのと同じ形で、置き場所も同じ)。検査が通らない間は Containment
-  // quarantine が pickup を止めており、未了は行に残ったまま次の起動を待つ。
+  // quarantine が pickup を止めており、未了は行に残ったまま次の起動か、その question の確認回答の
+  // 受理(受理の検査が同じ前提検査を読み直す。ADR 0254 決定2)を待つ。
   //
   // ADR 0112 決定4: ただし落ちた後始末の question が開いているなら撃ち直さない ——
   // 撃てば同じ所で落ちて無言に戻る。枠も占めない: question が pickup を止めている
