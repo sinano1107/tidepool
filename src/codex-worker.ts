@@ -36,7 +36,7 @@ import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
-import { resolveTaskAgent, type Task, withheldDecompositionVerbs } from "./tasks.js";
+import { resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import type { Transcript, TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
@@ -419,9 +419,9 @@ function tomlInline(value: Record<string, unknown>): string {
 }
 
 /** ADR 0157 決定2・3: Codex の委譲先は subagent。Workflow tool に当たる機構は無いので禁止の段落は出さない。
- *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。`split` は decompose を持つ task か(ADR 0247 決定3)。 */
-function codexDoctrine(split: boolean): string {
-  return `${boardDoctrine({ delegate: "a subagent", workflow: false }, split)} ` +
+ *  最終段落に続く `fork_turns` の1文は Codex 固有の追記(ADR 0134 決定4)。`verbs` は task ごとの verb の差し替え(ADR 0247 決定3 / ADR 0253 決定5)。 */
+function codexDoctrine(verbs: TaskVerbSwap): string {
+  return `${boardDoctrine({ delegate: "a subagent", workflow: false }, verbs)} ` +
     "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.";
 }
 
@@ -1039,7 +1039,8 @@ export class CodexWorker implements WorkerAdapter {
     try {
       const hook = installBoardHook(this.options.codexHome);
       const subject = metaReviewSubjectOf(this.options.db, task.id);
-      const withheld: readonly string[] = withheldDecompositionVerbs(this.options.db, task.id);
+      const verbs = taskVerbSwap(this.options.db, task.id);
+      const withheld: readonly string[] = verbs.withheld;
       const taskMcpUrl = new URL(this.options.mcpUrl);
       taskMcpUrl.searchParams.set("task", task.id);
       const config = spawnConfig({
@@ -1055,17 +1056,20 @@ export class CodexWorker implements WorkerAdapter {
           task,
           systemPrompt: agent.definition.systemPrompt,
           profile: agent.profile,
-          doctrine: codexDoctrine(!withheld.includes("decompose")),
+          doctrine: codexDoctrine(verbs),
           allowedDomains: workspace.allowed_domains,
           memorySection: memory.section ?? material?.section ?? null,
         })}\n\n`,
         mcpUrl: taskMcpUrl.toString(),
-        // ADR 0122 決定2 / ADR 0245 決定1・3: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+        // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定5: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
         // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
-        enabledTools: (subject
-          ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
-        ).filter((verb) => !withheld.includes(verb)),
+        enabledTools: [
+          ...(subject
+            ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
+            : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
+          ).filter((verb) => !withheld.includes(verb)),
+          ...verbs.added,
+        ],
         workspace: workspace.path,
         allowedDomains: workspace.allowed_domains ?? [],
         taskTemp,

@@ -13,10 +13,10 @@ import {
   type RosterAgent,
   registryAtCommit,
 } from "./registry.js";
-import { AUTHORITY_WILDCARD, getTask, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task } from "./tasks.js";
+import { AUTHORITY_WILDCARD, getTask, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task, type TaskVerbSwap } from "./tasks.js";
 
 /** doctrine の Harness の語のスロット(ADR 0157 決定3)。「委譲先の語」と「Workflow 段落の有無」の2つだけ。
- *  task ごとに変わるのは別の引数 `split`(ADR 0245 決定2)で、Harness の語ではない。 */
+ *  task ごとに変わるのは別の引数 `verbs`(task ごとの verb の差し替え —— ADR 0245 決定2 / ADR 0253 決定5)で、Harness の語ではない。 */
 interface DoctrineVocabulary {
   delegate: string;
   workflow: boolean;
@@ -26,13 +26,18 @@ const NOT_SPLIT = `This task is not split: complete it in this session. If it is
 larger than one session can finish, finish what you can and state in the
 handoff what remains.`;
 
+const POSE_PROBE = `This task is not split by you: pose its probe with the tidepool
+MCP's pose_probe instead, and the board registers one child per target.`;
+
 // injected into every spawned session's system prompt (issue #31 / ADR
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
 // each authority profile would drift, and "Agent tool"/"Workflow tool" are
 // vendor vocabulary the adapter translates the board's line into (ADR 0005).
-// `split` false は分けない task(decompose を伏せた task —— Interview の pin の子と分解済みの root、ADR 0245 決定2 / ADR 0247 決定3)で、decompose を指す文を
-// 1 session で完了せよという文に差し替える。Interview であることは書かない
-export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, split: boolean): string {
+// decompose を伏せた task は decompose を指す文を差し替える: 出題の verb を足した task(出題前の Interview の root)は出題を指し、
+// それ以外(Interview の pin の子と出題済みの root —— ADR 0245 決定2 / ADR 0247 決定3)は 1 session で完了せよと言う。後者は
+// Interview であることを書かない
+export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, verbs: TaskVerbSwap): string {
+  const split = !verbs.withheld.includes("decompose");
   const delegateAtSentenceStart = delegate[0]!.toUpperCase() + delegate.slice(1);
   // Claude の文面はバイト単位で不変(#695)で、2段落目の末尾だけ委譲先の語の最後の空白で折り返している
   const delegateAtLineEnd = delegate.replace(/ (?=\S+$)/, "\n");
@@ -41,7 +46,7 @@ export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, split:
 Work that needs independent completion criteria, separate authority, its own
 risk, or survival across sessions must not be routed to ${delegate} —
 that is delegation smuggled past the board. ${split ? `Register that split with the
-tidepool MCP's decompose instead.` : NOT_SPLIT}
+tidepool MCP's decompose instead.` : verbs.added.includes("pose_probe") ? POSE_PROBE : NOT_SPLIT}
 
 ${delegateAtSentenceStart} may only be used for labor-splitting that does not divide
 accountability (exploration, parallel research, mechanical edits): you carry

@@ -9,7 +9,7 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_OUTCOMES } from "./events.js";
-import { interviewTargetSchema, PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -60,6 +60,7 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
+  assertTargetsRunnable,
   assigneeNeedsApproval,
   completeTask,
   contentSourceFor,
@@ -72,19 +73,19 @@ import {
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
-  interviewTargetId,
   interviewTargets,
   joinHistory,
   listChildren,
   logDecision,
+  poseProbe,
   redecompose,
   resolveTaskAgent,
   scoreInterview,
   type Task,
   type TaskType,
   taskHistoryRows,
+  taskVerbSwap,
   type Unstored,
-  withheldDecompositionVerbs,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
 import {
@@ -200,7 +201,7 @@ export interface McpDeps {
   listAgents?: () => RosterAgent[];
   /** registry の agent 一覧(issue #920): routing meta-review の tier の提案が agent の定義を読む。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
-  /** pickup と同じ候補の口(ADR 0110 決定3): decompose が pin の子の走れる候補を確かめる(ADR 0199)。Absent → 確かめない。 */
+  /** pickup と同じ候補の口(ADR 0110 決定3): 出題と Interview の登録が対象の走れる候補を確かめる(ADR 0253 決定3)。Absent → 確かめない。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
 }
 
@@ -438,23 +439,6 @@ export const JUDGED_AFTER_THE_EDIT =
   "applied, stored values otherwise — so an edit that would leave a stored review_flag or review_by with no " +
   "effect (dropping a child's flags, or assigning human) is refused.";
 
-/** pin の子は、その assignee で走る候補を持たなければならない(ADR 0199): pin の Provider が assignee の entry に無いか、
- *  advisor の entry で advisor を導出できない(ADR 0208)対象は、spawn の候補が空で走れないので decompose で拒む。判定は
- *  pickup と同じ候補の口(registry の無い盤面の暗黙の entry を含む)。root の一覧に無い pin は domain が拒むので飛ばす。 */
-function assertPinsRunnable(deps: McpDeps, parent: Task, children: z.infer<ReturnType<typeof decomposeChildrenSchema>>): void {
-  for (const { interview_pin: pin, assignee } of children) {
-    const target = pin && interviewTargetId(deps.db, parent.id, pin);
-    if (target === undefined || !deps.taskExecutionCandidates) continue;
-    const child = { type: "work" as const, assignee: assignee ?? null, tier: null, priority: null, review_tier: null, interview_target_id: target };
-    if (deps.taskExecutionCandidates(child).length > 0) continue;
-    const name = assignee ?? deps.defaultAgentName;
-    throw new DomainError(
-      `interview_pin ${JSON.stringify(pin)} cannot run as ${name}: its provider is not among ${name}'s providers, ` +
-        `or ${name} has an advisor that cannot be derived for this model under the board's advisor ceiling`,
-    );
-  }
-}
-
 /** decompose と redecompose が共有する子の入力。段の説明は盤面の一覧から組む(ADR 0200 決定3)。 */
 function decomposeChildrenSchema(db: Db) {
   const tierDescriptions = tierFieldDescriptions(db);
@@ -485,14 +469,6 @@ function decomposeChildrenSchema(db: Db) {
         .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_REVIEW_FIRES}`),
       review_tier: z.string().optional().describe(`${tierDescriptions.review_tier}\n${ONLY_WHERE_REVIEW_FIRES}`),
       priority: z.string().optional().describe(PRIORITY_FIELD_DESCRIPTION),
-      interview_pin: interviewTargetSchema
-        .optional()
-        .describe(
-          "Interview only: the one target this child runs on, copied with all four fields from get_current_task's interview_targets (present only on an Interview). " +
-            "The child skips the board's model selection, runs on a branch that never lands, and takes no review_flag, risk_flag, tier or " +
-            "priority; its provider must be among its assignee's providers. Give each target exactly one child: a decomposition that leaves a " +
-            "target without a child, or pins a target twice, is refused. Log the probe and its rubric with log_decision before decomposing.",
-        ),
     }),
   );
 }
@@ -508,8 +484,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
-  // ADR 0245 決定1・3: Interview の木では分解の verb を登録しない(同じ task ごとの差し替え)
-  const withheld = attributedTaskId === null ? [] : withheldDecompositionVerbs(deps.db, attributedTaskId);
+  // ADR 0245 決定1・3 / ADR 0253 決定5: Interview の木では分解の verb を登録せず、出題前の root にだけ出題の verb を登録する(同じ task ごとの差し替え)
+  const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
     "get_current_task",
@@ -536,7 +512,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
-        // 対象の一覧は最初の decompose が読むためのもの。pin した子が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
+        // 対象の一覧は出題の前に読むためのもの。pin した子が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
         const targets = !listChildren(deps.db, task.id).some((child) => child.interview_target_id !== null) && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
@@ -661,7 +637,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
           assertChildrenKnown(deps, input.children);
-          assertPinsRunnable(deps, task, input.children);
           const children = decomposeTask(
             deps.db,
             task,
@@ -677,11 +652,40 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
+  if (added.includes("pose_probe")) {
+    server.registerTool(
+      "pose_probe",
+      {
+        description:
+          "Pose this Interview's probe, once: the title, the probe (the problem statement every target solves), the completion " +
+          "criteria and the rubric you will score the answers against. The board logs all four as one decision, registers one " +
+          "child per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
+          "completion criteria, blocks this task until every child settles, and frees the slot. The children never read the " +
+          "rubric. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          title: requiredTextSchema,
+          probe: requiredTextSchema,
+          completion_criteria: requiredTextSchema,
+          rubric: requiredTextSchema,
+        },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+          if (deps.taskExecutionCandidates) {
+            assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
+          }
+          const children = poseProbe(deps.db, task, input, workerId, now, "worker");
+          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+        }),
+    );
+  }
+
   server.registerTool(
     "score_interview",
     {
       description:
-        "Interview only: score one of this Interview's done children against the rubric you logged before decomposing, from its " +
+        "Interview only: score one of this Interview's done children against the rubric you posed with its probe, from its " +
         "handoff alone — the board withholds which agent and model ran it. child_id is the id the child carries in " +
         "get_current_task's history. accepted when the deliverable meets the rubric, rejected " +
         "when it does not. Scoring a child again replaces its earlier score.",
@@ -781,7 +785,6 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
           assertChildrenKnown(deps, input.children);
-          assertPinsRunnable(deps, task, input.children);
           const children = redecompose(
             deps.db,
             task,

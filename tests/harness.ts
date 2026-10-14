@@ -443,6 +443,7 @@ const RELEASING_VERBS = new Set([
   "declare_premise_breach",
   "continue_decomposition",
   "redecompose",
+  "pose_probe",
 ]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
