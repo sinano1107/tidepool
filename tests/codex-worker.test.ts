@@ -21,7 +21,8 @@ import { commitTriage, raiseObjection } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
-  codexSkillsList,
+  answerSkillsList,
+  codexSkillsListAt,
   driveCodexPreflight,
   FakeClock,
   fakeAppServerCall,
@@ -108,8 +109,8 @@ const closedPaths = (args: readonly string[]) =>
   new Set([...skills(args).matchAll(/path=("(?:[^"\\]|\\.)*")/g)].map((match) => JSON.parse(match[1]!) as string));
 
 /** 閉じた設定を正直に当てる app-server: 列挙には実物の応答を返し、観測ではそのうち閉じられなかった skill を有効と答える。 */
-function honestSkillsList(args: readonly string[]) {
-  const listed = codexSkillsList() as { data: Array<{ skills: Array<{ path: string; enabled: boolean }> }> };
+function honestSkillsList(args: readonly string[], cwds: readonly string[]) {
+  const listed = codexSkillsListAt(cwds) as { data: Array<{ skills: Array<{ path: string; enabled: boolean }> }> };
   if (!args.includes("--strict-config")) return listed;
   const closed = closedPaths(args);
   for (const skill of listed.data.flatMap((entry) => entry.skills)) skill.enabled = !closed.has(skill.path);
@@ -329,7 +330,8 @@ describe("CodexWorker (ADR 0098)", () => {
     // skills/list の cwds・-C・cwd も preflight と同じ実体の綴り
     const listed = { method: "skills/list", params: { cwds: [f.workspace], forceReload: true } };
     expect(f.appServer.flatMap(({ requests }) => requests)).toEqual([{ id: 2, ...listed }, { id: 2, ...listed }]);
-    expect(String(preflight.processes[1]!.stdin.read())).toContain(JSON.stringify({ id: 2, ...listed }));
+    const preflightListing = preflight.calls.findIndex((call) => call.args[0] === "app-server");
+    expect(String(preflight.processes[preflightListing]!.stdin.read())).toContain(JSON.stringify({ id: 2, ...listed }));
     const args = f.process.calls[0]!.args;
     expect(args[args.indexOf("-C") + 1]).toBe(f.workspace);
     expect(f.process.calls[0]!.cwd).toBe(f.workspace);
@@ -367,28 +369,31 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const [enumeration, observation] = f.appServer;
     expect(enumeration!.spec).toMatchObject({ kind: "Codex skill enumeration", harness: "codex", args: ["app-server"] });
+    expect(observation!.spec.kind).toBe("Codex skill observation");
     expect(enumeration!.spec.cwd).not.toBe(f.workspace);
     expect(enumeration!.requests).toEqual([{ id: 2, method: "skills/list", params: { cwds: [f.workspace], forceReload: true } }]);
     const spawned = f.process.calls[0]!.args;
     expect(skills(spawned)).toBe(
-      `skills.config=[${listedSkillPaths(codexSkillsList()).map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(",")}]`,
+      `skills.config=[${listedSkillPaths(codexSkillsListAt([f.workspace]), [f.workspace]).map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(",")}]`,
     );
     const configPairs = spawned.flatMap((arg, i) => (spawned[i - 1] === "-c" ? ["-c", arg] : []));
     expect(observation!.spec.args).toEqual(["app-server", "--strict-config", ...configPairs]);
     expect(observation!.requests).toEqual(enumeration!.requests);
   });
 
-  it("閉じた設定の下で有効と報告される skill が残れば、その名前を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {
+  it("閉じた設定の下で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {
     const onSpawnFailed = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
-      appServer: (args) => codexSkillsList(args.includes("--strict-config") ? "one-enabled" : undefined),
+      appServer: answerSkillsList("one-enabled"),
     });
     const value = task(f.db);
     await f.start(value);
 
     expect(f.process.calls).toEqual([]);
     expect(openQuarantineValues(f.db, "workspace")).toEqual([]);
-    expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")?.purpose).toContain("enabled after the board disabled every skill its skills/list returned: flat");
+    expect(quarantineQuestion(f.db, "workspaceContainment", "codex/work")?.purpose).toContain(
+      "Under the board's closed skills.config, Codex still reports these skills enabled: flat (/board/fixture/ws/B/.agents/skills/flat/SKILL.md).",
+    );
     expect(listEvents(f.db, value.id).map((event) => event.kind)).not.toEqual(expect.arrayContaining(["worker_spawned", "spawn_failed"]));
     expect(onSpawnFailed).not.toHaveBeenCalled();
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
@@ -396,8 +401,10 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it.each([
     ["口が答えを返さない(上限到達)", () => null],
-    ["列挙の応答が読めない", (args: readonly string[]) => (args.includes("--strict-config") ? codexSkillsList("closed") : { data: [{}] })],
-    ["観測の応答が読めない", (args: readonly string[]) => (args.includes("--strict-config") ? {} : codexSkillsList())],
+    ["列挙の応答が読めない", (args: readonly string[], cwds: readonly string[]) => (args.includes("--strict-config") ? codexSkillsListAt(cwds, "closed") : { data: [{}] })],
+    ["列挙の応答に workspace の entry が無い", (args: readonly string[], cwds: readonly string[]) => (args.includes("--strict-config") ? codexSkillsListAt(cwds, "closed") : { data: [] })],
+    ["観測の応答が読めない", (args: readonly string[], cwds: readonly string[]) => (args.includes("--strict-config") ? {} : codexSkillsListAt(cwds))],
+    ["観測の応答に workspace の entry が無い", (args: readonly string[], cwds: readonly string[]) => (args.includes("--strict-config") ? { data: [] } : codexSkillsListAt(cwds))],
   ])("skill の列挙・観測の失敗(%s)は spawn_failed を書いて盤面側の一撃を呼び、組の quarantine は立てず spawn しない(ADR 0259 決定6 / ADR 0118)", async (_, appServer) => {
     const calls: Array<[string, { error_code: string | null; message: string }]> = [];
     const f = await fixture((taskId, failure) => calls.push([taskId, failure]), undefined, undefined, undefined, { appServer });
@@ -406,7 +413,9 @@ describe("CodexWorker (ADR 0098)", () => {
 
     expect(f.process.calls).toEqual([]);
     expect(openQuarantineValues(f.db, "workspaceContainment")).toEqual([]);
-    const message = expect.stringMatching(/^Codex skill enumeration failed, so the skills to close could not be decided and the worker was not spawned/);
+    const message = expect.stringMatching(
+      /^Codex skills\/list failed while the board enumerated or observed this workspace's skills, so it could not decide or confirm which skills are closed; the worker was not spawned \(no fail-open\): /,
+    );
     expect(calls).toEqual([[value.id, { error_code: null, message }]]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "spawn_failed")?.payload).toEqual({ kind: "spawn_failed", error_code: null, message });
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
@@ -1079,6 +1088,16 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(calls).toEqual([[value.id, { error_code: null, message: "spawn blew up" }]]);
     expect(listEvents(f.db, value.id).find((event) => event.kind === "spawn_failed")?.payload).toMatchObject({ message: "spawn blew up" });
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith(`tidepool-codex-${value.id}-`))).toEqual([]);
+  });
+
+  it("spawn のあとの配線で投げても未処理の reject にせず、spawn_failed を1度だけ書いて盤面側の一撃を呼ぶ(ADR 0118)", async () => {
+    const calls: Array<[string, { error_code: string | null; message: string }]> = [];
+    const f = await fixture((taskId, failure) => calls.push([taskId, failure]), undefined, undefined, () => ({ on() {}, kill() {} }) as never);
+    const value = task(f.db);
+
+    await f.start(value);
+    expect(calls).toEqual([[value.id, { error_code: null, message: expect.stringContaining("pipe") }]]);
+    expect(listEvents(f.db, value.id).filter((event) => event.kind === "spawn_failed")).toHaveLength(1);
   });
 });
 

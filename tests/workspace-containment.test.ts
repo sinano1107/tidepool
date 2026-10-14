@@ -13,7 +13,7 @@ import { Slot } from "../src/slot.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
-  codexSkillsList,
+  codexSkillsListAt,
   FakeClock,
   fakeAppServerCall,
   healthyOpenai,
@@ -126,8 +126,8 @@ it("(codex, B) の question への回答は、その workspace の skill の列�
   const clock = new FakeClock();
   const path = await realpath(await tempDir("tidepool-ws-"));
   let leaking = true;
-  const appServer = fakeAppServerCall((args) =>
-    codexSkillsList(args.includes("--strict-config") ? (leaking ? "one-enabled" : "closed") : undefined)
+  const appServer = fakeAppServerCall((args, cwds) =>
+    codexSkillsListAt(cwds, args.includes("--strict-config") ? (leaking ? "one-enabled" : "closed") : undefined)
   );
   registerQuarantine(db, "workspaceContainment", "codex/B", "flat stays enabled", clock.now());
   const question = quarantineQuestion(db, "workspaceContainment", "codex/B")!;
@@ -154,6 +154,25 @@ it("(codex, B) の question への回答は、その workspace の skill の列�
   leaking = false;
   await answer();
   expect(getTask(db, question.id)?.status).toBe("done");
+});
+
+it("Codex の組の検査が配線されていない盤面では、(codex, B) の question への回答は拒まれて開いたまま残る(ADR 0259 決定5)", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const path = await tempDir("tidepool-ws-");
+  registerQuarantine(db, "workspaceContainment", "codex/B", "flat stays enabled", clock.now());
+  const question = quarantineQuestion(db, "workspaceContainment", "codex/B")!;
+  const deps = {
+    db,
+    pollNow() {},
+    landing: unusedLanding,
+    quarantineChecks: quarantineChecks({ db, resolveWorkspace: (name) => ({ name: name!, path, branch: "main" }) }),
+  };
+
+  await expect(submitAnswer(deps, question, ["repaired by hand"], undefined, () => clock.now(), "webui")).rejects.toThrow(
+    "codex containment in workspace B cannot be verified",
+  );
+  expect(getTask(db, question.id)?.status).toBe("todo");
 });
 
 let t: Tidepool | undefined;

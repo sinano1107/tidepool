@@ -585,9 +585,10 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     workspaceContainment: async (value) => {
       const { harness, workspace } = parseWorkspaceContainmentValue(value!);
       const target = resolveWorkspaceForAnswer(deps, workspace, "cannot verify repair");
-      const codex = deps.codexWorkspaceContainment;
-      if (harness === "codex" && !codex) throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
-      const capability = harness === "codex" ? await codex!(target) : claudeWorkspaceContainment(target.path);
+      const codex: CodexWorkspaceCheck = deps.codexWorkspaceContainment ?? (async () => {
+        throw new DomainError(`codex containment in workspace ${workspace} cannot be verified`);
+      });
+      const capability = harness === "codex" ? await codex(target) : claudeWorkspaceContainment(target.path);
       if (!capability.available) {
         throw new DomainError(
           `${harness} containment in workspace ${workspace} is still not established: ${capability.reason}`,

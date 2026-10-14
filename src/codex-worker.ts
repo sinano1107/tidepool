@@ -40,12 +40,12 @@ import {
 } from "./memory.js";
 import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
-import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
+import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import type { Transcript, TranscriptStore } from "./transcript-store.js";
+import type { TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
@@ -345,20 +345,33 @@ export function observedHooks(
 
 // cwd ごとの entry の `errors[]` は読まない —— 読めなかった skill は返らないので、閉じる対象にも観測にも現れない
 const skillsListResponse = z.object({
-  data: z.array(z.object({ skills: z.array(z.object({ name: z.string(), path: z.string(), enabled: z.boolean() })) })),
+  data: z.array(
+    z.object({
+      cwd: z.string(),
+      skills: z.array(z.object({ name: z.string(), path: z.string(), enabled: z.boolean() })),
+    }),
+  ),
 });
 
-/** `skills/list` の `result` から、返った skill の path を cwd を跨いで重ねずに取り出す(ADR 0259 決定2)。scope は見ない。
- *  形が崩れていれば投げる —— 列挙の失敗として spawn_failed に倒れる(決定6)。 */
-export function listedSkillPaths(result: unknown): string[] {
-  return [...new Set(skillsListResponse.parse(result).data.flatMap((entry) => entry.skills.map((skill) => skill.path)))];
+/** 要求した cwd ごとの entry の skill。形が崩れた応答も、要求した cwd の entry が無い応答も投げる —— 空の応答を
+ *  「skill 無し」と読んで閉じたことにしない。どちらも列挙・観測の失敗として spawn_failed に倒れる(ADR 0259 決定6)。 */
+function skillsAt(result: unknown, cwds: readonly string[]) {
+  const { data } = skillsListResponse.parse(result);
+  return cwds.flatMap((cwd) => {
+    const entry = data.find((candidate) => candidate.cwd === cwd);
+    if (!entry) throw new Error(`skills/list returned no entry for ${cwd}`);
+    return entry.skills;
+  });
 }
 
-/** 閉じた設定を当てた `skills/list` の `result` から、まだ有効と報告された skill の名前を拾う(ADR 0259 決定3)。 */
-export function enabledSkillNames(result: unknown): string[] {
-  return skillsListResponse.parse(result).data.flatMap((entry) =>
-    entry.skills.filter((skill) => skill.enabled).map((skill) => skill.name)
-  );
+/** `skills/list` の `result` から、返った skill の path を cwd を跨いで重ねずに取り出す(ADR 0259 決定2)。scope は見ない。 */
+export function listedSkillPaths(result: unknown, cwds: readonly string[]): string[] {
+  return [...new Set(skillsAt(result, cwds).map((skill) => skill.path))];
+}
+
+/** 閉じた設定を当てた `skills/list` の `result` から、まだ有効と報告された skill を `name (path)` で拾う(ADR 0259 決定3)。 */
+export function enabledSkills(result: unknown, cwds: readonly string[]): string[] {
+  return skillsAt(result, cwds).filter((skill) => skill.enabled).map((skill) => `${skill.name} (${skill.path})`);
 }
 
 export interface CodexCapabilityObservation {
@@ -641,13 +654,18 @@ async function enumerateSkills(
   workspace: string,
 ): Promise<string> {
   const [listed] = await callAppServer(command, executable, env, [], [skillsListRequest(workspace)]);
-  return closedSkillsConfig(listedSkillPaths(listed));
+  return closedSkillsConfig(listedSkillPaths(listed, [workspace]));
 }
+
+/** 列挙・観測そのものの失敗の文面(ADR 0259 決定6)。worker の起動の spawn_failed と回答時の拒否が同じ文で言う。 */
+const SKILL_CHECK_FAILED =
+  "Codex skills/list failed while the board enumerated or observed this workspace's skills, " +
+  "so it could not decide or confirm which skills are closed";
 
 /** (codex, workspace) の組の検査(ADR 0259 決定1・3・5): 列挙した skill を閉じた spawn の設定を `--strict-config` で
  *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は spawn の設定で、回答時の検査は
  *  placeholder の設定で、同じこれを撃つ。列挙・観測そのものの失敗は投げる(決定6)。 */
-export async function codexWorkspaceContainment(options: {
+async function codexWorkspaceContainment(options: {
   call: BoardCall;
   executable: string;
   env: NodeJS.ProcessEnv;
@@ -655,16 +673,18 @@ export async function codexWorkspaceContainment(options: {
   workspace: string;
   config: (skills: string) => string[];
 }): Promise<{ config: string[]; capability: ContainmentCapability }> {
-  const command = codexCommandThrough(options.call, "Codex skill enumeration", CODEX_PREFLIGHT_LIMIT_MS);
-  const config = options.config(await enumerateSkills(command, options.executable, options.env, options.workspace));
+  const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
+  const config = options.config(
+    await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace),
+  );
   const [observed] = await callAppServer(
-    command,
+    through("Codex skill observation"),
     options.executable,
     options.env,
     ["--strict-config", ...configArgs(config)],
     [skillsListRequest(options.workspace)],
   );
-  const enabled = enabledSkillNames(observed);
+  const enabled = enabledSkills(observed, [options.workspace]);
   return {
     config,
     capability: enabled.length === 0
@@ -672,8 +692,9 @@ export async function codexWorkspaceContainment(options: {
       : {
           available: false,
           reason:
-            `Codex still reports these skills enabled after the board disabled every skill its skills/list returned: ` +
-            `${enabled.join(", ")} — remove them from the checkout and the directories above it that Codex searches`,
+            `Under the board's closed skills.config, Codex still reports these skills enabled: ${enabled.join(", ")}. ` +
+            "The board disabled every skill path that skills/list returned for this workspace, so it cannot close " +
+            "these itself — find where Codex loads them from and remove or disable them there",
         },
   };
 }
@@ -1001,7 +1022,7 @@ export function createCodexWorkspaceCheck(options: {
       });
       return capability;
     } catch (error) {
-      return { available: false, reason: `Codex skill enumeration failed: ${String(error)}` };
+      return { available: false, reason: `${SKILL_CHECK_FAILED}: ${String(error)}` };
     } finally {
       rmSync(taskTemp, { recursive: true, force: true });
     }
@@ -1173,7 +1194,11 @@ export class CodexWorker implements WorkerAdapter {
       }
     };
     // ADR 0118: worker が1度も走らなかった pickup の観測点(skill の列挙・観測、spawn までの同期 throw、spawn の error)は同じ形で記録する
+    let recorded = false;
     const spawnFailed = (failure: { error_code: string | null; message: string }) => {
+      // 配線の途中で投げたあとに spawn の error が来ても、記録は1度だけ
+      if (recorded) return;
+      recorded = true;
       removeTaskTemp();
       appendEvent(this.options.db, {
         taskId: task.id,
@@ -1188,9 +1213,9 @@ export class CodexWorker implements WorkerAdapter {
     // ADR 0259 決定2・3・6: spawn の前に Codex 自身の列挙で skill を閉じ、閉じた設定の下で観測する。ここから先は
     // scheduler の catch の外なので、失敗は自分で spawn_failed に落とす(Claude adapter の skill 列挙と同じ形)
     return (async () => {
-      let closure: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
+      let checked: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
       try {
-        closure = await codexWorkspaceContainment({
+        checked = await codexWorkspaceContainment({
           call: this.options.boardCall,
           executable: this.options.executable,
           env,
@@ -1200,76 +1225,60 @@ export class CodexWorker implements WorkerAdapter {
       } catch (error) {
         spawnFailed({
           error_code: null,
-          message:
-            "Codex skill enumeration failed, so the skills to close could not be decided and the worker was " +
-            `not spawned (no fail-open): ${String(error)}`,
+          message: `${SKILL_CHECK_FAILED}; the worker was not spawned (no fail-open): ${String(error)}`,
         });
         return;
       }
-      if (!closure.capability.available) {
+      if (!checked.capability.available) {
         removeTaskTemp();
         // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
         registerQuarantine(
           this.options.db,
           "workspaceContainment",
           workspaceContainmentValue("codex", workspace.name),
-          closure.capability.reason,
+          checked.capability.reason,
           this.options.clock.now(),
         );
         return;
       }
-      let child: ContainedProcess;
-      let spawned: number;
-      let transcript: Transcript;
-      try {
-        // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
-        spawned = appendEvent(this.options.db, {
-          taskId: task.id,
-          workerId: agent.name,
-          origin: "board",
-          payload: {
-            kind: "worker_spawned",
-            registry_commit: registry.commit,
-            definition_version: agent.definition.version,
-            // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
-            // 実行設定に advisor は決して載らない
-            advisor: null,
-            provider: setting.provider,
-            model: setting.model,
-            effort: setting.effort,
-            tier_id: setting.tier_id,
-            source: setting.source,
-            harness: "codex",
-            cli_version: this.options.cliVersion,
-          },
-          at: this.options.clock.now(),
-        });
-        recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
-        if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
-        transcript = this.options.transcripts.open(task.id, spawned);
-        child = this.containers.open(task.id).spawn(
-          this.options.executable,
-          [
-            "--ask-for-approval", "never",
-            "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-            "--strict-config", "--dangerously-bypass-hook-trust",
-            "-C", workspacePath,
-            "-m", setting.model,
-            ...configArgs(closure.config),
-            taskPrompt(task),
-          ],
-          { cwd: workspacePath, env },
-        );
-      } catch (error) {
-        // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
-        // 稀な経路)。積み上がりが観測されたらここで destroy する。
-        // ADR 0149 決定6: scheduler の catch の外なので、spawn までの同期 throw も spawn_failed に落とす
-        spawnFailed({
-          error_code: (error as NodeJS.ErrnoException).code ?? null,
-          message: error instanceof Error ? error.message : String(error),
-        });
-        return;
-      }
+      // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
+      const spawned = appendEvent(this.options.db, {
+        taskId: task.id,
+        workerId: agent.name,
+        origin: "board",
+        payload: {
+          kind: "worker_spawned",
+          registry_commit: registry.commit,
+          definition_version: agent.definition.version,
+          // openai の正準経路は advisor を提供しない(ADR 0098)ので、選ばれた
+          // 実行設定に advisor は決して載らない
+          advisor: null,
+          provider: setting.provider,
+          model: setting.model,
+          effort: setting.effort,
+          tier_id: setting.tier_id,
+          source: setting.source,
+          harness: "codex",
+          cli_version: this.options.cliVersion,
+        },
+        at: this.options.clock.now(),
+      });
+      recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
+      if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
+      const transcript = this.options.transcripts.open(task.id, spawned);
+      const child = this.containers.open(task.id).spawn(
+        this.options.executable,
+        [
+          "--ask-for-approval", "never",
+          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
+          "--strict-config", "--dangerously-bypass-hook-trust",
+          "-C", workspacePath,
+          "-m", setting.model,
+          ...configArgs(checked.config),
+          taskPrompt(task),
+        ],
+        { cwd: workspacePath, env },
+      );
       child.stdout.pipe(transcript.stream);
       child.stderr.pipe(transcript.stderr);
       let usage: CodexUsage | null = null;
@@ -1342,7 +1351,17 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
       settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
-    })();
+    })().catch((error) => {
+      // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
+      // 稀な経路)。積み上がりが観測されたらここで destroy する。
+      // ADR 0149 決定6: scheduler の catch の外なので、検査のあとの同期 throw(quarantine の登録、spawn まで、
+      // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない
+      this.running.delete(task.id);
+      spawnFailed({
+        error_code: (error as NodeJS.ErrnoException).code ?? null,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
   }
 
   /** Codex folds up on SIGINT; force/reclaimed belong to ProcessContainers. */
