@@ -18,8 +18,10 @@ fetch でしか動かないので、別の clone からの force-push(#1831)や 
    読めないことは、どれも「比べられない = 積み残し」(fail-closed)。
 4. **盤面の外の push が内容を落とした head は、キューを外して推奨 hold の merge question に倒す。** 最後に push した
    head には全部載っているのに GitHub の head に無いとき、盤面には運ぶ手が無い。question は届いていない子孫のブランチを
-   名指しし、直す手段を2つ書く(内容をブランチに戻す / 捨てるなら `merge -s ours` を記録して push する — ADR 0239
-   帰結)。「merge」の回答は積み残しが残る間は拒まれたまま(CI 赤と同じ形)で、拒否文は「盤面がまだ運んでいる」でなく
+   名指しし、直す手段を2つ書く(内容をブランチに戻す / 捨てるなら workspace のタスクブランチを GitHub の head に
+   合わせてから `merge -s ours` を記録して push する)。ADR 0239 帰結の手段をそのまま使わないのは、ここでは修理が
+   すでに merge back 済みで、`merge -s ours` が何も記録しないからである —— push は non-fast-forward で拒まれるか、
+   origin が祖先へ巻き戻されていれば fast-forward で修理を戻す(#1868 の実測)。「merge」の回答は積み残しが残る間は拒まれたまま(CI 赤と同じ形)で、拒否文は「盤面がまだ運んでいる」でなく
    外の push の事実を言う。両方の head に無ければ盤面がまだ運んでいるので、キューに残す(ADR 0231 決定3 のまま)。
 
 ## Considered options

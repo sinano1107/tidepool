@@ -3512,6 +3512,21 @@ it("外の push が落とした内容をブランチに戻して push すれば�
   expect(pr.github.merged.map((merged) => merged.number)).toEqual([1]);
 });
 
+it("外の push が落とした内容を、workspace でタスクブランチを GitHub の head に合わせてから `merge -s ours` で記録して push すれば、修理の内容を戻さずに「merge」の回答が通る", async () => {
+  const pr = await openPushedPr("left-behind-dropped-outside-discarded", "auto_if_ci_green");
+  const repair = await dropRepairOutsideBoard(pr);
+  await pr.landing.tick("auto_merge", pr.clock.now());
+  git(pr.workspace.path, "fetch", "origin");
+  git(pr.workspace.path, "reset", "--hard", `origin/task/${pr.work.id}`);
+  git(pr.workspace.path, "merge", "-s", "ours", "--no-edit", `task/${repair.id}`);
+  git(pr.workspace.path, "push", "origin", `task/${pr.work.id}`);
+
+  await expect(answerMergeQuestion(pr)).resolves.toMatchObject({ status: "done" });
+
+  expect(pr.github.merged.map((merged) => merged.number)).toEqual([1]);
+  expect(() => git(pr.workspace.path, "cat-file", "-e", `${originHead(pr.workspace, pr.work.id)}:repair.txt`)).toThrow();
+});
+
 /** 収束が PR #1 を開く(盤面自身の push)。`narrowRefspec` は #1778 の形 —— fetch の refspec を保護ブランチだけに絞った
  *  checkout(`--single-branch` の clone)で、push しても写しが書かれない。 */
 async function openPrByConvergence(name: string, merge: MergeDial, { narrowRefspec = false } = {}) {
