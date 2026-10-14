@@ -1818,7 +1818,7 @@ export function redecompose(
   // ADR 0245 決定3: Interview の root は作り直さない
   if (interviewTargets(db, parent.id) !== null) {
     throw new DomainError(
-      "an Interview is not redecomposed: keep its decomposition with continue_decomposition, " +
+      "an Interview is not redecomposed: keep its posed probe with continue_decomposition, " +
         "or escalate so a human can abandon it and register the Interview again with a fixed probe",
     );
   }
@@ -1909,7 +1909,8 @@ export function logDecision(
  *  判断ログの1件と、一覧の対象ごとに pin の子を一覧の順に1つ入れ、root を blocked にする。子は全部同じ出題の値で、assignee は
  *  未指定(既定 agent)、workspace は親から、登録者は root の agent。決裁権の検査は通らない —— root が子ごとに選ぶものが無い。 */
 export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin): Task[] {
-  if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root poses a probe");
+  const targets = targetRows(db, root.id);
+  if (!targets.length) throw new DomainError("only an Interview root poses a probe");
   if (interviewProbe(db, root.id) !== null) {
     throw new DomainError("this Interview's probe is already posed and is not posed again: escalate so a human abandons it and registers the Interview again");
   }
@@ -1930,7 +1931,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
       },
       at: now,
     });
-    const children = targetRows(db, root.id).map(({ id, tier }) =>
+    const children = targets.map(({ id, tier }) =>
       registerTask(
         db,
         {

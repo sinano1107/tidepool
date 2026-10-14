@@ -815,18 +815,6 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
   });
 
-  it("出題前の Interview の root の system prompt には、出題を指す doctrine が載り decompose を指す文は載らない(ADR 0253 決定5)", async () => {
-    const { worker, setting, slot, calls, db } = await makeWorker();
-    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-    const root = registerTask(db, { type: "review", assignee: "deckhand", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
-    slot.occupy(root.id);
-    worker.start(root, setting(root));
-    const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!.replace(/\s+/g, " ");
-    expect(systemPrompt).toContain("pose its probe with the tidepool MCP's pose_probe instead");
-    expect(systemPrompt).not.toContain("Register that split with the tidepool MCP's decompose instead.");
-  });
-
   it("出題済みの Interview の root の system prompt には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };

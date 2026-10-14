@@ -418,9 +418,7 @@ export async function registerThroughHumanDoor(
     const task = deps.db.transaction(() => {
       const registered = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
       // ADR 0253 決定3: 対象は行の id を得てから判定するので、拒否は登録ごと巻き戻す
-      if (input.interview_targets && deps.taskExecutionCandidates) {
-        assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
-      }
+      if (deps.taskExecutionCandidates) assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
       return registered;
     })();
     deps.pollNow();
