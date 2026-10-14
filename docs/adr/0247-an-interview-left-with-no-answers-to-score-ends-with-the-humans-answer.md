@@ -41,3 +41,9 @@ retry も root ごと cancel するのは abandon と同じで、そのうえで
 決定4 の「進めない事情は escalate で上げる」は、probe が壊れていたという事情については ADR 0251 の probe の破綻の報告に
 置き換わった。決定2 の「done の答案を採点しない」は、ADR 0251 決定4 で「cancelled の Interview の採点は学習器が数えない」
 に広がった —— 報告の前に付けた採点も入らない。
+
+## 追記3(2026-10-14 の triage / grilling、issue #1901 / ADR 0253)
+
+決定4 の「採点の無い done の子が残るあいだ root は完了できない」は、`complete_task` の拒否ではなく採点完了の verb の形で
+保たれる —— root は done の子全部の採点と完了を1回で渡す(ADR 0253 決定4)。決定1 の「全対象の承認 question を reject」の
+経路は無くなった: 盤面が立てる pin の子は決裁権の外に出ないので、承認 question にならない。

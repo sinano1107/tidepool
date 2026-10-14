@@ -51,3 +51,8 @@
 決定3 の「breach を受けた root は `continue_decomposition` で続行させるか、escalate で人間に上げ、人間が abandon して直した
 probe で登録し直す」は ADR 0248 に置き換わった —— pin の子の前提の破綻は root を起こさず初回から人間の question になり、
 人間はその場で retry(同じ対象で登録し直す)を選べる。root を作り直さない線は変わらない。
+
+## 追記2(2026-10-14 の triage / grilling、issue #1901 / ADR 0253)
+
+決定3 の「probe と rubric を回答前に確定するのは Interview 1件につき1回」は、分解の回数ではなく出題の回数で保たれる ——
+Interview の root は `decompose` / `redecompose` を持たず、出題の verb で一度だけ子を立てる(ADR 0253 決定1・5)。

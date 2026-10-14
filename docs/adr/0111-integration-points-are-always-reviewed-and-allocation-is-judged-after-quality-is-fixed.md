@@ -179,3 +179,9 @@ CONTEXT.md「要求」)。selector は review task の `tier` を読まず、`pr
 - **review task も work と同じ盤面既定に従う。** 上記のとおり、work の費用のつまみが判定者を動かす。
 - **review task の `tier` を `review_tier` の別名として受ける。** 同じ値に綴りが2つできる。読み替えは WebUI の中に留める。
 - **Meta-review だけ別の既定にする。** 観測された要求が無い(#1596 で観測を待つ)。
+
+## 追記11(2026-10-14 の triage / grilling、issue #1901 / ADR 0253)
+
+決定6 の「probe + rubric を先に decision log に書き、候補セルごとに work type の子を走らせ」は ADR 0253 に置き換わった ——
+root は分解せず、出題の1回で probe・完了基準・rubric を盤面が型つきの event として確定し、対象ごとの子は盤面が立てる。
+rubric は受験者に伏せる。「probe の著者は常に agent」は不変条件になり、人間の扉は Interview の root を分けない。
