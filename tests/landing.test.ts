@@ -1489,9 +1489,8 @@ it("運ぶ内容の無い根の nothing_to_land と、門で待った根の land
   expect(boardEvents(db, waiting.id, "landing_deferred")).toHaveLength(1);
 });
 
-// 着地の終わっていない根の子孫は、その根が運ぶので候補にしない。閉じた PR の根と断念した根は記録で外す —— 子孫の
-// lineage が保護ブランチへ帰る(根の内容が保護ブランチに既にある)ときも撃たない
-it.each(["closed", "abandoned"] as const)("%s の根の下で完了した子孫は、lineage が保護ブランチへ帰っても撃たれない", async (shape) => {
+// ADR 0250: 閉じた PR の根と断念した根の子孫も記録で外さず、lineage が根かどうかを決める
+it.each(["closed", "abandoned"] as const)("%s の根の内容が保護ブランチにあれば、その下で完了した子孫は自分で根になり自分の PR を開く", async (shape) => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr(`landing-carried-${shape}`);
   if (shape === "closed") {
     github.scriptClosedOutside(1);
@@ -1507,13 +1506,9 @@ it.each(["closed", "abandoned"] as const)("%s の根の下で完了した子孫�
   git(workspace.path, "checkout", "-b", `task/${child.id}`, "refs/remotes/origin/main");
   commitWork(workspace.path, "child.txt", "the child's own change\n");
   finish(db, clock, child);
-  const before = listEvents(db, child.id).length;
 
-  const verdicts = await landing.converge();
-
-  expect(verdicts.map(({ taskId }) => taskId)).not.toContain(child.id);
-  expect(listEvents(db, child.id)).toHaveLength(before);
-  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+  await expect(convergeOn(landing, child.id)).resolves.toEqual({ kind: "landed", form: "pull_request_opened", prNumber: 2 });
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`, `task/${child.id}`]);
 });
 
 it("PR が開いている根の下で完了し、根のブランチへ帰る子孫は撃たれず、根がその内容を push する", async () => {
@@ -1529,6 +1524,28 @@ it("PR が開いている根の下で完了し、根のブランチへ帰る子�
     { taskId: root.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
   ]);
   expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+});
+
+// ADR 0250 決定1 / ADR 0229 決定3: 閉じた根への修理は閉じる判断の内側で、問い返さない
+it("閉じた PR の根の内容が保護ブランチに無いまま、根のブランチへ帰って完了した子孫は撃たれず、根にも push せず、question も立たない", async () => {
+  const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-carried-closed-back");
+  github.scriptClosedOutside(1);
+  commitWork(workspace.path, "repair.txt", "a repair the closed PR never gets\n");
+  await landing.converge();
+  expect(boardEvents(db, root.id, "pr_close_observed")).toHaveLength(1);
+  const child = attachUnsettledChild(db, clock, root.id);
+  git(workspace.path, "checkout", "-b", `task/${child.id}`);
+  commitWork(workspace.path, "child.txt", "merged back\n");
+  git(workspace.path, "checkout", `task/${root.id}`);
+  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
+  finish(db, clock, child);
+  const before = listEvents(db, child.id).length;
+
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(listEvents(db, child.id)).toHaveLength(before);
+  expect(github.pushes).toEqual([]);
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+  expect([...promotionFailures(db, root.id), ...promotionFailures(db, child.id)]).toEqual([]);
 });
 
 // #1840 の実装で見つけた3点(#1842 のコメント)
@@ -4702,7 +4719,7 @@ it("PR 昇格を abandon した後、内容を変えない付帯子が決着し�
   expect(github.requests).toHaveLength(1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
+  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(0);
 });
 
 it("PR 昇格を abandon した後、修理が内容を変えて決着すると、profile を読まず PR も開かずに昇格の question を1つ立て直し、retry と答えると PR が開く", async () => {
@@ -4725,7 +4742,7 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
       question_items: [{ options: ["retry", "abandon promotion"], recommendation: "retry" }],
     },
   ]);
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
+  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(1);
 
   authority.resolve = () => profile("escalate");
   await answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry");
@@ -4733,6 +4750,21 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
   expect(github.requests).toHaveLength(2);
   expect(getTask(db, work.id)?.pr_number).toBe(1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
+});
+
+// ADR 0250 決定2: 自分のタスクブランチを根のブランチへ merge back した子孫も、lineage が根に帰すので問い直しになる
+it("PR 昇格を abandon した根のブランチへ自分のブランチを merge back して完了した子孫は撃たれず、昇格の question が立て直される", async () => {
+  const { db, clock, workspace, github, landing, work } = await abandonedPromotion("landing-abandon-child-branch");
+  const child = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${child.id}`, `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "merged back\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
+  finish(db, clock, child);
+
+  await expect(landing.converge()).resolves.toEqual([{ taskId: work.id, verdict: expect.objectContaining({ kind: "failed", reason: "promotion_failed" }) }]);
+  expect(openPromotionQuestions(db, work.id).map((q) => q.title)).toEqual(["PR promotion re-asked: ship"]);
+  expect(github.requests).toHaveLength(1);
 });
 
 it("立て直した question への retry の時点で運ぶ内容が無ければ、回答を受理して着地対象なしを1件だけ刻む", async () => {
