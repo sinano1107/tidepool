@@ -52,17 +52,18 @@ this run on a fresh database instead:
 caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && export TIDEPOOL_DB=~/.tidepool/version-bump-<version>.sqlite PATH="$HOME/.local/bin:$PATH" && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
 ```
 
-## 4. Run the three canaries
+## 4. Run the four canaries
 
 ```bash
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/containment-canary.sh local'
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/hook-canary.sh local'
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local'
+limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh local'
 ```
 
 The containment canary needs the board from step 3. The deploy-pi skill explains how to read each
 canary's verdict: [containment](../.agents/skills/deploy-pi/SKILL.md#containment-canary-network-layer),
-settings-floor and tool-floor.
+settings-floor, tool-floor and read-floor.
 
 ## 5. Run the conformance test
 

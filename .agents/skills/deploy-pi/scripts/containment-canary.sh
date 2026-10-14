@@ -2,7 +2,7 @@
 # Containment canary (issue #154 / ADR 0036): measures that a confined worker
 # cannot enter the board's human surface.
 #
-#     bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # this machine
+#     bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # a Linux host (the Lima VM)
 #     bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the production Pi
 #
 # `pi` re-executes this same file on the Pi in `local` mode over ssh, so there is

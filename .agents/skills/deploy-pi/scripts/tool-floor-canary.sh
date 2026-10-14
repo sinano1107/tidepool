@@ -2,7 +2,7 @@
 # Tool-floor canary (issue #151 / #162 / ADR 0038): measures that a work worker
 # cannot read or write outside its own workspace with the in-process tools.
 #
-#     bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local  # this machine
+#     bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local   # a Linux host (the Lima VM)
 #     bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh pi     # the production Pi
 #
 # `pi` re-executes this same file on the Pi in `local` mode over ssh, so there is
@@ -90,13 +90,13 @@
 # exit, the source-only escape, and one shared refusal literal all also live in
 # hook-canary.sh. Extracting them is not available: every canary ships itself to
 # the Pi with `exec ssh "$PI" 'bash -s -- local …' < "$0"`, so a sourced sibling
-# simply would not exist over there. A fourth canary should copy this on purpose,
-# not discover the constraint the hard way.
+# simply would not exist over there. A new canary copies the shape on purpose
+# (read-floor-canary.sh does, with its tally as a tested run_status over the rows).
 #
 # EXIT CODES: 0 = every row measured, both live rows refused, both controls got
 # out. 1 = a worker reached outside its workspace (or the sandbox died).
 # 2 = nothing got out but a row could not be measured. Same three-valued reading
-# as the other two canaries, and for the same reason.
+# as the other canaries, and for the same reason.
 set -uo pipefail
 
 # role(live|control) + did the session run + did it get out + did the PERMISSION
@@ -206,7 +206,7 @@ printf -v TABLE "$ROW_FMT" "ROW" "MODE" "SESSION RAN" "OBSERVED" "VERDICT"
 # EVERY counted hole goes through here, and nothing counts a hole any other way —
 # a tally that can be incremented without printing a row lets the script exit 1
 # under a banner saying "read the FAIL rows above" while the table shows nothing
-# but PASS. Same rule as the other two canaries.
+# but PASS. Same rule as the other canaries.
 record() {
   local row="$1" mode="$2" ran="$3" observed="$4" verdict="$5"
   case "$verdict" in
