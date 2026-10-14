@@ -222,7 +222,7 @@ Verified on production in exactly this order, 2026-07-30: 200 → question stand
 ### Containment canary (network layer)
 
 ```bash
-bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # this machine
+bash .agents/skills/deploy-pi/scripts/containment-canary.sh local   # a Linux host (the Lima VM)
 bash .agents/skills/deploy-pi/scripts/containment-canary.sh pi      # the Pi
 ```
 
@@ -267,7 +267,7 @@ A phase-2 session may report `DECLINED` — a session can reasonably read "curl 
 ### Settings-floor canary (ADR 0037 — re-run after every `claude` CLI update)
 
 ```bash
-bash .agents/skills/deploy-pi/scripts/hook-canary.sh local   # this machine
+bash .agents/skills/deploy-pi/scripts/hook-canary.sh local   # a Linux host (the Lima VM)
 bash .agents/skills/deploy-pi/scripts/hook-canary.sh pi      # the Pi
 ```
 
@@ -315,7 +315,7 @@ The live row's own `notes.txt` is the bwrap evidence: `failIfUnavailable: true` 
 ### Tool-floor canary (ADR 0038 — re-run after every `claude` CLI update)
 
 ```bash
-bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local   # this machine
+bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh local   # a Linux host (the Lima VM)
 bash .agents/skills/deploy-pi/scripts/tool-floor-canary.sh pi      # the Pi
 ```
 
@@ -349,6 +349,36 @@ Measured on macOS 2.1.220, 2026-08-03 — **exit 0**:
 Re-run on the Pi after the CLI was updated to **2.1.221** (2026-08-04, issue #33): the identical four rows, exit 0 — both live rows refused in the permission layer's own words, both `auto` controls out.
 
 The script greps the deployed `src/claude-worker.ts` for the ADR 0038 flag shape and exits 1 if it is absent — that catches **a deployed board older than this decision** (the Pi before the #162 deploy) and nothing else. It cannot see an inverted ternary; `tests/claude-worker.test.ts` is the board-side drift guard.
+
+### Read-floor canary (ADR 0257 — re-run after every deploy and every `claude` CLI update)
+
+```bash
+bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh local   # a Linux host (the Lima VM)
+bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh pi      # the Pi
+```
+
+Measures that a worker's Bash cannot read outside ADR 0257's default-deny range (its workspace, its task temp, the OS locations) — issue #1953. It carries #1950's real-environment confirmation: the reads #1950 observed getting through are its three refused rows. It is not part of the board's containment check, because the CLI cannot run a command in its sandbox without a model turn (ADR 0257 decision 3).
+
+**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other three canaries are expected to fail closed there too (Bash cannot start under the Linux set, so `DECLINED` / `VACUOUS`) — run them in the Lima VM as well.
+
+**Six rows in one session**, run by `scripts/read-floor-canary-probe.sh` from a throwaway workspace with the emitted work profile, the production spawn flags, and a task temp made the board's way (`/tmp/tidepool-claude-<uuid>-XXXXXX`, so the CLI's proxy socket path is as long as in production):
+
+| row | target | pass |
+|---|---|---|
+| other-task-temp | a token file in `/tmp`, outside the task temp | refused, **with the OS string** |
+| data-dir | Pi: the board's data directory (`/opt/tidepool/data`); VM: the Mac home Lima mounts under `/Users` | refused, **with the OS string** |
+| home | a token file under `~`, outside the workspace | refused, **with the OS string** |
+| workspace | write and read back a file in the workspace | the file landed |
+| task-temp | `mktemp` | the file landed in the task temp |
+| allowed-domain | `curl https://registry.npmjs.org` (emitted with `--allowed-domain`) | `code=200` |
+
+The OS string is the sandbox e2e smoke's: `No such file or directory` under bwrap (`そのようなファイルやディレクトリはありません` under a Japanese locale), `Operation not permitted` under Seatbelt. Every refused row's target is first checked from **outside** the sandbox; bwrap's refusal is the same string as "not there", so a target missing outside (`BASELINE no`) makes its row `VACUOUS`. `other-task-temp` and `home` hold a per-run token that appears in neither the prompt nor the probe, so "it was read" is the token in the transcript. `data-dir` carries no token — the canary does not own it, and the VM's mount is read-only — so the probe only asks `ls -d` of the directory itself: `rc=0` is the hole, and nothing in it is listed or read.
+
+**Reading a failure.** A refused row that was readable, **or that was refused in the harness's words rather than the OS string**, means the sandbox was not in effect — work's Bash is never asked about under `autoAllowBashIfSandboxed`. Treat it as a production incident: halt pickup and read ADR 0257. **Read PASS only alongside all three controls**: a control that did not succeed is what a silently dropped `--settings`, a declined probe or a closed allowlist looks like, and then the refusals prove nothing (`VACUOUS`, exit 2).
+
+**Exit codes: `0`** every refused row refused by the OS and every control succeeded — **`1`** a target was read, a refusal was harness-worded, or the sandbox failed to start — **`2`** nothing was read but a row could not be measured. `2` is not a steady state: all six rows should pass on both hosts. The script refuses to run (exit 1) against a checkout whose emitted profile is not `denyRead: ["/"]` with the task temp opened — a deployed board older than ADR 0257. That check reads the emitted profile, not a `src/` identifier.
+
+`refused_row_verdict()`, `control_verdict()`, `run_status()` and `os_refused_in()` are where "not measured" could quietly become "measured and fine"; `scripts/read-floor-canary.test.sh` pins every branch (`bash scripts/read-floor-canary.test.sh`, no Linux host and no session needed). The probe also prints, unjudged, whether `npm` works for a worker whose home is masked (`READ-FLOOR-DIAG npm-view`) and where its `~/.npm` stands.
 
 ### After a token rotation
 
