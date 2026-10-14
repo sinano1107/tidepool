@@ -359,7 +359,7 @@ bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh pi      # the Pi
 
 Measures that a worker's Bash cannot read outside ADR 0257's default-deny range (its workspace, its task temp, the OS locations) — issue #1953. It carries #1950's real-environment confirmation: the reads #1950 observed getting through are its three refused rows. It is not part of the board's containment check, because the CLI cannot run a command in its sandbox without a model turn (ADR 0257 decision 3).
 
-**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other three canaries are expected to fail closed there too (Bash cannot start under the Linux set, so `DECLINED` / `VACUOUS`) — run them in the Lima VM as well.
+**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other three canaries are expected to fail closed there too (unmeasured) — run them in the Lima VM as well.
 
 **Six rows in one session**, run by `scripts/read-floor-canary-probe.sh` from a throwaway workspace with the emitted work profile, the production spawn flags, and a task temp made the board's way (`/tmp/tidepool-claude-<uuid>-XXXXXX`, so the CLI's proxy socket path is as long as in production):
 
