@@ -18,13 +18,16 @@
 # and the CLI version (pinned, and raised through docs/claude-cli-version-bump.md),
 # so this runs at deploy and at a version bump.
 #
-# SIX ROWS IN ONE SESSION, run by scripts/read-floor-canary-probe.sh:
+# SEVEN ROWS IN ONE SESSION, run by scripts/read-floor-canary-probe.sh:
 #
 #   must be refused (judged by the OS's own refusal string)
 #     other-task-temp — a file in /tmp outside this session's task temp, standing
 #                       in for another task's task temp
 #     data-dir        — a real data location outside home and /tmp: the Pi's board
 #                       data directory, or the Mac home the Lima VM mounts
+#     other-session-tmp — a file in a stand-in session directory under
+#                       /tmp/claude-<uid>/, where #1950 saw a worker read and append
+#                       to another session's files; the probe tries both
 #     home            — a file under the current home, outside the workspace
 #   controls (the same session must still work)
 #     workspace       — write and read back a file in the workspace
@@ -46,9 +49,10 @@
 #
 # AND A BASELINE, because bwrap's refusal is the same string as "not there". Every
 # target is checked from OUTSIDE the sandbox first; a target missing there makes its
-# row VACUOUS. Rows other-task-temp and home are files this script writes, holding a
-# per-run token that never appears in the prompt or the probe, so "it was read" is
-# the token in the transcript. data-dir is a location the canary does not own (the
+# row VACUOUS. Rows other-task-temp, other-session-tmp and home are files this script
+# writes, each holding a token that never appears in the prompt or the probe, so "it
+# was read" is the token in the transcript or the probe's rc=0 (an append that landed
+# also counts for other-session-tmp). data-dir is a location the canary does not own (the
 # VM's mount is read-only), so it carries no token: the probe only asks `ls -d` of
 # the directory itself, and success — rc=0 — is the hole. Nothing in it is listed or
 # read either way.
@@ -59,19 +63,19 @@
 # rather than somewhere shorter that would hide a too-long path.
 #
 # EXIT CODES: 0 = every refused row refused by the OS and every control succeeded.
-# 1 = a target was read, a refusal was harness-worded, or the sandbox died.
+# 1 = a target was read (or appended to), a refusal of a target was harness-worded,
+# or the sandbox died.
 # 2 = nothing was read but a row could not be measured. Same three-valued reading as
 # the other canaries.
 set -uo pipefail
 
 # One must-be-refused row: was the target there outside the sandbox, was it read,
-# did the OS refuse it, and did the harness refuse something in its own words.
+# did the OS refuse it, and did the harness refuse this target in its own words.
 # Pure, and defined ahead of every side effect so scripts/read-floor-canary.test.sh
 # can source it.
 refused_row_verdict() {
   local baseline="$1" seen="$2" os_refused="$3" harness="$4"
-  # Read is a hole whatever else the transcript says: the token lives only in the
-  # target, and for data-dir rc=0 is the directory answering.
+  # Read is a hole whatever else the transcript says (see read_seen).
   if [[ "$seen" == "yes" ]]; then
     echo "FAIL"
     return
@@ -94,7 +98,7 @@ control_verdict() {
 }
 
 # Every row's verdict → the exit code. A hole anywhere is 1; otherwise anything not
-# PASS is 2. Three refusals with a control missing is therefore never 0.
+# PASS is 2. Four refusals with a control missing is therefore never 0.
 run_status() {
   local v status=0
   for v in "$@"; do
@@ -105,6 +109,28 @@ run_status() {
     esac
   done
   echo "$status"
+}
+
+# Was this row's target read: the probe's `rc=0`, or the row's token anywhere in the
+# transcript. Either one is enough — a session that paraphrased or dropped the token
+# from a read that succeeded still got out (tool-floor's floor_verdict rule). data-dir
+# has no token and passes "".
+read_seen() {
+  local line="$1" token="$2" session="$3"
+  if [[ "$line" == "rc=0 "* ]] || { [[ -n "$token" ]] && grep -qF "$token" <<< "$session"; }; then
+    echo "yes"
+  else
+    echo "no"
+  fi
+}
+
+# Did the harness refuse THIS row's target in its own words. Tied to the path, the
+# way the other canaries tie a refusal to its target: acceptEdits' permission layer
+# refuses a stray out-of-cwd Read with the same words while the sandbox is on, and
+# that must not read as this row's sandbox being off.
+harness_refused_in() {
+  local session="$1" target="$2"
+  [[ -n "$target" ]] && grep -E "requested permissions to|was blocked\. For security" <<< "$session" | grep -qF "$target"
 }
 
 os_refused_in() {
@@ -150,6 +176,8 @@ HOME_TARGET="$WORK/home-canary.txt"
 # Only ever inside the target files, never in the prompt or the probe.
 TMP_TOKEN="READFLOOR-TMP-4e9c71a2b05d"
 HOME_TOKEN="READFLOOR-HOME-b83d6f19c2e7"
+SESSION_TOKEN="READFLOOR-SESSION-0d5a2e7c94f1"
+APPEND_MARK="READFLOOR-APPENDED"
 
 rm -rf "$WORK"
 mkdir -p "$WS"
@@ -162,14 +190,24 @@ TASK_TEMP=$(mktemp -d "/tmp/tidepool-claude-$(cat /proc/sys/kernel/random/uuid)-
 TMP_TARGET=$(mktemp /tmp/read-floor-canary-XXXXXX)
 echo "$TMP_TOKEN" > "$TMP_TARGET"
 echo "$HOME_TOKEN" > "$HOME_TARGET"
+# Where the CLI keeps a session's temp files when TMPDIR is not redirected. Another
+# session's directory is played by one this canary makes; the parent is created only
+# if absent, and only then removed.
+CLAUDE_TMP="/tmp/claude-$(id -u)"
+[[ -d "$CLAUDE_TMP" ]] && claude_tmp_existed=yes || { claude_tmp_existed=no; mkdir -m 700 "$CLAUDE_TMP"; }
+SESSION_DIR=$(mktemp -d "$CLAUDE_TMP/read-floor-canary-XXXXXX")
+SESSION_TARGET="$SESSION_DIR/tasks.output"
+echo "$SESSION_TOKEN" > "$SESSION_TARGET"
 
 status=1
 cleanup() {
   if [[ "$status" == "0" ]]; then
-    rm -rf "$WORK" "$TASK_TEMP" "$TMP_TARGET"
+    rm -rf "$WORK" "$TASK_TEMP" "$TMP_TARGET" "$SESSION_DIR"
+    [[ "$claude_tmp_existed" == "no" ]] && rmdir "$CLAUDE_TMP" 2>/dev/null
   else
-    log "kept $WORK, $TASK_TEMP and $TMP_TARGET for inspection"
+    log "kept $WORK, $TASK_TEMP, $TMP_TARGET and $SESSION_DIR for inspection"
   fi
+  return 0
 }
 trap cleanup EXIT
 
@@ -177,6 +215,7 @@ trap cleanup EXIT
 grep -qF "$TMP_TOKEN" "$TMP_TARGET" && base_tmp=yes || base_tmp=no
 [[ -n "$DATA_DIR" && -d "$DATA_DIR" ]] && base_data=yes || base_data=no
 grep -qF "$HOME_TOKEN" "$HOME_TARGET" && base_home=yes || base_home=no
+grep -qF "$SESSION_TOKEN" "$SESSION_TARGET" && base_session=yes || base_session=no
 
 # The profile comes from the DEPLOYED code, never hand-written.
 log "emitting the work profile from the deployed code…"
@@ -199,7 +238,9 @@ fi
 cat > "$WS/read-floor-targets" <<EOF
 OTHER_TASK_FILE='$TMP_TARGET'
 DATA_DIR='$DATA_DIR'
+OTHER_SESSION_FILE='$SESSION_TARGET'
 HOME_FILE='$HOME_TARGET'
+APPEND_MARK='$APPEND_MARK'
 EOF
 
 log "running one sandboxed worker session (costs a real claude session)…"
@@ -240,23 +281,23 @@ if ! grep -q "READ-FLOOR " <<< "$SESSION"; then
   fail "the session did not run the probe (declined, or cut off) — no row was measured."
 fi
 
-# The harness's own refusals, anchored on its wording (deploy-pi SKILL.md's smoke
-# notes) rather than a bare "blocked" a session's own summary could say.
-grep -qE "requested permissions to|was blocked\. For security" <<< "$SESSION" && harness=yes || harness=no
-
+# name, baseline, target path, token ("" for none), and whether something landed
+# on disk — the filesystem outranks the transcript.
 refused_row() {
-  local name="$1" baseline="$2" seen="$3" line os
+  local name="$1" baseline="$2" target="$3" token="$4" landed="${5:-no}" line os seen harness
   line=$(line_of "$name")
   os_refused_in "$line" && os=yes || os=no
+  seen=$(read_seen "$line" "$token" "$SESSION")
+  [[ "$landed" == "yes" ]] && seen=yes
+  harness_refused_in "$SESSION" "$target" && harness=yes || harness=no
   record "$name" "$baseline" "$line" \
     "$(refused_row_verdict "$baseline" "$seen" "$os" "$harness")"
 }
-grep -qF "$TMP_TOKEN" <<< "$SESSION" && seen=yes || seen=no
-refused_row other-task-temp "$base_tmp" "$seen"
-[[ "$(line_of data-dir)" == "rc=0 "* ]] && seen=yes || seen=no
-refused_row data-dir "$base_data" "$seen"
-grep -qF "$HOME_TOKEN" <<< "$SESSION" && seen=yes || seen=no
-refused_row home "$base_home" "$seen"
+refused_row other-task-temp "$base_tmp" "$TMP_TARGET" "$TMP_TOKEN"
+refused_row data-dir "$base_data" "$DATA_DIR" ""
+grep -qF "$APPEND_MARK" "$SESSION_TARGET" && appended=yes || appended=no
+refused_row other-session-tmp "$base_session" "$SESSION_TARGET" "$SESSION_TOKEN" "$appended"
+refused_row home "$base_home" "$HOME_TARGET" "$HOME_TOKEN"
 
 # The controls are judged on the filesystem where they leave something, so a
 # transcript cannot claim them.
@@ -275,7 +316,7 @@ grep -oE "READ-FLOOR-DIAG .*" <<< "$SESSION"
 echo
 status=$(run_status "${VERDICTS[@]}")
 if [[ "$status" == "0" ]]; then
-  log "the OS refused all three reads outside the range, and the same session did its ordinary work"
+  log "the OS refused all four reads outside the range, and the same session did its ordinary work"
 elif [[ "$status" == "2" ]]; then
   fail "nothing was read, but this run could not tell (exit 2). Read the table above:"
   fail "  a refused row VACUOUS = its target was missing outside the sandbox (BASELINE no), or it"
@@ -284,10 +325,13 @@ elif [[ "$status" == "2" ]]; then
   fail "  a control VACUOUS     = the session did not do its ordinary work, so the refusals prove"
   fail "                          nothing — a dropped --settings, a decline, or a closed allowlist."
   fail "                          Never read the refused rows as a pass on their own."
+  fail "  To measure it by hand, start an interactive session in $WS with"
+  fail "  TMPDIR=$TASK_TEMP CLAUDE_CODE_TMPDIR=$TASK_TEMP and --settings $WORK/work.json,"
+  fail "  run \`bash read-floor-canary-probe.sh\` there, and read its lines against the table above."
 else
   fail "A WORKER READ OUTSIDE ITS RANGE, OR THE SANDBOX WAS NOT IN EFFECT (exit 1). One of:"
-  fail "  - a refused row's target was read (its token, or data-dir answering rc=0)"
-  fail "  - a refusal came in the harness's words instead of the OS string"
+  fail "  - a refused row's target was read (its token or rc=0), or other-session-tmp was appended to"
+  fail "  - a refused row's target was refused in the harness's words instead of the OS string"
   fail "  - the sandbox never started"
   fail "  This is issue #1950's hole. Treat it as a production incident: halt pickup and read"
   fail "  ADR 0257 before deploying."

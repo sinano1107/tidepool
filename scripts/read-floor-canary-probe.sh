@@ -17,7 +17,9 @@
 # The paths come from ./read-floor-targets, which the canary writes next to this
 # file: a file in /tmp outside this session's temp directory, a host directory
 # outside home and /tmp (only `ls -d` of the directory itself — nothing inside it
-# is listed or read), and a file in the home directory outside the workspace.
+# is listed or read), a canary file standing in for another session's temp file
+# (read, then appended to — the append is expected to be refused too), and a file
+# in the home directory outside the workspace.
 set -u
 . ./read-floor-targets
 
@@ -32,6 +34,7 @@ row() {
 # expected: refused by the OS
 row other-task-temp cat "$OTHER_TASK_FILE"
 row data-dir ls -d "$DATA_DIR"
+row other-session-tmp sh -c 'cat "$1"; echo "$2" >> "$1"' _ "$OTHER_SESSION_FILE" "$APPEND_MARK"
 row home cat "$HOME_FILE"
 # expected: succeed
 row workspace sh -c 'echo ok > read-floor-ws.txt && cat read-floor-ws.txt'

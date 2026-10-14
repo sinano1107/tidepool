@@ -5,7 +5,7 @@
 # cannot rewrite the settings files that would let it re-author that floor, and
 # that it cannot write into the pinned auto-memory directory (ADR 0156).
 #
-#     bash .agents/skills/deploy-pi/scripts/hook-canary.sh local   # this machine
+#     bash .agents/skills/deploy-pi/scripts/hook-canary.sh local   # a Linux host (the Lima VM)
 #     bash .agents/skills/deploy-pi/scripts/hook-canary.sh pi      # the production Pi
 #
 # `pi` re-executes this same file on the Pi in `local` mode over ssh, so there is

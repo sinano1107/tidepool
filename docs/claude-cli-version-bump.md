@@ -54,9 +54,6 @@ caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && e
 
 ## 4. Run the four canaries
 
-`local` means the host the canary runs on, which must be Linux: ADR 0257's worker read range is
-decided for Linux only, so on the Mac the canaries cannot measure it.
-
 ```bash
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/containment-canary.sh local'
 limactl shell tidepool -- bash -lc 'cd ~/tidepool && export PATH="$HOME/.local/bin:$PATH" && bash .agents/skills/deploy-pi/scripts/hook-canary.sh local'
