@@ -42,8 +42,8 @@ export interface WatchdogConfig {
 }
 
 /** 回収済み観測の不成立(CONTEXT.md「容器」)で止まっている slot の門
- *  (ADR 0099 決定3)。Containment quarantine の確認回答の受理側(human-verbs)
- *  だけがこれを読む。 */
+ *  (ADR 0099 決定3)。Containment / Harness Containment quarantine の確認回答の
+ *  受理側(human-verbs)だけがこれを読む。 */
 export interface PendingReclaim {
   /** 空をまだ観測できていない容器を名乗る一句(例: "the container for task 42")、
    *  無ければ undefined。id ではなく一句なのは、単位が worker session と Board call の
@@ -53,6 +53,10 @@ export interface PendingReclaim {
    *  slot を解放する。まだ populated なら no-op。この run で待っている回収が無くても、
    *  再起動を越えて後始末の印が残り枠が空いていれば、その後始末を走らせる(ADR 0254 決定2)。 */
   acceptReclaimed: () => void;
+  /** `acceptReclaimed` の再起動を越えた枝だけ: この run で待っている回収には触れない。
+   *  Harness Containment question の確認回答の受理が撃つ —— 解放の門は Containment question
+   *  だけなので(ADR 0099 決定3)、`pending` を解放してはならない。 */
+  resumeTeardown: () => void;
 }
 
 export interface Watchdog extends PendingReclaim {
@@ -519,11 +523,12 @@ export function startWatchdog(deps: {
       pending !== null && containers.pendingReclaim(pending)
         ? `the container for task ${pending}`
         : undefined,
+    // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
+    // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
+    // 起動時の復旧と同じ門を通して走らせる
+    resumeTeardown: () => void resumeUnfinishedTeardown(teardown),
     acceptReclaimed: () => {
       if (pending === null) {
-        // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
-        // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
-        // 起動時の復旧と同じ門を通して走らせる
         void resumeUnfinishedTeardown(teardown);
         return;
       }

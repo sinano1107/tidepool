@@ -443,7 +443,7 @@ export interface SubmitAnswerDeps {
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する
    *  唯一の門。空の再観測は containment の検査の側にある。Absent → watchdog を
    *  持たない盤面(回収を待っている slot が存在しない)。 */
-  reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
+  reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
   quarantineChecks?: QuarantineChecks;
   /** registry の agent 一覧と tier の書き込み(issue #920): tier の提案への approve が使う。Absent → registry の無い盤面。 */
   agentAdmin?: Partial<Pick<AgentAdmin, "list" | "changeTier">>;
@@ -1150,7 +1150,11 @@ export async function submitAnswer(
     // 上の検証節で済んでいる — ここは効果の側で、slot-release tree rule はこの
     // 解放と対で走る。再起動を越えて後始末の印だけが残っていれば、その後始末を走らせる
     // (ADR 0254 決定2)。待っている回収も残った印も無い Containment quarantine(ツール面のずれなど)では no-op。
+    // Harness Containment の受理も同じ前提検査を読み直すので、再起動を越えた印の後始末だけは走らせる ——
+    // `harnessContainment` を持つ盤面では前提検査の不成立が Harness ごとの question に畳まれ、
+    // Containment question が立たない(issue #1937)。待っている回収は解放しない(上の唯一の門)。
     if (kind.kind === "quarantine" && kind.quarantine === "containment") deps.reclaim?.acceptReclaimed();
+    if (kind.kind === "quarantine" && kind.quarantine === "harnessContainment") deps.reclaim?.resumeTeardown();
     // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
     if (!session) deps.pollNow();

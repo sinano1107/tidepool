@@ -149,7 +149,7 @@ export interface ManagementMcpDeps {
   resolvesToBuiltIn?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。 */
-  reclaim?: Pick<PendingReclaim, "acceptReclaimed">;
+  reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
   /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
   quarantineChecks?: QuarantineChecks;
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名 —— 直接 cancel の門が読む
