@@ -19,10 +19,9 @@ export function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, ac
     <React.Fragment key={id}>{' '}<a href={`#memory-entry-${id}`} onClick={(e) => { e.preventDefault(); onOpenMemoryEntry?.(id); }}
       style={{ color: 'var(--tide-4)' }}>{`#${id}`}</a></React.Fragment>
   ));
-  const causeLinks = entryLinks(causeEntries);
   // 判定の根拠(ADR 0213 決定4)は異議コメントの下の、帯の幅いっぱいの独立した行に置く(issue #1113)
   const causeNote = causeText && (
-    <span style={{ color: 'var(--text-muted)' }}><span>{causeText}</span>{causeLinks}{causeEvidence && ` — ${causeEvidence}`}</span>
+    <span style={{ color: 'var(--text-muted)' }}><span>{causeText}</span>{entryLinks(causeEntries)}{causeEvidence && ` — ${causeEvidence}`}</span>
   );
   const band = { display: 'flex', flexDirection: 'column', gap: 8, marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-xs)', fontSize: 'var(--text-xs)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' };
   // 注記の帯は Object 押下面の外に置く(issue #1090)—— role="button" の子孫に

@@ -325,7 +325,7 @@ function written<T extends object>(db: Db, writer: { taskId: string; agent: stri
 /** 書き込みの記録の行の文(ADR 0083 決定8 —— 自己申告でなく構造から): 店の event ごとに1句。移動の複製の作成は移動の句が言う。 */
 function writeLine(events: readonly EventRow[]): string {
   const place = (entry: MemoryEntryFields) => `${entry.path} (${entry.scope ?? "whole board"})`;
-  const copies = new Map(events.flatMap(({ payload: p }) => (p.kind === "memory_entry_invalidated" && p.reason === "path_moved" ? [[p.successor_id!, p.entry_id]] : [])));
+  const copies = new Set(events.flatMap(({ payload: p }) => (p.kind === "memory_entry_invalidated" && p.reason === "path_moved" ? [p.successor_id] : [])));
   const entries = new Map(events.flatMap(({ id, payload: p }) => (p.kind === "memory_entry_created" ? [[id, p.entry]] : [])));
   return events
     .flatMap(({ id, payload: p }) => {
@@ -342,9 +342,8 @@ function writeLine(events: readonly EventRow[]): string {
 }
 
 /** writer(書き手の task —— AI の直接適用)を渡せば書き込みの記録で包む。人間の面は渡さない。 */
-function maybeWritten<T extends object>(db: Db, writer: { taskId: string | undefined; agent: string }, at: Date, write: () => T): T {
-  const { taskId, agent } = writer;
-  return taskId === undefined ? write() : written(db, { taskId, agent }, at, write);
+function maybeWritten<T extends object>(db: Db, writer: string | undefined, agent: string, at: Date, write: () => T): T {
+  return writer === undefined ? write() : written(db, { taskId: writer, agent }, at, write);
 }
 
 /** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。writer は書き手の task(maybeWritten)。 */
@@ -356,7 +355,7 @@ export function recordKnowledge(
   writer?: string,
 ): { entry_id: number; event_id: number } {
   const { supersedes, ...fields } = input;
-  return maybeWritten(db, { taskId: writer, agent: fields.author.name }, at, () =>
+  return maybeWritten(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
       createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
     ),
@@ -377,7 +376,7 @@ export function defineMemoryBranch(
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...rest } = input;
   const fields = { ...rest, path: checkedPath(rest.path) };
-  return maybeWritten(db, { taskId: writer, agent: fields.author.name }, at, () =>
+  return maybeWritten(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
       const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
       if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
@@ -669,7 +668,7 @@ export function moveMemoryByMetaReview(
   at: Date,
   writer?: string,
 ): { entry_id: number; event_id: number } {
-  return maybeWritten(db, { taskId: writer, agent: input.mover.name }, at, () =>
+  return maybeWritten(db, writer, input.mover.name, at, () =>
     db.transaction(() => {
       const old = requireEntry(db, input.entry_id);
       requireWidening(db, [old], old.scope, input.scope);
@@ -687,7 +686,7 @@ export function moveMemoryBranchByMetaReview(
   at: Date,
   writer?: string,
 ): ReturnType<typeof moveMemoryBranch> & { event_id?: number } {
-  return maybeWritten(db, { taskId: writer, agent: input.mover.name }, at, () =>
+  return maybeWritten(db, writer, input.mover.name, at, () =>
     db.transaction(() => {
       requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
       return moveMemoryBranch(db, input, origin, at);
@@ -1112,7 +1111,7 @@ export function invalidateMemoryByMetaReview(
   if (input.reason === "superseded" || input.reason === "path_moved") {
     throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes, move_memory or move_memory_branch`);
   }
-  return maybeWritten(db, { taskId: writer, agent: workerId }, at, () => {
+  return maybeWritten(db, writer, workerId, at, () => {
     const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
     if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
     return { event_id: invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" }) };
