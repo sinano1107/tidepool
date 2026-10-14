@@ -1537,6 +1537,23 @@ describe("ClaudeCodeWorker", () => {
     );
   });
 
+  it("tracked settings.json を隠せなければ (claude-code, workspace) の組ではなく workspace を quarantine し、spawn しない(ADR 0259 決定1)", async () => {
+    const ws = await makeWorkspace("tracked-settings-unhidable");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: {} }));
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    // 変更中の tracked ファイルは sparse-checkout が作業ツリーから消さない
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
+    const { start, calls, db } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    start("task-sbx-unhidable-settings");
+    expect(calls).toEqual([]);
+    expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("could not exclude");
+    expect(quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool")).toBeUndefined();
+  });
+
   it("sparse 後に branch の settings.json が床キーへ変わっても quarantine せず、次の task も spawn する(ADR 0158)", async () => {
     const ws = await makeWorkspace("tracked-hooks-floor-change");
     await mkdir(join(ws.path, ".claude"), { recursive: true });

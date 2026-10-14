@@ -1718,17 +1718,19 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
     // entries win, and a `permissions.allow` entry lifts review's manual write
-    // floor (both measured — see workspaceSettingsDisposition). A workspace whose
-    // local or untracked settings redefine the floor is a broken resource —
-    // quarantined like a dirty tree, since sparse-checkout cannot safely hide
-    // them, and no session starts in it meanwhile. A tracked
+    // floor (both measured — see workspaceSettingsDisposition). A checkout whose
+    // local or untracked settings redefine the floor stops the (claude-code,
+    // workspace) pair — sparse-checkout cannot safely hide them, and only the
+    // claude CLI reads them, so the workspace's Codex tasks keep running
+    // (ADR 0259 決定1). A tracked
     // settings.json is hidden for the session instead, whatever it holds (ADR 0158).
     // issue #149 / ADR 0040: 盤面自身の状態(DB・worker-logs・token ファイル・
     // 実行 checkout)が workspace と交差していたら、この workspace で走る worker は
     // 人間面に到達せずに盤面の状態を書き換えられる(ADR 0034/0036 の不変条件の
     // 迂回)。危険なのはその workspace で走る worker だけなので、封じ込め能力の
-    // ような盤面全体停止ではなく workspace quarantine — 直下の settings ガードと
-    // 同じ形・同じ場所。
+    // ような盤面全体停止ではなく workspace quarantine。Harness に依らず盤面を
+    // 損なうので、直下の settings ガードのような (Harness, workspace) の組には
+    // 狭めない(ADR 0259)。
     //
     // **settings ガードより先に見る**: この罠が現実に当たるのは「盤面自身の
     // checkout を workspace 登録した」瞬間で、その checkout は自分の

@@ -29,7 +29,8 @@ export interface WorkerSessionSettings {
    *  root-owned host-wide file with its override env var inert on 2.1.235).
    *  What the blanket covered is re-covered without it: tracked project hooks
    *  are kept out of the worker's physical checkout, untracked/local hooks
-   *  refuse the spawn (`workspaceSettingsDisposition`), and
+   *  refuse the spawn and stop the (claude-code, workspace) pair
+   *  (`workspaceSettingsDisposition`, ADR 0259), and
    *  the mid-session hot-load path was already independently closed by ADR
    *  0037's two write denials (`settingsDenyWrite` + `SETTINGS_TOOL_DENY`,
    *  both measured and re-measured by the deploy canary). The workspace's
