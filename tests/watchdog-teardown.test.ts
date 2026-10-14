@@ -9,7 +9,7 @@ import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { markTeardown, runTeardown, sessionInTeardown as teardownMark } from "../src/teardown.js";
+import { sessionInTeardown as markedSession, markTeardown, runTeardown } from "../src/teardown.js";
 import { capInterruptionHandler, rowRefusalHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
 import {
   prepareWorkspaceAtPickup,
@@ -115,7 +115,7 @@ async function fallToTheBottom(f: Fixture): Promise<void> {
 
 /** 時間制限 → 猶予 → 強制回収 → 回収 timeout まで、容器の空を観測できないまま進める。 */
 async function reclaimTimesOut(f: Fixture): Promise<void> {
-  await f.clock.advance(90 * MIN + 30 * MIN + 5 * MIN);
+  await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout);
   expect(f.runtime.forceReclaims).toEqual([f.task.id]);
   expect(f.watchdog.heldForContainment(f.task.id)).toBe(true);
 }
@@ -327,7 +327,7 @@ it("回収 timeout に落ちた watchdog の session は後始末へ入り、続
   const f = await sessionInTeardown("watchdog");
   await reclaimTimesOut(f);
 
-  expect(teardownMark(f.db)?.taskId).toBe(f.task.id);
+  expect(markedSession(f.db)?.taskId).toBe(f.task.id);
   expect(f.slot.currentTaskId).toBe(f.task.id);
   expect(f.slot.inTeardown).toBe(true);
 
@@ -370,7 +370,7 @@ it("再起動後の確認回答が、回収 timeout に落ちた watchdog の se
   expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("unfinished work");
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
-  expect(teardownMark(f.db)).toBeUndefined();
+  expect(markedSession(f.db)).toBeUndefined();
   expect(restarted.slot.currentTaskId).toBeNull();
   expect(restarted.triggered).toEqual(["pollNow"]);
 });
@@ -386,7 +386,23 @@ it("再起動後の確認回答が、梯子の底に落ちた完了済み sessio
   expect(workspaceNeedsHuman(f.db, f.ws.name)).toBe(false);
   expect(git(f.ws.path, "log", "--oneline", `task/${f.task.id}`)).not.toContain("WIP");
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
-  expect(teardownMark(f.db)).toBeUndefined();
+  expect(markedSession(f.db)).toBeUndefined();
   expect(restarted.slot.currentTaskId).toBeNull();
   expect(restarted.triggered).toEqual(["pollNow"]);
+});
+
+it("再起動後の確認回答は、起動時の復旧がすでに枠を握っているなら何もしない(issue #648)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  await reclaimTimesOut(f);
+  const restarted = restart(f);
+  // 前提検査が通った起動の復旧が、後始末の途中で枠を握っている
+  restarted.slot.occupy(f.task.id);
+  restarted.slot.enterTeardown();
+
+  expect(() => restarted.watchdog.acceptReclaimed()).not.toThrow();
+  await settle();
+
+  expect(markedSession(f.db)?.taskId).toBe(f.task.id);
+  expect(restarted.slot.currentTaskId).toBe(f.task.id);
+  expect(restarted.triggered).toEqual([]);
 });

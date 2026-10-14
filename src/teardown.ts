@@ -14,8 +14,8 @@ import {
 } from "./workspace.js";
 
 /** 後始末(CONTEXT.md「後始末」/ ADR 0109)に要るもの。上限到達による中断の
- *  ハンドラが既に持っていた引数と**同じ**であり、通常完了・上限到達による中断・
- *  watchdog の強制回収の3経路がこの1つの型を共有する(ADR 0109 決定1)。 */
+ *  ハンドラが既に持っていた引数と**同じ**であり、後始末へ入るすべての経路がこの1つの型を
+ *  共有する(ADR 0109 決定1)。 */
 export interface TeardownDeps {
   db: Db;
   clock: Clock;

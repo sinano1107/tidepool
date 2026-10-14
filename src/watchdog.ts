@@ -363,25 +363,29 @@ export function startWatchdog(deps: {
     pending = task.id;
     rec.settled = true;
     const now = clock.now();
-    registerFailureQuestion(
-      db,
-      task,
-      `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
-        `force-reclaimed, but the board could not observe the container going empty within ` +
-        `${reclaimTimeout}ms. No self-report is possible.` +
-        exitSections(rec.exit),
-      now,
-    );
-    // 回収を観測できないときに slot を塞いだままにするのは ADR 0099
-    quarantineContainment(
-      db,
-      `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
-        "so processes from that session may still be running against this host and its " +
-        "workspaces. The execution slot stays occupied until this is answered",
-      now,
-    );
-    markTeardown(db, task.id, now);
+    // 同じ transaction に置く —— 間で落ちると、status は決着したのに印の無い session が残り、
+    // 起動時の復旧も再起動後の受理も後始末を走らせない(#648 の形に戻る)
+    db.transaction(() => {
+      registerFailureQuestion(
+        db,
+        task,
+        `watchdog killed task: ${task.title}`,
+        `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
+          `force-reclaimed, but the board could not observe the container going empty within ` +
+          `${reclaimTimeout}ms. No self-report is possible.` +
+          exitSections(rec.exit),
+        now,
+      );
+      // 回収を観測できないときに slot を塞いだままにするのは ADR 0099
+      quarantineContainment(
+        db,
+        `the container for task ${task.id} was force-reclaimed but never observed empty, ` +
+          "so processes from that session may still be running against this host and its " +
+          "workspaces. The execution slot stays occupied until this is answered",
+        now,
+      );
+      markTeardown(db, task.id, now);
+    })();
     slot.enterTeardown();
   }
 
