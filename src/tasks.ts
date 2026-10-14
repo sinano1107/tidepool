@@ -1993,9 +1993,9 @@ export function completeInterview(
     if (scored.has(child_id)) throw new DomainError(`${child_id} is scored more than once: score each done child exactly once`);
     scored.add(child_id);
   }
-  // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
   const unscored = [...pins.values()].filter((child) => child.status === "done" && !scored.has(child.id)).map(({ id }) => id);
   if (unscored.length > 0) throw new DomainError(`score every done child exactly once; unscored: ${unscored.join(", ")}`);
+  // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
   return db.transaction(() => {
     for (const { child_id, outcome } of scores) {
       appendEvent(db, { taskId: child_id, workerId, origin, payload: { kind: "interview_scored", outcome }, at: now });
