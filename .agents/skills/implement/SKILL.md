@@ -54,7 +54,7 @@ Judge each finding rather than applying the set wholesale. One finding is never 
 Before opening the PR, gather everything the run surfaced, wherever it came from: the sub-agent's report, the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
 
 - **Belongs to an existing open issue** — comment there.
-- **Hits a closed issue** — read how it closed. Closed as not planned means "not worth an issue", and the reason cites it. Closed as completed means the work was wanted and what you found is a leftover or a regression of it: file it as new, citing the closed issue.
+- **Hits a closed issue** — closed as not planned means "not worth an issue", and the reason cites it. Closed as completed: what you found is a leftover or regression of it, so treat it as new, citing the closed issue.
 - **New, and observed** — `gh issue create --label needs-triage`, the body citing the originating issue and where the observation is (file, test, commit on this branch). It enters `/triage` like any other filed issue.
 - **New, but only suspected** — file it `needs-info`, saying what observation would settle it. An issue is not an observation (ADR 0102).
 - **Not worth an issue** — say so in the PR, with a reason held to the same bar as a review finding.
