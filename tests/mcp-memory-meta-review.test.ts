@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge, WORKER_MEMORY_VERBS } from "../src/memory.js";
-import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
+import { createBehaviorCandidate, defineMemoryBranch, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
+import { MEMORY_META_REVIEW_VERBS, WORKER_MEMORY_VERBS } from "../src/meta-review.js";
 import { nextDescription } from "../src/response-budget.js";
 import { registerTask } from "../src/tasks.js";
 import {

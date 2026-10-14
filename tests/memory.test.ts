@@ -41,7 +41,8 @@ import {
 import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
 
-import { bundledObjection, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
+
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -2072,7 +2073,7 @@ const workspaceKnowledge = (db: ReturnType<typeof openDb>, path: string) => reco
 /** 盤面全体のエントリを置く操作ごとに、その前の setup を済ませて、workspace の定義(テストが次に書く build)が塞ぐ置き場への1手を返す。 */
 const placingWholeBoard: Array<[string, (db: ReturnType<typeof openDb>, task: ReturnType<typeof board>["task"]) => () => unknown]> = [
   ["直書きの Knowledge", (db) => () => recordKnowledge(db, { ...knowledge, scope: null, path: "build", source: { commit: "0a46a46" } }, "worker", at)],
-  ["meta-review の define_memory", (db) => () => defineMemoryByMetaReview(db, { ...definition, scope: null, path: "build/x", author: metaReview }, "worker", at)],
+  ["meta-review の define_memory", (db) => () => defineMemoryByMetaReview(db, { ...definition, scope: null, path: "build/x", author: metaReview }, "worker", at, writerTask(db))],
   ["RCA が起草する Behavior candidate", (db) => () => candidate(db, "Rebase before push", null, null, "build/x")],
   [
     "提案が起草する盤面全体の candidate",

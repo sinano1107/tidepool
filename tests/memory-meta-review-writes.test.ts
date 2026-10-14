@@ -21,7 +21,8 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { bundledObjection, HUMAN_WEBUI } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, writerTask } from "./harness.js";
+
 
 /** meta-review の直接適用(issue #619 / ADR 0122 決定1)のドメイン層。verb への写像はサーバ境界
  *  (tests/mcp-memory-meta-review.test.ts)が言う。 */
@@ -46,7 +47,7 @@ const entry = (db: ReturnType<typeof openDb>, id: number) => listMemoryEntries(d
 const knowledgeEntry = (db: ReturnType<typeof openDb>, scope: string | null = null) =>
   recordKnowledge(db, { scope, path: "habits", title: "k", text: "k.", source: { commit: "0a46a46" }, author: metaReview }, "worker", at).entry_id;
 const definitionEntry = (db: ReturnType<typeof openDb>) =>
-  defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at, writerTask(db)).entry_id;
 const decisionOfAnotherTask = (db: ReturnType<typeof openDb>) =>
   logDecision(db, registerTask(db, { type: "work", title: "o", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "someone else's reasoning", "deckhand", at, "worker");
 
@@ -83,7 +84,7 @@ it("fold_memory の replaces に畳めないものが1つでもあれば domain 
   const kept = knowledge("kept");
   const dead = knowledge("dead");
   invalidateMemoryEntry(db, { entry_id: dead, reason: "environment" }, "human", "webui", at);
-  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "build", text: "How it builds.", author: metaReview }, "worker", at, writerTask(db)).entry_id;
   const candidate = createBehaviorCandidate(
     db,
     { scope: null, path: "habits", title: "Small commits", text: "Commit small.", addressee: null, source: { event_id: decision }, author: { activity: "rca", name: "auditor" } },
@@ -123,7 +124,7 @@ it("meta-review の move_memory は4種別の approved / candidate を同じ sco
     ["knowledge", "approved"],
   ]);
 
-  const copies = olds.map((old) => moveMemoryByMetaReview(db, { entry_id: old.id, scope: old.scope, path: "moved/here", mover: metaReview }, "worker", at).entry_id);
+  const copies = olds.map((old) => moveMemoryByMetaReview(db, { entry_id: old.id, scope: old.scope, path: "moved/here", mover: metaReview }, "worker", at, writerTask(db)).entry_id);
 
   olds.forEach((old, i) => {
     const copy = copies[i]!;
@@ -140,7 +141,7 @@ it("meta-review の move_memory は Knowledge・Definition・candidate を works
     [replaced("Two commits per migration"), "habits"],
   ];
 
-  const widened = moves.map(([entry_id, path]) => moveMemoryByMetaReview(db, { entry_id, scope: null, path, mover: metaReview }, "worker", at).entry_id);
+  const widened = moves.map(([entry_id, path]) => moveMemoryByMetaReview(db, { entry_id, scope: null, path, mover: metaReview }, "worker", at, writerTask(db)).entry_id);
 
   expect(widened.map((id) => entry(db, id))).toMatchObject([
     { kind: "knowledge", state: "approved", scope: null, path: "toolchain/node", author: metaReview },
@@ -158,7 +159,7 @@ function rescoping() {
     approveMemoryProposal(db, proposal, "question-workspace-exemplar", "webui", at);
     return proposal.candidate_id;
   };
-  const move = (entry_id: number, scope: string | null) => () => moveMemoryByMetaReview(db, { entry_id, scope, path: "moved", mover: metaReview }, "worker", at);
+  const move = (entry_id: number, scope: string | null) => () => moveMemoryByMetaReview(db, { entry_id, scope, path: "moved", mover: metaReview }, "worker", at, writerTask(db));
   return { ...fixture, workspaceExemplar, move };
 }
 type Rescoping = ReturnType<typeof rescoping>;
@@ -211,14 +212,14 @@ it.each([
 });
 
 const moveBranch = (db: ReturnType<typeof openDb>, scope: string | null, to_scope: string | null, to_path = "habits", merge?: boolean) =>
-  moveMemoryBranchByMetaReview(db, { scope, path: "habits", to_scope, to_path, merge, mover: metaReview }, "worker", at);
+  moveMemoryBranchByMetaReview(db, { scope, path: "habits", to_scope, to_path, merge, mover: metaReview }, "worker", at, writerTask(db));
 const liveUnder = (db: ReturnType<typeof openDb>, scope: string | null, path: string) =>
   listMemoryEntries(db, {}).filter((e) => e.scope === scope && e.invalidation_reason === null && (e.path === path || e.path.startsWith(`${path}/`)));
 
 it("meta-review の move_memory_branch は同じ scope の中で枝を改名し、4種別(approved / candidate、open な提案が名指すものも)を配下ごと移して旧 id → 複製の id を返す(ADR 0176 決定1)", () => {
   const f = rescoping();
   const ids = [
-    defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at).entry_id,
+    defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at, writerTask(f.db)).entry_id,
     f.approvedReplaced("Pin npm"),
     f.workspaceExemplar(),
     f.consolidate([f.replaced("Pin pnpm")], { scope: "tidepool", text: "Pin pnpm." }).candidate_id,
@@ -238,7 +239,7 @@ it("meta-review の move_memory_branch は同じ scope の中で枝を改名し�
 
 it("meta-review の move_memory_branch は approved の Behavior / Exemplar も名指されたエントリも無い workspace の枝を盤面全体へ広げる(ADR 0176 決定2)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at, writerTask(f.db));
   knowledgeEntry(f.db, "tidepool");
   f.replaced("Rebase before push");
   const under = liveUnder(f.db, "tidepool", "habits");
@@ -264,7 +265,7 @@ it("meta-review の move_memory_branch の盤面全体 → 盤面全体の移動
 
 it("meta-review の move_memory_branch は scope が変わるとき、配下に approved の Behavior / Exemplar か open な提案が名指すエントリが1件でもあれば全体を domain error で拒んでそのすべてを名指し、行き先が別 workspace・狭める向きも拒む —— どれも何も変わらない(ADR 0176 決定2・5)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at, writerTask(f.db));
   knowledgeEntry(f.db, "tidepool");
   const approved = f.approvedReplaced("Pin npm");
   const exemplar = f.workspaceExemplar();
@@ -288,7 +289,7 @@ it("meta-review の move_memory_branch は NFD の path でも NFC で記録し�
   const before = listMemoryEntries(f.db, {});
 
   expect(() =>
-    moveMemoryBranchByMetaReview(f.db, { scope: "tidepool", path: "ガイド".normalize("NFD"), to_scope: null, to_path: "ガイド", mover: metaReview }, "worker", at),
+    moveMemoryBranchByMetaReview(f.db, { scope: "tidepool", path: "ガイド".normalize("NFD"), to_scope: null, to_path: "ガイド", mover: metaReview }, "worker", at, writerTask(f.db)),
   ).toThrow(`memory entry ${proposal.candidate_id} (an approved behavior)`);
   expect(listMemoryEntries(f.db, {})).toEqual(before);
 });
@@ -298,9 +299,9 @@ it.each([
   ["盤面全体へ広げる向きで", null],
 ] as const)("meta-review の move_memory_branch の merge は%s、移される定義を行き先の定義へ meta_review の印で畳み、残りを移す(ADR 0177 決定7)", (_, to_scope) => {
   const { db } = board();
-  const old = defineMemoryByMetaReview(db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at).entry_id;
+  const old = defineMemoryByMetaReview(db, { scope: "tidepool", path: "habits", text: "How we work.", author: metaReview }, "worker", at, writerTask(db)).entry_id;
   const fact = knowledgeEntry(db, "tidepool");
-  const kept = defineMemoryByMetaReview(db, { scope: to_scope, path: "practices", text: "How we practise.", author: metaReview }, "worker", at).entry_id;
+  const kept = defineMemoryByMetaReview(db, { scope: to_scope, path: "practices", text: "How we practise.", author: metaReview }, "worker", at, writerTask(db)).entry_id;
 
   const { moved, folded } = moveBranch(db, "tidepool", to_scope, "practices", true);
 
@@ -312,9 +313,9 @@ it.each([
 
 it("meta-review の move_memory_branch の merge も、scope の門に掛かる行(approved の Behavior)が配下にあれば全体を domain error で拒み何も変わらない(ADR 0177 決定7 / ADR 0176 決定2)", () => {
   const f = rescoping();
-  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: "tidepool", path: "habits/workflow", text: "How we work.", author: metaReview }, "worker", at, writerTask(f.db));
   const approved = f.approvedReplaced("Pin npm");
-  defineMemoryByMetaReview(f.db, { scope: null, path: "practices/workflow", text: "How we practise.", author: metaReview }, "worker", at);
+  defineMemoryByMetaReview(f.db, { scope: null, path: "practices/workflow", text: "How we practise.", author: metaReview }, "worker", at, writerTask(f.db));
   const before = listMemoryEntries(f.db, {});
 
   expect(() => moveBranch(f.db, "tidepool", null, "practices", true)).toThrow(`memory entry ${approved} (an approved behavior)`);
@@ -336,7 +337,7 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
   const { db, decision, knowledge } = board();
   const fact = knowledge("stale fact");
   const successor = knowledge("fresh fact", null);
-  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "deploy", text: "How it builds.", author: metaReview }, "worker", at).entry_id;
+  const definition = defineMemoryByMetaReview(db, { scope: "tidepool", path: "deploy", text: "How it builds.", author: metaReview }, "worker", at, writerTask(db)).entry_id;
   const behavior = (title: string) =>
     createBehaviorCandidate(
       db,
@@ -348,7 +349,7 @@ it("meta-review の無効化は candidate・Knowledge・Definition に効き、a
   const approved = behavior("Rebase before push");
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: approved, replaces: [] }, "question-1", "webui", at);
   const invalidate = (entry_id: number, reason: InvalidationReason, successor_id?: number) =>
-    invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at);
+    invalidateMemoryByMetaReview(db, { entry_id, reason, successor_id }, "auditor", "worker", at, writerTask(db));
 
   invalidate(candidate, "requirement_change");
   invalidate(fact, "capability");
@@ -376,7 +377,7 @@ it("meta-review の無効化の rejected は candidate(Behavior / Exemplar)だ�
     "worker",
     at,
   ).entry_id;
-  const reject = (entry_id: number) => invalidateMemoryByMetaReview(db, { entry_id, reason: "rejected" }, "auditor", "worker", at);
+  const reject = (entry_id: number) => invalidateMemoryByMetaReview(db, { entry_id, reason: "rejected" }, "auditor", "worker", at, writerTask(db));
 
   reject(behavior);
   reject(exemplar);
@@ -392,7 +393,7 @@ it("meta-review の無効化の rejected は candidate(Behavior / Exemplar)だ�
 it("meta-review の無効化は approved の Exemplar をどの理由でも domain error で拒み、candidate の Exemplar は直接無効化できる(ADR 0160 決定1)", () => {
   const { db, attributed, drafted, consolidate, exemplar } = approvedPair();
   const candidate = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
-  const invalidate = (entry_id: number, reason: InvalidationReason) => invalidateMemoryByMetaReview(db, { entry_id, reason }, "auditor", "worker", at);
+  const invalidate = (entry_id: number, reason: InvalidationReason) => invalidateMemoryByMetaReview(db, { entry_id, reason }, "auditor", "worker", at, writerTask(db));
 
   for (const reason of ["capability", "environment", "requirement_change"] as const) {
     expect(() => invalidate(exemplar, reason)).toThrow(/propose it instead/);
@@ -932,7 +933,7 @@ it.each([
 });
 
 const defineByMetaReview = (db: ReturnType<typeof openDb>, scope: string | null, path: string, supersedes?: number[]) =>
-  defineMemoryByMetaReview(db, { scope, path, text: `What ${path} holds.`, supersedes, author: metaReview }, "worker", at).entry_id;
+  defineMemoryByMetaReview(db, { scope, path, text: `What ${path} holds.`, supersedes, author: metaReview }, "worker", at, writerTask(db)).entry_id;
 
 it.each([
   ["同じ scope・同じ path の定義を(改訂、ADR 0161 決定2)", "tidepool", "tidepool"],

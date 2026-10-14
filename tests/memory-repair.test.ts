@@ -5,11 +5,15 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   foldMemory,
+  HUMAN_AUTHOR,
   listMemoryEntries,
+  moveMemoryBranchByMetaReview,
   moveMemoryByMetaReview,
+  recordBehavior,
   recordKnowledge,
   repairInvalidate,
   repairMove,
+  repairMoveBranchBack,
   repairReplace,
   repairRestore,
 } from "../src/memory.js";
@@ -123,4 +127,44 @@ it("置き換え: Knowledge は同じ scope / path の新しい本文に record_
     { invalidation_reason: "superseded", successor_id: knowledge.entry_id },
     { invalidation_reason: "superseded", successor_id: definition.entry_id },
   ]);
+});
+
+it("逆操作は書き込みがしたことに結ぶ —— 移動の複製(approved の Behavior も)は無効化せず移し戻し、作ったエントリは復元せず、どれも DomainError で何も変わらない", () => {
+  const { db, task, reviewed, repairOf, entry } = board();
+  const behavior = recordBehavior(db, { scope: "charts", path: "habits", title: "Small commits", text: "Commit small.", addressee: null, author: HUMAN_AUTHOR }, "webui", at).entry_id;
+  const moved = moveMemoryByMetaReview(db, { entry_id: behavior, scope: "charts", path: "habits/commits", mover: metaReview }, "worker", at, reviewed.id);
+  const moveRepair = { taskId: repairOf(moved.event_id, reviewed.id).id, agent: "deckhand" };
+  const objected = task("index the tide charts");
+  const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, objected.id);
+  const writeRepair = { taskId: repairOf(wrote.event_id, objected.id).id, agent: "deckhand" };
+
+  expect(() => repairInvalidate(db, moveRepair, { entry_id: moved.entry_id, reason: "capability" }, at)).toThrow("was not created by the objected memory write");
+  expect(() => repairRestore(db, moveRepair, { entry_id: behavior }, at)).toThrow("was not invalidated by the objected memory write");
+  repairInvalidate(db, writeRepair, { entry_id: wrote.entry_id, reason: "capability" }, at);
+  expect(() => repairRestore(db, writeRepair, { entry_id: wrote.entry_id }, at)).toThrow("was not invalidated by the objected memory write");
+
+  expect(entry(moved.entry_id)).toMatchObject({ kind: "behavior", state: "approved", invalidation_reason: null });
+  const back = repairMove(db, moveRepair, { entry_id: moved.entry_id, scope: "charts", path: "habits" }, at);
+  expect(entry(back.entry_id)).toMatchObject({ kind: "behavior", state: "approved", path: "habits", invalidation_reason: null });
+});
+
+it("枝ごとの移し戻し: 異議された move_memory_branch が移したエントリを、定義ごとに書き込みの前の scope / path へ1回で戻し、あとから枝に入ったエントリは動かさない", () => {
+  const { db, reviewed, knowledge, repairOf, entry } = board();
+  const definition = defineMemoryBranch(db, { scope: "charts", path: "build", text: "How the charts build.", author: worker }, "worker", at).entry_id;
+  const leaf = knowledge("Tests need Node 22", "charts", "build/tests");
+  const branch = moveMemoryBranchByMetaReview(db, { scope: "charts", path: "build", to_scope: null, to_path: "toolchain", mover: metaReview }, "worker", at, reviewed.id);
+  const later = knowledge("Arrived later", null, "toolchain/later");
+  const repairer = { taskId: repairOf(branch.event_id, reviewed.id).id, agent: "deckhand" };
+
+  expect(() => repairMoveBranchBack(db, repairer, { scope: null, path: "elsewhere" }, at)).toThrow(DomainError);
+  const back = repairMoveBranchBack(db, repairer, { scope: null, path: "toolchain" }, at);
+
+  expect(back).toEqual({ moved: 2, event_id: expect.any(Number) });
+  const live = listMemoryEntries(db, { state: "approved" }).map((e) => [e.kind, e.scope, e.path, e.title]);
+  expect(live).toEqual([
+    ["knowledge", null, "toolchain/later", "Arrived later"],
+    ["definition", "charts", "build", "How the charts build."],
+    ["knowledge", "charts", "build/tests", "Tests need Node 22"],
+  ]);
+  expect([entry(definition), entry(leaf), entry(later)]).toMatchObject([{ invalidation_reason: "path_moved" }, { invalidation_reason: "path_moved" }, { invalidation_reason: null }]);
 });

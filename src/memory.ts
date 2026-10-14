@@ -310,7 +310,7 @@ function inheritedOriginal(original: EntryInput["original"], replaced: MemoryEnt
 /** 書き込みの記録(ADR 0252 決定2・3): AI の直接適用の verb 呼び出し1回を write ごと1 transaction で走らせ、その間に店へ入った作成・
  *  無効化から行の文を組んで書き手の task に1つ追記する。返り値の event_id は記録の id —— tool 結果に載り Episode のマーカーに結ぶ。
  *  畳み・移動が内側で呼ぶ書き込みは writer を渡さないので、記録は外側の1つだけ。 */
-function written<T extends object>(db: Db, writer: { taskId: string; agent: string }, at: Date, write: () => T): T & { event_id: number } {
+function withWriteRecord<T extends object>(db: Db, writer: { taskId: string; agent: string }, at: Date, write: () => T): T & { event_id: number } {
   return db.transaction(() => {
     const since = memoryWatermark(db);
     const result = write();
@@ -341,12 +341,12 @@ function writeLine(events: readonly EventRow[]): string {
     .join("; ");
 }
 
-/** writer(書き手の task —— AI の直接適用)を渡せば書き込みの記録で包む。人間の面は渡さない。 */
-function maybeWritten<T extends object>(db: Db, writer: string | undefined, agent: string, at: Date, write: () => T): T {
-  return writer === undefined ? write() : written(db, { taskId: writer, agent }, at, write);
+/** writer(書き手の task —— AI の直接適用)を渡せば書き込みの記録で包む(withWriteRecord)。人間の面は渡さない。 */
+function withOptionalWriteRecord<T extends object>(db: Db, writer: string | undefined, agent: string, at: Date, write: () => T): T {
+  return writer === undefined ? write() : withWriteRecord(db, { taskId: writer, agent }, at, write);
 }
 
-/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。writer は書き手の task(maybeWritten)。 */
+/** Knowledge の書き込み(spec #586 E)。承認不要なので書いた瞬間に approved。writer は書き手の task(withOptionalWriteRecord)。 */
 export function recordKnowledge(
   db: Db,
   input: EntryInput & { supersedes?: number[] },
@@ -355,7 +355,7 @@ export function recordKnowledge(
   writer?: string,
 ): { entry_id: number; event_id: number } {
   const { supersedes, ...fields } = input;
-  return maybeWritten(db, writer, fields.author.name, at, () =>
+  return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
       createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
     ),
@@ -376,7 +376,7 @@ export function defineMemoryBranch(
   if (/[\r\n]/.test(input.text)) throw new DomainError("a definition must be one line");
   const { supersedes, ...rest } = input;
   const fields = { ...rest, path: checkedPath(rest.path) };
-  return maybeWritten(db, writer, fields.author.name, at, () =>
+  return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
       const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
       if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
@@ -393,7 +393,7 @@ export function defineMemoryByMetaReview(
   input: Parameters<typeof defineMemoryBranch>[1],
   origin: EventOrigin,
   at: Date,
-  writer?: string,
+  writer: string,
 ): { entry_id: number; event_id: number } {
   requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
   return defineMemoryBranch(db, input, origin, at, writer);
@@ -459,7 +459,7 @@ export function foldMemory(
   if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
   }
-  return written(db, { taskId: metaReviewId, agent: author.name }, at, () => {
+  return withWriteRecord(db, { taskId: metaReviewId, agent: author.name }, at, () => {
     const replaced = replaces.map((id) => requireNotApprovedBehaviorOrExemplar(db, id));
     let successor = successor_id;
     if (successor === undefined) {
@@ -666,9 +666,9 @@ export function moveMemoryByMetaReview(
   input: Parameters<typeof moveMemory>[1],
   origin: EventOrigin,
   at: Date,
-  writer?: string,
+  writer: string,
 ): { entry_id: number; event_id: number } {
-  return maybeWritten(db, writer, input.mover.name, at, () =>
+  return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
     db.transaction(() => {
       const old = requireEntry(db, input.entry_id);
       requireWidening(db, [old], old.scope, input.scope);
@@ -684,9 +684,9 @@ export function moveMemoryBranchByMetaReview(
   input: Parameters<typeof moveMemoryBranch>[1],
   origin: EventOrigin,
   at: Date,
-  writer?: string,
-): ReturnType<typeof moveMemoryBranch> & { event_id?: number } {
-  return maybeWritten(db, writer, input.mover.name, at, () =>
+  writer: string,
+): ReturnType<typeof moveMemoryBranch> & { event_id: number } {
+  return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
     db.transaction(() => {
       requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
       return moveMemoryBranch(db, input, origin, at);
@@ -717,60 +717,100 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
 /** 修理 task の書き手(ADR 0252 決定4): 修理 task の id と agent 名。修理の書き込みも書き込みの記録になる(書き手は worker_verb)。 */
 type Repairer = { taskId: string; agent: string };
 
-/** 修理 task の束が異議した記憶の書き込みの記録(task_registered の objection_event_ids → 異議の entry_id → memory_written)。
+/** 異議された書き込み1つがしたこと(ADR 0252 決定4): 新しく作ったエントリ、移したエントリ(`path_moved` の旧 —— 複製は旧の鎖が持つ)、
+ *  落としたエントリ(それ以外の無効化)。 */
+type WriteTouch = { created: number[]; moved: number[]; dropped: number[] };
+
+/** 修理 task の束が異議した記憶の書き込み(task_registered の objection_event_ids → 異議の entry_id → memory_written)。
  *  修理 task(work)でなければ空 —— RCA の review 子も同じ欄を持つ。 */
-function objectedWrites(db: Db, taskId: string): Array<{ created: number[]; invalidated: number[] }> {
+function objectedWrites(db: Db, taskId: string): WriteTouch[] {
   if (getTask(db, taskId)?.type !== "work") return [];
   return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
     const objection = getEvent(db, id)?.payload;
     const row = objection?.kind === "objection_raised" ? getEvent(db, objection.entry_id)?.payload : undefined;
-    return row?.kind === "memory_written" ? [row] : [];
+    if (row?.kind !== "memory_written") return [];
+    const moved = row.invalidated.map((id) => requireEntry(db, id)).filter((old) => old.invalidation_reason === "path_moved");
+    const copies = new Set(moved.map((old) => old.successor_id));
+    const movedIds = moved.map((old) => old.id);
+    return [{ created: row.created.filter((id) => !copies.has(id)), moved: movedIds, dropped: row.invalidated.filter((id) => !movedIds.includes(id)) }];
   });
 }
 
-/** 修理 verb が受けるエントリ(ADR 0252 決定4): 異議された書き込みが作った・無効化したエントリと、その `path_moved` の鎖の先。
+/** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */
+const withMovedCopies = (db: Db, ids: number[]) => ids.flatMap((id) => sameBodyChain(db, requireEntry(db, id)).map((row) => row.id));
+
+/** 修理 verb が受けるエントリ(ADR 0252 決定4): 異議された書き込みが作った・移したエントリ(と、その後に移された複製)と落としたエントリ。
  *  空なら修理 verb を登録しない。 */
 export function repairableEntries(db: Db, taskId: string): Set<number> {
-  const touched = objectedWrites(db, taskId).flatMap(({ created, invalidated }) => [...created, ...invalidated]);
-  return new Set(touched.flatMap((id) => sameBodyChain(db, requireEntry(db, id)).map((row) => row.id)));
+  return new Set(objectedWrites(db, taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]));
 }
 
-/** 修理の書き込み1回: 対象が修理の範囲にあることを確かめて、書き込みの記録で包む。 */
-function repairWrite<T extends object>(db: Db, repairer: Repairer, entryId: number, at: Date, write: (row: EntryRow) => T): T & { event_id: number } {
-  return written(db, repairer, at, () => {
-    const repairable = repairableEntries(db, repairer.taskId);
-    if (repairable.size === 0) throw new DomainError("memory repair verbs are only for a repair task opened on an objection to a memory write");
-    if (!repairable.has(entryId)) {
-      throw new DomainError(`memory entry ${entryId} was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved`);
-    }
-    return write(requireEntry(db, entryId));
+/** 修理の書き込み1回: 書き込みの記録で包み、異議された書き込みが無ければ拒む。 */
+function repairWrite<T extends object>(db: Db, repairer: Repairer, at: Date, write: (writes: WriteTouch[]) => T): T & { event_id: number } {
+  return withWriteRecord(db, repairer, at, () => {
+    const writes = objectedWrites(db, repairer.taskId);
+    if (writes.length === 0) throw new DomainError("memory repair verbs are only for a repair task opened on an objection to a memory write");
+    return write(writes);
   });
 }
+
+/** 対象が reach(異議された書き込みがしたことのうち、その操作が戻せるもの)に入っていることを確かめて行を返す。 */
+function requireReach(db: Db, entryId: number, reach: number[], refusal: string): EntryRow {
+  if (!reach.includes(entryId)) throw new DomainError(`memory entry ${entryId} ${refusal}`);
+  return requireEntry(db, entryId);
+}
+
+/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて。 */
+const requireTouched = (db: Db, repairer: Repairer, entryId: number) =>
+  requireReach(db, entryId, [...repairableEntries(db, repairer.taskId)], "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
 
 const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", name: repairer.agent });
 
-/** 逆操作 —— 書き込みが作ったエントリの無効化(門は掛けない)。 */
+/** 逆操作 —— 書き込みが新しく作ったエントリ(その後に移された複製も)の無効化。門は掛けない。移動の複製は移し戻しで戻す。 */
 export function repairInvalidate(db: Db, repairer: Repairer, input: { entry_id: number; reason: z.infer<typeof invalidationSchema>["reason"] }, at: Date): { event_id: number } {
-  return repairWrite(db, repairer, input.entry_id, at, () => {
+  return repairWrite(db, repairer, at, (writes) => {
+    requireReach(db, input.entry_id, writes.flatMap((w) => withMovedCopies(db, w.created)), "was not created by the objected memory write: a repair drops only an entry that write created — move a moved entry back instead");
     invalidateMemoryEntry(db, input, repairer.agent, "worker", at, { activity: "worker_verb" });
     return {};
   });
 }
 
-/** 逆操作 —— 書き込みが無効化したエントリの復元(ADR 0163 の門はそのまま: 後継が生きている間は拒む)。 */
+/** 逆操作 —— 書き込みが落としたエントリの復元(ADR 0163 の門はそのまま: 後継が生きている間は拒む)。 */
 export function repairRestore(db: Db, repairer: Repairer, input: { entry_id: number }, at: Date): { entry_id: number; event_id: number } {
-  return repairWrite(db, repairer, input.entry_id, at, () => restoreMemoryEntry(db, { entry_id: input.entry_id, restorer: repairActor(repairer) }, "worker", at));
+  return repairWrite(db, repairer, at, (writes) => {
+    requireReach(db, input.entry_id, writes.flatMap((w) => w.dropped), "was not invalidated by the objected memory write: a repair restores only an entry that write dropped");
+    return restoreMemoryEntry(db, { entry_id: input.entry_id, restorer: repairActor(repairer) }, "worker", at);
+  });
 }
 
-/** 移動: 書き込みが移す前の置き場への移し戻しは逆操作なので門を掛けず、それ以外は meta-review と同じ scope の門(ADR 0176)。 */
+/** 移動: 書き込みが移したエントリを移す前の置き場へ戻すのは逆操作なので門を掛けず、それ以外は meta-review と同じ scope の門(ADR 0176)。 */
 export function repairMove(db: Db, repairer: Repairer, input: { entry_id: number; scope: string | null; path: string }, at: Date): { entry_id: number; event_id: number } {
-  return repairWrite(db, repairer, input.entry_id, at, (row) => {
+  return repairWrite(db, repairer, at, (writes) => {
+    const row = requireTouched(db, repairer, input.entry_id);
     const path = checkedPath(input.path);
-    const back = objectedWrites(db, repairer.taskId)
-      .flatMap(({ invalidated }) => invalidated.map((id) => requireEntry(db, id)))
-      .some((old) => old.invalidation_reason === "path_moved" && old.scope === input.scope && old.path === path && movedTail(db, old.id).id === row.id);
+    const back = writes
+      .flatMap((w) => w.moved.map((id) => requireEntry(db, id)))
+      .some((old) => old.scope === input.scope && old.path === path && movedTail(db, old.id).id === row.id);
     if (!back) requireWidening(db, [row], row.scope, input.scope);
     return moveMemory(db, { ...input, mover: repairActor(repairer) }, "worker", at);
+  });
+}
+
+/** 枝ごとの移し戻し(逆操作、門は掛けない): 異議された書き込みが移したエントリのうち、今 scope の path かその配下に生きている複製を、
+ *  定義も含めてそれぞれの書き込みの前の scope / path へ1 transaction で戻す。後から枝に入ったエントリは動かさない。盤面全体の枝では、
+ *  書き込みが scope を変えずに運んだ workspace のエントリも戻す。 */
+export function repairMoveBranchBack(db: Db, repairer: Repairer, input: { scope: string | null; path: string }, at: Date): { moved: number; event_id: number } {
+  return repairWrite(db, repairer, at, (writes) => {
+    const path = checkedPath(input.path);
+    const moves = writes
+      .flatMap((w) => w.moved.map((id) => requireEntry(db, id)))
+      .flatMap((old) => {
+        const tail = movedTail(db, old.id);
+        const here = tail.invalidation_reason === null && atOrUnder(tail.path, path) && (tail.scope === input.scope || (input.scope === null && tail.scope === old.scope));
+        return here ? [{ old: tail, scope: old.scope, path: old.path }] : [];
+      });
+    if (moves.length === 0) throw new DomainError(`the objected memory write moved no entry that now lives at ${path} or under it in this scope`);
+    return { moved: moveEntries(db, moves, repairActor(repairer), "worker", at).moved.length };
   });
 }
 
@@ -782,7 +822,8 @@ export function repairReplace(
   input: { entry_id: number; title?: string; text: string; source?: SourceInput },
   at: Date,
 ): { entry_id: number; event_id: number } {
-  return repairWrite(db, repairer, input.entry_id, at, (row) => {
+  return repairWrite(db, repairer, at, () => {
+    const row = requireTouched(db, repairer, input.entry_id);
     const { title, text, source } = input;
     const fields = { scope: row.scope, path: row.path, text, supersedes: [row.id], author: repairActor(repairer) };
     if (row.kind === "knowledge") {
@@ -1099,19 +1140,19 @@ function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
 
 /** meta-review の無効化(ADR 0122 決定1 / ADR 0160 決定1 / ADR 0161 決定2): 後継なしで落とすだけ —— 置き換えは `fold_memory`・
  *  `define_memory` の supersedes・`moveMemory`・`moveMemoryBranch` が持つ。`rejected` は Behavior にも Exemplar にもならない candidate の引退(issue #954)。
- *  返り値は memory_entry_invalidated の event id、writer を渡せば書き込みの記録の id。 */
+ *  writer は meta-review の task で、返り値はその書き込みの記録の id。 */
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
   workerId: string,
   origin: EventOrigin,
   at: Date,
-  writer?: string,
+  writer: string,
 ): number {
   if (input.reason === "superseded" || input.reason === "path_moved") {
     throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes, move_memory or move_memory_branch`);
   }
-  return maybeWritten(db, writer, workerId, at, () => {
+  return withWriteRecord(db, { taskId: writer, agent: workerId }, at, () => {
     const row = requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
     if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
     return { event_id: invalidateMemoryEntry(db, input, workerId, origin, at, { activity: "meta_review" }) };
@@ -2471,11 +2512,6 @@ export function changeMemorySettings(
   })();
 }
 
-/** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS`(meta-review.ts)に置き換わる
- *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
-export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"] as const;
-/** 書き込みの行への異議の修理 task にだけ足す記憶の修理 verb(ADR 0252 決定4、repairableEntries が空でないとき)。 */
-export const MEMORY_REPAIR_VERBS = ["invalidate_memory", "restore_memory", "move_memory", "replace_memory"] as const;
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、
  *  索引の版を今の版に刻む。無効化済みの行(理由コード・後継 id)も再生で戻る。 */

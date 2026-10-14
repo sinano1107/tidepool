@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { MEMORY_REPAIR_VERBS, recordKnowledge } from "../src/memory.js";
+import { recordKnowledge } from "../src/memory.js";
+import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
 import {
   api,
   bootTidepool,
@@ -46,12 +47,8 @@ it("record_knowledge と define_memory_branch の tool 結果の event_id は書
     );
 
     expect(await writeRecords(task.id)).toEqual([branch.event_id, knowledge.event_id]);
-    const row = {
-      id: knowledge.event_id,
-      task_id: task.id,
-      worker_id: t.worker.id,
-      payload: { kind: "memory_written", line: `wrote knowledge #${knowledge.entry_id} "Tests need Node 22" at build (charts)`, created: [knowledge.entry_id], invalidated: [] },
-    };
+    // 行の文と中身はドメイン層が言う —— ここは tool 結果の event_id が決定ログの行になる写像だけ
+    const row = { id: knowledge.event_id, task_id: task.id, worker_id: t.worker.id, payload: expect.objectContaining({ kind: "memory_written" }) };
     expect((await api(t.baseUrl, "GET", "/api/log")).json.entries).toContainEqual(expect.objectContaining({ ...row, unread: true }));
     const read = body(await management.callTool({ name: "read_decision_log", arguments: {} }));
     expect(read.entries).toContainEqual(expect.objectContaining(row));

@@ -28,13 +28,11 @@ import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
   type InjectionQuery,
-  MEMORY_REPAIR_VERBS,
   recordMemoryInjection,
   recordMetaReviewMaterial,
   repairableEntries,
-  WORKER_MEMORY_VERBS,
 } from "./memory.js";
-import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
+import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";

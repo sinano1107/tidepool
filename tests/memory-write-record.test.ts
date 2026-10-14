@@ -24,7 +24,7 @@ import {
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes, projectAndPersist } from "../src/precedent.js";
 import { attributeObjections, proposeFromObjection } from "../src/retrospective.js";
-import { logDecision, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
@@ -186,7 +186,7 @@ it("書き込みの記録は tool 結果の event id で Episode の memory_writ
   projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
   bundledObjection(db, writer.id, wrote.event_id, at, "the note is wrong");
   registerMetaReview(db, "memory", at);
-  const reviewId = (db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string }).id; // setup のみ: 登録した task の id を引く
+  const reviewId = listBoard(db).find((t) => t.meta_review_subject === "memory")!.id;
 
   expect(listEpisodes(db, {})[0]!.markers).toEqual([
     expect.objectContaining({ kind: "memory", position: 0, eventId: pull }),
@@ -201,4 +201,25 @@ it("書き込みの記録は tool 結果の event id で Episode の memory_writ
   };
   expect(listPrecedents(db, { taskId: reviewId, agent: "auditor" }, { since_watermark: 0 }, at).precedents).toEqual([expect.objectContaining(objected)]);
   expect(buildMetaReviewMaterial(db, reviewId)!.parts).toMatchObject({ precedents: [objected] });
+});
+
+it("meta-review の畳みへの異議は、次の meta-review の材料の異議つき判断と list_precedents に載る —— meta-review 自身の産物は店の変更から外れても、異議された書き込みは届く", async () => {
+  const { db, knowledge } = board();
+  registerMetaReview(db, "memory", at);
+  const first = getTask(db, listBoard(db).find((t) => t.meta_review_subject === "memory")!.id)!;
+  const [a, b] = [knowledge("Tests need Node 22"), knowledge("Node 24 breaks the tests")];
+  const spawned = appendEvent(db, { taskId: first.id, workerId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
+  const decision = logDecision(db, first, "the two notes say the same", "auditor", at, "worker");
+  const fold = foldMemory(db, first.id, { scope: "charts", path: "build", title: "Node 22 only", text: "Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview }, "worker", at);
+  const transcriptPath = join(await tempDir("tidepool-write-record-"), `${first.id}.${spawned}.stream.jsonl`);
+  writeFileSync(transcriptPath, [...toolCall(1, "mcp__tidepool__log_decision", decision), ...toolCall(2, "mcp__tidepool__fold_memory", fold.event_id)].join("\n"));
+  projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
+  completeTask(db, first, undefined, "auditor", at, "worker");
+  bundledObjection(db, first.id, fold.event_id, at, "those two were different");
+  registerMetaReview(db, "memory", at);
+  const next = listBoard(db).find((t) => t.meta_review_subject === "memory" && t.id !== first.id)!;
+
+  const objected = { task_id: first.id, decision_event_id: fold.event_id, objections: ["those two were different"] };
+  expect(buildMetaReviewMaterial(db, next.id)!.parts).toMatchObject({ precedents: [objected] });
+  expect(listPrecedents(db, { taskId: next.id, agent: "auditor" }, {}, at).precedents).toEqual([expect.objectContaining(objected)]);
 });

@@ -37,6 +37,7 @@ import {
   repairableEntries,
   repairInvalidate,
   repairMove,
+  repairMoveBranchBack,
   repairReplace,
   repairRestore,
   searchMemory,
@@ -957,7 +958,9 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
   server.registerTool(
     "invalidate_memory",
     {
-      description: `Repair only: drop an entry the objected memory write created, with no successor. reason is capability / environment / requirement_change. ${scope}`,
+      description:
+        "Repair only: drop an entry the objected memory write created as a new entry, with no successor. A copy that write moved is not dropped: move it back. " +
+        `reason is capability / environment / requirement_change. ${scope}`,
       inputSchema: invalidationSchema.extend({ entry_id: z.number().int() }),
     },
     async (input) => run((repairer, now) => repairInvalidate(deps.db, repairer, input, now)),
@@ -967,7 +970,7 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
     "restore_memory",
     {
       description:
-        "Repair only: restore an entry the objected memory write invalidated — the board copies it back as it was, to its own scope and path. " +
+        "Repair only: restore an entry the objected memory write dropped — the board copies it back as it was, to its own scope and path. " +
         `Refused while its successor is live: drop the successor first when the write created it. ${scope}`,
       inputSchema: { entry_id: z.number().int() },
     },
@@ -984,6 +987,18 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
       inputSchema: { entry_id: z.number().int(), scope: requiredTextSchema.nullable(), path: requiredTextSchema },
     },
     async (input) => run((repairer, now) => repairMove(deps.db, repairer, { ...input, scope: registeredScope(deps, input.scope) }, now)),
+  );
+
+  server.registerTool(
+    "move_memory_branch",
+    {
+      description:
+        "Repair only: undo the objected memory write's branch move in one step. Every entry that write moved and that now lives at path or under it " +
+        "in scope (null for the whole board) goes back to the scope and path it had before that write, Definitions included; entries that arrived " +
+        "under path later stay. Returns how many entries were moved back.",
+      inputSchema: { scope: requiredTextSchema.nullable(), path: requiredTextSchema },
+    },
+    async (input) => run((repairer, now) => repairMoveBranchBack(deps.db, repairer, input, now)),
   );
 
   server.registerTool(
@@ -1030,7 +1045,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
     "list_precedents",
     {
       description:
-        "List objected decisions from past worker sessions: the decision line, objections and their attributed cause, " +
+        "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
         "Defaults to objections since the previous completed meta-review of your subject; pass since_watermark (an event id) to look further back. " +

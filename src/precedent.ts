@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
+import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
 
@@ -492,8 +493,11 @@ const PULL_VERBS = {
 } satisfies Record<Extract<EventPayload, { kind: "memory_pulled" }>["verb"], true>;
 const PULL_TOOL = new RegExp(`__(${Object.keys(PULL_VERBS).join("|")})$`);
 
-/** memory_write マーカーに結ぶ tool = `memory_written` を書く verb(worker・RCA・meta-review・修理 task の直接適用、ADR 0252)。 */
-const WRITE_TOOL = /__(record_knowledge|define_memory_branch|propose_from_objection|define_memory|fold_memory|move_memory|move_memory_branch|invalidate_memory|restore_memory|replace_memory)$/;
+/** memory_write マーカーに結ぶ tool = 記憶の verb のうち pull でないもの(worker・RCA・meta-review・修理 task の直接適用、ADR 0252)。
+ *  書き込みの記録を返さない verb(提案)は event_id を写さないので結ばれない。 */
+const WRITE_TOOL = new RegExp(
+  `__(${[...WORKER_MEMORY_VERBS, ...MEMORY_META_REVIEW_VERBS, ...MEMORY_REPAIR_VERBS, "propose_from_objection"].filter((verb) => !(verb in PULL_VERBS)).join("|")})$`,
+);
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
