@@ -291,8 +291,8 @@ describe("CodexWorker (ADR 0098)", () => {
 
     // task temp は preflight と spawn で別物なので、workspace 由来の行だけを比べる
     const workspaceRows = (args: string[]) =>
-      [...filesystem(args, "tidepool-work").matchAll(/"([^"]+)"="(\w+)"/g)]
-        .filter(([, path]) => [f.workspace, f.registeredWorkspace].some((root) => path === root || path!.startsWith(`${root}/`)))
+      [...filesystem(args, "tidepool-work").matchAll(/"([^"]+)"="\w+"/g)]
+        .filter(([, path]) => path!.startsWith(f.workspace) || path!.startsWith(f.registeredWorkspace))
         .map(([row]) => row);
     const spawned = workspaceRows(f.process.calls[0]!.args);
     expect(spawned).toEqual([
