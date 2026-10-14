@@ -82,15 +82,19 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   return listChildren(db, objected.id).find((child) => child.type === "work")!;
 }
 
+/** `-c <prefix>…` の引数をそのまま返す。 */
+const configEntry = (args: string[], prefix: string) => args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith(prefix))!;
+
 /** `-c <prefix><値>` を読む。値は toml() = JSON.stringify なので JSON.parse で戻す。 */
 function configValue<T>(args: string[], prefix: string): T {
-  const entry = args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith(prefix))!;
-  return JSON.parse(entry.slice(prefix.length)) as T;
+  return JSON.parse(configEntry(args, prefix).slice(prefix.length)) as T;
 }
 
 /** `-c permissions.<name>.filesystem=` の値(TOML の inline table のまま)。 */
-const filesystem = (args: string[], name: string) =>
-  args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith(`permissions.${name}.filesystem=`))!;
+const filesystem = (args: string[], name: string) => configEntry(args, `permissions.${name}.filesystem=`);
+
+/** `-c skills.config=` の引数(ADR 0147 決定3)。 */
+const skills = (args: string[]) => configEntry(args, "skills.config=");
 
 /** 盤面が書いた文面は `-c developer_instructions=` に載る(ADR 0124 決定2)。 */
 const developerInstructions = (args: string[]) => configValue<string>(args, "developer_instructions=");
@@ -103,8 +107,7 @@ async function fixture(
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
   spawn?: ContainerSpawn,
-  registryFiles: Record<string, string> = {},
-  linkWorkspace = false,
+  { registryFiles = {}, linkWorkspace = false }: { registryFiles?: Record<string, string>; linkWorkspace?: boolean } = {},
 ) {
   // 実体のパスで持つ —— spawn は登録 path を realpath する(issue #864)ので、macOS の tmpdir の /var でも assert がそのまま読める
   const workspace = await realpath(await tempDir("tidepool-codex-workspace-"));
@@ -259,9 +262,9 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
-  it("work task の filesystem 表は workspace の .git を write、.git/hooks と .git/config を read にし、review task の表には .git の行が無い(issue #849 / ADR 0033)", async () => {
+  // work task の .git の行(write / hooks・config は read)は下の issue #864 のテストが同じ seam で固定する(ADR 0107 決定3)
+  it("review task の filesystem 表には workspace の .git の行が無い(issue #849 / ADR 0033)", async () => {
     const f = await fixture();
-    f.start(task(f.db));
     f.start(registerTask(
       f.db,
       { type: "review", assignee: "codex-agent", workspace: "work", title: "codex-review", purpose: "read the diff", completion_criteria: "findings are filed" },
@@ -269,15 +272,11 @@ describe("CodexWorker (ADR 0098)", () => {
       ...HUMAN_WEBUI,
     ));
 
-    const work = filesystem(f.process.calls[0]!.args, "tidepool-work");
-    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git"))}="write"`);
-    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`);
-    expect(work).toContain(`${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`);
-    expect(filesystem(f.process.calls[1]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
+    expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
   });
 
   it("シンボリックリンク経由で登録した workspace でも、work task の spawn は filesystem 表の workspace・.git・.git/hooks・.git/config の行を実体のパスで書き、preflight の同じ行と一致する(issue #864)", async () => {
-    const f = await fixture(undefined, undefined, undefined, undefined, {}, true);
+    const f = await fixture(undefined, undefined, undefined, undefined, { linkWorkspace: true });
     f.start(task(f.db));
 
     // preflight には登録と同じリンク側の綴りを渡す。work の sandbox probe(3)まで通れば足りる
@@ -302,7 +301,11 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`,
     ]);
     expect(workspaceRows(preflight.calls[index]!.args)).toEqual(spawned);
-    // cwd も preflight の probe と同じ実体の綴り
+    // skills.config・-C・cwd も preflight と同じ実体の綴り
+    expect(skills(f.process.calls[0]!.args)).toContain(JSON.stringify(join(f.workspace, ".agents", "skills", "repo-skill", "SKILL.md")));
+    expect(skills(preflight.calls[1]!.args)).toBe(skills(f.process.calls[0]!.args));
+    const args = f.process.calls[0]!.args;
+    expect(args[args.indexOf("-C") + 1]).toBe(f.workspace);
     expect(f.process.calls[0]!.cwd).toBe(f.workspace);
   });
 
@@ -350,7 +353,6 @@ describe("CodexWorker (ADR 0098)", () => {
     preflight.emitExitAt(index, 1, null);
     await capability;
 
-    const skills = (args: string[]) => args.find((arg, index) => args[index - 1] === "-c" && arg.startsWith("skills.config="))!;
     const spawned = skills(f.process.calls[0]!.args);
     expect(skills(preflight.calls[1]!.args)).toBe(spawned);
     expect(spawned).toContain(`{path=${JSON.stringify(join(f.codexHome, "skills", "foo", "SKILL.md"))},enabled=false}`);
@@ -557,7 +559,9 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("authority guidance が空文字なら `## Authority` 見出しごと省き、空でなければ置く(issue #488 / ADR 0157 決定1)", async () => {
     const empty = await fixture(undefined, undefined, undefined, undefined, {
-      "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      registryFiles: {
+        "authority/standard.yaml": `guidance: ""\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
+      },
     });
     empty.start(task(empty.db, "codex-empty-guidance"));
     expect(developerInstructions(empty.process.calls[0]!.args)).not.toContain("## Authority");
