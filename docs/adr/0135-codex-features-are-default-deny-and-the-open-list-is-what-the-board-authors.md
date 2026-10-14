@@ -1,5 +1,7 @@
 # Codex の features 軸は既定拒否である —— 盤面が書くのは開ける名前のほう
 
+**Status 追記: 決定5 は [ADR 0255](0255-codex-model-metadata-is-not-a-floor-because-the-backend-sets-its-values-at-runtime.md) が supersede(2026-10-14)。** model の metadata の値は pin でなく backend が実行時に決めるので、metadata が届く軸では feature の閉じを床に数えず、版ごとの source 読みは各欄の最悪値で別の床が掛かるかを読む。決定1〜4・6 は不変。
+
 2026-09-20 の grilling(issue #571)で決定。ADR 0039 の「既定拒否の allowlist」はツール層の決定で、Codex の features 軸の向きは
 どこにも決まっていなかった。`CLOSED_FEATURES` は名指しで閉じる列挙で、導入元(#453)にも ADR 0098 / 0108 にも選定の根拠が無く、
 stable かつ true のまま列挙の外にいる feature が 23 件あった。vendor source(`rust-v0.147.0`)を feature ごとに読んだ結果と
