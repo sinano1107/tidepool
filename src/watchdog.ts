@@ -10,6 +10,7 @@ import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, returnToQueueHead, type Task, type TaskType } from "./tasks.js";
 import {
   markTeardown,
+  resumeUnfinishedTeardown,
   runTeardown,
   runTreeRule,
   sessionInTeardown,
@@ -518,13 +519,8 @@ export function startWatchdog(deps: {
       if (pending === null) {
         // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
         // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
-        // ここで枠を握って走らせる。復旧が枠を握っている / 落ちた後始末の question が開いている
-        // (起動時の復旧と同じ門。ADR 0112 決定4)なら撃たない
-        const session = sessionInTeardown(db);
-        if (!session || slot.currentTaskId !== null || openQuarantineValues(db, "failedTeardown").length > 0) return;
-        slot.occupy(session.taskId);
-        slot.enterTeardown();
-        void runTeardown(teardown, session.taskId, teardownStep(db, session.taskId));
+        // 起動時の復旧と同じ門を通して走らせる
+        void resumeUnfinishedTeardown(teardown);
         return;
       }
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の

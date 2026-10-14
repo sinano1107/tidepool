@@ -3,6 +3,7 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
+import { openQuarantineValues } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
@@ -111,6 +112,19 @@ export async function runTeardown(
       quarantineFailedTeardown(deps.db, taskId, err, deps.clock.now());
     }
   }
+}
+
+/** 行に残った後始末の未了を、枠を握ってから走らせる —— 起動時の復旧と、再起動を越えた梯子の底の
+ *  確認回答の受理(ADR 0254 決定2)が通る1つの門。未了が無い / 枠がもう握られている / 落ちた後始末の
+ *  question が開いている(撃てば同じ所で落ちて無言に戻る。ADR 0112 決定4)なら撃たない。
+ *  枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 走り切るまで pickup は進まない。 */
+export function resumeUnfinishedTeardown(deps: TeardownDeps): Promise<void> | undefined {
+  const session = sessionInTeardown(deps.db);
+  if (!session || deps.slot.currentTaskId !== null) return;
+  if (openQuarantineValues(deps.db, "failedTeardown").length > 0) return;
+  deps.slot.occupy(session.taskId);
+  deps.slot.enterTeardown();
+  return runTeardown(deps, session.taskId, teardownStep(deps.db, session.taskId));
 }
 
 /** 落ちた後始末の受理の門(ADR 0112 決定3)。隣の門(`ContainmentCheck` /

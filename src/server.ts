@@ -43,7 +43,7 @@ import { type ContainerRuntime, ProcessContainers } from "./process-container.js
 import type { ProfileAdmin } from "./profile-create.js";
 import type { Provider } from "./provider.js";
 import { createNotificationTick, type PushClient } from "./push.js";
-import { openQuarantineValues, type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
+import { type QuarantineResolvers, registerQuarantine } from "./quarantine.js";
 import type { Harness } from "./registry.js";
 import {
   type AuthorityProfile,
@@ -56,7 +56,7 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, runTeardown, sessionInTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -538,19 +538,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     pollNow,
   };
-  const unfinishedTeardown = sessionInTeardown(db);
-  let teardownRecovery: Promise<void> | undefined;
-  if (unfinishedTeardown && runtimePreflight.available && openQuarantineValues(db, "failedTeardown").length === 0) {
-    // 枠を握っているのは task ではなく session である(ADR 0109 決定2)—— 後始末が
-    // 走り切るまで pickup は進まない
-    slot.occupy(unfinishedTeardown.taskId);
-    slot.enterTeardown();
-    teardownRecovery = runTeardown(
-      teardownDeps,
-      unfinishedTeardown.taskId,
-      teardownStep(db, unfinishedTeardown.taskId),
-    );
-  }
+  const teardownRecovery = runtimePreflight.available ? resumeUnfinishedTeardown(teardownDeps) : undefined;
   // `harnessContainment` is the one production option. startServer prepends
   // the shared container/human-surface result to each adapter's sandbox/tool
   // result, so a common failure becomes one quarantine per Harness rather than

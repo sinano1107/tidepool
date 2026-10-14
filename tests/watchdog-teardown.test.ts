@@ -26,6 +26,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
  *  それを跨いではならない —— 跨げば確認 question が開いたまま workspace と slot が動く。 */
 
 const MIN = 60 * 1000;
+const CONFIG = { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN };
 /** 後始末は fire-and-forget の `void` の先にある。 */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -94,7 +95,7 @@ async function sessionInTeardown(
     containers,
     workspace: ws,
     pollNow: () => triggered.push("pollNow"),
-    config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
+    config: CONFIG,
   });
   if (route === "cap") {
     capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
@@ -352,7 +353,7 @@ function restart(f: Fixture): { slot: Slot; watchdog: Watchdog; triggered: strin
     containers: new ProcessContainers(new FakeContainerRuntime()),
     workspace: f.ws,
     pollNow: () => triggered.push("pollNow"),
-    config: { timeLimits: { work: 90 * MIN }, grace: 30 * MIN, reclaimTimeout: 5 * MIN },
+    config: CONFIG,
   });
   return { slot, watchdog, triggered };
 }
