@@ -813,7 +813,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(child!, setting(child!));
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(systemPrompt.replace(/\s+/g, " ")).toContain("This task is not split: complete it in this session.");
+    expect(systemPrompt).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose"], added: [] }));
   });
 
   it("出題前の Interview の root の system prompt には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
@@ -835,9 +835,7 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!.replace(/\s+/g, " ");
-    expect(systemPrompt).toContain("This task is not split: complete it in this session.");
-    expect(systemPrompt).not.toContain("Register that split with the tidepool MCP's decompose instead.");
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose"], added: [] }));
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules
