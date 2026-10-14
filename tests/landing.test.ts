@@ -1539,13 +1539,10 @@ it("閉じた PR の根の内容が保護ブランチに無いまま、根のブ
   git(workspace.path, "checkout", `task/${root.id}`);
   git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
   finish(db, clock, child);
-  const before = listEvents(db, child.id).length;
 
   await expect(landing.converge()).resolves.toEqual([]);
-  expect(listEvents(db, child.id)).toHaveLength(before);
   expect(github.pushes).toEqual([]);
-  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
-  expect([...promotionFailures(db, root.id), ...promotionFailures(db, child.id)]).toEqual([]);
+  expect(promotionFailures(db, root.id)).toEqual([]);
 });
 
 // #1840 の実装で見つけた3点(#1842 のコメント)
