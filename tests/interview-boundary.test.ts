@@ -73,7 +73,7 @@ it("Interview の root は対象を読んで decompose し、一覧に無い pin
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sol, ghost] })).json;
   const current = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
   expect(current.interview_targets).toEqual([opus46, sol, ghost]);
-  const decompose = (pin: object) => callAsTask(t, root.id, "decompose", { reason: "one child per target", children: [{ ...CHILD, interview_pin: pin }] });
+  const decompose = (pin: object) => callAsTask(t, root.id, "decompose", { reason: "r", children: [{ ...CHILD, interview_pin: pin }] });
   expect((await decompose({ ...opus46, effort: "medium" })).isError).toBe(true);
   for (const pin of [sol, ghost]) expect((await decompose(pin)).content[0].text).toContain("cannot run as fake-worker");
 });

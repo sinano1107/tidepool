@@ -15,16 +15,15 @@ import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQu
 const ROOT = { type: "review" as const, title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
 const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
 const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
-const sonnet = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
+const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
 
 function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh]) {
   return { db, root: registerTask(db, { ...ROOT, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
 }
 
 it("Interview の root は対象の一覧を持つ —— 対象は表の行でなくてよく、effort の「無い」も対象の値(ADR 0199 決定1・2 / ADR 0218 決定5)", () => {
-  const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
-  const { db, root } = registerInterview(undefined, [opusHigh, haiku]);
-  expect(interviewTargets(db, root.id)).toEqual([opusHigh, haiku]);
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+  expect(interviewTargets(db, root.id)).toEqual([opusHigh, haikuNull]);
 });
 
 it("登録の扉は未知の Provider、anthropic の alias、走らない effort の対象を拒む(ADR 0199 決定3 / ADR 0182 決定1 / ADR 0218 決定4)", () => {
@@ -50,14 +49,13 @@ const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "
 const pinned = (...targets: object[]) => targets.map((target) => ({ ...CHILD, interview_pin: target as never }));
 
 it("子の pin は root の対象のどれかと4欄一致しなければ拒まれ、effort の null も値として比べる —— 一致した子は対象の段を要求する(ADR 0199 決定3 / ADR 0218 決定5)", () => {
-  const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
-  const { db, root } = registerInterview(undefined, [opusHigh, haiku]);
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const decompose = (pin: Record<string, unknown>) =>
     decomposeTaskViaWorker(db, root, { reason: "one child per target", children: [{ ...CHILD, interview_pin: pin as never }, { ...CHILD, interview_pin: opusHigh }] }, "auditor", new Date(0));
-  expect(() => decompose({ ...haiku, effort: "high" })).toThrow(/not one of this Interview's targets/);
+  expect(() => decompose({ ...haikuNull, effort: "high" })).toThrow(/not one of this Interview's targets/);
   expect(() => decompose({ ...opusHigh, effort: null })).toThrow(/not one of this Interview's targets/);
   expect(() => decompose({ ...opusHigh, tier: "frontier" })).toThrow(/not one of this Interview's targets/);
-  const [child] = decompose(haiku);
+  const [child] = decompose(haikuNull);
   expect(pinOf(db, child!.id)).toEqual({ provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier_id: tierIdOf(db, "economy"), source: "interview" });
   expect(child!.tier).toBe("economy");
 });
@@ -65,12 +63,12 @@ it("子の pin は root の対象のどれかと4欄一致しなければ拒ま�
 it("pin は Interview の root の子だけが持ち、pin した子は完了時レビューも別の要求も持たない", () => {
   const db = openDb(":memory:");
   const plain = registerTask(db, { ...ROOT }, new Date(0), ...HUMAN_WEBUI);
-  const pinned = (parent: Task, extra: object = {}) =>
+  const decomposeOne = (parent: Task, extra: object = {}) =>
     decomposeTaskViaWorker(db, parent, { reason: "r", children: [{ ...CHILD, interview_pin: opusHigh, ...extra }] }, "auditor", new Date(0));
-  expect(() => pinned(plain)).toThrow(/only an Interview's children carry interview_pin/);
+  expect(() => decomposeOne(plain)).toThrow(/only an Interview's children carry interview_pin/);
   const { root } = registerInterview(db);
   for (const extra of [{ review_flag: true }, { risk_flag: true }, { tier: "standard" }, { priority: "cost" }]) {
-    expect(() => pinned(root, extra)).toThrow(/an Interview child runs at its pin/);
+    expect(() => decomposeOne(root, extra)).toThrow(/an Interview child runs at its pin/);
   }
 });
 
@@ -104,24 +102,27 @@ it("Interview の root の子は全部 pin を持つ —— pin の無い子を�
 });
 
 it("Interview の decompose は対象の一覧の各対象にちょうど1つの子を求める —— 欠けた対象は agent の decompose でも人間の扉でも拒否の文に名指され、何も登録されない(ADR 0249 決定1・3)", () => {
-  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnet]);
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh]);
   const missing = { reason: "r", children: pinned(opusHigh, haikuNull) };
-  expect(() => decomposeTaskViaWorker(db, root, missing, "auditor", new Date(0))).toThrow(`no child pins ${JSON.stringify(sonnet)}`);
-  expect(() => humanDecomposeTaskViaWebui(db, root, missing, new Date(0))).toThrow(`no child pins ${JSON.stringify(sonnet)}`);
+  // 権限外で承認 question になる子を混ぜても、question も立たない
+  const [outside, inside] = missing.children;
+  const withOutside = { reason: "r", children: [{ ...outside!, assignee: "deckhand" }, inside!] };
+  expect(() => decomposeTaskViaWorker(db, root, withOutside, "auditor", new Date(0), { authority: { assignable_to: [] } })).toThrow(`no child pins ${JSON.stringify(sonnetHigh)}`);
+  expect(() => humanDecomposeTaskViaWebui(db, root, missing, new Date(0))).toThrow(`no child pins ${JSON.stringify(sonnetHigh)}`);
   expect(listChildren(db, root.id)).toEqual([]);
 });
 
 it("同じ対象への2つ目の子も、agent の decompose でも人間の扉でも拒否の文に名指され、何も登録されない(ADR 0249 決定1・3)", () => {
-  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnet]);
-  const doubled = { reason: "r", children: pinned(opusHigh, opusHigh, haikuNull, sonnet) };
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh]);
+  const doubled = { reason: "r", children: pinned(opusHigh, opusHigh, haikuNull, sonnetHigh) };
   expect(() => decomposeTaskViaWorker(db, root, doubled, "auditor", new Date(0))).toThrow(`more than one child pins ${JSON.stringify(opusHigh)}`);
   expect(() => humanDecomposeTaskViaWebui(db, root, doubled, new Date(0))).toThrow(`more than one child pins ${JSON.stringify(opusHigh)}`);
   expect(listChildren(db, root.id)).toEqual([]);
 });
 
 it("各対象を1つずつ覆う decompose は通る —— 権限外の assignee で承認 question になる子も、その対象を覆う子として数える(ADR 0249 決定1)", () => {
-  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnet]);
-  const [outside, ...inside] = pinned(sonnet, opusHigh, haikuNull);
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh]);
+  const [outside, ...inside] = pinned(sonnetHigh, opusHigh, haikuNull);
   const split = { reason: "one child per target", children: [{ ...outside!, assignee: "deckhand" }, ...inside] };
   decomposeTaskViaWorker(db, root, split, "auditor", new Date(0), { authority: { assignable_to: [] } });
   expect(listChildren(db, root.id).map((task) => task.type).sort()).toEqual(["question", "work", "work"]);

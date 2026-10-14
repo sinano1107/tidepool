@@ -476,16 +476,18 @@ function resolveInterviewPin(db: Db, parent: Task, child: ChildSpec, interview: 
 
 /** Interview の分解は一覧の各対象にちょうど1つの子を置く(ADR 0249 決定1): 欠けた対象と重なった対象を4欄で名指して拒む。
  *  権限外で承認 question になる子も、ここではまだ子として数える。 */
-function assertCoversTargetsOnce(db: Db, rootId: string, children: DecomposeChild[]): void {
+function assertCoversTargetsOnce(db: Db, rootId: string, targets: InterviewTarget[], children: DecomposeChild[]): void {
   const missing: string[] = [];
   const doubled: string[] = [];
-  for (const target of interviewTargets(db, rootId)!) {
+  for (const target of targets) {
     const id = interviewTargetId(db, rootId, target);
     const count = children.filter((child) => child.interview_target_id === id).length;
     if (count === 0) missing.push(JSON.stringify(target));
     if (count > 1) doubled.push(JSON.stringify(target));
   }
-  const problems = [missing.length && `no child pins ${missing.join(", ")}`, doubled.length && `more than one child pins ${doubled.join(", ")}`].filter(Boolean);
+  const problems: string[] = [];
+  if (missing.length) problems.push(`no child pins ${missing.join(", ")}`);
+  if (doubled.length) problems.push(`more than one child pins ${doubled.join(", ")}`);
   if (problems.length) throw new DomainError(`an Interview runs exactly one child per target: ${problems.join("; ")}`);
 }
 
@@ -2285,7 +2287,8 @@ export function decomposeTask(
   if (parent.interview_target_id !== null) {
     throw new DomainError("this task is not split: complete it as one task and state in its handoff what remains");
   }
-  const interview = interviewTargets(db, parent.id) !== null;
+  const targets = interviewTargets(db, parent.id);
+  const interview = targets !== null;
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError(
       `a child's premise breach is open — the decomposition's author judges it first (${interview ? "continue_decomposition or escalate" : "redecompose or continue_decomposition"})`,
@@ -2312,7 +2315,7 @@ export function decomposeTask(
   if (input.children.length === 0) {
     throw new DomainError("a decomposition carries at least one child task");
   }
-  if (interview) assertCoversTargetsOnce(db, parent.id, input.children);
+  if (targets) assertCoversTargetsOnce(db, parent.id, targets, input.children);
   // before anything registers: a child whose request is a bad value must not
   // survive as a pending_child on an approval question, where it would only
   // throw at the moment a human clicks approve (registerTask validates the
