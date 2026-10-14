@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { approveMemoryProposal, createBehaviorCandidate, movedPins } from "../src/memory.js";
 import { getTask } from "../src/tasks.js";
 import {
@@ -198,6 +198,9 @@ it("defer の回答は comment が無ければ 409 で question を開いたま�
   }
 });
 
+/** entry の無効化の event id —— meta-review の invalidate_memory の tool 結果の event_id は書き込みの記録なので、店の event を引く。 */
+const invalidationOf = (entryId: number) => listEventsOfKinds(t.db, ["memory_entry_invalidated"]).find((e) => e.payload.entry_id === entryId)!.id;
+
 it("pin の entry が人間・meta-review・superseded のどの経路で無効化されても、open な提案 question は観測で決着し memory_proposal_stale が残る", async () => {
   const { ids, client, call, propose } = await boardWithMetaReview(["first rule", "second rule", "successor rule", "superseded rule"]);
   const [byHuman, byMetaReview, successor, superseded] = ids as [number, number, number, number];
@@ -207,7 +210,7 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
 
     const observed = [
       (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${byHuman}/invalidate`, { reason: "requirement_change" })).json.event_id,
-      (await call("invalidate_memory", { entry_id: byMetaReview, reason: "capability" })).event_id,
+      (await call("invalidate_memory", { entry_id: byMetaReview, reason: "capability" }), invalidationOf(byMetaReview)),
       (await call("fold_memory", { successor_id: successor, replaces: [superseded] })).event_ids[0],
     ];
 
@@ -428,7 +431,7 @@ it("consolidate の replaces や invalidate の target が先に無効化され�
     const questions = [(await consolidate(board, [replaced])).question_id, (await invalidate(board, target)).question_id];
 
     const observed = [
-      (await board.call("invalidate_memory", { entry_id: replaced, reason: "capability" })).event_id,
+      (await board.call("invalidate_memory", { entry_id: replaced, reason: "capability" }), invalidationOf(replaced)),
       (await api(t.baseUrl, "POST", `/api/settings/memory/entries/${target}/invalidate`, { reason: "requirement_change" })).json.event_id,
     ];
 

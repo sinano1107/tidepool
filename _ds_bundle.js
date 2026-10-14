@@ -173,11 +173,11 @@ const kindColors = {
   objection: "var(--coral-4)"
 };
 function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = false, style }) {
-  const { time, taskId, agent, agentIcon, human = false, kind = "decision", text, objection, bundledObjection, cause, causeEntries = [], causeEvidence, unread = false } = entry;
+  const { time, taskId, agent, agentIcon, human = false, kind = "decision", text, objection, bundledObjection, cause, causeEntries = [], causeEvidence, memoryEntries = [], unread = false } = entry;
   const completion = kind === "completion";
   const clickable = !!onObject;
   const causeText = cause === "uncertain" ? "cause: not yet determined (uncertain)" : cause ? `cause: ${cause}` : null;
-  const causeLinks = causeEntries.map((id) => /* @__PURE__ */ React.createElement(React.Fragment, { key: id }, " ", /* @__PURE__ */ React.createElement(
+  const entryLinks = (ids) => ids.map((id) => /* @__PURE__ */ React.createElement(React.Fragment, { key: id }, " ", /* @__PURE__ */ React.createElement(
     "a",
     {
       href: `#memory-entry-${id}`,
@@ -189,6 +189,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
     },
     `#${id}`
   )));
+  const causeLinks = entryLinks(causeEntries);
   const causeNote = causeText && /* @__PURE__ */ React.createElement("span", { style: { color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, causeText), causeLinks, causeEvidence && ` \u2014 ${causeEvidence}`);
   const band = { display: "flex", flexDirection: "column", gap: 8, marginTop: 6, padding: "6px 10px", borderRadius: "var(--radius-xs)", fontSize: "var(--text-xs)", whiteSpace: "pre-wrap", overflowWrap: "anywhere" };
   return /* @__PURE__ */ React.createElement(
@@ -237,6 +238,7 @@ function LogEntry({ entry = {}, onObject, onExpand, onOpenMemoryEntry, active = 
       },
       "\u2304"
     ),
+    memoryEntries.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, "entries:"), entryLinks(memoryEntries)),
     (objection || bundledObjection) && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1" } }, objection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--coral-1)", color: "var(--coral-4)" } }, /* @__PURE__ */ React.createElement("span", null, "objection: ", objection), causeNote), bundledObjection && /* @__PURE__ */ React.createElement("div", { style: { ...band, background: "var(--surface-recessed)", color: "var(--text-muted)" } }, /* @__PURE__ */ React.createElement("span", null, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", textTransform: "uppercase", letterSpacing: "0.06em", marginRight: 6 } }, "bundled"), bundledObjection), !objection && causeNote))
   );
 }

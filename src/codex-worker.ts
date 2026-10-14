@@ -24,7 +24,16 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial, WORKER_MEMORY_VERBS } from "./memory.js";
+import {
+  buildMemoryInjection,
+  buildMetaReviewMaterial,
+  type InjectionQuery,
+  MEMORY_REPAIR_VERBS,
+  recordMemoryInjection,
+  recordMetaReviewMaterial,
+  repairableEntries,
+  WORKER_MEMORY_VERBS,
+} from "./memory.js";
 import { META_REVIEW_SUBJECTS, metaReviewSubjectOf } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ContainerSpawn, ProcessContainers } from "./process-container.js";
@@ -1057,7 +1066,7 @@ export class CodexWorker implements WorkerAdapter {
         // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
         enabledTools: (subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : BOARD_VERBS
+          : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
         ).filter((verb) => !withheld.includes(verb)),
         workspace: workspace.path,
         allowedDomains: workspace.allowed_domains ?? [],

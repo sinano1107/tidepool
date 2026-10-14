@@ -847,7 +847,7 @@ it("fold_memory の successor_id は replaces を既にある approved の後継
   const candidateExemplar = consolidate([drafted("Keep it split", { event_id: attributed("kept the two commits apart") })], { kind: "exemplar", annotations }).candidate_id;
   const before = listMemoryEntries(db, {}).length;
 
-  expect(foldInto(fixture)({ successor_id: kept, replaces: [fact] })).toEqual({ entry_id: kept, event_ids: [expect.any(Number)] });
+  expect(foldInto(fixture)({ successor_id: kept, replaces: [fact] })).toEqual({ entry_id: kept, event_ids: [expect.any(Number)], event_id: expect.any(Number) });
   foldInto(fixture)({ successor_id: exemplar, replaces: [candidateBehavior] });
   foldInto(fixture)({ successor_id: behavior, replaces: [candidateExemplar] });
 

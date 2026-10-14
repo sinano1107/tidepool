@@ -192,7 +192,9 @@ export interface WireContract {
       /** 値集合の正本は src/events.ts の HUMAN_FACING_KINDS(移送は issue #352)。 */
       payload:
         | { kind: "task_completed"; result: string | null; handoff_present: boolean }
-        | { kind: "decision_logged" | "premise_breached"; line: string };
+        | { kind: "decision_logged" | "premise_breached"; line: string }
+        /** AI の記憶の書き込み(src/events.ts の memory_written): 作った・無効化したエントリの id。 */
+        | { kind: "memory_written"; line: string; created: number[]; invalidated: number[] };
       unread: boolean;
       workspace: string | null;
       cause: Cause | null;

@@ -37,7 +37,9 @@ function buildPrompt(input: AttributionInput): string {
     "was itself wrong — the shortfall is the entry's, not the worker's; use uncertain when the evidence does " +
     'not decide it), "evidence" (string — the concrete observations your judgment rests on), and "entries" ' +
     "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
-    "read before the decision; never answer memory when memory_read is empty). When the input " +
+    "read before the decision; never answer memory when memory_read is empty). When the input carries " +
+    "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +
+    "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: those are their decision logs and completion reports, read them as " +
     "evidence.\n\n" +
