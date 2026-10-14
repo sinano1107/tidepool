@@ -484,7 +484,8 @@ function decomposeChildrenSchema(db: Db) {
         .describe(
           "Interview only: the one target this child runs on, copied with all four fields from get_current_task's interview_targets (present only on an Interview). " +
             "The child skips the board's model selection, runs on a branch that never lands, and takes no review_flag, risk_flag, tier or " +
-            "priority; its provider must be among its assignee's providers. Log the probe and its rubric with log_decision before decomposing.",
+            "priority; its provider must be among its assignee's providers. Give each target exactly one child: a decomposition that leaves a " +
+            "target without a child, or pins a target twice, is refused. Log the probe and its rubric with log_decision before decomposing.",
         ),
     }),
   );

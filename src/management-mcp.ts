@@ -1112,7 +1112,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           .describe(
             "Root review tasks only: makes the review an Interview, which measures each target without staking production work on it. " +
               "A target is the provider, model, effort and tier it is measured at; it need not be an execution-setting row, and effort " +
-              "null means the model takes no effort. The review's children may each pin one of these targets.",
+              "null means the model takes no effort. Targets are not duplicated: two targets equal on all four fields are refused. " +
+              "The review is split into exactly one child per target.",
           ),
       },
     },
