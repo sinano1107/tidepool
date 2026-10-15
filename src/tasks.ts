@@ -1311,7 +1311,7 @@ function cancelUnsettledSubtree(
   now: Date,
   payload: TaskScopedPayload,
   origin: EventOrigin,
-): void {
+): number | undefined {
   const rows = db
     .prepare(
       `WITH RECURSIVE subtree(id) AS (
@@ -1323,13 +1323,16 @@ function cancelUnsettledSubtree(
        WHERE ${unsettledSql("tasks.status")}`,
     )
     .all(rootTaskId) as Array<{ id: string }>;
+  let rootEventId: number | undefined;
   db.transaction(() => {
     for (const { id } of rows) {
       // a cancelled declarer holds nothing — the cancel is the record that ends its breach
       db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
-      appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
+      const eventId = appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
+      if (id === rootTaskId) rootEventId = eventId;
     }
   })();
+  return rootEventId;
 }
 
 /** Cancel a task and every unfinished descendant via an abandon answer (ADR
@@ -1343,8 +1346,8 @@ function cancelTask(
   workerId: string,
   now: Date,
   origin: EventOrigin,
-): void {
-  cancelUnsettledSubtree(db, task.id, workerId, now, {
+): number | undefined {
+  return cancelUnsettledSubtree(db, task.id, workerId, now, {
     kind: "task_cancelled",
     origin_question_id: originQuestionId,
   }, origin);
@@ -1443,10 +1446,13 @@ export function cancelTaskDirectly(
 ): void {
   assertDirectlyCancellableScope(db, task);
   assertNoGatingQuestion(db, task.id, defaults);
-  cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
-    kind: "task_cancelled_directly",
-    reason,
-  }, origin);
+  db.transaction(() => {
+    const cancelled = cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
+      kind: "task_cancelled_directly",
+      reason,
+    }, origin);
+    if (cancelled !== undefined) settleUnrunnableTargetQuestions(db, cancelled, now);
+  })();
 }
 
 /** The six pure preconditions an answer submission must clear before any
@@ -1676,6 +1682,7 @@ export function answerQuestion(
         }
         const failed = getTask(db, question.parent_id!)!;
         const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
+        let rootCancelled: number | undefined;
         if (plan) {
           for (const id of abandonScopeIds(db, failed.id, breach)) {
             cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
@@ -1683,11 +1690,13 @@ export function answerQuestion(
           if (failed.interview_target_id === null) unblockTarget = plan;
           // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)。破綻した probe か、
           // 採点できる答案も未決着の子も残らない Interview は、この答えで終える(ADR 0247 決定1・2)
-          else if (breach || interviewLeftEmpty(db, plan.id)) cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin);
+          else if (breach || interviewLeftEmpty(db, plan.id)) rootCancelled = cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin);
           if (retry) retryInterview(db, plan, premiseBreachReason(db, failed.id), comment, now, origin);
         } else {
-          cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
+          rootCancelled = cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
         }
+        // retry の新しい root が登録された後で引く —— 先に引けば、写った対象の question が retry の直後に閉じる(ADR 0199 追記)
+        if (rootCancelled !== undefined) settleUnrunnableTargetQuestions(db, rootCancelled, now);
         break;
       }
       case "approval": {
@@ -1804,7 +1813,7 @@ function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOri
       .prepare(
         `SELECT t.id FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
          WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL}
-           AND @value = it.provider || '/' || it.model || CASE @kind WHEN 'interviewTargetEffort' THEN '/' || COALESCE(it.effort, '') ELSE '' END`,
+           AND @value = ${refusedTargetValueSql("@kind")}`,
       )
       .pluck()
       .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as string[]
@@ -1812,6 +1821,30 @@ function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOri
   for (const child of children) cancelTask(db, child, question.id, HUMAN_WORKER_ID, now, origin);
   for (const rootId of new Set(children.map((child) => child.parent_id!))) {
     if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
+  }
+}
+
+/** 対象 `it` の、断られた対象の question の値の綴り(quarantine.ts の `tableRowValue` / `tableRowEffortValue`、effort の鍵だけ effort まで)。 */
+const refusedTargetValueSql = (kind: string) =>
+  `it.provider || '/' || it.model || CASE ${kind} WHEN 'interviewTargetEffort' THEN '/' || COALESCE(it.effort, '') ELSE '' END`;
+
+/** 断られた対象の question の主題が盤面から消えたときの門(ADR 0199 追記、issue #1992): その対象を走らせうる未決着の Interview
+ *  —— その対象を pin した未決着の子か、まだその対象の子を持たない未決着の root —— が残らない question を、Interview を消した
+ *  cancel の event を観測として盤面名義に決着させる。 */
+function settleUnrunnableTargetQuestions(db: Db, observedEventId: number, now: Date): void {
+  const open = db
+    .prepare(
+      `SELECT q.id, q.question_quarantine_kind AS quarantine, q.question_quarantine_value AS value FROM tasks q
+       WHERE q.type = 'question' AND q.status = 'todo' AND q.question_quarantine_kind IN ('interviewTarget', 'interviewTargetEffort')
+         AND NOT EXISTS (
+           SELECT 1 FROM interview_targets it JOIN tasks root ON root.id = it.task_id
+           LEFT JOIN tasks child ON child.interview_target_id = it.id
+           WHERE ${UNROWED_TARGET_SQL} AND q.question_quarantine_value = ${refusedTargetValueSql("q.question_quarantine_kind")}
+             AND (${unsettledSql("child.status")} OR (child.id IS NULL AND ${unsettledSql("root.status")})))`,
+    )
+    .all() as Array<{ id: string; quarantine: string; value: string }>;
+  for (const { id, ...released } of open) {
+    settleQuestionAsObserved(db, id, { kind: "quarantine_released", ...released, observed_event_id: observedEventId }, now);
   }
 }
 
