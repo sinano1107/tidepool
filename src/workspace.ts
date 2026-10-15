@@ -2,6 +2,7 @@ import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
+import { appendEvent } from "./events.js";
 import { git } from "./git.js";
 import {
   authedGitBounded,
@@ -26,8 +27,10 @@ import { isSettled } from "./task-status.js";
 import {
   getTask,
   issueRefPlaceholder,
+  posedHead,
   type Task,
 } from "./tasks.js";
+import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
  *  branch discipline and the slot-release tree rule (issue #8) act on it —
@@ -289,6 +292,8 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
+    // 決着した pin の子のブランチは外れうる(ADR 0263 決定5)。外れた後の分岐元は #1886 で決める —— ここでは落ちないだけ
+    if (ancestor.interview_target_id !== null && !taskBranchExists(workspace, ancestor.id)) continue;
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;
@@ -307,8 +312,9 @@ export function lineageTaskBranch(
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
- *  A fresh task forks from its live lineage; a resumed task only checks its
- *  existing branch out again, WIP intact. */
+ *  A fresh task forks from its live lineage — a pin child from the head its
+ *  probe recorded (ADR 0263 決定6); a resumed task only checks its existing
+ *  branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
   if (!taskBranchExists(workspace, task.id)) {
@@ -316,10 +322,24 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
       workspace.path,
       "branch",
       branch,
-      lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace),
+      task.interview_target_id !== null
+        ? resolvablePosedHead(db, workspace, task)
+        : (lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace)),
     );
   }
   git(workspace.path, "checkout", branch);
+}
+
+/** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
+function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
+  const head = posedHead(db, task);
+  try {
+    if (head !== undefined) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
+  } catch {}
+  throw new Error(
+    `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head ?? "none recorded"}) ` +
+      "cannot be resolved in this checkout, so its branch is not forked",
+  );
 }
 
 /** Keep shared project settings (ADR 0158) in Git but out of the worker's physical checkout.
@@ -521,7 +541,7 @@ export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource; now?: Date },
 ): Promise<void> {
   assertGitDirIsDirectory(workspace.path);
   assertRegistryRoleAgrees(workspace, board.registry);
@@ -529,9 +549,24 @@ export async function prepareWorkspaceAtPickup(
   await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
+  if (task.interview_target_id !== null) removeSettledPinBranches(db, workspace, board.now ?? new Date());
   // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
-  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ
+  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した pin の子のブランチを外すのも
+  // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ
   snapshotRefs(db, workspace);
+}
+
+/** ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子が兄弟(どの Interview のものでも)の答案を git で読めないように、
+ *  この checkout にある決着した pin の子の task ブランチの ref を外し、head をその子の event に残す。走るのは自分のブランチを
+ *  checkout した後なので、外すブランチが checkout 中であることは無い。 */
+function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, now: Date): void {
+  const branches = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/heads/task/");
+  for (const [head, id] of branches.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string])) {
+    const settled = getTask(db, id);
+    if (settled?.interview_target_id == null || !isSettled(settled.status)) continue;
+    git(workspace.path, "branch", "-D", taskBranch(id));
+    appendEvent(db, { taskId: id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "task_branch_removed", head }, at: now });
+  }
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も

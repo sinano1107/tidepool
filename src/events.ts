@@ -158,8 +158,9 @@ export type EventPayload =
   // child rests on — stamped at registration so provenance never needs a join.
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string } }
-  // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む
-  | { kind: "decision_logged"; line: string; interview_probe?: InterviewProbe }
+  // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
+  // head は出題の時点の root の workspace の保護ブランチの head —— pin の子は全部ここから分岐する(ADR 0263 決定6)
+  | { kind: "decision_logged"; line: string; interview_probe?: InterviewProbe; head?: string }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): root review が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された pin の子、worker は review の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
@@ -240,6 +241,9 @@ export type EventPayload =
   // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
   // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
   | { kind: "pr_promotion_abandoned"; head: string | null }
+  // ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子の pickup の準備が、決着したこの pin の子の task ブランチの ref を
+  // 外した —— head は外した時点の値で、答案の diff はここから後で確かめる
+  | { kind: "task_branch_removed"; head: string }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

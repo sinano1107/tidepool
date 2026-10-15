@@ -10,6 +10,7 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_OUTCOMES } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
+import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -92,6 +93,7 @@ import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./te
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
+  protectedBranchRef,
   resolveOrQuarantine,
   treeIsDirty,
   UnknownWorkspaceError,
@@ -322,7 +324,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
  *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
  *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
- *  `gate` は verb の**前**に走る(ADR 0084 の完了の門)。門を持つ verb だけが workspace を
+ *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の head の読み —— ADR 0263 決定6)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
  *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
  *  **解決できなかったとき(`null`)も含めて**そのまま後始末へ渡す —— `undefined` で渡すと
@@ -674,14 +676,24 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           rubric: requiredTextSchema,
         },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
-          if (deps.taskExecutionCandidates) {
-            assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
-          }
-          const children = poseProbe(deps.db, task, input, workerId, now, "worker");
-          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
-        }),
+      async (input) => {
+        // ADR 0263 決定6: 出題の時点の保護ブランチの head を、この verb が呼ばれた checkout で読む(fetch しない)
+        let head: string | undefined;
+        return runReleasingVerb(
+          deps,
+          attributedTaskId,
+          (task, workerId, now) => {
+            if (deps.taskExecutionCandidates) {
+              assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
+            }
+            const children = poseProbe(deps.db, task, input, workerId, now, "worker", head);
+            return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+          },
+          (_task, workspace) => {
+            head = git(workspace.path, "rev-parse", protectedBranchRef(workspace));
+          },
+        );
+      },
     );
   }
 
