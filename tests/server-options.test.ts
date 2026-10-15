@@ -3,6 +3,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
+import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { QUARANTINES } from "../src/quarantine.js";
@@ -323,7 +324,7 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
 
 /** 同じ網羅を `CodexWorkerOptions` にも掛ける(ADR 0261)。使用量の読み口と中断の一撃は、渡し忘れれば
  *  「Codex の上限到達による exit が報告なき exit の failure question に落ちる」形で静かに壊れる。 */
-it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使用量の読み口は openaiUsage と同じ App Server probe である(ADR 0043 / ADR 0261)", async () => {
+it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使用量の読み口は盤面の openaiUsage と同じ probe である(ADR 0043 / ADR 0261)", async () => {
   const optional = optionalFields("codex-worker.ts", "CodexWorkerOptions");
   // 走査が壊れていないことの control
   expect(optional).toEqual(expect.arrayContaining(["usageProbe", "onCapInterrupted", "onWorkerExited"]));
@@ -331,13 +332,11 @@ it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使
   const registryDir = await makeRegistry();
   const harness = containerHarness(fakeContainers());
   const onCapInterrupted = () => {};
-  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, onCapInterrupted, onRowRefused: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  const openaiUsage: CodexAppServerProbe = async () => ({ status: "unobservable", provider: "openai", cliVersion: null, reason: "fake" });
+  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, onCapInterrupted, openaiUsage, onRowRefused: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
   expect(optional.filter((key) => !Object.keys(options).includes(key))).toEqual([]);
   expect(options.onCapInterrupted).toBe(onCapInterrupted);
-  // 同じ口・同じ executable を通る同じ probe は、同じ観測を返す(composition() の codex は無いので観測不能の理由まで一致する)
-  const now = new Date("2026-10-15T00:00:00Z");
-  const callers = (await buildOptions(composition())).boardCallers?.(harness.boardCall);
-  expect(await options.usageProbe?.(now)).toEqual(await callers?.openaiUsage?.(now));
+  expect(options.usageProbe).toBe(openaiUsage);
 });
 
 /** 上の網羅は `buildWorkerOptions` の戻り値を見ている。本番の worker がその

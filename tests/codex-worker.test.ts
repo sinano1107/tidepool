@@ -1154,7 +1154,8 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     ({ name, model: null, usedPercent, durationMs: 5 * 3_600_000, resetsAt: RESETS_AT });
   const observed = (...windows: ReturnType<typeof windowAt>[]): CodexAppServerProbe => async () =>
     ({ status: "observed", provider: "openai", cliVersion: CLI_VERSION, plan: "plus", models: new Map(), windows });
-  const turnFailed = { type: "turn.failed", error: { message: "You've hit your usage limit." } };
+  // 文を持たない `turn.failed` —— 読み直しの条件が行の有無であって文ではないことを、ここで釘付けにする(ADR 0188 決定1)
+  const turnFailed = { type: "turn.failed" };
 
   /** 最後の行を流して exit させ、盤面側の一撃の順と worker_exited の payload を返す。 */
   async function exitAfter(id: string, usageProbe: CodexAppServerProbe, last: object = turnFailed, code = 1) {

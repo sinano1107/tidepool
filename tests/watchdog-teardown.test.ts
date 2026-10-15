@@ -164,7 +164,7 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   expect(questions(db)).toEqual([]);
 });
 
-it("Codex の上限到達による中断は、読み直しの間に回収済み観測が先に届いていても failure question を立てず、task を todo の先頭へ戻して cap_interrupted を残す(ADR 0261)", async () => {
+it("回収済み観測が中断の一撃より先に届いていても(Codex の読み直しの順)、中断は failure question を立てず、task を todo の先頭へ戻して cap_interrupted を残す(ADR 0261)", async () => {
   const f = await sessionInTeardown("watchdog");
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
 

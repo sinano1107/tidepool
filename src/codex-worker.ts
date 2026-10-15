@@ -1089,6 +1089,11 @@ function readTurnFailure(value: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
+/** ADR 0261 決定2: `turn.failed` の行か —— 行の有無だけを見て、文は読まない。 */
+function isTurnFailure(value: unknown): boolean {
+  return !!value && typeof value === "object" && (value as { type?: unknown }).type === "turn.failed";
+}
+
 /** ADR 0261 決定2・6: どれかの窓が Throttle の 100% キャップに届いていれば満杯。読めなければ理由を持つ。 */
 async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<NonNullable<WorkerExit["usage_recheck"]>> {
   try {
@@ -1318,7 +1323,7 @@ export class CodexWorker implements WorkerAdapter {
       const observe = (event: unknown) => {
         usage = readUsage(event) ?? usage;
         reportedError = readTurnFailure(event) ?? reportedError;
-        turnFailed ||= (event as { type?: unknown } | null)?.type === "turn.failed";
+        turnFailed ||= isTurnFailure(event);
         lastMessage = readAgentMessage(event) ?? lastMessage;
       };
       const flushStdout = readLines(child.stdout, (line) => observe(parseJsonl(line)));

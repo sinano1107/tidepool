@@ -39,7 +39,6 @@ import {
 import type { Clock } from "./clock.js";
 import {
   CODEX_APP_SERVER_LIMIT_MS,
-  type CodexAppServerProbe,
   checkCodexCliVersion,
   codexCommandThrough,
   codexLoginAbsence,
@@ -283,7 +282,7 @@ export function buildWorkerOptions(
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
-    // 組を書き下す2箇所目にして最後(理由は `registrySource` の doc comment)
+    // 組を書き下す2箇所目(3箇所目にして最後は `buildCodexWorkerOptions`。理由は `registrySource` の doc comment)
     registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
@@ -313,7 +312,7 @@ export function buildWorkerOptions(
 /** `CodexWorkerOptions` の口の一覧を持つ唯一の場所 —— `buildWorkerOptions` と同じ理由(ADR 0043)。 */
 export function buildCodexWorkerOptions(
   board: BoardComposition & { registryDir: string },
-  session: Parameters<typeof buildWorkerOptions>[1],
+  session: Parameters<WorkerFactory>[0],
 ): CodexWorkerOptions {
   return {
     db: session.db,
@@ -335,8 +334,9 @@ export function buildCodexWorkerOptions(
     boardState: board.boardState,
     onSpawnFailed: session.onSpawnFailed,
     onWorkerExited: session.onWorkerExited,
-    // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する
-    usageProbe: codexUsageProbe(board, session.boardCall),
+    // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
+    // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない
+    usageProbe: session.openaiUsage,
     onCapInterrupted: session.onCapInterrupted,
   };
 }
@@ -433,8 +433,8 @@ export function declaredRegistryMode(registryDir: string | undefined): RegistryM
  *  無ければ registry という概念自体が無い盤面なので undefined —— 呼び出し側の
  *  `registryDir` ゲートはこの不在の検査そのものに置き換わる。
  *
- *  `buildWorkerOptions` だけはここを通らない: あちらの `board` は型で
- *  `registryDir: string` に絞られており、`ClaudeWorkerOptions.registry` は任意では
+ *  `buildWorkerOptions` と `buildCodexWorkerOptions` だけはここを通らない: あちらの `board` は型で
+ *  `registryDir: string` に絞られており、両 adapter の `registry` は任意では
  *  ない口なので、undefined を許す面と噛み合わない。 */
 function registrySource(board: BoardComposition): RegistrySource | undefined {
   return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;
@@ -745,15 +745,6 @@ function profileAdmin(board: BoardComposition, registry: WritableRegistry | unde
   };
 }
 
-/** Codex App Server の使用量 probe。pickup の観測(`openaiUsage`)と worker の exit の読み直し(ADR 0261)が同じ形で組む。 */
-function codexUsageProbe(board: BoardComposition, call: BoardCall): CodexAppServerProbe {
-  return createCodexAppServerProbe({
-    executable: board.codexExecutable,
-    codexHome: board.codexHome,
-    command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
-  });
-}
-
 /** Board call を撃つ口たち(ADR 0136 決定2)。どれも口 `call` を通るので、口ができる
  *  `startServer` がここを呼ぶ。 */
 function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCallers {
@@ -777,7 +768,11 @@ function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCa
     attributionClient: new ClaudeAttributionClient({ exec: execThrough(call, "attribution") }),
     // ADR 0120 決定1(b)(c): Behavior candidate 起草の Board call。同じ理由で常に配線する
     behaviorDraftClient: new ClaudeBehaviorDraftClient({ exec: execThrough(call, "Behavior candidate draft") }),
-    openaiUsage: codexUsageProbe(board, call),
+    openaiUsage: createCodexAppServerProbe({
+      executable: board.codexExecutable,
+      codexHome: board.codexHome,
+      command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
+    }),
     // ADR 0259 決定5: (codex, workspace) の組の question への回答時の検査
     codexWorkspaceContainment: createCodexWorkspaceCheck({
       executable: board.codexExecutable,
