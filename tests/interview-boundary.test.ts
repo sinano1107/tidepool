@@ -3,6 +3,7 @@ import type { AgentView } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { registerMetaReview } from "../src/meta-review.js";
+import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { tierIdOf } from "../src/tier.js";
 import {
   api,
@@ -17,6 +18,8 @@ import {
   managementMcpClient,
   mcpClient,
   questions,
+  readFollowingNext,
+  registerQuestion,
   runNow,
   type Tidepool,
   WORKER_SPAWNED,
@@ -192,4 +195,67 @@ it("pin の子の pickup は、学習器が昇格していない盤面でも sha
   await runNow(t, review.id);
   const { shadow } = JSON.parse((await callAsTask(t, review.id, "list_routing_shadow", { since_watermark: 0 })).content[0].text);
   expect(shadow.filter((row: any) => row.task_id === childId)).toEqual([]);
+});
+
+const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
+const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
+const SIBLING_ANSWER = "sibling-answer-mark-91c";
+
+/** 最後の受験者が読む盤面(ADR 0263 決定10 の sweep の状況): 人間が書いた root の題・目的は「Interview」を持ち、root は出題以外の
+ *  判断ログの行と question を持つ。兄弟の1つは目印つきの handoff で done、1つは「この対象は測らない」で cancel、最後の対象の子が
+ *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。 */
+async function lastExaminee() {
+  t = await boot();
+  const root = (
+    await api(t.baseUrl, "POST", "/api/tasks", {
+      type: "review",
+      title: "Interview the parser targets",
+      purpose: "Interview which target writes the parser",
+      completion_criteria: "every target scored",
+      interview_targets: [opus46, sonnet55, haiku45],
+    })
+  ).json;
+  await callAsTask(t, root.id, "log_decision", { line: "chose the parser probe over the lexer one" });
+  const [done, cancelled, reader] = JSON.parse((await callAsTask(t, root.id, "pose_probe", SWEEP_POSE)).content[0].text).child_ids;
+  await completeMetaReviews(t);
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", sonnet55.model), "the provider refused", t.clock.now());
+  const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${refusal.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
+  commitWork(workspacePath, "probe.txt", "probe\n");
+  expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
+  await t.clock.advance(HOUR);
+  expect(t.worker.started.at(-1)!.id).toBe(reader);
+  registerQuestion(t, {
+    parent_id: root.id,
+    title: "a root question",
+    purpose: "the Interview root asks",
+    completion_criteria: "answered",
+    question: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
+  });
+  const client = await mcpClient(t.mcpBaseUrl, reader);
+  try {
+    for (let i = 0; i < 15; i++) await client.callTool({ name: "log_decision", arguments: { line: `${i} ${"x".repeat(3_000)}` } });
+    const pages = (await readFollowingNext(client, "get_current_task")).map((response) => response.payload);
+    return { rootId: root.id, siblings: [done, cancelled], reader, pages, tools: (await client.listTools()).tools };
+  } finally {
+    await client.close();
+  }
+}
+
+it("最後の受験者が読む get_current_task の全ページと tools/list の全説明文に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案の目印が出ない(ADR 0263 決定10)", async () => {
+  const { siblings, pages, tools } = await lastExaminee();
+  expect(pages.length).toBeGreaterThan(1);
+  // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
+  const read = [...pages, ...tools].map((item) => JSON.stringify(item)).join("\n");
+  expect(read).not.toMatch(/interview/i);
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, ...siblings]) expect(read).not.toContain(text);
+});
+
+it("get_current_task は受験者から見える親を欄と history の両方に使い、続き(ADR 0195)は親を載せない(ADR 0263 決定3・4)", async () => {
+  const { rootId, pages } = await lastExaminee();
+  // 見え方の中身は interview.test.ts の domain 層で言う。ここは get_current_task が欄と history の両方をそれで組む写像だけ
+  expect(pages[0].parent).toMatchObject({ id: rootId, title: SWEEP_POSE.title, handoff_doc: null, history: [{ children: [{ you: true }] }] });
+  expect(pages[0].parent.history).toHaveLength(1);
+  for (const page of pages.slice(1)) expect(page.parent).toBeUndefined();
 });

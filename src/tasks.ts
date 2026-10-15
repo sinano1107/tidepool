@@ -3499,8 +3499,8 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
  *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
- *  history を読む子: その子に `you` を付け、出題の行から rubric を伏せ、`retry_of` を載せない(ADR 0253 決定2)。Interview の pin の子
- *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(同 / issue #1932)。 */
+ *  history を読む子: その子に `you` を付ける(受験者から見える親は examineeParent がこれから組む)。Interview の pin の子
+ *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(ADR 0253 決定2 / issue #1932)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
@@ -3513,14 +3513,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   const decisions = new Map<number, WorkingDecision>();
   for (const event of taskDecisionLog(db, taskId)) {
     if (event.payload.kind === "decision_logged") {
-      const probe = event.payload.interview_probe;
-      const decision = {
-        // 子が読む出題の行は rubric も Interview であることも書かない(ADR 0253 決定2 / ADR 0245 決定2)
-        decision: probe && readingChildId !== undefined
-          ? `Registered the same task for each child: "${probe.title}". Purpose: ${probe.probe} Completion criteria: ${probe.completion_criteria}`
-          : event.payload.line,
-        children: [],
-      };
+      const decision = { decision: event.payload.line, children: [] };
       decisions.set(event.id, decision);
       timeline.push({ eventId: event.id, kind: "decision", value: decision });
     } else if (event.payload.kind === "task_completed") {
@@ -3533,8 +3526,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       });
     }
   }
-  // 子が読む親の history には載せない —— rubric と Interview であることを伏せる(ADR 0253 決定2 / ADR 0245 決定2)
-  const retried = readingChildId === undefined ? latestEventOfTask(db, taskId, "interview_retried") : undefined;
+  const retried = latestEventOfTask(db, taskId, "interview_retried");
   if (retried) {
     const { kind: _, ...retry_of } = retried.payload;
     timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
@@ -3593,6 +3585,20 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
         .sort((a, b) => a.eventId - b.eventId)
         .map(({ eventId, child }) => ({ id: eventId, decision: item.eventId, entry: { decision, children: [child] } }));
     });
+}
+
+/** 受験者から見える親(ADR 0263 決定3・4): 本番の1子の分解と同じ見え方。欄は出題の値で handoff は無く、history は1つの子の
+ *  登録だけを言う出題の行1つで、子は読み手自身の行だけ(採点の `id` は載せない)。root の他の行・兄弟・`retry_of` は載せない。 */
+export function examineeParent(db: Db, reader: Task) {
+  const rootId = reader.parent_id!;
+  const { title, probe, completion_criteria } = interviewProbe(db, rootId)!;
+  const rows = taskHistoryRows(db, rootId, reader.id).flatMap((row) => {
+    const [own] = "children" in row.entry ? row.entry.children : [];
+    if (!own?.you) return [];
+    const { id: _, ...child } = own;
+    return [{ ...row, entry: { decision: "Registered one child to do this task.", children: [child] } }];
+  });
+  return { context: { id: rootId, title, purpose: probe, completion_criteria, handoff_doc: null }, rows };
 }
 
 /** A cancelled task's `task_cancelled` event names the abandon question that
