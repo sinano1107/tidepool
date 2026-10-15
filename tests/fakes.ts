@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { once } from "node:events";
-import { readFileSync, realpathSync, rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { basename } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
@@ -1177,6 +1177,18 @@ export const skillsListAnswer = (result: unknown) => `{"id":1,"result":{}}\n${JS
 /** skill を持たない cwd の skills/list の `result`。 */
 export const emptySkillsList = (cwd: string) => ({ data: [{ cwd, skills: [], errors: [] }] });
 
+/** app-server の stdin に流れた skills/list の要求の `cwds[0]` —— preflight は検査ごとに作る空の cwd を名指すので、
+ *  fake はそれを読んで同じ cwd の entry で答える。 */
+export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<string> {
+  const written = await vi.waitFor(() => {
+    const chunk = proc.stdin.read();
+    expect(chunk).not.toBeNull();
+    return String(chunk);
+  });
+  const requests = written.trim().split("\n").map((line) => JSON.parse(line));
+  return requests.find((request) => request.method === "skills/list").params.cwds[0];
+}
+
 /** `createCodexCapabilityCheck(options)()` を `recordingSpawn` + `passthroughContainers`
  *  で駆動し、preflight を指定した停止点まで進める(issue #874)。段の並びは --version(0)・
  *  skills/list(1)・prompt-input(2)・features list(3)・sandbox probe ×2(4, 5)・work app-server(6)・
@@ -1188,27 +1200,25 @@ export const emptySkillsList = (cwd: string) => ({ data: [{ cwd, skills: [], err
  *  work 側の index は `index - 1`。 */
 export async function driveCodexPreflight(
   stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
-  overrides: { codexHome?: string; workspace?: string; allowedDomains?: readonly string[]; skillsList?: (cwd: string) => unknown } = {},
+  overrides: { codexHome?: string; skillsList?: (cwd: string) => unknown } = {},
 ) {
   const spawn = recordingSpawn();
   const { boardCall } = containerHarness(passthroughContainers(spawn.spawn));
-  const workspace = overrides.workspace ?? await tempDir("tidepool-codex-preflight-ws-");
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: overrides.codexHome ?? await tempDir("tidepool-codex-home-"),
-    workspace,
-    allowedDomains: overrides.allowedDomains ?? [],
     call: boardCall,
   })();
 
-  const answers: Record<number, string> = {
-    1: skillsListAnswer((overrides.skillsList ?? emptySkillsList)(realpathSync(workspace))),
-    2: "[]",
-  };
+  let listedCwd = "";
   const before = stop === "sandboxProbe" ? [0, 1, 2, 3] : [0, 1, 2, 3, 4, 5];
   for (const i of before) {
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(i + 1));
-    if (answers[i]) spawn.processes[i]!.stdout.write(answers[i]);
+    if (i === 1) {
+      listedCwd = await requestedSkillsListCwd(spawn.processes[1]!);
+      spawn.processes[1]!.stdout.write(skillsListAnswer((overrides.skillsList ?? emptySkillsList)(listedCwd)));
+    }
+    if (i === 2) spawn.processes[2]!.stdout.write("[]");
     spawn.emitExitAt(i, 0, null);
   }
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(before.length + 1));
@@ -1220,5 +1230,5 @@ export async function driveCodexPreflight(
     await vi.waitFor(() => expect(spawn.calls).toHaveLength(workIndex + 2));
   }
 
-  return { spawn, capability, index: spawn.calls.length - 1 };
+  return { spawn, capability, index: spawn.calls.length - 1, listedCwd };
 }

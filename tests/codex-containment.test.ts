@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
@@ -29,6 +29,7 @@ import {
   FakeClock,
   FakeContainerRuntime,
   recordingSpawn,
+  requestedSkillsListCwd,
   skillsListAnswer,
 } from "./fakes.js";
 import { api, bootTidepool, registerWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
@@ -67,8 +68,6 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
-    workspace: await tempDir("tidepool-codex-preflight-ws-"),
-    allowedDomains: [],
     call: boardCall,
   })();
   await vi.waitFor(() =>
@@ -83,34 +82,28 @@ it("preflight は Board call の口を通り、口が答えを返さなければ
   });
 });
 
-it("workspace を cwd にする preflight の呼び出しは、容器が空になるまで次へ進まない(ADR 0136 決定5)", async () => {
+it("preflight はどの workspace も cwd にしないので、容器が空になるのを待たずに次の呼び出しへ進む(ADR 0259 決定4 / ADR 0136 決定5)", async () => {
   const spawn = recordingSpawn();
   const runtime = new FakeContainerRuntime(spawn.spawn);
   const clock = new FakeClock();
   const { boardCall } = containerHarness(new ProcessContainers(runtime), clock);
-  const workspace = await tempDir("tidepool-codex-preflight-ws-");
   const capability = createCodexCapabilityCheck({
     executable: "/opt/tidepool/bin/codex",
     codexHome: "/nonexistent/codex-home",
-    workspace,
-    allowedDomains: [],
     call: boardCall,
   })();
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(1));
   spawn.emitExitAt(0, 0, null);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(2));
-  spawn.processes[1]!.stdout.write(skillsListAnswer(emptySkillsList(realpathSync(workspace)))); // skills/list
+  spawn.processes[1]!.stdout.write(skillsListAnswer(emptySkillsList(await requestedSkillsListCwd(spawn.processes[1]!)))); // skills/list
   spawn.emitExitAt(1, 0, null);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(3));
   expect(spawn.calls[2]!.args.slice(0, 2)).toEqual(["debug", "prompt-input"]);
   runtime.hold(runtime.created[2]!); // force では空にならないホスト
   spawn.emitExitAt(2, 0, null);
-  await new Promise((resolve) => setImmediate(resolve));
 
-  expect(spawn.calls).toHaveLength(3);
-
-  runtime.fireEmpty(runtime.created[2]!);
   await vi.waitFor(() => expect(spawn.calls).toHaveLength(4));
+  runtime.fireEmpty(runtime.created[2]!);
   await clock.advance(60_000);
   expect((await capability).available).toBe(false);
 });
@@ -128,14 +121,37 @@ it("preflight の prompt-input と features list は、skills/list が返した�
   expect((await capability).available).toBe(false);
 });
 
-it("preflight の permission probe は workspace の allowed_domains を network の許可に載せる(issue #763)", async () => {
-  const { spawn, capability, index } = await driveCodexPreflight("sandboxProbe", {
-    allowedDomains: ["registry.npmjs.org"],
-  });
+it("preflight の --version・prompt-input・features list と skills/list の列挙は、検査ごとに作る空の cwd で走り、終われば消える(ADR 0259 決定4)", async () => {
+  const { spawn, capability, index, listedCwd } = await driveCodexPreflight("sandboxProbe");
+  const [version, , promptInput, features] = spawn.calls;
 
-  expect(spawn.calls[index]!.args).toContainEqual(expect.stringContaining('"domains"={"registry.npmjs.org"="allow","127.0.0.1"="allow"}'));
-  spawn.emitExitAt(index, 1, null); // 後続の probe は見ないので、ここで倒して後始末まで走らせる
+  expect([version!.cwd, promptInput!.cwd, features!.cwd]).toEqual([listedCwd, listedCwd, listedCwd]);
+  expect(readdirSync(listedCwd)).toEqual([]);
+  spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);
+  expect(existsSync(listedCwd)).toBe(false);
+});
+
+it("permission canary と strict parse の placeholder は、検査ごとに作る空の git repo を workspace に見立て、allowed_domains を空として組み、終われば消える(ADR 0259 決定4)", async () => {
+  const { spawn, capability, index } = await driveCodexPreflight("reviewAppServer");
+  const [work, review] = spawn.calls.filter((call) => call.args[0] === "sandbox");
+  const workspace = work!.args[work!.args.indexOf("-C") + 1]!;
+  const noDomains = '"domains"={"127.0.0.1"="allow"}';
+
+  for (const sandbox of [work!, review!]) {
+    expect(sandbox.cwd).toBe(workspace);
+    expect(sandbox.args[sandbox.args.indexOf("-C") + 1]).toBe(workspace);
+    expect(sandbox.args[sandbox.args.indexOf(process.execPath) + 2]).toBe(workspace); // canary の workspace 引数
+    expect(sandbox.args).toContainEqual(expect.stringContaining(noDomains));
+  }
+  for (const appServer of [spawn.calls[index - 1]!, spawn.calls[index]!]) {
+    expect(appServer.args).toContainEqual(expect.stringContaining(`${JSON.stringify(workspace)}=`));
+    expect(appServer.args).toContainEqual(expect.stringContaining(noDomains));
+  }
+  expect(readdirSync(workspace)).toEqual([".git"]);
+  spawn.emitExitAt(index, 1, null);
+  expect((await capability).available).toBe(false);
+  expect(existsSync(workspace)).toBe(false);
 });
 
 /** sandbox probe の argv から、tmpdir() 側と homedir() 側の外側ファイルを拾う。 */
@@ -525,8 +541,6 @@ it("codex が PATH に無ければ、preflight は起こさず、合成した pa
   const capability = await createCodexCapabilityCheck({
     ...codex,
     codexHome: "/nonexistent/codex-home",
-    workspace: await tempDir("tidepool-codex-preflight-ws-"),
-    allowedDomains: [],
     call: () => {
       throw new Error("preflight must not spawn an absent codex");
     },

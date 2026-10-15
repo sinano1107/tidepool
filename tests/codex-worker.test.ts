@@ -301,37 +301,22 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(filesystem(f.process.calls[0]!.args, "tidepool-review")).not.toContain(join(f.workspace, ".git"));
   });
 
-  it("シンボリックリンク経由で登録した workspace でも、work task の spawn は filesystem 表の workspace・.git・.git/hooks・.git/config の行を実体のパスで書き、preflight の同じ行と一致する(issue #864)", async () => {
+  it("シンボリックリンク経由で登録した workspace でも、work task の spawn は filesystem 表の workspace・.git・.git/hooks・.git/config の行と skills/list の cwds・-C・cwd を実体のパスで書く(issue #864)", async () => {
     const f = await fixture(undefined, undefined, undefined, undefined, { linkWorkspace: true });
     await f.start(task(f.db));
 
-    // preflight には登録と同じリンク側の綴りを渡す。work の sandbox probe(4)まで通れば足りる
-    const { spawn: preflight, capability, index } = await driveCodexPreflight("sandboxProbe", {
-      codexHome: f.codexHome,
-      workspace: f.registeredWorkspace,
-      allowedDomains: ["api.github.com"],
-    });
-    preflight.emitExitAt(index, 1, null);
-    await capability;
-
-    // task temp は preflight と spawn で別物なので、workspace 由来の行だけを比べる
     const workspaceRows = (args: string[]) =>
       [...filesystem(args, "tidepool-work").matchAll(/"([^"]+)"="\w+"/g)]
         .filter(([, path]) => path!.startsWith(f.workspace) || path!.startsWith(f.registeredWorkspace))
         .map(([row]) => row);
-    const spawned = workspaceRows(f.process.calls[0]!.args);
-    expect(spawned).toEqual([
+    expect(workspaceRows(f.process.calls[0]!.args)).toEqual([
       `${JSON.stringify(f.workspace)}="write"`,
       `${JSON.stringify(join(f.workspace, ".git"))}="write"`,
       `${JSON.stringify(join(f.workspace, ".git", "hooks"))}="read"`,
       `${JSON.stringify(join(f.workspace, ".git", "config"))}="read"`,
     ]);
-    expect(workspaceRows(preflight.calls[index]!.args)).toEqual(spawned);
-    // skills/list の cwds・-C・cwd も preflight と同じ実体の綴り
     const listed = { method: "skills/list", params: { cwds: [f.workspace], forceReload: true } };
     expect(f.appServer.flatMap(({ requests }) => requests)).toEqual([{ id: 2, ...listed }, { id: 2, ...listed }]);
-    const preflightListing = preflight.calls.findIndex((call) => call.args[0] === "app-server");
-    expect(String(preflight.processes[preflightListing]!.stdin.read())).toContain(JSON.stringify({ id: 2, ...listed }));
     const args = f.process.calls[0]!.args;
     expect(args[args.indexOf("-C") + 1]).toBe(f.workspace);
     expect(f.process.calls[0]!.cwd).toBe(f.workspace);
@@ -348,11 +333,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ));
 
     // preflight を --version・prompt-input・features list・sandbox 2本・hooks/list と通し、review 呼び出しまで進める
-    const { spawn: preflight, capability, index } = await driveCodexPreflight("reviewAppServer", {
-      codexHome: f.codexHome,
-      workspace: f.workspace,
-      allowedDomains: ["api.github.com"],
-    });
+    const { spawn: preflight, capability, index } = await driveCodexPreflight("reviewAppServer", { codexHome: f.codexHome });
     preflight.emitExitAt(index, 1, null);
     await capability;
 

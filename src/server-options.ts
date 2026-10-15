@@ -741,13 +741,11 @@ function profileAdmin(board: BoardComposition, registry: WritableRegistry | unde
 
 /** Board call を撃つ口たち(ADR 0136 決定2)。どれも口 `call` を通るので、口ができる
  *  `startServer` がここを呼ぶ。 */
-function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | undefined, call: BoardCall, db: Db): BoardCallers {
-  const codexContainment = workspace && createCodexCapabilityCheck({
+function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCallers {
+  const codexContainment = createCodexCapabilityCheck({
     executable: board.codexExecutable,
     onPath: board.codexOnPath,
     codexHome: board.codexHome,
-    workspace: workspace.path,
-    allowedDomains: workspace.allowed_domains ?? [],
     call,
   });
   const claudeContainment = async (): Promise<ContainmentCapability> => {
@@ -776,12 +774,7 @@ function boardCallers(board: BoardComposition, workspace: WorkspaceConfig | unde
       call,
     }),
     harnessContainment: board.registryDir
-      ? (harness: Harness) => harness === "codex"
-        ? (codexContainment?.() ?? Promise.resolve({
-            available: false as const,
-            reason: "no execution workspace is configured for the Codex preflight",
-          }))
-        : claudeContainment()
+      ? (harness: Harness) => (harness === "codex" ? codexContainment() : claudeContainment())
       : undefined,
     cliAuth: createClaudeCliAuthCheck(cliAuthCommandThrough(call, "Claude authentication probe")),
     // OpenAI is derived from the same App Server probe in server.ts; this
@@ -841,7 +834,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // candidates must reflect agents/workspaces created live through settings
     registryCandidates: () => registryCandidates(board),
     // ADR 0136 決定2: Board call を撃つ口はどれも Board call の口から組む
-    boardCallers: (call) => boardCallers(board, workspace, call, db),
+    boardCallers: (call) => boardCallers(board, call, db),
     // ADR 0186 決定3: 口が呼び出しのたびに読む版の検査。Codex は App Server の互換性検査と同じ固定の版と比べる
     checkHarnessCliVersion: (harness) =>
       harness === "codex"
