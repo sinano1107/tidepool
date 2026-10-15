@@ -29,6 +29,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
+import { git } from "./git.js";
 import type { CodexWorkspaceCheck } from "./harness-containment.js";
 import {
   buildMemoryInjection,
@@ -611,14 +612,13 @@ function configArgs(config: readonly string[]): string[] {
 const CODEX_PREFLIGHT_LIMIT_MS = 60_000;
 const PREFLIGHT_KIND = "Codex containment preflight";
 
-/** preflight の1回を Board call の口に通す(ADR 0136 決定2)。workspace を cwd にする
- *  呼び出し(`cwd` を渡すのはそれだけ)は回収済み観測のあとに返す —— 残存がその workspace で
- *  次に起きる worker と同居しない(決定5)。 */
+/** preflight の1回を Board call の口に通す(ADR 0136 決定2)。cwd は検査ごとの使い捨てのディレクトリで、
+ *  workspace の checkout ではない(ADR 0259 決定4)ので、回収済み観測は待たない(ADR 0136 決定5)。 */
 async function runFile(
   call: BoardCall,
   command: string,
   args: readonly string[],
-  options: { cwd?: string; env: NodeJS.ProcessEnv },
+  options: { cwd: string; env: NodeJS.ProcessEnv },
 ): Promise<string> {
   const output = await call(
     {
@@ -626,10 +626,9 @@ async function runFile(
       harness: "codex",
       command,
       args: [...args],
-      cwd: options.cwd ?? process.cwd(),
+      cwd: options.cwd,
       env: options.env,
       limitMs: CODEX_PREFLIGHT_LIMIT_MS,
-      awaitReclaimed: options.cwd !== undefined,
     },
     readOutput,
   );
@@ -858,7 +857,6 @@ async function probePermission(
   taskTemp: string,
   taskType: "work" | "review",
   env: NodeJS.ProcessEnv,
-  allowedDomains: readonly string[],
 ): Promise<void> {
   const outsideDir = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-outside-")));
   // `:slash_tmp` の deny は tmpdir() 側、`:root` の deny は homedir() 側が測る(Linux、issue #712)
@@ -878,7 +876,7 @@ async function probePermission(
         "sandbox",
         "-P", `tidepool-${taskType}`,
         "-C", workspace,
-        ...configArgs(permissionConfig(taskType, workspace, taskTemp, executable, allowedDomains)),
+        ...configArgs(permissionConfig(taskType, workspace, taskTemp, executable, [])),
         process.execPath,
         canary,
         workspace,
@@ -914,22 +912,32 @@ function placeholderSpawnConfig(
 async function actualCodexCapability(options: {
   executable: string;
   codexHome: string;
-  workspace: string;
-  allowedDomains: readonly string[];
   call: BoardCall;
 }): Promise<CodexCapabilityObservation> {
   const { call } = options;
-  const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
-  const workspace = realpathSync(options.workspace);
-  const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
+  // 作ったディレクトリはどれも finally で消す —— 途中の mkdtemp / realpath が投げても先に作った分を残さない
+  const created: string[] = [];
+  const disposableDir = (prefix: string) => {
+    const dir = mkdtempSync(prefix);
+    created.push(dir);
+    return realpathSync(dir);
+  };
   try {
-    const cliVersion = (await runFile(call, options.executable, ["--version"], { env })).trim();
-    // ADR 0259 決定2: 閉じる skill は worker と同じく Codex 自身の列挙から(cwd を縮めるのは #1968)
+    const taskTemp = disposableDir(join(tmpdir(), "tidepool-codex-preflight-"));
+    // ADR 0259 決定4: どの workspace の checkout も cwd にしない —— 問うのはホストの性質だけ
+    const emptyCwd = disposableDir(join(tmpdir(), "tidepool-codex-preflight-cwd-"));
+    // permission canary と strict parse の placeholder が workspace に見立てる、使い捨ての空の git repo。
+    // 実物の checkout と同じく homedir() の下に置き、Linux の `:root` の deny の下で canary を走らせる(issue #712)
+    const workspace = disposableDir(join(homedir(), ".tidepool-codex-preflight-workspace-"));
+    const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
+    git(workspace, "init");
+    const cliVersion = (await runFile(call, options.executable, ["--version"], { cwd: emptyCwd, env })).trim();
+    // ADR 0259 決定2: 閉じる skill は worker と同じく Codex 自身の列挙から
     const skills = await enumerateSkills(
       codexCommandThrough(call, PREFLIGHT_KIND, CODEX_PREFLIGHT_LIMIT_MS),
       options.executable,
       env,
-      workspace,
+      emptyCwd,
     );
     const config = [...closedSurfaceConfig(), skills];
     const promptInput = await runFile(
@@ -937,13 +945,13 @@ async function actualCodexCapability(options: {
       options.executable,
       // marker は prompt-input にだけ渡す —— 実測したのはこの面だけ(ADR 0124 の測定)
       ["debug", "prompt-input", ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]), "containment canary"],
-      { cwd: workspace, env },
+      { cwd: emptyCwd, env },
     );
     const features = await runFile(
       call,
       options.executable,
       ["features", "list", ...configArgs(config)],
-      { cwd: workspace, env },
+      { cwd: emptyCwd, env },
     );
     // 先頭 field が name、末尾 field が state。stage 列は空白を含みうる(under development)ので数えない。
     const observedFeatures = Object.fromEntries(
@@ -952,8 +960,8 @@ async function actualCodexCapability(options: {
         return [fields[0] ?? "", fields.at(-1) ?? ""] as const;
       }),
     );
-    await probePermission(call, options.executable, workspace, taskTemp, "work", env, options.allowedDomains);
-    await probePermission(call, options.executable, workspace, taskTemp, "review", env, options.allowedDomains);
+    await probePermission(call, options.executable, workspace, taskTemp, "work", env);
+    await probePermission(call, options.executable, workspace, taskTemp, "review", env);
     const hook = installBoardHook(options.codexHome);
     return {
       cliVersion,
@@ -963,7 +971,7 @@ async function actualCodexCapability(options: {
       ...await probeHookRegistration(call, options.executable, env, (taskType) =>
         placeholderSpawnConfig(taskType, {
           workspace,
-          allowedDomains: options.allowedDomains,
+          allowedDomains: [],
           taskTemp,
           executable: options.executable,
           skills,
@@ -972,7 +980,7 @@ async function actualCodexCapability(options: {
       features: observedFeatures,
     };
   } finally {
-    rmSync(taskTemp, { recursive: true, force: true });
+    for (const dir of created) rmSync(dir, { recursive: true, force: true });
   }
 }
 
@@ -981,8 +989,6 @@ export function createCodexCapabilityCheck(options: {
   /** `resolveCodexExecutable` の結果。false なら probe を起こさない。 */
   onPath?: boolean;
   codexHome: string;
-  workspace: string;
-  allowedDomains: readonly string[];
   call: BoardCall;
 }): () => Promise<ContainmentCapability> {
   if (options.onPath === false) {
@@ -1144,7 +1150,7 @@ export class CodexWorker implements WorkerAdapter {
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
     const material = buildMetaReviewMaterial(this.options.db, task.id);
-    // preflight と同じ実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
+    // 実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
     const workspacePath = realpathSync(workspace.path);
     const hook = installBoardHook(this.options.codexHome);
     const subject = metaReviewSubjectOf(this.options.db, task.id);

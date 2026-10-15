@@ -414,6 +414,17 @@ it("providerAuth は anthropic だけの registry では openai を空で返す(
   expect(providerAuth?.(["openai"])).toEqual([]);
 });
 
+it("codex の Harness の封じ込め能力の検査は、Codex 自身の preflight に組まれる(ADR 0259 決定4)", async () => {
+  const registryDir = await makeRegistry();
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool" });
+
+  // composition() は codexOnPath: false —— probe を起こさず PATH の不在を答えるのは Codex の preflight だけ
+  expect(await options.boardCallers?.(async () => null).harnessContainment?.("codex")).toEqual({
+    available: false,
+    reason: "Codex containment preflight failed: codex was not found on PATH when the board started",
+  });
+});
+
 /** 上の網羅テストは `registryDir` 未設定で走る — registry 由来の口が**すべて**
  *  そこ1つに掛かっているので、13本の解決子はどれも早期 return しか通らない。
  *  つまりキーが揃っていることは分かっても、**どのキーにどの解決子が刺さって
