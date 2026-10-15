@@ -510,10 +510,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const read = readPosition("get_current_task", input);
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
         // 受験者から見える親は出題そのもの(ADR 0263 決定3・4)
-        const examinee = task.interview_target_id !== null ? examineeParent(deps.db, task) : null;
+        const examineeView = task.interview_target_id !== null ? examineeParent(deps.db, task) : null;
         // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
         const rows = [
-          ...(parent ? (examinee?.rows ?? taskHistoryRows(deps.db, parent.id, task.id)).map((row) => ({ ...row, list: "parent.history" })) : []),
+          ...(parent ? (examineeView?.rows ?? taskHistoryRows(deps.db, parent.id, task.id)).map((row) => ({ ...row, list: "parent.history" })) : []),
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
@@ -524,7 +524,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(await taskContext(deps, task)),
             type: task.type,
             ...(targets && { interview_targets: targets }),
-            parent: parent && (examinee?.context ?? { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc }),
+            parent: parent && (examineeView?.context ?? { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc }),
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
           keyOf: (_, i) => rows[i]!.id,

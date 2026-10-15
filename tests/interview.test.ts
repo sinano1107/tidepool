@@ -277,7 +277,7 @@ it("pin の子の前提の破綻の question への retry は root ごと cancel
   const retry = { retry_of: { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, reason: "the probe is broken", comment: "the probe leaks the answer" } };
   expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([retry]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
-  // 新しい root の pin の子が読む親の history には、旧い rubric も Interview であることも載せない(ADR 0253 決定2 / ADR 0245 決定2)
+  // 新しい root の受験者から見える親には、旧い root の `retry_of` を載せない(ADR 0263 決定3)
   const [child] = poseProbe(db, again, POSE, "auditor", new Date(0), "worker");
   expect(examineeParent(db, child!).rows.map((row) => row.entry)).not.toContainEqual(retry);
 });

@@ -197,8 +197,8 @@ it("pin の子の pickup は、学習器が昇格していない盤面でも sha
   expect(shadow.filter((row: any) => row.task_id === childId)).toEqual([]);
 });
 
-const SONNET = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
-const HAIKU = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
+const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
 
@@ -213,13 +213,13 @@ async function lastExaminee() {
       title: "Interview the parser targets",
       purpose: "Interview which target writes the parser",
       completion_criteria: "every target scored",
-      interview_targets: [opus46, SONNET, HAIKU],
+      interview_targets: [opus46, sonnet55, haiku45],
     })
   ).json;
   await callAsTask(t, root.id, "log_decision", { line: "chose the parser probe over the lexer one" });
   const [done, cancelled, reader] = JSON.parse((await callAsTask(t, root.id, "pose_probe", SWEEP_POSE)).content[0].text).child_ids;
   await completeMetaReviews(t);
-  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", SONNET.model), "the provider refused", t.clock.now());
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", sonnet55.model), "the provider refused", t.clock.now());
   const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${refusal.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
   commitWork(workspacePath, "probe.txt", "probe\n");
@@ -249,14 +249,13 @@ it("最後の受験者が読む get_current_task の全ページと tools/list �
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, SONNET.model, HAIKU.model, SIBLING_ANSWER, ...siblings]) expect(read).not.toContain(text);
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, ...siblings]) expect(read).not.toContain(text);
 });
 
-it("受験者から見える親は、続き(ADR 0195)を含めて出題そのもの —— 欄は出題の値で handoff は null、history は出題の行と自分の行だけ(ADR 0263 決定3・4)", async () => {
+it("get_current_task は受験者から見える親を欄と history の両方に使い、続き(ADR 0195)は親を載せない(ADR 0263 決定3・4)", async () => {
   const { rootId, pages } = await lastExaminee();
-  const { history, ...fields } = pages[0].parent;
-  expect(fields).toEqual({ id: rootId, title: SWEEP_POSE.title, purpose: SWEEP_POSE.probe, completion_criteria: SWEEP_POSE.completion_criteria, handoff_doc: null });
-  const own = { title: SWEEP_POSE.title, purpose: SWEEP_POSE.probe, completion_criteria: SWEEP_POSE.completion_criteria, status: "in_progress", you: true };
-  expect(history).toEqual([{ decision: "Registered one child to do this task.", children: [own] }]);
+  // 見え方の中身は interview.test.ts の domain 層で言う。ここは get_current_task が欄と history の両方をそれで組む写像だけ
+  expect(pages[0].parent).toMatchObject({ id: rootId, title: SWEEP_POSE.title, handoff_doc: null, history: [{ children: [{ you: true }] }] });
+  expect(pages[0].parent.history).toHaveLength(1);
   for (const page of pages.slice(1)) expect(page.parent).toBeUndefined();
 });

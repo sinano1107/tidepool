@@ -3499,8 +3499,8 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
  *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
- *  history を読む本番の子: その子に `you` を付ける(pin の子が読む親は examineeParent)。Interview の pin の子
- *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(同 / issue #1932)。 */
+ *  history を読む子: その子に `you` を付ける(受験者から見える親は examineeParent がこれから組む)。Interview の pin の子
+ *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(ADR 0253 決定2 / issue #1932)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
