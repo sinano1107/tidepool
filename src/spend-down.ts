@@ -30,28 +30,29 @@ export function isKnownSpendDownTarget(provider: string, window: string): boolea
   return (SPEND_DOWN_WINDOWS as Record<string, readonly string[]>)[provider]?.includes(window) ?? false;
 }
 
-/** その (provider, window) の最新の観測の窓の reset —— 観測済み(observed)の Provider の観測に
- *  その窓があるときだけ。Spend-down の窓は Provider 全体の窓なので model は空。 */
-function observedResetsAt(db: Db, provider: Provider, window: string): Date | null {
+/** その (provider, window) の最新の観測に保存された窓の reset と、その観測が観測済み(observed)か。
+ *  Spend-down の窓は Provider 全体の窓なので model は空。 */
+function storedWindow(db: Db, provider: Provider, window: string): { resetsAt: Date; observed: boolean } | null {
   const row = db
     .prepare(
-      `SELECT w.resets_at FROM provider_usage_windows w
+      `SELECT w.resets_at, o.status FROM provider_usage_windows w
        JOIN provider_usage_observations o ON o.provider = w.provider
-       WHERE w.provider = ? AND w.window = ? AND w.model = '' AND o.status = 'observed'`,
+       WHERE w.provider = ? AND w.window = ? AND w.model = ''`,
     )
-    .get(provider, window) as { resets_at: string | null } | undefined;
-  return row?.resets_at ? new Date(row.resets_at) : null;
+    .get(provider, window) as { resets_at: string | null; status: string } | undefined;
+  return row?.resets_at ? { resetsAt: new Date(row.resets_at), observed: row.status === "observed" } : null;
 }
 
 /** Spend-down (ADR 0091 / 0143 / 0260): one independently expiring row per armed Provider window.
  *  最新の観測で開いている窓(今がその reset より前)に結び、そうでなければ未確定にする。表示の reset を
- *  過ぎて許容幅の内の arm は、どちらの窓のつもりか分からないので拒む(ADR 0260 決定4)。 */
+ *  過ぎて許容幅の内の arm は、どちらの窓のつもりか分からないので拒む(ADR 0260 決定4)—— 観測不能の観測に
+ *  保存された窓の行でも拒む。結ぶのは観測済みの窓だけ(決定1)。 */
 export function setSpendDown(db: Db, provider: Provider, window: string, now: Date): void {
-  const observed = observedResetsAt(db, provider, window);
-  if (observed && observed <= now && now.getTime() < observed.getTime() + WINDOW_TOLERANCE_MS) {
+  const stored = storedWindow(db, provider, window);
+  if (stored && stored.resetsAt <= now && now.getTime() < stored.resetsAt.getTime() + WINDOW_TOLERANCE_MS) {
     throw new DomainError("window is resetting; arm again after the new window opens");
   }
-  const resetsAt = observed && now < observed ? observed.toISOString() : null;
+  const resetsAt = stored?.observed && now < stored.resetsAt ? stored.resetsAt.toISOString() : null;
   db.prepare(
     `INSERT INTO spend_down_state (provider, window, activated_at, resets_at) VALUES (?, ?, ?, ?)
      ON CONFLICT(provider, window) DO UPDATE SET
