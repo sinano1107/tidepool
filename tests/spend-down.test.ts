@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { reportProviderUsage } from "../src/throttle.js";
 import { usagePanelText } from "./fakes.js";
 import { api, bootTidepool, HOUR, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
@@ -23,22 +24,59 @@ const NO_SPEND_DOWN = {
   openai: { primary: null, secondary: null },
 };
 
-it("POST /api/spend-down で Provider × ウィンドウを arm / cancel でき、応答と GET /api/pause に Provider ごとの形で載る", async () => {
+/** その窓だけが観測された Provider の最新の観測を永続化する。 */
+function observeWindow(t: Tidepool, provider: "anthropic" | "openai", window: string, resetsAt: Date): void {
+  reportProviderUsage(t.db, {
+    provider,
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: t.clock.now(),
+    windows: [
+      { window, model: null, usedPercent: 10, durationMs: 5 * HOUR, resetsAt, throttled: false, resumesAt: null },
+    ],
+  });
+}
+
+it("POST /api/spend-down で Provider × ウィンドウを arm / cancel でき、応答と GET /api/pause に結んだ窓の reset つきで載る", async () => {
   t = await bootTidepool();
   const at = t.clock.now().toISOString();
+  const resetsAt = new Date(t.clock.now().getTime() + 2 * HOUR);
+  observeWindow(t, "openai", "primary", resetsAt);
 
   const res = await api(t.baseUrl, "POST", "/api/spend-down", { provider: "openai", window: "primary", active: true });
   expect(res).toEqual({
     status: 200,
-    json: { spendDown: { ...NO_SPEND_DOWN, openai: { primary: { activatedAt: at }, secondary: null } } },
+    json: {
+      spendDown: {
+        ...NO_SPEND_DOWN,
+        openai: { primary: { activatedAt: at, resetsAt: resetsAt.toISOString() }, secondary: null },
+      },
+    },
   });
   await api(t.baseUrl, "POST", "/api/spend-down", { provider: "anthropic", window: "session", active: true });
   await api(t.baseUrl, "POST", "/api/spend-down", { provider: "openai", window: "primary", active: false });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
     ...NO_SPEND_DOWN,
-    anthropic: { session: { activatedAt: at }, week: null },
+    // anthropic の session は観測が無い —— 次に観測に現れる窓に結ぶ(未確定)
+    anthropic: { session: { activatedAt: at, resetsAt: null }, week: null },
   });
+});
+
+it("表示の reset を過ぎて5分以内の arm は拒まれて行は書かれず、取り消しは通る", async () => {
+  t = await bootTidepool();
+  observeWindow(t, "anthropic", "session", new Date(t.clock.now().getTime() - 2 * MIN));
+
+  const res = await api(t.baseUrl, "POST", "/api/spend-down", { provider: "anthropic", window: "session", active: true });
+  expect(res).toEqual({
+    status: 400,
+    json: { error: "window is resetting; arm again after the new window opens" },
+  });
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual(NO_SPEND_DOWN);
+
+  const cancel = await api(t.baseUrl, "POST", "/api/spend-down", { provider: "anthropic", window: "session", active: false });
+  expect(cancel.status).toBe(200);
 });
 
 it("既知の組(anthropic × session / week、openai × primary / secondary)以外は入口で弾く", async () => {
@@ -168,7 +206,7 @@ it("spend-down 状態はサーバー再起動を跨いで維持される", async
   t = await bootTidepool({ dir: t.dir });
 
   expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
-    anthropic: { session: { activatedAt }, week: null },
-    openai: { primary: null, secondary: { activatedAt } },
+    anthropic: { session: { activatedAt, resetsAt: null }, week: null },
+    openai: { primary: null, secondary: { activatedAt, resetsAt: null } },
   });
 });

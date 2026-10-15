@@ -226,7 +226,7 @@ export function evaluateAndReportProviderUsage(
     );
     const startsAtMs = startsAt(window);
     const elapsed = (now.getTime() - startsAtMs) / window.durationMs;
-    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, startsAtMs);
+    const spendDownActive = isSpendDownActive(spendDown, observation.provider, window.window, window.resetsAt);
     const throttled = spendDownActive
       ? window.usedPercent >= 100
       : window.usedPercent >= 100 || window.usedPercent > elapsed * 100 - offset;

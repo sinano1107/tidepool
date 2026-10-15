@@ -722,7 +722,7 @@ export function startScheduler(deps: {
           let observation = observedProviders.get(setting.provider);
           if (!observation) {
             observation = await observeProviderUsage(setting.provider);
-            // Spend-down (ADR 0143) は Provider ごとの観測で、arm の後に開いた窓の対象を失効させる
+            // Spend-down (ADR 0260) は Provider ごとの観測で、結んだ窓と別の窓の対象を失効させ、未確定の対象を結ぶ
             expireSpendDown(db, observation);
             observedProviders.set(setting.provider, observation);
             if (setting.provider === "openai" && observation.status === "observed") {
