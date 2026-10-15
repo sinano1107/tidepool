@@ -96,6 +96,9 @@ export function openDb(path: string): Db {
       -- question stands in for. Its abandon keeps the decision-wide scope even for an
       -- Interview pin child, whose failure question's scope stops at itself.
       question_breached_decision INTEGER,
+      -- system-internal only (ADR 0251): the reason an Interview root gave when it reported its
+      -- probe broken. A retry answer shows it to the new root.
+      question_broken_probe_reason TEXT,
       -- system-internal only (issue #11): a pending-child approval question's
       -- would-be child, JSON-encoded, materialized only if the human answers
       -- "approve". Never set via MCP or the JSON API — only decomposeTask sets this.

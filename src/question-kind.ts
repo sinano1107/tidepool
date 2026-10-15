@@ -10,6 +10,8 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "failure"; cancel_option: string }
   /** 失敗 question と違い、pin の子でも abandon の範囲は分解判断ごと(ADR 0245 決定5)。 */
   | { kind: "premise_breach"; cancel_option: string; breached_decision: number }
+  /** Interview の root の probe の破綻の報告(ADR 0251): reason は root が書いた理由で、retry が新しい root に見せる。 */
+  | { kind: "broken_probe"; reason: string }
   /** decomposeTask の承認 question(issue #11)。approve で pending_child を実体化する。 */
   | { kind: "approval"; pending_child: PendingChildSpec }
   /** recordPrOpened の escalate の枝(issue #11): pr はこの question が代わりに立つ PR 番号。 */
@@ -28,6 +30,7 @@ export type QuestionKind<T extends TierRef = TierId> =
 const COLUMNS = [
   "question_cancel_option",
   "question_breached_decision",
+  "question_broken_probe_reason",
   "question_pending_child",
   "question_proposal",
   "question_pending_merge_pr",
@@ -52,6 +55,8 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
       return { ...none, question_cancel_option: kind.cancel_option };
     case "premise_breach":
       return { ...none, question_cancel_option: kind.cancel_option, question_breached_decision: kind.breached_decision };
+    case "broken_probe":
+      return { ...none, question_broken_probe_reason: kind.reason };
     case "approval":
       return { ...none, question_pending_child: kind.pending_child };
     case "pr_merge":
@@ -80,6 +85,8 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
       return { kind: "failure", cancel_option: q.question_cancel_option! };
     case "question_cancel_option + question_breached_decision":
       return { kind: "premise_breach", cancel_option: q.question_cancel_option!, breached_decision: q.question_breached_decision! };
+    case "question_broken_probe_reason":
+      return { kind: "broken_probe", reason: q.question_broken_probe_reason! };
     case "question_pending_child":
       return { kind: "approval", pending_child: q.question_pending_child! };
     case "question_proposal":
