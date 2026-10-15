@@ -10,7 +10,6 @@ import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_OUTCOMES } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
-import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -93,7 +92,7 @@ import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./te
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
-  protectedBranchRef,
+  protectedBranchHead,
   resolveOrQuarantine,
   treeIsDirty,
   UnknownWorkspaceError,
@@ -690,7 +689,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
           },
           (_task, workspace) => {
-            head = git(workspace.path, "rev-parse", protectedBranchRef(workspace));
+            head = protectedBranchHead(workspace);
           },
         );
       },

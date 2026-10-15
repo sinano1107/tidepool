@@ -47,7 +47,7 @@ async function pickedUpSession(): Promise<{
   );
   const task = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(task.id);
-  await prepareWorkspaceAtPickup(db, ws, task, {});
+  await prepareWorkspaceAtPickup(db, ws, task, { now: new Date(0) });
   return { deps: { db, clock, slot, resolve: () => ws, pollNow: () => {} }, slot, task, ws };
 }
 

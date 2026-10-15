@@ -36,7 +36,7 @@ it("pin の子の新しいブランチは、出題の後に main が進んでも
   const posedHead = git(workspace.path, "rev-parse", "main");
   commitWork(workspace.path, "later.txt", "main moved on after the probe was posed\n");
 
-  await prepareWorkspaceAtPickup(db, workspace, child!, {});
+  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
 
   expect(git(workspace.path, "rev-parse", `task/${child!.id}`)).toBe(posedHead);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${child!.id}`);
@@ -47,12 +47,12 @@ it("failure の retry で再開する pin の子は、既存のブランチの�
   const workspace = await makeWorkspace("pin-retry-resumes");
   const db = openDb(":memory:");
   const [child] = posed(db, workspace);
-  await prepareWorkspaceAtPickup(db, workspace, child!, {});
+  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
   commitWork(workspace.path, "wip.txt", "the first session's work\n");
   const wip = git(workspace.path, "rev-parse", "HEAD");
   git(workspace.path, "checkout", "main");
 
-  await prepareWorkspaceAtPickup(db, workspace, child!, {});
+  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
 
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(wip);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${child!.id}`);
@@ -65,7 +65,7 @@ it("出題が記録した head を checkout で引けなければ、pickup の�
   const unknown = "0123456789abcdef0123456789abcdef01234567";
   const [child] = posed(db, workspace, [opusHigh], unknown);
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, child!, {})).rejects.toThrow(
+  await expect(prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) })).rejects.toThrow(
     `the protected branch head the probe recorded for ${child!.id} (${unknown}) cannot be resolved in this checkout`,
   );
   expect(git(workspace.path, "branch", "--list", `task/${child!.id}`)).toBe("");
@@ -81,7 +81,7 @@ it("pin の子の pickup の準備は、決着した pin の子(別の Interview
   const heads = Object.fromEntries([done, pending, earlier, work].map(({ id }) => [id, answeredBranch(workspace, id)]));
   for (const task of [done, earlier, work]) completeTask(db, task, FULL_HANDOFF, "tako", NOW, "worker");
 
-  await prepareWorkspaceAtPickup(db, workspace, picked, {});
+  await prepareWorkspaceAtPickup(db, workspace, picked, { now: new Date(0) });
 
   const branches = git(workspace.path, "for-each-ref", "--format=%(refname:short)", "refs/heads/task/").split("\n");
   expect(branches.sort()).toEqual([`task/${pending.id}`, `task/${picked.id}`, `task/${work.id}`].sort());

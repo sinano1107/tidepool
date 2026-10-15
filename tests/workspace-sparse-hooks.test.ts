@@ -47,7 +47,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
     ...HUMAN_WEBUI,
   );
 
-  await prepareWorkspaceAtPickup(db, workspace, parent, {});
+  await prepareWorkspaceAtPickup(db, workspace, parent, { now: new Date(0) });
   excludeWorkspaceProjectSettings(workspace);
   commitWork(workspace.path, "parent.txt", "parent work\n");
   releaseWorkspace(db, workspace, parent, now);
@@ -65,7 +65,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
     now,
     ...HUMAN_WEBUI,
   );
-  await prepareWorkspaceAtPickup(db, workspace, child, {});
+  await prepareWorkspaceAtPickup(db, workspace, child, { now: new Date(0) });
   excludeWorkspaceProjectSettings(workspace);
   expect(readFileSync(join(workspace.path, "parent.txt"), "utf8")).toBe("parent work\n");
   writeFileSync(join(workspace.path, "child.txt"), "child work\n");

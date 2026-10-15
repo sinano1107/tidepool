@@ -27,7 +27,7 @@ it("`.git` がファイルの checkout は pickup の準備で拒否され、理
     ...HUMAN_WEBUI,
   );
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task, {})).rejects.toThrow(
+  await expect(prepareWorkspaceAtPickup(db, workspace, task, { now: new Date(0) })).rejects.toThrow(
     ".git is not a directory — linked worktrees and submodules cannot be workspaces",
   );
   db.close();

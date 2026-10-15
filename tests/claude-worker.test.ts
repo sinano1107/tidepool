@@ -4494,7 +4494,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     runtime.hold(task.id);
     // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
     // 実物で通す —— tree rule はその基準に対して退避する
-    await prepareWorkspaceAtPickup(db, ws, task, {});
+    await prepareWorkspaceAtPickup(db, ws, task, { now: new Date(0) });
     // 途中ターンの WIP: session はタスクブランチの上で作業していた
     writeFileSync(join(ws.path, "wip.txt"), "half-done work\n");
     processes[0]!.stdout.write(CAP_STREAM);

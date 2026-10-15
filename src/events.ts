@@ -241,7 +241,7 @@ export type EventPayload =
   // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
   // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
   | { kind: "pr_promotion_abandoned"; head: string | null }
-  // ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子の pickup の準備が、決着したこの pin の子の task ブランチの ref を
+  // ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子の pickup の準備が、決着したこの pin の子のタスクブランチの ref を
   // 外した —— head は外した時点の値で、答案の diff はここから後で確かめる
   | { kind: "task_branch_removed"; head: string }
   // issue #11: a risk-approval question's "approve" answer raised the
