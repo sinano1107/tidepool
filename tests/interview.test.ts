@@ -134,10 +134,21 @@ it("pin の子の前提の破綻の question への continue は宣言者を再�
   expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
 });
 
-it("pin の子の前提の破綻の question の context は、理由に加えて盤面が確定した probe と rubric、retry の帰結を言う(ADR 0248 決定2・4)", () => {
+it("pin の子の前提の破綻の question の、人間が答える context は、理由に加えて盤面が確定した probe と rubric、retry の帰結を言う(ADR 0248 決定2・4)", () => {
   const { db, failed } = twoPinnedChildren();
-  const { purpose } = breachQuestion(db, failed);
-  for (const text of ["the probe is broken", POSE.probe, POSE.rubric, `"retry"`]) expect(purpose).toContain(text);
+  const question = breachQuestion(db, failed);
+  for (const text of ["the probe is broken", POSE.probe, POSE.rubric, `"retry"`]) expect(getTask(db, question.id)!.purpose).toContain(text);
+});
+
+it("continue の後、宣言した pin の子が読む自分の history の破綻の question は人間の答えを運び、context(rubric・Interview の帰結)を運ばない(ADR 0253 決定2 / ADR 0245 決定2)", () => {
+  const { db, failed } = twoPinnedChildren();
+  answerQuestionViaWebui(db, breachQuestion(db, failed), ["continue"], new Date(0), { comment: "the probe holds" });
+  const history = taskHistoryRows(db, failed.id).map((row) => row.entry);
+  expect(history).toEqual([
+    { child_outside_the_decomposition: expect.objectContaining({ title: `premise breach: ${POSE.title}`, answer: ["continue"], comment: "the probe holds" }) },
+  ]);
+  expect(JSON.stringify(history)).not.toContain(POSE.rubric);
+  expect(JSON.stringify(history)).not.toMatch(/interview/i);
 });
 
 it("pin の子の failure question は兄弟の pin の子を held にしない —— 兄弟はそのまま pickup できる(ADR 0245 決定5)", () => {

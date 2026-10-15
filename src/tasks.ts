@@ -1617,8 +1617,10 @@ export function answerQuestion(
         return;
       case "failure":
       case "premise_breach": {
-        // retry は Interview の pin の子の破綻の question にだけある固定の選択肢(ADR 0248 決定2)
-        const retry = kind.kind === "premise_breach" && answer === "retry";
+        const breach = kind.kind === "premise_breach";
+        // 固定選択肢の question は出した選択肢でしか答えられず、retry を出すのは Interview の破綻の question だけ(ADR 0248 決定2)。
+        // 失敗 question の "retry" は再実行の意味なので、種類で絞る
+        const retry = breach && answer === "retry";
         if (answer !== kind.cancel_option && !retry) {
           unblockTarget = blockedParent();
           break;
@@ -1626,7 +1628,6 @@ export function answerQuestion(
         const failed = getTask(db, question.parent_id!)!;
         const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
         if (plan) {
-          const breach = kind.kind === "premise_breach";
           for (const id of abandonScopeIds(db, failed.id, breach)) {
             cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
           }
@@ -1700,18 +1701,18 @@ export function answerQuestion(
 
 /** retry(ADR 0248 決定2・3): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した probe を
  *  盤面名義の event で新しい root の history に渡す。 */
-function retryInterview(db: Db, old: Task, declarer: Task, comment: string | undefined, now: Date, origin: EventOrigin): void {
-  const { probe, rubric } = interviewProbe(db, old.id)!;
+function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: string | undefined, now: Date, origin: EventOrigin): void {
+  const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
   const root = registerTask(
     db,
     {
-      type: old.type,
-      title: old.title,
-      purpose: old.purpose,
-      completion_criteria: old.completion_criteria,
-      workspace: old.workspace ?? undefined,
-      review_tier: old.review_tier ?? undefined,
-      interview_targets: interviewTargets(db, old.id)!,
+      type: previousRoot.type,
+      title: previousRoot.title,
+      purpose: previousRoot.purpose,
+      completion_criteria: previousRoot.completion_criteria,
+      workspace: previousRoot.workspace ?? undefined,
+      review_tier: previousRoot.review_tier ?? undefined,
+      interview_targets: interviewTargets(db, previousRoot.id)!,
     },
     now,
     HUMAN_WORKER_ID,
@@ -1723,7 +1724,7 @@ function retryInterview(db: Db, old: Task, declarer: Task, comment: string | und
     origin: "board",
     payload: {
       kind: "interview_retried",
-      previous_root_id: old.id,
+      previous_root_id: previousRoot.id,
       probe,
       rubric,
       premise_breach: premiseBreachReason(db, declarer.id),
@@ -3268,8 +3269,10 @@ interface SettledChildContext {
   origin_direct_cancel?: { reason: string | null };
 }
 
-type HistoryChildContext = TaskContent &
+type HistoryChildContext = Omit<TaskContent, "purpose"> &
   Omit<SettledChildContext, "title" | "status"> & {
+    /** Interview の pin の子が読む自分の前提の破綻の question だけ無い(ADR 0253 決定2)。 */
+    purpose?: string;
     status: BoardTask["status"];
     you?: true;
     /** Interview の子だけ: complete_interview の採点が名指す id。 */
@@ -3308,7 +3311,9 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
 
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
- *  分解外の子は1行で、`id` はそれぞれの event。`readingChildId` は親の history を読む子: その子に `you` を付け、出題の行から rubric を伏せる(ADR 0253 決定2)。 */
+ *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
+ *  history を読む子: その子に `you` を付け、出題の行から rubric を伏せ、`retry_of` を載せない(ADR 0253 決定2)。Interview の pin の子
+ *  自身の history は、前提の破綻の question の purpose(context)を載せない(同)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
@@ -3347,13 +3352,16 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     const { kind: _, ...retry_of } = retried.payload;
     timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
   }
+  const pinChild = getTask(db, taskId)?.interview_target_id != null;
   for (const child of listChildren(db, taskId)) {
     const registered = latestEventOfTask(db, child.id, "task_registered");
     if (!registered) continue;
     const { based_on_decision } = registered.payload;
     const context: HistoryChildContext = {
       title: child.title,
-      purpose: child.purpose,
+      // pin の子の前提の破綻の question の context は rubric と Interview の帰結を持つので、宣言者には答えだけを見せる
+      // (ADR 0253 決定2 / ADR 0245 決定2)。人間は question の context を読む(ADR 0248 決定4)
+      ...(!(pinChild && child.question_breached_decision !== null) && { purpose: child.purpose }),
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
