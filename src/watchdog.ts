@@ -1,4 +1,4 @@
-import { quarantineRefusedRow, rowRefusalEvidence } from "./cli-auth.js";
+import { quarantineRefusedRow, ROW_REFUSAL_EVIDENCE } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
@@ -201,7 +201,7 @@ export function rowRefusalHandler(
     const target = task.interview_target_id === null ? undefined : unrowedTarget(deps.db, task.interview_target_id);
     deps.db.transaction(() => {
       if (target) {
-        questionRefusedTarget(deps.db, task, { ...target, cause: refusal.cause }, `ended with ${rowRefusalEvidence(refusal.cause)}`, now);
+        questionRefusedTarget(deps.db, task, { ...target, cause: refusal.cause }, `ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`, now);
         returnToQueue(deps.db, task, { kind: "row_refused", ...refusal }, now);
       } else {
         quarantineRefusedRow(deps.db, refusal, `The worker session for task ${taskId}`, now);

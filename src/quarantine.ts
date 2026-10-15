@@ -349,22 +349,17 @@ export const QUARANTINES = [
     scope: "target",
     prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
       const { provider, model } = parseTableRowValue(value!);
-      const recheck = "the board checks this model id again before it accepts the answer";
-      return refusalCause === "cli_version_too_old"
-        ? targetRefusalProse(
-            `${provider} / ${model}`,
-            reason,
-            `This board's Claude Code CLI is older than this model requires, so the ${provider} provider refused the model id \`${model}\` on this board.`,
-            "update tidepool to a version that supports this model first",
-            recheck,
-          )
-        : targetRefusalProse(
-            `${provider} / ${model}`,
-            reason,
-            `The ${provider} provider refused the model id \`${model}\` on this board — with this CLI version and this account. The board does not know why.`,
-            "if the model id is right, update tidepool or restore the account first",
-            recheck,
-          );
+      const [why, keep] =
+        refusalCause === "cli_version_too_old"
+          ? [
+              `This board's Claude Code CLI is older than this model requires, so the ${provider} provider refused the model id \`${model}\` on this board.`,
+              "update tidepool to a version that supports this model first",
+            ]
+          : [
+              `The ${provider} provider refused the model id \`${model}\` on this board — with this CLI version and this account. The board does not know why.`,
+              "if the model id is right, update tidepool or restore the account first",
+            ];
+      return targetRefusalProse(`${provider} / ${model}`, reason, why, keep, "the board checks this model id again before it accepts the answer");
     },
   },
   {

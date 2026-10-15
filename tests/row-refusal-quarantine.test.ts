@@ -572,12 +572,15 @@ const SONNET_MEDIUM = { provider: "anthropic", model: "claude-sonnet-5-5", effor
 const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low", tier: "economy" };
 const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
 
-/** Interview を登録して出題し、root の session を終えて枠を空け、pin の子の id を対象の順に返す(root は登録の poll で拾われる)。 */
-async function poseInterview(proc: ReturnType<typeof recordingSpawn>, targets: object[]): Promise<{ rootId: string; childIds: string[] }> {
+/** Interview を登録して出題し、pin の子の id を対象の順に返す。root は登録の poll で拾われ、実 adapter の盤面(`proc`)では
+ *  その session を終えて枠を空ける。 */
+async function poseInterview(proc: ReturnType<typeof recordingSpawn> | undefined, targets: object[]): Promise<{ rootId: string; childIds: string[] }> {
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
   const posed = await callAsTask(t, root.id, "pose_probe", POSE);
-  proc.emitExitAt(proc.processes.length - 1, 0, null);
-  await settle();
+  if (proc) {
+    proc.emitExitAt(proc.processes.length - 1, 0, null);
+    await settle();
+  }
   return { rootId: root.id, childIds: JSON.parse(posed.content[0].text).child_ids };
 }
 
@@ -621,16 +624,9 @@ const MINI_UNLISTED = { provider: "openai", model: "gpt-5.4-mini", effort: "high
 const GPT55_MAX = { provider: "openai", model: "gpt-5.5", effort: "max", tier: "standard" };
 const LUNA = { provider: "openai", model: "gpt-5.6-luna", effort: "high", tier: "economy" };
 
-/** openai だけを喋る盤面で Interview を出題する(root は scripted worker が拾い、出題で枠を返す)。 */
-async function poseOpenaiInterview(targets: object[]) {
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
-  const posed = await callAsTask(t, root.id, "pose_probe", POSE);
-  return { rootId: root.id as string, childIds: JSON.parse(posed.content[0].text).child_ids as string[] };
-}
-
 it("openai の行でない対象が一覧に無い / effort が広告されないと、spawn の前に対象の question が鍵ごとに立ち、行の Quarantine は立たず、一覧にある兄弟の子は走る", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
-  const { childIds: [mini, max, luna] } = await poseOpenaiInterview([MINI_UNLISTED, GPT55_MAX, LUNA]);
+  const { childIds: [mini, max, luna] } = await poseInterview(undefined, [MINI_UNLISTED, GPT55_MAX, LUNA]);
   await t.clock.advance(HOUR);
 
   const opened = (await questions(t)).filter((q) => q.question_quarantine_kind?.startsWith("interviewTarget"));
@@ -700,7 +696,7 @@ it("「走らせ直す」は、その id の検査がまだ断られれば拒ま
 it("effort の鍵の question の「走らせ直す」は一覧を読み直し、その effort が広告されていなければ拒まれ、広告されれば受理される", async () => {
   let models = MEASURED_OPENAI_MODELS;
   await bootOpenai(async (now) => listingProbe(models)(now));
-  await poseOpenaiInterview([GPT55_MAX]);
+  await poseInterview(undefined, [GPT55_MAX]);
   await t.clock.advance(HOUR);
   const question = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTargetEffort")!;
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["run it again"] });
