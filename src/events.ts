@@ -393,6 +393,15 @@ export type EventPayload =
       // truncated. null means none was observed. Display only — no judgment on
       // the board reads it (ADR 0104 決定2 / ADR 0184 決定3).
       last_message: string | null;
+      // ADR 0261 決定5: the Codex adapter's re-read of the App Server usage
+      // right after an exit that saw a `turn.failed` line — the windows that
+      // were full (usedPercent >= 100), that none was, or why it could not be
+      // read. Absent when the session saw no `turn.failed` and nothing was
+      // re-read. Classification evidence only; never written to the Throttle.
+      usage_recheck?:
+        | { result: "full"; windows: { name: string; used_percent: number; resets_at: string }[] }
+        | { result: "not_full" }
+        | { result: "unreadable"; reason: string };
       // issue #379: the id of the `worker_spawned` event that opened this
       // same session — a task can have several worker sessions (retry /
       // decompose 統合復帰 / quarantine 復帰), and the adapter now names each

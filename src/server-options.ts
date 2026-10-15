@@ -39,6 +39,7 @@ import {
 import type { Clock } from "./clock.js";
 import {
   CODEX_APP_SERVER_LIMIT_MS,
+  type CodexAppServerProbe,
   checkCodexCliVersion,
   codexCommandThrough,
   codexLoginAbsence,
@@ -47,6 +48,7 @@ import {
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
+  type CodexWorkerOptions,
   createCodexCapabilityCheck,
   createCodexWorkspaceCheck,
 } from "./codex-worker.js";
@@ -308,47 +310,51 @@ export function buildWorkerOptions(
   };
 }
 
+/** `CodexWorkerOptions` の口の一覧を持つ唯一の場所 —— `buildWorkerOptions` と同じ理由(ADR 0043)。 */
+export function buildCodexWorkerOptions(
+  board: BoardComposition & { registryDir: string },
+  session: Parameters<typeof buildWorkerOptions>[1],
+): CodexWorkerOptions {
+  return {
+    db: session.db,
+    clock: session.clock,
+    reclaimTimeout: session.reclaimTimeout,
+    containers: session.containers,
+    registry: { dir: board.registryDir, mode: board.registryMode },
+    agent: board.defaultAgentName,
+    auditorName: board.auditorName,
+    workspace: board.workspaceName,
+    workspacesDir: board.workspacesDir,
+    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+    transcripts: session.transcripts,
+    codexHome: board.codexHome,
+    executable: board.codexExecutable,
+    cliVersion: CODEX_CLI_VERSION,
+    // ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る口
+    boardCall: session.boardCall,
+    boardState: board.boardState,
+    onSpawnFailed: session.onSpawnFailed,
+    onWorkerExited: session.onWorkerExited,
+    // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する
+    usageProbe: codexUsageProbe(board, session.boardCall),
+    onCapInterrupted: session.onCapInterrupted,
+  };
+}
+
 /** registry が無ければ LoggingWorker、あれば実 CLI worker(issue #33 / ADR 0043
  *  でこの分岐ごと合成側へ移した)。`ServerOptions.worker` はこれで埋まるので、
  *  合成 root から渡されるのは env 由来のスカラだけになる。 */
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts }) => {
-    const registry = { dir: registryDir, mode: board.registryMode } as const;
-    return new CanonicalWorkerRouter({
+  return (session) =>
+    new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       adapters: {
-        "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions(
-            { ...board, registryDir },
-            { db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts },
-          ),
-        ),
-        codex: new CodexWorker({
-          db,
-          clock,
-          reclaimTimeout,
-          containers,
-          registry,
-          agent: board.defaultAgentName,
-          auditorName: board.auditorName,
-          workspace: board.workspaceName,
-          workspacesDir: board.workspacesDir,
-          mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
-          transcripts,
-          codexHome: board.codexHome,
-          executable: board.codexExecutable,
-          cliVersion: CODEX_CLI_VERSION,
-          // ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る口
-          boardCall,
-          boardState: board.boardState,
-          onSpawnFailed,
-          onWorkerExited,
-        }),
+        "claude-code": new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, session)),
+        codex: new CodexWorker(buildCodexWorkerOptions({ ...board, registryDir }, session)),
       },
     });
-  };
 }
 
 /** pickup の除外判定と queue の skipped 表示が共有する口。ここで選ばれた設定が
@@ -739,6 +745,15 @@ function profileAdmin(board: BoardComposition, registry: WritableRegistry | unde
   };
 }
 
+/** Codex App Server の使用量 probe。pickup の観測(`openaiUsage`)と worker の exit の読み直し(ADR 0261)が同じ形で組む。 */
+function codexUsageProbe(board: BoardComposition, call: BoardCall): CodexAppServerProbe {
+  return createCodexAppServerProbe({
+    executable: board.codexExecutable,
+    codexHome: board.codexHome,
+    command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
+  });
+}
+
 /** Board call を撃つ口たち(ADR 0136 決定2)。どれも口 `call` を通るので、口ができる
  *  `startServer` がここを呼ぶ。 */
 function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCallers {
@@ -762,11 +777,7 @@ function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCa
     attributionClient: new ClaudeAttributionClient({ exec: execThrough(call, "attribution") }),
     // ADR 0120 決定1(b)(c): Behavior candidate 起草の Board call。同じ理由で常に配線する
     behaviorDraftClient: new ClaudeBehaviorDraftClient({ exec: execThrough(call, "Behavior candidate draft") }),
-    openaiUsage: createCodexAppServerProbe({
-      executable: board.codexExecutable,
-      codexHome: board.codexHome,
-      command: codexCommandThrough(call, "Codex App Server probe", CODEX_APP_SERVER_LIMIT_MS),
-    }),
+    openaiUsage: codexUsageProbe(board, call),
     // ADR 0259 決定5: (codex, workspace) の組の question への回答時の検査
     codexWorkspaceContainment: createCodexWorkspaceCheck({
       executable: board.codexExecutable,

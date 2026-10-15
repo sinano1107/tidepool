@@ -98,11 +98,15 @@ function pickedUpAt(db: Db, taskId: string): number {
 }
 
 /** exit が持っていた逐語 —— worker の最後の発話、CLI が報告した失敗の文、stderr 末尾 ——
- *  を見出し付きでこの順に連結する。空の欄は節ごと出さない(ADR 0188 / 0189 / 0191)。 */
+ *  を見出し付きでこの順に連結する。空の欄は節ごと出さない(ADR 0188 / 0189 / 0191)。
+ *  使用量を読み直せなかった exit だけ、CLI の失敗の文の後ろに1行添える(ADR 0261 決定6)。 */
 function exitSections(exit: WorkerExit | undefined): string {
   return (
     (exit?.last_message ? `\n\nlast message from the worker:\n${exit.last_message}` : "") +
     (exit?.reported_error ? `\n\nerror reported by the CLI:\n${exit.reported_error}` : "") +
+    (exit?.usage_recheck?.result === "unreadable"
+      ? `\n\nthe board could not check whether a usage cap ended this session: ${exit.usage_recheck.reason}`
+      : "") +
     (exit?.stderr_tail ? `\n\nstderr tail:\n${exit.stderr_tail}` : "") +
     (exit?.model_swaps?.length
       ? `\n\nmodels swapped in by the CLI:\n${exit.model_swaps.map((s) => `${s.from} → ${s.to}`).join("\n")}`

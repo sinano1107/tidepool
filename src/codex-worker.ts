@@ -20,6 +20,7 @@ import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import {
   CODEX_APP_SERVER_VERSION,
+  type CodexAppServerProbe,
   type CodexCliCommand,
   callAppServer,
   codexCommandThrough,
@@ -301,6 +302,11 @@ export interface CodexWorkerOptions {
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
+  /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
+   *  分類にだけ使い、Throttle の状態には書かない。 */
+  usageProbe?: CodexAppServerProbe;
+  /** ADR 0261 決定3: 上限到達による中断の盤面側の一撃(`capInterruptionHandler` 製)。Claude と同じく exit より先に撃つ。 */
+  onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
 }
 
 /** Codex に登録された hook のうち、盤面が宣言と突き合わせる項目 —— ADR 0130 決定3 の4つ
@@ -1083,6 +1089,25 @@ function readTurnFailure(value: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
+type UsageRecheck = NonNullable<WorkerExit["usage_recheck"]>;
+
+/** ADR 0261 決定2・6: どれかの窓が Throttle の 100% キャップに届いていれば満杯。読めなければ理由を持つ。 */
+async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<UsageRecheck> {
+  try {
+    const observed = await probe(now);
+    if (observed.status !== "observed") return { result: "unreadable", reason: observed.reason };
+    const full = observed.windows.filter((window) => window.usedPercent >= 100);
+    return full.length === 0
+      ? { result: "not_full" }
+      : {
+          result: "full",
+          windows: full.map((window) => ({ name: window.name, used_percent: window.usedPercent, resets_at: window.resetsAt })),
+        };
+  } catch (error) {
+    return { result: "unreadable", reason: String(error) };
+  }
+}
+
 /** ADR 0189: worker の発話は `item.completed` の `agent_message`(空の text は前の発話を残す)。 */
 function readAgentMessage(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
@@ -1290,9 +1315,12 @@ export class CodexWorker implements WorkerAdapter {
       let usage: CodexUsage | null = null;
       let reportedError: string | null = null;
       let lastMessage: string | null = null;
+      // ADR 0261 決定2: 読み直しの条件は `turn.failed` の行の有無だけ —— 文(reported_error)は読まない
+      let turnFailed = false;
       const observe = (event: unknown) => {
         usage = readUsage(event) ?? usage;
         reportedError = readTurnFailure(event) ?? reportedError;
+        turnFailed ||= (event as { type?: unknown } | null)?.type === "turn.failed";
         lastMessage = readAgentMessage(event) ?? lastMessage;
       };
       const flushStdout = readLines(child.stdout, (line) => observe(parseJsonl(line)));
@@ -1320,6 +1348,16 @@ export class CodexWorker implements WorkerAdapter {
           reported_error: reportedError,
           last_message: lastMessage,
         };
+        const probe = this.options.usageProbe;
+        if (turnFailed && probe) {
+          void recheckUsage(probe, this.options.clock.now()).then((recheck) =>
+            record({ ...exit, usage_recheck: recheck }, outputClosed)
+          );
+        } else {
+          record(exit, outputClosed);
+        }
+      };
+      const record = (exit: WorkerExit, outputClosed: boolean) => {
         const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
           ? {
               input_tokens: usage.input_tokens,
@@ -1346,6 +1384,9 @@ export class CodexWorker implements WorkerAdapter {
           at: this.options.clock.now(),
         });
         removeTaskTemp();
+        // ADR 0261 決定3: Claude と同じ順 —— 中断を先に撃てば、続く exit は後始末中として盤面に読まれる。
+        // 回収済み観測が読み直しの間に届いていても `reclaimed()` は解決する
+        if (exit.usage_recheck?.result === "full") this.options.onCapInterrupted?.(task.id, this.containers.reclaimed(task.id));
         this.options.onWorkerExited?.(task.id, exit);
         // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
         projectWhenTranscriptCloses(this.options.db, transcript.stream, {

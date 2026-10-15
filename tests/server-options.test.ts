@@ -9,6 +9,7 @@ import { QUARANTINES } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import {
   type BoardComposition,
+  buildCodexWorkerOptions,
   buildServerOptions,
   buildWorkerFactory,
   buildWorkerOptions,
@@ -320,6 +321,25 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
   expect(optional.filter((key) => !emitted.has(key))).toEqual(["pty", "enumerateSkills"]);
 });
 
+/** 同じ網羅を `CodexWorkerOptions` にも掛ける(ADR 0261)。使用量の読み口と中断の一撃は、渡し忘れれば
+ *  「Codex の上限到達による exit が報告なき exit の failure question に落ちる」形で静かに壊れる。 */
+it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使用量の読み口は openaiUsage と同じ App Server probe である(ADR 0043 / ADR 0261)", async () => {
+  const optional = optionalFields("codex-worker.ts", "CodexWorkerOptions");
+  // 走査が壊れていないことの control
+  expect(optional).toEqual(expect.arrayContaining(["usageProbe", "onCapInterrupted", "onWorkerExited"]));
+
+  const registryDir = await makeRegistry();
+  const harness = containerHarness(fakeContainers());
+  const onCapInterrupted = () => {};
+  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, onCapInterrupted, onRowRefused: () => {}, onSpawnFailed: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  expect(optional.filter((key) => !Object.keys(options).includes(key))).toEqual([]);
+  expect(options.onCapInterrupted).toBe(onCapInterrupted);
+  // 同じ口・同じ executable を通る同じ probe は、同じ観測を返す(composition() の codex は無いので観測不能の理由まで一致する)
+  const now = new Date("2026-10-15T00:00:00Z");
+  const callers = (await buildOptions(composition())).boardCallers?.(harness.boardCall);
+  expect(await options.usageProbe?.(now)).toEqual(await callers?.openaiUsage?.(now));
+});
+
 /** 上の網羅は `buildWorkerOptions` の戻り値を見ている。本番の worker がその
  *  リテラルで組まれていなければ空振りする —— ADR 0041 §4 の「テストは合成 root が
  *  組み立てたものを観測する」を、この層にも同じ形で適用する。
@@ -334,6 +354,7 @@ it("worker options の口の一覧は main.ts に戻っていない(ADR 0043)", 
   expect(source("main.ts")).not.toMatch(/new ClaudeCodeWorker\(/);
   // 本番の合成が実際にその一覧を使っていること(呼び出しの**形**は主張しない)
   expect(source("server-options.ts")).toMatch(/new ClaudeCodeWorker\(\s*buildWorkerOptions\(/);
+  expect(source("server-options.ts")).toMatch(/new CodexWorker\(\s*buildCodexWorkerOptions\(/);
 });
 
 /** ADR 0040 の線: worker ログの置き場と、盤面が「重なるな」と守っている
