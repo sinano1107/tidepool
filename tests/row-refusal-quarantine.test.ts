@@ -573,9 +573,14 @@ const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: 
 const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
 
 /** Interview を登録して出題し、pin の子の id を対象の順に返す。root は登録の poll で拾われ、実 adapter の盤面(`proc`)では
- *  その session を終えて枠を空ける。 */
-async function poseInterview(proc: ReturnType<typeof recordingSpawn> | undefined, targets: object[]): Promise<{ rootId: string; childIds: string[] }> {
+ *  その session を終えて枠を空ける。`beforePose` は root が拾われた後、出題の poll で子が拾われる前に走る。 */
+async function poseInterview(
+  proc: ReturnType<typeof recordingSpawn> | undefined,
+  targets: object[],
+  beforePose = () => {},
+): Promise<{ rootId: string; childIds: string[] }> {
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
+  beforePose();
   const posed = await callAsTask(t, root.id, "pose_probe", POSE);
   if (proc) {
     proc.emitExitAt(proc.processes.length - 1, 0, null);
@@ -847,19 +852,11 @@ it("行の Quarantine の question に「走らせ直す」と答えると、止
   expect(await spawned()).toEqual(["claude-sonnet-5-5", "claude-sonnet-5-5"]);
 });
 
-/** root(economy の review —— 種の economy 行は1行だけ)が拾われてから `openQuarantine` で行を外し、出題する。出題の poll で
- *  子が拾われる前に Quarantine が開いている。fake の adapter の盤面で、pin の子の id を対象の順に返す。 */
-async function poseWith(targets: object[], openQuarantine: () => void): Promise<string[]> {
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
-  openQuarantine();
-  return JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text).child_ids;
-}
-
+// 行の Quarantine は root(economy の review —— 種の economy 行は1行だけ)が拾われてから開く。出題の扉は止まらない
 it("model ごとの行の Quarantine は、表の行と effort の違う対象を pin した子も止め、別の model の兄弟の子は走る(ADR 0200 決定5)", async () => {
   t = await bootTidepool();
-  const [medium, opus] = await poseWith(
-    [SONNET_MEDIUM, OPUS_46],
-    () => registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "refused", t.clock.now()),
+  const { childIds: [medium, opus] } = await poseInterview(undefined, [SONNET_MEDIUM, OPUS_46], () =>
+    registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "refused", t.clock.now()),
   );
   await t.clock.advance(HOUR);
 
@@ -870,9 +867,8 @@ it("model ごとの行の Quarantine は、表の行と effort の違う対象�
 
 it("effort ごとの行の Quarantine は、その effort の対象を pin した子だけを止める(ADR 0218 決定2)", async () => {
   t = await bootTidepool();
-  const [high, low] = await poseWith(
-    [SONNET_ROW_TARGET, SONNET_LOW],
-    () => registerQuarantine(t.db, "tableRowEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "high"), "refused", t.clock.now()),
+  const { childIds: [high, low] } = await poseInterview(undefined, [SONNET_ROW_TARGET, SONNET_LOW], () =>
+    registerQuarantine(t.db, "tableRowEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "high"), "refused", t.clock.now()),
   );
   await t.clock.advance(HOUR);
 
