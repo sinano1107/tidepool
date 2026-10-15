@@ -813,7 +813,7 @@ it("前提の破綻の question の retry は、「この対象は測らない�
   expect(JSON.parse(current.content[0].text).interview_targets).toEqual([OPUS_46, OPUS_55_MEDIUM]);
 });
 
-// ── 表の行と一致する Interview の対象(ADR 0184 決定4 を pin の子にも、issue #1994) ──
+// ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
 
 /** 種の economy 行と4欄が一致する対象 —— 断られると行の Quarantine になる。 */
 const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
@@ -839,7 +839,7 @@ it("表の行と一致する対象を pin した子が 404 で断られると、
   expect(await queueStatus(child)).toBe("skipped");
 });
 
-it("行の Quarantine の question に「走らせ直す」と答えると、止まっていた pin の子は次の pickup で拾われる", async () => {
+it("行の Quarantine の question に「the row can run again」と答えると、止まっていた pin の子は次の pickup で拾われる", async () => {
   const { proc, spawned } = await refuseRowTarget();
   const [question] = await questions(t);
 
@@ -875,6 +875,22 @@ it("effort ごとの行の Quarantine は、その effort の対象を pin し�
   expect(t.worker.started.map((task) => task.id)).not.toContain(high);
   expect(await queueStatus(high!)).toBe("skipped");
   expect(t.worker.started.map((task) => task.id)).toContain(low);
+});
+
+it("openai の一覧の照合が同じ poll で開いた行の Quarantine は、その行と一致する対象を pin した子をその poll で止める", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  const { childIds: [mini] } = await poseInterview(undefined, [MINI_UNLISTED]);
+  // 子が拾われる poll の直前に、一覧に無い対象と一致する行を足す —— 行の Quarantine はその poll の観測で開く
+  applyExecutionSettingsChange(
+    t.db,
+    { setting: "row", row: { provider: "openai", tier: "economy", model: "gpt-5.4-mini", effort: "high", price_in: 1, price_out: 4 } },
+    "webui",
+    t.clock.now(),
+  );
+  await t.clock.advance(HOUR);
+
+  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "tableRow").map((q) => q.question_quarantine_value)).toContain("openai/gpt-5.4-mini");
+  expect(t.worker.started.map((task) => task.id)).not.toContain(mini);
 });
 
 it("CLI の版の古さで断られた行でない対象の question は、原因を名指す(ADR 0187)", async () => {

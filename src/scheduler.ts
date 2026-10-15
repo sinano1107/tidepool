@@ -16,7 +16,7 @@ import {
   firstSelectable,
   type ListAgentTiers,
   loadExecutionSettingTable,
-  pinsQuarantinedRow,
+  pinnedTargetRowQuarantined,
   readExecutionSettings,
   selectable,
   windowMatchesSetting,
@@ -94,7 +94,7 @@ export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => Execut
 /** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、task の実行 workspace と
  *  行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
  *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。
- *  断られた行でない Interview の対象(ADR 0199 決定4)の question か、対象に当たる行の Quarantine(ADR 0184 決定4)が
+ *  断られた行でない Interview の対象(ADR 0199 決定4)の question か、対象に当たる行の Quarantine(ADR 0184 決定2)が
  *  開いていれば、その対象を pin した子の候補は空になる。 */
 function withoutStopped(
   db: Db,
@@ -102,10 +102,9 @@ function withoutStopped(
   defaultWorkspaceName: string | undefined,
 ): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => ExecutionSetting[] {
   const pairs = (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
-  const rowStopped = pinsQuarantinedRow(db);
   return (task) => {
     const target = unrowedTarget(db, task);
-    if ((target && refusedTargetQuestion(db, target)) || rowStopped(task)) return [];
+    if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
     const workspace = task.workspace ?? defaultWorkspaceName;
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
