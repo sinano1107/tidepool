@@ -1089,10 +1089,8 @@ function readTurnFailure(value: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
-type UsageRecheck = NonNullable<WorkerExit["usage_recheck"]>;
-
 /** ADR 0261 決定2・6: どれかの窓が Throttle の 100% キャップに届いていれば満杯。読めなければ理由を持つ。 */
-async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<UsageRecheck> {
+async function recheckUsage(probe: CodexAppServerProbe, now: Date): Promise<NonNullable<WorkerExit["usage_recheck"]>> {
   try {
     const observed = await probe(now);
     if (observed.status !== "observed") return { result: "unreadable", reason: observed.reason };
@@ -1349,13 +1347,8 @@ export class CodexWorker implements WorkerAdapter {
           last_message: lastMessage,
         };
         const probe = this.options.usageProbe;
-        if (turnFailed && probe) {
-          void recheckUsage(probe, this.options.clock.now()).then((recheck) =>
-            record({ ...exit, usage_recheck: recheck }, outputClosed)
-          );
-        } else {
-          record(exit, outputClosed);
-        }
+        if (!turnFailed || !probe) return record(exit, outputClosed);
+        void recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => record({ ...exit, usage_recheck }, outputClosed));
       };
       const record = (exit: WorkerExit, outputClosed: boolean) => {
         const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
