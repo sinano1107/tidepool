@@ -10,7 +10,7 @@ import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
-import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import { api, bootTidepool, callAsTask, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
@@ -573,9 +573,14 @@ const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: 
 const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
 
 /** Interview を登録して出題し、pin の子の id を対象の順に返す。root は登録の poll で拾われ、実 adapter の盤面(`proc`)では
- *  その session を終えて枠を空ける。 */
-async function poseInterview(proc: ReturnType<typeof recordingSpawn> | undefined, targets: object[]): Promise<{ rootId: string; childIds: string[] }> {
+ *  その session を終えて枠を空ける。`beforePose` は root が拾われた後、出題の poll で子が拾われる前に走る。 */
+async function poseInterview(
+  proc: ReturnType<typeof recordingSpawn> | undefined,
+  targets: object[],
+  beforePose = () => {},
+): Promise<{ rootId: string; childIds: string[] }> {
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
+  beforePose();
   const posed = await callAsTask(t, root.id, "pose_probe", POSE);
   if (proc) {
     proc.emitExitAt(proc.processes.length - 1, 0, null);
@@ -806,6 +811,86 @@ it("前提の破綻の question の retry は、「この対象は測らない�
   }
   const current = await callAsTask(t, again.id, "get_current_task", {});
   expect(JSON.parse(current.content[0].text).interview_targets).toEqual([OPUS_46, OPUS_55_MEDIUM]);
+});
+
+// ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
+
+/** 種の economy 行と4欄が一致する対象 —— 断られると行の Quarantine になる。 */
+const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
+
+/** 表の行と一致する対象を pin した子が 404 で断られ、次の poll も過ぎた盤面。回答時の probe は通る。 */
+async function refuseRowTarget() {
+  // 報告なく終わった session の枠は watchdog が空ける
+  const watchdog = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
+  const proc = await bootClaude({ modelProbes: { anthropic: async () => ({ status: "runs" }) }, watchdog });
+  const { childIds: [child] } = await poseInterview(proc, [SONNET_ROW_TARGET]);
+  await t.clock.advance(HOUR);
+  await refuseLatestSession(proc, REFUSED_404);
+  await t.clock.advance(HOUR);
+  const spawned = async () => (await events(child!)).filter((e) => e.kind === "worker_spawned").map((e) => e.payload.model);
+  return { proc, child: child!, spawned };
+}
+
+it("表の行と一致する対象を pin した子が 404 で断られると、行の Quarantine が開いている間は同じ model で拾い直されず skipped になる", async () => {
+  const { child, spawned } = await refuseRowTarget();
+
+  expect((await questions(t)).map((q) => q.title)).toEqual([SONNET_ROW]);
+  expect(await spawned()).toEqual(["claude-sonnet-5-5"]);
+  expect(await queueStatus(child)).toBe("skipped");
+});
+
+it("行の Quarantine の question に「the row can run again」と答えると、止まっていた pin の子は次の pickup で拾われる", async () => {
+  const { proc, spawned } = await refuseRowTarget();
+  const [question] = await questions(t);
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["the row can run again"] })).status).toBe(200);
+  // 枠を握る session(子が止まっている間に拾われたもの)を終えて、次の pickup を回す
+  proc.emitExitAt(proc.processes.length - 1, 0, null);
+  await settle();
+  await t.clock.advance(HOUR);
+
+  expect(await spawned()).toEqual(["claude-sonnet-5-5", "claude-sonnet-5-5"]);
+});
+
+// 行の Quarantine は root(economy の review —— 種の economy 行は1行だけ)が拾われてから開く。出題の扉は止まらない
+it("model ごとの行の Quarantine は、表の行と effort の違う対象を pin した子も止め、別の model の兄弟の子は走る(ADR 0200 決定5)", async () => {
+  t = await bootTidepool();
+  const { childIds: [medium, opus] } = await poseInterview(undefined, [SONNET_MEDIUM, OPUS_46], () =>
+    registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "refused", t.clock.now()),
+  );
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.started.map((task) => task.id)).not.toContain(medium);
+  expect(await queueStatus(medium!)).toBe("skipped");
+  expect(t.worker.started.map((task) => task.id)).toContain(opus);
+});
+
+it("effort ごとの行の Quarantine は、その effort の対象を pin した子だけを止める(ADR 0218 決定2)", async () => {
+  t = await bootTidepool();
+  const { childIds: [high, low] } = await poseInterview(undefined, [SONNET_ROW_TARGET, SONNET_LOW], () =>
+    registerQuarantine(t.db, "tableRowEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "high"), "refused", t.clock.now()),
+  );
+  await t.clock.advance(HOUR);
+
+  expect(t.worker.started.map((task) => task.id)).not.toContain(high);
+  expect(await queueStatus(high!)).toBe("skipped");
+  expect(t.worker.started.map((task) => task.id)).toContain(low);
+});
+
+it("openai の一覧の照合が同じ poll で開いた行の Quarantine は、その行と一致する対象を pin した子をその poll で止める", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  const { childIds: [mini] } = await poseInterview(undefined, [MINI_UNLISTED]);
+  // 子が拾われる poll の直前に、一覧に無い対象と一致する行を足す —— 行の Quarantine はその poll の観測で開く
+  applyExecutionSettingsChange(
+    t.db,
+    { setting: "row", row: { provider: "openai", tier: "economy", model: "gpt-5.4-mini", effort: "high", price_in: 1, price_out: 4 } },
+    "webui",
+    t.clock.now(),
+  );
+  await t.clock.advance(HOUR);
+
+  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "tableRow").map((q) => q.question_quarantine_value)).toContain("openai/gpt-5.4-mini");
+  expect(t.worker.started.map((task) => task.id)).not.toContain(mini);
 });
 
 it("CLI の版の古さで断られた行でない対象の question は、原因を名指す(ADR 0187)", async () => {
