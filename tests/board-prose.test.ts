@@ -12,7 +12,7 @@ const words = (text: string) => text.replace(/\s+/g, " ");
 const SPLIT = { withheld: [], added: [] };
 const NOT_SPLIT_SWAP = { withheld: ["decompose", "redecompose"] as const, added: [] };
 const POSE = { withheld: ["decompose", "redecompose", "complete_task"] as const, added: ["pose_probe"] as const };
-const POSED = { withheld: ["decompose", "redecompose", "complete_task"] as const, added: ["complete_interview"] as const };
+const POSED = { withheld: ["decompose", "redecompose", "complete_task"] as const, added: ["complete_interview", "report_broken_probe"] as const };
 
 it("分ける task の doctrine はバイト単位で不変(#695)", () => {
   expect(boardDoctrine(CLAUDE, SPLIT)).toBe(

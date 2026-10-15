@@ -841,7 +841,7 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] }));
+    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules

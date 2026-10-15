@@ -581,7 +581,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("出題済みの Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const f = await fixture();
     await f.start(posedInterviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] }));
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {

@@ -99,7 +99,7 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id)).toEqual([]);
 });
 
-it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview と、報告したことが無ければ report_broken_probe を持つ。pin の子は分解の verb だけを持たず、普通の work は分解の verb を持ち、pin の子と普通の work はどの差し替えの verb も持たない(ADR 0253 決定4・5 / ADR 0251 決定1・2)", async () => {
+it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview と report_broken_probe を持つ。pin の子は分解の verb だけを持たず、普通の work は分解の verb を持ち、pin の子と普通の work はどの差し替えの verb も持たない(ADR 0253 決定4・5 / ADR 0251 決定1・2)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -122,15 +122,6 @@ it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の ro
   const [childId] = await pose(root.id);
   expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "complete_interview", "report_broken_probe"].sort());
   expect(await tools(childId)).toEqual(unsplit);
-
-  // 統合復帰した root が報告すると、以後の一覧から report_broken_probe が消える
-  await completeMetaReviews(t);
-  commitWork(workspacePath, "probe.txt", "probe\n");
-  await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
-  await runNow(t, root.id);
-  const reported: any = await callAsTask(t, root.id, "report_broken_probe", { reason: "the probe leaks the expected output", recommendation: "abandon" });
-  expect(reported.isError).toBeFalsy();
-  expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "complete_interview"].sort());
 });
 
 it("出題で立った pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {

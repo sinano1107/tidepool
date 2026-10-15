@@ -1062,7 +1062,9 @@ export function completeTask(
 ): Task {
   // ADR 0253 決定5: Interview の root は扉を問わず採点完了でだけ終わる —— 子0のまま完了する経路もここで閉じる
   if (interviewTargets(db, task.id) !== null) {
-    throw new DomainError("an Interview root completes only with complete_interview: score every done child and write the findings in one call");
+    throw new DomainError(
+      `an Interview root does not complete with complete_task: ${interviewProbe(db, task.id) === null ? "pose its probe with pose_probe first" : POSED_INTERVIEW_EXITS}`,
+    );
   }
   return finishTask(db, task, handoff, workerId, now, origin);
 }
@@ -1746,7 +1748,7 @@ function retryInterview(db: Db, previousRoot: Task, reason: string, comment: str
       previous_root_id: previousRoot.id,
       probe,
       rubric,
-      premise_breach: reason,
+      reason,
       ...(comment !== undefined && { comment }),
     },
     at: now,
@@ -2087,7 +2089,9 @@ export function reportBrokenProbe(
   const posed = interviewProbe(db, root.id);
   if (posed === null) throw new DomainError("this Interview has no probe yet: pose it with pose_probe first");
   if (brokenProbeReported(db, root.id)) {
-    throw new DomainError("this Interview's probe was already reported broken once: score every done answer with complete_interview");
+    throw new DomainError(
+      "this Interview's probe was already reported broken once and the human answered continue: score every done answer with complete_interview, or escalate if you still disagree",
+    );
   }
   const answers = listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done");
   return escalateTask(

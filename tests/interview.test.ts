@@ -60,12 +60,16 @@ it("pin の子は分解できない —— agent の decompose も人間の扉�
   expect(listBoard(db)).toHaveLength(before);
 });
 
-it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb と報告の verb を足す。pin の子は分解の verb だけを伏せる(ADR 0253 決定4・5 / ADR 0245 決定1 / ADR 0251 決定1)", () => {
+it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb と、報告したことが無ければ報告の verb を足す。pin の子は分解の verb だけを伏せる(ADR 0253 決定4・5 / ADR 0245 決定1 / ADR 0251 決定1)", () => {
   const { db, root } = registerInterview();
   expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] });
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] });
   expect(taskVerbSwap(db, child!.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  // 報告したあとの root は報告の verb を失う(ADR 0251 決定2)
+  completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
+  report(db, root);
+  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] });
 });
 
 it("Interview の root は作り直せない —— 子の前提の破綻を受けた root の redecompose は拒まれ、子は cancel されず何も登録されない(ADR 0245 決定3)", () => {
@@ -225,7 +229,7 @@ it("pin の子の前提の破綻の question への retry は root ごと cancel
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull]);
   expect(taskVerbSwap(db, again.id).added).toEqual(["pose_probe"]);
   expect(listEvents(db, again.id).find((event) => event.kind === "interview_retried")?.worker_id).toBe(BOARD_WORKER_ID);
-  const retry = { retry_of: { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, premise_breach: "the probe is broken", comment: "the probe leaks the answer" } };
+  const retry = { retry_of: { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, reason: "the probe is broken", comment: "the probe leaks the answer" } };
   expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([retry]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
   // 新しい root の pin の子が読む親の history には、旧い rubric も Interview であることも載せない(ADR 0253 決定2 / ADR 0245 決定2)
@@ -262,8 +266,10 @@ it("probe の破綻の報告は Interview でない task・pin の子・出題�
   report(db, root);
   const before = listBoard(db).length;
   for (const task of [plain, children[0]!, unposed, root]) expect(() => report(db, task)).toThrow(DomainError);
+  for (const task of [plain, children[0]!]) expect(() => report(db, task)).toThrow("only an Interview root reports a broken probe");
   expect(() => report(db, unposed)).toThrow(/pose_probe/);
-  expect(() => report(db, root)).toThrow(/complete_interview/);
+  // 人間の continue に不服なら escalate はできる(ADR 0251 決定2)
+  expect(() => report(db, root)).toThrow(/complete_interview, or escalate/);
   expect(listBoard(db)).toHaveLength(before);
 });
 
@@ -296,7 +302,7 @@ it("報告の question への retry で root はその question を出自に can
   expect(getRegistrant(db, again.id)).toBe(HUMAN_WORKER_ID);
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull]);
   expect(again.purpose).toBe(root.purpose);
-  const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, premise_breach: BROKEN.reason, comment: "rewrite the probe" };
+  const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, reason: BROKEN.reason, comment: "rewrite the probe" };
   expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ retry_of: retry }]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
 });
@@ -463,12 +469,12 @@ it("採点完了は Interview の root でない task・出題前の root・未�
   expect([getTask(db, root.id)!.status, getTask(db, plain.id)!.status]).not.toContain("done");
 });
 
-it("completeTask は Interview の root を出題の前も後も拒み、採点完了の verb を指す —— 子0のまま完了できない(ADR 0253 決定5)", () => {
+it("completeTask は Interview の root を出題の前も後も拒み、出題前は pose_probe を指す —— 子0のまま完了できない(ADR 0253 決定5。出題後の文は「出題済みの root に届く拒否」のテスト)", () => {
   const { db, root } = registerInterview();
   const complete = () => completeTask(db, getTask(db, root.id)!, FINDINGS, "auditor", new Date(1), "worker");
-  expect(complete).toThrow(/complete_interview/);
+  expect(complete).toThrow(/pose_probe/);
   ranChildren(db, root);
-  expect(complete).toThrow(/complete_interview/);
+  expect(complete).toThrow(DomainError);
   expect(getTask(db, root.id)!.status).not.toBe("done");
 });
 
@@ -574,7 +580,7 @@ it("出題済みの root に届く拒否(decompose・complete_task・2度目の�
   ];
   for (const refused of refusals) {
     expect(refused).toThrow(DomainError);
-    expect(refused).toThrow(/complete_interview|report_broken_probe/);
+    expect(refused).toThrow(/report_broken_probe/);
     expect(refused).not.toThrow(/escalate|pose_probe/);
   }
 });
