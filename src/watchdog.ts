@@ -198,7 +198,7 @@ export function rowRefusalHandler(
     if (task?.status !== "in_progress") return;
     const now = deps.clock.now();
     // 行でない Interview の対象(ADR 0199 決定4): pin の子には別の候補が無いので、先頭へ戻さず対象の question を立てる
-    const target = task.interview_target_id === null ? undefined : unrowedTarget(deps.db, task.interview_target_id);
+    const target = unrowedTarget(deps.db, task);
     deps.db.transaction(() => {
       if (target) {
         questionRefusedTarget(deps.db, task, { ...target, cause: refusal.cause }, `ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`, now);

@@ -11,7 +11,7 @@ import { appendEvent, type ListedRefusal, type RowRefusalCause } from "./events.
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { getTask, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -127,7 +127,6 @@ function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
 
 /** 行でない Interview の対象の question の2つの出口(ADR 0199 決定4)。 */
 const RERUN_TARGET_OPTION = "run it again";
-export const DROP_TARGET_OPTION = "do not measure this target";
 
 /** 行でない Interview の対象の question の形(ADR 0199 決定4)。表の行ではないので settings タブでは直らない。 */
 function targetRefusalProse(target: string, reason: string, why: string, keep: string, recheck: string): QuarantineProse {

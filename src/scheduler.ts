@@ -101,7 +101,7 @@ function withoutStopped(
 ): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => ExecutionSetting[] {
   const pairs = (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
   return (task) => {
-    const target = task.interview_target_id === null ? undefined : unrowedTarget(db, task.interview_target_id);
+    const target = unrowedTarget(db, task);
     if (target && refusedTargetQuestion(db, target)) return [];
     const workspace = task.workspace ?? defaultWorkspaceName;
     return candidates(task).filter(

@@ -299,7 +299,7 @@ it("一覧が読めない観測は、表に一覧外の行があっても行の 
 
   await t.clock.advance(HOUR);
 
-  expect((await questions(t)).filter((q) => q.question_quarantine_kind !== "tableRow")).toEqual([]);
+  expect(await questions(t)).toEqual([]);
 });
 
 it("openai の行の question への回答は一覧を読み直し、id が載っていなければ拒まれて question は開いたまま、載れば受理される", async () => {
@@ -641,12 +641,20 @@ it("openai の行でない対象が一覧に無い / effort が広告されな�
   expect(t.worker.started.map((task) => task.id)).not.toContain(mini);
   expect(t.worker.started.map((task) => task.id)).not.toContain(max);
   expect(t.worker.started.at(-1)!.id).toBe(luna);
+
+  // effort の鍵の question を「この対象は測らない」で答えると、その effort の子だけが cancel される
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${opened[1].id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
+  const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  expect([await status(max!), await status(mini!)]).toEqual(["cancelled", "todo"]);
 });
 
 it("一覧が読めない観測は、一覧に無い対象があっても対象の question を立てない", async () => {
   let readable = true;
   await bootOpenai(async (now) =>
-    readable ? listingProbe(MEASURED_OPENAI_MODELS)(now) : { status: "unobservable", provider: "openai", cliVersion: "codex-cli 0.147.0", reason: "model/list failed" },
+    // 読める間の一覧には種の gpt-6-astra を載せる —— 行の Quarantine が立たず、question が1枚も無いことで言える
+    readable
+      ? listingProbe(new Map([...MEASURED_OPENAI_MODELS, ["gpt-6-astra", UP_TO_MAX]]))(now)
+      : { status: "unobservable", provider: "openai", cliVersion: "codex-cli 0.147.0", reason: "model/list failed" },
   );
   // root は一覧が読める間に拾われ、読めなくなってから出題する
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [MINI_UNLISTED] })).json;
@@ -654,7 +662,7 @@ it("一覧が読めない観測は、一覧に無い対象があっても対象�
   await callAsTask(t, root.id, "pose_probe", POSE);
   await t.clock.advance(HOUR);
 
-  expect((await questions(t)).filter((q) => q.question_quarantine_kind !== "tableRow")).toEqual([]);
+  expect(await questions(t)).toEqual([]);
 });
 
 /** 行でない対象を pin した子が 404 で断られた盤面。回答時の probe は `results` を順に返す。 */
@@ -727,6 +735,39 @@ it("「この対象は測らない」は検査を撃たず、その (provider, m
     expect((await events(id)).find((e) => e.kind === "task_cancelled")?.payload).toEqual({ kind: "task_cancelled", origin_question_id: board.question.id });
   }
   expect({ opus: await status(opus!), root: await status(board.rootId) }).toEqual(before);
+  // 修理の確認ではないので、Quarantine の解除は記録しない(ADR 0199 決定4)
+  expect((await events(board.question.id)).map((e) => e.kind)).not.toContain("quarantine_released");
+});
+
+it("「この対象は測らない」で cancel された子は、統合復帰の history に、model を伏せたまま Provider に断られたことと証拠の種類を見せる", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46]);
+  const [medium, opus] = board.childIds;
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  // 走っている兄弟が読む親の history は、root が統合復帰で読む history と同じ組み立て(子の行は id を持つ)
+  const current = JSON.parse((await callAsTask(t, opus!, "get_current_task", {})).content[0].text);
+  const cancelled = current.parent.history.flatMap((entry: any) => entry.children ?? []).find((child: any) => child.id === medium);
+  expect(cancelled).toMatchObject({
+    status: "cancelled",
+    origin_question: { title: "the provider refused this child's Interview target", answer: ["do not measure this target"], cause: "api_404" },
+  });
+  expect(JSON.stringify(current.parent.history)).not.toContain("claude-sonnet-5-5");
+});
+
+it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず再発火だけが刻まれる", async () => {
+  const proc = await bootClaude();
+  const { childIds: [medium] } = await poseInterview(proc, [SONNET_MEDIUM]);
+  await t.clock.advance(HOUR);
+  // 1度目の観測で開いた question が、走っている session の途中に既にある(行の拒否の同じ形の釘に倣う)
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "first observation", t.clock.now());
+
+  await refuseLatestSession(proc, REFUSED_404);
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect((await events(medium!)).map((e) => e.kind)).toContain("row_refused");
+  expect(await queueStatus(medium!)).toBe("skipped");
 });
 
 it("最後の対象を「この対象は測らない」で外すと、採点できる答案の無い root はこの question を出自に cancelled になる", async () => {

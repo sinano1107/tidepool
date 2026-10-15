@@ -35,7 +35,6 @@ import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryA
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
-  DROP_TARGET_OPTION,
   openQuarantineQuestion,
   parseTableRowEffortValue,
   parseTableRowValue,
@@ -44,7 +43,6 @@ import {
   type QuarantineKind,
   type QuarantineResolvers,
   quarantineStops,
-  refusedTargetQuestion,
   tableRowEffortTrigger,
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
@@ -66,7 +64,7 @@ import {
   type ChildSpec,
   cancelTaskDirectly,
   completeTask,
-  dropInterviewTarget,
+  dropsRefusedTarget,
   type EditTaskInput,
   editTask,
   getTask,
@@ -84,7 +82,6 @@ import {
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
-  unrowedPinChildren,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
@@ -1087,7 +1084,7 @@ export async function submitAnswer(
         // kind's check runs immediately before accepting, and a board that cannot
         // check that kind refuses the answer rather than accepting it unverified.
         // 行でない Interview の対象を「測らない」答えは修理の確認ではないので検査しない(ADR 0199 決定4)
-        if (answers[0] === DROP_TARGET_OPTION) break;
+        if (dropsRefusedTarget(kind, answers[0])) break;
         const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
         if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
         await check(kind.value);
@@ -1117,11 +1114,6 @@ export async function submitAnswer(
     // export(pin 不一致の DomainError は回答ごと巻き戻す)、reject は reject の export、defer は何もしない(ADR 0165)。routing の approve は表の書き口で
     // 行を書く —— 回答が先に question を done にするので、書き口の陳腐化の hook はこの question 自身を決着させない
     const question = deps.db.transaction(() => {
-      // 「この対象は測らない」が cancel する子 —— 回答で question が閉じる前に、この question が止めている子を引く
-      const dropped =
-        kind.kind === "quarantine" && answers[0] === DROP_TARGET_OPTION
-          ? unrowedPinChildren(deps.db).filter(({ target }) => refusedTargetQuestion(deps.db, target)?.id === task.id).map((pin) => pin.task)
-          : [];
       const answered = answerQuestion(
         deps.db,
         task,
@@ -1132,7 +1124,6 @@ export async function submitAnswer(
         amended,
         origin,
       );
-      if (dropped.length > 0) dropInterviewTarget(deps.db, task, dropped, now(), origin);
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
         else if (answers[0] === "reject") rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
