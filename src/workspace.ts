@@ -2,7 +2,7 @@ import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, getEvent } from "./events.js";
 import { git } from "./git.js";
 import {
   authedGitBounded,
@@ -27,7 +27,6 @@ import { isSettled } from "./task-status.js";
 import {
   getTask,
   issueRefPlaceholder,
-  posedHead,
   type Task,
 } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
@@ -332,7 +331,8 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
 
 /** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
 function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  const head = posedHead(db, task);
+  const posed = task.based_on_decision === null ? undefined : getEvent(db, task.based_on_decision)?.payload;
+  const head = posed?.kind === "decision_logged" ? posed.head : undefined;
   try {
     if (head !== undefined) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
   } catch {}

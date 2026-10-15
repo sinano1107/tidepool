@@ -2121,7 +2121,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
         kind: "decision_logged",
         line: `Posed the Interview probe "${probe.title}". Probe: ${probe.probe} Completion criteria: ${probe.completion_criteria} Rubric: ${probe.rubric}`,
         interview_probe: probe,
-        ...(head !== undefined && { head }),
+        head,
       },
       at: now,
     });
@@ -2147,12 +2147,6 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(root.id);
     return children;
   })();
-}
-
-/** pin の子が乗る出題が記録した保護ブランチの head(ADR 0263 決定6)。記録が無ければ undefined。 */
-export function posedHead(db: Db, pinChild: Task): string | undefined {
-  const row = db.prepare("SELECT json_extract(payload, '$.head') AS head FROM events WHERE id = ?").get(pinChild.based_on_decision) as { head: string | null } | undefined;
-  return row?.head ?? undefined;
 }
 
 /** Interview の root の出題の型つきの欄(ADR 0253 決定1)。出題前・Interview でない task は null。 */
