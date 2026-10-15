@@ -67,3 +67,26 @@
 - **前提の破綻の question の retry(ADR 0248 決定2)は、この回答で外した対象を新しい Interview に写さない。** retry が登録時
   の一覧をそのまま写すのは、途中で外れた対象が壊れた probe のせいだった可能性があるからで、Provider の拒否は probe と独立
   した理由である。写すと同じ拒否の question がもう一度立ち、人間が同じ答えを2度する。測りたくなったら人間が登録し直す。
+
+## 追記(2026-10-15 の triage / grilling、issue #1992)
+
+決定4 の question の主題は、断られた子ではなく対象(鍵)である —— 同じ対象を pin した子はどの Interview のものでもこの
+question で止まり、前提の破綻の retry(ADR 0248 決定2)で写った対象の子も同じ question で止まる。これに1つ足す。
+
+- **その対象を走らせうる未決着の Interview が盤面に残らなくなれば、question は回答なしで盤面名義に決着する。** 走らせうる
+  とは、その対象の子が止まっているか、出題前の root の一覧にその対象があること。root の直接 cancel と前提の破綻の abandon
+  は question に答えずに Interview を消すので、question が開いたまま残り、「この対象は測らない」は何も cancel しなかった。
+  主題が盤面から消えたら回答なしで決着するのは、表から行が消えた行の question(ADR 0184 決定5 の門1)と同じ形で、記録も
+  同じ `quarantine_released` に Interview を消した cancel の event を `observed_event_id` として付ける。誰も判断していない
+  ので decision log には載せない。測定は #1992 のコメントに置く。
+
+退けた案:
+
+- **この question が開いている間は直接 cancel を拒む** —— 3経路(直接 cancel、前提の破綻の abandon / retry)のうち1つしか
+  塞がない。残りを塞ぐと前提の破綻の回答を拒むことになり、probe が壊れたと人間が判断した Interview を、model の拒否が片付く
+  まで畳めない。主題がタスクでないので、直接 cancel の門の族から外す。
+- **止めている子が無くなれば決着する** —— retry の直後は写った対象の子が出題前で居ないので question が閉じ、新しい子が同じ
+  拒否で question を立て直す。人間がまだ答えていない拒否をもう一度作る。
+- **新しい event の種類を足す / question を cancelled にする** —— 回答で受理された解除との区別は `observed_event_id` が持ち、
+  それ以上を読む読み手は居ない。question は subtree の外にあって Interview をまたぐので、どの cancel に巻き込まれたかの線も
+  引けない。
