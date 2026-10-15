@@ -524,6 +524,16 @@ function rowQuarantineQuestions(db: Db): (row: { provider: Provider; model: stri
   return (row) => byModel.get(tableRowValue(row.provider, row.model)) ?? byEffort.get(tableRowEffortValue(row.provider, row.model, row.effort));
 }
 
+/** pin の子の対象に、開いている行の Quarantine が当たるか(ADR 0184 決定4 を pin の子にも、issue #1994)。照合は表の読み手と
+ *  同じ `rowQuarantineQuestions` で、対象が表の行でなくても同じ model の Quarantine は当たる。対象を登録・出題する扉の
+ *  「走れるか」(`assertTargetsRunnable`)は読まない —— 開いている間だけの止まりで、対象の綴りの誤りではない。 */
+export function pinsQuarantinedRow(db: Db): (task: Pick<Task, "interview_target_id">) => boolean {
+  const questionFor = rowQuarantineQuestions(db);
+  return (task) =>
+    task.interview_target_id !== null &&
+    questionFor(db.prepare("SELECT provider, model, effort FROM interview_targets WHERE id = ?").get(task.interview_target_id) as RowKey) !== undefined;
+}
+
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
 const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema.nullable() });
 type RowKey = z.infer<typeof rowKeySchema>;
