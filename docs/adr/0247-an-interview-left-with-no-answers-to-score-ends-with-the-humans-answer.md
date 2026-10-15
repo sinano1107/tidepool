@@ -47,3 +47,7 @@ retry も root ごと cancel するのは abandon と同じで、そのうえで
 決定4 の「採点の無い done の子が残るあいだ root は完了できない」は、`complete_task` の拒否ではなく採点完了の verb の形で
 保たれる —— root は done の子全部の採点と完了を1回で渡す(ADR 0253 決定4)。決定1 の「全対象の承認 question を reject」の
 経路は無くなった: 盤面が立てる pin の子は決裁権の外に出ないので、承認 question にならない。
+
+## 追記4(2026-10-15、issue #1410 / ADR 0199 追記)
+
+決定1 の「人間の abandon / reject の答え」に、断られた Interview の対象の question への「この対象は測らない」も含める。
