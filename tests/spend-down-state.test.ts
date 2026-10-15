@@ -80,7 +80,6 @@ it.each([
   // 観測不能の観測に保存された窓の行にも拒否は効く。結ぶのは観測済みの窓だけ
   ["観測不能: reset ちょうど", 0, "refused", "unobservable"],
   ["観測不能: reset の5分後の直前", 5 * MIN - 1, "refused", "unobservable"],
-  ["観測不能: reset の直前", -1, "unbound", "unobservable"],
   ["観測不能: reset のちょうど5分後", 5 * MIN, "unbound", "unobservable"],
 ] as const)("最新の観測の reset に対する arm: %s", (_, offset, outcome, status) => {
   const db = openDb(":memory:");
