@@ -75,9 +75,9 @@ question で止まり、前提の破綻の retry(ADR 0248 決定2)で写った�
 
 - **その対象を走らせうる未決着の Interview が盤面に残らなくなれば、question は回答なしで盤面名義に決着する。** 走らせうる
   とは、その対象の子が止まっているか、出題前の root の一覧にその対象があること。root の直接 cancel と前提の破綻の abandon
-  は question に答えずに Interview を消すので、question が開いたまま残り、「この対象は測らない」は何も cancel しなかった。
+  は question に答えずに Interview を cancel するので、question が開いたまま残り、「この対象は測らない」は何も cancel しなかった。
   主題が盤面から消えたら回答なしで決着するのは、表から行が消えた行の question(ADR 0184 決定5 の門1)と同じ形で、記録も
-  同じ `quarantine_released` に Interview を消した cancel の event を `observed_event_id` として付ける。誰も判断していない
+  同じ `quarantine_released` に Interview の root を cancel した event を `observed_event_id` として付ける。誰も判断していない
   ので decision log には載せない。測定は #1992 のコメントに置く。
 
 退けた案:

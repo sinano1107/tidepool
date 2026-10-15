@@ -784,11 +784,14 @@ it("最後の対象を「この対象は測らない」で外すと、採点で�
   expect((await events(board.rootId)).find((e) => e.kind === "task_cancelled")?.payload).toEqual({ kind: "task_cancelled", origin_question_id: board.question.id });
 });
 
+/** 報告なく終わった session の枠は watchdog が空ける。 */
+const WATCHDOG = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
+
 const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium", tier: "standard" };
 
 it("前提の破綻の question の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
   // 報告なき exit の failure question は watchdog の持つ経路
-  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR });
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], WATCHDOG);
   const [, failing, declarer] = board.childIds;
   expect((await board.answer("do not measure this target")).status).toBe(200);
   // 2つ目の対象の子は報告なく終わり、failure question を abandon する
@@ -813,6 +816,97 @@ it("前提の破綻の question の retry は、「この対象は測らない�
   expect(JSON.parse(current.content[0].text).interview_targets).toEqual([OPUS_46, OPUS_55_MEDIUM]);
 });
 
+// ── 対象を走らせうる Interview が無くなった対象の question(ADR 0199 追記、issue #1992) ──
+
+/** question の quarantine_released を [worker, origin, payload] で並べる(盤面名義かは worker と origin で言う)。 */
+const releases = async (questionId: string) =>
+  (await events(questionId)).filter((e) => e.kind === "quarantine_released").map((e) => [e.worker_id, e.origin, e.payload]);
+
+it("対象の question が開いている間に Interview の root を直接 cancel すると、question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM]);
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${board.rootId}/cancel`, {})).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  const cancelled = (await events(board.rootId)).find((e) => e.kind === "task_cancelled_directly");
+  expect(await releases(board.question.id)).toEqual([
+    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTarget", value: "anthropic/claude-sonnet-5-5", observed_event_id: cancelled.id }],
+  ]);
+});
+
+it("root の直接 cancel が決着させるのはその Interview の対象の question だけで、走らせうる Interview の無い別の鍵の question は開いたまま", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM]);
+  // 走らせうる Interview の無い鍵の question —— この扉の観測ではないので、この cancel の event を付けて閉じない
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", "claude-opus-4-6"), "another observation", t.clock.now());
+  const other = (await questions(t)).find((q) => q.question_quarantine_value === "anthropic/claude-opus-4-6")!;
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${board.rootId}/cancel`, {})).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("done");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${other.id}`)).json.status).toBe("todo");
+  expect(await releases(other.id)).toEqual([]);
+});
+
+/** 対象の question が開いたまま、兄弟の子が前提の破綻を宣言した盤面。 */
+async function breachBesideRefusedTarget() {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46], [], WATCHDOG);
+  const [, declarer] = board.childIds;
+  await t.clock.advance(HOUR);
+  expect((await callAsTask(t, declarer!, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
+  const breach = (await questions(t)).find((q) => q.parent_id === declarer && q.status === "todo")!;
+  return { ...board, answerBreach: (answer: string) => api(t.baseUrl, "POST", `/api/tasks/${breach.id}/answer`, { answers: [answer] }) };
+}
+
+it("前提の破綻の question を abandon して Interview が cancel されると、対象の question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
+  const board = await breachBesideRefusedTarget();
+
+  expect((await board.answerBreach("abandon")).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  const cancelled = (await events(board.rootId)).find((e) => e.kind === "task_cancelled");
+  expect(await releases(board.question.id)).toEqual([
+    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTarget", value: "anthropic/claude-sonnet-5-5", observed_event_id: cancelled.id }],
+  ]);
+});
+
+it("前提の破綻の question を retry すると、写った対象の question は開いたままで、新しい Interview が出題すると写った子も同じ question で skipped になる", async () => {
+  const board = await breachBesideRefusedTarget();
+
+  expect((await board.answerBreach("retry")).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("todo");
+  const again = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.title === INTERVIEW.title && task.id !== board.rootId);
+  // 枠を握る session(宣言者、その後に拾われる周期の meta-review)を終えて、新しい root を拾わせる
+  for (let i = 0; i < 2; i++) {
+    board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
+    await settle();
+    await t.clock.advance(HOUR);
+  }
+  const [copied] = JSON.parse((await callAsTask(t, again.id, "pose_probe", POSE)).content[0].text).child_ids;
+  await t.clock.advance(HOUR);
+
+  expect(await queueStatus(copied)).toBe("skipped");
+  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "interviewTarget").map((q) => [q.id, q.status])).toEqual([[board.question.id, "todo"]]);
+  expect(await releases(board.question.id)).toEqual([]);
+});
+
+it("同じ (provider, model) を pin した Interview がもう1つ残っていれば、片方の root を直接 cancel しても対象の question は開いたままで、もう片方の子は skipped のまま", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM], [], WATCHDOG);
+  // 子が止まっている間に拾われた周期の meta-review の枠を空けて、2つ目の root を拾わせる
+  board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
+  await settle();
+  await t.clock.advance(HOUR);
+  const { childIds: [other] } = await poseInterview(board.proc, [SONNET_LOW]);
+  await t.clock.advance(HOUR);
+  expect(await queueStatus(other!)).toBe("skipped");
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${board.rootId}/cancel`, {})).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("todo");
+  expect(await releases(board.question.id)).toEqual([]);
+  expect(await queueStatus(other!)).toBe("skipped");
+});
+
 // ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
 
 /** 種の economy 行と4欄が一致する対象 —— 断られると行の Quarantine になる。 */
@@ -820,9 +914,7 @@ const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", e
 
 /** 表の行と一致する対象を pin した子が 404 で断られ、次の poll も過ぎた盤面。回答時の probe は通る。 */
 async function refuseRowTarget() {
-  // 報告なく終わった session の枠は watchdog が空ける
-  const watchdog = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
-  const proc = await bootClaude({ modelProbes: { anthropic: async () => ({ status: "runs" }) }, watchdog });
+  const proc = await bootClaude({ modelProbes: { anthropic: async () => ({ status: "runs" }) }, watchdog: WATCHDOG });
   const { childIds: [child] } = await poseInterview(proc, [SONNET_ROW_TARGET]);
   await t.clock.advance(HOUR);
   await refuseLatestSession(proc, REFUSED_404);
