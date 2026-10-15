@@ -185,3 +185,8 @@ CONTEXT.md「要求」)。selector は review task の `tier` を読まず、`pr
 決定6 の「probe + rubric を先に decision log に書き、候補セルごとに work type の子を走らせ」は ADR 0253 に置き換わった ——
 root は分解せず、出題の1回で probe・完了基準・rubric を盤面が型つきの event として確定し、対象ごとの子は盤面が立てる。
 rubric は受験者に伏せる。「probe の著者は常に agent」は不変条件になり、人間の扉は Interview の root を分けない。
+
+## 追記12(2026-10-15 の grilling、issue #2008 / ADR 0263)
+
+決定6 の「ブランチは残す」は ADR 0263 決定5 に置き換わった —— 決着した pin の子のブランチは後から走る兄弟の checkout に残さず、
+head を記録に残す。全 pin の子は出題が記録した保護ブランチの head から分岐する(同 決定6)。
