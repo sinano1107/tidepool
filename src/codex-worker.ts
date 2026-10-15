@@ -915,13 +915,21 @@ async function actualCodexCapability(options: {
   call: BoardCall;
 }): Promise<CodexCapabilityObservation> {
   const { call } = options;
-  const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-")));
-  // ADR 0259 決定4: どの workspace の checkout も cwd にしない —— 問うのはホストの性質だけ
-  const emptyCwd = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-cwd-")));
-  // permission canary と strict parse の placeholder が workspace に見立てる、使い捨ての空の git repo
-  const workspace = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-codex-preflight-workspace-")));
-  const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
+  // 作ったディレクトリはどれも finally で消す —— 途中の mkdtemp / realpath が投げても先に作った分を残さない
+  const created: string[] = [];
+  const disposableDir = (prefix: string) => {
+    const dir = mkdtempSync(prefix);
+    created.push(dir);
+    return realpathSync(dir);
+  };
   try {
+    const taskTemp = disposableDir(join(tmpdir(), "tidepool-codex-preflight-"));
+    // ADR 0259 決定4: どの workspace の checkout も cwd にしない —— 問うのはホストの性質だけ
+    const emptyCwd = disposableDir(join(tmpdir(), "tidepool-codex-preflight-cwd-"));
+    // permission canary と strict parse の placeholder が workspace に見立てる、使い捨ての空の git repo。
+    // 実物の checkout と同じく homedir() の下に置き、Linux の `:root` の deny の下で canary を走らせる(issue #712)
+    const workspace = disposableDir(join(homedir(), ".tidepool-codex-preflight-workspace-"));
+    const env = workerEnv(options.executable, options.codexHome, taskTemp, "tidepool");
     git(workspace, "init");
     const cliVersion = (await runFile(call, options.executable, ["--version"], { cwd: emptyCwd, env })).trim();
     // ADR 0259 決定2: 閉じる skill は worker と同じく Codex 自身の列挙から
@@ -972,9 +980,7 @@ async function actualCodexCapability(options: {
       features: observedFeatures,
     };
   } finally {
-    rmSync(taskTemp, { recursive: true, force: true });
-    rmSync(emptyCwd, { recursive: true, force: true });
-    rmSync(workspace, { recursive: true, force: true });
+    for (const dir of created) rmSync(dir, { recursive: true, force: true });
   }
 }
 

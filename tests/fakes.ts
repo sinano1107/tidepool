@@ -1197,7 +1197,7 @@ export async function requestedSkillsListCwd(proc: RecordedProcess): Promise<str
  *  (hooks/list)に登録一致の応答を書いて通す。停止した spawn の `spawn` / `capability`(promise)/ `index` を返す —
  *  段の並びと応答の文字列はこの関数の中にしか現れない。呼び出し側は返った `index` で
  *  `spawn.calls[index]` / `spawn.emitExitAt(index, …)` を読み書きする。review 停止での
- *  work 側の index は `index - 1`。 */
+ *  work 側の index は `index - 1`。`listedCwd` は skills/list の要求が名指した cwd(検査ごとの空の cwd)。 */
 export async function driveCodexPreflight(
   stop: "sandboxProbe" | "workAppServer" | "reviewAppServer",
   overrides: { codexHome?: string; skillsList?: (cwd: string) => unknown } = {},

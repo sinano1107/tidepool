@@ -132,7 +132,7 @@ it("preflight の --version・prompt-input・features list と skills/list の�
   expect(existsSync(listedCwd)).toBe(false);
 });
 
-it("permission canary と strict parse の placeholder は、検査ごとに作る空の git repo を workspace に見立て、allowed_domains を空として組み、終われば消える(ADR 0259 決定4)", async () => {
+it("permission canary と strict parse の placeholder は、検査ごとに homedir() の下に作る空の git repo を workspace に見立て、allowed_domains を空として組み、終われば消える(ADR 0259 決定4)", async () => {
   const { spawn, capability, index } = await driveCodexPreflight("reviewAppServer");
   const [work, review] = spawn.calls.filter((call) => call.args[0] === "sandbox");
   const workspace = work!.args[work!.args.indexOf("-C") + 1]!;
@@ -148,6 +148,7 @@ it("permission canary と strict parse の placeholder は、検査ごとに作�
     expect(appServer.args).toContainEqual(expect.stringContaining(`${JSON.stringify(workspace)}=`));
     expect(appServer.args).toContainEqual(expect.stringContaining(noDomains));
   }
+  expect(workspace.startsWith(`${realpathSync(homedir())}/`)).toBe(true); // 実物の checkout と同じく `:root` の deny の下(issue #712)
   expect(readdirSync(workspace)).toEqual([".git"]);
   spawn.emitExitAt(index, 1, null);
   expect((await capability).available).toBe(false);

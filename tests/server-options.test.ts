@@ -414,7 +414,7 @@ it("providerAuth は anthropic だけの registry では openai を空で返す(
   expect(providerAuth?.(["openai"])).toEqual([]);
 });
 
-it("codex の封じ込め能力の検査は、既定の workspace を入力にせず Codex の preflight として組まれる(ADR 0259 決定4)", async () => {
+it("codex の Harness の封じ込め能力の検査は、Codex 自身の preflight に組まれる(ADR 0259 決定4)", async () => {
   const registryDir = await makeRegistry();
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool" });
 

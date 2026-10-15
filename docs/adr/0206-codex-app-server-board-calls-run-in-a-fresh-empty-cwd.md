@@ -1,5 +1,7 @@
 # Codex App Server の Board call は呼び出しごとの空の cwd で走る
 
+**Status: 決定3 の「workspace を cwd にする preflight の probe は動かさない」は ADR 0259 決定4 で改めた —— Harness 単位の preflight はどの workspace の checkout も cwd にせず、workspace の層は worker の起動時の観測(ADR 0259 決定3)が受け持つ。**
+
 2026-10-06 の grilling(issue #1452、#733 の cwd 軸)で決定。preflight の `hooks/list` と使用量 probe が立てる `codex app-server`
 は盤面プロセスの cwd を継承していた。worker とも、workspace を cwd にする隣の probe とも違う第3の面である。checkout が持つ
 `.codex/hooks.json` について vendor が「trust せよ」の ERROR を出し、それに従うと project の hook が登録の列に混ざって完全一致が
