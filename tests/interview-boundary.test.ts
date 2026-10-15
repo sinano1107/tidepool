@@ -254,9 +254,9 @@ it("最後の受験者が読む get_current_task の全ページと tools/list �
 
 it("受験者から見える親は、続き(ADR 0195)を含めて出題そのもの —— 欄は出題の値で handoff は null、history は出題の行と自分の行だけ(ADR 0263 決定3・4)", async () => {
   const { rootId, pages } = await lastExaminee();
-  const { history: _, ...fields } = pages[0].parent;
+  const { history, ...fields } = pages[0].parent;
   expect(fields).toEqual({ id: rootId, title: SWEEP_POSE.title, purpose: SWEEP_POSE.probe, completion_criteria: SWEEP_POSE.completion_criteria, handoff_doc: null });
   const own = { title: SWEEP_POSE.title, purpose: SWEEP_POSE.probe, completion_criteria: SWEEP_POSE.completion_criteria, status: "in_progress", you: true };
-  expect(pages.flatMap((page) => page.parent?.history ?? [])).toEqual([{ decision: "Registered one child to do this task.", children: [own] }]);
+  expect(history).toEqual([{ decision: "Registered one child to do this task.", children: [own] }]);
   for (const page of pages.slice(1)) expect(page.parent).toBeUndefined();
 });

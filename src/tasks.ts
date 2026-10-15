@@ -3513,7 +3513,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   const decisions = new Map<number, WorkingDecision>();
   for (const event of taskDecisionLog(db, taskId)) {
     if (event.payload.kind === "decision_logged") {
-      const decision: WorkingDecision = { decision: event.payload.line, children: [] };
+      const decision = { decision: event.payload.line, children: [] };
       decisions.set(event.id, decision);
       timeline.push({ eventId: event.id, kind: "decision", value: decision });
     } else if (event.payload.kind === "task_completed") {
@@ -3593,8 +3593,8 @@ export function examineeParent(db: Db, reader: Task) {
   const rootId = reader.parent_id!;
   const { title, probe, completion_criteria } = interviewProbe(db, rootId)!;
   const rows = taskHistoryRows(db, rootId, reader.id).flatMap((row) => {
-    const own = "children" in row.entry ? row.entry.children.find((child) => child.you) : undefined;
-    if (!own) return [];
+    const [own] = "children" in row.entry ? row.entry.children : [];
+    if (!own?.you) return [];
     const { id: _, ...child } = own;
     return [{ ...row, entry: { decision: "Registered one child to do this task.", children: [child] } }];
   });
