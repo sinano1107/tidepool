@@ -34,7 +34,17 @@ import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, obs
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
-import { openQuarantineQuestion, parseTableRowEffortValue, parseTableRowValue, parseWorkspaceContainmentValue, type QuarantineChecks, type QuarantineKind, type QuarantineResolvers, quarantineStops, tableRowEffortTrigger } from "./quarantine.js";
+import {
+  openQuarantineQuestion,
+  parseTableRowEffortValue,
+  parseTableRowValue,
+  parseWorkspaceContainmentValue,
+  type QuarantineChecks,
+  type QuarantineKind,
+  type QuarantineResolvers,
+  quarantineStops,
+  tableRowEffortTrigger,
+} from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
@@ -54,6 +64,7 @@ import {
   type ChildSpec,
   cancelTaskDirectly,
   completeTask,
+  dropsRefusedTarget,
   type EditTaskInput,
   editTask,
   getTask,
@@ -656,6 +667,9 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         }
         await recheckRow(modelProbes, clock, row);
       },
+      // 行でない Interview の対象の「走らせ直す」(ADR 0199 決定4): 行の Quarantine の受理と同じ検査
+      interviewTarget: (value) => recheckRow(modelProbes, clock, parseTableRowValue(value!)),
+      interviewTargetEffort: (value) => recheckRow(modelProbes, clock, parseTableRowEffortValue(value!)),
     }),
     ...(harnessContainment && {
       harnessContainment: async (value) => {
@@ -1069,6 +1083,8 @@ export async function submitAnswer(
         // Quarantine confirmation is never taken on faith (ADR 0137 決定5): the
         // kind's check runs immediately before accepting, and a board that cannot
         // check that kind refuses the answer rather than accepting it unverified.
+        // 行でない Interview の対象を「測らない」答えは修理の確認ではないので検査しない(ADR 0199 決定4)
+        if (dropsRefusedTarget(kind, answers[0])) break;
         const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
         if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
         await check(kind.value);

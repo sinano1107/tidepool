@@ -11,8 +11,9 @@ import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -50,7 +51,7 @@ const VERSION_TOO_OLD = `${JSON.stringify({
 const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
 
 /** 実 Claude adapter を fake の容器機構の上で盤面に載せる(worker-exit-without-report.test.ts と同じ形)。 */
-async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>> } = {}) {
+async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<Record<Provider, ModelProbe>>; watchdog?: WatchdogConfig } = {}) {
   const provider = options.provider ?? "anthropic";
   const proc = recordingSpawn();
   onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
@@ -63,6 +64,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
     modelProbes: options.modelProbes,
+    watchdog: options.watchdog,
     containerRuntime: new FakeContainerRuntime(proc.spawn),
     workerAdapter: (deps) => {
       const worker = new ClaudeCodeWorker({
@@ -73,6 +75,8 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
         moonshotApiKeyFile,
+        // Interview の pin の子は skill の allowlist を持つ agent で走るので、列挙の ping を spawn の手前で済ませる
+        enumerateSkills: async () => [],
       });
       return withHealthyUsage(worker, deps.clock);
     },
@@ -557,4 +561,260 @@ it("起動時の照合の question は、行の effort を表で直すと回答�
   });
   expect(edited.status).toBe(200);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+});
+
+// ── 行でない Interview の対象の拒否(ADR 0199 決定4、issue #1410) ──
+
+const INTERVIEW = { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
+const POSE = { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" };
+/** model は表にあるが4欄が一致しない対象 —— 表の行ではない(ADR 0199 決定2)。2つは同じ (provider, model)。 */
+const SONNET_MEDIUM = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
+const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low", tier: "economy" };
+const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+
+/** Interview を登録して出題し、pin の子の id を対象の順に返す。root は登録の poll で拾われ、実 adapter の盤面(`proc`)では
+ *  その session を終えて枠を空ける。 */
+async function poseInterview(proc: ReturnType<typeof recordingSpawn> | undefined, targets: object[]): Promise<{ rootId: string; childIds: string[] }> {
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
+  const posed = await callAsTask(t, root.id, "pose_probe", POSE);
+  if (proc) {
+    proc.emitExitAt(proc.processes.length - 1, 0, null);
+    await settle();
+  }
+  return { rootId: root.id, childIds: JSON.parse(posed.content[0].text).child_ids };
+}
+
+/** 最後に spawn した session を `resultLine` で終わらせる。 */
+async function refuseLatestSession(proc: ReturnType<typeof recordingSpawn>, resultLine: string) {
+  const index = proc.processes.length - 1;
+  proc.processes[index]!.stdout.write(resultLine);
+  proc.emitExitAt(index, 1, null);
+  await settle();
+}
+
+const queueStatus = async (id: string) => ((await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((row) => row.id === id)?.status;
+
+it("行でない対象を pin した子が 404 で断られると、対象を名指す question が1枚立ち、子は先頭へ戻らず同じ (provider, model) の子とともに skipped になり、兄弟の子は走る。行の Quarantine は立たない", async () => {
+  const proc = await bootClaude();
+  const { rootId, childIds: [medium, low, opus] } = await poseInterview(proc, [SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
+  await t.clock.advance(HOUR);
+  await refuseLatestSession(proc, REFUSED_404);
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  expect([question.question_quarantine_kind, question.question_quarantine_value]).toEqual(["interviewTarget", "anthropic/claude-sonnet-5-5"]);
+  expect(question.title).toBe("Interview target anthropic / claude-sonnet-5-5 cannot run on this board");
+  expect(question.purpose).toContain(`Interview "interview" (${rootId})`);
+  expect(question.purpose).toContain("API error 404 for this model id");
+  expect(question.purpose).toContain("The board does not know why.");
+  expect(question.purpose).toContain("If the model id is misspelled, choose this and register the Interview again with the right id.");
+  expect(question.question_items[0].options).toEqual(["run it again", "do not measure this target"]);
+
+  const timeline = await events(medium!);
+  const spawned = timeline.filter((e) => e.kind === "worker_spawned");
+  expect(timeline.find((e) => e.kind === "row_refused")?.payload).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" });
+  expect(timeline.map((e) => e.kind)).not.toContain("task_moved");
+  expect([await queueStatus(medium!), await queueStatus(low!)]).toEqual(["skipped", "skipped"]);
+  // 兄弟の子は次の pickup で走る
+  expect((await events(opus!)).find((e) => e.kind === "worker_spawned")?.payload.model).toBe("claude-opus-4-6");
+});
+
+/** openai の行でない対象: 一覧に無い model / 一覧がその effort を広告しない model / 一覧にある model。 */
+const MINI_UNLISTED = { provider: "openai", model: "gpt-5.4-mini", effort: "high", tier: "economy" };
+const GPT55_MAX = { provider: "openai", model: "gpt-5.5", effort: "max", tier: "standard" };
+const LUNA = { provider: "openai", model: "gpt-5.6-luna", effort: "high", tier: "economy" };
+
+it("openai の行でない対象が一覧に無い / effort が広告されないと、spawn の前に対象の question が鍵ごとに立ち、行の Quarantine は立たず、一覧にある兄弟の子は走る", async () => {
+  await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
+  const { childIds: [mini, max, luna] } = await poseInterview(undefined, [MINI_UNLISTED, GPT55_MAX, LUNA]);
+  await t.clock.advance(HOUR);
+
+  const opened = (await questions(t)).filter((q) => q.question_quarantine_kind?.startsWith("interviewTarget"));
+  expect(opened.map((q) => [q.question_quarantine_kind, q.question_quarantine_value, q.title])).toEqual([
+    ["interviewTarget", "openai/gpt-5.4-mini", "Interview target openai / gpt-5.4-mini cannot run on this board"],
+    ["interviewTargetEffort", "openai/gpt-5.5/max", "Interview target openai / gpt-5.5 / max cannot run on this board"],
+  ]);
+  expect(opened[0].purpose).toContain("does not include this model id");
+  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "tableRow").map((q) => q.question_quarantine_value)).toEqual(["openai/gpt-6-astra"]);
+  expect((await events(mini!)).find((e) => e.kind === "row_refused")?.payload).toMatchObject({ provider: "openai", model: "gpt-5.4-mini", worker_spawned_event_id: null, cause: "model_not_listed" });
+  expect((await events(max!)).find((e) => e.kind === "row_refused")?.payload).toMatchObject({ model: "gpt-5.5", effort: "max", worker_spawned_event_id: null, cause: "effort_not_advertised" });
+  expect(t.worker.started.map((task) => task.id)).not.toContain(mini);
+  expect(t.worker.started.map((task) => task.id)).not.toContain(max);
+  expect(t.worker.started.at(-1)!.id).toBe(luna);
+
+  // effort の鍵の question を「この対象は測らない」で答えると、その effort の子だけが cancel される
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${opened[1].id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
+  const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  expect([await status(max!), await status(mini!)]).toEqual(["cancelled", "todo"]);
+});
+
+it("一覧が読めない観測は、一覧に無い対象があっても対象の question を立てない", async () => {
+  let readable = true;
+  await bootOpenai(async (now) =>
+    // 読める間の一覧には種の gpt-6-astra を載せる —— 行の Quarantine が立たず、question が1枚も無いことで言える
+    readable
+      ? listingProbe(new Map([...MEASURED_OPENAI_MODELS, ["gpt-6-astra", UP_TO_MAX]]))(now)
+      : { status: "unobservable", provider: "openai", cliVersion: "codex-cli 0.147.0", reason: "model/list failed" },
+  );
+  // root は一覧が読める間に拾われ、読めなくなってから出題する
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [MINI_UNLISTED] })).json;
+  readable = false;
+  await callAsTask(t, root.id, "pose_probe", POSE);
+  await t.clock.advance(HOUR);
+
+  expect(await questions(t)).toEqual([]);
+});
+
+/** 行でない対象を pin した子が 404 で断られた盤面。回答時の probe は `results` を順に返す。 */
+async function refuseUnrowedTarget(targets: object[], results: ModelProbeResult[] = [], watchdog?: WatchdogConfig) {
+  const probedModels: string[] = [];
+  const proc = await bootClaude({ modelProbes: { anthropic: async (model) => (probedModels.push(model), results.shift()!) }, watchdog });
+  const posed = await poseInterview(proc, targets);
+  await t.clock.advance(HOUR);
+  await refuseLatestSession(proc, REFUSED_404);
+  const question = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
+  return {
+    ...posed,
+    proc,
+    probedModels,
+    question,
+    answer: (answer: string) => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: [answer] }),
+  };
+}
+
+it("「走らせ直す」は、その id の検査がまだ断られれば拒まれて question が開いたまま子も止まり、通れば子が pickup に戻る", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM], [{ status: "refused", reason: "API returned 404 for this model id" }, { status: "runs" }]);
+  const [child] = board.childIds;
+
+  const still404 = await board.answer("run it again");
+  expect({ status: still404.status, error: still404.json.error }).toEqual({
+    status: 409,
+    error: "anthropic / claude-sonnet-5-5 still cannot run: API returned 404 for this model id",
+  });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("todo");
+  expect(await queueStatus(child!)).toBe("skipped");
+
+  expect((await board.answer("run it again")).status).toBe(200);
+  await settle();
+  expect(board.probedModels).toEqual(["claude-sonnet-5-5", "claude-sonnet-5-5"]);
+  // skipped が解ける(枠は、子が止まっている間に拾われた周期の meta-review が握っている)
+  expect(await queueStatus(child!)).toBe("todo");
+});
+
+it("effort の鍵の question の「走らせ直す」は一覧を読み直し、その effort が広告されていなければ拒まれ、広告されれば受理される", async () => {
+  let models = MEASURED_OPENAI_MODELS;
+  await bootOpenai(async (now) => listingProbe(models)(now));
+  await poseInterview(undefined, [GPT55_MAX]);
+  await t.clock.advance(HOUR);
+  const question = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTargetEffort")!;
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["run it again"] });
+
+  const unadvertised = await answer();
+  expect({ status: unadvertised.status, error: unadvertised.json.error }).toEqual({
+    status: 409,
+    error:
+      "openai / gpt-5.5 / max still cannot run: the Codex App Server model list (codex-cli 0.147.0, hidden models " +
+      "included) does not advertise effort max for this model id",
+  });
+
+  models = new Map([...MEASURED_OPENAI_MODELS, ["gpt-5.5", UP_TO_MAX]]);
+  expect((await answer()).status).toBe(200);
+});
+
+it("「この対象は測らない」は検査を撃たず、その (provider, model) を pin した未決着の子だけをこの question を出自に cancel し、兄弟の子と root の status は変わらない", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
+  const [medium, low, opus] = board.childIds;
+  const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  const before = { opus: await status(opus!), root: await status(board.rootId) };
+
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  expect(board.probedModels).toEqual([]);
+  for (const id of [medium!, low!]) {
+    expect(await status(id)).toBe("cancelled");
+    expect((await events(id)).find((e) => e.kind === "task_cancelled")?.payload).toEqual({ kind: "task_cancelled", origin_question_id: board.question.id });
+  }
+  expect({ opus: await status(opus!), root: await status(board.rootId) }).toEqual(before);
+  // 修理の確認ではないので、Quarantine の解除は記録しない(ADR 0199 決定4)
+  expect((await events(board.question.id)).map((e) => e.kind)).not.toContain("quarantine_released");
+});
+
+it("「この対象は測らない」で cancel された子は、統合復帰の history に、model を伏せたまま Provider に断られたことと証拠の種類を見せる", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46]);
+  const [medium, opus] = board.childIds;
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  // 走っている兄弟が読む親の history は、root が統合復帰で読む history と同じ組み立て(子の行は id を持つ)
+  const current = JSON.parse((await callAsTask(t, opus!, "get_current_task", {})).content[0].text);
+  const cancelled = current.parent.history.flatMap((entry: any) => entry.children ?? []).find((child: any) => child.id === medium);
+  expect(cancelled).toMatchObject({
+    status: "cancelled",
+    origin_question: { title: "the provider refused this child's Interview target", answer: ["do not measure this target"], cause: "api_404" },
+  });
+  expect(JSON.stringify(current.parent.history)).not.toContain("claude-sonnet-5-5");
+});
+
+it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず再発火だけが刻まれる", async () => {
+  const proc = await bootClaude();
+  const { childIds: [medium] } = await poseInterview(proc, [SONNET_MEDIUM]);
+  await t.clock.advance(HOUR);
+  // 1度目の観測で開いた question が、走っている session の途中に既にある(行の拒否の同じ形の釘に倣う)
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "first observation", t.clock.now());
+
+  await refuseLatestSession(proc, REFUSED_404);
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  expect((await events(question.id)).map((e) => e.kind)).toContain("quarantine_refired");
+  expect((await events(medium!)).map((e) => e.kind)).toContain("row_refused");
+  expect(await queueStatus(medium!)).toBe("skipped");
+});
+
+it("最後の対象を「この対象は測らない」で外すと、採点できる答案の無い root はこの question を出自に cancelled になる", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM]);
+
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.rootId}`)).json.status).toBe("cancelled");
+  expect((await events(board.rootId)).find((e) => e.kind === "task_cancelled")?.payload).toEqual({ kind: "task_cancelled", origin_question_id: board.question.id });
+});
+
+const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium", tier: "standard" };
+
+it("前提の破綻の question の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
+  // 報告なき exit の failure question は watchdog の持つ経路
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR });
+  const [, failing, declarer] = board.childIds;
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+  // 2つ目の対象の子は報告なく終わり、failure question を abandon する
+  board.proc.emitExitAt(board.proc.processes.length - 1, 1, null);
+  await settle();
+  const failure = (await questions(t)).find((q) => q.parent_id === failing && q.status === "todo")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["abandon"] })).status).toBe(200);
+  // 3つ目の対象の子が前提の破綻を宣言し、人間が retry する
+  await t.clock.advance(HOUR);
+  expect((await callAsTask(t, declarer!, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
+  const breach = (await questions(t)).find((q) => q.parent_id === declarer && q.status === "todo")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${breach.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+
+  const again = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.title === INTERVIEW.title && task.id !== board.rootId);
+  // 枠を握る session(宣言者、その後に拾われる周期の meta-review)を終えて、新しい root を拾わせ、その対象の一覧を読む
+  for (let i = 0; i < 2; i++) {
+    board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
+    await settle();
+    await t.clock.advance(HOUR);
+  }
+  const current = await callAsTask(t, again.id, "get_current_task", {});
+  expect(JSON.parse(current.content[0].text).interview_targets).toEqual([OPUS_46, OPUS_55_MEDIUM]);
+});
+
+it("CLI の版の古さで断られた行でない対象の question は、原因を名指す(ADR 0187)", async () => {
+  const proc = await bootClaude();
+  await poseInterview(proc, [SONNET_MEDIUM]);
+  await t.clock.advance(HOUR);
+  await refuseLatestSession(proc, VERSION_TOO_OLD);
+
+  const [question] = await questions(t);
+  expect(question.purpose).toContain("This board's Claude Code CLI is older than this model requires");
+  expect(question.purpose).toContain("update tidepool to a version that supports this model first");
 });

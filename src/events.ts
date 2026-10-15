@@ -19,6 +19,16 @@ export interface RowRefusal {
   cause: RowRefusalCause;
 }
 
+/** spawn 前に Codex の model 一覧が断った行でない Interview の対象(ADR 0184 決定3 / ADR 0218 決定2 / issue #1410):
+ *  一覧に model が無い / その model に effort が広告されない。session が無いので worker_spawned は null。 */
+export interface ListedRefusal {
+  provider: Provider;
+  model: string;
+  effort: string | null;
+  worker_spawned_event_id: null;
+  cause: "model_not_listed" | "effort_not_advertised";
+}
+
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
  *  `worker_exited.usage.advisor`, where null means neither a consultation nor a
@@ -175,7 +185,8 @@ export type EventPayload =
   | { kind: "cap_interrupted" }
   // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
-  | ({ kind: "row_refused" } & RowRefusal)
+  // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
+  | ({ kind: "row_refused" } & (RowRefusal | ListedRefusal))
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }

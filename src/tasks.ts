@@ -9,7 +9,7 @@ import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
-import { PROVIDER_VALUES } from "./provider.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -488,6 +488,41 @@ function targetRows(db: Db, taskId: string): Array<InterviewTarget & { id: numbe
   return db
     .prepare("SELECT id, provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
     .all(taskId) as Array<InterviewTarget & { id: number }>;
+}
+
+/** Interview の対象の (provider, model, effort)。 */
+export type TargetKey = { provider: Provider; model: string; effort: string | null };
+
+/** 4欄一致の行が表に無い対象(ADR 0199 決定2)。 */
+const UNROWED_TARGET_SQL = `NOT EXISTS (SELECT 1 FROM execution_settings e
+  WHERE e.provider = it.provider AND e.model = it.model AND e.effort IS it.effort AND e.tier_id = it.tier_id)`;
+
+/** pin の子の対象が表の行でなければその鍵、pin が無いか行なら undefined。行の対象の拒否は行の Quarantine に乗る(ADR 0184)。 */
+export function unrowedTarget(db: Db, task: Pick<Task, "interview_target_id">): TargetKey | undefined {
+  if (task.interview_target_id === null) return undefined;
+  return db.prepare(`SELECT provider, model, effort FROM interview_targets it WHERE id = ? AND ${UNROWED_TARGET_SQL}`).get(task.interview_target_id) as TargetKey | undefined;
+}
+
+/** 断られた行でない対象の question の Quarantine の種類(quarantine.ts の表の2行。依存はあちら → こちらなので綴りで持つ)。 */
+const REFUSED_TARGET_KINDS: readonly string[] = ["interviewTarget", "interviewTargetEffort"];
+
+/** その question の2つの出口のうち、修理の確認でない方(ADR 0199 決定4)。 */
+export const DROP_TARGET_OPTION = "do not measure this target";
+
+/** 断られた行でない対象の question への「この対象は測らない」か —— 検査も Quarantine の解除も無く、子を cancel する。 */
+export function dropsRefusedTarget(kind: QuestionKind, answer: string | undefined): boolean {
+  return kind.kind === "quarantine" && REFUSED_TARGET_KINDS.includes(kind.quarantine) && answer === DROP_TARGET_OPTION;
+}
+
+/** 行でない対象を pin した未決着の子と、その対象。 */
+export function unrowedPinChildren(db: Db): Array<{ task: Task; target: TargetKey }> {
+  const rows = db
+    .prepare(
+      `SELECT t.id, it.provider, it.model, it.effort FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
+       WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL} ORDER BY t.sort_key`,
+    )
+    .all() as Array<TargetKey & { id: string }>;
+  return rows.map(({ id, ...target }) => ({ task: getTask(db, id)!, target }));
 }
 
 /** 既定 agent が走らせられない対象を名指して拒む(ADR 0253 決定3): pin の Provider が既定 agent の entry に無いか、advisor の
@@ -1177,16 +1212,16 @@ export function returnToQueueHead(
   now: Date,
 ): void {
   db.transaction(() => {
-    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
-    appendEvent(db, {
-      taskId: task.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload,
-      at: now,
-    });
+    returnToQueue(db, task, payload, now);
     moveTask(db, task, null, now, BOARD_WORKER_ID, "board");
   })();
+}
+
+/** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
+ *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
+export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>, now: Date): void {
+  db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
+  appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }
 
 function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
@@ -1617,6 +1652,10 @@ export function answerQuestion(
     let unblockTarget: Task | undefined;
     switch (kind.kind) {
       case "quarantine":
+        if (dropsRefusedTarget(kind, answer)) {
+          dropInterviewTarget(db, question, now, origin);
+          return;
+        }
         appendEvent(db, {
           taskId: question.id,
           workerId: HUMAN_WORKER_ID,
@@ -1733,7 +1772,7 @@ function retryInterview(db: Db, previousRoot: Task, reason: string, comment: str
       completion_criteria: previousRoot.completion_criteria,
       workspace: previousRoot.workspace ?? undefined,
       review_tier: previousRoot.review_tier ?? undefined,
-      interview_targets: interviewTargets(db, previousRoot.id)!,
+      interview_targets: retriedTargets(db, previousRoot.id),
     },
     now,
     HUMAN_WORKER_ID,
@@ -1753,6 +1792,39 @@ function retryInterview(db: Db, previousRoot: Task, reason: string, comment: str
     },
     at: now,
   });
+}
+
+/** 断られた行でない対象の question への「この対象は測らない」(ADR 0199 決定4・追記): その対象を pin した未決着の子だけを、この
+ *  question を出自に cancel する。兄弟も親も動かさないが、採点できる答案も未決着の子も残らない Interview はこの答えで終える
+ *  (ADR 0247 決定1)。 */
+function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOrigin): void {
+  // この question が止めている子: 値は quarantine.ts の `tableRowValue` / `tableRowEffortValue` の綴り(effort の鍵だけ effort まで)
+  const children = (
+    db
+      .prepare(
+        `SELECT t.id FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
+         WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL}
+           AND @value = it.provider || '/' || it.model || CASE @kind WHEN 'interviewTargetEffort' THEN '/' || COALESCE(it.effort, '') ELSE '' END`,
+      )
+      .pluck()
+      .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as string[]
+  ).map((id) => getTask(db, id)!);
+  for (const child of children) cancelTask(db, child, question.id, HUMAN_WORKER_ID, now, origin);
+  for (const rootId of new Set(children.map((child) => child.parent_id!))) {
+    if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
+  }
+}
+
+/** retry が写す対象(ADR 0248 決定2・追記): 登録時の一覧から、断られた対象の question への「この対象は測らない」で外した対象だけを除く
+ *  —— abandon / reject で外れた対象は写す。 */
+function retriedTargets(db: Db, rootId: string): InterviewTarget[] {
+  const children = listChildren(db, rootId);
+  return targetRows(db, rootId)
+    .filter(({ id }) => {
+      const child = children.find((task) => task.interview_target_id === id);
+      return !(child && refusedTargetQuestionOf(db, child));
+    })
+    .map(({ id: _, ...target }) => target);
 }
 
 /** 採点できる答案(done の pin の子)も未決着の子も残っていない Interview の root か(ADR 0247 決定1)。 */
@@ -3333,7 +3405,8 @@ interface SettledChildContext {
   /** The reject-reason steering channel (issue #40) — carried alongside
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
-  origin_question?: { title: string; answer: string[] | null; comment: string | null };
+  /** `cause` は断られた行でない対象の question で cancel された子だけ: その子の `row_refused` の証拠の種類。 */
+  origin_question?: { title: string; answer: string[] | null; comment: string | null; cause?: Extract<EventPayload, { kind: "row_refused" }>["cause"] };
   /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
   origin_breach?: { title: string; reason: string };
   /** 人間が直接 cancel した子: その reason(任意なので無ければ null)。 */
@@ -3494,7 +3567,19 @@ function cancelOrigin(
     return { origin_breach: { title: declarer.title, reason: premiseBreachReason(db, declarer.id) } };
   }
   const question = getTask(db, payload.origin_question_id)!;
-  return { origin_question: { title: question.title, answer: question.question_answer, comment: question.question_answer_comment } };
+  const answer = { answer: question.question_answer, comment: question.question_answer_comment };
+  if (!REFUSED_TARGET_KINDS.includes(question.question_quarantine_kind ?? "")) return { origin_question: { title: question.title, ...answer } };
+  // 断られた対象の question の題は model を名指すので、統合復帰の history には伏せた文と証拠の種類だけを見せる(伏せた handoff、
+  // ADR 0199 / ADR 0253)。spawn 前に止まっていた子には証拠が無い
+  const cause = latestEventOfTask(db, taskId, "row_refused")?.payload.cause;
+  return { origin_question: { title: "the provider refused this child's Interview target", ...answer, ...(cause && { cause }) } };
+}
+
+/** その子を「この対象は測らない」で cancel した、断られた対象の question。 */
+function refusedTargetQuestionOf(db: Db, child: Task): Task | undefined {
+  const cancelled = child.status === "cancelled" ? latestEventOfTask(db, child.id, "task_cancelled")?.payload : undefined;
+  const question = cancelled && "origin_question_id" in cancelled ? getTask(db, cancelled.origin_question_id) : undefined;
+  return question && REFUSED_TARGET_KINDS.includes(question.question_quarantine_kind ?? "") ? question : undefined;
 }
 
 /** そのタスクの最新の前提の破綻の理由。 */

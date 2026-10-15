@@ -7,11 +7,11 @@
  *  module であり、逆は張らない。 */
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
-import { appendEvent, type RowRefusalCause } from "./events.js";
+import { appendEvent, type ListedRefusal, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { type QuestionItem, type ResourceStops, registerTask } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -120,6 +120,32 @@ function rowQuarantineProse(row: string, purpose: string): QuarantineProse {
         title: `Can ${row} run again?`,
         options: ["the row can run again"],
         recommendation: "the row can run again",
+      },
+    ],
+  };
+}
+
+/** 行でない Interview の対象の question の2つの出口(ADR 0199 決定4)。 */
+const RERUN_TARGET_OPTION = "run it again";
+
+/** 行でない Interview の対象の question の形(ADR 0199 決定4)。表の行ではないので settings タブでは直らない。 */
+function targetRefusalProse(target: string, reason: string, why: string, keep: string, recheck: string): QuarantineProse {
+  return {
+    title: `Interview target ${target} cannot run on this board`,
+    purpose:
+      `${reason}. ${why} Interview children that pin this target are not picked up while this stands; the other ` +
+      "targets of their Interviews keep running. This target is not an execution-setting row, so the settings tab " +
+      "does not repair it.\n\nAnswer one of two ways:\n\n" +
+      `1. "${DROP_TARGET_OPTION}": the board cancels the unsettled children that pin this target. Their sibling ` +
+      "children keep running; an Interview left with no answer to score and nothing unsettled ends. If the model " +
+      "id is misspelled, choose this and register the Interview again with the right id.\n" +
+      `2. "${RERUN_TARGET_OPTION}": ${keep} — ${recheck}, and the children are picked up again.`,
+    completion_criteria: `${target} can run on this board again, or no Interview measures it`,
+    question: [
+      {
+        title: `Run ${target} again, or stop measuring it?`,
+        options: [RERUN_TARGET_OPTION, DROP_TARGET_OPTION],
+        recommendation: RERUN_TARGET_OPTION,
       },
     ],
   };
@@ -314,12 +340,49 @@ export const QUARANTINES = [
       return TABLE_ROW_EFFORT_PROSE[tableRowEffortTrigger(provider)](`${provider} / ${model} / ${effort ?? "no effort"}`, reason);
     },
   },
+  {
+    // 行でない Interview の対象の拒否(ADR 0199 決定4、issue #1410)。値は `tableRowValue` の綴りで、鍵は (provider, model)。
+    // 資源には数えない(回答が修理の確認とは限らない)—— 止めるのは鍵に当たる pin の子だけで、scheduler の候補の口が外す。
+    // 原因は断言しない(ADR 0184 決定1)、CLI の版の古さだけは名指す(ADR 0187 決定3)
+    kind: "interviewTarget",
+    scope: "target",
+    prose: (value: string | null, reason: string, refusalCause?: RowRefusalCause): QuarantineProse => {
+      const { provider, model } = parseTableRowValue(value!);
+      const [why, keep] =
+        refusalCause === "cli_version_too_old"
+          ? [
+              `This board's Claude Code CLI is older than this model requires, so the ${provider} provider refused the model id \`${model}\` on this board.`,
+              "update tidepool to a version that supports this model first",
+            ]
+          : [
+              `The ${provider} provider refused the model id \`${model}\` on this board — with this CLI version and this account. The board does not know why.`,
+              "if the model id is right, update tidepool or restore the account first",
+            ];
+      return targetRefusalProse(`${provider} / ${model}`, reason, why, keep, "the board checks this model id again before it accepts the answer");
+    },
+  },
+  {
+    // 同じ question の effort の鍵(ADR 0218 決定2): Codex の一覧がその model にこの effort を広告しない。値は `tableRowEffortValue` の綴り
+    kind: "interviewTargetEffort",
+    scope: "target",
+    prose: (value: string | null, reason: string): QuarantineProse => {
+      const { provider, model, effort } = parseTableRowEffortValue(value!);
+      return targetRefusalProse(
+        `${provider} / ${model} / ${effort ?? "no effort"}`,
+        reason,
+        "This board's model list does not advertise this effort for this model — with this Codex CLI version and this account. The board does not know why.",
+        "if the effort is right, update tidepool or restore the account first",
+        "the board reads the model list again and accepts the answer only if it advertises this effort for this model",
+      );
+    },
+  },
 ] as const satisfies ReadonlyArray<{
   kind: string;
   /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク /
    *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)/
-   *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)。 */
-  scope: "board" | "workspace" | "assignees" | "row" | "pair";
+   *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)/
+   *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)。 */
+  scope: "board" | "workspace" | "assignees" | "row" | "pair" | "target";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
   resolveAssignees?: (values: string[]) => string[];
@@ -346,7 +409,7 @@ export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope === "board" || row.scope === "row" || row.scope === "pair") continue;
+    if (row.scope === "board" || row.scope === "row" || row.scope === "pair" || row.scope === "target") continue;
     const values = openQuarantineValues(db, row.kind) as string[];
     if (values.length === 0) continue;
     if (row.scope === "workspace") {
@@ -467,4 +530,31 @@ export async function quarantineUnlessClear(
   if (result.available) return false;
   registerQuarantine(db, kind, value, result.reason, now);
   return true;
+}
+
+/** 行でない Interview の対象を Provider が断った(ADR 0199 決定4): 対象を名指す question を立てる(開いていれば再発火)。
+ *  鍵は原因で決まり、一覧が effort を広告しないときだけ (provider, model, effort)(ADR 0218 決定2)。理由は断られた子の Interview を名指す。 */
+export function questionRefusedTarget(
+  db: Db,
+  child: Task,
+  refusal: TargetKey & { cause: RowRefusalCause | ListedRefusal["cause"] },
+  evidence: string,
+  now: Date,
+): void {
+  const root = getTask(db, child.parent_id!)!;
+  const reason = `Task ${child.id} of Interview "${root.title}" (${root.id}) ${evidence}`;
+  if (refusal.cause === "effort_not_advertised") {
+    registerQuarantine(db, "interviewTargetEffort", tableRowEffortValue(refusal.provider, refusal.model, refusal.effort), reason, now);
+  } else {
+    const cause = refusal.cause === "model_not_listed" ? undefined : refusal.cause;
+    registerQuarantine(db, "interviewTarget", tableRowValue(refusal.provider, refusal.model), reason, now, cause);
+  }
+}
+
+/** この対象に当たる開いた question(model の鍵か effort の鍵)。開いているあいだ、その対象を pin した子は pickup されない。 */
+export function refusedTargetQuestion(db: Db, target: TargetKey): { id: string } | undefined {
+  return (
+    openQuarantineQuestion(db, "interviewTarget", tableRowValue(target.provider, target.model)) ??
+    openQuarantineQuestion(db, "interviewTargetEffort", tableRowEffortValue(target.provider, target.model, target.effort))
+  );
 }

@@ -74,7 +74,7 @@ export function rowRefusalCause(value: unknown): RowRefusalCause | null {
 }
 
 /** 行の拒否の証拠が Board call の理由に名指すもの(ADR 0184 決定3)。 */
-const ROW_REFUSAL_EVIDENCE: Record<RowRefusalCause, string> = {
+export const ROW_REFUSAL_EVIDENCE: Record<RowRefusalCause, string> = {
   api_404: "API error 404 for this model id",
   cli_version_too_old: "API error code claude_code_version_too_old",
 };
