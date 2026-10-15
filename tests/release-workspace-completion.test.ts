@@ -41,7 +41,7 @@ async function pickedUpSession(type: TaskType = "work"): Promise<{
     ...HUMAN_WEBUI,
   );
   const task = pickupTask(db, registered, "deckhand", NOW)!;
-  await prepareWorkspaceAtPickup(db, ws, task, {});
+  await prepareWorkspaceAtPickup(db, ws, task, { now: new Date(0) });
   return { db, task, ws };
 }
 

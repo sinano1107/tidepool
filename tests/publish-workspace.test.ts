@@ -91,7 +91,7 @@ async function runningSession(db: Db, checkout: string) {
     ...HUMAN_WEBUI,
   );
   const workspace = { name: "sandbox", path: checkout };
-  await prepareWorkspaceAtPickup(db, workspace, task, {});
+  await prepareWorkspaceAtPickup(db, workspace, task, { now: new Date(0) });
   return { release: () => releaseWorkspace(db, workspace, task, clock.now()) };
 }
 

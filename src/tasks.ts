@@ -2101,7 +2101,7 @@ const POSED_INTERVIEW_EXITS = "score every done answer with complete_interview, 
 /** 出題(ADR 0253 決定1・3): Interview の root が題・probe・完了基準・rubric を一度に書く。1つの transaction で、型つきの欄を持つ
  *  判断ログの1件と、一覧の対象ごとに pin の子を一覧の順に1つ入れ、root を blocked にする。子は全部同じ出題の値で、assignee は
  *  未指定(既定 agent)、workspace は親から、登録者は root の agent。決裁権の検査は通らない —— root が子ごとに選ぶものが無い。 */
-export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin): Task[] {
+export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head?: string): Task[] {
   const targets = targetRows(db, root.id);
   if (!targets.length) throw new DomainError("only an Interview root poses a probe");
   if (interviewProbe(db, root.id) !== null) {
@@ -2121,6 +2121,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
         kind: "decision_logged",
         line: `Posed the Interview probe "${probe.title}". Probe: ${probe.probe} Completion criteria: ${probe.completion_criteria} Rubric: ${probe.rubric}`,
         interview_probe: probe,
+        head,
       },
       at: now,
     });

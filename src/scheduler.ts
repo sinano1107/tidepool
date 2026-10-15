@@ -453,7 +453,7 @@ export function startScheduler(deps: {
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
       try {
-        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry });
+        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, now: clock.now() });
       } catch (err) {
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;

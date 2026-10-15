@@ -13,6 +13,7 @@ import {
   completeMetaReviews,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
+  git,
   HOUR,
   makeWorkspace,
   managementMcpClient,
@@ -125,6 +126,15 @@ it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の ro
   const [childId] = await pose(root.id);
   expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "complete_interview", "report_broken_probe"].sort());
   expect(await tools(childId)).toEqual(unsplit);
+});
+
+it("出題の event は、出題の verb が呼ばれた checkout の保護ブランチの head を持つ(ADR 0263 決定6)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await pose(root.id);
+
+  const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
+  expect(posed.payload.head).toBe(git(workspacePath, "rev-parse", "main"));
 });
 
 it("出題で立った pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {

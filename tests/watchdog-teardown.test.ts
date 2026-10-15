@@ -65,7 +65,7 @@ async function sessionInTeardown(
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
-  await prepareWorkspaceAtPickup(db, ws, picked, {});
+  await prepareWorkspaceAtPickup(db, ws, picked, { now: new Date(0) });
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
   containers.open(picked.id);
   runtime.hold(picked.id);
