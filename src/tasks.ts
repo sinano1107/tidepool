@@ -3287,7 +3287,7 @@ type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
-  | { retry_of: { task_id: string; probe: string; rubric: string; premise_breach: string; comment: string | null } }
+  | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
 
 /** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
@@ -3344,8 +3344,8 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   // 子が読む親の history には載せない —— rubric と Interview であることを伏せる(ADR 0253 決定2 / ADR 0245 決定2)
   const retried = readingChildId === undefined ? latestEventOfTask(db, taskId, "interview_retried") : undefined;
   if (retried) {
-    const { previous_root_id, probe, rubric, premise_breach, comment } = retried.payload;
-    timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of: { task_id: previous_root_id, probe, rubric, premise_breach, comment: comment ?? null } } });
+    const { kind: _, ...retry_of } = retried.payload;
+    timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
   }
   for (const child of listChildren(db, taskId)) {
     const registered = latestEventOfTask(db, child.id, "task_registered");

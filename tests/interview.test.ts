@@ -214,7 +214,7 @@ it("pin の子の前提の破綻の question への retry は root ごと cancel
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull]);
   expect(taskVerbSwap(db, again.id).added).toEqual(["pose_probe"]);
   expect(listEvents(db, again.id).find((event) => event.kind === "interview_retried")?.worker_id).toBe(BOARD_WORKER_ID);
-  const retry = { retry_of: { task_id: root.id, probe: POSE.probe, rubric: POSE.rubric, premise_breach: "the probe is broken", comment: "the probe leaks the answer" } };
+  const retry = { retry_of: { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, premise_breach: "the probe is broken", comment: "the probe leaks the answer" } };
   expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([retry]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
   // 新しい root の pin の子が読む親の history には、旧い rubric も Interview であることも載せない(ADR 0253 決定2 / ADR 0245 決定2)
