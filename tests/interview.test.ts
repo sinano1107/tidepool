@@ -10,6 +10,7 @@ import type { Provider } from "../src/provider.js";
 import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getRegistrant, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
+import { failTask } from "../src/watchdog.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
@@ -160,6 +161,36 @@ it("pin の子の failure question は兄弟の pin の子を held にしない 
   failureQuestion(db, failed.id, new Date(0));
   expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("todo");
   expect(nextSlotTask(db)?.id).toBe(sibling.id);
+});
+
+it("retry 後の pin の子の failure question の history は失敗の理由と再実行の帰結を残し、Interview の帰結だけを伏せる —— 人間の context は残る(ADR 0245 決定2 / ADR 0247 決定1)", () => {
+  const { db, failed } = twoPinnedChildren();
+  failTask(db, failed, "worker timed out", "The worker exceeded its time limit. Last utterance: still parsing.", undefined, new Date(0));
+  const question = listChildren(db, failed.id)[0]!;
+  answerQuestionViaWebui(db, question, ["retry"], new Date(0));
+
+  const history = taskHistoryRows(db, failed.id).map((row) => row.entry);
+  expect(JSON.stringify(history)).not.toMatch(/interview/i);
+  expect(history).toEqual([
+    { child_outside_the_decomposition: expect.objectContaining({
+      purpose: `The worker exceeded its time limit. Last utterance: still parsing.\n\n` +
+        `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
+        `"abandon" cancels this task and its remaining work.`,
+      answer: ["retry"],
+    }) },
+  ]);
+  expect(getTask(db, question.id)!.purpose).toContain("If no other target of this Interview is done or still unsettled, the Interview ends too.");
+});
+
+it("通常の task の failure question の history は Interview の帰結と同じ文が理由にあっても purpose をそのまま運ぶ", () => {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { ...CHILD, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  failTask(db, task, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", undefined, new Date(0));
+  const question = listChildren(db, task.id)[0]!;
+  answerQuestionViaWebui(db, question, ["retry"], new Date(0));
+  expect(taskHistoryRows(db, task.id).map((row) => row.entry)).toEqual([
+    { child_outside_the_decomposition: expect.objectContaining({ purpose: getTask(db, question.id)!.purpose }) },
+  ]);
 });
 
 it("pin の子の failure question への abandon は、その子だけを cancel する —— 兄弟の pin の子は todo のまま、root は blocked のまま(ADR 0245 決定5)", () => {

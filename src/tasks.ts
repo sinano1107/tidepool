@@ -2037,6 +2037,8 @@ function resolvePremiseBreach(
   });
 }
 
+export const INTERVIEW_FAILURE_END_CONSEQUENCE = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
+
 /** Canonical English abandon consequence baked into failure questions
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
  *  rule and count only when unfinished same-decision siblings are in the abandon scope; an Interview pin child's
@@ -2051,7 +2053,7 @@ export function abandonConsequence(db: Db, task: Task, breach = false): string {
       ? `"abandon" ends this Interview — it cancels this task's remaining work${siblingCount > 0 ? ` plus ${siblings}` : ""} ` +
           `and the Interview itself, so no answer to this probe is scored. "retry" ends it the same way and registers a new Interview ` +
           `in your name with the same targets and purpose; its root reads this probe, its rubric, this reason and your comment before posing a new probe.`
-      : `"abandon" cancels this task and its remaining work. If no other target of this Interview is done or still unsettled, the Interview ends too.`;
+      : `"abandon" cancels this task and its remaining work. ${INTERVIEW_FAILURE_END_CONSEQUENCE}`;
   }
   return siblingCount > 0
     ? `"abandon" discards this decomposition decision — this task's remaining work plus ${siblings} — ` +
@@ -3498,7 +3500,7 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
  *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
  *  history を読む子: その子に `you` を付け、出題の行から rubric を伏せ、`retry_of` を載せない(ADR 0253 決定2)。Interview の pin の子
- *  自身の history は、前提の破綻の question の purpose(context)を載せない(同)。 */
+ *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(同 / issue #1932)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
@@ -3546,7 +3548,11 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       title: child.title,
       // pin の子の前提の破綻の question の context は rubric と Interview の帰結を持つので、宣言者には答えだけを見せる
       // (ADR 0253 決定2 / ADR 0245 決定2)。人間は question の context を読む(ADR 0248 決定4)
-      ...(!(pinChild && child.question_breached_decision !== null) && { purpose: child.purpose }),
+      ...(!(pinChild && child.question_breached_decision !== null) && {
+        purpose: pinChild && child.question_cancel_option !== null
+          ? child.purpose.replace(` ${INTERVIEW_FAILURE_END_CONSEQUENCE}`, "")
+          : child.purpose,
+      }),
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
