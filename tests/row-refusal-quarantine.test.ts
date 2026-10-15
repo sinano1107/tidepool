@@ -784,11 +784,14 @@ it("最後の対象を「この対象は測らない」で外すと、採点で�
   expect((await events(board.rootId)).find((e) => e.kind === "task_cancelled")?.payload).toEqual({ kind: "task_cancelled", origin_question_id: board.question.id });
 });
 
+/** 報告なく終わった session の枠は watchdog が空ける。 */
+const WATCHDOG = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
+
 const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium", tier: "standard" };
 
 it("前提の破綻の question の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
   // 報告なき exit の failure question は watchdog の持つ経路
-  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR });
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], WATCHDOG);
   const [, failing, declarer] = board.childIds;
   expect((await board.answer("do not measure this target")).status).toBe(200);
   // 2つ目の対象の子は報告なく終わり、failure question を abandon する
@@ -815,7 +818,7 @@ it("前提の破綻の question の retry は、「この対象は測らない�
 
 // ── 対象を走らせうる Interview が無くなった対象の question(ADR 0199 追記、issue #1992) ──
 
-/** 盤面名義の quarantine_released を [worker, origin, payload] で並べる。 */
+/** question の quarantine_released を [worker, origin, payload] で並べる(盤面名義かは worker と origin で言う)。 */
 const releases = async (questionId: string) =>
   (await events(questionId)).filter((e) => e.kind === "quarantine_released").map((e) => [e.worker_id, e.origin, e.payload]);
 
@@ -831,8 +834,18 @@ it("対象の question が開いている間に Interview の root を直接 can
   ]);
 });
 
-/** 報告なく終わった session の枠は watchdog が空ける。 */
-const WATCHDOG = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
+it("root の直接 cancel が決着させるのはその Interview の対象の question だけで、走らせうる Interview の無い別の鍵の question は開いたまま", async () => {
+  const board = await refuseUnrowedTarget([SONNET_MEDIUM]);
+  // 走らせうる Interview の無い鍵の question —— この扉の観測ではないので、この cancel の event を付けて閉じない
+  registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", "claude-opus-4-6"), "another observation", t.clock.now());
+  const other = (await questions(t)).find((q) => q.question_quarantine_value === "anthropic/claude-opus-4-6")!;
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${board.rootId}/cancel`, {})).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("done");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${other.id}`)).json.status).toBe("todo");
+  expect(await releases(other.id)).toEqual([]);
+});
 
 /** 対象の question が開いたまま、兄弟の子が前提の破綻を宣言した盤面。 */
 async function breachBesideRefusedTarget() {
@@ -844,7 +857,7 @@ async function breachBesideRefusedTarget() {
   return { ...board, answerBreach: (answer: string) => api(t.baseUrl, "POST", `/api/tasks/${breach.id}/answer`, { answers: [answer] }) };
 }
 
-it("前提の破綻の question を abandon して Interview が消えると、対象の question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
+it("前提の破綻の question を abandon して Interview が cancel されると、対象の question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
   const board = await breachBesideRefusedTarget();
 
   expect((await board.answerBreach("abandon")).status).toBe(200);
@@ -901,9 +914,7 @@ const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", e
 
 /** 表の行と一致する対象を pin した子が 404 で断られ、次の poll も過ぎた盤面。回答時の probe は通る。 */
 async function refuseRowTarget() {
-  // 報告なく終わった session の枠は watchdog が空ける
-  const watchdog = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
-  const proc = await bootClaude({ modelProbes: { anthropic: async () => ({ status: "runs" }) }, watchdog });
+  const proc = await bootClaude({ modelProbes: { anthropic: async () => ({ status: "runs" }) }, watchdog: WATCHDOG });
   const { childIds: [child] } = await poseInterview(proc, [SONNET_ROW_TARGET]);
   await t.clock.advance(HOUR);
   await refuseLatestSession(proc, REFUSED_404);
