@@ -34,6 +34,8 @@ import {
   quarantineAgent,
   quarantineExcludedProviders,
   quarantineStops,
+  questionRefusedTarget,
+  refusedTargetQuestion,
   registerQuarantine,
   tableRowEffortValue,
   tableRowValue,
@@ -59,6 +61,8 @@ import {
   resolveTaskAgent,
   type Task,
   type TaskContent,
+  unrowedPinChildren,
+  unrowedTarget,
 } from "./tasks.js";
 import {
   blockedProviderUsageResources,
@@ -88,14 +92,17 @@ export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => Execut
 
 /** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、task の実行 workspace と
  *  行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
- *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。 */
-function withoutStoppedPairs(
+ *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。
+ *  断られた行でない Interview の対象(ADR 0199 決定4)の question が開いていれば、その対象を pin した子の候補は空になる。 */
+function withoutStopped(
   db: Db,
   candidates: TaskExecutionCandidates,
   defaultWorkspaceName: string | undefined,
 ): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => ExecutionSetting[] {
   const pairs = (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
   return (task) => {
+    const target = task.interview_target_id === null ? undefined : unrowedTarget(db, task.interview_target_id);
+    if (target && refusedTargetQuestion(db, target)) return [];
     const workspace = task.workspace ?? defaultWorkspaceName;
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
@@ -137,7 +144,7 @@ export function entryExclusionPredicate(
   defaultWorkspaceName: string | undefined,
 ): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => boolean {
   const excluded = pickupExclusions(db);
-  const pairFiltered = withoutStoppedPairs(db, candidates, defaultWorkspaceName);
+  const pairFiltered = withoutStopped(db, candidates, defaultWorkspaceName);
   return (task) => allEntriesExcluded(task, excluded, () => pairFiltered(task));
 }
 
@@ -598,6 +605,16 @@ export function startScheduler(deps: {
           registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now);
         }
       }
+      // 行でない Interview の対象も、未決着の pin の子が待つものを同じ一覧で照合し、spawn の前に対象の question を立てる
+      // (ADR 0199 決定4 / ADR 0218 決定2)。question が開いている対象はもう走らないので照合しない
+      for (const { task, target } of unrowedPinChildren(db)) {
+        if (task.status !== "todo" || target.provider !== "openai" || refusedTargetQuestion(db, target)) continue;
+        const unlisted = whyRowUnlisted(result, target.model, target.effort ?? undefined);
+        if (!unlisted) continue;
+        const refusal = { ...target, worker_spawned_event_id: null, cause: unlisted.unit === "model" ? "model_not_listed" : "effort_not_advertised" } as const;
+        questionRefusedTarget(db, task, refusal, `was not picked up: ${unlisted.reason}`, now);
+        appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "row_refused", ...refusal }, at: now });
+      }
       return evaluateAndReportProviderUsage(
         db,
         {
@@ -650,7 +667,7 @@ export function startScheduler(deps: {
       // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
       const excludedTasks: string[] = [];
       let entryExcluded = pickupExclusions(db, false);
-      const pairFiltered = withoutStoppedPairs(db, taskExecutionCandidates, workspace?.name);
+      const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
       let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */

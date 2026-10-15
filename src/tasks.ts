@@ -9,7 +9,7 @@ import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
-import { PROVIDER_VALUES } from "./provider.js";
+import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { type QuestionColumns, type QuestionKind, questionColumns, questionKindOf } from "./question-kind.js";
 import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -484,6 +484,29 @@ function targetRows(db: Db, taskId: string): Array<InterviewTarget & { id: numbe
   return db
     .prepare("SELECT id, provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
     .all(taskId) as Array<InterviewTarget & { id: number }>;
+}
+
+/** Interview の対象の (provider, model, effort)。 */
+export type TargetKey = { provider: Provider; model: string; effort: string | null };
+
+/** 4欄一致の行が表に無い対象(ADR 0199 決定2)。 */
+const UNROWED_TARGET_SQL = `NOT EXISTS (SELECT 1 FROM execution_settings e
+  WHERE e.provider = it.provider AND e.model = it.model AND e.effort IS it.effort AND e.tier_id = it.tier_id)`;
+
+/** 対象が表の行でなければその鍵、行なら undefined。行の対象の拒否は行の Quarantine に乗る(ADR 0184)。 */
+export function unrowedTarget(db: Db, targetId: number): TargetKey | undefined {
+  return db.prepare(`SELECT provider, model, effort FROM interview_targets it WHERE id = ? AND ${UNROWED_TARGET_SQL}`).get(targetId) as TargetKey | undefined;
+}
+
+/** 行でない対象を pin した未決着の子と、その対象。 */
+export function unrowedPinChildren(db: Db): Array<{ task: Task; target: TargetKey }> {
+  const rows = db
+    .prepare(
+      `SELECT t.id, it.provider, it.model, it.effort FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
+       WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL} ORDER BY t.sort_key`,
+    )
+    .all() as Array<TargetKey & { id: string }>;
+  return rows.map(({ id, ...target }) => ({ task: getTask(db, id)!, target }));
 }
 
 /** 既定 agent が走らせられない対象を名指して拒む(ADR 0253 決定3): pin の Provider が既定 agent の entry に無いか、advisor の
@@ -1171,16 +1194,16 @@ export function returnToQueueHead(
   now: Date,
 ): void {
   db.transaction(() => {
-    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
-    appendEvent(db, {
-      taskId: task.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
-      payload,
-      at: now,
-    });
+    returnToQueue(db, task, payload, now);
     moveTask(db, task, null, now, BOARD_WORKER_ID, "board");
   })();
+}
+
+/** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
+ *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
+export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>, now: Date): void {
+  db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
+  appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }
 
 function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
@@ -1712,7 +1735,7 @@ function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: str
       completion_criteria: previousRoot.completion_criteria,
       workspace: previousRoot.workspace ?? undefined,
       review_tier: previousRoot.review_tier ?? undefined,
-      interview_targets: interviewTargets(db, previousRoot.id)!,
+      interview_targets: retriedTargets(db, previousRoot.id),
     },
     now,
     HUMAN_WORKER_ID,
@@ -1732,6 +1755,28 @@ function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: str
     },
     at: now,
   });
+}
+
+/** 断られた行でない対象の question への「この対象は測らない」(ADR 0199 決定4・追記): その対象を pin した未決着の子だけを、この
+ *  question を出自に cancel する。兄弟も親も動かさないが、採点できる答案も未決着の子も残らない Interview はこの答えで終える
+ *  (ADR 0247 決定1)。 */
+export function dropInterviewTarget(db: Db, question: Task, children: Task[], now: Date, origin: EventOrigin): void {
+  for (const child of children) cancelTask(db, child, question.id, HUMAN_WORKER_ID, now, origin);
+  for (const rootId of new Set(children.map((child) => child.parent_id!))) {
+    if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
+  }
+}
+
+/** retry が写す対象(ADR 0248 決定2・追記): 登録時の一覧から、断られた対象の question への「この対象は測らない」で外した対象だけを除く
+ *  —— その子を cancel した question は Quarantine の確認型で、abandon / reject で外れた対象は写す。 */
+function retriedTargets(db: Db, rootId: string): InterviewTarget[] {
+  return targetRows(db, rootId)
+    .filter(({ id }) => {
+      const child = listChildren(db, rootId).find((task) => task.interview_target_id === id);
+      const cancelled = child?.status === "cancelled" ? latestEventOfTask(db, child.id, "task_cancelled")?.payload : undefined;
+      return !(cancelled && "origin_question_id" in cancelled && getTask(db, cancelled.origin_question_id)!.question_quarantine_kind !== null);
+    })
+    .map(({ id: _, ...target }) => target);
 }
 
 /** 採点できる答案(done の pin の子)も未決着の子も残っていない Interview の root か(ADR 0247 決定1)。 */

@@ -79,6 +79,9 @@ const ROW_REFUSAL_EVIDENCE: Record<RowRefusalCause, string> = {
   cli_version_too_old: "API error code claude_code_version_too_old",
 };
 
+/** 行の拒否の証拠を理由の文に名指す語。 */
+export const rowRefusalEvidence = (cause: RowRefusalCause): string => ROW_REFUSAL_EVIDENCE[cause];
+
 type RefusedRow = Pick<RowRefusal, "provider" | "model" | "cause">;
 
 /** 表の行で撃つ Board call の result envelope が行の拒否の証拠だったこと(ADR 0202 決定1)。`CliAuthError` と同じく
