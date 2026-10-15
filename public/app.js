@@ -315,7 +315,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   const providerUsage = data.providerUsage ?? [];
   const headId = data.queue[0]?.id ?? null;
   const spendDownText = (spend) => spend.resetsAt ? `spend-down \xB7 until ${new Date(spend.resetsAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : "spend-down \xB7 armed for next window";
-  const spendDownButton = (provider, window2, spend, arm) => /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `${spend ? "cancel spend-down" : arm} ${provider} ${window2}`, onClick: () => onSpendDown(provider, window2, !spend) }, spend ? "cancel" : arm);
+  const spendDownButton = (provider, window2, spend, armLabel) => /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", "aria-label": `${spend ? "cancel spend-down" : armLabel} ${provider} ${window2}`, onClick: () => onSpendDown(provider, window2, !spend) }, spend ? "cancel" : armLabel);
   React.useEffect(() => {
     lucide.createIcons();
   });
@@ -4124,7 +4124,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     running: !!running,
     paused: !!paused,
     triageActive: halts.some((h) => h.kind === "triage"),
-    // Spend-down (ADR 0143) — Provider × 窓ごとの盤面状態応答から素通し
+    // Spend-down (ADR 0143 / 0260) — Provider × 窓ごとの盤面状態応答から素通し
     spendDown: pause.spendDown,
     providerUsage,
     lastLogId: log.entries.at(-1)?.id ?? null
@@ -4667,7 +4667,7 @@ function App() {
       say(
         active ? "warn" : "info",
         active ? `spend-down armed \xB7 ${provider} ${window2}` : `spend-down cancelled \xB7 ${provider} ${window2}`,
-        active ? "pace line off \u2014 burns to the 100% cap, expires at the window reset" : "pace line back on"
+        active ? "pace line off for the bound window (or the next one to open) \u2014 burns to the 100% cap, expires at that window's reset" : "pace line back on"
       );
     } catch (err) {
       say("danger", "spend-down failed", String(err.message || err));

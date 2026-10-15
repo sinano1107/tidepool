@@ -196,9 +196,9 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   const spendDownText = (spend: { resetsAt: string | null }) => spend.resetsAt
     ? `spend-down · until ${new Date(spend.resetsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
     : 'spend-down · armed for next window';
-  const spendDownButton = (provider: string, window: string, spend: unknown, arm: string) => (
-    <Button variant="secondary" size="sm" aria-label={`${spend ? 'cancel spend-down' : arm} ${provider} ${window}`} onClick={() => onSpendDown(provider, window, !spend)}>
-      {spend ? 'cancel' : arm}
+  const spendDownButton = (provider: string, window: string, spend: { resetsAt: string | null } | null | undefined, armLabel: string) => (
+    <Button variant="secondary" size="sm" aria-label={`${spend ? 'cancel spend-down' : armLabel} ${provider} ${window}`} onClick={() => onSpendDown(provider, window, !spend)}>
+      {spend ? 'cancel' : armLabel}
     </Button>
   );
   React.useEffect(() => { lucide.createIcons(); });
@@ -261,7 +261,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                 </div>
                 {usage.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
                 {usage.windows.map((window) => {
-                  // Spend-down (ADR 0143): 入口は既知の組の窓の行だけ —— キーの集合はサーバが返す
+                  // Spend-down (ADR 0143 / 0260): 入口は既知の組の窓の行と、下の idle の行だけ —— キーの集合はサーバが返す
                   const spend = spendDown[usage.provider]?.[window.window];
                   return (
                     <div key={`${window.window}:${window.model ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : spend ? 'var(--text-body)' : 'var(--text-muted)' }}>

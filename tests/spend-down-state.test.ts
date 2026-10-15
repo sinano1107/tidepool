@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import {
   clearSpendDown,
   expireSpendDown,
@@ -64,6 +65,36 @@ it.each([
   setSpendDown(db, "anthropic", "session", now);
 
   expect(getSpendDown(db).anthropic.session).toEqual({ activatedAt: now, resetsAt: null });
+  db.close();
+});
+
+// --- 表示の reset を過ぎて5分以内の arm は拒む(ADR 0260 決定4) ---
+
+it.each([
+  ["reset ちょうど", 0, "refused"],
+  ["reset の5分後の直前", 5 * MIN - 1, "refused"],
+  // 終わりかけの窓のつもりの arm は、その窓に結ぶ
+  ["reset の直前", -1, "bound"],
+  // 区間を過ぎた arm は次に観測に現れる窓に結ぶ
+  ["reset のちょうど5分後", 5 * MIN, "unbound"],
+] as const)("最新の観測の reset に対する arm: %s", (_, offset, outcome) => {
+  const db = openDb(":memory:");
+  const resetsAt = new Date("2026-08-20T10:00:00.000Z");
+  const now = new Date(resetsAt.getTime() + offset);
+  observe(db, "anthropic", new Date(resetsAt.getTime() - HOUR), [{ window: "session", resetsAt }]);
+
+  if (outcome === "refused") {
+    expect(() => setSpendDown(db, "anthropic", "session", now)).toThrow(
+      new DomainError("window is resetting; arm again after the new window opens"),
+    );
+    expect(getSpendDown(db).anthropic.session).toBeNull();
+  } else {
+    setSpendDown(db, "anthropic", "session", now);
+    expect(getSpendDown(db).anthropic.session).toEqual({
+      activatedAt: now,
+      resetsAt: outcome === "bound" ? resetsAt : null,
+    });
+  }
   db.close();
 });
 
@@ -168,9 +199,31 @@ it("未確定の行は、reset が arm より後の最初に観測された窓�
   db.close();
 });
 
-it.each([
+it("week に結んだ arm は、同じ reset の anthropic の fable の線も外す", () => {
+  const db = openDb(":memory:");
+  const now = new Date("2026-08-20T10:00:00.000Z");
+  const resetsAt = new Date("2026-08-25T00:00:00.000Z");
+  observe(db, "anthropic", now, [{ window: "week", resetsAt }]);
+  setSpendDown(db, "anthropic", "week", now);
+
   // 同じ瞬間に失効する予算(ADR 0091 決定2)
-  ["anthropic の week は anthropic の fable の線も外す", "anthropic", "week", "anthropic", "fable", true],
+  expect(isSpendDownActive(getSpendDown(db), "anthropic", "fable", resetsAt)).toBe(true);
+  db.close();
+});
+
+it("week が idle の間の次の窓への arm は、開いている fable の窓に当たらず、fable の観測でも結ばれない", () => {
+  const db = openDb(":memory:");
+  const armedAt = new Date("2026-08-20T10:00:00.000Z");
+  const fableResetsAt = new Date("2026-08-25T00:00:00.000Z");
+  setSpendDown(db, "anthropic", "week", armedAt);
+
+  expect(isSpendDownActive(getSpendDown(db), "anthropic", "fable", fableResetsAt)).toBe(false);
+  expireSpendDown(db, { provider: "anthropic", windows: [{ window: "fable", resetsAt: fableResetsAt }] });
+  expect(getSpendDown(db).anthropic.week).toEqual({ activatedAt: armedAt, resetsAt: null });
+  db.close();
+});
+
+it.each([
   // fable は週次予算で、session と失効時刻を共有しない
   ["anthropic の session は fable の線に触れない", "anthropic", "session", "anthropic", "fable", false],
   // Provider をまたがない(ADR 0143)

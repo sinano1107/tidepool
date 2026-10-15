@@ -96,12 +96,13 @@ export function isSpendDownActive(
   window: string,
   resetsAt: Date,
 ): boolean {
-  const target = provider === "anthropic" && window === "fable" ? "week" : window;
-  const armed = (state as LooseSpendDownState)[provider]?.[target];
+  const followsWeek = provider === "anthropic" && window === "fable";
+  const armed = (state as LooseSpendDownState)[provider]?.[followsWeek ? "week" : window];
   if (!armed) return false;
-  return armed.resetsAt
-    ? Math.abs(resetsAt.getTime() - armed.resetsAt.getTime()) <= WINDOW_TOLERANCE_MS
-    : resetsAt > armed.activatedAt;
+  if (armed.resetsAt) return Math.abs(resetsAt.getTime() - armed.resetsAt.getTime()) <= WINDOW_TOLERANCE_MS;
+  // 次の窓に結んだ week の arm は fable に当たらない —— fable の観測は week の行を結ばないので、当てると
+  // week の窓が観測されるまで fable の窓を次々に外し続ける。week に結ばれた後から fable も従う
+  return !followsWeek && resetsAt > armed.activatedAt;
 }
 
 /** 失効の後始末(ADR 0260 決定2): 結んだ窓と別の窓が観測されたら、その (provider, window) の行を消し、

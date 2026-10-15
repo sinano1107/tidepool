@@ -64,7 +64,7 @@ it("POST /api/spend-down で Provider × ウィンドウを arm / cancel でき�
   });
 });
 
-it("表示の reset を過ぎて5分以内の arm は拒まれて行は書かれず、取り消しは通る", async () => {
+it("リセット直後の arm の拒否は 400 とその文で返り、取り消しは通る", async () => {
   t = await bootTidepool();
   observeWindow(t, "anthropic", "session", new Date(t.clock.now().getTime() - 2 * MIN));
 
@@ -73,7 +73,6 @@ it("表示の reset を過ぎて5分以内の arm は拒まれて行は書かれ
     status: 400,
     json: { error: "window is resetting; arm again after the new window opens" },
   });
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual(NO_SPEND_DOWN);
 
   const cancel = await api(t.baseUrl, "POST", "/api/spend-down", { provider: "anthropic", window: "session", active: false });
   expect(cancel.status).toBe(200);

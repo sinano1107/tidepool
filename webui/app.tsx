@@ -404,7 +404,7 @@ function mapData(
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
     slot, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
-    // Spend-down (ADR 0143) — Provider × 窓ごとの盤面状態応答から素通し
+    // Spend-down (ADR 0143 / 0260) — Provider × 窓ごとの盤面状態応答から素通し
     spendDown: pause.spendDown,
     providerUsage,
     lastLogId: log.entries.at(-1)?.id ?? null,
@@ -1220,7 +1220,7 @@ function App() {
       say(active ? 'warn' : 'info',
         active ? `spend-down armed · ${provider} ${window}` : `spend-down cancelled · ${provider} ${window}`,
         active
-          ? 'pace line off — burns to the 100% cap, expires at the window reset'
+          ? 'pace line off for the bound window (or the next one to open) — burns to the 100% cap, expires at that window\'s reset'
           : 'pace line back on');
     } catch (err) {
       say('danger', 'spend-down failed', String((err as Error).message || err));
