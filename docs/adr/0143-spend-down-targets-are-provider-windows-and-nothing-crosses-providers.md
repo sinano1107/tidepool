@@ -1,5 +1,7 @@
 # Spend-down の対象は「Provider × ウィンドウ」で、Provider をまたいで写さない
 
+**Status: 決定4(idle の窓に入口を置かない)と決定5(門は既知の組だけ、効かない arm は窓の開始との比較で消える)は ADR 0260 で置き換えた —— arm は窓の reset に結ばれ、idle の窓は次に開く窓への arm を受け、リセット直後の arm は門で拒む。**
+
 2026-09-21 の grilling(issue #721)で決定。Codex usage probe の導入(commit 8910b92)以来、Claude の
 Spend-down(session / week)が Codex の primary / secondary にも写されていたが、ADR 0030 / 0091 は対象を
 Claude の窓として定義しただけで、Provider 間で共有するとは誰も決めていなかった。Claude の予算だけを燃やす

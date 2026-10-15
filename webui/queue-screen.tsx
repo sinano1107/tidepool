@@ -192,6 +192,15 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
+  // arm がどの窓に当たっているか: 結んだ窓の reset か、次に開く窓か(ADR 0260 決定3)
+  const spendDownText = (spend: { resetsAt: string | null }) => spend.resetsAt
+    ? `spend-down · until ${new Date(spend.resetsAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : 'spend-down · armed for next window';
+  const spendDownButton = (provider: string, window: string, spend: { resetsAt: string | null } | null | undefined, armLabel: string) => (
+    <Button variant="secondary" size="sm" aria-label={`${spend ? 'cancel spend-down' : armLabel} ${provider} ${window}`} onClick={() => onSpendDown(provider, window, !spend)}>
+      {spend ? 'cancel' : armLabel}
+    </Button>
+  );
   React.useEffect(() => { lucide.createIcons(); });
   return (
     <div style={{ padding: '20px 16px' }}>
@@ -252,23 +261,28 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                 </div>
                 {usage.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
                 {usage.windows.map((window) => {
-                  // Spend-down (ADR 0143): 入口は既知の組の窓の行だけ —— キーの集合はサーバが返す
+                  // Spend-down (ADR 0143 / 0260): 入口は既知の組の窓の行と、下の idle の行だけ —— キーの集合はサーバが返す
                   const spend = spendDown[usage.provider]?.[window.window];
                   return (
                     <div key={`${window.window}:${window.model ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
                       <span style={{ flex: 1, minWidth: 0 }}>
                         {window.window}{window.model ? ` · ${window.model}` : ''} · {window.usedPercent ?? '?'}% · {spend
-                          ? 'spend-down · 100% cap · expires at reset'
+                          ? spendDownText(spend)
                           : `offset ${window.offset}pt · ${window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}`}
                       </span>
-                      {spend !== undefined && (
-                        <Button variant="secondary" size="sm" aria-label={`${spend ? 'cancel spend-down' : 'spend down'} ${usage.provider} ${window.window}`} onClick={() => onSpendDown(usage.provider, window.window, !spend)}>
-                          {spend ? 'cancel' : 'spend down'}
-                        </Button>
-                      )}
+                      {spend !== undefined && spendDownButton(usage.provider, window.window, spend, 'spend down')}
                     </div>
                   );
                 })}
+                {/* Idle の窓(観測に現れない既知の組)にも次に開く窓への入口を置く(ADR 0260 決定3)。観測不能の Provider には足さない */}
+                {usage.status === 'observed' && Object.entries(spendDown[usage.provider] ?? {})
+                  .filter(([name]) => !usage.windows.some((window) => window.window === name))
+                  .map(([name, spend]) => (
+                    <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
+                      <span style={{ flex: 1, minWidth: 0 }}>{name} · {spend ? spendDownText(spend) : 'idle'}</span>
+                      {spendDownButton(usage.provider, name, spend, 'spend down next window')}
+                    </div>
+                  ))}
               </div>
             ))}
           </div>

@@ -322,13 +322,15 @@ export function openDb(path: string): Db {
       paused INTEGER NOT NULL
     );
 
-    -- Spend-down (ADR 0091 / 0143): one independently expiring row per armed
+    -- Spend-down (ADR 0091 / 0143 / 0260): one independently expiring row per armed
     -- Provider window. No row for a window means its pace line remains in force.
-    -- The known (provider, window) pairs live in src/spend-down.ts.
+    -- resets_at identifies the window the arm is bound to; NULL = the next window
+    -- to appear in an observation. The known (provider, window) pairs live in src/spend-down.ts.
     CREATE TABLE IF NOT EXISTS spend_down_state (
       provider     TEXT NOT NULL,
       window       TEXT NOT NULL,
       activated_at TEXT NOT NULL,
+      resets_at    TEXT,
       PRIMARY KEY (provider, window)
     );
 

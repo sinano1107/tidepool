@@ -4,55 +4,70 @@ import { expect, test } from "./fixtures.js";
 
 const H = 60 * 60 * 1000;
 
-test("provider usage の窓の行で Provider × 窓を arm / cancel できる", async ({ boot, page }) => {
+test("provider usage の窓の行で Provider × 窓を arm / cancel でき、idle の窓には次の窓への入口が出る", async ({
+  boot,
+  page,
+}) => {
   const t = await boot();
   const now = t.clock.now();
+  const sessionResets = new Date(now.getTime() + 2 * H);
   const w = (window: string, model: string | null, usedPercent: number, durationMs: number) => ({
     window,
     model,
     usedPercent,
     durationMs,
-    resetsAt: new Date(now.getTime() + 2 * H),
+    resetsAt: sessionResets,
     throttled: false,
     resumesAt: null,
   });
+  // week は Idle —— 観測に現れない窓
   reportProviderUsage(t.db, {
     provider: "anthropic",
     status: "observed",
     plan: null,
     cliVersion: null,
     observedAt: now,
-    windows: [w("session", null, 40, 5 * H), w("week", null, 20, 168 * H), w("fable", "fable", 30, 168 * H)],
+    windows: [w("session", null, 40, 5 * H), w("fable", "fable", 30, 168 * H)],
   });
-  // secondary は Idle —— 行が無いので入口も無い
+  // 観測不能の Provider には入口を足さない
   reportProviderUsage(t.db, {
     provider: "openai",
-    status: "observed",
-    plan: "plus",
+    status: "unobservable",
+    plan: null,
     cliVersion: null,
+    reason: "probe failed",
     observedAt: now,
-    windows: [w("primary", null, 30, 5 * H)],
+    windows: [],
   });
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Queue" }).click();
   const card = page.locator('[data-testid^="provider-usage-"]');
-  // 入口は anthropic session / week と openai primary の3つだけ(fable と Idle の secondary には無い)
+  // 入口は anthropic の session と Idle の week の2つ(fable と観測不能の openai には無い)
   await expect(page.getByTestId("provider-usage-anthropic").getByRole("button")).toHaveCount(2);
-  await expect(page.getByTestId("provider-usage-openai").getByRole("button")).toHaveCount(1);
+  await expect(page.getByTestId("provider-usage-openai").getByRole("button")).toHaveCount(0);
   await expect(page.getByText("spend-down", { exact: false })).toHaveCount(0);
   const button = (name: string) => page.getByRole("button", { name, exact: true });
+  await expect(button("spend down next window anthropic week")).toHaveText("spend down next window");
 
   await button("spend down anthropic session").click();
-  await expect(card.getByText("session · 40% · spend-down · 100% cap · expires at reset")).toBeVisible();
-  await button("spend down openai primary").click();
-  await expect(card.getByText("primary · 30% · spend-down · 100% cap · expires at reset")).toBeVisible();
+  const until = await page.evaluate(
+    (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    sessionResets.toISOString(),
+  );
+  await expect(card.getByText(`session · 40% · spend-down · until ${until}`)).toBeVisible();
+  await button("spend down next window anthropic week").click();
+  await expect(card.getByText("week · spend-down · armed for next window")).toBeVisible();
 
-  await expect(button("spend down anthropic week")).toHaveText("spend down");
+  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
+    anthropic: {
+      session: { activatedAt: expect.any(String), resetsAt: sessionResets.toISOString() },
+      week: { activatedAt: expect.any(String), resetsAt: null },
+    },
+    openai: { primary: null, secondary: null },
+  });
+  await button("cancel spend-down anthropic week").click();
+  await expect(button("spend down next window anthropic week")).toBeVisible();
   await button("cancel spend-down anthropic session").click();
   await expect(card.getByText("session · 40% · offset", { exact: false })).toBeVisible();
-  expect((await api(t.baseUrl, "GET", "/api/pause")).json.spendDown).toEqual({
-    anthropic: { session: null, week: null },
-    openai: { primary: { activatedAt: expect.any(String) }, secondary: null },
-  });
 });

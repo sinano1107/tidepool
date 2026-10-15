@@ -500,7 +500,8 @@ const pauseSchema = z.object({
 });
 
 // Spend-down (ADR 0030 / 0091 / 0143) — pause と同じ人間専用の盤面状態。門は既知の組だけを
-// 見る —— 最新の観測にその窓があるかは見ない(ADR 0143 決定5)。
+// 見る —— 最新の観測にその窓があるかは見ない(ADR 0143 決定5)。唯一の例外のリセット直後の
+// 拒否(ADR 0260 決定4)は setSpendDown の DomainError で来る。
 const spendDownSchema = z
   .object({ provider: z.enum(PROVIDER_VALUES), window: z.string(), active: z.boolean() })
   .refine((body) => isKnownSpendDownTarget(body.provider, body.window), {
@@ -1841,7 +1842,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         Object.fromEntries(
           Object.entries(windows).map(([window, state]) => [
             window,
-            state && { activatedAt: state.activatedAt.toISOString() },
+            state && { activatedAt: state.activatedAt.toISOString(), resetsAt: state.resetsAt?.toISOString() ?? null },
           ]),
         ),
       ]),
@@ -1888,8 +1889,14 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const { provider, window, active } = parsed.data;
-    if (active) setSpendDown(db, provider, window, clock.now());
-    else clearSpendDown(db, provider, window);
+    try {
+      if (active) setSpendDown(db, provider, window, clock.now());
+      else clearSpendDown(db, provider, window);
+    } catch (err) {
+      if (!(err instanceof DomainError)) throw err;
+      sendJson(res.status(400), { error: err.message });
+      return;
+    }
     // 有効化(今すぐ残りを燃やせ)も取り消しも即時再評価 — 取り消し側を tick 待ち
     // にすると、spend-down 時代の Provider 使用量の判定が最大1時間 UI に残る
     // (ADR 0028「fail-closed は可視化とセット」の可視化の延長)
