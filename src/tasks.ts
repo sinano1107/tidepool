@@ -1617,14 +1617,17 @@ export function answerQuestion(
         return;
       case "failure":
       case "premise_breach": {
-        if (answer !== kind.cancel_option) {
+        const breach = kind.kind === "premise_breach";
+        // 固定選択肢の question は出した選択肢でしか答えられず、retry を出すのは Interview の破綻の question だけ(ADR 0248 決定2)。
+        // 失敗 question の "retry" は再実行の意味なので、種類で絞る
+        const retry = breach && answer === "retry";
+        if (answer !== kind.cancel_option && !retry) {
           unblockTarget = blockedParent();
           break;
         }
         const failed = getTask(db, question.parent_id!)!;
         const plan = failed.parent_id ? getTask(db, failed.parent_id) : undefined;
         if (plan) {
-          const breach = kind.kind === "premise_breach";
           for (const id of abandonScopeIds(db, failed.id, breach)) {
             cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
           }
@@ -1632,6 +1635,7 @@ export function answerQuestion(
           // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)。破綻した probe か、
           // 採点できる答案も未決着の子も残らない Interview は、この答えで終える(ADR 0247 決定1・2)
           else if (breach || interviewLeftEmpty(db, plan.id)) cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin);
+          if (retry) retryInterview(db, plan, failed, comment, now, origin);
         } else {
           cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
         }
@@ -1695,6 +1699,41 @@ export function answerQuestion(
   return getTask(db, question.id)!;
 }
 
+/** retry(ADR 0248 決定2・3): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した probe を
+ *  盤面名義の event で新しい root の history に渡す。 */
+function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: string | undefined, now: Date, origin: EventOrigin): void {
+  const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
+  const root = registerTask(
+    db,
+    {
+      type: previousRoot.type,
+      title: previousRoot.title,
+      purpose: previousRoot.purpose,
+      completion_criteria: previousRoot.completion_criteria,
+      workspace: previousRoot.workspace ?? undefined,
+      review_tier: previousRoot.review_tier ?? undefined,
+      interview_targets: interviewTargets(db, previousRoot.id)!,
+    },
+    now,
+    HUMAN_WORKER_ID,
+    origin,
+  );
+  appendEvent(db, {
+    taskId: root.id,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: {
+      kind: "interview_retried",
+      previous_root_id: previousRoot.id,
+      probe,
+      rubric,
+      premise_breach: premiseBreachReason(db, declarer.id),
+      ...(comment !== undefined && { comment }),
+    },
+    at: now,
+  });
+}
+
 /** 採点できる答案(done の pin の子)も未決着の子も残っていない Interview の root か(ADR 0247 決定1)。 */
 function interviewLeftEmpty(db: Db, rootId: string): boolean {
   return db
@@ -1756,17 +1795,25 @@ export function declarePremiseBreach(
       at: now,
     });
     db.prepare("UPDATE tasks SET status = 'todo', premise_breach_decision = ? WHERE id = ?").run(decision, task.id);
-    // 書き手が人間、または同じ判断への2度目以降 —— 人間が判断する
-    if (getEvent(db, decision)?.worker_id !== HUMAN_WORKER_ID && prior === 0) return;
+    // Interview の pin の子、書き手が人間、または同じ判断への2度目以降 —— 人間が判断する(ADR 0248 決定1)
+    const interview = task.interview_target_id !== null;
+    if (!interview && getEvent(db, decision)?.worker_id !== HUMAN_WORKER_ID && prior === 0) return;
+    const posed = interview ? interviewProbe(db, task.parent_id!)! : undefined;
     question = escalateTask(
       db,
       task,
       {
         context:
-          `${reason}\n\n"continue" keeps the decomposition decision and resumes this task. ` +
+          `${reason}\n\n` +
+          (posed ? `The posed probe: ${posed.probe}\nIts rubric: ${posed.rubric}\n\n` : "") +
+          `"continue" keeps the decomposition decision and resumes this task. ` +
           abandonConsequence(db, task, true),
         questions: [
-          { title: `premise breach: ${task.title}`, options: ["continue", "abandon"], recommendation: "continue" },
+          {
+            title: `premise breach: ${task.title}`,
+            options: interview ? ["continue", "abandon", "retry"] : ["continue", "abandon"],
+            recommendation: "continue",
+          },
         ],
         question_kind: { kind: "premise_breach", cancel_option: "abandon", breached_decision: decision },
       },
@@ -1825,8 +1872,7 @@ export function redecompose(
   // ADR 0245 決定3: Interview の root は作り直さない
   if (interviewTargets(db, parent.id) !== null) {
     throw new DomainError(
-      "an Interview is not redecomposed: keep its posed probe with continue_decomposition, " +
-        "or escalate so a human can abandon it and register the Interview again with a fixed probe",
+      "an Interview is not redecomposed: a broken probe is the human's premise-breach question to settle (continue, abandon or retry)",
     );
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
@@ -1860,7 +1906,7 @@ function resolvePremiseBreach(
 /** Canonical English abandon consequence baked into failure questions
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
  *  rule and count only when unfinished same-decision siblings are in the abandon scope; an Interview pin child's
- *  wording says instead that the Interview ends (breach) or may end (failure) (ADR 0247). */
+ *  wording says instead that the Interview ends (breach, alongside retry: ADR 0248) or may end (failure) (ADR 0247). */
 export function abandonConsequence(db: Db, task: Task, breach = false): string {
   // derived from the cancel/held scope so the wording cannot drift
   const siblingCount = abandonScopeIds(db, task.id, breach).filter((id) => id !== task.id).length;
@@ -1869,7 +1915,8 @@ export function abandonConsequence(db: Db, task: Task, breach = false): string {
   if (task.interview_target_id !== null) {
     return breach
       ? `"abandon" ends this Interview — it cancels this task's remaining work${siblingCount > 0 ? ` plus ${siblings}` : ""} ` +
-          `and the Interview itself, so no answer to this probe is scored; a human registers the Interview again with a fixed probe.`
+          `and the Interview itself, so no answer to this probe is scored. "retry" ends it the same way and registers a new Interview ` +
+          `in your name with the same targets and purpose; its root reads this probe, its rubric, this reason and your comment before posing a new probe.`
       : `"abandon" cancels this task and its remaining work. If no other target of this Interview is done or still unsettled, the Interview ends too.`;
   }
   return siblingCount > 0
@@ -3222,8 +3269,10 @@ interface SettledChildContext {
   origin_direct_cancel?: { reason: string | null };
 }
 
-type HistoryChildContext = TaskContent &
+type HistoryChildContext = Omit<TaskContent, "purpose"> &
   Omit<SettledChildContext, "title" | "status"> & {
+    /** Interview の pin の子が読む自分の前提の破綻の question だけ無い(ADR 0253 決定2)。 */
+    purpose?: string;
     status: BoardTask["status"];
     you?: true;
     /** Interview の子だけ: complete_interview の採点が名指す id。 */
@@ -3240,6 +3289,8 @@ interface DecisionHistoryEntry {
 type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
+  /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
+  | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
 
 /** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
@@ -3260,7 +3311,9 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
 
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
- *  分解外の子は1行で、`id` はそれぞれの event。`readingChildId` は親の history を読む子: その子に `you` を付け、出題の行から rubric を伏せる(ADR 0253 決定2)。 */
+ *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
+ *  history を読む子: その子に `you` を付け、出題の行から rubric を伏せ、`retry_of` を載せない(ADR 0253 決定2)。Interview の pin の子
+ *  自身の history は、前提の破綻の question の purpose(context)を載せない(同)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
@@ -3293,13 +3346,22 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       });
     }
   }
+  // 子が読む親の history には載せない —— rubric と Interview であることを伏せる(ADR 0253 決定2 / ADR 0245 決定2)
+  const retried = readingChildId === undefined ? latestEventOfTask(db, taskId, "interview_retried") : undefined;
+  if (retried) {
+    const { kind: _, ...retry_of } = retried.payload;
+    timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
+  }
+  const pinChild = getTask(db, taskId)?.interview_target_id != null;
   for (const child of listChildren(db, taskId)) {
     const registered = latestEventOfTask(db, child.id, "task_registered");
     if (!registered) continue;
     const { based_on_decision } = registered.payload;
     const context: HistoryChildContext = {
       title: child.title,
-      purpose: child.purpose,
+      // pin の子の前提の破綻の question の context は rubric と Interview の帰結を持つので、宣言者には答えだけを見せる
+      // (ADR 0253 決定2 / ADR 0245 決定2)。人間は question の context を読む(ADR 0248 決定4)
+      ...(!(pinChild && child.question_breached_decision !== null) && { purpose: child.purpose }),
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
