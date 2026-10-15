@@ -8,6 +8,7 @@ const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }
   escalation: [{ kind: "escalation" }],
   failure: [{ kind: "failure", cancel_option: "abandon" }],
   premise_breach: [{ kind: "premise_breach", cancel_option: "abandon", breached_decision: 7 }],
+  broken_probe: [{ kind: "broken_probe", reason: "the probe leaks the expected output" }],
   approval: [{ kind: "approval", pending_child: { title: "B", purpose: "p", completion_criteria: "c", risk_flag: true } }],
   pr_merge: [{ kind: "pr_merge", pr: 12 }],
   local_merge: [{ kind: "local_merge", task_id: "t-1" }],

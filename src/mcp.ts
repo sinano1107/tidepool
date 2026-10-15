@@ -80,6 +80,7 @@ import {
   logDecision,
   poseProbe,
   redecompose,
+  reportBrokenProbe,
   resolveTaskAgent,
   type Task,
   type TaskType,
@@ -694,7 +695,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "findings in handoff.outcome. scores lists every done child exactly once: child_id is the id the child carries in " +
           "get_current_task's history, and outcome is accepted when the deliverable meets the rubric, rejected when it does " +
           "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
-          "and nothing is recorded. The handoff " +
+          "and nothing is recorded. If the answers show the probe itself was broken, do not score them: report it with " +
+          "report_broken_probe instead. The handoff " +
           `takes the same fields as complete_task (${describeHandoffFields()}); only outcome is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
@@ -706,6 +708,27 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
           const done = completeInterview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
+        }),
+    );
+  }
+
+  if (added.includes("report_broken_probe")) {
+    server.registerTool(
+      "report_broken_probe",
+      {
+        description:
+          "Report that this Interview's probe was broken, instead of scoring the answers: give the reason and recommend " +
+          "abandon (end this Interview) or retry (end it and register a new Interview with the same targets and purpose, " +
+          "whose root reads your reason). The board registers a continue / abandon / retry question for the human with your " +
+          "reason, the posed probe and rubric and the done children's ids, blocks this task until the human answers, and " +
+          "frees the slot. On continue you resume and score with complete_interview. You report once per Interview. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { reason: requiredTextSchema, recommendation: z.enum(["abandon", "retry"]) },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+          const question = reportBrokenProbe(deps.db, task, input, workerId, now, "worker");
+          return { question_id: question.id, parent_status: "blocked" };
         }),
     );
   }

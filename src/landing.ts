@@ -249,6 +249,7 @@ export function landingAnnotation(
     case "escalation":
     case "failure":
     case "premise_breach":
+    case "broken_probe":
     case "approval":
     case "pr_promotion_retry":
     case "proposal":

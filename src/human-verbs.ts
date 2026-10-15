@@ -1084,6 +1084,7 @@ export async function submitAnswer(
       case "escalation":
       case "failure":
       case "premise_breach":
+      case "broken_probe":
       case "approval":
       case "cli_auth_expiry_warning":
         break;

@@ -130,6 +130,8 @@ export interface Task {
   /** System-internal only (ADR 0121 / ADR 0245 決定2・5): the decision this premise-breach question
    *  stands in for — its abandon scope stays decision-wide even for an Interview pin child. */
   question_breached_decision: number | null;
+  /** System-internal only (ADR 0251): the reason an Interview root reported its probe broken. */
+  question_broken_probe_reason: string | null;
   /** System-internal only (issue #11): a pending-child approval question's
    *  would-be child, materialized by answerQuestion only on an "approve"
    *  answer. */
@@ -459,16 +461,18 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
 
 export interface TaskVerbSwap {
   withheld: readonly ("decompose" | "redecompose" | "complete_task")[];
-  added: readonly ("pose_probe" | "complete_interview")[];
+  added: readonly ("pose_probe" | "complete_interview" | "report_broken_probe")[];
 }
 
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
  *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、root は complete_task も伏せて、出題前は出題の verb を、
- *  出題済みは採点完了の verb を足す(ADR 0253 決定4)。 */
+ *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose"], added: [] };
   if (interviewTargets(db, taskId) !== null) {
-    return { withheld: ["decompose", "redecompose", "complete_task"], added: [interviewProbe(db, taskId) === null ? "pose_probe" : "complete_interview"] };
+    const withheld = ["decompose", "redecompose", "complete_task"] as const;
+    if (interviewProbe(db, taskId) === null) return { withheld, added: ["pose_probe"] };
+    return { withheld, added: brokenProbeReported(db, taskId) ? ["complete_interview"] : ["complete_interview", "report_broken_probe"] };
   }
   return { withheld: [], added: [] };
 }
@@ -893,12 +897,12 @@ export function registerTask(
     db.prepare(
       `INSERT INTO tasks (id, type, status, assignee, workspace, title, purpose, completion_criteria,
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
-         question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision,
+         question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
          question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
-         @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision,
+         @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
          @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
@@ -1203,8 +1207,9 @@ interface EscalateInput {
   /** 1-4 question items, whichever door escalate enters by. */
   questions: QuestionItem[];
   /** System-internal only — absent from the MCP tool schema and the JSON API: the failure question's and the
-   *  premise breach's cancel option (ADR 0006 / 0121), meaningful only for a single-item bundle. */
-  question_kind?: Extract<QuestionKind, { kind: "failure" | "premise_breach" }>;
+   *  premise breach's cancel option (ADR 0006 / 0121), or a broken-probe report's reason (ADR 0251), meaningful only
+   *  for a single-item bundle. */
+  question_kind?: Extract<QuestionKind, { kind: "failure" | "premise_breach" | "broken_probe" }>;
 }
 
 /** Escalation: a question child carrying a bundle of 1-4 items, each with
@@ -1461,6 +1466,7 @@ export function isLandingQuestion(task: QuestionColumns<TierRef>): boolean {
     case "escalation":
     case "failure":
     case "premise_breach":
+    case "broken_probe":
     case "approval":
     case "pr_promotion_retry":
     case "proposal":
@@ -1486,6 +1492,7 @@ export function isFixedChoiceQuestion(question: QuestionColumns<TierRef>): boole
   switch (questionKindOf(question).kind) {
     case "failure":
     case "premise_breach":
+    case "broken_probe":
     case "approval":
     case "pr_merge":
     case "local_merge":
@@ -1510,6 +1517,7 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
     case "escalation":
     case "failure":
     case "premise_breach":
+    case "broken_probe":
     case "pr_merge":
     case "local_merge":
     case "pr_promotion_retry":
@@ -1635,7 +1643,7 @@ export function answerQuestion(
           // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)。破綻した probe か、
           // 採点できる答案も未決着の子も残らない Interview は、この答えで終える(ADR 0247 決定1・2)
           else if (breach || interviewLeftEmpty(db, plan.id)) cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin);
-          if (retry) retryInterview(db, plan, failed, comment, now, origin);
+          if (retry) retryInterview(db, plan, premiseBreachReason(db, failed.id), comment, now, origin);
         } else {
           cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin);
         }
@@ -1675,6 +1683,17 @@ export function answerQuestion(
         unblockTarget = blockedParent();
         break;
       }
+      case "broken_probe": {
+        if (answer === "continue") {
+          unblockTarget = blockedParent();
+          break;
+        }
+        // abandon も retry も Interview を終える(ADR 0251 決定2 / ADR 0248 決定2・3)。子は全部決着済みで root は起こさない
+        const root = getTask(db, question.parent_id!)!;
+        cancelTask(db, root, question.id, HUMAN_WORKER_ID, now, origin);
+        if (answer === "retry") retryInterview(db, root, kind.reason, comment, now, origin);
+        break;
+      }
       case "escalation":
       case "pr_merge":
       case "local_merge":
@@ -1699,9 +1718,9 @@ export function answerQuestion(
   return getTask(db, question.id)!;
 }
 
-/** retry(ADR 0248 決定2・3): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した probe を
- *  盤面名義の event で新しい root の history に渡す。 */
-function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: string | undefined, now: Date, origin: EventOrigin): void {
+/** retry(ADR 0248 決定2・3 / ADR 0251 決定2): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した
+ *  probe と破綻の理由(pin の子の宣言か root の報告)を盤面名義の event で新しい root の history に渡す。 */
+function retryInterview(db: Db, previousRoot: Task, reason: string, comment: string | undefined, now: Date, origin: EventOrigin): void {
   const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
   const root = registerTask(
     db,
@@ -1727,7 +1746,7 @@ function retryInterview(db: Db, previousRoot: Task, declarer: Task, comment: str
       previous_root_id: previousRoot.id,
       probe,
       rubric,
-      premise_breach: premiseBreachReason(db, declarer.id),
+      premise_breach: reason,
       ...(comment !== undefined && { comment }),
     },
     at: now,
@@ -1959,6 +1978,9 @@ export function logDecision(
   });
 }
 
+/** 出題済みの Interview の root の出口(ADR 0251 決定5): 拒否文は escalate でなくこの2つを指す。 */
+const POSED_INTERVIEW_EXITS = "score every done answer with complete_interview, or report the probe broken with report_broken_probe";
+
 /** 出題(ADR 0253 決定1・3): Interview の root が題・probe・完了基準・rubric を一度に書く。1つの transaction で、型つきの欄を持つ
  *  判断ログの1件と、一覧の対象ごとに pin の子を一覧の順に1つ入れ、root を blocked にする。子は全部同じ出題の値で、assignee は
  *  未指定(既定 agent)、workspace は親から、登録者は root の agent。決裁権の検査は通らない —— root が子ごとに選ぶものが無い。 */
@@ -1966,7 +1988,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
   const targets = targetRows(db, root.id);
   if (!targets.length) throw new DomainError("only an Interview root poses a probe");
   if (interviewProbe(db, root.id) !== null) {
-    throw new DomainError("this Interview's probe is already posed and is not posed again: escalate so a human abandons it and registers the Interview again");
+    throw new DomainError(`this Interview's probe is already posed and is not posed again: ${POSED_INTERVIEW_EXITS}`);
   }
   const probe = { ...input };
   for (const field of ["title", "probe", "completion_criteria", "rubric"] as const) {
@@ -2049,6 +2071,48 @@ export function completeInterview(
     }
     return finishTask(db, root, handoff, workerId, now, origin);
   })();
+}
+
+/** probe の破綻の報告(ADR 0251 決定1〜3): 出題済みの Interview の root が、理由と推奨(abandon / retry)をつけて人間に問う。
+ *  escalate と同じく root の agent 名義の question を立てて root を blocked にする。報告は Interview 1件につき1回。 */
+export function reportBrokenProbe(
+  db: Db,
+  root: Task,
+  { reason, recommendation }: { reason: string; recommendation: "abandon" | "retry" },
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root reports a broken probe");
+  const posed = interviewProbe(db, root.id);
+  if (posed === null) throw new DomainError("this Interview has no probe yet: pose it with pose_probe first");
+  if (brokenProbeReported(db, root.id)) {
+    throw new DomainError("this Interview's probe was already reported broken once: score every done answer with complete_interview");
+  }
+  if (whyBlank(reason)) throw new DomainError("a broken-probe report requires a reason");
+  reason = normalizeText(reason);
+  const answers = listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done");
+  return escalateTask(
+    db,
+    root,
+    {
+      context:
+        `${reason}\n\nThe posed probe: ${posed.probe}\nIts rubric: ${posed.rubric}\n` +
+        `The done answers (open each to read it): ${answers.map(({ id }) => id).join(", ")}\n\n` +
+        `"continue" wakes this Interview's root to score every done answer and complete. "abandon" ends this Interview. ` +
+        `"retry" ends it the same way and registers a new Interview with the same targets and purpose, showing its root the broken probe and this reason.`,
+      questions: [{ title: `broken probe: ${root.title}`, options: ["continue", "abandon", "retry"], recommendation }],
+      question_kind: { kind: "broken_probe", reason },
+    },
+    workerId,
+    now,
+    origin,
+  );
+}
+
+/** この Interview の root が probe の破綻を報告したことがあるか(答えの後も含む)。 */
+function brokenProbeReported(db: Db, rootId: string): boolean {
+  return db.prepare("SELECT 1 FROM tasks WHERE parent_id = ? AND question_broken_probe_reason IS NOT NULL LIMIT 1").get(rootId) !== undefined;
 }
 
 export interface ChildSpec extends TaskContent {
@@ -2379,7 +2443,11 @@ export function decomposeTask(
   }
   // ADR 0253 決定1・5: Interview の root は分けない —— 出題で進む
   if (interviewTargets(db, parent.id) !== null) {
-    throw new DomainError("an Interview root is not decomposed: pose its probe with pose_probe and the board registers one child per target");
+    throw new DomainError(
+      interviewProbe(db, parent.id) === null
+        ? "an Interview root is not decomposed: pose its probe with pose_probe and the board registers one child per target"
+        : `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`,
+    );
   }
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
@@ -3018,6 +3086,7 @@ export function approvalAnnotation(
     case "escalation":
     case "failure":
     case "premise_breach":
+    case "broken_probe":
     case "pr_merge":
     case "local_merge":
     case "pr_promotion_retry":

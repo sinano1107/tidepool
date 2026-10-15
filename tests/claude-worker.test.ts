@@ -91,6 +91,7 @@ function makeTask(
     question_answer_comment: null,
     question_cancel_option: null,
     question_breached_decision: null,
+    question_broken_probe_reason: null,
     question_pending_child: null,
     question_proposal: null,
     question_pending_merge_pr: null,
