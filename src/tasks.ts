@@ -2089,8 +2089,6 @@ export function reportBrokenProbe(
   if (brokenProbeReported(db, root.id)) {
     throw new DomainError("this Interview's probe was already reported broken once: score every done answer with complete_interview");
   }
-  if (whyBlank(reason)) throw new DomainError("a broken-probe report requires a reason");
-  reason = normalizeText(reason);
   const answers = listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done");
   return escalateTask(
     db,

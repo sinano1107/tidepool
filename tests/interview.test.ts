@@ -574,14 +574,7 @@ it("出題済みの root に届く拒否(decompose・complete_task・2度目の�
   ];
   for (const refused of refusals) {
     expect(refused).toThrow(DomainError);
-    const message = (() => {
-      try {
-        refused();
-      } catch (error) {
-        return (error as Error).message;
-      }
-    })();
-    expect(message).toMatch(/complete_interview|report_broken_probe/);
-    expect(message).not.toMatch(/escalate|pose_probe/);
+    expect(refused).toThrow(/complete_interview|report_broken_probe/);
+    expect(refused).not.toThrow(/escalate|pose_probe/);
   }
 });
