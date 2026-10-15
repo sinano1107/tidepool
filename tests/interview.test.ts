@@ -7,7 +7,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getRegistrant, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, examineeParent, getRegistrant, getTask, interviewTargets, listBoard, listChildren, logDecision, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
 import { failTask } from "../src/watchdog.js";
@@ -279,7 +279,7 @@ it("pin の子の前提の破綻の question への retry は root ごと cancel
   expect(nextSlotTask(db)?.id).toBe(again.id);
   // 新しい root の pin の子が読む親の history には、旧い rubric も Interview であることも載せない(ADR 0253 決定2 / ADR 0245 決定2)
   const [child] = poseProbe(db, again, POSE, "auditor", new Date(0), "worker");
-  expect(taskHistoryRows(db, again.id, child!.id).map((row) => row.entry)).not.toContainEqual(retry);
+  expect(examineeParent(db, child!).rows.map((row) => row.entry)).not.toContainEqual(retry);
 });
 
 /** 採点の段階の root: 出題して対象ごとの pin の子を全部 done にした(答案は FULL_HANDOFF)。 */
@@ -587,16 +587,20 @@ it("2度目の出題・Interview でない task・pin の子への出題は拒�
   expect(listEvents(db, root.id).filter((event) => event.kind === "decision_logged")).toHaveLength(1);
 });
 
-it("pin の子が読む親の history の出題の行は rubric も「Interview」の語も持たず、root 自身の history と人間の判断ログは全部を持つ(ADR 0253 決定2)", () => {
-  const { db, root } = registerInterview();
-  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
-  const decisionOf = (rows: ReturnType<typeof taskHistoryRows>) => (rows.map((row) => row.entry).find((entry) => "decision" in entry) as { decision: string }).decision;
-  const asChild = decisionOf(taskHistoryRows(db, root.id, child!.id));
-  for (const text of [POSE.title, POSE.probe, POSE.completion_criteria]) expect(asChild).toContain(text);
-  expect(asChild).not.toContain(POSE.rubric);
-  expect(asChild).not.toMatch(/interview/i);
+it("受験者から見える親は出題そのもの —— 欄は出題の値で handoff は null、history は1つの子の登録だけを言う出題の行1つで、子は id の無い自分の行だけ。root 自身の history と人間の判断ログは全部を持つ(ADR 0263 決定3・4 / ADR 0253 決定2)", () => {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+  logDecision(db, root, "a note the root logged before posing", "auditor", new Date(0), "worker");
+  const [child, sibling] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  completeTask(db, sibling!, FULL_HANDOFF, "tako", new Date(0), "worker");
+  registerTask(db, { type: "question", title: "a root question", purpose: "p", completion_criteria: "c", parent_id: root.id, question: [{ title: "q", options: ["a", "b"], recommendation: "a" }] }, new Date(0), BOARD_WORKER_ID, "board");
+  const parent = examineeParent(db, child!);
+  expect(parent.context).toEqual({ id: root.id, title: POSE.title, purpose: POSE.probe, completion_criteria: POSE.completion_criteria, handoff_doc: null });
+  expect(parent.rows.map((row) => row.entry)).toEqual([
+    { decision: "Registered one child to do this task.", children: [{ title: POSE.title, purpose: POSE.probe, completion_criteria: POSE.completion_criteria, status: presentTask(db, child!).status, you: true }] },
+  ]);
+  const decisionOf = (rows: ReturnType<typeof taskHistoryRows>) => (rows.map((row) => row.entry).find((entry) => "children" in entry && entry.children.length) as { decision: string }).decision;
   const asRoot = decisionOf(taskHistoryRows(db, root.id));
-  const humanLog = listLog(db).find((entry) => entry.task_id === root.id && entry.payload.kind === "decision_logged")!.payload as { line: string };
+  const humanLog = listLog(db).find((entry) => entry.task_id === root.id && entry.payload.kind === "decision_logged" && "interview_probe" in entry.payload)!.payload as { line: string };
   for (const line of [asRoot, humanLog.line]) for (const text of Object.values(POSE)) expect(line).toContain(text);
 });
 

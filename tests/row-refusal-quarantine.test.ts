@@ -13,7 +13,7 @@ import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -744,19 +744,23 @@ it("「この対象は測らない」は検査を撃たず、その (provider, m
   expect((await events(board.question.id)).map((e) => e.kind)).not.toContain("quarantine_released");
 });
 
-it("「この対象は測らない」で cancel された子は、統合復帰の history に、model を伏せたまま Provider に断られたことと証拠の種類を見せる", async () => {
+it("「この対象は測らない」で cancel された子は、root が統合復帰で読む history に、model を伏せたまま Provider に断られたことと証拠の種類を見せる", async () => {
   const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46]);
   const [medium, opus] = board.childIds;
   expect((await board.answer("do not measure this target")).status).toBe(200);
 
-  // 走っている兄弟が読む親の history は、root が統合復帰で読む history と同じ組み立て(子の行は id を持つ)
-  const current = JSON.parse((await callAsTask(t, opus!, "get_current_task", {})).content[0].text);
-  const cancelled = current.parent.history.flatMap((entry: any) => entry.children ?? []).find((child: any) => child.id === medium);
+  // 残る兄弟が答案を出して枠を空け、root が統合復帰で拾われる
+  expect((await callAsTask(t, opus!, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
+  await settle();
+  await t.clock.advance(HOUR);
+  const current = JSON.parse((await callAsTask(t, board.rootId, "get_current_task", {})).content[0].text);
+  const cancelled = current.history.flatMap((entry: any) => entry.children ?? []).find((child: any) => child.id === medium);
   expect(cancelled).toMatchObject({
     status: "cancelled",
     origin_question: { title: "the provider refused this child's Interview target", answer: ["do not measure this target"], cause: "api_404" },
   });
-  expect(JSON.stringify(current.parent.history)).not.toContain("claude-sonnet-5-5");
+  expect(JSON.stringify(current.history)).not.toContain("claude-sonnet-5-5");
 });
 
 it("question が開いている間に同じ (provider, model) の対象がもう一度断られても、question は重ならず再発火だけが刻まれる", async () => {
