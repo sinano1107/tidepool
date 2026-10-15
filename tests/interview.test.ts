@@ -7,9 +7,10 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, continueDecomposition, countUnsettledTasksReferencing, declarePremiseBreach, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, getRegistrant, getTask, interviewTargets, listBoard, listChildren, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
@@ -72,7 +73,9 @@ it("Interview の root は作り直せない —— 子の前提の破綻を受�
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   declarePremiseBreach(db, child!, "the probe is broken", "tako", new Date(0), "worker");
   const replan = { reason: "a fixed probe", children: [CHILD] };
-  expect(() => redecompose(db, getTask(db, root.id)!, replan, "auditor", new Date(0), undefined, undefined, "worker")).toThrow(/continue_decomposition/);
+  expect(() => redecompose(db, getTask(db, root.id)!, replan, "auditor", new Date(0), undefined, undefined, "worker")).toThrow(
+    "an Interview is not redecomposed: a broken probe is the human's premise-breach question to settle (continue, abandon or retry)",
+  );
   expect(listChildren(db, root.id).map(({ id, status }) => ({ id, status }))).toEqual([{ id: child!.id, status: "todo" }]);
 });
 
@@ -110,12 +113,32 @@ function twoPinnedChildren() {
   return { db, root, failed: failed!, sibling: sibling! };
 }
 
-/** 前提の破綻の question: 出題の書き手は root の agent なので、同じ判断への2度目の宣言で人間の question になる(ADR 0121)。 */
-function breachQuestion(db: Db, root: Task, failed: Task) {
-  declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker");
-  continueDecomposition(db, getTask(db, root.id)!, "the probe holds", "auditor", new Date(0), "worker");
-  return declarePremiseBreach(db, getTask(db, failed.id)!, "the probe is broken", "tako", new Date(0), "worker")!;
+/** 前提の破綻の question: pin の子の宣言は初回から人間の question になる(ADR 0248 決定1)。 */
+function breachQuestion(db: Db, failed: Task) {
+  return declarePremiseBreach(db, failed, "the probe is broken", "tako", new Date(0), "worker")!;
 }
+
+it("pin の子の初回の宣言は、出題の書き手が agent でも Tidepool 名義の question(continue / abandon / retry)になり、root も宣言者も pickup されない(ADR 0248 決定1・2)", () => {
+  const { db, failed } = twoPinnedChildren();
+  const question = breachQuestion(db, failed);
+  expect(question.parent_id).toBe(failed.id);
+  expect(question.question_items).toEqual([expect.objectContaining({ options: ["continue", "abandon", "retry"], recommendation: "continue" })]);
+  expect(nextSlotTask(db)).toBeUndefined();
+});
+
+it("pin の子の前提の破綻の question への continue は宣言者を再開させ、兄弟の held を解く —— root は blocked のまま(ADR 0248 決定2)", () => {
+  const { db, root, failed, sibling } = twoPinnedChildren();
+  answerQuestionViaWebui(db, breachQuestion(db, failed), ["continue"], new Date(0));
+  expect(nextSlotTask(db)?.id).toBe(failed.id);
+  expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("todo");
+  expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
+});
+
+it("pin の子の前提の破綻の question の context は、理由に加えて盤面が確定した probe と rubric、retry の帰結を言う(ADR 0248 決定2・4)", () => {
+  const { db, failed } = twoPinnedChildren();
+  const { purpose } = breachQuestion(db, failed);
+  for (const text of ["the probe is broken", POSE.probe, POSE.rubric, `"retry"`]) expect(purpose).toContain(text);
+});
 
 it("pin の子の failure question は兄弟の pin の子を held にしない —— 兄弟はそのまま pickup できる(ADR 0245 決定5)", () => {
   const { db, failed, sibling } = twoPinnedChildren();
@@ -147,18 +170,19 @@ it("pin の子の failure question の abandon の文は、分解判断の破棄
   );
 });
 
-it("pin の子の前提の破綻の abandon の文は、親を先頭へ戻すと言わず、Interview ごと終わり登録し直すのは人間だと言う(ADR 0247 決定2)", () => {
+it("pin の子の前提の破綻の abandon の文は、親を先頭へ戻すと言わず、Interview ごと終わり、測り直すのは retry だと言う(ADR 0247 決定2 / ADR 0248 決定2)", () => {
   const { db, failed } = twoPinnedChildren();
   const consequence = abandonConsequence(db, failed, true);
   expect(consequence).toContain("1 unfinished sibling from the same decomposition decision");
   expect(consequence).toContain("ends this Interview");
-  expect(consequence).toContain("a human registers the Interview again with a fixed probe");
+  expect(consequence).toContain(`"retry" ends it the same way and registers a new Interview`);
+  expect(consequence).not.toContain("a human registers the Interview again");
   expect(consequence).not.toContain("queue head");
 });
 
 it("pin の子の前提の破綻の question は、これまでどおり兄弟の pin の子を held にし、その abandon は兄弟も root も cancel する(ADR 0245 決定2 / ADR 0247 決定2)", () => {
   const { db, root, failed, sibling } = twoPinnedChildren();
-  const question = breachQuestion(db, root, failed);
+  const question = breachQuestion(db, failed);
   expect(question.purpose).toContain("1 unfinished sibling from the same decomposition decision");
   expect(presentTask(db, getTask(db, sibling.id)!).status).toBe("held");
   answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
@@ -169,10 +193,33 @@ it("pin の子の前提の破綻の question は、これまでどおり兄弟�
 it("done の兄弟が居ても、pin の子の前提の破綻の abandon は root ごと cancel する —— done の答案はそのまま残り、root は起きない(ADR 0247 決定2)", () => {
   const { db, root, failed, sibling } = twoPinnedChildren();
   completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
-  const question = breachQuestion(db, root, failed);
+  const question = breachQuestion(db, failed);
   answerQuestionViaWebui(db, question, ["abandon"], new Date(0));
   expect([failed.id, sibling.id, root.id].map((id) => getTask(db, id)!.status)).toEqual(["cancelled", "done", "cancelled"]);
   expect(nextSlotTask(db)).toBeUndefined();
+});
+
+it("pin の子の前提の破綻の question への retry は root ごと cancel し、同じ対象・目的の Interview を人間名義で登録して、その history に旧い root・probe・rubric・理由・コメントを見せる(ADR 0248 決定2・3)", () => {
+  const db = openDb(":memory:");
+  const root = registerTask(db, { ...ROOT, workspace: "reef", review_tier: "standard", interview_targets: [opusHigh, haikuNull] as never }, new Date(0), ...HUMAN_WEBUI);
+  const [failed, sibling] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  const question = breachQuestion(db, failed!);
+  answerQuestionViaWebui(db, question, ["retry"], new Date(0), { comment: "the probe leaks the answer" });
+  expect([failed!.id, sibling!.id, root.id].map((id) => getTask(db, id)!.status)).toEqual(["cancelled", "cancelled", "cancelled"]);
+  expect(cancelledBy(db, root.id)).toEqual([question.id]);
+  const again = getTask(db, listBoard(db).find((task) => task.parent_id === null && task.id !== root.id)!.id)!;
+  const fields = ({ type, title, purpose, completion_criteria, workspace, review_tier }: Task) => ({ type, title, purpose, completion_criteria, workspace, review_tier });
+  expect(fields(again)).toEqual(fields(root));
+  expect(getRegistrant(db, again.id)).toBe(HUMAN_WORKER_ID);
+  expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull]);
+  expect(taskVerbSwap(db, again.id).added).toEqual(["pose_probe"]);
+  expect(listEvents(db, again.id).find((event) => event.kind === "interview_retried")?.worker_id).toBe(BOARD_WORKER_ID);
+  const retry = { retry_of: { task_id: root.id, probe: POSE.probe, rubric: POSE.rubric, premise_breach: "the probe is broken", comment: "the probe leaks the answer" } };
+  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([retry]);
+  expect(nextSlotTask(db)?.id).toBe(again.id);
+  // 新しい root の pin の子が読む親の history には、旧い rubric も Interview であることも載せない(ADR 0253 決定2 / ADR 0245 決定2)
+  const [child] = poseProbe(db, again, POSE, "auditor", new Date(0), "worker");
+  expect(taskHistoryRows(db, again.id, child!.id).map((row) => row.entry)).not.toContainEqual(retry);
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
