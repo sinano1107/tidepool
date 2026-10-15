@@ -97,6 +97,9 @@ export type WorkerFactory = (deps: {
   /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
    *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
   onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
+  /** ADR 0261 決定1: Codex adapter が `turn.failed` の exit の直後に使用量を読み直す口 —— pickup の観測と同じ probe。
+   *  任意の口にしない: 渡し忘れは型で落ちる(合成側に probe が無い盤面だけが undefined を渡す)。 */
+  openaiUsage: CodexAppServerProbe | undefined;
   /** ADR 0184 決定4: 行の拒否を受ける盤面側の一撃(`rowRefusalHandler` 製)。 */
   onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
@@ -465,6 +468,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     containers,
     boardCall: boardCalls.call,
     onCapInterrupted,
+    openaiUsage: options.openaiUsage,
     onRowRefused,
     onSpawnFailed,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)

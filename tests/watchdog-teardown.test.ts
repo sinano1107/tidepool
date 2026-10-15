@@ -37,6 +37,7 @@ interface Fixture {
   task: Task;
   ws: WorkspaceConfig;
   runtime: FakeContainerRuntime;
+  containers: ProcessContainers;
   worker: ScriptedWorker;
   watchdog: Watchdog;
   /** watchdog の後始末が撃った pickup の契機 —— 着地はこの契機が突く収束が撃つ(ADR 0241 決定5)。 */
@@ -102,7 +103,7 @@ async function sessionInTeardown(
     containers.forceReclaim(task.id);
   }
   if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 });
-  return { db, clock, slot, task, ws, runtime, worker, watchdog, triggered };
+  return { db, clock, slot, task, ws, runtime, containers, worker, watchdog, triggered };
 }
 
 /** 後始末の backstop を超え、回収も観測できないまま梯子の底まで落とす。 */
@@ -161,6 +162,47 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(true);
   expect(nextSlotTask(db)?.id).toBe(task.id);
   expect(questions(db)).toEqual([]);
+});
+
+it("回収済み観測が中断の一撃より先に届いていても(Codex の読み直しの順)、中断は failure question を立てず、task を todo の先頭へ戻して cap_interrupted を残す(ADR 0261)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
+
+  // Codex の順: root の exit で強制回収 → 使用量を読み直す間に容器が空になる → 中断の一撃 → exit の一撃
+  f.containers.forceReclaim(f.task.id);
+  f.runtime.fireEmpty(f.task.id);
+  await settle();
+  capInterruptionHandler({ db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, heldForContainment: f.watchdog.heldForContainment, pollNow: () => {} })(f.task.id, f.containers.reclaimed(f.task.id));
+  f.watchdog.onWorkerExited(f.task.id, {
+    ...QUIET_EXIT,
+    exit_code: 1,
+    reported_error: "You've hit your usage limit.",
+    usage_recheck: { result: "full", windows: [{ name: "primary", used_percent: 100, resets_at: "2026-10-15T12:00:00.000Z" }] },
+  });
+  await settle();
+
+  expect(questions(f.db)).toEqual([]);
+  expect(getTask(f.db, f.task.id)?.status).toBe("todo");
+  expect(nextSlotTask(f.db)?.id).toBe(f.task.id);
+  expect(listEvents(f.db, f.task.id).some((e) => e.kind === "cap_interrupted")).toBe(true);
+  expect(f.slot.currentTaskId).toBeNull();
+});
+
+it("使用量を読み直せなかった報告なき exit の failure question は、確かめられなかったことと理由を1行添える(ADR 0261 決定6)", async () => {
+  const f = await sessionInTeardown("watchdog");
+
+  f.watchdog.onWorkerExited(f.task.id, {
+    ...QUIET_EXIT,
+    exit_code: 1,
+    usage_recheck: { result: "unreadable", reason: "App Server probe failed: timeout" },
+  });
+
+  const [question, ...more] = questions(f.db);
+  expect(more).toEqual([]);
+  expect(question?.title).toBe("worker exited without reporting: one");
+  expect(question?.purpose).toContain(
+    "\n\nthe board could not check whether a usage cap ended this session: App Server probe failed: timeout",
+  );
 });
 
 it("cap teardown reaches containment in one reclaim timeout without running the task-type ladder", async () => {

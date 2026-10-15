@@ -47,6 +47,7 @@ import {
 import {
   CODEX_CLI_VERSION,
   CodexWorker,
+  type CodexWorkerOptions,
   createCodexCapabilityCheck,
   createCodexWorkspaceCheck,
 } from "./codex-worker.js";
@@ -281,7 +282,7 @@ export function buildWorkerOptions(
     // ADR 0052 決定1: spawn がどの ref を読むか。ここに載っていなければ worker は
     // 既定へ落ちるしかなく、盤面側の resolver だけをリモートへ移しても
     // 「人間の merge を通った内容が spawn に効く」は成立しない。
-    // 組を書き下す2箇所目にして最後(理由は `registrySource` の doc comment)
+    // 組を書き下す2箇所目(3箇所目にして最後は `buildCodexWorkerOptions`。理由は `registrySource` の doc comment)
     registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
@@ -308,47 +309,52 @@ export function buildWorkerOptions(
   };
 }
 
+/** `CodexWorkerOptions` の口の一覧を持つ唯一の場所 —— `buildWorkerOptions` と同じ理由(ADR 0043)。 */
+export function buildCodexWorkerOptions(
+  board: BoardComposition & { registryDir: string },
+  session: Parameters<WorkerFactory>[0],
+): CodexWorkerOptions {
+  return {
+    db: session.db,
+    clock: session.clock,
+    reclaimTimeout: session.reclaimTimeout,
+    containers: session.containers,
+    registry: { dir: board.registryDir, mode: board.registryMode },
+    agent: board.defaultAgentName,
+    auditorName: board.auditorName,
+    workspace: board.workspaceName,
+    workspacesDir: board.workspacesDir,
+    mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
+    transcripts: session.transcripts,
+    codexHome: board.codexHome,
+    executable: board.codexExecutable,
+    cliVersion: CODEX_CLI_VERSION,
+    // ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る口
+    boardCall: session.boardCall,
+    boardState: board.boardState,
+    onSpawnFailed: session.onSpawnFailed,
+    onWorkerExited: session.onWorkerExited,
+    // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
+    // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない
+    usageProbe: session.openaiUsage,
+    onCapInterrupted: session.onCapInterrupted,
+  };
+}
+
 /** registry が無ければ LoggingWorker、あれば実 CLI worker(issue #33 / ADR 0043
  *  でこの分岐ごと合成側へ移した)。`ServerOptions.worker` はこれで埋まるので、
  *  合成 root から渡されるのは env 由来のスカラだけになる。 */
 export function buildWorkerFactory(board: BoardComposition): WorkerFactory {
   const { registryDir } = board;
   if (!registryDir) return () => new LoggingWorker();
-  return ({ db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts }) => {
-    const registry = { dir: registryDir, mode: board.registryMode } as const;
-    return new CanonicalWorkerRouter({
+  return (session) =>
+    new CanonicalWorkerRouter({
       id: board.defaultAgentName,
       adapters: {
-        "claude-code": new ClaudeCodeWorker(
-          buildWorkerOptions(
-            { ...board, registryDir },
-            { db, clock, reclaimTimeout, containers, boardCall, onCapInterrupted, onRowRefused, onSpawnFailed, onWorkerExited, transcripts },
-          ),
-        ),
-        codex: new CodexWorker({
-          db,
-          clock,
-          reclaimTimeout,
-          containers,
-          registry,
-          agent: board.defaultAgentName,
-          auditorName: board.auditorName,
-          workspace: board.workspaceName,
-          workspacesDir: board.workspacesDir,
-          mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
-          transcripts,
-          codexHome: board.codexHome,
-          executable: board.codexExecutable,
-          cliVersion: CODEX_CLI_VERSION,
-          // ADR 0259 決定2・3: 起動時の skill の列挙と観測が通る口
-          boardCall,
-          boardState: board.boardState,
-          onSpawnFailed,
-          onWorkerExited,
-        }),
+        "claude-code": new ClaudeCodeWorker(buildWorkerOptions({ ...board, registryDir }, session)),
+        codex: new CodexWorker(buildCodexWorkerOptions({ ...board, registryDir }, session)),
       },
     });
-  };
 }
 
 /** pickup の除外判定と queue の skipped 表示が共有する口。ここで選ばれた設定が
@@ -427,8 +433,8 @@ export function declaredRegistryMode(registryDir: string | undefined): RegistryM
  *  無ければ registry という概念自体が無い盤面なので undefined —— 呼び出し側の
  *  `registryDir` ゲートはこの不在の検査そのものに置き換わる。
  *
- *  `buildWorkerOptions` だけはここを通らない: あちらの `board` は型で
- *  `registryDir: string` に絞られており、`ClaudeWorkerOptions.registry` は任意では
+ *  `buildWorkerOptions` と `buildCodexWorkerOptions` だけはここを通らない: あちらの `board` は型で
+ *  `registryDir: string` に絞られており、両 adapter の `registry` は任意では
  *  ない口なので、undefined を許す面と噛み合わない。 */
 function registrySource(board: BoardComposition): RegistrySource | undefined {
   return board.registryDir ? { dir: board.registryDir, mode: board.registryMode } : undefined;

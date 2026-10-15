@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { boardDoctrine } from "../src/board-prose.js";
+import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_FEATURE_SNAPSHOT, CodexWorker, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
@@ -16,6 +17,7 @@ import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { getTask, listBoard, listChildren, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
@@ -132,10 +134,14 @@ async function fixture(
     registryFiles = {},
     linkWorkspace = false,
     appServer = honestSkillsList,
+    usageProbe,
+    onCapInterrupted,
   }: {
     registryFiles?: Record<string, string>;
     linkWorkspace?: boolean;
     appServer?: Parameters<typeof fakeAppServerCall>[0];
+    usageProbe?: CodexAppServerProbe;
+    onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
   } = {},
 ) {
   // 実体のパスで持つ —— spawn は登録 path を realpath する(issue #864)ので、macOS の tmpdir の /var でも assert がそのまま読める
@@ -183,6 +189,8 @@ You are the Codex worker.`,
     boardCall: appServerCall.call,
     onSpawnFailed,
     onWorkerExited,
+    usageProbe,
+    onCapInterrupted,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
@@ -1137,6 +1145,83 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
 
     expect(exitedOf(f, value.id)).toMatchObject({ exit_code: 0, stderr_tail: "stuck", output_closed: false });
     expect(exits).toEqual([{ exit_code: 0, signal: null, stderr_tail: "stuck", reported_error: null, last_message: null }]);
+  });
+});
+
+describe("上限到達による中断は exit の直後に読み直した使用量で認める(issue #1979 / ADR 0261)", () => {
+  const RESETS_AT = "2026-10-15T12:00:00.000Z";
+  const windowAt = (name: string, usedPercent: number) =>
+    ({ name, model: null, usedPercent, durationMs: 5 * 3_600_000, resetsAt: RESETS_AT });
+  const observed = (...windows: ReturnType<typeof windowAt>[]): CodexAppServerProbe => async () =>
+    ({ status: "observed", provider: "openai", cliVersion: CLI_VERSION, plan: "plus", models: new Map(), windows });
+  // 文を持たない `turn.failed` —— 読み直しの条件が行の有無であって文ではないことを、ここで釘付けにする(ADR 0188 決定1)
+  const turnFailed = { type: "turn.failed" };
+
+  /** 最後の行を流して exit させ、盤面側の一撃の順と worker_exited の payload を返す。 */
+  async function exitAfter(id: string, usageProbe: CodexAppServerProbe, last: object = turnFailed, code = 1) {
+    const calls: string[] = [];
+    const f = await fixture(undefined, undefined, (taskId) => calls.push(`exited ${taskId}`), undefined, {
+      usageProbe,
+      onCapInterrupted: (taskId) => calls.push(`cap ${taskId}`),
+    });
+    const value = task(f.db, id);
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(last)}\n`);
+    f.process.emitExit(code, null);
+    await vi.waitFor(() => expect(calls.at(-1)).toBe(`exited ${value.id}`));
+    const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")!.payload as Record<string, unknown>;
+    return { f, value, calls, exited };
+  }
+
+  it("turn.failed で終わり、読み直した窓のどれかが 100% なら、onCapInterrupted を onWorkerExited より先に撃ち、worker_exited に満杯の窓だけを残す", async () => {
+    const { value, calls, exited } = await exitAfter("codex-capped", observed(windowAt("primary", 100), windowAt("secondary", 40)));
+
+    expect(calls).toEqual([`cap ${value.id}`, `exited ${value.id}`]);
+    expect(exited.usage_recheck).toEqual({
+      result: "full",
+      windows: [{ name: "primary", used_percent: 100, resets_at: RESETS_AT }],
+    });
+  });
+
+  it("turn.failed で終わっても、どの窓も 100% 未満なら onCapInterrupted は撃たず、usage_recheck は not_full", async () => {
+    const { value, calls, exited } = await exitAfter("codex-not-full", observed(windowAt("primary", 99), windowAt("secondary", 40)));
+
+    expect(calls).toEqual([`exited ${value.id}`]);
+    expect(exited.usage_recheck).toEqual({ result: "not_full" });
+  });
+
+  it("turn.failed で終わって使用量が読めなければ(unobservable / unauthorized / probe が投げる)、onCapInterrupted は撃たず、usage_recheck は unreadable で理由を持つ", async () => {
+    const cases: Array<[string, CodexAppServerProbe, string]> = [
+      ["unobservable", async () => ({ status: "unobservable", provider: "openai", cliVersion: CLI_VERSION, reason: "App Server probe failed: timeout" }), "App Server probe failed: timeout"],
+      ["unauthorized", async () => ({ status: "unauthorized", provider: "openai", cliVersion: CLI_VERSION, reason: "Codex rejected the rate-limit read with HTTP 401" }), "Codex rejected the rate-limit read with HTTP 401"],
+      ["thrown", async () => { throw new Error("probe blew up"); }, "Error: probe blew up"],
+    ];
+    for (const [id, probe, reason] of cases) {
+      const { value, calls, exited } = await exitAfter(`codex-unreadable-${id}`, probe);
+
+      expect(calls).toEqual([`exited ${value.id}`]);
+      expect(exited.usage_recheck).toEqual({ result: "unreadable", reason });
+    }
+  });
+
+  it("turn.completed で exit 0 した session は、窓が 100% でも使用量を読み直さず、usage_recheck の欄を持たない", async () => {
+    const probe = vi.fn(observed(windowAt("primary", 100)));
+    const { value, calls, exited } = await exitAfter(
+      "codex-completed",
+      probe,
+      { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+      0,
+    );
+
+    expect(probe).not.toHaveBeenCalled();
+    expect(calls).toEqual([`exited ${value.id}`]);
+    expect(exited).not.toHaveProperty("usage_recheck");
+  });
+
+  it("満杯と認めた読み直しは Throttle の状態に書かない(ADR 0261 決定4 / ADR 0104 決定3)", async () => {
+    const { f } = await exitAfter("codex-capped-no-throttle", observed(windowAt("primary", 100)));
+
+    expect(getProviderUsage(f.db)).toEqual([]);
   });
 });
 

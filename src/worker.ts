@@ -7,7 +7,7 @@ import type { Task } from "./tasks.js";
 /** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
  *  `model_swaps` は `usage.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— usage 側と違い
  *  常には置かない(読み手は文面の節だけ)。 */
-export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail" | "reported_error" | "last_message"> & {
+export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, "exit_code" | "signal" | "stderr_tail" | "reported_error" | "last_message" | "usage_recheck"> & {
   model_swaps?: ModelSwap[];
 };
 
