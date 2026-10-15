@@ -71,17 +71,21 @@ it.each([
 // --- 表示の reset を過ぎて5分以内の arm は拒む(ADR 0260 決定4) ---
 
 it.each([
-  ["reset ちょうど", 0, "refused"],
-  ["reset の5分後の直前", 5 * MIN - 1, "refused"],
+  ["reset ちょうど", 0, "refused", "observed"],
+  ["reset の5分後の直前", 5 * MIN - 1, "refused", "observed"],
   // 終わりかけの窓のつもりの arm は、その窓に結ぶ
-  ["reset の直前", -1, "bound"],
+  ["reset の直前", -1, "bound", "observed"],
   // 区間を過ぎた arm は次に観測に現れる窓に結ぶ
-  ["reset のちょうど5分後", 5 * MIN, "unbound"],
-] as const)("最新の観測の reset に対する arm: %s", (_, offset, outcome) => {
+  ["reset のちょうど5分後", 5 * MIN, "unbound", "observed"],
+  // 観測不能の観測に保存された窓の行にも拒否は効く。結ぶのは観測済みの窓だけ
+  ["観測不能: reset ちょうど", 0, "refused", "unobservable"],
+  ["観測不能: reset の5分後の直前", 5 * MIN - 1, "refused", "unobservable"],
+  ["観測不能: reset のちょうど5分後", 5 * MIN, "unbound", "unobservable"],
+] as const)("最新の観測の reset に対する arm: %s", (_, offset, outcome, status) => {
   const db = openDb(":memory:");
   const resetsAt = new Date("2026-08-20T10:00:00.000Z");
   const now = new Date(resetsAt.getTime() + offset);
-  observe(db, "anthropic", new Date(resetsAt.getTime() - HOUR), [{ window: "session", resetsAt }]);
+  observe(db, "anthropic", new Date(resetsAt.getTime() - HOUR), [{ window: "session", resetsAt }], status);
 
   if (outcome === "refused") {
     expect(() => setSpendDown(db, "anthropic", "session", now)).toThrow(
