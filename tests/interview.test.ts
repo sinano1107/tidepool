@@ -193,6 +193,20 @@ it("通常の task の failure question の history は Interview の帰結と�
   ]);
 });
 
+it("pin の子の失敗理由に引用された Interview の帰結は逐語で残し、末尾の生成文だけを history から外す", () => {
+  const { db, failed } = twoPinnedChildren();
+  failTask(db, failed, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", undefined, new Date(0));
+  const question = listChildren(db, failed.id)[0]!;
+  answerQuestionViaWebui(db, question, ["retry"], new Date(0));
+  expect(taskHistoryRows(db, failed.id).map((row) => row.entry)).toEqual([
+    { child_outside_the_decomposition: expect.objectContaining({
+      purpose: `Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.\n\n` +
+        `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
+        `"abandon" cancels this task and its remaining work.`,
+    }) },
+  ]);
+});
+
 it("pin の子の failure question への abandon は、その子だけを cancel する —— 兄弟の pin の子は todo のまま、root は blocked のまま(ADR 0245 決定5)", () => {
   const { db, root, failed, sibling } = twoPinnedChildren();
   answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
