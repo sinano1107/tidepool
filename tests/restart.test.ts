@@ -3,9 +3,10 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { getTask, listBoard } from "../src/tasks.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
 import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -60,9 +61,7 @@ const watchdog = { timeLimits: { work: 90 * 60 * 1000 }, grace: 30 * 60 * 1000, 
 
 /** 再起動中断の後始末(issue #1936): 未 commit の変更を残して `in_progress` のまま盤面が落ち、
  *  容器機構の前提検査が落ちた起動で立ち上がる —— 前の盤面の process が残っていないことは証明されていない。 */
-async function interruptedThenBootWithFailedPreflight(
-  harnessContainment?: () => Promise<{ available: true }>,
-): Promise<{ ws: WorkspaceConfig; task: { id: string; title: string }; runtime: FakeContainerRuntime }> {
+async function interruptedThenBootWithFailedPreflight(harnessContainment?: () => Promise<{ available: true }>) {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog, harnessContainment });
   const task = queueWork(t, "interrupted by restart");
@@ -77,7 +76,7 @@ async function interruptedThenBootWithFailedPreflight(
   return { ws, task, runtime };
 }
 
-it("前提検査が落ちた起動では、再起動中断の workspace を書かずに failure question を立てて後始末へ入れる(issue #1936)", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, async () => {
+it("前提検査が落ちた起動では、再起動中断の workspace を書かずに failure question を立てて後始末へ入れる(issue #1936)", async () => {
   const { ws, task } = await interruptedThenBootWithFailedPreflight();
 
   expect(git(ws.path, "status", "--porcelain")).toContain("wip.txt");
@@ -86,7 +85,7 @@ it("前提検査が落ちた起動では、再起動中断の workspace を書�
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id, settlement: "released" });
 });
 
-it("前提検査が戻ってから Harness Containment question への確認回答を受理すると、再起動中断の tree rule が走って枠が空く(issue #1936)", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, async () => {
+it("前提検査が戻ってから Harness Containment question への確認回答を受理すると、再起動中断の tree rule が走って枠が空く(issue #1936)", async () => {
   const { ws, task, runtime } = await interruptedThenBootWithFailedPreflight(async () => ({ available: true }) as const);
   const next = queueWork(t, "waits for the slot");
   const confirmations = await vi.waitFor(async () => {
@@ -108,7 +107,7 @@ it("前提検査が戻ってから Harness Containment question への確認回�
 
 // `harnessContainment` を持たない盤面は Containment question の修理を検査できず、回答を拒む ——
 // そこで tree rule を持つ門は、前提検査の通る次の起動の復旧である
-it("Harness 封じ込めを持たない盤面では、前提検査の通る次の起動が再起動中断の tree rule を走らせ、failure question は2枚目を立てない(issue #1936)", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, async () => {
+it("Harness 封じ込めを持たない盤面では、前提検査の通る次の起動が再起動中断の tree rule を走らせ、failure question は2枚目を立てない(issue #1936)", async () => {
   const { ws, task } = await interruptedThenBootWithFailedPreflight();
   await t.stopServer();
 
