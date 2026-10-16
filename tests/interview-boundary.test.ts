@@ -255,8 +255,9 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
  *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
  *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
  *  read)で兄弟の Knowledge と、root が書いた目印つきの Knowledge・人間が出題の event を出所に書いた目印つきの Exemplar(ADR 0264
- *  決定3)を探した応答。`injection` はその子の直近の spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと
- *  同じ引数(盤面が渡した task と query、task の workspace 名、worker の agent 名)で組む。 */
+ *  決定3)を探した応答と、最後に兄弟が目印つきで定義した枝を定義した応答(ADR 0264 決定4)。`injection` はその子の直近の
+ *  spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと同じ引数(盤面が渡した task と query、task の workspace 名、
+ *  worker の agent 名)で組む。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
@@ -293,6 +294,8 @@ async function lastExaminee() {
   commitWork(workspacePath, "probe.txt", "probe\n");
   const knowledge = { path: "parser", title: `parser ${SIBLING_MEMORY}`, text: `the parser ${SIBLING_MEMORY}`, source: { commit: "0a46a46" } };
   const { entry_id } = JSON.parse((await callAsTask(t, done, "record_knowledge", knowledge)).content[0].text);
+  const siblingBranch = { prefix: "parser", definition: `the parser ${SIBLING_MEMORY}` };
+  const siblingDefinition = JSON.parse((await callAsTask(t, done, "define_memory_branch", siblingBranch)).content[0].text).entry_id;
   expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(reader);
@@ -321,24 +324,26 @@ async function lastExaminee() {
       { name: "read_memory", arguments: { ids: [entry_id, rootEntry, exemplar.json.entry_id] } },
     ];
     const pulled = await Promise.all(pulls.map((call) => client.callTool(call)));
+    // 兄弟が定義した枝を定義する(ADR 0264 決定4)—— pull の後に、応答は pull と同じく検査される
+    pulled.push(await client.callTool({ name: "define_memory_branch", arguments: { prefix: "parser", definition: "What the parser work files." } }));
     const spawn = t.worker.started.map((task) => task.id).lastIndexOf(reader);
     const spawned = t.worker.started[spawn]!;
     expect(spawned.workspace).not.toBeNull();
     const injection = buildMemoryInjection(t.db, spawned, spawned.workspace, t.worker.id, t.worker.startedQueries[spawn]).section;
-    return { rootId: root.id, siblings: [done, cancelled], reader, pages, pulls: pulled, injection, tools: (await client.listTools()).tools };
+    return { rootId: root.id, siblings: [done, cancelled], siblingDefinition, reader, pages, pulls: pulled, injection, tools: (await client.listTools()).tools };
   } finally {
     await client.close();
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印・採点者の印が出ない(ADR 0263 決定7・8・10、ADR 0264 決定6)", async () => {
-  const { siblings, pages, pulls, injection, tools } = await lastExaminee();
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)と兄弟が定義した枝の define の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印・採点者の印が出ず、define は通る(ADR 0263 決定7・8・10、ADR 0264 決定4・6)", async () => {
+  const { siblings, siblingDefinition, pages, pulls, injection, tools } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, "not shown to examinees", ...siblings]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, "not shown to examinees", ...siblings, `entry ${siblingDefinition}`]) {
     expect(read).not.toContain(text);
   }
 });

@@ -209,6 +209,7 @@ function writeSuperseding(
   origin: EventOrigin,
   at: Date,
   write: (replaced: MemoryEntry[]) => number,
+  writer?: string,
 ): { entry_id: number; event_id: number } {
   if (supersedes?.length === 0) throw new DomainError("supersedes needs at least one entry to replace; omit it to write without replacing");
   return db.transaction(() => {
@@ -216,7 +217,7 @@ function writeSuperseding(
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
     if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
-    requireOneTree(db, since);
+    requireOneTree(db, since, writer);
     return { entry_id: id, event_id: id };
   })();
 }
@@ -225,18 +226,23 @@ function writeSuperseding(
  *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
  *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
  *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
+ *  受験者(pin の子)の書き込みはどの書き手にも数えない(ADR 0264 決定4)—— 書き手(writer)が受験者なら置く行はみな受験者の
+ *  書き込みなので門は当たらず、他の書き手は本番の記録(readerHidden の外)だけを、本番の記録から見た生死(liveTo)で数えて名指す。
+ *  SQL の無効化の条件は粗い前絞りで、後継なしで落ちた行だけを外す。
  *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
-function requireOneTree(db: Db, since: number): void {
+function requireOneTree(db: Db, since: number, writer?: string): void {
+  if (writer !== undefined && getTask(db, writer)?.interview_target_id != null) return;
   const pairs = db
     .prepare(
       `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, ef.id AS e_from,
-              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from
+              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from,
+              e.invalidation_reason AS e_reason, e.successor_id AS e_successor, d.invalidation_reason AS d_reason, d.successor_id AS d_successor
          FROM memory_entries e JOIN memory_entries d
-           ON d.kind = 'definition' AND d.scope IS NOT NULL AND d.invalidation_reason IS NULL
+           ON d.kind = 'definition' AND d.scope IS NOT NULL AND (d.invalidation_reason IS NULL OR d.successor_id IS NOT NULL)
           AND (e.path = d.path OR substr(e.path, 1, length(d.path) + 1) = d.path || '/')
          LEFT JOIN memory_entries ef ON ef.invalidation_reason = 'path_moved' AND ef.successor_id = e.id
          LEFT JOIN memory_entries df ON df.invalidation_reason = 'path_moved' AND df.successor_id = d.id
-        WHERE e.scope IS NULL AND e.invalidation_reason IS NULL AND (e.id > ? OR d.id > ?)
+        WHERE e.scope IS NULL AND (e.invalidation_reason IS NULL OR e.successor_id IS NOT NULL) AND (e.id > ? OR d.id > ?)
         ORDER BY e.id, d.id`,
     )
     .all(since, since) as Array<{
@@ -248,11 +254,19 @@ function requireOneTree(db: Db, since: number): void {
     d_path: string;
     d_scope: string;
     d_from: number | null;
+    e_reason: InvalidationReason | null;
+    e_successor: number | null;
+    d_reason: InvalidationReason | null;
+    d_successor: number | null;
   }>;
-  if (pairs.length === 0) return;
+  const examineeWrites = pairs.length === 0 ? new Set<number>() : readerHidden(db, undefined);
+  const counts = (id: number, invalidation_reason: InvalidationReason | null, successor_id: number | null) =>
+    !examineeWrites.has(id) && liveTo(db, examineeWrites, { invalidation_reason, successor_id });
+  const counted = pairs.filter((p) => counts(p.e_id, p.e_reason, p.e_successor) && counts(p.d_id, p.d_reason, p.d_successor));
+  if (counted.length === 0) return;
   // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
   const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
-  const named: OneTreePair[] = pairs.map((p) => ({
+  const named: OneTreePair[] = counted.map((p) => ({
     entry: { ...side(p.e_id, p.e_from), kind: p.e_kind, path: p.e_path },
     definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
   }));
@@ -314,7 +328,12 @@ function withWriteRecord<T extends object>(db: Db, writer: { taskId: string; age
   return db.transaction(() => {
     const since = memoryWatermark(db);
     const result = write();
-    const events = listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"], { after: since });
+    // 書き手の視界に無い定義を盤面の手で畳んだ無効化(defineMemoryBranch)は載せない —— 記録も視界に無いものを
+    // 名指さない(ADR 0264 決定4)
+    const hiddenToWriter = readerHidden(db, writer.taskId);
+    const events = listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"], { after: since }).filter(
+      (e) => e.payload.kind !== "memory_entry_invalidated" || !hiddenToWriter.has(e.payload.entry_id),
+    );
     const created = events.filter((e) => e.payload.kind === "memory_entry_created").map((e) => e.id);
     const invalidated = events.flatMap((e) => (e.payload.kind === "memory_entry_invalidated" ? [e.payload.entry_id] : []));
     const payload = { kind: "memory_written" as const, line: writeLine(events), created, invalidated };
@@ -358,14 +377,17 @@ export function recordKnowledge(
   return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
       createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
+      writer,
     ),
   );
 }
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
  *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義を含める。置き換えられるのは同じ path の定義だけで(畳みの線 —— foldMemoryEntries)、枝の改名と統合は
- *  枝ごとの移動が持つ(ADR 0177 決定6)。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
+ *  `supersedes` に旧定義を含める。書き手(writer)の視界に無い生きた定義は拒みも名指しもせず、新しい定義が盤面の手で
+ *  superseded にする(ADR 0264 決定4)。人間の面は writer を渡さないので全部が視界にある。置き換えられるのは同じ path の
+ *  定義だけで(畳みの線 —— foldMemoryEntries)、枝の改名と統合は枝ごとの移動が持つ(ADR 0177 決定6)。meta-review は
+ *  defineMemoryByMetaReview の門を通して呼ぶ。 */
 export function defineMemoryBranch(
   db: Db,
   input: Omit<EntryInput, "title"> & { supersedes?: number[] },
@@ -378,10 +400,17 @@ export function defineMemoryBranch(
   const fields = { ...rest, path: checkedPath(rest.path) };
   return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
-      const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
-      if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-      return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
-    }),
+      const hidden = writer === undefined ? new Set<number>() : readerHidden(db, writer);
+      const rows = (
+        db.prepare("SELECT * FROM memory_entries WHERE kind = 'definition' AND path = ? AND scope IS ?").all(fields.path, fields.scope) as EntryRow[]
+      ).filter((row) => !supersedes?.includes(row.id));
+      const defined = rows.find((row) => !hidden.has(row.id) && liveTo(db, hidden, row));
+      if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
+      const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
+      const unseen = rows.filter((row) => hidden.has(row.id) && row.invalidation_reason === null).map((row) => row.id);
+      if (unseen.length > 0) foldMemoryEntries(db, { replaces: unseen, successor_id: id, author: fields.author }, origin, at);
+      return id;
+    }, writer),
   );
 }
 
@@ -526,7 +555,7 @@ function moveEntries(
   })();
 }
 
-/** scope / path に生きている Definition の id(定義の書き込み・移動・復元の置き場の門)。 */
+/** scope / path に生きている Definition の id(移動・復元の置き場の門)。 */
 function liveDefinitions(db: Db, scope: string | null, path: string): number[] {
   return (
     db.prepare("SELECT id FROM memory_entries WHERE kind = 'definition' AND invalidation_reason IS NULL AND path = ? AND scope IS ?").all(path, scope) as Array<{ id: number }>
@@ -1543,10 +1572,12 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 
 /** 人間の面の一覧(spec #586 F): candidate・無効化済みも出す(id 順)。
  *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
- *  approved / candidate は無効化されていないもの。path はその枝と配下 P/…(#1209)。 */
+ *  approved / candidate は無効化されていないもの。path はその枝と配下 P/…(#1209)。人間の面は hidden を渡さない。meta-review の
+ *  読み口は hidden(readerHidden)を除き、行をその読み手から見た形(seenRow)にして絞る(ADR 0264 決定1・4)。 */
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated"; path?: string },
+  hidden = new Set<number>(),
 ): Array<
   MemoryEntry & {
     invalidation_reason: InvalidationReason | null;
@@ -1568,13 +1599,17 @@ export function listMemoryEntries(
   );
   const restored = restoredAs(db);
   // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
-  const rows = db
-    .prepare(
-      `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
+  const rows = (
+    db
+      .prepare(
+        `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
          LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind = 'objection_attributed'
         ORDER BY m.id`,
-    )
-    .all() as Array<EntryRow & { cause: Cause | null }>;
+      )
+      .all() as Array<EntryRow & { cause: Cause | null }>
+  )
+    .filter((row) => !hidden.has(row.id))
+    .map((row) => seenRow(db, hidden, row));
   // 絞り込みの前に引く —— 置き換えられた行は無効化済みで、approved の絞り込みでは落ちる
   const replacedIds = new Map<number, number[]>();
   for (const row of rows) {
@@ -1592,7 +1627,7 @@ export function listMemoryEntries(
       ...rowToEntry(row),
       invalidation_reason: row.invalidation_reason,
       successor_id: row.successor_id,
-      invalidated_by: invalidatedBy.get(row.id) ?? null,
+      invalidated_by: row.invalidation_reason === null ? null : (invalidatedBy.get(row.id) ?? null),
       restored_as: restored.get(row.id) ?? null,
       replaced_ids: replacedIds.get(row.id) ?? [],
       cause: row.cause,
@@ -1732,7 +1767,7 @@ type ExamineeMark = { not_shown_to_examinees?: boolean };
 
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
- *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
+ *  2段目 宛先、3段目 未無効化(liveTo)。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。mark は採点者の印
  *  (ADR 0264 決定6)で、読み手が Interview の root のときだけ欄を持つ。読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
@@ -1741,17 +1776,40 @@ function readerSight(db: Db, reader: MemoryReader) {
   const hiddenFromExaminees = interviewTargets(db, reader.taskId) === null ? null : examineeHidden(db);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
-  const live = (row: EntryRow) => row.invalidation_reason === null;
+  const live = (row: EntryRow) => liveTo(db, hidden, row);
   const layers = [base, addressed, live];
   return {
     scope: reader.scope,
     has: (row: EntryRow, layer: 1 | 2 | 3) => layers.slice(0, layer).every((inLayer) => inLayer(row)),
     dropReason: (row: EntryRow): MemoryDropReason | null => (!live(row) ? "invalidated" : !addressed(row) ? "addressee" : null),
+    seen: (row: EntryRow) => seenRow(db, hidden, row),
     mark: (row: EntryRow): ExamineeMark => (hiddenFromExaminees === null ? {} : { not_shown_to_examinees: hiddenFromExaminees.has(row.id) }),
   };
 }
 
 type ReaderSight = ReturnType<typeof readerSight>;
+
+/** id から hidden(読み手に無い集合)の後継を飛ばした、読み手に見える最初の後継(id 自身を含む)。hidden の行で鎖が尽きれば null。 */
+function seenSuccessor(db: Db, hidden: Set<number>, id: number | null): number | null {
+  let next = id;
+  while (next !== null && hidden.has(next)) next = requireEntry(db, next).successor_id;
+  return next;
+}
+
+type Invalidation = Pick<EntryRow, "invalidation_reason" | "successor_id">;
+
+/** 視界の3段目(未無効化)の正本: 無効化されていないか、後継が hidden にあってその先に読み手に見える後継が無い —— 読み手の視界に
+ *  無い後継による無効化は、その読み手には起きていない(ADR 0264 決定4)。hidden の後継のその後(生死・落ちたこと)は問わない。
+ *  読みの門・定義の門・一木の門・meta-review の読み口(seenRow)が読む。 */
+function liveTo(db: Db, hidden: Set<number>, row: Invalidation): boolean {
+  return row.invalidation_reason === null || (row.successor_id !== null && hidden.has(row.successor_id) && seenSuccessor(db, hidden, row.successor_id) === null);
+}
+
+/** 読み手(hidden)から見た行: 無効化が起きていなければ(liveTo)生きた行に、起きていれば後継を読み手に見える最初の後継に。 */
+function seenRow<T extends EntryRow>(db: Db, hidden: Set<number>, row: T): T {
+  if (row.invalidation_reason === null) return row;
+  return liveTo(db, hidden, row) ? { ...row, invalidation_reason: null, successor_id: null } : { ...row, successor_id: seenSuccessor(db, hidden, row.successor_id) };
+}
 
 /** FTS に当たった行(順位順)のうち視界の1段目にあるもの。SQL は FTS の照合と粗い前絞り(approved・scope)だけ。Definition は
  *  当てない —— worker に届くのは INDEX だけで、search の候補にも注入の関連 leaf にもならない(ADR 0083 追記7)。宛先と無効化は
@@ -1771,14 +1829,14 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
 /** 読み手(task)に無いエントリ。書いた task は作った書き込みの記録(ADR 0252)の task で引き、どれも本文が同じ後継(移動の複製・
  *  復元の複製)を含む。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の
  *  専用 verb と材料もこの集合を外す。
- *  - 読み手が pin の子でない(agent の読み手): どの Interview でも、pin の子が書いたもの —— 受験者の書き込みは本番の記録ではない
- *    (ADR 0264 決定1)。
+ *  - 読み手が pin の子でない(agent の読み手。taskId 無しは一木の門が数えない受験者の書き込み): どの Interview でも、pin の子が
+ *    書いたもの —— 受験者の書き込みは本番の記録ではない(ADR 0264 決定1)。
  *  - 読み手が pin の子(受験者、ADR 0264 決定3): どの Interview でも、Interview の木の task が書いたものと、書き手を問わず出所の
  *    event の task が木の task(自分を含む)であるもの(帰責 `objection_attributed` はその entry_id が指す判断ログの行の task で
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
-function readerHidden(db: Db, taskId: string): Set<number> {
-  if (getTask(db, taskId)?.interview_target_id == null) return new Set(examineeWrites(db).keys());
+function readerHidden(db: Db, taskId: string | undefined): Set<number> {
+  if (taskId === undefined || getTask(db, taskId)?.interview_target_id == null) return new Set(examineeWrites(db).keys());
   const own = withSameBodyCopies(db, writtenBy("?"), taskId);
   return new Set([...examineeHidden(db)].filter((id) => !own.has(id)));
 }
@@ -1872,10 +1930,14 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
     const hits = (db
       .prepare(
         `SELECT e.* FROM memory_fts JOIN memory_entries e ON e.id = memory_fts.rowid
-          WHERE memory_fts MATCH ? AND e.kind != 'definition' AND (e.invalidation_reason IS NULL OR e.successor_id IS NULL)
+          WHERE memory_fts MATCH ? AND e.kind != 'definition'
           ORDER BY memory_fts.rank, e.id`,
       )
-      .all(match) as EntryRow[]).filter((row) => !hidden.has(row.id) && (likeTail === undefined || tailOf(row) !== likeTail));
+      .all(match) as EntryRow[])
+      .filter((row) => !hidden.has(row.id) && (likeTail === undefined || tailOf(row) !== likeTail))
+      // 置き換えられた行は後継が代表する —— 読み手から見て(seenRow)後継の無い行だけ
+      .map((row) => seenRow(db, hidden, row))
+      .filter((row) => row.successor_id === null);
     const results = hits.map(({ id, kind, state, scope, path, title, addressee, invalidation_reason }) => ({ id, kind, state, scope, path, title, addressee, invalidation_reason }));
     const packed = packItems(read, "results", results, {}, { every: PENDING_EVENT_ID }) as Packed<{ results: typeof results; event_id: number }>;
     return recordPull(db, reader, { verb: "search_memory_entries", input: args, returned_ids: packed.results.map((r) => r.id) }, packed, at);
@@ -1944,9 +2006,9 @@ export function browseMemory(
 /** 枝の一覧(ADR 0122 追記 #1209): approved・未無効化のエントリ(4種別・全 scope・宛先を問わない)の path とすべての上位の prefix を
  *  1枝1行、木の順(親の直後に配下、同じ階層は segment の名前順)で。行はその path の Definition と、その path か配下にエントリ
  *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま(hidden は空)、meta-review は
- *  readerHidden を除き(ADR 0264 決定1)、pullMemoryBranches が原文を落とす。 */
+ *  readerHidden を除いてその読み手から見た生死で数え(listMemoryEntries、ADR 0264 決定1・4)、pullMemoryBranches が原文を落とす。 */
 export function listMemoryBranches(db: Db, hidden = new Set<number>()) {
-  const entries = approvedMemoryEntries(db).filter((e) => !hidden.has(e.id));
+  const entries = listMemoryEntries(db, { state: "approved" }, hidden);
   const paths = new Set(entries.flatMap((e) => e.path.split("/").map((_, i, segments) => segments.slice(0, i + 1).join("/"))));
   const bySegments = (a: string, b: string) => {
     const [x, y] = [a.split("/"), b.split("/")];
@@ -2014,7 +2076,7 @@ function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], inpu
   };
   const entries =
     verb === "list_memory_entries"
-      ? listMemoryEntries(db, input).filter((e) => !hidden.has(e.id))
+      ? listMemoryEntries(db, input, hidden)
       : ((all) =>
           all
             .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
@@ -2243,7 +2305,8 @@ export function readMemory(
         else if (!found.has(tail.id)) found.set(tail.id, { row: tail, requested_id: id });
         continue;
       }
-      const successor = tail.successor_id === null ? undefined : requireEntry(db, tail.successor_id);
+      const { successor_id } = sight.seen(tail);
+      const successor = successor_id === null ? undefined : requireEntry(db, successor_id);
       dropped.push({ id, reason: tail.invalidation_reason!, successor: successor && sight.has(successor, 2) ? successor.id : null });
     }
     const entries = [...found.values()]
@@ -2301,7 +2364,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
       else if (!found.has(tail.id)) found.set(tail.id, id);
     }
     // ponytail: 一覧を全件材料化して id で引く —— コストは #1056
-    const listed = new Map(listMemoryEntries(db, {}).map((e) => [e.id, e]));
+    const listed = new Map(listMemoryEntries(db, {}, hidden).map((e) => [e.id, e]));
     const entries = [...found]
       .sort(([a], [b]) => a - b)
       .map(([id, requested_id]) => {
@@ -2466,11 +2529,14 @@ function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
     const created = payload.kind === "memory_entry_created";
     if (!created && payload.reason === "path_moved") continue;
-    const tail = sameBodyChain(db, requireEntry(db, created ? id : payload.entry_id), restored).at(-1)!;
+    const row = requireEntry(db, created ? id : payload.entry_id);
+    // 読み手の視界に無い後継による無効化は起きていない(ADR 0264 決定4)
+    if (!created && liveTo(db, hidden, row)) continue;
+    const tail = sameBodyChain(db, row, restored).at(-1)!;
     changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(created ? "created" : "invalidated"));
   }
-  return listMemoryEntries(db, {})
-    .filter((entry) => changes.has(entry.id) && entry.state !== "candidate" && !hidden.has(entry.id))
+  return listMemoryEntries(db, {}, hidden)
+    .filter((entry) => changes.has(entry.id) && entry.state !== "candidate")
     .map((entry) => ({ ...metaReviewRow(entry), changes: (["created", "invalidated"] as const).filter((c) => changes.get(entry.id)!.has(c)) }));
 }
 

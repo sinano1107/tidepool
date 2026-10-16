@@ -128,6 +128,21 @@ it("define_memory_branch の description は、盤面全体のエントリがあ
   }
 });
 
+it("worker の record_knowledge と define_memory_branch は supersedes を受けない —— 置き換えるのは盤面・meta-review・修理 task(ADR 0264 決定5)", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "index the tide charts");
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const { tools } = await client.listTools();
+    for (const name of ["record_knowledge", "define_memory_branch"]) {
+      const tool = tools.find((candidate) => candidate.name === name)!;
+      expect(Object.keys(tool.inputSchema.properties!)).not.toContain("supersedes");
+    }
+  } finally {
+    await client.close();
+  }
+});
+
 it("record_knowledge の description は、新しい枝を切るときは先に define_memory_branch で定義を書くよう言う", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "index the tide charts");

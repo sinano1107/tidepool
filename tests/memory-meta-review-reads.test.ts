@@ -839,3 +839,39 @@ it("meta-review の list_memory_entries・read_memory_entries・search_memory_en
   expect(() => searchMemoryEntries(db, reader, { like: hidden[0]! }, at)).toThrow(`no memory entry ${hidden[0]}`);
   expect(pullMemoryBranches(db, reader, {}, at).branches).toEqual([{ path: "parser", definitions: [], scopes: ["tidepool"] }]);
 });
+
+it("受験者の書き込みが畳んだ本番の行は、meta-review の一覧・id 読み・検索・枝の一覧で無効化の起きていない生きた行として出て受験者の id を名指さず、視界にある後継が来れば受験者の後継を飛ばしてそれを指す —— 人間の面の一覧は畳みをそのまま見せる(ADR 0264 決定4)", () => {
+  const { db, reader } = board();
+  const examinee = interviewPinChild(db, at);
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (text: string, writer?: string, supersedes?: number[]) =>
+    defineMemoryBranch(db, { scope: "tidepool", path: "build", text, author, supersedes }, writer ? "worker" : "webui", at, writer).entry_id;
+  const root = define("What the root files.", examinee.parent_id!);
+  const examineeDefinition = define("What the examinee files.", examinee.id);
+  const production = recordKnowledge(db, { scope: "tidepool", path: "build", title: "build fact", text: "The build.", source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
+  const examineeFact = recordKnowledge(
+    db,
+    { scope: "tidepool", path: "build", title: "build examinee", text: "The build.", source: { commit: "0a46a46" }, author, supersedes: [production] },
+    "worker",
+    at,
+    examinee.id,
+  ).entry_id;
+  const live = { invalidation_reason: null, successor_id: null, invalidated_by: null, replaced_ids: [] };
+
+  expect(pullMemoryList(db, reader, "list_memory_entries", {}, at).entries).toMatchObject([{ id: root, ...live }, { id: production, ...live }]);
+  expect(readMemoryEntries(db, reader, { ids: [root, production] }, at).entries).toMatchObject([{ id: root, ...live }, { id: production, ...live }]);
+  expect(searchMemoryEntries(db, reader, { query: "build" }, at).results).toMatchObject([{ id: production, invalidation_reason: null }]);
+  expect(pullMemoryBranches(db, reader, {}, at).branches).toEqual([{ path: "build", definitions: [{ id: root, scope: "tidepool", text: "What the root files." }], scopes: ["tidepool"] }]);
+  expect(listMemoryEntries(db, { path: "build" }).map((e) => [e.id, e.successor_id])).toEqual([
+    [root, examineeDefinition],
+    [examineeDefinition, null],
+    [production, examineeFact],
+    [examineeFact, null],
+  ]);
+
+  const human = define("How this workspace is built.", undefined, [examineeDefinition]);
+  expect(pullMemoryList(db, reader, "list_memory_entries", { kind: "definition" }, at).entries).toMatchObject([
+    { id: root, invalidation_reason: "superseded", successor_id: human },
+    { id: human, replaced_ids: [root] },
+  ]);
+});
