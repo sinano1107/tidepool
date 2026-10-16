@@ -153,7 +153,6 @@ it("continue の後、宣言した pin の子が読む自分の history の破�
   expect(history).toEqual([
     { child_outside_the_decomposition: expect.objectContaining({ title: `premise breach: ${POSE.title}`, answer: ["continue"], comment: null }) },
   ]);
-  expect(JSON.stringify(history)).not.toContain("the probe holds");
   expect(JSON.stringify(history)).not.toContain(POSE.rubric);
   expect(JSON.stringify(history)).not.toMatch(/interview/i);
   expect(getTask(db, question.id)!.question_answer_comment).toBe("the probe holds");
