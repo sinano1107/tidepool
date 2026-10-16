@@ -964,7 +964,7 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
 });
 
 /** escalate の PR #42 の merge question と、本物の Landing を通して `answer` と答える手。 */
-function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?: LandingDeps["resolveWorkspace"]) {
+function escalatedMergeQuestionWith(github: FakeGitHubClient, landingDeps: Partial<LandingDeps> = {}) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -974,7 +974,7 @@ function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?:
   );
   recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
-  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, resolveWorkspace });
+  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, ...landingDeps });
   const answer = (value: string) =>
     submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, [value], undefined, () => NOW, "webui");
   return { question, landing, answer };
@@ -996,18 +996,52 @@ it.each(["merge", "hold"])("盤面の外で merge された PR の観測の書�
   }).toEqual({ status: "todo", kinds: expect.not.arrayContaining(["question_answered"]) });
 });
 
+// ADR 0265 決定4(#2037): バックストップが PR を読めなければ、merge 済みの PR への「hold」を決定として残さない
 it.each([
-  ["PR の状態が読めない", () => {
-    const github = new FakeGitHubClient();
+  ["PR の状態が読めない", "gh: network unreachable", (github: FakeGitHubClient) => {
     github.scriptStateReadFailure(42, new Error("gh: network unreachable"));
     return escalatedMergeQuestionWith(github);
   }],
-  ["workspace が引けない", () =>
-    escalatedMergeQuestionWith(new FakeGitHubClient(), () => {
-      throw new Error("workspace gone");
+  ["workspace が引けない", "workspace gone", (github: FakeGitHubClient) =>
+    escalatedMergeQuestionWith(github, {
+      resolveWorkspace: () => {
+        throw new Error("workspace gone");
+      },
     })],
-])("%s merge question への「hold」は、今日どおり回答として記録される", async (_, setup) => {
-  const { question, answer } = setup();
+] as const)("%s merge question への「merge」も「hold」も拒まれ、question は開いたまま残る", async (_, reason, setup) => {
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(42);
+  const { question, answer } = setup(github);
+  const refusal = new DomainError(`PR #42's state could not be read (${reason}), so the answer was not accepted`);
+
+  await expect(answer("hold")).rejects.toThrow(refusal);
+  await expect(answer("merge")).rejects.toThrow(refusal);
+  expect({
+    status: getTask(db, question.id)?.status,
+    kinds: listEvents(db, question.id).map((event) => event.kind),
+  }).toEqual({ status: "todo", kinds: expect.not.arrayContaining(["question_answered", "pr_merge_observed"]) });
+});
+
+it("PR の読みが戻れば回答は通り、盤面の外で merge 済みなら観測で決着する", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(42);
+  vi.spyOn(github, "getPullRequestState").mockRejectedValueOnce(new Error("gh: network unreachable"));
+  const { question, answer } = escalatedMergeQuestionWith(github);
+
+  await expect(answer("hold")).rejects.toThrow(DomainError);
+  await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+  expect(listEvents(db, question.id).map((event) => event.kind)).toEqual(
+    expect.arrayContaining(["pr_merge_observed"]),
+  );
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("question_answered");
+});
+
+// 「観測しなかった」のうち「該当しない」(GitHub 未設定・純ローカル)は、今日どおり回答を通す
+it.each([
+  ["GitHub 未設定", { github: undefined }],
+  ["純ローカル", { workspace: undefined, resolveWorkspace: undefined }],
+] as const)("%s の merge question への「hold」は、今日どおり回答として記録される", async (_, landingDeps) => {
+  const { question, answer } = escalatedMergeQuestionWith(new FakeGitHubClient(), landingDeps);
 
   await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
   expect(listEvents(db, question.id).map((event) => event.kind)).toContain("question_answered");

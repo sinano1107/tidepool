@@ -1050,12 +1050,14 @@ export function createLanding(deps: LandingDeps): Landing {
       const prNumber = question.question_pending_merge_pr;
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (prNumber === null || !resolve || !deps.github) return false;
-      // 握りつぶすのは読みの失敗だけ。決着の書き込みの失敗は呼び手(回答)へ投げる
+      // ADR 0265 決定4: 読めなければ回答を拒む(「観測しなかった」に倒すと merge 済みの PR への hold が残る)。
+      // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let state: PrState;
       try {
         state = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
-      } catch {
-        return false;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;

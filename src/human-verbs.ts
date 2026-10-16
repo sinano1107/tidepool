@@ -1000,10 +1000,9 @@ export async function submitAnswer(
         const mergePr = kind.pr;
         // ADR 0079 決定3 / ADR 0229 決定4 のバックストップ。回答の値に依らず、かつ CI ゲートより**先**に
         // 走る — merge 済み・閉じた PR は CI が赤/pending でも観測決着に到達しなければならず、
-        // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
-        // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
-        // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
-        // 観測決着の書き込みの失敗は落とさず投げる —— 回答は失敗し question は開いたまま。
+        // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
+        // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
+        // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
         if (await deps.landing.observePullRequestOutcome(task)) {
           return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
         }
