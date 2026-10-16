@@ -62,12 +62,12 @@ it("受験者は分解できない —— agent の decompose も人間の扉も
   expect(listBoard(db)).toHaveLength(before);
 });
 
-it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb と、報告したことが無ければ報告の verb を足す。受験者は分解の verb だけを伏せる(ADR 0253 決定4・5 / ADR 0245 決定1 / ADR 0251 決定1)", () => {
+it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb と、報告したことが無ければ報告の verb を足す。受験者は分解の verb と記憶を書く verb を伏せる(ADR 0253 決定4・5 / ADR 0245 決定1 / ADR 0251 決定1 / ADR 0268 決定2)", () => {
   const { db, root } = registerInterview();
   expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] });
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] });
-  expect(taskVerbSwap(db, child!.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  expect(taskVerbSwap(db, child!.id)).toEqual({ withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] });
   // 報告したあとの root は報告の verb を失う(ADR 0251 決定2)
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
   report(db, root);

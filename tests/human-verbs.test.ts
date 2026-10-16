@@ -11,13 +11,11 @@ import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   editThroughHumanDoor,
-  listMemoryEntriesForHuman,
   quarantineChecks,
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
 import { createLanding, type LandingDeps, registerPrPromotionFailureQuestion, taskIdsAwaitingLanding } from "../src/landing.js";
-import { defineMemoryBranch, invalidateMemoryEntry, moveMemory, recordKnowledge, restoreMemoryEntry } from "../src/memory.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
@@ -38,7 +36,6 @@ import {
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
-  interviewPinChild,
   queuedForAutoMerge,
 } from "./harness.js";
 
@@ -1492,42 +1489,3 @@ it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll
   expect({ ok: results.map((r) => r.ok), polls }).toEqual({ ok: [false, false, false], polls: 0 });
 });
 
-it("人間の面の記憶の一覧は、pin の子(受験者)が書いたエントリも返す(ADR 0264 決定1)", () => {
-  db = openDb(":memory:");
-  const pinChild = interviewPinChild(db, NOW);
-  const author = { activity: "worker_verb" as const, name: "deckhand" };
-  const knowledge = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author }, "worker", NOW, pinChild.id).entry_id;
-  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", NOW, pinChild.id).entry_id;
-
-  expect(listMemoryEntriesForHuman({ db: db }, {}).map((e) => e.id)).toEqual([knowledge, definition]);
-});
-
-it("人間の面の記憶の一覧は、受験者の書き込みとその移動・復元の複製に書いた pin の子と Interview の対象の印を付け、他は null —— 絞りは変わらない(ADR 0264 決定1)", () => {
-  db = openDb(":memory:");
-  const pinChild = interviewPinChild(db, NOW);
-  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const author = { activity: "worker_verb" as const, name: "deckhand" };
-  const human = { activity: "human" as const, name: "human" };
-  const write = (taskId: string, path: string) =>
-    recordKnowledge(db, { scope: "tidepool", path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author }, "worker", NOW, taskId).entry_id;
-  const production = write(work.id, "production");
-  const answer = write(pinChild.id, "answer");
-  const moving = write(pinChild.id, "moving");
-  const moved = moveMemory(db, { entry_id: moving, scope: "tidepool", path: "moved", mover: human }, "webui", NOW).entry_id;
-  const dropped = write(pinChild.id, "dropped");
-  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", NOW);
-  const restored = restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", NOW).entry_id;
-
-  const mark = { task_id: pinChild.id, provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
-  const marks = (filter: Parameters<typeof listMemoryEntriesForHuman>[1]) =>
-    listMemoryEntriesForHuman({ db }, filter).map((e) => [e.id, e.examinee]);
-  expect(marks({})).toEqual([
-    [production, null],
-    [answer, mark],
-    [moving, mark],
-    [moved, mark],
-    [dropped, mark],
-    [restored, mark],
-  ]);
-  expect(marks({ state: "approved", path: "moved" })).toEqual([[moved, mark]]);
-});

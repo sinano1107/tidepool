@@ -30,7 +30,7 @@ import {
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, examineeRootId, HUMAN_WEBUI, interviewPinChild, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -808,70 +808,4 @@ it("search_memory_entries は応答予算で切って next と remaining を言�
     worker_id: "auditor",
     payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide" }, returned_ids: second.results.map((r) => r.id) },
   });
-});
-
-/** どの Interview でも pin の子(受験者)が書いた Knowledge と Definition、その移動・復元の複製と、本番の Knowledge(ADR 0264 決定1)。 */
-function examineeWrites(fixture: Pick<ReturnType<typeof board>, "db">) {
-  const { db } = fixture;
-  const [pinChild, otherPinChild] = [interviewPinChild(db, at), interviewPinChild(db, at)];
-  const author = { activity: "worker_verb" as const, name: "deckhand" };
-  const write = (writer: { id: string }, path: string) =>
-    recordKnowledge(db, { scope: "tidepool", path, title: `parser ${path}`, text: "The parser.", source: { commit: "0a46a46" }, author }, "worker", at, writer.id).entry_id;
-  const production = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "parser production", text: "The parser.", source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
-  const knowledge = write(pinChild, "parser/answers");
-  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser/answers", text: "What the examinee filed.", author }, "worker", at, pinChild.id).entry_id;
-  const original = write(otherPinChild, "parser/drafts");
-  const moved = moveMemory(db, { entry_id: original, scope: "tidepool", path: "lexer", mover: human }, "webui", at).entry_id;
-  const dropped = write(otherPinChild, "grammar");
-  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at);
-  const restored = restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at).entry_id;
-  return { production, hidden: [knowledge, definition, original, moved, dropped, restored] };
-}
-
-it("meta-review の list_memory_entries・read_memory_entries・search_memory_entries・枝の一覧は、どの Interview の pin の子が書いたエントリも、その移動・復元の複製も返さない —— read は名指された id を missing でなく黙って落とし、like に名指すと存在しない id と同じに断る(ADR 0264 決定1)", () => {
-  const fixture = board();
-  const { db, reader } = fixture;
-  const { production, hidden } = examineeWrites(fixture);
-
-  expect(pullMemoryList(db, reader, "list_memory_entries", {}, at).entries.map((e) => e.id)).toEqual([production]);
-  expect(readMemoryEntries(db, reader, { ids: [production, ...hidden] }, at)).toMatchObject({ entries: [{ id: production }], missing: [] });
-  expect(searchMemoryEntries(db, reader, { query: "parser" }, at).results.map((r) => r.id)).toEqual([production]);
-  expect(() => searchMemoryEntries(db, reader, { like: hidden[0]! }, at)).toThrow(`no memory entry ${hidden[0]}`);
-  expect(pullMemoryBranches(db, reader, {}, at).branches).toEqual([{ path: "parser", definitions: [], scopes: ["tidepool"] }]);
-});
-
-it("受験者の書き込みが畳んだ本番の行は、meta-review の一覧・id 読み・検索・枝の一覧で無効化の起きていない生きた行として出て受験者の id を名指さず、視界にある後継が来れば受験者の後継を飛ばしてそれを指す —— 人間の面の一覧は畳みをそのまま見せる(ADR 0264 決定4)", () => {
-  const { db, reader } = board();
-  const examinee = interviewPinChild(db, at);
-  const author = { activity: "worker_verb" as const, name: "deckhand" };
-  const define = (text: string, writer?: string, supersedes?: number[]) =>
-    defineMemoryBranch(db, { scope: "tidepool", path: "build", text, author, supersedes }, writer ? "worker" : "webui", at, writer).entry_id;
-  const root = define("What the root files.", examineeRootId(db, examinee.id));
-  const examineeDefinition = define("What the examinee files.", examinee.id);
-  const production = recordKnowledge(db, { scope: "tidepool", path: "build", title: "build fact", text: "The build.", source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
-  const examineeFact = recordKnowledge(
-    db,
-    { scope: "tidepool", path: "build", title: "build examinee", text: "The build.", source: { commit: "0a46a46" }, author, supersedes: [production] },
-    "worker",
-    at,
-    examinee.id,
-  ).entry_id;
-  const live = { invalidation_reason: null, successor_id: null, invalidated_by: null, replaced_ids: [] };
-
-  expect(pullMemoryList(db, reader, "list_memory_entries", {}, at).entries).toMatchObject([{ id: root, ...live }, { id: production, ...live }]);
-  expect(readMemoryEntries(db, reader, { ids: [root, production] }, at).entries).toMatchObject([{ id: root, ...live }, { id: production, ...live }]);
-  expect(searchMemoryEntries(db, reader, { query: "build" }, at).results).toMatchObject([{ id: production, invalidation_reason: null }]);
-  expect(pullMemoryBranches(db, reader, {}, at).branches).toEqual([{ path: "build", definitions: [{ id: root, scope: "tidepool", text: "What the root files." }], scopes: ["tidepool"] }]);
-  expect(listMemoryEntries(db, { path: "build" }).map((e) => [e.id, e.successor_id])).toEqual([
-    [root, examineeDefinition],
-    [examineeDefinition, null],
-    [production, examineeFact],
-    [examineeFact, null],
-  ]);
-
-  const human = define("How this workspace is built.", undefined, [examineeDefinition]);
-  expect(pullMemoryList(db, reader, "list_memory_entries", { kind: "definition" }, at).entries).toMatchObject([
-    { id: root, invalidation_reason: "superseded", successor_id: human },
-    { id: human, replaced_ids: [root] },
-  ]);
 });

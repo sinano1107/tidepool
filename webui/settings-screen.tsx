@@ -2179,7 +2179,7 @@ function MemoryEntriesCard({ workspaceNames, agentNames, language, say, edit, fo
           <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>
             #{entry.id} · {entry.kind} · {entry.invalidation_reason
               ? `invalidated: ${entry.invalidation_reason}${entry.successor_id ? ` → #${entry.successor_id}` : ''}${invalidatedBy(entry.invalidated_by)}${entry.restored_as ? ` · restored → #${entry.restored_as}` : ''}`
-              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`}{entry.orphaned && ` · orphaned: ${entry.orphaned}`}{entry.examinee && ` · examinee: ${[entry.examinee.provider, entry.examinee.model, entry.examinee.effort].filter(Boolean).join(' ')} (task ${entry.examinee.task_id})`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
+              : entry.state} · {entry.scope ?? 'board-wide'} · {entry.path}{(entry.kind === 'behavior' || entry.kind === 'exemplar') && ` · to ${entry.addressee ?? 'every agent'}`}{entry.orphaned && ` · orphaned: ${entry.orphaned}`} · {entry.author.activity}{entry.cause && ` · ${entry.cause}`}
             {entry.replaced_ids.length > 0 && ` · replaces ${entry.replaced_ids.map((id) => `#${id}`).join(', ')}`}
           </p>
           {entry.kind !== 'definition' && <strong style={{ fontSize: 'var(--text-sm)' }}>{entry.title}</strong>}

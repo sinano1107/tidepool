@@ -122,7 +122,7 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing; entries Interview examinees wrote are not returned. " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
         "Entries come in id order. " +
         "When the entries do not fit in one response, the response carries `next` and `remaining` (how many entries are not returned yet): " +
         "call read_memory_entries again with only `next` to read the rest, and repeat until a response carries no `next` — then the list is complete. " +

@@ -38,7 +38,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 
-import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
 
 import { bundledObjection, examineeRootId, HUMAN_WEBUI, interviewPinChild, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
@@ -361,45 +361,30 @@ it("同じ枝の定義は supersedes にその生きた定義を含めれば書�
   ]);
 });
 
-/** 1つの Interview の pin の子2つ(兄弟、setup のみ)。 */
-function siblingPinChildren(db: ReturnType<typeof openDb>): ReturnType<typeof poseProbe> {
-  const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-  const interview = registerTask(
-    db,
-    { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [target, { ...target, effort: "low" }] as never },
-    at,
-    ...HUMAN_WEBUI,
-  );
-  return poseProbe(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker");
-}
+it("同じ scope・path に書き手の視界に無い生きた Definition があれば、define は拒まずに通り、新しい Definition がそれを後継つき superseded にし、書き手の書き込みの記録には載せない —— 受験者が Interview の root の定義に当たるとき。視界にある生きた Definition があれば拒み、拒否文は視界に無い id を名指さない(ADR 0264 決定4)", () => {
+  const { db } = board();
+  const examinee = interviewPinChild(db, at);
+  const root = examineeRootId(db, examinee.id);
+  const define = (writer: string, text: string, supersedes?: number[]) => () => defineMemoryBranch(db, { ...definition, text, supersedes }, "worker", at, writer);
 
-it("同じ scope・path に書き手の視界に無い生きた Definition があれば、define は拒まずに通り、新しい Definition がそれを後継つき superseded にし、書き手の書き込みの記録には載せない —— 受験者どうし(前の Interview・兄弟)も、本番の worker が受験者の定義に当たるときも。視界にある生きた Definition があれば拒み、拒否文は視界に無い id を名指さない(ADR 0264 決定4)", () => {
-  const { db, task } = board();
-  const earlier = interviewPinChild(db, at);
-  const [examinee, sibling] = siblingPinChildren(db) as [Task, Task];
-  const define = (writer: Task, text: string) => () => defineMemoryBranch(db, { ...definition, text }, "worker", at, writer.id).entry_id;
+  const first = define(root, "What the root files.")().entry_id;
+  const { entry_id: second, event_id: record } = define(examinee.id, "What the examinee files.")();
 
-  const first = define(earlier, "What the earlier examinee files.")();
-  const second = define(sibling, "What the sibling files.")();
-  // 戻った earlier には後継(兄弟の定義)による無効化が起きていない —— 自分の定義が生きていて、それだけを名指す
-  expect(define(earlier, "Again.")).toThrow(`branch build is already defined in this scope by entry ${first}; revise it with supersedes`);
-  const third = define(examinee, "What the examinee files.")();
-  const { entry_id: production, event_id: record } = defineMemoryBranch(db, { ...definition, text: "How this workspace is built." }, "worker", at, task.id);
-
-  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([production]);
+  expect(approvedMemoryEntries(db).map((e) => e.id)).toEqual([second]);
   // 盤面の手の畳みは書き手の書き込みの記録に載らない —— 視界に無い定義を名指さない
   expect(getEvent(db, record)!.payload).toEqual({
     kind: "memory_written",
-    line: `wrote definition #${production} "How this workspace is built." at build (tidepool)`,
-    created: [production],
+    line: `wrote definition #${second} "What the examinee files." at build (tidepool)`,
+    created: [second],
     invalidated: [],
   });
+  const third = define(root, "What the root files again.", [second])().entry_id;
   expect(listMemoryEntries(db, { state: "invalidated" })).toMatchObject([
     { id: first, invalidation_reason: "superseded", successor_id: second },
     { id: second, invalidation_reason: "superseded", successor_id: third },
-    { id: third, invalidation_reason: "superseded", successor_id: production },
   ]);
-  expect(define(examinee, "Again.")).toThrow(`branch build is already defined in this scope by entry ${production}; revise it with supersedes`);
+  // 受験者には後継(root の定義)による無効化が起きていない —— 自分の定義が生きていて、それだけを名指す
+  expect(define(examinee.id, "Again.")).toThrow(`branch build is already defined in this scope by entry ${second}; revise it with supersedes`);
 });
 
 it("定義の書き込みの supersedes に別 path の定義があれば、書く先の定義の有無を問わず domain error で枝ごとの移動へ案内して何も書かず、同じ path・別 scope の定義は置き換えられる(ADR 0177 決定6)", () => {
@@ -2301,37 +2286,6 @@ it("門の拒否は DomainError の派生で、当たった組をすべて構造
   expect((carried as OneTreeError).pairs).toEqual([
     { entry: { id: tests, existing: true, kind: "knowledge", path: "qa/lint" }, definition: { id: lint, existing: false, path: "qa/lint", scope: "tidepool" } },
   ]);
-});
-
-it("一木の門は受験者(pin の子)の書き込みをどの書き手にも数えない —— 受験者の定義の上下に盤面全体のエントリを置け、人間の書き込みは本番の記録だけを数えて名指す。受験者は自分の視界に無い盤面全体のエントリの上も視界にあるものの上も定義できる(ADR 0264 決定4)", () => {
-  const { db } = board();
-  const examinee = interviewPinChild(db, at);
-  const root = getTask(db, examineeRootId(db, examinee.id))!;
-  const examineeDefines = (path: string) => defineMemoryBranch(db, { ...definition, path }, "worker", at, examinee.id).entry_id;
-  const wholeBoard = (path: string, writer?: string) => recordKnowledge(db, { ...knowledge, scope: null, path, source: { commit: "0a46a46" } }, "worker", at, writer).entry_id;
-
-  examineeDefines("tools");
-  wholeBoard("tools/x");
-  const production = defineMemoryBranch(db, { ...definition, path: "build" }, "worker", at).entry_id;
-  examineeDefines("build/x");
-  expect(() => wholeBoard("build/x/y")).toThrow(
-    `the whole-board knowledge being placed at build/x/y lies at or under workspace definition ${production} at build in scope tidepool: `,
-  );
-  wholeBoard("probes/x", root.id);
-  wholeBoard("ci/x");
-  examineeDefines("probes");
-  examineeDefines("ci");
-});
-
-it("受験者の define が畳んだ本番の Definition は、一木の門には生きた定義として数えられる —— その配下に盤面全体のエントリを置く人間の書き込みは拒まれ、その定義を名指す(ADR 0264 決定4 / ADR 0178)", () => {
-  const { db } = board();
-  const examinee = interviewPinChild(db, at);
-  const root = defineMemoryBranch(db, { ...definition, text: "What the root files." }, "worker", at, examineeRootId(db, examinee.id)).entry_id;
-  defineMemoryBranch(db, { ...definition, text: "What the examinee files." }, "worker", at, examinee.id);
-
-  expect(() => recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at)).toThrow(
-    `the whole-board knowledge being placed at build/x lies at or under workspace definition ${root} at build in scope tidepool: `,
-  );
 });
 
 it("workspace が build と build/x を定義していれば、盤面全体の Knowledge を build/x/y に置くには上の build から盤面全体へ広げる —— 下の build/x を先に広げると上の build に当たって何も変えず、上から順なら build/x も Knowledge も通る(ADR 0221 決定3)", () => {

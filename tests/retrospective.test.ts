@@ -21,7 +21,6 @@ import {
   HOUR,
   HUMAN_WEBUI,
   haltedRefires,
-  interviewPinChild,
   KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
@@ -566,22 +565,6 @@ it.each([
   await commit(t, s.task.id, "naming");
 
   expect(s.behaviorDraftClient.calls[0]!.input.index!.includes(`- #${ladder} Attic ladder`)).toBe(hit);
-});
-
-it("起草に渡す注入節(異議された task を読み手にした INDEX)に、pin の子が書いたエントリは出ない(ADR 0264 決定1)", async () => {
-  const s = await objectedForDraft("naming", { initial: { cause: "preference", evidence: "taste" } });
-  t = s.t;
-  const at = t.clock.now();
-  const pinChild = interviewPinChild(t.db, at);
-  rememberedNote(t, "Attic ladder");
-  recordKnowledge(t.db, { scope: null, path: "examinee", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, pinChild.id);
-  s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
-
-  await commit(t, s.task.id, "naming");
-
-  const index = s.behaviorDraftClient.calls[0]!.input.index!;
-  expect(index).toContain("- build/ — (undefined)");
-  expect(index).not.toContain("examinee");
 });
 
 it("盤面設定 judgement_tier を standard にすると、帰責の判定も Behavior candidate の起草も anthropic × standard の行で撃たれる(issue #914)", async () => {
