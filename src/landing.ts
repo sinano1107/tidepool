@@ -29,6 +29,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
+import type { SettledByObservation } from "./wire-contract.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   boardRefWriter,
@@ -280,6 +281,24 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
     .get(taskId) as { kind: string; pr_number: number } | undefined;
   if (!row) return null;
   return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
+}
+
+/** 観測で閉じた question の印(ADR 0265 決定7): 回答なしで done の question の観測の種類、それ以外は null。merge question の
+ *  決着は根に刻まれる(決定1)ので根の決着の読みから、他の観測は question 自身の記録から引く。 */
+export function settledByObservation(db: Db, question: Pick<Task, "id" | "workspace" | "question_pending_merge_pr">): SettledByObservation | null {
+  const row = db
+    .prepare(
+      `SELECT status = 'done' AND NOT EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'question_answered') AS observed,
+         (SELECT kind FROM events WHERE task_id = tasks.id
+           AND kind IN ('pr_promotion_observed', 'quarantine_released', 'routing_proposal_stale', 'memory_proposal_stale')
+           ORDER BY id DESC LIMIT 1) AS kind
+         FROM tasks WHERE id = ?`,
+    )
+    .get(question.id) as { observed: number; kind: SettledByObservation | null };
+  if (!row.observed) return null;
+  if (question.question_pending_merge_pr === null) return row.kind;
+  const outcome = rootPrOutcome(db, taskIdForPr(db, question.question_pending_merge_pr, question.workspace));
+  return outcome && OBSERVED[outcome.state];
 }
 
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。

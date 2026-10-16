@@ -410,7 +410,7 @@ it("effort の Quarantine 中の行の effort を直すと、question は回答�
   });
   expect(edited.status).toBe(200);
 
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "quarantine_released" });
   expect((await events(question.id)).find((e) => e.kind === "quarantine_released")?.payload).toMatchObject({
     quarantine: "tableRowEffort",
     value: "openai/gpt-5.5/max",

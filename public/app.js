@@ -1054,7 +1054,7 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings })
 function BoardScreen({ data, onOpenTask }) {
   const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ["todo", "in_progress", "blocked", "done"];
-  return /* @__PURE__ */ React.createElement("div", { style: { height: "100%", display: "flex", flexDirection: "column", minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px 0" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Board"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "progress overview \xB7 queue order lives in the queue")), /* @__PURE__ */ React.createElement("div", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowX: "auto", display: "flex" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "inline-flex", gap: 12, alignItems: "stretch", padding: "0 16px 16px", minHeight: "100%", boxSizing: "border-box" } }, cols.map((key) => /* @__PURE__ */ React.createElement("div", { key, style: { width: 210, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, background: "var(--surface-recessed)", borderRadius: "var(--radius-md)", padding: 10, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, padding: "2px 4px 10px", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--text-secondary)" } }, key), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.board[key].length)), /* @__PURE__ */ React.createElement(FadeScroll, { style: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 } }, data.board[key].map((t) => /* @__PURE__ */ React.createElement(TaskCard, { key: t.id, task: { ...t, status: key }, onClick: () => onOpenTask(t), style: { flexShrink: 0 } }))))))));
+  return /* @__PURE__ */ React.createElement("div", { style: { height: "100%", display: "flex", flexDirection: "column", minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px 0" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Board"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "progress overview \xB7 queue order lives in the queue")), /* @__PURE__ */ React.createElement("div", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowX: "auto", display: "flex" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "inline-flex", gap: 12, alignItems: "stretch", padding: "0 16px 16px", minHeight: "100%", boxSizing: "border-box" } }, cols.map((key) => /* @__PURE__ */ React.createElement("div", { key, style: { width: 210, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, background: "var(--surface-recessed)", borderRadius: "var(--radius-md)", padding: 10, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, padding: "2px 4px 10px", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--text-secondary)" } }, key), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.board[key].length)), /* @__PURE__ */ React.createElement(FadeScroll, { style: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 } }, data.board[key].map((t) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { flexShrink: 0, display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(TaskCard, { task: { ...t, status: key }, onClick: () => onOpenTask(t) }), t.settledByObservation && /* @__PURE__ */ React.createElement("span", { "data-testid": `settled-by-observation-${t.id}`, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", padding: "0 4px" } }, t.settledByObservation)))))))));
 }
 
 // webui/register-screen.tsx
@@ -3854,6 +3854,14 @@ const tabs = [
   { key: "register", label: "Register", icon: "plus" },
   { key: "settings", label: "Settings", icon: "settings" }
 ];
+const SETTLED_BY_OBSERVATION_COPY = {
+  pr_merge_observed: "observed \xB7 PR merged",
+  pr_close_observed: "observed \xB7 PR closed",
+  pr_promotion_observed: "observed \xB7 PR promoted",
+  quarantine_released: "observed \xB7 quarantine lifted",
+  routing_proposal_stale: "observed \xB7 routing proposal stale",
+  memory_proposal_stale: "observed \xB7 memory proposal stale"
+};
 class ApiError extends Error {
   status;
   detail;
@@ -4059,7 +4067,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
-      githubIssueNumber: t.github_issue_number
+      githubIssueNumber: t.github_issue_number,
+      settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : void 0
     });
   }
   const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);
@@ -4170,8 +4179,8 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
         api("GET /api/registry/candidates").catch(() => ({ icons: {} }))
       ]);
       if (cancelled) return;
-      if (!task || task.type !== "question" || task.status !== "todo") return setQ(null);
       setRawTask(task);
+      if (!task || task.type !== "question" || task.status !== "todo") return setQ(null);
       setQ(toQuestionCardShape(task, candidates.icons));
     })().catch(() => {
       if (!cancelled) setQ(null);
@@ -4193,7 +4202,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-display)", fontStyle: "italic", fontSize: "var(--text-2xl)", color: "var(--tide-5)" } }, "tidepool"));
   }
   if (q === null || rawTask?.landing) {
-    return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(Card, { style: { textAlign: "center", padding: 24, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, q === null ? "This question is no longer available \u2014 it may already be answered." : "Merge decisions are made in triage, after the log."), /* @__PURE__ */ React.createElement(Button, { variant: "primary", onClick: () => onDone(null) }, "Open board")));
+    return /* @__PURE__ */ React.createElement("div", { style: { height: "100vh", display: "flex", flexDirection: "column", justifyContent: "center", padding: 24, boxSizing: "border-box", background: "var(--surface-page)" } }, /* @__PURE__ */ React.createElement(Card, { style: { textAlign: "center", padding: 24, display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, q === null ? rawTask?.settled_by_observation ? /* @__PURE__ */ React.createElement("span", { "data-testid": "settled-by-observation" }, "The board closed this question without an answer \u2014 ", SETTLED_BY_OBSERVATION_COPY[rawTask.settled_by_observation]) : "This question is no longer available \u2014 it may already be answered." : "Merge decisions are made in triage, after the log."), /* @__PURE__ */ React.createElement(Button, { variant: "primary", onClick: () => onDone(null) }, "Open board")));
   }
   return (
     // TpSingleQuestion is `position: absolute; inset: 0` (same as the design
@@ -4502,7 +4511,8 @@ function App() {
   };
   const answerNow = async (q, a, amendment, comment) => {
     try {
-      await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment });
+      const answered = await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment });
+      if (answered.settled_by_observation) say("warn", "settled by the board, not by your answer", SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
     } catch (err) {
       say("danger", "answer failed", String(err.message || err));
       throw err;

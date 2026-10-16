@@ -180,7 +180,7 @@ it("pin の段と下げ先の段の間に段を挿入すると、question は観
     const questionId = await proposeDeckhand(call);
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "insert_tier", name: "mid", description: "x", position: 2 })).status).toBe(200);
 
-    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
+    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "routing_proposal_stale" });
     expect((await events(questionId)).find((e) => e.kind === "routing_proposal_stale").payload.changed).toContain("tier_order");
   } finally {
     await client.close();
@@ -280,16 +280,17 @@ it("registry の push が失敗すると回答ごと断られ、question は ope
   }
 });
 
-it("書き込み前の registry の tier が pin と違えば、question は観測で決着し回答は適用されない", async () => {
+it("書き込み前の registry の tier が pin と違えば、question は観測で決着し回答は適用されず、応答は 200 で観測の印を持つ(ADR 0265 決定7)", async () => {
   const registry = fakeRegistry();
   registry.changeTier.mockRejectedValue(new AgentTierMismatchError("deckhand", "frontier", "standard"));
   const { client, call } = await boardWithRoutingReview(registry);
   try {
     const questionId = await proposeDeckhand(call);
 
-    expect((await answer(questionId, { answers: ["approve"] })).status).toBe(409);
+    const res = await answer(questionId, { answers: ["approve"] });
+    expect(res).toMatchObject({ status: 200, json: { id: questionId, status: "done", settled_by_observation: "routing_proposal_stale" } });
 
-    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null });
+    expect(await task(questionId)).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "routing_proposal_stale" });
     expect((await events(questionId)).filter((e) => e.kind !== "task_registered").map((e) => e.payload)).toEqual([
       { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "registry", changed: ["agent_tier"], observed_event_id: null },
     ]);

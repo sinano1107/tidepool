@@ -39,6 +39,15 @@ export interface ProviderUsage {
   }>;
 }
 
+/** 観測で閉じた question の印(ADR 0265 決定7): 回答なしで盤面が閉じたときの観測の種類。WebUI の札の文言表がこれで欠けを落とす。 */
+export type SettledByObservation =
+  | "pr_merge_observed"
+  | "pr_close_observed"
+  | "pr_promotion_observed"
+  | "quarantine_released"
+  | "routing_proposal_stale"
+  | "memory_proposal_stale";
+
 export interface QueueTask {
   id: string;
   title: string;
@@ -158,6 +167,7 @@ export interface WireContract {
       needs_comment?: string[];
       /** 自由記述の回答を受けるか —— 固定選択肢の question は false(issue #1309)。 */
       free_text?: boolean;
+      settled_by_observation?: SettledByObservation | null;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
@@ -169,6 +179,7 @@ export interface WireContract {
     blocking?: string | null;
     needs_comment?: string[];
     free_text?: boolean;
+    settled_by_observation?: SettledByObservation | null;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

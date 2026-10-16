@@ -30,7 +30,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, type ExamineeWriter, examineeWrites, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -872,24 +872,29 @@ export async function cancelThroughHumanDoor(
   }
 }
 
+/** 回答の応答: 盤面の行と同じ形に、観測で閉じた印を添える(ADR 0265 決定7)。HTTP と管理 MCP の扉がこれを返す。 */
+function presentAnswered(deps: SubmitAnswerDeps, task: Task) {
+  return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), settled_by_observation: settledByObservation(deps.db, task) };
+}
+
 /** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて
- *  いれば question を observed で決着させて回答を断り、下げ先に行が無い・push できないなら question は open のまま回答を断る。
+ *  いれば question を observed で決着させて null を返し、下げ先に行が無い・push できないなら question は open のまま回答を断る。
  *  返り値は着地した commit。 */
-async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposal: RegistryProposal, to: Tier, now: () => Date): Promise<string> {
+async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposal: RegistryProposal, to: Tier, now: () => Date): Promise<string | null> {
   const { list, changeTier } = deps.agentAdmin ?? {};
   if (!list || !changeTier) throw new DomainError("no registry configured — cannot change the agent's tier");
-  const stale = (changed: ["rows"] | ["agent_tier"]) => {
+  const stale = () => {
     settleQuestionAsObserved(
       deps.db,
       questionId,
-      { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "registry", changed, observed_event_id: null },
+      { kind: "routing_proposal_stale", question_id: questionId, proposal_kind: "registry", changed: ["agent_tier"], observed_event_id: null },
       now(),
     );
-    return new DomainError(`the proposal's premise no longer holds (${changed.join(", ")} changed), so the board settled the question as observed`);
+    return null;
   };
   // 根拠の行の pin は表の書き口の hook が決着させる(ADR 0150 決定1)ので、ここで照合するのは registry 側だけ
   const agent = list().find((a) => a.name === proposal.agent);
-  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) throw stale(["agent_tier"]);
+  if (registryPinChanges(proposal, agent, liveTierRows(deps.db)).length) return stale();
   const assertLandable = (providers: string[]) => assertTierRunnableFor(deps.db, proposal.agent, providers, to);
   assertLandable(agentViewProviders(agent!));
   try {
@@ -901,7 +906,7 @@ async function landAgentTier(deps: SubmitAnswerDeps, questionId: string, proposa
       message: `lower agent ${proposal.agent}'s tier to ${to} (question ${questionId})`,
     });
   } catch (err) {
-    if (err instanceof AgentTierMismatchError) throw stale(["agent_tier"]);
+    if (err instanceof AgentTierMismatchError) return stale();
     if (err instanceof RegistryPushFailedError || err instanceof RegistryFetchFailedError) throw new DomainError(err.message);
     throw err;
   }
@@ -937,7 +942,7 @@ export async function submitAnswer(
   origin: EventOrigin,
   openTriage = false,
   amendment?: unknown,
-): Promise<BoardTask> {
+): Promise<ReturnType<typeof presentAnswered>> {
   // 空・空白だけの comment は「comment なし」に畳む(issue #1310)。空白でない comment は手を加えない。以降はこの値だけを見る
   if (comment === undefined || whyBlank(comment)) comment = undefined;
   // Every special-case side effect below must come after this validation.
@@ -1007,9 +1012,7 @@ export async function submitAnswer(
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。workspace が引けない・
         // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
-        if (await deps.landing.observePullRequestOutcome(task)) {
-          return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
-        }
+        if (await deps.landing.observePullRequestOutcome(task)) return presentAnswered(deps, task);
         if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
           const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
           assertLandingAllowed(deps.db, landingTaskId);
@@ -1101,7 +1104,10 @@ export async function submitAnswer(
         // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
         if (proposal?.kind === "registry" && answers[0] === "approve") {
           tierTarget = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
-          registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
+          const commit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
+          // 前提が崩れていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
+          if (commit === null) return presentAnswered(deps, task);
+          registryCommit = commit;
         }
         break;
       case "escalation":
@@ -1203,7 +1209,7 @@ export async function submitAnswer(
     // 受理された回答は常に poll を撃つ —— 何が pickable になったかの判定は poll の1点で行い、契機の側は判定しない
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
     if (!session) deps.pollNow();
-    return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
+    return presentAnswered(deps, task);
   } finally {
     release?.();
   }

@@ -126,12 +126,15 @@ it("answering a merge-decision question with \"merge\" while CI is green perform
     answers: ["merge"],
   });
   expect(answered.status).toBe(200);
+  expect(answered.json.settled_by_observation).toBeNull();
 
   expect(t.github.merged).toEqual([{ path: ws.path, number: 1 }]);
 
   const answeredQuestion = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(answeredQuestion.status).toBe("done");
   expect(answeredQuestion.question_answer).toEqual(["merge"]);
+  // 人間が答えた question は観測で閉じたものではない
+  expect(answeredQuestion.settled_by_observation).toBeNull();
 });
 
 it("answering \"merge\" while CI is not green is rejected, and the question stays open to retry", async () => {
@@ -209,14 +212,16 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["merge"],
   });
-  // 座礁(DomainError)ではなく、決着として受理される
+  // 座礁(DomainError)ではなく、決着として受理され、応答は行と同じ観測の印を持つ(ADR 0265 決定7)
   expect(answered.status).toBe(200);
+  expect(answered.json).toMatchObject({ id: question.id, status: "done", settled_by_observation: "pr_merge_observed" });
 
   expect(t.github.ciChecks).toEqual([]);
   expect(t.github.merged).toEqual([]);
 
   const settled = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(settled.status).toBe("done");
+  expect(settled.settled_by_observation).toBe("pr_merge_observed");
 });
 
 it("同じ question に「hold」で回答しても観測決着になり、hold は決定として記録されない(ADR 0079 決定3)", async () => {
@@ -243,14 +248,17 @@ const MINUTE = 60 * 1000;
 
 const SCAN = 10 * 60 * 1000;
 
-it("open な merge question の PR が盤面の外で merge されていたら、独自の遅い走査が1 tick 以内に観測決着させる(ADR 0079 決定3)", async () => {
+it.each([
+  ["merge", "scriptMergedOutside", "pr_merge_observed"],
+  ["close", "scriptClosedOutside", "pr_close_observed"],
+] as const)("open な merge question の PR が盤面の外で %s されていたら、独自の遅い走査が1 tick 以内に観測決着させ、行はその観測の印を持つ(ADR 0079 決定3 / ADR 0265 決定7)", async (_, script, mark) => {
   const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
   t = await bootTidepool({
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
   const { question } = await completeUnderEscalate(t, ws.path);
-  t.github.scriptMergedOutside(1);
+  t.github[script](1);
 
   // 60秒面は一切広げない — CI poll の周期では走査は動かない
   await t.clock.advance(MINUTE);
@@ -262,6 +270,7 @@ it("open な merge question の PR が盤面の外で merge されていたら�
   const settled = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(settled.status).toBe("done");
   expect(settled.question_answer).toBeNull();
+  expect(settled.settled_by_observation).toBe(mark);
   expect(t.github.merged).toEqual([]);
 });
 
