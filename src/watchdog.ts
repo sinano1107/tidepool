@@ -273,42 +273,42 @@ export function transcriptFailureHandler(
       payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
       at: deps.clock.now(),
     });
-    const stopped = failAndReclaim(deps, containers, taskId, (task) => [
-      `worker transcript could not be written: ${task.title}`,
-      `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
-        `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
-    ]);
-    if (stopped) {
-      registerQuarantine(
-        deps.db,
-        "recordContainer",
-        null,
-        `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
-          "That session was force-reclaimed and has its own failure question",
-        deps.clock.now(),
-      );
-    }
+    failAndReclaim(
+      deps,
+      containers,
+      taskId,
+      (task) => [
+        `worker transcript could not be written: ${task.title}`,
+        `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
+          `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
+      ],
+      `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
+        "That session was force-reclaimed and has its own failure question",
+    );
   };
 }
 
 /** 盤面が観測した瞬間に失敗を記録して後始末へ入れる(ADR 0118 の型)。記録を回収済み観測の
  *  **前**に置くので、後始末中の status は `todo` になり、経路はエスカレーションの step に
- *  読まれる(ADR 0113 決定3)。止めたら true —— slot の主でない・決着済みの session には何もしない。 */
+ *  読まれる(ADR 0113 決定3)。`haltReason` があれば記録の器の停止も同じ transaction で登録する(ADR 0266 決定4)。 */
 function failAndReclaim(
   deps: TeardownDeps,
   containers: ProcessContainers,
   taskId: string,
   wording: (task: Task) => [title: string, reason: string],
-): boolean {
-  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return false;
+  haltReason?: string,
+): void {
+  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
   const task = getTask(deps.db, taskId);
-  if (task?.status !== "in_progress") return false;
+  if (task?.status !== "in_progress") return;
   const now = deps.clock.now();
-  registerFailureAndMarkTeardown(deps.db, task, ...wording(task), now);
+  deps.db.transaction(() => {
+    registerFailureAndMarkTeardown(deps.db, task, ...wording(task), now);
+    if (haltReason) registerQuarantine(deps.db, "recordContainer", null, haltReason, now);
+  })();
   deps.slot.enterTeardown();
   containers.forceReclaim(taskId);
   void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
-  return true;
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the
