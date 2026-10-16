@@ -61,6 +61,7 @@ import {
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
+  returnToQueueHead,
   type Task,
   type TaskContent,
   unrowedPinChildren,
@@ -72,6 +73,7 @@ import {
   type ProviderUsageObservation,
   reportProviderUsage,
 } from "./throttle.js";
+import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
@@ -459,6 +461,18 @@ export function startScheduler(deps: {
       try {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
+        if (err instanceof RecordContainerError) {
+          // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まり、踏んだ task は失敗にせず先頭へ戻る。
+          // 記録と status の決着を slot の解放より前に1 transaction で(ADR 0184 決定4)。session は無いので回収は無く、
+          // 盤面が止まったので pickup の契機も撃たない
+          const now = clock.now();
+          db.transaction(() => {
+            registerQuarantine(db, "recordContainer", null, `while picking up task ${picked.id}, the board's write for task ${err.taskId} to ${err.path} threw this exception:\n\n${err.reason}`, now);
+            returnToQueueHead(db, picked, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
+          })();
+          slot.release();
+          return;
+        }
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;
       }

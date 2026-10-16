@@ -4096,6 +4096,13 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       "warn",
       "moved to front \u2014 pickup blocked",
       "registry remote is unreachable"
+    ),
+    // ADR 0266 決定3: worker transcript と受験者の答案の写しを置く盤面の状態
+    recordContainer: () => halt(
+      { color: "var(--coral-4)", line: "board record container unwritable \xB7 nothing starts", meta: "see the repair question", taskId: null },
+      "warn",
+      "moved to front \u2014 pickup blocked",
+      "the board's record container cannot be written"
     )
     // 門そのもの (ADR 0133 決定3 / #749 User Story 8): HALT_KINDS に1つ足して
     // ここを更新しないと typecheck が落ちる。これがあるので下の引きに `?.` は要らない

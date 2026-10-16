@@ -1213,11 +1213,11 @@ export function moveTask(
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
  *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
  *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
- *  行の拒否(ADR 0184 決定4)も同じ一撃で、刻む event だけが違う。 */
+ *  行の拒否(ADR 0184 決定4)と盤面の記録の器が書けない pickup(ADR 0266 決定3)も同じ一撃で、刻む event だけが違う。 */
 export function returnToQueueHead(
   db: Db,
   task: Task,
-  payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>,
+  payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>,
   now: Date,
 ): void {
   db.transaction(() => {
@@ -1228,7 +1228,7 @@ export function returnToQueueHead(
 
 /** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
  *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
-export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>, now: Date): void {
+export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>, now: Date): void {
   db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
   appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }

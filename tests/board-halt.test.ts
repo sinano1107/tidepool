@@ -16,7 +16,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     expect(boardHalts(openDb(":memory:"))).toEqual([]);
   });
 
-  it("5つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に並ぶ", () => {
+  it("6つすべてが同時に立っていれば落ちた後始末は containment の直後・レジストリ到達性の前に、記録の器は末尾に並ぶ", () => {
     const db = openDb(":memory:");
     startTriage(db, NOW);
     setPaused(db, true);
@@ -24,6 +24,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
     // ADR 0112 決定1: 両方立ったときに先に直すべきはホスト全体の側である
     quarantineFailedTeardown(db, "task-1", new Error("resolve exploded"), NOW);
     registerQuarantine(db, "registryReachability", null, "origin is unreachable", NOW);
+    registerQuarantine(db, "recordContainer", null, "worker-logs is gone", NOW);
 
     expect(boardHalts(db).map((h: { kind: string }) => h.kind)).toEqual([
       "triage",
@@ -31,6 +32,7 @@ describe("boardHalts は盤面全体の停止を1つの順序つき列挙で答�
       "containment",
       "failedTeardown",
       "registryReachability",
+      "recordContainer",
     ]);
   });
 

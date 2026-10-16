@@ -152,7 +152,7 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
 }
 
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
- *  registryReachability)で、資源単位の種類がその後に続く。 */
+ *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,
@@ -200,6 +200,20 @@ export const QUARANTINES = [
         "a repair note. If the board's GitHub login was revoked or is missing, run " +
         "`npm run github-login` on the board host first.",
       completion_criteria: "the registry remote main is reachable again",
+    }),
+  },
+  {
+    kind: "recordContainer" satisfies HaltKind,
+    scope: "board",
+    // 断言するのは、どの task の・どの path への書き込みが・どの例外で落ちたか(reason)だけで、原因の所在は言わない(ADR 0266 決定3)
+    prose: (_value: string | null, reason: string): QuarantineProse => ({
+      title: "the board's record container cannot be written — pickup is stopped",
+      purpose:
+        `${reason}\n\n` +
+        "No task is picked up while this stands; the task being picked up was returned to the queue head, not failed. " +
+        "Answering checks the same container by writing a file to that directory and removing it: if the write " +
+        "still fails the answer is refused and this question stays open. Any answer text is kept as a repair note.",
+      completion_criteria: "the board's record container can be written again",
     }),
   },
   {
