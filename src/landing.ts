@@ -4,8 +4,9 @@ import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
-import type { GitHubClient, PrState } from "./github.js";
+import type { GitHubClient, PrStateRead } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import { GITHUB_APP_SLUG } from "./github-login.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
@@ -269,6 +270,12 @@ interface LandingRoot {
 /** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
 const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
 
+/** 読んだ PR の決着の綴り(ADR 0265 決定5): 盤面自身の名義の merge は執行(`pr_merged`)—— merge の後・記録の前に落ちた
+ *  盤面の merge —— で、それ以外は観測。名義は `gh pr view --json mergedBy` の login で、App は `app/<slug>`(#2079 で実測)。 */
+function prOutcomeKind(state: keyof typeof OBSERVED, mergedBy: string | null) {
+  return state === "MERGED" && mergedBy === `app/${GITHUB_APP_SLUG}` ? "pr_merged" : OBSERVED[state];
+}
+
 /** 根の PR の決着(ADR 0265 決定2): merge されたか閉じられたか、盤面の執行(`pr_merged`)か観測か。決着していなければ null。
  *  決着はどの経路でも PR を開いた根の id に刻まれる(決定1)ので、根の記録だけを読む。読み手はすべてこれを通る。 */
 export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOSED"; observed: boolean; prNumber: number } | null {
@@ -472,7 +479,8 @@ export function recordPrPromotionAbandoned(
 }
 
 /** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
- *  already merged or closed outside the board. Deliberately not `answerQuestion`:
+ *  already merged or closed outside the board — or merged under the board's own name with the answer's record lost
+ *  (ADR 0265 決定5), `kind` then being `pr_merged`. Deliberately not `answerQuestion`:
  *  nobody decided anything, so there is no `question_answered` event, no
  *  recorded option, and no recommendation-acceptance statistic — a "hold"
  *  submitted against an already-merged PR must never read back as a hold
@@ -483,13 +491,13 @@ function settleMergeQuestionAsObserved(
   db: Db,
   question: Pick<Task, "id" | "workspace">,
   prNumber: number,
-  state: keyof typeof OBSERVED,
+  kind: ReturnType<typeof prOutcomeKind>,
   now: Date,
 ): void {
   // ADR 0265 決定1: 観測は PR を開いた根に1回だけ刻み(収束が先に刻んでいれば重ねない)、question は回答なしの done で閉じる
   const root = taskIdForPr(db, prNumber, question.workspace);
   const recordOn = rootPrOutcome(db, root) === null ? root : null;
-  settleQuestionAsObserved(db, question.id, { kind: OBSERVED[state], pr_number: prNumber }, now, recordOn);
+  settleQuestionAsObserved(db, question.id, { kind, pr_number: prNumber }, now, recordOn);
 }
 
 /** 収束が着地を成立させたら、同じタスクを指す PR 昇格失敗の question はもう誰にも訊く
@@ -913,12 +921,13 @@ export function createLanding(deps: LandingDeps): Landing {
         boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
       };
       if (task.pr_number !== null) {
-        const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
-        // 盤面の外で決着した PR は観測として1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。
+        const { state, mergedBy } = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
+        // 決着した PR は1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。盤面の外の決着は観測、落ちた盤面
+        // 自身の merge は執行(ADR 0265 決定5)。
         // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
         // 根へ刻んだ観測を重ねない(ADR 0236 決定3)
         if (state !== "OPEN" && !isMarked(task.workspace, task.pr_number) && rootPrOutcome(deps.db, task.id) === null) {
-          retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
+          retireAutoMerge(deps.db, task.id, { kind: prOutcomeKind(state, mergedBy), pr_number: task.pr_number }, deps.clock.now());
         }
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
@@ -1057,16 +1066,17 @@ export function createLanding(deps: LandingDeps): Landing {
       if (prNumber === null || !resolve || !deps.github) return false;
       // ADR 0265 決定4: 読めなければ回答を拒む(「観測しなかった」に倒すと merge 済みの PR への hold が残る)。
       // 決着の書き込みの失敗も呼び手(回答)へ投げる
-      let state: PrState;
+      let read: PrStateRead;
       try {
-        state = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
+        read = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
+      const { state, mergedBy } = read;
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
-      settleMergeQuestionAsObserved(deps.db, question, prNumber, state, deps.clock.now());
+      settleMergeQuestionAsObserved(deps.db, question, prNumber, prOutcomeKind(state, mergedBy), deps.clock.now());
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
@@ -1079,16 +1089,17 @@ export function createLanding(deps: LandingDeps): Landing {
       for (const { task_id, pr_number } of listPendingAutoMerges(deps.db)) {
         const task = getTask(deps.db, task_id);
         if (task?.type !== "work" || (task.assignee ?? deps.defaultAgentName) !== agentName) continue;
-        let state: PrState;
+        let read: PrStateRead;
         try {
-          state = await github.getPullRequestState({ path: resolve(task.workspace).path, number: pr_number });
+          read = await github.getPullRequestState({ path: resolve(task.workspace).path, number: pr_number });
         } catch {
           continue;
         }
+        const { state, mergedBy } = read;
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
         // 執行側が書く(ADR 0236 決定3)。キューの確認は、quarantine 回答が重なったときの観測同士の競合を防ぐ
         if (state === "OPEN" || isMarked(task.workspace, pr_number) || !isQueuedForAutoMerge(deps.db, task_id)) continue;
-        retireAutoMerge(deps.db, task_id, { kind: OBSERVED[state], pr_number }, deps.clock.now());
+        retireAutoMerge(deps.db, task_id, { kind: prOutcomeKind(state, mergedBy), pr_number }, deps.clock.now());
       }
     },
     async tick(kind, now) {
@@ -1103,12 +1114,12 @@ export function createLanding(deps: LandingDeps): Landing {
             const workspace = resolveOrQuarantine(deps.db, resolve, taskWorkspace, now);
             if (!workspace) continue;
             // 状態が読めない(網・認証)回は黙って次の tick へ回す —— 瞬断のたびにログを出さない
-            const state = await github
+            const read = await github
               .getPullRequestState({ path: workspace.path, number: pr_number })
               .catch(() => null);
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
-            if (state && state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
-              settleMergeQuestionAsObserved(deps.db, { id, workspace: taskWorkspace }, pr_number, state, now);
+            if (read && read.state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
+              settleMergeQuestionAsObserved(deps.db, { id, workspace: taskWorkspace }, pr_number, prOutcomeKind(read.state, read.mergedBy), now);
             }
           } catch (error) {
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む
@@ -1147,7 +1158,7 @@ export function createLanding(deps: LandingDeps): Landing {
           // 状態は CI と同じ読み取りで、行為の前に読む(ADR 0229 決定2)。閉じた PR は CI の色に依らず観測になる
           const pr = await github.readPullRequest(ref);
           if (pr.state === "MERGED" || pr.state === "CLOSED") {
-            retireAutoMerge(deps.db, task_id, { kind: OBSERVED[pr.state], pr_number }, now);
+            retireAutoMerge(deps.db, task_id, { kind: prOutcomeKind(pr.state, pr.mergedBy), pr_number }, now);
             continue;
           }
           // 状態が読めなければ、面が変わっていてもキューに残す(ADR 0238 決定3)
@@ -1206,7 +1217,7 @@ export function createLanding(deps: LandingDeps): Landing {
               throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
             }
             if (after.state !== "OPEN") {
-              retireAutoMerge(deps.db, task_id, { kind: OBSERVED[after.state], pr_number }, now);
+              retireAutoMerge(deps.db, task_id, { kind: prOutcomeKind(after.state, after.mergedBy), pr_number }, now);
               continue;
             }
             observePrHead(deps.db, task_id, pr_number, after.head, now);
