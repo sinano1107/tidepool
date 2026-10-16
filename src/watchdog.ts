@@ -144,10 +144,10 @@ export function registerFailureQuestion(
   );
 }
 
-/** failure question と後始末の印を同じ transaction で書く(issue #1935)—— 間で落ちると後始末の印の
+/** failure question と後始末の印を同じ transaction で書く(issue #1935 / 起動時の再起動中断の掃き出しは #1936)—— 間で落ちると後始末の印の
  *  無い todo が残り、起動時の中断の掃き出しにも復旧にも拾われず、tree rule の走らない workspace へ
  *  次の pickup が入る。 */
-function registerFailureAndMarkTeardown(
+export function registerFailureAndMarkTeardown(
   db: Db,
   task: Task,
   title: string,

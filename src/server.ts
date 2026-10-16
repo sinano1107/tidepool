@@ -57,7 +57,7 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
+import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
@@ -65,7 +65,7 @@ import {
   capInterruptionHandler,
   type PendingReclaim,
   RECLAIM_TIMEOUT,
-  registerFailureQuestion,
+  registerFailureAndMarkTeardown,
   rowRefusalHandler,
   spawnFailureHandler,
   startWatchdog,
@@ -392,21 +392,15 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     .get() as { id: string } | undefined;
   if (interrupted) {
     const task = getTask(db, interrupted.id)!;
-    const now = options.clock.now();
-    // 同じ transaction に置く —— 間で落ちると、status は決着したのに印の無い session が残り、
-    // どの門も tree rule を走らせない
-    db.transaction(() => {
-      // 「restart never drains gracefully」は ADR 0001
-      registerFailureQuestion(
-        db,
-        task,
-        `restart interrupted task: ${task.title}`,
-        "the server restarted while this task was in progress; no self-report is " +
-          "possible (a restart never drains gracefully).",
-        now,
-      );
-      markTeardown(db, task.id, now);
-    })();
+    // 「restart never drains gracefully」は ADR 0001
+    registerFailureAndMarkTeardown(
+      db,
+      task,
+      `restart interrupted task: ${task.title}`,
+      "the server restarted while this task was in progress; no self-report is " +
+        "possible (a restart never drains gracefully).",
+      options.clock.now(),
+    );
   }
   // issue #382: sparse-checkout survives a board crash while the in-memory
   // reclamation callback does not. Only restore after the container preflight
