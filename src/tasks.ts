@@ -1266,13 +1266,15 @@ export function escalateTask(
   origin: EventOrigin,
 ): Task {
   let question: Task;
+  // 受験者の failure と escalation の答えとコメントはその対象にだけ届く、と人間に言う(ADR 0263 決定9)。前提の破綻は自分の文を持つ
+  const onlyThisTarget = parent.interview_target_id !== null && input.question_kind?.kind !== "premise_breach";
   db.transaction(() => {
     question = registerTask(
       db,
       {
         type: "question",
         title: input.questions[0]!.title,
-        purpose: input.context,
+        purpose: onlyThisTarget ? `${input.context}${EXAMINEE_ONLY_THIS_TARGET}` : input.context,
         completion_criteria: "a human answer is recorded",
         parent_id: parent.id,
         question: input.questions,
@@ -1941,7 +1943,9 @@ export function declarePremiseBreach(
           `${reason}\n\n` +
           (posed ? `The posed probe: ${posed.probe}\nIts rubric: ${posed.rubric}\n\n` : "") +
           `"continue" keeps the decomposition decision and resumes this task. ` +
-          abandonConsequence(db, task, true),
+          abandonConsequence(db, task, true) +
+          // continue のコメントは宣言者にも届けない(ADR 0263 決定8)。この purpose ごと受験者の history から伏せる
+          (interview ? ` A comment given with "continue" does not reach this target; to fix the probe, answer "retry".` : ""),
         questions: [
           {
             title: `premise breach: ${task.title}`,
@@ -2038,6 +2042,8 @@ function resolvePremiseBreach(
 }
 
 const INTERVIEW_FAILURE_END_CONSEQUENCE = "If no other target of this Interview is done or still unsettled, the Interview ends too.";
+/** 受験者の failure と escalation の question の context の末尾に盤面が足す、人間だけが読む文(ADR 0263 決定9)。受験者の history は外す。 */
+const EXAMINEE_ONLY_THIS_TARGET = "\n\nThe answer and comment reach only this target of the Interview.";
 
 /** Canonical English abandon consequence baked into failure questions
  *  (ADR 0015 / 0048) and breach questions (ADR 0121, `breach`). It states the decision-discard
@@ -3501,7 +3507,8 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
  *  子を持つ decision は子1件ごとに `{ decision, children: [子] }` の行になり、`id` はその子の登録 event。子の無い decision・完了・
  *  分解外の子・retry が登録した Interview の root の `retry_of`(ADR 0248 決定3)は1行で、`id` はそれぞれの event。`readingChildId` は親の
  *  history を読む子: その子に `you` を付ける(受験者から見える親は examineeParent がこれから組む)。Interview の pin の子
- *  自身の history は、前提の破綻の question の purpose(context)を載せず、failure question は Interview の帰結の一文だけを外す(ADR 0253 決定2 / issue #1932)。 */
+ *  自身の history は、前提の破綻の question の purpose(context)と continue のコメントを載せず(ADR 0263 決定8)、failure と escalation の
+ *  question は盤面が人間に足した「この対象にだけ届く」と failure の Interview の帰結の一文だけを外す(ADR 0253 決定2 / issue #1932 / ADR 0263 決定9)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
     decision: string;
@@ -3541,11 +3548,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       title: child.title,
       // pin の子の前提の破綻の question の context は rubric と Interview の帰結を持つので、宣言者には答えだけを見せる
       // (ADR 0253 決定2 / ADR 0245 決定2)。人間は question の context を読む(ADR 0248 決定4)
-      ...(!(pinChild && child.question_breached_decision !== null) && {
-        purpose: pinChild && child.question_cancel_option !== null && child.purpose.endsWith(` ${INTERVIEW_FAILURE_END_CONSEQUENCE}`)
-          ? child.purpose.slice(0, -INTERVIEW_FAILURE_END_CONSEQUENCE.length - 1)
-          : child.purpose,
-      }),
+      ...(!(pinChild && child.question_breached_decision !== null) && { purpose: pinChild ? examineePurpose(child) : child.purpose }),
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
@@ -3559,7 +3562,8 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
         ? {
             items: child.question_items ?? [],
             answer: child.question_answer,
-            comment: child.question_answer_comment,
+            // 前提の破綻への continue のコメントは probe の補足なので受験者に届けない(ADR 0263 決定8)
+            comment: pinChild && child.question_breached_decision !== null ? null : child.question_answer_comment,
           }
         : {}),
       ...(child.status === "cancelled" ? cancelOrigin(db, child.id) : {}),
@@ -3600,6 +3604,14 @@ export function examineeParent(db: Db, reader: Task) {
     return [{ ...row, entry: { decision: "Registered one child to do this task.", children: [child] } }];
   });
   return { context: { id: rootId, title, purpose: probe, completion_criteria, handoff_doc: null }, rows };
+}
+
+/** 受験者が読む自分の question の purpose: 盤面が人間に足した文(この対象にだけ届く、failure の Interview の帰結)だけを末尾から外す。 */
+function examineePurpose({ purpose, question_cancel_option }: Task): string {
+  if (purpose.endsWith(EXAMINEE_ONLY_THIS_TARGET)) purpose = purpose.slice(0, -EXAMINEE_ONLY_THIS_TARGET.length);
+  return question_cancel_option !== null && purpose.endsWith(` ${INTERVIEW_FAILURE_END_CONSEQUENCE}`)
+    ? purpose.slice(0, -INTERVIEW_FAILURE_END_CONSEQUENCE.length - 1)
+    : purpose;
 }
 
 /** A cancelled task's `task_cancelled` event names the abandon question that
