@@ -15,7 +15,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
-import { countTasksAwaitingLanding, createLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { countTasksAwaitingLanding, createLanding, type LandingDeps, registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
@@ -964,7 +964,7 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
 });
 
 /** escalate の PR #42 の merge question と、本物の Landing を通して `answer` と答える手。 */
-function answerEscalatedMergeQuestion(github: FakeGitHubClient, resolveWorkspace?: () => never) {
+function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?: LandingDeps["resolveWorkspace"]) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -984,7 +984,7 @@ function answerEscalatedMergeQuestion(github: FakeGitHubClient, resolveWorkspace
 it.each(["merge", "hold"])("盤面の外で merge された PR の観測の書き込みが失敗したら、「%s」の回答は拒まれ question は開いたまま残る", async (value) => {
   const github = new FakeGitHubClient();
   github.scriptMergedOutside(42);
-  const { question, answer } = answerEscalatedMergeQuestion(github);
+  const { question, answer } = escalatedMergeQuestionWith(github);
   db.exec(
     "CREATE TRIGGER fail_observed BEFORE INSERT ON events WHEN NEW.kind = 'pr_merge_observed' BEGIN SELECT RAISE(ABORT, 'observed write failed'); END",
   );
@@ -1000,10 +1000,10 @@ it.each([
   ["PR の状態が読めない", () => {
     const github = new FakeGitHubClient();
     github.scriptStateReadFailure(42, new Error("gh: network unreachable"));
-    return answerEscalatedMergeQuestion(github);
+    return escalatedMergeQuestionWith(github);
   }],
   ["workspace が引けない", () =>
-    answerEscalatedMergeQuestion(new FakeGitHubClient(), () => {
+    escalatedMergeQuestionWith(new FakeGitHubClient(), () => {
       throw new Error("workspace gone");
     })],
 ])("%s merge question への「hold」は、今日どおり回答として記録される", async (_, setup) => {
@@ -1016,7 +1016,7 @@ it.each([
 /** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
 function escalatedMergeQuestion() {
   const github = new FakeGitHubClient();
-  const { question, landing, answer } = answerEscalatedMergeQuestion(github);
+  const { question, landing, answer } = escalatedMergeQuestionWith(github);
   return { question, github, landing, answer: () => answer("merge") };
 }
 
