@@ -2,68 +2,62 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
-import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
-import { Slot } from "../src/slot.js";
-import { answerQuestion, getTask, listBoard, pickupTask, registerTask } from "../src/tasks.js";
+import { pickupTask, registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { failTask } from "../src/watchdog.js";
 import { ensureTaskBranch } from "../src/workspace.js";
-import { FakeClock, FakeContainerRuntime, fakeContainers, noRetrospectiveCalls, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
-import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, TEST_CREDENTIAL } from "./harness.js";
+import { FakeClock, FakeContainerRuntime, pinnedCliVersions, ScriptedWorker } from "./fakes.js";
+import {
+  api,
+  bootTidepool,
+  defaultingTo,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  git,
+  HOUR,
+  HUMAN_WEBUI,
+  makeWorkspace,
+  questions,
+  queueWork,
+  TEST_CREDENTIAL,
+  type Tidepool,
+} from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let server: TidepoolServer | undefined;
+let t: Tidepool | undefined;
 afterEach(async () => {
   await server?.stop();
   server = undefined;
+  await t?.stop();
+  t = undefined;
 });
 
 // ADR 0233: 既定への参照は pickup で終わる —— retry の再 pickup も最初の pickup で解決した先に従う
-it("既定 workspace a・既定 agent a で pickup したタスクは、再起動の中断を retry すると、既定を b に差し替えた scheduler でも a・a のまま再 pickup され、a の既存のタスクブランチを checkout する", async () => {
+it("既定 workspace a・既定 agent a で pickup したタスクは、再起動の中断を retry すると、既定を b に差し替えた盤面でも a・a のまま再 pickup され、a の既存のタスクブランチを checkout する", async () => {
   const a = await makeWorkspace("retry-pinned-a");
   const b = await makeWorkspace("retry-pinned-b");
-  const db = openDb(":memory:");
-  const clock = new FakeClock();
-  const schedulerOf = (workspace: typeof a, other: typeof a, worker: ScriptedWorker) =>
-    startScheduler({
-      retrospectiveCalls: noRetrospectiveCalls,
-      converge: async () => [],
-      db,
-      clock,
-      slot: new Slot(),
-      worker,
-      containers: fakeContainers(),
-      onSpawnFailed: () => {},
-      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
-      workspace,
-      resolveWorkspace: defaultingTo(workspace, other),
-    });
-  const first = schedulerOf(a, b, new ScriptedWorker(clock, "a"));
-  const task = registerTask(db, { type: "work", title: "unspecified work", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
-  await clock.advance(HOURLY);
+  t = await bootTidepool({ workspace: a, resolveWorkspace: defaultingTo(a, b), workerId: "a" });
+  const task = queueWork(t, "unspecified work");
+  await t.clock.advance(HOUR);
   writeFileSync(join(a.path, "stuck.txt"), "interrupted mid-write\n");
-  first.stop();
+  await t.stopServer();
 
-  // 再起動の中断(server.ts の起動時の failTask)は、差し替えた既定 b の resolver で走る
-  failTask(db, getTask(db, task.id)!, "restart interrupted task", "the server restarted", defaultingTo(b, a), clock.now());
-  const failure = listBoard(db).find((x) => x.type === "question" && x.parent_id === task.id)!;
-  answerQuestion(db, getTask(db, failure.id)!, ["retry"], clock.now(), undefined, undefined, undefined, "webui");
-  const worker = new ScriptedWorker(clock, "b");
-  const second = schedulerOf(b, a, worker);
-  await clock.advance(HOURLY);
+  // 再起動の中断(起動時の掃き出し)は、差し替えた既定 b の盤面で走る
+  t = await bootTidepool({ dir: t.dir, workspace: b, resolveWorkspace: defaultingTo(b, a), workerId: "b" });
+  const failure = (await questions(t)).find((q) => q.parent_id === task.id)!;
+  await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
+  await t.clock.advance(HOUR);
 
-  expect(worker.started.map(({ id, workspace, assignee }) => ({ id, workspace, assignee }))).toEqual([
+  expect(t.worker.started.map(({ id, workspace, assignee }) => ({ id, workspace, assignee }))).toEqual([
     { id: task.id, workspace: a.name, assignee: "a" },
   ]);
   expect(git(a.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
   expect(git(a.path, "log", "--format=%s", "HEAD")).toContain(`WIP: task ${task.id}`);
   expect(git(b.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(b.path, "branch", "--list", `task/${task.id}`)).toBe("");
-  second.stop();
 });
 
 describe("restart 割り込みの failTask が task.workspace を解決する", () => {
@@ -115,4 +109,20 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
     );
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   });
+});
+
+it("再起動中断の WIP 退避は、sandbox の影の .bashrc をタスクブランチに載せない", async () => {
+  const ws = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace: ws });
+  const task = queueWork(t, "interrupted by restart");
+  await t.clock.advance(HOUR);
+  writeFileSync(join(ws.path, "stuck.txt"), "stuck work\n");
+  writeFileSync(join(ws.path, ".bashrc"), "");
+  await t.stopServer();
+
+  t = await bootTidepool({ dir: t.dir, workspace: ws });
+
+  const taskFiles = git(ws.path, "ls-tree", "-r", "--name-only", `task/${task.id}`).split("\n");
+  expect(taskFiles).toContain("stuck.txt");
+  expect(taskFiles).not.toContain(".bashrc");
 });

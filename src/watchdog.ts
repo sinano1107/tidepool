@@ -12,7 +12,6 @@ import {
   markTeardown,
   resumeUnfinishedTeardown,
   runTeardown,
-  runTreeRule,
   sessionInTeardown,
   type TeardownDeps,
   teardownStep,
@@ -116,29 +115,9 @@ function exitSections(exit: WorkerExit | undefined): string {
 
 /** The failure escalation: a question child in tidepool's own name (the agent
  *  could not self-report), with a standing "retry" option — answering it runs
- *  through the ordinary unblock-to-head path, same as any other escalation. */
-export function failTask(
-  db: Db,
-  task: Task,
-  title: string,
-  reason: string,
-  /** Resolves the failed task's own execution workspace against the registry
-   *  (issue #26 / ADR 0009). Build with `buildWorkspaceResolver` — absent
-   *  means no workspace tracking at all (a workspaceless caller). */
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
-  now: Date,
-): void {
-  // the failure question registers first, mirroring an agent's own escalate
-  // call; the tree rule runs after, same order as every releasing MCP verb —
-  // a tree-rule failure adds its own quarantine question on top, it never
-  // replaces the failure question
-  registerFailureQuestion(db, task, title, reason, now);
-  runTreeRule(db, resolve, task, now);
-}
-
-/** failure question そのもの。後始末の型を通る watchdog 経路は tree rule を
- *  `runTeardown` 側に任せるので、記録だけを撃つこちらを使う。 */
-function registerFailureQuestion(
+ *  through the ordinary unblock-to-head path, same as any other escalation.
+ *  記録だけを撃つ —— tree rule はどの呼び手でも後始末(`runTeardown`)が走らせる。 */
+export function registerFailureQuestion(
   db: Db,
   task: Task,
   title: string,
@@ -171,7 +150,7 @@ function registerFailureQuestion(
  *
  *  通る型は通常完了・watchdog の強制回収と同じ後始末(`runTeardown`)であり、違いは
  *  failure question を立てないことだけである: リトライ判断が存在しない以上、問いに
- *  判断価値が無い(ADR 0007 の理路)。同じ理由で `failTask` を通さず、失敗統計も汚さない。
+ *  判断価値が無い(ADR 0007 の理路)。同じ理由で `registerFailureQuestion` を通さず、失敗統計も汚さない。
  *
  *  slot と status の門は後始末モジュールが持つ: 回収済み観測は非同期に届くので、その間に
  *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の slot を

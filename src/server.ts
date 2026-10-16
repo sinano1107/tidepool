@@ -57,15 +57,15 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
 import { getTask, type TaskType } from "./tasks.js";
-import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
+import { acceptTeardownQuarantine, markTeardown, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import {
   capInterruptionHandler,
-  failTask,
   type PendingReclaim,
   RECLAIM_TIMEOUT,
+  registerFailureQuestion,
   rowRefusalHandler,
   spawnFailureHandler,
   startWatchdog,
@@ -384,22 +384,29 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // ゲートと、回答時の検証つき解除のために運ばれる。
   // a restart interrupts any running task (ADR 0001): it drops into the same
   // failure-escalation path as a watchdog kill, so the slot never wedges past
-  // a restart (#9) — no graceful-drain machinery exists or is needed
+  // a restart (#9) — no graceful-drain machinery exists or is needed.
+  // 失敗の記録の瞬間に後始末へ入る(ADR 0254 決定1)。tree rule はここでは撃たない —— 前提検査が
+  // 通った起動ではこの下の起動時の復旧が、通らなかった起動では確認回答の受理が走らせる(ADR 0109 決定5)
   const interrupted = db
     .prepare("SELECT id FROM tasks WHERE status = 'in_progress' AND teardown_started_at IS NULL")
     .get() as { id: string } | undefined;
   if (interrupted) {
     const task = getTask(db, interrupted.id)!;
-    // 「restart never drains gracefully」は ADR 0001
-    failTask(
-      db,
-      task,
-      `restart interrupted task: ${task.title}`,
-      "the server restarted while this task was in progress; no self-report is " +
-        "possible (a restart never drains gracefully).",
-      buildWorkspaceResolver(options.resolveWorkspace, options.workspace),
-      options.clock.now(),
-    );
+    const now = options.clock.now();
+    // 同じ transaction に置く —— 間で落ちると、status は決着したのに印の無い session が残り、
+    // どの門も tree rule を走らせない
+    db.transaction(() => {
+      // 「restart never drains gracefully」は ADR 0001
+      registerFailureQuestion(
+        db,
+        task,
+        `restart interrupted task: ${task.title}`,
+        "the server restarted while this task was in progress; no self-report is " +
+          "possible (a restart never drains gracefully).",
+        now,
+      );
+      markTeardown(db, task.id, now);
+    })();
   }
   // issue #382: sparse-checkout survives a board crash while the in-memory
   // reclamation callback does not. Only restore after the container preflight

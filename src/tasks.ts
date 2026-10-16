@@ -1202,7 +1202,7 @@ export function moveTask(
 
 /** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
- *  `failTask` は通らず、question も失敗統計も生まれない —— 再開の門は次の pickup の
+ *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
  *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
  *  行の拒否(ADR 0184 決定4)も同じ一撃で、刻む event だけが違う。 */
 export function returnToQueueHead(

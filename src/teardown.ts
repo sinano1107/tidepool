@@ -211,19 +211,6 @@ async function teardown(
   deps.pollNow();
 }
 
-/** slot-release tree rule の一撃だけ(CONTEXT.md「Slot-release tree rule」)。
- *  slot を触らない呼び手 —— `failTask` —— が使う。resolve が無い盤面では no-op。 */
-export function runTreeRule(
-  db: Db,
-  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
-  task: Task,
-  now: Date,
-): void {
-  if (!resolve) return;
-  const resolved = resolveOrQuarantine(db, resolve, task.workspace, now);
-  if (resolved) releaseWorkspace(db, resolved, task, now);
-}
-
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は
  *  盤面の crash を越えないので、未了は行に持つ。 */
 export function markTeardown(db: Db, taskId: string, now: Date): void {
