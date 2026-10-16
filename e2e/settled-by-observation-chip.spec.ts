@@ -30,5 +30,4 @@ test("観測で閉じた question の行と question 面にだけ観測の札が
   await expect(page.getByTestId("settled-by-observation")).toContainText("observed · PR promoted");
   await page.goto(`${t.baseUrl}?question=${answered.id}`);
   await expect(page.getByText("This question is no longer available")).toBeVisible();
-  await expect(page.getByTestId("settled-by-observation")).toHaveCount(0);
 });

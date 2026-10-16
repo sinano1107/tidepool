@@ -971,7 +971,7 @@ export async function submitAnswer(
 
   let release: (() => void) | null = null;
   let tierTarget: Tier | undefined;
-  let registryCommit: string | undefined;
+  let registryCommit: string | null | undefined;
   // merge の回答が merge した PR の根 —— 決着はここに、回答と同じトランザクションで刻む(ADR 0265 決定1)
   let mergeRecord: { root: string; pr: number } | undefined;
   try {
@@ -1104,10 +1104,9 @@ export async function submitAnswer(
         // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
         if (proposal?.kind === "registry" && answers[0] === "approve") {
           tierTarget = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
-          const commit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
+          registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
           // 前提が崩れていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
-          if (commit === null) return presentAnswered(deps, task);
-          registryCommit = commit;
+          if (registryCommit === null) return presentAnswered(deps, task);
         }
         break;
       case "escalation":
