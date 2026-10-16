@@ -160,7 +160,7 @@ it("continue の後、宣言した pin の子が読む自分の history の破�
 
 it("pin の子の前提の破綻の question の context は、continue のコメントが受験者に届かず、probe を直すなら retry だと人間に言う(ADR 0263 決定8)", () => {
   const { db, failed } = twoPinnedChildren();
-  expect(getTask(db, breachQuestion(db, failed).id)!.purpose).toMatch(/comment given with "continue" does not reach .*"retry"/);
+  expect(getTask(db, breachQuestion(db, failed).id)!.purpose).toMatch(/comment given with "continue" reaches no target .*"retry"/);
 });
 
 const ONLY_THIS_TARGET = /answer and comment reach only this target/;
@@ -191,7 +191,7 @@ it("pin の子が escalate した question の context は、agent の書いた 
   ]);
 });
 
-it("本番の task の failure と escalation の question の context は「この対象にだけ届く」を持たず、history は purpose をそのまま運ぶ", () => {
+it("本番の work の failure と escalation の question の context は「この対象にだけ届く」を持たず、history は purpose をそのまま運ぶ", () => {
   const db = openDb(":memory:");
   const task = registerTask(db, { ...CHILD, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   failTask(db, task, "worker failed", "The worker exceeded its time limit.", undefined, new Date(0));
