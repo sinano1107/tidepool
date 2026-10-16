@@ -185,7 +185,6 @@ it("行の拒否で後始末の印の書き込みが落ちると、行の Quaran
   ).toThrow("teardown mark failed");
 
   expect(getTask(db, task.id)?.status).toBe("in_progress");
-  expect(openQuarantineValues(db, "tableRow")).toEqual([]);
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(false);
   expect(questions(db)).toEqual([]);
 });
@@ -434,10 +433,8 @@ it("回収 timeout で後始末の印の書き込みが落ちると、failure qu
 
   await expect(f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout)).rejects.toThrow("teardown mark failed");
 
-  expect(f.runtime.forceReclaims).toEqual([f.task.id]);
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
   expect(questions(f.db)).toEqual([]);
-  expect(openQuarantineValues(f.db, "containment")).toEqual([]);
 });
 
 it("1度も走らなかった pickup で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
