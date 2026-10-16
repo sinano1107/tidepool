@@ -42,3 +42,8 @@ Auditor の registry エントリに何が残っているかを一つずつ当�
   Episode の「当時の agent 定義の版」欄が言うのは「registry に無い = 盤面の code が定義を持っていた」ことだけである。盤面の版が
   必要になったら、それは `package.json` に版を持たせるという別の決定になる。
 - 専門 agent の本文の存在価値は未観測(唯一の実測は fugu の A/B)— 最初の専門 agent が現れたときの問いとして別 issue に置く。
+
+## 追記(2026-10-16 の grilling、issue #2109 / ADR 0269)
+
+本文を持つ最初の組み込み agent は Interviewer `suzumedai` 🐠(ADR 0269)。機構は決定1・2 のまま(review 専用、profile は reviewer 定数、
+shadow 可)で、役割ポインタは決定4 の2本に `TIDEPOOL_INTERVIEWER` が並ぶ。帰結の「専門 agent の本文の存在価値」(#567)は、これが走れば測れる。

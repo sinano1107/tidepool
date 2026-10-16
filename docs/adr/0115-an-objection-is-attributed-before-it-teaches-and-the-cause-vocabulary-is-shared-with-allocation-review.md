@@ -73,3 +73,8 @@ decision = 推論)に event 種別の例外が入り、同じ帰責 event を出
 決定1 の `environment` は worker の外側の事情(盤面の道具・網・sandbox の故障も上流の変化も)を指す1値で、判断がその時の入力に
 対して妥当だったときだけ付く —— 壁への応じ方自体が異議の対象なら `capability`。決定3 の「`environment` は修理だけ」はそのままだが、
 修理タスクの purpose が帰責の判定(cause と evidence)を運び、持続する盤面側の故障は修理子の escalate で人間に届く(ADR 0213)。
+
+## 追記(2026-10-16 の grilling、issue #2109 / ADR 0268)
+
+決定3 の「commit 時に立つもの」は cause に加えて異議された task で決まる —— 直す成果が盤面に残らない task(cancelled の task、Interview の
+root の出題・採点)には修理子を立てず、帰責と RCA(と起草)だけが立つ。受験者のエントリには異議そのものを受け付けない(ADR 0268 決定1・3)。

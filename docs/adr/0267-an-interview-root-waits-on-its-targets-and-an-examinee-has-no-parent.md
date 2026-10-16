@@ -42,3 +42,9 @@ ADR 0248 決定3、ADR 0251、ADR 0264(視界の「Interview の木」は root �
   置き場が2 task に割れ、「Interview は root review task」(ADR 0111 決定6、ADR 0248 決定3)を書き換える。
 - **受験者を task でない存在にする。** 受験者は worker session の器で、pickup・pin・verb の帰属・event・watchdog・ブランチ・
   handoff・学習器・記憶の視界が全部 task id に掛かる。第2の実体に写し直すことになる。
+
+## 追記(2026-10-16 の grilling、issue #2109 / ADR 0268)
+
+決定1 の「root の下に生えるのは対象であって task ではない」は「対象と付帯子」に改める —— root は本番の review task と同じく、異議由来の
+RCA review と人間が名指しで登録する review 子を受ける(ADR 0268 決定5)。受験者が親を持たない線と、受験者の下には question 以外何も
+生えない線はそのまま。root を走らせる agent は ADR 0269。

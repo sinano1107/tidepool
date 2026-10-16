@@ -30,3 +30,8 @@ CI を読んで merge しうる。ダイヤルも新しい既定 agent の profi
   両者が揃わない。数えの SQL も event との join を要する。
 - **path を pin する(ADR 0009 が退けた案)とは別物である。** 書くのは名前で、path は今も使うたびに registry から解決する
   ので、repo の移設には追従する。
+
+## 追記(2026-10-16 の grilling、issue #2109 / ADR 0269)
+
+決定3 の「review の空の assignee は Auditor ポインタへの参照」に例外が1つ —— Interview の root の空の assignee は Interviewer ポインタ
+`TIDEPOOL_INTERVIEWER`(既定 `suzumedai`)への参照(ADR 0269 決定2)。列を書かない線は同じ。
