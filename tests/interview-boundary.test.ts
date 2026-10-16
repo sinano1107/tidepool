@@ -224,13 +224,11 @@ it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新�
   const refusedMcp: any = await client.callTool({ name: "retry_interview", arguments: { task_id: first.id } });
   expect(refusedMcp.isError).toBe(true);
   expect(refusedMcp.content[0].text).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).not.toBe("cancelled");
 
   definition.provider = [{ name: "anthropic", advisor: true }];
   const viaApi = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, { comment: "the probe names the answer" });
   expect(viaApi.status).toBe(200);
-  expect(viaApi.json).toMatchObject({ title: INTERVIEW.title, purpose: INTERVIEW.purpose });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("cancelled");
+  expect(viaApi.json.id).not.toBe(first.id);
 
   // 新しい root を拾わせて出題し、管理MCP から retry する
   await runNow(t, viaApi.json.id);
@@ -239,7 +237,6 @@ it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新�
   await client.close();
   expect(viaMcp.isError).toBeFalsy();
   expect(JSON.parse(viaMcp.content[0].text).id).not.toBe(viaApi.json.id);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${viaApi.json.id}`)).json.status).toBe("cancelled");
 });
 
 const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };

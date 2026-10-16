@@ -467,6 +467,13 @@ it("出題前の root・Interview でない task・受験者・決着済みの r
   expect(() => retryRoot(db, unposed)).toThrow(/not posed/);
   expect(listBoard(db).map(({ id, status }) => ({ id, status }))).toEqual(before);
   expect(getTask(db, root.id)!.status).toBe("todo");
+
+  // 採点完了で done になった root も決着済み
+  const graded = scoringRoot();
+  const scores = graded.children.map(({ id }) => ({ child_id: id, outcome: "accepted" as const }));
+  completeInterview(graded.db, graded.root, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  expect(() => retryRoot(graded.db, graded.root)).toThrow(DomainError);
+  expect(otherRoots(graded.db, graded.root)).toBe(0);
 });
 
 it("断られた対象の question が開いたまま root を retry すると、新しい root がその対象を持つので question は開いたままで、決着の記録も無い(ADR 0199 追記)", () => {
