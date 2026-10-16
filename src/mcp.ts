@@ -314,7 +314,8 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
   );
 }
 
-/** Verbs that end the slot session (complete, decompose, escalate): run the
+/** Verbs that end the slot session (complete, decompose, escalate, and the other
+ *  releasing verbs registered below): run the
  *  domain verb attributed to the slot worker, then hand the release to the
  *  session's 後始末. Work completion opts into lineage merge-back; every other
  *  release only stashes WIP. A domain error keeps the slot — the session
@@ -333,16 +334,23 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
-  verb: (task: Task, workerId: string, now: Date) => object,
+  verb: (task: Task) => (workerId: string, now: Date) => object,
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
     const workspace = gate ? (resolveTaskWorkspace(deps, task) ?? null) : undefined;
     if (gate && workspace) gate(task, workspace);
-    const result = verb(task, attributedWorkerId(deps, task), deps.clock.now());
+    // `verb(task)` は transaction の外: 拒否でも残す副作用(authority の quarantine)はここに置き、返す記録だけが中で走る
+    const record = verb(task);
     // 後始末に入った(CONTEXT.md「後始末」)。枠を握っているのは task ではなく
     // session であり、この事実は再起動をまたぐので行にも持つ(ADR 0109 決定5)。
-    markTeardown(deps.db, task.id, deps.clock.now());
+    // 記録と印は同じ transaction(issue #2025)—— 間で落ちると印の無い決着済み session が残る。
+    const result = deps.db.transaction(() => {
+      const now = deps.clock.now();
+      const recorded = record(attributedWorkerId(deps, task), now);
+      markTeardown(deps.db, task.id, now);
+      return recorded;
+    })();
     deps.slot.enterTeardown();
     const teardown: TeardownDeps = {
       db: deps.db,
@@ -593,7 +601,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(
           deps,
           attributedTaskId,
-          (task, workerId, now) => {
+          (task) => (workerId, now) => {
             const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
             return { id: done.id, status: done.status };
           },
@@ -643,19 +651,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         },
       },
       async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        runReleasingVerb(deps, attributedTaskId, (task) => {
           assertChildrenKnown(deps, input.children);
-          const children = decomposeTask(
-            deps.db,
-            task,
-            input,
-            workerId,
-            now,
-            attributedAuthorityOrQuarantine(deps, task),
-            deps.isProtectedWorkspace,
-            "worker",
-          );
-          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+          const authority = attributedAuthorityOrQuarantine(deps, task);
+          return (workerId, now) => {
+            const children = decomposeTask(deps.db, task, input, workerId, now, authority, deps.isProtectedWorkspace, "worker");
+            return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+          };
         }),
     );
   }
@@ -684,7 +686,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         return runReleasingVerb(
           deps,
           attributedTaskId,
-          (task, workerId, now) => {
+          (task) => (workerId, now) => {
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
             }
@@ -719,7 +721,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         },
       },
       async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeInterview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
         }),
@@ -740,7 +742,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: { reason: requiredTextSchema, recommendation: z.enum(["abandon", "retry"]) },
       },
       async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const question = reportBrokenProbe(deps.db, task, input, workerId, now, "worker");
           return { question_id: question.id, parent_status: "blocked" };
         }),
@@ -772,7 +774,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
         const question = escalateTask(deps.db, task, input, workerId, now, "worker");
         return { question_id: question.id, parent_status: "blocked" };
       }),
@@ -794,7 +796,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       inputSchema: { reason: requiredTextSchema },
     },
     async ({ reason }) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
         const question = declarePremiseBreach(deps.db, task, reason, workerId, now, "worker");
         return { question_id: question?.id ?? null, status: "held" };
       }),
@@ -813,7 +815,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       inputSchema: { line: requiredTextSchema },
     },
     async ({ line }) =>
-      runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
         continueDecomposition(deps.db, task, line, workerId, now, "worker");
         return { parent_status: "blocked" };
       }),
@@ -832,19 +834,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: { reason: requiredTextSchema, children: decomposeChildrenSchema(deps.db) },
       },
       async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task, workerId, now) => {
+        runReleasingVerb(deps, attributedTaskId, (task) => {
           assertChildrenKnown(deps, input.children);
-          const children = redecompose(
-            deps.db,
-            task,
-            input,
-            workerId,
-            now,
-            attributedAuthorityOrQuarantine(deps, task),
-            deps.isProtectedWorkspace,
-            "worker",
-          );
-          return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+          const authority = attributedAuthorityOrQuarantine(deps, task);
+          return (workerId, now) => {
+            const children = redecompose(deps.db, task, input, workerId, now, authority, deps.isProtectedWorkspace, "worker");
+            return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+          };
         }),
     );
   }

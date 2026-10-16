@@ -17,7 +17,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -122,13 +122,6 @@ async function reclaimTimesOut(f: Fixture): Promise<void> {
 }
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question");
-
-/** 後始末の印の書き込みだけを落とす(issue #1935)—— 記録と印が同じ transaction なら記録も巻き戻る。 */
-const failTeardownMark = (db: Db) =>
-  db.exec(
-    "CREATE TRIGGER fail_teardown_mark BEFORE UPDATE OF teardown_started_at ON tasks " +
-      "BEGIN SELECT RAISE(ABORT, 'teardown mark failed'); END",
-  );
 
 it("cap settlement supersedes an already pending watchdog reclaim callback", async () => {
   const db = openDb(":memory:");
