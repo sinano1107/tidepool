@@ -1,6 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { appendEvent } from "../src/events.js";
-import { settleQuestionAsObserved } from "../src/tasks.js";
 import {
   addTaskChange,
   api,
@@ -282,10 +280,10 @@ it("盤面の名義の merge(根の pr_merged)で回答の記録なしに閉じ�
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { task, question } = await completeUnderEscalate(t, ws.path);
-  // 盤面が merge した直後に落ち、回答の記録だけが失われた形(#1820): 根に執行の記録、question は観測の経路で閉じる
-  appendEvent(t.db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "pr_merged", pr_number: 1 }, at: t.clock.now() });
-  settleQuestionAsObserved(t.db, question.id, { kind: "pr_merge_observed", pr_number: 1 }, t.clock.now(), null);
+  const { question } = await completeUnderEscalate(t, ws.path);
+  // 盤面が merge した直後に落ち、回答の記録だけが失われた形(#1820): GitHub 上は盤面の名義で merge 済み、遅い走査が読む
+  t.github.scriptMergedByBoard(1);
+  await t.clock.advance(SCAN);
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
     status: "done",
