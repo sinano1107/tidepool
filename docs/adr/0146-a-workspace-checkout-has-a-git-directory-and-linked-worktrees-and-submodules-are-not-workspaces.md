@@ -14,3 +14,10 @@ issue #866 の grilling(2026-09-22)で決定。#849(PR #865)が Codex work worke
 - **`permissionConfig()` で `.git` がディレクトリのときだけ3行を出す** —— sandbox は立つが git は動かず、失敗が spawn 時から worker の実行時(escalate → question)へ後退する。登録の門も preflight も黙って通す。床の形(hooks / config の read)がファイル状態で変わるのも ADR 0013 の「床はデータの状態に依存しない」から外れる。guard が守るのは「非 git のコマンドは走る」だけで、linked worktree で git 抜きの task を流す場面は未観測。
 - **registry のロード(`assertValidWorkspaces`)で拒む** —— registry の検証は宣言だけを見て clone を覗かない(ADR 0052 決定3)。checkout の性質は pickup の quarantine が受ける場所である。
 - **`.git` がファイルで gitdir が checkout 内にある形を許す** —— `git init --separate-git-dir` を checkout の中に向けて手で作る以外に生まれず、ニーズは無い。
+
+## 追記: 部分ディレクトリも workspace にならない(2026-10-16、issue #1964)
+
+決定1 の「`.git` が無い checkout は git 側の失敗で pickup に落ちる」は、どの repo にも属さないパスにしか当たらなかった。親 repo の部分ディレクトリ(自分の `.git` を持たない)では git が親 repo を見つけて成功するので、登録は通り、pickup のブランチ操作・tree rule・merge back が親 repo 全体に効く(Lima で実測: 親の HEAD が `task/<id>` に切り替わり、sandbox は `sub/` で止まるので worker は commit できない)。測定は #1964 に置く。
+
+- **3つの門は部分ディレクトリも拒む。** `.git` が無く、かつ git がそのパスを外側の repo の作業ツリーとして解決するとき、登録は拒否(同意しても動かないので #383 の提示ではない)、pickup は git 操作の前に quarantine、修理確認は受理しない。理由は linked worktree・submodule とは別の文で「自分の `.git` を持たない(別の repo の部分ディレクトリ)」と言う。
+- **決定3 の線は保つ。** 拒む形は「`.git` が無い」という stat の形で、git は部分ディレクトリか、どの repo にも属さないパスかを分けるためだけに呼ぶ。後者は今日どおり —— 登録は「git リポジトリでない」、修理確認は「使える git リポジトリでない」で落ちる。作業ツリーを持たない bare repo も `--show-toplevel` が失敗するのでこの門を素通りし、今日の扱いのまま(登録は `worktree_unreadable` の信号の提示)。

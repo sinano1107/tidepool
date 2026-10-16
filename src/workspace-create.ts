@@ -26,7 +26,7 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
-  assertGitDirIsDirectory,
+  assertOwnGitDirectory,
   conventionCheckoutPath,
   entryCheckoutPath,
   originUrl,
@@ -722,7 +722,7 @@ export class LiveCheckoutSignalsError extends Error {
 function registerExistingCheckout(path: string): WorkspaceEntry {
   // ADR 0146: rev-parse より前 —— gitdir の指し先が無ければ rev-parse が先に落ち、
   // 「git リポジトリでない」という違う理由が人間に届く
-  assertGitDirIsDirectory(path);
+  assertOwnGitDirectory(path);
   try {
     git(path, "rev-parse", "--git-dir");
   } catch {
