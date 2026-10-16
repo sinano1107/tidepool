@@ -2803,15 +2803,8 @@ it("別の workspace の同じ番号の PR の観測は、それぞれの worksp
 
 // #2026: 外で閉じた escalate の根の閉じた記録が question の側にあり、収束が読めずに撃ち続けていた
 it("遅い走査が外で閉じたと観測した escalate の根は、次の収束で候補から外れ、git も読まれず verdict にも出ない", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("landing-scan-closed-root");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
-  const root = landingWork(db, clock);
-  git(workspace.path, "checkout", "-b", `task/${root.id}`);
-  commitWork(workspace.path, "feature.txt", "ready\n");
-  finish(db, clock, root);
-  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-root");
+  expect(listBoard(db).filter((q) => q.question_pending_merge_pr === 1)).toHaveLength(1);
   github.scriptClosedOutside(1);
   const pushes = github.pushes.length;
 
@@ -2824,6 +2817,50 @@ it("遅い走査が外で閉じたと観測した escalate の根は、次の収
   await expect(landing.converge()).resolves.toEqual([]);
   expect(promotionFailures(db, root.id)).toEqual([]);
   expect(github.pushes).toHaveLength(pushes);
+});
+
+/** escalate のダイヤルで PR #1 を開き、merge question が開いている根。 */
+async function escalatedRootWithOpenedPr(name: string) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+  const root = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, root);
+  await landing.converge();
+  return { workspace, db, clock, github, landing, root: getTask(db, root.id)! };
+}
+
+it("遅い走査が外で閉じたと観測した根への retry は、閉じたことを理由に verdict で拒まれる", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-retry");
+  registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
+  const [failure] = promotionFailures(db, root.id);
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge", clock.now());
+
+  await expect(convergeOn(landing, root.id, failure!.id)).resolves.toEqual({
+    kind: "excluded",
+    reason: "pull_request_closed",
+    error: `PR #1 was closed outside the board, so task/${root.id} is not pushed to it`,
+  });
+});
+
+it("遅い走査が外で merge されたと観測した根は、収束が GitHub を読まず観測を重ねずに着地が終わったと刻む", async () => {
+  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-merged-finish");
+  await mergeOnGitHub(workspace, root.id);
+  github.scriptMergedOutside(1);
+  await landing.tick("outside_merge", clock.now());
+  const stateChecks = github.stateChecks.length;
+
+  await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
+  expect(github.stateChecks).toHaveLength(stateChecks);
+  expect(boardEvents(db, root.id, "pr_merge_observed")).toHaveLength(1);
+  expect(boardEvents(db, root.id, "landing_finished")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1 } },
+  ]);
 });
 
 it("遅い走査は、workspace の解決が分類できない失敗で落ちた question を open のまま残し、tick は落ちず後ろの question は決着する(ADR 0229 決定1)", async () => {

@@ -270,14 +270,17 @@ interface LandingRoot {
   lineageError?: unknown;
 }
 
-/** PR の merge を記録した(盤面が merge した・merge を観測した)SQL 述語。人間の merge 回答と merge question の観測は、
- *  記録を question の側に刻む。 */
-function prMergedSql(t: string): string {
-  return `(${t}.pr_number IS NOT NULL AND EXISTS (SELECT 1 FROM events m
-             WHERE m.kind IN ('pr_merged', 'pr_merge_observed')
-               AND json_extract(m.payload, '$.pr_number') = ${t}.pr_number
-               AND (m.task_id = ${t}.id OR m.task_id IN (SELECT q.id FROM tasks q
-                      WHERE q.question_pending_merge_pr = ${t}.pr_number AND q.workspace IS ${t}.workspace))))`;
+/** 根の PR の決着(ADR 0265 決定2): merge されたか閉じられたか、盤面の執行(`pr_merged`)か観測か。決着していなければ null。
+ *  決着はどの経路でも PR を開いた根の id に刻まれる(決定1)ので、根の記録だけを読む。読み手はすべてこれを通る。 */
+export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOSED"; observed: boolean; prNumber: number } | null {
+  const row = db
+    .prepare(
+      `SELECT kind, json_extract(payload, '$.pr_number') AS pr_number FROM events
+        WHERE task_id = ? AND kind IN ('pr_merged', 'pr_merge_observed', 'pr_close_observed') ORDER BY id DESC LIMIT 1`,
+    )
+    .get(taskId) as { kind: string; pr_number: number } | undefined;
+  if (!row) return null;
+  return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
@@ -297,14 +300,14 @@ function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): Lan
       `SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id
-                            AND e.kind IN ('landing_finished', 'nothing_to_land', 'pr_close_observed'))
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
         ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string }>;
   const roots: LandingRoot[] = [];
   for (const { id } of ids) {
+    if (rootPrOutcome(db, id)?.state === "CLOSED") continue;
     const task = getTask(db, id)!;
     let workspace: WorkspaceConfig | undefined;
     try {
@@ -857,11 +860,12 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
-      const merged = deps.db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${prMergedSql("t")}`).get(task.id) !== undefined;
+      const outcome = rootPrOutcome(deps.db, task.id);
+      const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
-      if (merged) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+      if (mergedPr !== undefined) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
       if (!taskHasContentToLand(workspace, task.id)) {
-        if (merged) return finishLanding(task, workspace, task.pr_number!, ctx);
+        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, ctx);
         const base = protectedBranchRef(workspace);
         if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
         retireFailures(task.id, ctx);
@@ -874,7 +878,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 門は quarantine より先に読む(ADR 0241 決定3)
       if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
-      if (merged) return alreadyMerged(task, task.pr_number!, ctx);
+      if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
@@ -911,11 +915,7 @@ export function createLanding(deps: LandingDeps): Landing {
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
         // 盤面の外で決着した PR は観測として1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。
         // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
-        if (
-          state !== "OPEN" &&
-          !isMarked(task.workspace, task.pr_number) &&
-          latestEventOfTask(deps.db, task.id, OBSERVED[state])?.payload.pr_number !== task.pr_number
-        ) {
+        if (state !== "OPEN" && !isMarked(task.workspace, task.pr_number) && rootPrOutcome(deps.db, task.id) === null) {
           retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
         }
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
@@ -1015,14 +1015,15 @@ export function createLanding(deps: LandingDeps): Landing {
     for (const questionId of answering) {
       const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
       if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
-      const closed = latestEventOfTask(deps.db, taskId, OBSERVED.CLOSED);
+      const outcome = rootPrOutcome(deps.db, taskId);
       verdicts.push({
         taskId,
-        verdict: closed
+        verdict:
+          outcome?.state === "CLOSED"
           ? {
               kind: "excluded",
               reason: "pull_request_closed",
-              error: `PR #${closed.payload.pr_number} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
+              error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
             }
           : { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` },
       });
