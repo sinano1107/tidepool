@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
+import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection } from "../src/memory.js";
@@ -216,7 +217,7 @@ const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "m
 const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
-const CONTINUE_COMMENT = "continue-comment-mark-4d2";
+const ROOT_MARK = "root-mark-3e9";
 const SIBLING_MEMORY = "sibling-memory-mark-4d2";
 const TREE_MEMORY = "tree-memory-mark-b85";
 
@@ -251,27 +252,28 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
   expect(t.worker.started.at(-1)!.id).toBe(reader);
 }
 
-/** 最後の受験者が読む盤面(ADR 0263 決定10 の sweep の状況): 人間が書いた root の題・目的は「Interview」を持ち、root は出題以外の
- *  判断ログの行と question を持つ。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で
- *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
- *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
- *  read)で兄弟の Knowledge と、root が書いた目印つきの Knowledge・人間が出題の event を出所に書いた目印つきの Exemplar(ADR 0264
- *  決定3)を探した応答と、最後に兄弟が目印つきで定義した枝を定義した応答(ADR 0264 決定4)。`injection` はその子の直近の
- *  spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと同じ引数(盤面が渡した task と query、task の workspace 名、
- *  worker の agent 名)で組む。 */
+/** 最後の受験者が読む盤面(ADR 0263 決定10 の sweep の状況、ADR 0267 決定7 で親の場面を外した形): 人間が書いた root の題・目的は
+ *  「Interview」と目印を持ち、root は出題以外の目印つきの判断ログの行と question を持つ —— 受験者には親が無いので、どれも見えては
+ *  ならない。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で cancel、最後の対象の
+ *  受験者は failure を retry で再開し、escalate して答えを受けてから slot に居て、自分の history の長さで get_current_task が続き
+ *  (ADR 0195)を持つ。`pulls` はその受験者が記憶の pull verb(browse・search・read)で兄弟の Knowledge と、root が書いた
+ *  目印つきの Knowledge・人間が出題の event を出所に書いた目印つきの Exemplar(ADR 0264 決定3)を探した応答と、最後に兄弟が
+ *  目印つきで定義した枝を定義した応答(ADR 0264 決定4)。`injection` はその受験者の直近の spawn で adapter が組むはずの記憶の
+ *  注入の節で、adapter が渡すのと同じ引数(盤面が渡した task と query、task の workspace 名、worker の agent 名)で組む。
+ *  `production` は同じ盤面に Register API で登録した本番の親なし work の tools/list。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
   const root = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "review",
-      title: "Interview the parser targets",
-      purpose: "Interview which target writes the parser",
+      title: `Interview the parser targets ${ROOT_MARK}`,
+      purpose: `Interview which target writes the parser ${ROOT_MARK}`,
       completion_criteria: "every target scored",
       interview_targets: [opus46, sonnet55, haiku45],
     })
   ).json;
-  await callAsTask(t, root.id, "log_decision", { line: "chose the parser probe over the lexer one" });
+  await callAsTask(t, root.id, "log_decision", { line: `chose the parser probe over the lexer one ${ROOT_MARK}` });
   const rootKnowledge = { path: "parser", title: `parser ${TREE_MEMORY}`, text: `the parser ${TREE_MEMORY}`, source: { commit: "0a46a46" } };
   const rootEntry = JSON.parse((await callAsTask(t, root.id, "record_knowledge", rootKnowledge)).content[0].text).entry_id;
   const [done, cancelled, reader] = JSON.parse((await callAsTask(t, root.id, "pose_probe", SWEEP_POSE)).content[0].text).child_ids;
@@ -307,8 +309,8 @@ async function lastExaminee() {
   await answerReaderQuestion(reader, ["toml"], "toml only");
   registerQuestion(t, {
     parent_id: root.id,
-    title: "a root question",
-    purpose: "the Interview root asks",
+    title: `a root question ${ROOT_MARK}`,
+    purpose: `the Interview root asks ${ROOT_MARK}`,
     completion_criteria: "answered",
     question: [{ title: "which?", options: ["a", "b"], recommendation: "a" }],
   });
@@ -329,27 +331,37 @@ async function lastExaminee() {
     const spawned = t.worker.started[spawn]!;
     expect(spawned.workspace).not.toBeNull();
     const injection = buildMemoryInjection(t.db, spawned, spawned.workspace, t.worker.id, t.worker.startedQueries[spawn]).section;
-    return { rootId: root.id, siblings: [done, cancelled], siblingDefinition, reader, pages, pulls: pulled, injection, tools: (await client.listTools()).tools };
+    const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+    const productionClient = await mcpClient(t.mcpBaseUrl, work.id);
+    let production: Awaited<ReturnType<typeof productionClient.listTools>>["tools"];
+    try {
+      production = (await productionClient.listTools()).tools;
+    } finally {
+      await productionClient.close();
+    }
+    return { rootId: root.id, siblings: [done, cancelled], siblingDefinition, pages, pulls: pulled, injection, tools: (await client.listTools()).tools, production };
   } finally {
     await client.close();
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)と兄弟が定義した枝の define の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印・採点者の印が出ず、define は通る(ADR 0263 決定7・8・10、ADR 0264 決定4・6)", async () => {
-  const { siblings, siblingDefinition, pages, pulls, injection, tools } = await lastExaminee();
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)と兄弟が定義した枝の define の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・採点者の印・親の欄・親の history の行・登録者の名前が出ず、define は通る(ADR 0263 決定7・10、ADR 0264 決定4・6、ADR 0267 決定7)", async () => {
+  const { rootId, siblings, siblingDefinition, pages, pulls, injection, tools, production } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
+  for (const page of pages) expect(page.parent ?? null).toBeNull();
+  // 登録者は root の agent —— root の面には出ている名前で、受験者の面に出ないことを確かめる
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${rootId}`)).json.assignee).toBe(DEFAULT_AUDITOR_NAME);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, "not shown to examinees", ...siblings, `entry ${siblingDefinition}`]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, ROOT_MARK, DEFAULT_AUDITOR_NAME, "not shown to examinees", ...siblings, `entry ${siblingDefinition}`]) {
     expect(read).not.toContain(text);
   }
-});
-
-it("受験者の get_current_task は親の欄も親の history も持たない —— 本番の親の無い work と同じく自分の task だけを読む(ADR 0267 決定7)", async () => {
-  const { pages } = await lastExaminee();
-  for (const page of pages) expect(page.parent ?? null).toBeNull();
+  // 写像: 本番の親なし work の tools/list(名前・説明文・schema)との差は分解の verb だけ(ADR 0267 決定7)。どの verb を
+  // 外すかは interview.test.ts の taskVerbSwap が言う
+  expect(production.map((tool) => tool.name)).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
+  expect(tools).toEqual(production.filter((tool) => tool.name !== "decompose" && tool.name !== "redecompose"));
 });
 
 it("受験者の詳細と盤面の一覧の行は、その Interview の root の id を名指す(ADR 0267 決定6)", async () => {
