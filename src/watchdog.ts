@@ -278,8 +278,11 @@ function failAndReclaim(
   const task = getTask(deps.db, taskId);
   if (task?.status !== "in_progress") return;
   const now = deps.clock.now();
-  registerFailureQuestion(deps.db, task, ...wording(task), now);
-  markTeardown(deps.db, taskId, now);
+  // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない
+  deps.db.transaction(() => {
+    registerFailureQuestion(deps.db, task, ...wording(task), now);
+    markTeardown(deps.db, taskId, now);
+  })();
   deps.slot.enterTeardown();
   containers.forceReclaim(taskId);
   void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
@@ -355,18 +358,21 @@ export function startWatchdog(deps: {
     // 決着済みのタスクに failure question を立てない
     if (task?.status !== "in_progress") return;
     const now = clock.now();
-    registerFailureQuestion(
-      db,
-      task,
-      `watchdog killed task: ${task.title}`,
-      `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
-        `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
-        "No self-report is possible." +
-        // root の exit は必ずここより先に観測済み(容器が exit を adapter より先に登録、reclaimed は microtask)
-        exitSections(rec.exit),
-      now,
-    );
-    markTeardown(db, taskId, now);
+    // 同じ transaction に置く(`failAndReclaim` と同じ理由)
+    db.transaction(() => {
+      registerFailureQuestion(
+        db,
+        task,
+        `watchdog killed task: ${task.title}`,
+        `the task hit its ${task.type} time limit (${limit}ms) and its container was ` +
+          `reclaimed (graceful stop, then force reclaim after ${config.grace}ms grace). ` +
+          "No self-report is possible." +
+          // root の exit は必ずここより先に観測済み(容器が exit を adapter より先に登録、reclaimed は microtask)
+          exitSections(rec.exit),
+        now,
+      );
+      markTeardown(db, taskId, now);
+    })();
     slot.enterTeardown();
     void runTeardown(teardown, taskId, teardownStep(db, taskId));
   }
@@ -467,16 +473,19 @@ export function startWatchdog(deps: {
     if (task?.status !== "in_progress") return;
     const now = clock.now();
     const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
-    registerFailureQuestion(
-      db,
-      task,
-      `worker exited without reporting: ${task.title}`,
-      `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
-        "it did not complete, decompose, or escalate. No self-report is possible." +
-        exitSections(exit),
-      now,
-    );
-    markTeardown(db, taskId, now);
+    // 同じ transaction に置く(`failAndReclaim` と同じ理由)
+    db.transaction(() => {
+      registerFailureQuestion(
+        db,
+        task,
+        `worker exited without reporting: ${task.title}`,
+        `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
+          "it did not complete, decompose, or escalate. No self-report is possible." +
+          exitSections(exit),
+        now,
+      );
+      markTeardown(db, taskId, now);
+    })();
     slot.enterTeardown();
     void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
   }

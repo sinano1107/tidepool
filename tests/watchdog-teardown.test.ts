@@ -10,7 +10,7 @@ import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineValues } from "../src/qua
 import { Slot } from "../src/slot.js";
 import { completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, runTeardown } from "../src/teardown.js";
-import { capInterruptionHandler, rowRefusalHandler, startWatchdog, type Watchdog } from "../src/watchdog.js";
+import { capInterruptionHandler, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
@@ -123,6 +123,13 @@ async function reclaimTimesOut(f: Fixture): Promise<void> {
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question");
 
+/** 後始末の印の書き込みだけを落とす(issue #1935)—— 記録と印が同じ transaction なら記録も巻き戻る。 */
+const failTeardownMark = (db: Db) =>
+  db.exec(
+    "CREATE TRIGGER fail_teardown_mark BEFORE UPDATE OF teardown_started_at ON tasks " +
+      "BEGIN SELECT RAISE(ABORT, 'teardown mark failed'); END",
+  );
+
 it("cap settlement supersedes an already pending watchdog reclaim callback", async () => {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -161,6 +168,25 @@ it("走っている間に表から消えた行の 404 は行の Quarantine を�
   expect(openQuarantineValues(db, "tableRow")).toEqual([]);
   expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(true);
   expect(nextSlotTask(db)?.id).toBe(task.id);
+  expect(questions(db)).toEqual([]);
+});
+
+it("行の拒否で後始末の印の書き込みが落ちると、行の Quarantine も row_refused も残らず、タスクは in_progress のまま(issue #1935)", () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const slot = new Slot();
+  const { provider, model } = loadExecutionSettingTable(db)[0]!;
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "refused", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
+  slot.occupy(task.id);
+  failTeardownMark(db);
+
+  expect(() =>
+    rowRefusalHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} })(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve()),
+  ).toThrow("teardown mark failed");
+
+  expect(getTask(db, task.id)?.status).toBe("in_progress");
+  expect(openQuarantineValues(db, "tableRow")).toEqual([]);
+  expect(listEvents(db, task.id).some((e) => e.kind === "row_refused")).toBe(false);
   expect(questions(db)).toEqual([]);
 });
 
@@ -400,6 +426,71 @@ it("回収 timeout に落ちた watchdog の session は後始末へ入り、続
   expect(listEvents(f.db, containment.id).map((e) => e.kind)).not.toContain("quarantine_refired");
   expect(questions(f.db).filter((q) => q.title.includes("containment"))).toHaveLength(1);
   expect(f.runtime.forceReclaims).toEqual([f.task.id]);
+});
+
+it("回収 timeout で後始末の印の書き込みが落ちると、failure question も Containment quarantine も残らず、タスクは in_progress のまま(issue #1935)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  failTeardownMark(f.db);
+
+  await expect(f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace + CONFIG.reclaimTimeout)).rejects.toThrow("teardown mark failed");
+
+  expect(f.runtime.forceReclaims).toEqual([f.task.id]);
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(questions(f.db)).toEqual([]);
+  expect(openQuarantineValues(f.db, "containment")).toEqual([]);
+});
+
+it("1度も走らなかった pickup で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, pollNow: () => {} };
+  failTeardownMark(f.db);
+
+  expect(() => spawnFailureHandler(deps, f.containers)(f.task.id, { error_code: "ENOENT", message: "spawn claude ENOENT" })).toThrow(
+    "teardown mark failed",
+  );
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(questions(f.db)).toEqual([]);
+});
+
+it("transcript が書けなくなった session で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, pollNow: () => {} };
+  // handler は worker_spawned の worker id を引くだけなので、pickup の event で足りる
+  const spawned = listEvents(f.db, f.task.id).at(-1)!.id;
+  failTeardownMark(f.db);
+
+  expect(() =>
+    transcriptFailureHandler(deps, f.containers)({ taskId: f.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left" }),
+  ).toThrow("teardown mark failed");
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(questions(f.db)).toEqual([]);
+});
+
+it("報告なき exit で後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  failTeardownMark(f.db);
+
+  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 })).toThrow("teardown mark failed");
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(questions(f.db)).toEqual([]);
+});
+
+it("時間制限の梯子で容器の空を観測したときに後始末の印の書き込みが落ちると、failure question は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  expect(f.runtime.forceReclaims).toEqual([f.task.id]);
+  failTeardownMark(f.db);
+
+  // 観測は `void reclaimed.then(...)` の先に届くので、落ちた書き込みは未処理の reject として上がる
+  const raised = new Promise<unknown>((resolve) => process.once("unhandledRejection", resolve));
+  f.runtime.fireEmpty(f.task.id);
+  expect(String(await raised)).toContain("teardown mark failed");
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(questions(f.db)).toEqual([]);
 });
 
 /** 盤面の再起動: 同じ DB に新しい watchdog と空の `Slot` を作る。前提検査が落ちた起動を表す
