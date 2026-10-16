@@ -24,6 +24,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
+import { closedRootOf } from "./landing.js";
 import { loadEpisodes, observedInTier, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
@@ -694,11 +695,13 @@ export function startScheduler(deps: {
       const excludedTasks: string[] = [];
       let entryExcluded = pickupExclusions(db, false);
       const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
+      // 閉じた根に塞がれた子は、走っても閉じた根のブランチへ帰るだけなので飛ばす(ADR 0265 決定6)
+      const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。

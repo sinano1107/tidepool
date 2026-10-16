@@ -1,8 +1,9 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { warnCliAuthExpiry } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
+import { closedRootOf } from "../src/landing.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import {
@@ -18,7 +19,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, HOUR, HUMAN_WEBUI } from "./harness.js";
+import { closedRootTree, decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI } from "./harness.js";
 
 /** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
  *  root(question を除く)」、Edit は「文面の書き手が人間の task」。 */
@@ -26,6 +27,7 @@ const NOW = new Date("2026-10-05T00:00:00.000Z");
 
 let db: Db;
 afterEach(() => db?.close());
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 function metaReview(db: Db): Task {
   registerMetaReview(db, "memory", NOW);
@@ -90,6 +92,27 @@ it("盤面名義の RCA review(異議の付帯子)は直接 cancel を拒否さ�
   expect(rcas).toHaveLength(2);
   for (const rca of rcas) {
     expect(() => cancelTaskDirectly(db, rca, null, NOW, {}, "webui")).toThrow(DomainError);
+    expect(getTask(db, rca.id)!.status).toBe("todo");
+  }
+});
+
+// ADR 0265 決定6 / ADR 0198 の Status 追記: 根が死んだ時点で、付帯子は規則が要求する入力ではなくなる
+it("盤面の外で閉じた PR の根の付帯子(異議由来の修理と、盤面名義の RCA review)は直接 cancel できる", async () => {
+  const tree = await closedRootTree("direct-cancel-closed-root");
+  db = tree.db;
+
+  for (const repair of tree.repairs) {
+    cancelTaskDirectly(db, repair, null, NOW, { closedRootOf: closedRootOf(db, () => tree.workspace) }, "webui");
+    expect(getTask(db, repair.id)!.status).toBe("cancelled");
+  }
+});
+
+it("閉じていない根の盤面名義の付帯子(RCA review)は、閉じた根の述語を渡しても直接 cancel を拒否される", async () => {
+  const tree = await closedRootTree("direct-cancel-open-root", { closed: false });
+  db = tree.db;
+
+  for (const rca of tree.repairs.filter((repair) => repair.type === "review")) {
+    expect(() => cancelTaskDirectly(db, rca, null, NOW, { closedRootOf: closedRootOf(db, () => tree.workspace) }, "webui")).toThrow(DomainError);
     expect(getTask(db, rca.id)!.status).toBe("todo");
   }
 });
