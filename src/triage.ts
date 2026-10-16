@@ -13,9 +13,10 @@ import {
   listEventsOfKinds,
   parseEventRow,
   sessionSpawnOf,
+  taskDecisionLog,
 } from "./events.js";
 import { normalizeText, whyBlank } from "./required-text.js";
-import type { GatedJudgment } from "./retrospective.js";
+import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
   type BoardTask,
   getTask,
@@ -320,7 +321,7 @@ function bundleObjections(
   db: Db,
   sessionId: number,
   now: Date,
-  judgments: Map<number, GatedJudgment>,
+  judgments: Map<number, InitialJudgment>,
   origin: EventOrigin,
   assigneeDeps: AssigneeDeps,
 ): void {
@@ -336,6 +337,9 @@ function bundleObjections(
       const judgment = judgments.get(pair.entry.id);
       if (!judgment || RCA_CAUSES.includes(judgment.cause)) rcaPairs.push(pair);
       if (!judgment) continue;
+      // 判定の後に log が伸びていなければ、この event の id で切っても判定が読んだ範囲と同じ —— 欄を持たない(#1572)
+      const { decision_log_through, ...judged } = judgment;
+      const grown = decision_log_through !== undefined && taskDecisionLog(db, taskId).at(-1)!.id !== decision_log_through;
       appendEvent(db, {
         taskId,
         workerId: BOARD_WORKER_ID,
@@ -344,8 +348,9 @@ function bundleObjections(
           kind: "objection_attributed",
           entry_id: pair.entry.id,
           objection_event_ids: pair.objection_event_ids,
-          ...judgment,
+          ...judged,
           round: "initial",
+          ...(grown ? { decision_log_through } : {}),
         },
         at: now,
       });
@@ -567,7 +572,7 @@ function closeTriageSession(
   open: TriageSession,
   now: Date,
   closedBy: "commit" | "timeout",
-  judgments: Map<number, GatedJudgment>,
+  judgments: Map<number, InitialJudgment>,
   assigneeDeps: AssigneeDeps,
 ): void {
   // タイムアウトは盤面の watchdog が起こす(ADR 0194 決定4)
@@ -609,7 +614,7 @@ export function commitTriage(
   db: Db,
   now: Date,
   scratchpad: Array<{ id: number; disposition: ScratchpadDisposition }> = [],
-  judgments: Map<number, GatedJudgment> = new Map(),
+  judgments: Map<number, InitialJudgment> = new Map(),
   assigneeDeps: AssigneeDeps = {},
 ): TriageCommitResult {
   const open = activeTriageSession(db);

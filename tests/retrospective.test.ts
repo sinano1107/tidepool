@@ -1530,11 +1530,12 @@ it.each([
 });
 
 it.each([
-  ["初回 preference の起草", "preference", false],
-  ["初回 uncertain の第2回とそこからの起草", "uncertain", false],
-  ["初回 preference の起草の撃ち直し", "preference", true],
-  ["初回 uncertain の第2回からの起草の撃ち直し", "uncertain", true],
-] as const)("%s は、初回の判定の Board call の await 中に書かれた判断を、初回の判定と同じく当時の decision log に含めない(#1572)", async (_, cause, retry) => {
+  ["初回 preference の起草", "preference", false, "await"],
+  ["初回 uncertain の第2回とそこからの起草", "uncertain", false, "await"],
+  ["初回 preference の起草の撃ち直し", "preference", true, "await"],
+  ["初回 uncertain の第2回からの起草の撃ち直し", "uncertain", true, "await"],
+  ["判定が返った後・commit の前に判断が書かれた初回 preference の起草", "preference", false, "after"],
+] as const)("%s は、初回の判定の後に書かれた判断を、初回の判定と同じく当時の decision log に含めない(#1572)", async (_, cause, retry, when) => {
   const db = openDb(":memory:");
   try {
     const registered = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
@@ -1548,9 +1549,12 @@ it.each([
     let release!: () => void;
     client.scriptJudgment(entry, new Promise((resolve) => (release = () => resolve({ cause, evidence: "taste" }))));
     const attributing = attributeObjections(db, deps, session.id, at);
-    logDecision(db, task, "decided during the board call", "deckhand", at, "worker");
+    const decideLater = () => logDecision(db, task, "decided after the judgment read the log", "deckhand", at, "worker");
+    if (when === "await") decideLater();
     release();
-    commitTriage(db, at, [], await attributing);
+    const judgments = await attributing;
+    if (when === "after") decideLater();
+    commitTriage(db, at, [], judgments);
     for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) completeTask(db, rca, undefined, "auditor", at, "worker");
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
     const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };

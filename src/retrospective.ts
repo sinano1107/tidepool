@@ -55,7 +55,10 @@ export interface AttributionJudgment {
 }
 
 /** 門を通った判定 —— `objection_attributed` に載る形。 */
-export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attributed" }>, "cause" | "evidence" | "entries" | "decision_log_through">;
+export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attributed" }>, "cause" | "evidence" | "entries">;
+
+/** 初回の判定と、その入力が読んだ decision log の最後の entry の id(#1572)。commit の transaction が欄に載せるかを決める。 */
+export type InitialJudgment = GatedJudgment & { decision_log_through?: number };
 
 /** The Board call seam for attribution (draft / translation / allocation client と
  *  同型): `setting` は盤面が表から解決した Board call 自身の model / effort。 */
@@ -191,7 +194,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
  *  1度だけ集め、Board call を並列に問う。transaction の外で待ち、結果の map を持って
  *  従来の transaction に入る。撃てなかった・撃って失敗した entry は map に載らず(判断ではない)、
- *  判定には入力を組んだときに読んだ decision log の切れ目を添える(await 中に log が伸びたときだけ、#1572)。
+ *  判定には入力を組んだときに読んだ decision log の切れ目を添える(#1572)。
  *  失敗だけが `objection_attribution_failed`(round = initial)に残る(行の拒否と 401 は Quarantine に回し失敗に数えない、ADR 0202・0205)。初回は撃ち直さない ——
  *  その entry は未帰責のまま RCA に倒れ、第2回が拾う(ADR 0168 決定1・2)。ここからは投げない ——
  *  帰責の障害は commit を止めない。 */
@@ -200,13 +203,12 @@ export async function attributeObjections(
   deps: RetrospectiveCallDeps,
   sessionId: number,
   now: Date,
-): Promise<Map<number, GatedJudgment>> {
+): Promise<Map<number, InitialJudgment>> {
   const objected = listObjectedEntries(db, sessionId);
-  const judgments = new Map<number, GatedJudgment>();
+  const judgments = new Map<number, InitialJudgment>();
   if (objected.length === 0) return judgments;
   const call = boardCallSetting(db, deps.attributionClient, deps.containers);
   if ("unavailable" in call) return judgments;
-  const lastLogId = (taskId: string) => taskDecisionLog(db, taskId).at(-1)!.id;
   await Promise.all(
     objected.map(async (o) => {
       const input: AttributionInput = {
@@ -217,7 +219,7 @@ export async function attributeObjections(
         memory_read: memoryRead(db, o.entry),
         ...writtenBodies(db, o.entry),
       };
-      const through = lastLogId(o.entry.task_id);
+      const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
         judgments.set(o.entry.id, { ...gate(await call.client.judge(input, call.setting), input.memory_read), decision_log_through: through });
       } catch (err) {
@@ -233,11 +235,6 @@ export async function attributeObjections(
       }
     }),
   );
-  // await 中に log が伸びなければ帰責 event の id で切っても同じ範囲 —— 欄を持たない。呼び手はこの直後に同期で commit する
-  for (const o of objected) {
-    const judgment = judgments.get(o.entry.id);
-    if (judgment && lastLogId(o.entry.task_id) === judgment.decision_log_through) delete judgment.decision_log_through;
-  }
   return judgments;
 }
 
