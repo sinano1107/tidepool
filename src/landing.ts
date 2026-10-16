@@ -286,45 +286,62 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
  *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
  *  比例させ、盤面の歴史の長さには比例させない。SQL が外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の
  *  `landing_finished`(ADR 0265 決定3) / `nothing_to_land`)とローカル着地の question を持つ根で、盤面の外で閉じた
- *  PR の根は lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。着地の終わっていない根
- *  (PR が開いている・閉じた・断念した)の子孫は記録で外さず、lineage に任せる(ADR 0250)—— 根の内容が別の経路で
- *  保護ブランチに届いた後(`external` のダイヤルは盤面の外の merge を観測せず、根は内容で終わる)に完了した子孫は、
- *  自分で根になっている。閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
+ *  PR の根は lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。PR が開いている根(決着も断念も無い)の子孫も
+ *  lineage の前に記録で外す(ADR 0265 決定3 が ADR 0250 決定3 を置き換えた)—— 根の内容が別の経路で保護ブランチに
+ *  届けば根は内容で終わり、子孫は次に導くとき自分で根になる。収束の回は候補を祖先から順に撃つ直前に導くので、同じ回で
+ *  終わった根の子孫はその回で着地する。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)
+ *  —— 閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
  *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。lineage が祖先のブランチへ帰る done の work
  *  は根ではない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側が
  *  その根の失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
 function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
-  const ids = db
+  return landingCandidateIds(db).flatMap((id) => landingRootOf(db, resolve, id) ?? []);
+}
+
+/** 候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。 */
+function landingCandidateIds(db: Db): string[] {
+  return (
+    db
+      .prepare(
+        `SELECT t.id FROM tasks t
+          WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
+            AND t.interview_target_id IS NULL
+            AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
+            AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
+          ORDER BY t.rowid`,
+      )
+      .all() as Array<{ id: string }>
+  ).map(({ id }) => id);
+}
+
+/** 候補が根ならその根を返す。閉じた PR の根と、PR が開いている根(終わっていない・決着していない・断念していない)の
+ *  子孫は、lineage の前に記録で外す。今の記録を読むので、同じ回で先に終わった祖先の子孫は自分で根になれる。 */
+function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string): LandingRoot | undefined {
+  if (rootPrOutcome(db, id)?.state === "CLOSED") return undefined;
+  const openPrAncestors = db
     .prepare(
-      `SELECT t.id FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
-          AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
-          AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
-        ORDER BY t.rowid`,
+      `WITH RECURSIVE ancestors(id) AS (
+          SELECT parent_id FROM tasks WHERE id = ?
+          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+       SELECT t.id FROM tasks t
+        WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))`,
     )
-    .all() as Array<{ id: string }>;
-  const roots: LandingRoot[] = [];
-  for (const { id } of ids) {
-    if (rootPrOutcome(db, id)?.state === "CLOSED") continue;
-    const task = getTask(db, id)!;
-    let workspace: WorkspaceConfig | undefined;
-    try {
-      workspace = resolve?.(task.workspace);
-    } catch {}
-    if (!workspace) {
-      roots.push({ task, outlivedForkSource: false });
-      continue;
-    }
-    try {
-      const lineage = resolveTaskBranchLineage(db, workspace, task);
-      if (!lineage.branch) roots.push({ task, outlivedForkSource: lineage.outlivedForkSource });
-    } catch (lineageError) {
-      roots.push({ task, outlivedForkSource: false, lineageError });
-    }
+    .all(id) as Array<{ id: string }>;
+  if (openPrAncestors.some((a) => rootPrOutcome(db, a.id) === null && !abandonEventInForce(db, a.id))) return undefined;
+  const task = getTask(db, id)!;
+  let workspace: WorkspaceConfig | undefined;
+  try {
+    workspace = resolve?.(task.workspace);
+  } catch {}
+  if (!workspace) return { task, outlivedForkSource: false };
+  try {
+    const lineage = resolveTaskBranchLineage(db, workspace, task);
+    return lineage.branch ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
+  } catch (lineageError) {
+    return { task, outlivedForkSource: false, lineageError };
   }
-  return roots;
 }
 
 /** 根の木(根自身を含む)に、後始末が未了の行があるか —— その後始末の merge back がまだ根へ帰っていない(ADR 0240 決定2)。 */
@@ -1005,20 +1022,23 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */
   const pass = async (answering: ReadonlySet<string>): Promise<RootVerdict[]> => {
-    let roots: LandingRoot[];
+    let ids: string[];
     try {
-      roots = deriveLandingRoots(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
+      ids = landingCandidateIds(deps.db);
     } catch (error) {
       console.error("[landing] reading the landing roots failed; the next trigger runs the convergence again:", error);
       return [];
     }
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     const verdicts: RootVerdict[] = [];
-    for (const root of roots) {
+    // 候補ごとに、撃つ直前に根かを導く —— 同じ回で先に終わった根の子孫が、取り残されずにこの回で自分で根になる
+    for (const id of ids) {
       try {
-        const verdict = await landRoot(root, answering);
-        if (verdict) verdicts.push({ taskId: root.task.id, verdict });
+        const root = landingRootOf(deps.db, resolve, id);
+        const verdict = root && (await landRoot(root, answering));
+        if (verdict) verdicts.push({ taskId: id, verdict });
       } catch (error) {
-        console.error(`[landing] landing root ${root.task.id} failed; the pass goes on with the rest:`, error);
+        console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);
       }
     }
     // retry が答えている根をこの回が候補にしなかったなら、なぜかを verdict にする —— 回答はそれで拒まれる

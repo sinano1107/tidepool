@@ -1422,10 +1422,18 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   commitWork(workspace.path, "child.txt", "merged back\n");
   git(workspace.path, "checkout", `task/${work.id}`);
   git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
+  const nested = attachUnsettledChild(db, clock, child.id);
+  git(workspace.path, "branch", `task/${nested.id}`, `task/${child.id}`);
+  finish(db, clock, nested);
   finish(db, clock, child);
+  // 読めば壊れていると分かる checkout でも、PR の開いた根の子孫の lineage は読まれない(記録で外れる)
+  const childTip = git(workspace.path, "rev-parse", `task/${child.id}`);
+  git(workspace.path, "branch", "-D", `task/${child.id}`);
   await expect(landing.converge()).resolves.toEqual([
     { taskId: work.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
   ]);
+  expect(promotionFailures(db, nested.id)).toEqual([]);
+  git(workspace.path, "branch", `task/${child.id}`, childTip);
 
   await squashTaskIntoOrigin(workspace, work.id);
   git(workspace.path, "fetch", "origin", "main");
@@ -1438,6 +1446,7 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   await expect(landing.converge()).resolves.toEqual([
     { taskId: work.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
     { taskId: child.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: nested.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
     { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
   ]);
   expect(boardEvents(db, work.id, "landing_finished").map(({ payload }) => payload)).toEqual([
