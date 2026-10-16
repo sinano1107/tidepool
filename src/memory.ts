@@ -6,7 +6,7 @@ import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, 
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, latestEventOfTask, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
-import { landingAnnotation } from "./landing.js";
+import { landingAnnotation, settledByObservation } from "./landing.js";
 import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
@@ -1216,7 +1216,7 @@ export function movedPins(db: Db, proposal: QuestionProposal<TierRef> | null): A
   });
 }
 
-/** question 行が読むときに運ぶ6つの注釈(issue #1179・ADR 0092 決定4・ADR 0179 決定4・issue #1309・#1304)。HTTP の `GET /api/tasks`・
+/** question 行が読むときに運ぶ7つの注釈(issue #1179・ADR 0092 決定4・ADR 0179 決定4・issue #1309・#1304・ADR 0265 決定7)。HTTP の `GET /api/tasks`・
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを広げる。 */
 export function questionAnnotations(
   db: Db,
@@ -1229,6 +1229,7 @@ export function questionAnnotations(
     blocking: questionBlocking(db, task.id),
     needs_comment: needsComment(task),
     free_text: !isFixedChoiceQuestion(task),
+    settled_by_observation: settledByObservation(db, task),
   };
 }
 

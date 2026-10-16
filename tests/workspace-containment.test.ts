@@ -71,6 +71,7 @@ it.each([
       worker,
       containers: passthroughContainers(),
       onSpawnFailed: () => {},
+      onRecordContainerFailed: () => {},
       openaiUsage: () => healthyOpenai(clock.now()),
       taskExecutionCandidates: (task) =>
         executionSettingsFor(

@@ -205,12 +205,13 @@ export const QUARANTINES = [
   {
     kind: "recordContainer" satisfies HaltKind,
     scope: "board",
-    // 断言するのは、どの task の・どの path への書き込みが・どの例外で落ちたか(reason)だけで、原因の所在は言わない(ADR 0266 決定3)
+    // 断言するのは、どの task の・どの path への書き込みが・どの例外で落ちたか(reason)だけで、原因の所在は言わない(ADR 0266 決定3)。
+    // 踏んだ task がどうなったか(先頭へ戻った / 自分の failure question を持つ)は入口ごとに違うので、観測した入口が reason に書く
     prose: (_value: string | null, reason: string): QuarantineProse => ({
       title: "the board's record container cannot be written — pickup is stopped",
       purpose:
         `${reason}\n\n` +
-        "No task is picked up while this stands; the task being picked up was returned to the queue head, not failed. " +
+        "No task is picked up while this stands. " +
         "Answering checks the same container by writing a file to that directory and removing it: if the write " +
         "still fails the answer is refused and this question stays open. Any answer text is kept as a repair note.",
       completion_criteria: "the board's record container can be written again",

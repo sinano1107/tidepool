@@ -50,7 +50,7 @@ import {
   taskVerbSwap,
 } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import type { Transcript, TranscriptStore } from "./transcript-store.js";
+import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
@@ -1108,6 +1108,9 @@ export interface ClaudeWorkerOptions {
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
+   *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
+  onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
@@ -1872,8 +1875,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // for `cat`, not just for the Skill tool).
       const denied = new Set(deny);
       const permittedSkills = enumerated.filter((skill) => !denied.has(skill));
-      // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw
-      // (transcript が開けない等)をこの continuation が `spawn_failed` に落とす
+      // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
+      // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
         this.launch(task, workspace, agent, registry, {
           deny,
@@ -1881,6 +1884,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           permittedSkills,
         }, routing, query);
       } catch (err) {
+        if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
         this.recordSpawnFailed(task, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,
           message: err instanceof Error ? err.message : String(err),
@@ -1935,17 +1939,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // sandbox settings と cwd を実体の綴りで書く(issue #1954、Codex 側は #864)。無い checkout は
     // 何も作る前にここで投げ、spawn_failed に落ちる(scheduler の catch / ADR 0149 決定6)
     const workspacePath = realpathSync(workspace.path);
-    // the ?task= param is the attribution the MCP router checks against the
-    // slot — a stray call from a stale process fails that check and is refused
-    const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
-    writeFileSync(
-      mcpConfigPath,
-      JSON.stringify({
-        mcpServers: {
-          [MCP_SERVER_NAME]: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
-        },
-      }),
-    );
     // ADR 0257 決定2: the session's task temp. Removed at settle, on a spawn
     // failure, and on any throw between here and the spawn; a failed removal only
     // logs, never stopping the rest of the cleanup (issue #705).
@@ -1961,24 +1954,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let transcript: Transcript;
     let child: ContainedProcess;
     try {
-      // ADR 0033: every worker session — review and work alike — runs its Bash
-      // inside the CLI's own sandbox, confined to the workspace. Written per task
-      // next to the MCP config above, the same shape and lifetime; the profile
-      // itself is a code constant (src/sandbox.ts), never registry data.
-      const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
-      writeFileSync(
-        sandboxSettingsPath,
-        JSON.stringify(
-          buildSandboxSettings({
-            taskType: task.type,
-            workspacePath,
-            permittedSkills: enforcement.permittedSkills,
-            allowedDomains: workspace.allowed_domains,
-            taskTemp,
-            lib64: existsSync("/lib64"),
-          }),
-        ),
-      );
       const prompt =
         `You are picking up tidepool task ${task.id}. ` +
         "Call get_current_task first, then work it to completion through the tidepool MCP verbs.";
@@ -2052,14 +2027,46 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       });
       recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
-      // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
-      // process は1つも起きない(ADR 0118 の族)
+      // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
+      // process は1つも起きない(ADR 0266 決定4)
       transcript = this.options.transcripts.open(task.id, spawnedEventId);
+      // spawn の入力(MCP 設定・sandbox 設定)も同じ dir に置かれるので、transcript の open が器への最初の書き込みになるよう
+      // その後ろで書く —— 器が書けなければ open が先に落ちて盤面全体の停止になる(ADR 0266 決定4)。open の後で落ちた書き込みは
+      // spawn_failed のまま `worker_spawned` と対になる
+      // the ?task= param is the attribution the MCP router checks against the
+      // slot — a stray call from a stale process fails that check and is refused
+      const mcpConfigPath = join(this.logDir, `${task.id}.mcp.json`);
+      writeFileSync(
+        mcpConfigPath,
+        JSON.stringify({
+          mcpServers: {
+            [MCP_SERVER_NAME]: { type: "http", url: `${this.options.mcpUrl}?task=${task.id}` },
+          },
+        }),
+      );
+      // ADR 0033: every worker session — review and work alike — runs its Bash
+      // inside the CLI's own sandbox, confined to the workspace. Written per task
+      // next to the MCP config, in the same shape and lifetime; the profile
+      // itself is a code constant (src/sandbox.ts), never registry data.
+      const sandboxSettingsPath = join(this.logDir, `${task.id}.sandbox.json`);
+      writeFileSync(
+        sandboxSettingsPath,
+        JSON.stringify(
+          buildSandboxSettings({
+            taskType: task.type,
+            workspacePath,
+            permittedSkills: enforcement.permittedSkills,
+            allowedDomains: workspace.allowed_domains,
+            taskTemp,
+            lib64: existsSync("/lib64"),
+          }),
+        ),
+      );
       // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
       // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
       // reclaimed の相手が居ない session は生まれない。
-      // ponytail: spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の question が
-      // 1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
+      // ponytail: open の後の設定の書き込みか spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の
+      // question が1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
       child = this.containers.open(task.id).spawn(
         "claude",
         [

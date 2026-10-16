@@ -24,6 +24,7 @@ import {
 import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
+import { closedRootOf } from "./landing.js";
 import { loadEpisodes, observedInTier, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
@@ -61,7 +62,6 @@ import {
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
-  returnToQueueHead,
   type Task,
   type TaskContent,
   unrowedExaminees,
@@ -265,6 +265,9 @@ export function startScheduler(deps: {
   containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0266 決定3・4: 記録の器が書けない pickup(準備の答案の写し・`start` の中の transcript の open)の一撃
+   *  (`recordContainerHaltHandler` 製)。 */
+  onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -334,6 +337,7 @@ export function startScheduler(deps: {
     worker,
     containers,
     onSpawnFailed,
+    onRecordContainerFailed,
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
@@ -461,18 +465,8 @@ export function startScheduler(deps: {
       try {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
-        if (err instanceof RecordContainerError) {
-          // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まり、踏んだ task は失敗にせず先頭へ戻る。
-          // 先例は行の拒否の先頭復帰(ADR 0184 決定4)で、停止・event・先頭復帰を1 transaction で決着させてから slot を
-          // 解放する。session は無いので回収は無く、盤面が止まったので pickup の契機も撃たない
-          const now = clock.now();
-          db.transaction(() => {
-            registerQuarantine(db, "recordContainer", null, `while picking up task ${picked.id}, ${err.message}`, now);
-            returnToQueueHead(db, picked, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
-          })();
-          slot.release();
-          return;
-        }
+        // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
+        if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;
       }
@@ -482,6 +476,8 @@ export function startScheduler(deps: {
     try {
       worker.start(started, setting, query);
     } catch (err) {
+      // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
+      if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
       // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
@@ -694,11 +690,13 @@ export function startScheduler(deps: {
       const excludedTasks: string[] = [];
       let entryExcluded = pickupExclusions(db, false);
       const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
+      // 閉じた根に塞がれた子は、走っても閉じた根のブランチへ帰るだけなので飛ばす(ADR 0265 決定6)
+      const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。

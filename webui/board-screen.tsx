@@ -15,6 +15,8 @@ type BoardScreenTask = NonNullable<import('../design-system/components/board/Tas
   review_flag: number;
   review_by: string[] | null;
   githubIssueNumber?: number | null;
+  /** 観測で閉じた question の札の文言(ADR 0265 決定7)。 */
+  settledByObservation?: string;
 };
 type BoardScreenColumn = 'todo' | 'in_progress' | 'blocked' | 'done';
 interface BoardScreenProps {
@@ -42,7 +44,12 @@ function BoardScreen({ data, onOpenTask }: BoardScreenProps) {
               </div>
               <FadeScroll style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 2 }}>
                 {data.board[key].map((t) => (
-                  <TaskCard key={t.id} task={{ ...t, status: key }} onClick={() => onOpenTask(t)} style={{ flexShrink: 0 }} />
+                  <div key={t.id} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <TaskCard task={{ ...t, status: key }} onClick={() => onOpenTask(t)} />
+                    {t.settledByObservation && (
+                      <span data-testid={`settled-by-observation-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.settledByObservation}</span>
+                    )}
+                  </div>
                 ))}
               </FadeScroll>
             </div>

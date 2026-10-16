@@ -196,9 +196,11 @@ export type EventPayload =
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }
-  // ADR 0241 決定1: merge を記録した PR の根に、保護ブランチへ運ぶ内容がもう無いと収束が確かめた —— 着地が終わった
-  // 事実で、以後この根は収束の候補に入らない。merge された根には lineage の上で内容が帰らないので古くならない
-  | { kind: "landing_finished"; pr_number: number }
+  // ADR 0241 決定1 / ADR 0265 決定3: PR の根に、保護ブランチへ運ぶ内容がもう無いと収束が確かめた —— 着地が終わった
+  // 事実で、以後この根は収束の候補に入らない。`basis` は根拠: merge を記録した根は `merge`、記録の無い根(`external` の
+  // ダイヤルは盤面の外の merge を観測しない)は `content`。内容で終わっても決裁(キューの行・merge question)は引退しない。
+  // 終わった根には lineage の上で内容が帰らない(子孫は自分で根になる、ADR 0250 決定1)ので古くならない
+  | { kind: "landing_finished"; pr_number: number; basis: "merge" | "content" }
   // ADR 0092 / ADR 0106: 着地を1つの門(付帯子 / 未束ねの異議)で見送った事実。
   | {
       kind: "landing_deferred";

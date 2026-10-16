@@ -10,6 +10,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getRegistrant, getTask, listBoard, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { recordContainerHaltHandler } from "../src/watchdog.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
@@ -45,6 +46,7 @@ async function brokenContainer(name: string) {
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    onRecordContainerFailed: recordContainerHaltHandler({ db, clock, slot }),
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     workspace,
     recordDir,

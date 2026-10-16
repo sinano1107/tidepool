@@ -451,7 +451,7 @@ it("transcript が書けなくなった session で後始末の印の書き込�
   failTeardownMark(f.db);
 
   expect(() =>
-    transcriptFailureHandler(deps, f.containers)({ taskId: f.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left" }),
+    transcriptFailureHandler(deps, f.containers)({ taskId: f.task.id, workerSpawnedEventId: spawned, file: "stream", error_code: "ENOSPC", message: "no space left", path: "/records/x.stream.jsonl" }),
   ).toThrow("teardown mark failed");
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");

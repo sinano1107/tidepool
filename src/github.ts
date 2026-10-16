@@ -79,6 +79,13 @@ export type CiStatus = "pending" | "success" | "failure" | "unreported";
 /** GitHub's own PR state (ADR 0229 決定2). */
 export type PrState = "OPEN" | "CLOSED" | "MERGED";
 
+/** The PR's state and who merged it, read in one call (ADR 0265 決定5): `mergedBy` is `gh`'s `mergedBy.login`, null
+ *  unless merged. */
+export interface PrStateRead {
+  state: PrState;
+  mergedBy: string | null;
+}
+
 /** The PR found on a task branch, whatever its state (ADR 0241 決定4). */
 export interface FoundPr {
   number: number;
@@ -86,12 +93,12 @@ export interface FoundPr {
   head: string;
 }
 
-/** One read of a PR, CI, state and head together (ADR 0229 決定2 / ADR 0231
- *  決定1): `head` is the commit the CI was read on, the one a merge pins to. A
+/** One read of a PR, CI, state, merger and head together (ADR 0229 決定2 / ADR 0231
+ *  決定1 / ADR 0265 決定5): `head` is the commit the CI was read on, the one a merge pins to. A
  *  read that failed is CI "pending" and state "unreadable" with no head —
  *  never a state the caller would act on. */
 export type PrStatus =
-  | { ci: CiStatus; state: PrState; head: string }
+  | (PrStateRead & { ci: CiStatus; head: string })
   | { ci: "pending"; state: "unreadable" };
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
@@ -135,13 +142,13 @@ export interface GitHubClient {
   /** Merges only while the PR's head is still `head` — the one whose CI was
    *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
   mergePullRequest(ref: PrRef, head: string): Promise<void>;
-  /** The PR's state (ADR 0079 決定3 / ADR 0229) — the read the board needs to
+  /** The PR's state and who merged it (ADR 0079 決定3 / ADR 0229 / ADR 0265 決定5) — the read the board needs to
    *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
    *  decision on (an open merge question, the auto-merge queue) and before
    *  pushing a repair onto a still-open PR (issue #400), never as a standing
    *  watch over every open PR. Throws when it cannot be read. */
-  getPullRequestState(ref: PrRef): Promise<PrState>;
+  getPullRequestState(ref: PrRef): Promise<PrStateRead>;
   /** The PR whose head is `branch`, in any state, or null (ADR 0241 決定4) — read
    *  before opening one, so a PR the board opened but never recorded is not
    *  opened twice. Throws when it cannot be read. */
@@ -262,18 +269,23 @@ export class GhCliClient implements GitHubClient {
     // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
     // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
     // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
-    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string };
+    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: { login: string } | null };
     try {
       const output = execFileSync(
         "gh",
-        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid"],
+        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"],
         { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
       ).toString();
       parsed = JSON.parse(output);
     } catch {
       return { ci: "pending", state: "unreadable" };
     }
-    return { ci: ciStatusOf(parsed.statusCheckRollup ?? []), state: parsed.state, head: parsed.headRefOid };
+    return {
+      ci: ciStatusOf(parsed.statusCheckRollup ?? []),
+      state: parsed.state,
+      head: parsed.headRefOid,
+      mergedBy: parsed.mergedBy?.login ?? null,
+    };
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
@@ -284,13 +296,14 @@ export class GhCliClient implements GitHubClient {
     });
   }
 
-  async getPullRequestState(ref: PrRef): Promise<PrState> {
-    const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state"], {
+  async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
+    const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state,mergedBy"], {
       cwd: ref.path,
       env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     }).toString();
-    return (JSON.parse(output) as { state: PrState }).state;
+    const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null };
+    return { state, mergedBy: mergedBy?.login ?? null };
   }
 
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {

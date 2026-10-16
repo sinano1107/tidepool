@@ -237,6 +237,7 @@ function scheduledBoard(options: { candidates?: TaskExecutionCandidates; workspa
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
     taskExecutionCandidates: options.candidates ?? implicitTaskExecutionCandidates(db),
     workspace: options.workspace,
     openaiUsage: options.openaiUsage,
