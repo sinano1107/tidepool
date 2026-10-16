@@ -50,3 +50,8 @@
 - **pin の子の escalation に盤面が retry を足す** —— agent の書いた設問に盤面が手を入れ、ADR 0248 が退けた「escalate を状況で
   読み替える」に近づく。
 - **pin の子の verb 一覧を完全一致で固定する** —— 漏れと関係ない変更で落ちる。新しい verb は説明文の sweep で拾える。
+
+## 追記1(2026-10-16 の grilling、issue #2020 / ADR 0266)
+
+決定5 の「ref を外し、head を記録に残す」だけでは、HEAD の reflog と到達できない object から答案が読めた。外すときは答案を先に
+盤面の記録の器へ写し、HEAD の reflog と checkout 中のどこからも辿れない object も落とす(ADR 0266 決定1・2)。

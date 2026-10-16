@@ -497,6 +497,9 @@ export type TargetKey = { provider: Provider; model: string; effort: string | nu
 const UNROWED_TARGET_SQL = `NOT EXISTS (SELECT 1 FROM execution_settings e
   WHERE e.provider = it.provider AND e.model = it.model AND e.effort IS it.effort AND e.tier_id = it.tier_id)`;
 
+/** Interview の木の task の id(どの Interview でも): root(対象の一覧を持つ)と pin の子。`IN (...)` に入れる SELECT。 */
+export const INTERVIEW_TREE_SQL = "SELECT task_id FROM interview_targets UNION SELECT id FROM tasks WHERE interview_target_id IS NOT NULL";
+
 /** pin の子の対象が表の行でなければその鍵、pin が無いか行なら undefined。行の対象の拒否は行の Quarantine に乗る(ADR 0184)。 */
 export function unrowedTarget(db: Db, task: Pick<Task, "interview_target_id">): TargetKey | undefined {
   if (task.interview_target_id === null) return undefined;

@@ -11,11 +11,13 @@ import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   editThroughHumanDoor,
+  listMemoryEntriesForHuman,
   quarantineChecks,
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
 import { countTasksAwaitingLanding, createLanding, type LandingDeps, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { defineMemoryBranch, recordKnowledge } from "../src/memory.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
@@ -36,6 +38,7 @@ import {
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
+  interviewPinChild,
   queuedForAutoMerge,
 } from "./harness.js";
 
@@ -992,7 +995,7 @@ it.each([
 });
 
 /** escalate の PR #42 の merge question と、本物の Landing を通して `answer` と答える手。 */
-function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?: LandingDeps["resolveWorkspace"]) {
+function escalatedMergeQuestionWith(github: FakeGitHubClient, landingDeps: Partial<LandingDeps> = {}) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -1002,7 +1005,7 @@ function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?:
   );
   recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
-  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, resolveWorkspace });
+  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, ...landingDeps });
   const answer = (value: string) =>
     submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, [value], undefined, () => NOW, "webui");
   return { work, question, landing, answer };
@@ -1024,18 +1027,57 @@ it.each(["merge", "hold"])("盤面の外で merge された PR の観測の書�
   }).toEqual({ status: "todo", kinds: expect.not.arrayContaining(["question_answered"]) });
 });
 
+// ADR 0265 決定4(#2037): バックストップが PR を読めなければ、merge 済みの PR への「hold」を決定として残さない
 it.each([
-  ["PR の状態が読めない", () => {
-    const github = new FakeGitHubClient();
+  ["PR の状態が読めない", "gh: network unreachable", (github: FakeGitHubClient) => {
     github.scriptStateReadFailure(42, new Error("gh: network unreachable"));
     return escalatedMergeQuestionWith(github);
   }],
-  ["workspace が引けない", () =>
-    escalatedMergeQuestionWith(new FakeGitHubClient(), () => {
-      throw new Error("workspace gone");
+  ["workspace が引けない", "workspace gone", (github: FakeGitHubClient) =>
+    escalatedMergeQuestionWith(github, {
+      resolveWorkspace: () => {
+        throw new Error("workspace gone");
+      },
     })],
-])("%s merge question への「hold」は、今日どおり回答として記録される", async (_, setup) => {
-  const { question, answer } = setup();
+] as const)("%s merge question への「merge」も「hold」も拒まれ、question は開いたまま残る", async (_, reason, setup) => {
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(42);
+  const { work, question, answer } = setup(github);
+  const refusal = new DomainError(`PR #42's state could not be read (${reason}), so the answer was not accepted`);
+
+  await expect(answer("hold")).rejects.toThrow(refusal);
+  await expect(answer("merge")).rejects.toThrow(refusal);
+  expect({
+    status: getTask(db, question.id)?.status,
+    kinds: listEvents(db, question.id).map((event) => event.kind),
+    rootKinds: listEvents(db, work.id).map((event) => event.kind),
+  }).toEqual({
+    status: "todo",
+    kinds: expect.not.arrayContaining(["question_answered"]),
+    rootKinds: expect.not.arrayContaining(["pr_merged", "pr_merge_observed"]),
+  });
+});
+
+it("PR の読みが戻れば回答は通り、盤面の外で merge 済みなら観測で決着する", async () => {
+  const github = new FakeGitHubClient();
+  github.scriptMergedOutside(42);
+  vi.spyOn(github, "getPullRequestState").mockRejectedValueOnce(new Error("gh: network unreachable"));
+  const { work, question, answer } = escalatedMergeQuestionWith(github);
+
+  await expect(answer("hold")).rejects.toThrow(DomainError);
+  await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+  // ADR 0265 決定1: 観測は根に刻み、question には回答が残らない
+  expect(listEvents(db, work.id).map((event) => event.kind)).toContain("pr_merge_observed");
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("question_answered");
+});
+
+// 「観測しなかった」のうち「該当しない」(GitHub 未設定・workspace 未設定)は、今日どおり回答を通す。
+// 純ローカルの workspace(repo なし)は pr_merge question を作らず local_merge で着地するので、この経路に来ない
+it.each([
+  ["GitHub 未設定", { github: undefined }],
+  ["workspace 未設定", { workspace: undefined, resolveWorkspace: undefined }],
+] as const)("%s の merge question への「hold」は、今日どおり回答として記録される", async (_, landingDeps) => {
+  const { question, answer } = escalatedMergeQuestionWith(new FakeGitHubClient(), landingDeps);
 
   await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
   expect(listEvents(db, question.id).map((event) => event.kind)).toContain("question_answered");
@@ -1427,4 +1469,14 @@ it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll
   ];
 
   expect({ ok: results.map((r) => r.ok), polls }).toEqual({ ok: [false, false, false], polls: 0 });
+});
+
+it("人間の面の記憶の一覧は、pin の子(受験者)が書いたエントリも返す(ADR 0264 決定1)", () => {
+  db = openDb(":memory:");
+  const pinChild = interviewPinChild(db, NOW);
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const knowledge = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author }, "worker", NOW, pinChild.id).entry_id;
+  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", NOW, pinChild.id).entry_id;
+
+  expect(listMemoryEntriesForHuman({ db: db }, {}).map((e) => e.id)).toEqual([knowledge, definition]);
 });

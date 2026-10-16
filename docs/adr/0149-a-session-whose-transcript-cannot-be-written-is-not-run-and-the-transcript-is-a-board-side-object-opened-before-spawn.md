@@ -25,3 +25,10 @@
 - **記録の dir を6つ目の資源として quarantine / 盤面全体の停止にする** — ADR 0118 決定4 が「question の積み上がりが観測されるまで」退けた gate 形で、今も未観測。観測は派生 issue が受ける。
 - **adapter ごとに `'error'` / try-catch を足して同じ callback を呼ぶ** — 方針が2箇所に住む(決定5)。
 - **#718(codex-app-server の stdin)を同じ issue で直す** — Board call の側で主語が違い、その issue 自身が観測待ちを選んでいる。
+
+## 追記1(2026-10-16 の grilling、issue #2020 / ADR 0266)
+
+決定2 の「開けなければ `spawn_failed` に落とす」は ADR 0266 決定3・4 に置き換わった —— 記録の器が書けなければ盤面全体の停止
+(確認 question 1枚、踏んだ task は todo の先頭へ、解放は同じ器への書き込みの検査)。退けた案の「記録の dir を資源として盤面全体の
+停止にする」は、受験者の答案の写しが同じ器を使う入口になり、question の積み上がりが機構として確定したので採った(#910 は決着)。
+決定2 の open の順序と、決定4 の session 途中の `transcript_failed` の failure question は変わらない。

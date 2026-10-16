@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1656,7 +1656,7 @@ interface MemoryReader {
 
 /** search の候補が返らなかった理由(spec #586 D)。関連度の閾値は持たない(ADR 0083
  *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外・
- *  candidate・受験者に無いもの(examineeHidden)は候補になる前の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
+ *  candidate・受験者に無いもの(readerHidden)は候補になる前の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
 export type MemoryDropReason = "addressee" | "invalidated" | "response_budget";
 
 /** snapshot 識別子 = 店を変える memory 系 event の最大 id(approvedMemoryEntries が再生する種別)。 */
@@ -1728,12 +1728,12 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
 }
 
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
- *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(examineeHidden)、
+ *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
  *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。
  *  読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
-  const hidden = examineeHidden(db, reader.taskId);
+  const hidden = readerHidden(db, reader.taskId);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
   const live = (row: EntryRow) => row.invalidation_reason === null;
@@ -1762,21 +1762,35 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
-/** 受験者(pin の子)に無いものとするエントリ(ADR 0263 決定7): どの Interview でも、他の pin の子が書いたもの —— 書いた task は
- *  作った書き込みの記録(ADR 0252)の task。自分が書いたものは本番どおり読む(決定1、CONTEXT.md「他の受験者が書いた記憶」)。
- *  読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。 */
-function examineeHidden(db: Db, taskId: string): Set<number> {
-  if (getTask(db, taskId)?.interview_target_id == null) return new Set();
-  const rows = db
+/** 読み手(task)に無いエントリ。書いた task は作った書き込みの記録(ADR 0252)の task で引き、どれも本文が同じ後継(移動の複製・
+ *  復元の複製)を含む。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の
+ *  専用 verb と材料もこの集合を外す。
+ *  - 読み手が pin の子でない(agent の読み手): どの Interview でも、pin の子が書いたもの —— 受験者の書き込みは本番の記録ではない
+ *    (ADR 0264 決定1)。
+ *  - 読み手が pin の子(受験者、ADR 0264 決定3): どの Interview でも、Interview の木の task が書いたものと、書き手を問わず出所の
+ *    event の task が木の task(自分を含む)であるもの(帰責 `objection_attributed` はその entry_id が指す判断ログの行の task で
+ *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
+ *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
+function readerHidden(db: Db, taskId: string): Set<number> {
+  const written = (tasks: string) =>
+    `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
+  const examinee = getTask(db, taskId)?.interview_target_id != null;
+  const hidden = db
     .prepare(
-      `SELECT c.value AS id FROM events e JOIN tasks t ON t.id = e.task_id, json_each(e.payload, '$.created') c
-        WHERE e.kind = 'memory_written' AND t.interview_target_id IS NOT NULL AND e.task_id != ?`,
+      examinee
+        ? `${written(INTERVIEW_TREE_SQL)}
+           UNION
+           SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+             JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+            WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`
+        : written("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"),
     )
-    .all(taskId) as Array<{ id: number }>;
-  if (rows.length === 0) return new Set();
-  // 本文が同じ後継(移動の複製・復元の複製)は書き手の記録を持たないが、同じ答案なので一緒に外す
+    .all() as Array<{ id: number }>;
+  if (hidden.length === 0) return new Set();
   const restored = restoredAs(db);
-  return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
+  const chains = (rows: Array<{ id: number }>) => rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id));
+  const own = new Set(examinee ? chains(db.prepare(written("?")).all(taskId) as Array<{ id: number }>) : []);
+  return new Set(chains(hidden).filter((id) => !own.has(id)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
@@ -1818,6 +1832,9 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
     const restored = restoredAs(db);
     // like の行と本文が同じ鎖(両向き)は末尾が一致する
     const tailOf = (row: EntryRow) => sameBodyChain(db, row, restored).at(-1)!.id;
+    const hidden = readerHidden(db, reader.taskId);
+    // 視界の外の like は存在しない id と同じに断る —— 存在を知らせない
+    if (args.like !== undefined && hidden.has(args.like)) throw new DomainError(`no memory entry ${args.like}`);
     const like = args.like === undefined ? undefined : requireEntry(db, args.like);
     const match = ftsQuery(like ? `${like.title}\n${like.text}` : args.query!, " OR ");
     if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
@@ -1828,7 +1845,7 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
           WHERE memory_fts MATCH ? AND e.kind != 'definition' AND (e.invalidation_reason IS NULL OR e.successor_id IS NULL)
           ORDER BY memory_fts.rank, e.id`,
       )
-      .all(match) as EntryRow[]).filter((row) => likeTail === undefined || tailOf(row) !== likeTail);
+      .all(match) as EntryRow[]).filter((row) => !hidden.has(row.id) && (likeTail === undefined || tailOf(row) !== likeTail));
     const results = hits.map(({ id, kind, state, scope, path, title, addressee, invalidation_reason }) => ({ id, kind, state, scope, path, title, addressee, invalidation_reason }));
     const packed = packItems(read, "results", results, {}, { every: PENDING_EVENT_ID }) as Packed<{ results: typeof results; event_id: number }>;
     return recordPull(db, reader, { verb: "search_memory_entries", input: args, returned_ids: packed.results.map((r) => r.id) }, packed, at);
@@ -1889,10 +1906,10 @@ export function browseMemory(
 
 /** 枝の一覧(ADR 0122 追記 #1209): approved・未無効化のエントリ(4種別・全 scope・宛先を問わない)の path とすべての上位の prefix を
  *  1枝1行、木の順(親の直後に配下、同じ階層は segment の名前順)で。行はその path の Definition と、その path か配下にエントリ
- *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま、meta-review は
- *  pullMemoryBranches が原文を落とす。 */
-export function listMemoryBranches(db: Db) {
-  const entries = approvedMemoryEntries(db);
+ *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま(hidden は空)、meta-review は
+ *  readerHidden を除き(ADR 0264 決定1)、pullMemoryBranches が原文を落とす。 */
+export function listMemoryBranches(db: Db, hidden = new Set<number>()) {
+  const entries = approvedMemoryEntries(db).filter((e) => !hidden.has(e.id));
   const paths = new Set(entries.flatMap((e) => e.path.split("/").map((_, i, segments) => segments.slice(0, i + 1).join("/"))));
   const bySegments = (a: string, b: string) => {
     const [x, y] = [a.split("/"), b.split("/")];
@@ -1913,14 +1930,14 @@ const withoutOriginal = <T extends { original?: unknown; original_language?: unk
 export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { next?: string }, at: Date) {
   const read = readPosition("list_memory_branches", input);
   return db.transaction(() => {
-    const rows = metaReviewBranches(db);
+    const rows = metaReviewBranches(db, readerHidden(db, reader.taskId));
     const packed = packItems(read, "branches", rows, {}, { keyOf: (row) => row.path, every: PENDING_EVENT_ID }) as Packed<{ branches: typeof rows; event_id: number }>;
     const returned_ids = packed.branches.flatMap((row) => row.definitions.map((d) => d.id));
     return recordPull(db, reader, { verb: "list_memory_branches", input: read.args, returned_ids }, packed, at);
   })();
 }
 
-const metaReviewBranches = (db: Db) => listMemoryBranches(db).map((row) => ({ ...row, definitions: row.definitions.map(withoutOriginal) }));
+const metaReviewBranches = (db: Db, hidden: Set<number>) => listMemoryBranches(db, hidden).map((row) => ({ ...row, definitions: row.definitions.map(withoutOriginal) }));
 
 type ListedEntry = ReturnType<typeof listMemoryEntries>[number];
 
@@ -1943,14 +1960,15 @@ export function pullMemoryList(
 ) {
   const read = readPosition<MemoryListInput>(verb, input);
   return db.transaction(() => {
-    const rows = memoryListRows(db, verb, read.args);
+    const rows = memoryListRows(db, verb, read.args, verb === "list_memory_entries" ? readerHidden(db, reader.taskId) : undefined);
     const packed = packItems(read, "entries", rows, {}, { every: PENDING_EVENT_ID }) as Packed<{ entries: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb, input: read.args, returned_ids: packed.entries.map((e) => e.id) }, packed, at);
   })();
 }
 
-/** 一覧2つの行(meta-review の行の形)。pull と材料の節の candidate の部分が共有する。 */
-function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: MemoryListInput) {
+/** 一覧2つの行(meta-review の行の形)。pull と材料の節の candidate の部分が共有する。list_memory_entries は人間の面の一覧から
+ *  hidden(readerHidden)を除く(ADR 0264 決定1)。 */
+function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: MemoryListInput, hidden = new Set<number>()) {
   // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
   // (か、修正つきの統合に置き換えられた candidate)
   const withSuccessor = (e: ListedEntry, all: ListedEntry[]) => {
@@ -1959,7 +1977,7 @@ function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], inpu
   };
   const entries =
     verb === "list_memory_entries"
-      ? listMemoryEntries(db, input)
+      ? listMemoryEntries(db, input).filter((e) => !hidden.has(e.id))
       : ((all) =>
           all
             .filter((e) => e.state === "candidate" && (input.kind === undefined || e.kind === input.kind) && (input.include_invalidated || e.invalidation_reason === null))
@@ -2228,9 +2246,13 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
   if (!ids?.length) throw new DomainError("pass ids, or next from a previous read_memory_entries");
   return db.transaction(() => {
     const restored = restoredAs(db);
+    const hidden = readerHidden(db, reader.taskId);
     const found = new Map<number, number | undefined>();
     const missing: number[] = [];
     for (const id of new Set(ids)) {
+      // 視界の外は missing にも載せず黙って落とす(存在を知らせない)。見える行の鎖が視界の外へ続くことは無い —— 移動・復元の
+      // 複製を作るのは人間・meta-review・修理 task で、受験者の書き込みにならない
+      if (hidden.has(id)) continue;
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
       if (!row) {
         missing.push(id);
@@ -2302,10 +2324,11 @@ export function buildMemoryInjection(
 ): MemoryInjection {
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
-    const reader = { taskId: task.id, scope, agent };
-    const sight = readerSight(db, reader);
-    const visible = metaReviewSubjectOf(db, task.id) !== null ? [] : visibleEntries(db, sight);
-    if (visible.length === 0) return { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+    const none = { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+    if (metaReviewSubjectOf(db, task.id) !== null) return none;
+    const sight = readerSight(db, { taskId: task.id, scope, agent });
+    const visible = visibleEntries(db, sight);
+    if (visible.length === 0) return none;
     const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
       indexChildren(visible, prefix)
         .filter(isBranch)
@@ -2397,8 +2420,8 @@ export function recordMemoryInjection(
 
 /** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
  *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
- *  candidate の行は candidate の部分が持つので載せない。 */
-function storeChanges(db: Db, window: MetaReviewWindow) {
+ *  candidate の行は candidate の部分が持つので載せない。hidden(readerHidden)も載せない(ADR 0264 決定1)。 */
+function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
   for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
@@ -2408,7 +2431,7 @@ function storeChanges(db: Db, window: MetaReviewWindow) {
     changes.set(tail.id, (changes.get(tail.id) ?? new Set()).add(created ? "created" : "invalidated"));
   }
   return listMemoryEntries(db, {})
-    .filter((entry) => changes.has(entry.id) && entry.state !== "candidate")
+    .filter((entry) => changes.has(entry.id) && entry.state !== "candidate" && !hidden.has(entry.id))
     .map((entry) => ({ ...metaReviewRow(entry), changes: (["created", "invalidated"] as const).filter((c) => changes.get(entry.id)!.has(c)) }));
 }
 
@@ -2419,19 +2442,20 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window);
+    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window, readerHidden(db, taskId));
     return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
 }
 
-/** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。 */
-function memoryMaterial(db: Db, window: Required<MetaReviewWindow>) {
+/** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
+ *  (readerHidden)を載せない(ADR 0264 決定1)。 */
+function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) {
   const parts = {
-    store_changes: storeChanges(db, window),
+    store_changes: storeChanges(db, window, hidden),
     candidates: memoryListRows(db, "list_memory_candidates", {}),
     precedents: precedentRows(db, window),
     proposals: memoryProposalRows(db, window),
-    branches: metaReviewBranches(db),
+    branches: metaReviewBranches(db, hidden),
   };
   const section = materialSection("memory", window, [
     [

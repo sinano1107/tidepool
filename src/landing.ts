@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
@@ -339,6 +340,9 @@ export interface Landing {
    *  ちょうど1回走る回の結果を返す。retry だけが `answering`(答えている PR 昇格失敗 question)を渡す —— その回は
    *  その question を開いていないと読み、引退の対象からも除く(ADR 0106 決定5)。 */
   converge(options?: { answering?: string }): Promise<RootVerdict[]>;
+  /** 回答受理直前のバックストップ(ADR 0079 決定3)。merge 済み・閉じた PR を観測で決着させたら true、該当しない
+   *  (PR 番号・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
+   *  投げる(ADR 0265 決定4)。 */
   observePullRequestOutcome(question: Task): Promise<boolean>;
   observeAutoMergeOutcomes(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;
@@ -1051,12 +1055,14 @@ export function createLanding(deps: LandingDeps): Landing {
       const prNumber = question.question_pending_merge_pr;
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (prNumber === null || !resolve || !deps.github) return false;
-      // 握りつぶすのは読みの失敗だけ。決着の書き込みの失敗は呼び手(回答)へ投げる
+      // ADR 0265 決定4: 読めなければ回答を拒む(「観測しなかった」に倒すと merge 済みの PR への hold が残る)。
+      // 決着の書き込みの失敗も呼び手(回答)へ投げる
       let state: PrState;
       try {
         state = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
-      } catch {
-        return false;
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
