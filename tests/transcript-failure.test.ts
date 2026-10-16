@@ -52,8 +52,7 @@ class RecordingTranscripts extends TranscriptStore {
   }
 }
 
-/** 実 adapter を盤面に載せる。transcript の器の dir は adapter の logDir(mcp.json 等の置き場)と
- *  分ける —— 同じ dir を消すと、先に書かれる mcp.json の ENOENT が器の失敗に化ける。 */
+/** 実 adapter を盤面に載せる。transcript の器の dir は adapter が `deps.transcripts.dir` で引ける。 */
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider,
@@ -73,9 +72,9 @@ async function bootWithAdapter(
   return { proc, transcripts, transcriptDir };
 }
 
+/** 本番の形(`server-options.ts`)と同じく、Claude adapter の logDir(spawn の入力の置き場)は transcript の器と同じ dir。 */
 async function bootClaude(registryFiles: Record<string, string> = {}, extra: Partial<ClaudeWorkerOptions> = {}) {
   const registryDir = await makeRegistry(registryFiles);
-  const logDir = await tempDir("transcript-failure-logs-");
   return bootWithAdapter(
     (deps) =>
       new ClaudeCodeWorker({
@@ -84,7 +83,7 @@ async function bootClaude(registryFiles: Record<string, string> = {}, extra: Par
         agent: "deckhand",
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
-        logDir,
+        logDir: deps.transcripts.dir,
         ...extra,
       }),
     "anthropic",
@@ -184,9 +183,17 @@ for (const [harness, boot] of HARNESSES) {
   });
 }
 
-/** transcript の open より前で落ちる同期の失敗 —— 器の失敗ではない。 */
+/** transcript の open 以外で落ちる launch の同期の失敗 —— 器の失敗ではない。Claude は skill 列挙の continuation の中で、
+ *  器の外に置いた spawn の入力の dir が無い。 */
 const NON_OPEN_FAILURES = [
-  ["Claude(skill の列挙の失敗)", () => bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => null })],
+  [
+    "Claude(spawn の入力の dir が無い)",
+    async () =>
+      bootClaude(SKILLED_DECKHAND, {
+        enumerateSkills: async () => ["code-review"],
+        logDir: join(await tempDir("transcript-failure-logs-"), "gone"),
+      }),
+  ],
   ["Codex(checkout が無い)", async () => rm((await bootCodex()).workspace, { recursive: true })],
 ] as const;
 
