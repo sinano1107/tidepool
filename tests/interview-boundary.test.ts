@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { appendEvent } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
+import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { tierIdOf } from "../src/tier.js";
@@ -251,7 +252,8 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
  *  判断ログの行と question を持つ。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で
  *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
  *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
- *  read)で兄弟の Knowledge を探した応答。 */
+ *  read)で兄弟の Knowledge を探した応答。`injection` はその子の直近の spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと
+ *  同じ引数(盤面が渡した task と query、task の workspace 名、worker の agent 名)で組む。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
@@ -300,18 +302,22 @@ async function lastExaminee() {
       { name: "read_memory", arguments: { ids: [entry_id] } },
     ];
     const pulled = await Promise.all(pulls.map((call) => client.callTool(call)));
-    return { rootId: root.id, siblings: [done, cancelled], reader, pages, pulls: pulled, tools: (await client.listTools()).tools };
+    const spawn = t.worker.started.map((task) => task.id).lastIndexOf(reader);
+    const spawned = t.worker.started[spawn]!;
+    expect(spawned.workspace).not.toBeNull();
+    const injection = buildMemoryInjection(t.db, spawned, spawned.workspace, t.worker.id, t.worker.startedQueries[spawn]).section;
+    return { rootId: root.id, siblings: [done, cancelled], reader, pages, pulls: pulled, injection, tools: (await client.listTools()).tools };
   } finally {
     await client.close();
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印が出ない(ADR 0263 決定7・8・10)", async () => {
-  const { siblings, pages, pulls, tools } = await lastExaminee();
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印が出ない(ADR 0263 決定7・8・10)", async () => {
+  const { siblings, pages, pulls, injection, tools } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
-  const read = [...pages, ...pulls, ...tools].map((item) => JSON.stringify(item)).join("\n");
+  const read = [...pages, ...pulls, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
   for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, CONTINUE_COMMENT, ...siblings]) {
     expect(read).not.toContain(text);
