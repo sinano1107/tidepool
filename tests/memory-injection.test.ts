@@ -424,6 +424,17 @@ it("読み手が pin の子でないとき、どの Interview の pin の子が�
   expect(buildMemoryInjection(db, task, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
 });
 
+it("受験者が define して止まり、別の Interview の受験者が同じ枝を define した後に戻ると、注入の INDEX には自分の定義が生きて出る —— 視界に無い後継による無効化はその読み手には起きていない(ADR 0264 決定4)", () => {
+  const { db } = board({ title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" });
+  const [first, later] = [interviewPinChild(db, at), interviewPinChild(db, at)];
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the first examinee files.", author }, "worker", at, first.id);
+  defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the later examinee files.", author }, "worker", at, later.id);
+
+  expect(buildMemoryInjection(db, first, "tidepool", "deckhand").section).toContain("### Index\n\n- parser/ — What the first examinee files.");
+  expect(buildMemoryInjection(db, later, "tidepool", "deckhand").section).toContain("### Index\n\n- parser/ — What the later examinee files.");
+});
+
 it("読み手が pin の子のとき、出所の event の task がどの Interview の root か pin の子であるエントリは、書き手を問わず INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 出所が commit のもの・自分が書いたものには出て、本番の task と root には受験者の書き込みを除いて出る(ADR 0264 決定1・3)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);

@@ -570,7 +570,7 @@ it("読み手が pin の子のとき、browse はどの Interview の pin の子
   expect(browseMemory(db, examinee, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
 });
 
-it("読み手が pin の子のとき、read は pin の子が書いた id(移された複製・無効化済みも)を名指されても視界の外として黙って落とし、その後継も見えない後継として扱う(ADR 0263 決定7)", () => {
+it("読み手が pin の子のとき、read は pin の子が書いた id(移された複製・無効化済みも)を名指されても視界の外として黙って落とし、pin の子が書いた後継による無効化は起きていないものとして本番の行を返す(ADR 0263 決定7・ADR 0264 決定4)", () => {
   const { db, task, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
   const elsewhere = write(otherPinChild, "elsewhere");
@@ -589,8 +589,8 @@ it("読み手が pin の子のとき、read は pin の子が書いた id(移さ
 
   const read = readMemory(db, examinee, { ids }, at);
 
-  expect(read.entries.map((e) => e.id)).toEqual([production]);
-  expect(read.dropped).toEqual([{ id: replaced, reason: "superseded", successor: null }]);
+  expect(read.entries.map((e) => e.id)).toEqual([production, replaced]);
+  expect(read.dropped).toEqual([]);
 });
 
 it("読み手が pin の子のとき、どの Interview の root が書いたエントリ(移された複製も)も search・browse・read に出ず、search の候補にも載らない —— root と本番の task には見える(ADR 0264 決定3)", () => {
@@ -641,6 +641,24 @@ it("読み手が pin の子のとき、自分が書いたエントリ(移され�
   expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: own }, { id: movedOwn }, { id: digitsCommit }], dropped: [] });
   // 本番の読み手には受験者の書き込み(own・movedOwn)が無い(ADR 0264 決定1)
   expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual([onOwnDecision, digitsCommit]);
+});
+
+it("読み手の視界に無い後継による無効化はその読み手には起きていない —— 受験者が define して止まり、兄弟が同じ枝を define した後に戻ると、自分の定義は INDEX に生きて出て、read は鎖をそこで止めて本文を返し、search は兄弟の後継で置き換えられた Knowledge を落とさない(ADR 0264 決定4)", () => {
+  const { db, examinee, sibling } = examineeBoard();
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (writer: string, text: string) => defineMemoryBranch(db, { scope: "tidepool", path: "tide", text, author }, "worker", at, writer).entry_id;
+  const own = define(examinee.taskId, "What the examinee files.");
+  const knowledge = (writer: string, title: string, supersedes?: number[]) =>
+    recordKnowledge(db, { scope: "tidepool", path: "tide", title, text: `tide ${title}`, source: { commit: "0a46a46" }, author, supersedes }, "worker", at, writer).entry_id;
+  const ownFact = knowledge(examinee.taskId, "own");
+  define(sibling.id, "What the sibling files.");
+  knowledge(sibling.id, "sibling", [ownFact]);
+
+  expect(browseMemory(db, examinee, {}, at).children).toEqual([{ name: "tide", definition: "What the examinee files." }]);
+  expect(readMemory(db, examinee, { ids: [own, ownFact] }, at)).toMatchObject({ entries: [{ id: own, text: "What the examinee files." }, { id: ownFact }], dropped: [] });
+  const search = searchMemory(db, examinee, { query: "tide" }, at);
+  expect(search.results.map((r) => r.id)).toEqual([ownFact]);
+  expect(getEvent(db, search.event_id)!.payload).toMatchObject({ candidates: [{ id: ownFact, dropped: null }] });
 });
 
 it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
@@ -1196,7 +1214,7 @@ it("店に刻まれた tokenizer id が今の版と違えば、open 後の照合
   expect(ensureMemoryIndex(db, at)).toBeNull();
 });
 
-it("読み手が pin の子でないとき、search・browse・read はどの Interview の pin の子が書いたエントリも、その移動・復元の複製も返さず、memory_pulled の候補にも read の dropped にも載せない —— pin の子が書いた後継は見えない後継として扱う(ADR 0264 決定1)", () => {
+it("読み手が pin の子でないとき、search・browse・read はどの Interview の pin の子が書いたエントリも、その移動・復元の複製も返さず、memory_pulled の候補にも read の dropped にも載せない —— pin の子が書いた後継による無効化は起きていないものとする(ADR 0264 決定1・4)", () => {
   const { db, task, reader, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
   const siblingEntry = write(sibling, "sibling");
@@ -1215,10 +1233,10 @@ it("読み手が pin の子でないとき、search・browse・read はどの In
   ).entry_id;
 
   const search = searchMemory(db, reader, { query: "tide" }, at);
-  expect(search.results.map((r) => r.id)).toEqual([production]);
+  expect(search.results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, replaced]);
   expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id).sort((a, b) => a - b)).toEqual([production, replaced]);
-  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
+  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }, { id: replaced }] });
   const read = readMemory(db, reader, { ids: [production, siblingEntry, answers, moved, dropped, restored, replaced, successor] }, at);
-  expect(read.entries.map((e) => e.id)).toEqual([production]);
-  expect(read.dropped).toEqual([{ id: replaced, reason: "superseded", successor: null }]);
+  expect(read.entries.map((e) => e.id)).toEqual([production, replaced]);
+  expect(read.dropped).toEqual([]);
 });

@@ -209,6 +209,7 @@ function writeSuperseding(
   origin: EventOrigin,
   at: Date,
   write: (replaced: MemoryEntry[]) => number,
+  writer?: string,
 ): { entry_id: number; event_id: number } {
   if (supersedes?.length === 0) throw new DomainError("supersedes needs at least one entry to replace; omit it to write without replacing");
   return db.transaction(() => {
@@ -216,7 +217,7 @@ function writeSuperseding(
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
     if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
-    requireOneTree(db, since);
+    requireOneTree(db, since, writer);
     return { entry_id: id, event_id: id };
   })();
 }
@@ -225,8 +226,11 @@ function writeSuperseding(
  *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
  *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
  *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
+ *  受験者(pin の子)の書き込みはどの書き手にも数えない(ADR 0264 決定4)—— 書き手(writer)が受験者なら置く行はみな受験者の
+ *  書き込みなので門は当たらず、他の書き手は本番の記録(readerHidden の外)だけを数えて名指す。
  *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
-function requireOneTree(db: Db, since: number): void {
+function requireOneTree(db: Db, since: number, writer?: string): void {
+  if (writer !== undefined && getTask(db, writer)?.interview_target_id != null) return;
   const pairs = db
     .prepare(
       `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, ef.id AS e_from,
@@ -249,10 +253,12 @@ function requireOneTree(db: Db, since: number): void {
     d_scope: string;
     d_from: number | null;
   }>;
-  if (pairs.length === 0) return;
+  const examineeWrites = pairs.length === 0 ? new Set<number>() : readerHidden(db, undefined);
+  const counted = pairs.filter((p) => !examineeWrites.has(p.e_id) && !examineeWrites.has(p.d_id));
+  if (counted.length === 0) return;
   // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
   const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
-  const named: OneTreePair[] = pairs.map((p) => ({
+  const named: OneTreePair[] = counted.map((p) => ({
     entry: { ...side(p.e_id, p.e_from), kind: p.e_kind, path: p.e_path },
     definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
   }));
@@ -314,7 +320,11 @@ function withWriteRecord<T extends object>(db: Db, writer: { taskId: string; age
   return db.transaction(() => {
     const since = memoryWatermark(db);
     const result = write();
-    const events = listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"], { after: since });
+    // 書き手の視界に無い定義を盤面の手で畳んだ無効化(defineMemoryBranch)は載せない —— 記録も視界に無いものを名指さない(ADR 0264 決定4)
+    const unseen = readerHidden(db, writer.taskId);
+    const events = listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"], { after: since }).filter(
+      (e) => e.payload.kind !== "memory_entry_invalidated" || !unseen.has(e.payload.entry_id),
+    );
     const created = events.filter((e) => e.payload.kind === "memory_entry_created").map((e) => e.id);
     const invalidated = events.flatMap((e) => (e.payload.kind === "memory_entry_invalidated" ? [e.payload.entry_id] : []));
     const payload = { kind: "memory_written" as const, line: writeLine(events), created, invalidated };
@@ -358,13 +368,15 @@ export function recordKnowledge(
   return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
       createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
+      writer,
     ),
   );
 }
 
 /** 枝の定義(spec #600 A): その枝の下に何を保存するかの1行。承認不要で書いた瞬間に approved、
  *  出所は持たない(自身の作成 event)。同じ枝・同じスコープの approved は1つだけ —— 改訂は
- *  `supersedes` に旧定義を含める。置き換えられるのは同じ path の定義だけで(畳みの線 —— foldMemoryEntries)、枝の改名と統合は
+ *  `supersedes` に旧定義を含める。書き手(writer)の視界に無い生きた定義は拒みも名指しもせず、新しい定義が盤面の手で
+ *  superseded にする(ADR 0264 決定4)。人間の面は writer を渡さないので全部が視界にある。置き換えられるのは同じ path の定義だけで(畳みの線 —— foldMemoryEntries)、枝の改名と統合は
  *  枝ごとの移動が持つ(ADR 0177 決定6)。meta-review は defineMemoryByMetaReview の門を通して呼ぶ。 */
 export function defineMemoryBranch(
   db: Db,
@@ -378,10 +390,17 @@ export function defineMemoryBranch(
   const fields = { ...rest, path: checkedPath(rest.path) };
   return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) => {
-      const defined = liveDefinitions(db, fields.scope, fields.path).find((id) => !supersedes?.includes(id));
-      if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined}; revise it with supersedes`);
-      return createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
-    }),
+      const hidden = writer === undefined ? new Set<number>() : readerHidden(db, writer);
+      const rows = (
+        db.prepare("SELECT * FROM memory_entries WHERE kind = 'definition' AND path = ? AND scope IS ?").all(fields.path, fields.scope) as EntryRow[]
+      ).filter((row) => !supersedes?.includes(row.id));
+      const defined = rows.find((row) => !hidden.has(row.id) && liveTo(db, hidden, row));
+      if (defined) throw new DomainError(`branch ${fields.path} is already defined in this scope by entry ${defined.id}; revise it with supersedes`);
+      const id = createEntry(db, { ...fields, title: fields.text, kind: "definition", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at);
+      const unseen = rows.filter((row) => hidden.has(row.id) && row.invalidation_reason === null).map((row) => row.id);
+      if (unseen.length > 0) foldMemoryEntries(db, { replaces: unseen, successor_id: id, author: fields.author }, origin, at);
+      return id;
+    }, writer),
   );
 }
 
@@ -1729,14 +1748,14 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
 
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
- *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
+ *  2段目 宛先、3段目 未無効化(liveTo)。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。
  *  読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
   const hidden = readerHidden(db, reader.taskId);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
-  const live = (row: EntryRow) => row.invalidation_reason === null;
+  const live = (row: EntryRow) => liveTo(db, hidden, row);
   const layers = [base, addressed, live];
   return {
     scope: reader.scope,
@@ -1746,6 +1765,17 @@ function readerSight(db: Db, reader: MemoryReader) {
 }
 
 type ReaderSight = ReturnType<typeof readerSight>;
+
+/** 視界の3段目(未無効化)の正本: 無効化されていないか、無効化した後継が hidden(読み手に無い集合)にあり、その後継がこの段にある
+ *  —— 読み手の視界に無い後継による無効化は、その読み手には起きていない(ADR 0264 決定4)。readerSight と定義の書き込みの門が読む。 */
+function liveTo(db: Db, hidden: Set<number>, row: EntryRow): boolean {
+  let link = row;
+  while (link.invalidation_reason !== null) {
+    if (link.successor_id === null || !hidden.has(link.successor_id)) return false;
+    link = requireEntry(db, link.successor_id);
+  }
+  return true;
+}
 
 /** FTS に当たった行(順位順)のうち視界の1段目にあるもの。SQL は FTS の照合と粗い前絞り(approved・scope)だけ。Definition は
  *  当てない —— worker に届くのは INDEX だけで、search の候補にも注入の関連 leaf にもならない(ADR 0083 追記7)。宛先と無効化は
@@ -1765,16 +1795,16 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
 /** 読み手(task)に無いエントリ。書いた task は作った書き込みの記録(ADR 0252)の task で引き、どれも本文が同じ後継(移動の複製・
  *  復元の複製)を含む。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の
  *  専用 verb と材料もこの集合を外す。
- *  - 読み手が pin の子でない(agent の読み手): どの Interview でも、pin の子が書いたもの —— 受験者の書き込みは本番の記録ではない
- *    (ADR 0264 決定1)。
+ *  - 読み手が pin の子でない(agent の読み手。taskId 無しは一木の門が数えない受験者の書き込み): どの Interview でも、pin の子が
+ *    書いたもの —— 受験者の書き込みは本番の記録ではない(ADR 0264 決定1)。
  *  - 読み手が pin の子(受験者、ADR 0264 決定3): どの Interview でも、Interview の木の task が書いたものと、書き手を問わず出所の
  *    event の task が木の task(自分を含む)であるもの(帰責 `objection_attributed` はその entry_id が指す判断ログの行の task で
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
-function readerHidden(db: Db, taskId: string): Set<number> {
+function readerHidden(db: Db, taskId: string | undefined): Set<number> {
   const written = (tasks: string) =>
     `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
-  const examinee = getTask(db, taskId)?.interview_target_id != null;
+  const examinee = taskId !== undefined && getTask(db, taskId)?.interview_target_id != null;
   const hidden = db
     .prepare(
       examinee
