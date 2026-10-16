@@ -165,6 +165,22 @@ function registerFailureQuestion(
   );
 }
 
+/** failure question と後始末の印を同じ transaction で書く(issue #1935)—— 間で落ちると後始末の印の
+ *  無い todo が残り、起動時の中断の掃き出しにも復旧にも拾われず、tree rule の走らない workspace へ
+ *  次の pickup が入る。 */
+function registerFailureAndMarkTeardown(
+  db: Db,
+  task: Task,
+  title: string,
+  reason: string,
+  now: Date,
+): void {
+  db.transaction(() => {
+    registerFailureQuestion(db, task, title, reason, now);
+    markTeardown(db, task.id, now);
+  })();
+}
+
 /** 上限到達による中断(CONTEXT.md / ADR 0104)の盤面側の一撃。adapter は
  *  「Provider が 429 で断った」ことと「容器が空になった」ことだけを観測し、
  *  ここへ task id を渡す —— slot も tree rule も盤面の側にある(ADR 0099 決定1)。
@@ -278,8 +294,7 @@ function failAndReclaim(
   const task = getTask(deps.db, taskId);
   if (task?.status !== "in_progress") return;
   const now = deps.clock.now();
-  registerFailureQuestion(deps.db, task, ...wording(task), now);
-  markTeardown(deps.db, taskId, now);
+  registerFailureAndMarkTeardown(deps.db, task, ...wording(task), now);
   deps.slot.enterTeardown();
   containers.forceReclaim(taskId);
   void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
@@ -355,7 +370,7 @@ export function startWatchdog(deps: {
     // 決着済みのタスクに failure question を立てない
     if (task?.status !== "in_progress") return;
     const now = clock.now();
-    registerFailureQuestion(
+    registerFailureAndMarkTeardown(
       db,
       task,
       `watchdog killed task: ${task.title}`,
@@ -366,7 +381,6 @@ export function startWatchdog(deps: {
         exitSections(rec.exit),
       now,
     );
-    markTeardown(db, taskId, now);
     slot.enterTeardown();
     void runTeardown(teardown, taskId, teardownStep(db, taskId));
   }
@@ -467,7 +481,7 @@ export function startWatchdog(deps: {
     if (task?.status !== "in_progress") return;
     const now = clock.now();
     const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
-    registerFailureQuestion(
+    registerFailureAndMarkTeardown(
       db,
       task,
       `worker exited without reporting: ${task.title}`,
@@ -476,7 +490,6 @@ export function startWatchdog(deps: {
         exitSections(exit),
       now,
     );
-    markTeardown(db, taskId, now);
     slot.enterTeardown();
     void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
   }
