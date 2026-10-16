@@ -5,6 +5,7 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -283,7 +284,7 @@ async function seedRootWithPr() {
   const record = (kind: "pr_merged" | "pr_merge_observed" | "pr_close_observed", taskId = FIXTURE_TASK) =>
     appendEvent(db, { taskId, workerId: "human", origin: "webui", payload: { kind, pr_number: 7 }, at: new Date() });
   const prMerged = () => listEpisodes(db, { workspace: "sandbox", agent: "tako" })[0]!.prMerged;
-  return { record, prMerged };
+  return { db, record, prMerged };
 }
 
 it.each(["pr_merged", "pr_merge_observed"] as const)(
@@ -304,5 +305,17 @@ it("別の workspace で同じ番号の PR を開いた根の merge は、その
 it("pr_close_observed だけの PR の prMerged は null(issue #1822)", async () => {
   const { record, prMerged } = await seedRootWithPr();
   record("pr_close_observed");
+  expect(prMerged()).toBeNull();
+});
+
+it("内容で終わった根(landing_finished の根拠が content)の prMerged は null(ADR 0265 決定3)", async () => {
+  const { db, prMerged } = await seedRootWithPr();
+  appendEvent(db, {
+    taskId: FIXTURE_TASK,
+    workerId: BOARD_WORKER_ID,
+    origin: "board",
+    payload: { kind: "landing_finished", pr_number: 7, basis: "content" },
+    at: new Date(),
+  });
   expect(prMerged()).toBeNull();
 });
