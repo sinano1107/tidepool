@@ -337,6 +337,9 @@ export interface Landing {
    *  ちょうど1回走る回の結果を返す。retry だけが `answering`(答えている PR 昇格失敗 question)を渡す —— その回は
    *  その question を開いていないと読み、引退の対象からも除く(ADR 0106 決定5)。 */
   converge(options?: { answering?: string }): Promise<RootVerdict[]>;
+  /** 回答受理直前のバックストップ(ADR 0079 決定3)。merge 済み・閉じた PR を観測で決着させたら true、該当しない
+   *  (PR 番号・GitHub・workspace が無い)か PR が開いている・印が付いていれば false。PR を読めなければ DomainError を
+   *  投げる(ADR 0265 決定4)。 */
   observePullRequestOutcome(question: Task): Promise<boolean>;
   observeAutoMergeOutcomes(agentName: string): Promise<void>;
   tick(kind: "auto_merge" | "outside_merge", now: Date): Promise<void>;

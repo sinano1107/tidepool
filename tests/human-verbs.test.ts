@@ -1035,10 +1035,11 @@ it("PR の読みが戻れば回答は通り、盤面の外で merge 済みなら
   expect(kinds).not.toContain("question_answered");
 });
 
-// 「観測しなかった」のうち「該当しない」(GitHub 未設定・純ローカル)は、今日どおり回答を通す
+// 「観測しなかった」のうち「該当しない」(GitHub 未設定・workspace 未設定)は、今日どおり回答を通す。
+// 純ローカルの workspace(repo なし)は pr_merge question を作らず local_merge で着地するので、この経路に来ない
 it.each([
   ["GitHub 未設定", { github: undefined }],
-  ["純ローカル", { workspace: undefined, resolveWorkspace: undefined }],
+  ["workspace 未設定", { workspace: undefined, resolveWorkspace: undefined }],
 ] as const)("%s の merge question への「hold」は、今日どおり回答として記録される", async (_, landingDeps) => {
   const { question, answer } = escalatedMergeQuestionWith(new FakeGitHubClient(), landingDeps);
 
