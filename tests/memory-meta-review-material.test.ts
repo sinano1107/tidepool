@@ -21,10 +21,11 @@ import {
   recordKnowledge,
   recordMetaReviewMaterial,
   rejectMemoryProposal,
+  restoreMemoryEntry,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, type MemoryProposal, poseProbe, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
@@ -340,4 +341,35 @@ it("主題 memory の材料の節に載ったエントリは、その session �
 
   expect(entriesSeenBefore(episode, events, decision)).toEqual([followed, written, definition, drafted!, rejected!].sort((a, b) => a - b));
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
+});
+
+it("店の変更と枝の一覧に、どの Interview の pin の子が書いた Knowledge と Definition も、その移動・復元の複製も載らない —— 窓の中の本番の書き込みは載る(ADR 0264 決定1)", () => {
+  const db = openDb(":memory:");
+  const interview = () =>
+    poseProbe(
+      db,
+      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never }, at, ...HUMAN_WEBUI),
+      { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" },
+      "auditor",
+      at,
+      "worker",
+    )[0]!;
+  const [pinChild, otherPinChild] = [interview(), interview()];
+  register(db, "memory", true);
+  const write = (writer: { id: string }, path: string) =>
+    recordKnowledge(db, { scope: "tidepool", path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at, writer.id).entry_id;
+  const production = knowledge(db, "parser");
+  write(pinChild, "parser/answers");
+  defineMemoryBranch(db, { scope: "tidepool", path: "parser/answers", text: "What the examinee filed.", author: deckhand }, "worker", at, pinChild.id);
+  moveMemory(db, { entry_id: write(otherPinChild, "parser/drafts"), scope: "tidepool", path: "lexer", mover: human }, "webui", at);
+  const dropped = write(otherPinChild, "grammar");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at);
+  const review = register(db, "memory");
+
+  const { parts, section } = memoryMaterialOf(db, review);
+
+  expect(ids(parts.store_changes)).toEqual([production]);
+  expect(parts.branches).toEqual([{ path: "parser", definitions: [], scopes: ["tidepool"] }]);
+  expect(section).not.toMatch(/answers|drafts|lexer|grammar|examinee/);
 });

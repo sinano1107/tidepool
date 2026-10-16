@@ -29,7 +29,7 @@ import {
   searchMemoryEntries,
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, type MemoryProposal, poseProbe, registerTask } from "../src/tasks.js";
 import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
@@ -808,4 +808,43 @@ it("search_memory_entries は応答予算で切って next と remaining を言�
     worker_id: "auditor",
     payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide" }, returned_ids: second.results.map((r) => r.id) },
   });
+});
+
+/** どの Interview でも pin の子(受験者)が書いた Knowledge と Definition、その移動・復元の複製と、本番の Knowledge(ADR 0264 決定1)。 */
+function examineeWrites(fixture: ReturnType<typeof board>) {
+  const { db } = fixture;
+  const interview = () =>
+    poseProbe(
+      db,
+      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never }, at, ...HUMAN_WEBUI),
+      { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" },
+      "auditor",
+      at,
+      "worker",
+    )[0]!;
+  const [pinChild, otherPinChild] = [interview(), interview()];
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const write = (writer: { id: string }, path: string) =>
+    recordKnowledge(db, { scope: "tidepool", path, title: `parser ${path}`, text: "The parser.", source: { commit: "0a46a46" }, author }, "worker", at, writer.id).entry_id;
+  const production = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "parser production", text: "The parser.", source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
+  const knowledge = write(pinChild, "parser/answers");
+  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser/answers", text: "What the examinee filed.", author }, "worker", at, pinChild.id).entry_id;
+  const original = write(otherPinChild, "parser/drafts");
+  const moved = moveMemory(db, { entry_id: original, scope: "tidepool", path: "lexer", mover: human }, "webui", at).entry_id;
+  const dropped = write(otherPinChild, "grammar");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at);
+  const restored = restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at).entry_id;
+  return { production, hidden: [knowledge, definition, original, moved, dropped, restored] };
+}
+
+it("meta-review の list_memory_entries・read_memory_entries・search_memory_entries・枝の一覧は、どの Interview の pin の子が書いたエントリも、その移動・復元の複製も返さない —— read は名指された id を missing でなく黙って落とし、like に名指すと存在しない id と同じに断る(ADR 0264 決定1)", () => {
+  const fixture = board();
+  const { db, reader } = fixture;
+  const { production, hidden } = examineeWrites(fixture);
+
+  expect(pullMemoryList(db, reader, "list_memory_entries", {}, at).entries.map((e) => e.id)).toEqual([production]);
+  expect(readMemoryEntries(db, reader, { ids: [production, ...hidden] }, at)).toMatchObject({ entries: [{ id: production }], missing: [] });
+  expect(searchMemoryEntries(db, reader, { query: "parser" }, at).results.map((r) => r.id)).toEqual([production]);
+  expect(() => searchMemoryEntries(db, reader, { like: hidden[0]! }, at)).toThrow(`no memory entry ${hidden[0]}`);
+  expect(pullMemoryBranches(db, reader, {}, at).branches).toEqual([{ path: "parser", definitions: [], scopes: ["tidepool"] }]);
 });
