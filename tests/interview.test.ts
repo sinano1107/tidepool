@@ -9,9 +9,9 @@ import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js"
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
-import { entryObjections, listLog, raiseObjection } from "../src/triage.js";
+import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -806,4 +806,44 @@ it("受験者を親にした work と review の登録は扉を問わず拒ま�
   expect(listChildren(db, child.id)).toEqual([]);
   expect(failureQuestion(db, child.id, new Date(0)).parent_id).toBe(child.id);
   expect(registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI).parent_id).toBe(root.id);
+});
+
+it.each(["出題", "採点"] as const)("root の%sの行への異議を commit すると root の下に RCA(self / auditor)だけが立ち、修理子は立たない —— 帰責 event は今どおり(ADR 0268 決定3)", (line) => {
+  const { db, root, children } = scoringRoot();
+  if (line === "採点") {
+    const scores = children.map((child) => ({ child_id: child.id, outcome: "accepted" as const }));
+    completeInterview(db, root, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  }
+  const entry = (line === "出題" ? taskDecisionLog(db, root.id)[0] : taskDecisionLog(db, root.id).at(-1))!.id;
+  startTriage(db, new Date(2));
+  raiseObjection(db, entry, "the rubric is too loose", new Date(2));
+
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, root.id).map((child) => [child.type, child.title])).toEqual([
+    ["review", "rca (self): interview"],
+    ["review", "rca (auditor): interview"],
+  ]);
+  expect(listEvents(db, root.id).flatMap(({ payload }) => (payload.kind === "objection_attributed" ? [payload] : []))).toEqual([
+    expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" }),
+  ]);
+});
+
+it("出題の行への異議から立った RCA は root の retry で倒れず、todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0268 決定4)", () => {
+  const { db, root } = registerInterview();
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const [posed] = taskDecisionLog(db, root.id);
+  startTriage(db, new Date(1));
+  raiseObjection(db, posed!.id, "the probe names the answer", new Date(1));
+  commitTriage(db, new Date(1), [], new Map());
+  const rcas = listChildren(db, root.id);
+  expect(rcas.map((rca) => rca.title)).toEqual(["rca (self): interview", "rca (auditor): interview"]);
+
+  const again = retryRoot(db, root, "the probe names the answer");
+
+  expect([root, examinee].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled"]);
+  expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+  const picked: string[] = [];
+  for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "tako", new Date(2))!.id);
+  expect(picked.sort()).toEqual([again.id, ...rcas.map((rca) => rca.id)].sort());
 });

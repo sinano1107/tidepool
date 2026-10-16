@@ -241,25 +241,26 @@ export async function attributeObjections(
 /** 異議された task の子の登録 event のうち、その子が異議群を覆うもの(ADR 0171 決定1): `task_registered` の
  *  `objection_event_ids` が異議群の名前(最初の異議 id)を含む。 */
 const COVERING_CHILD = `FROM events e JOIN tasks t ON t.id = e.task_id
-  WHERE e.kind = 'task_registered' AND t.parent_id = @objectedId AND t.type = @type
+  WHERE e.kind = 'task_registered' AND t.parent_id = @objectedId
     AND EXISTS (SELECT 1 FROM json_each(e.payload, '$.objection_event_ids') WHERE value = @bundle)`;
 
 /** 異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)。 */
 const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
-  const covering = new Set(db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).pluck().all({ objectedId, type: "review", bundle }));
-  return listChildren(db, objectedId).filter((c) => covering.has(c.id));
+  const covering = new Set(db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).pluck().all({ objectedId, bundle }));
+  return listChildren(db, objectedId).filter((c) => c.type === "review" && covering.has(c.id));
 };
 
 const settledAll = (tasks: Task[]) => tasks.every((r) => isSettled(r.status));
 
 /** 第2回の出所: 入力を組む異議群。「当時の decision log」の切れ目はその異議群の記録から引く —— 初回の判定が読んだ範囲、
- *  未帰責なら覆う修理子の登録(`secondRoundInput`、#1572)。 */
+ *  未帰責なら覆う子の最初の登録(`secondRoundInput`、#1572)。 */
 type SecondRoundSource = Pick<Attribution, "entry_id" | "objection_event_ids">;
 
-/** 異議群を束ねた commit が立てた修理子の `task_registered`(ADR 0171 決定2)。未帰責の異議群の当時の decision log の切れ目 ——
- *  初回の帰責 event が書かれるはずだった同じ transaction の中にある。束ねた異議群には必ず修理子がある(task は消えず、`bundleObjections` が飛ばすのは task の無い異議だけ)。 */
-const repairRegistered = (db: Db, objectedId: string, bundle: number) =>
-  db.prepare(`SELECT MIN(e.id) ${COVERING_CHILD}`).pluck().get({ objectedId, type: "work", bundle }) as number;
+/** 異議群を束ねた commit が立てた最初の子(修理子、無ければ RCA)の `task_registered`(ADR 0171 決定2)。未帰責の異議群の当時の
+ *  decision log の切れ目 —— 初回の帰責 event が書かれるはずだった同じ transaction の中にある。未帰責の異議群には必ず RCA が立つ
+ *  (修理子は Interview の root と cancelled の task には立たない、ADR 0268 決定3)。 */
+const bundleRegistered = (db: Db, objectedId: string, bundle: number) =>
+  db.prepare(`SELECT MIN(e.id) ${COVERING_CHILD}`).pluck().get({ objectedId, bundle }) as number;
 
 /** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
  *  異議群と未帰責の異議群 —— 後者の出所はその異議群。それ以外は確定
@@ -308,7 +309,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
   });
 }
 
-/** 第2回の入力: 当時の decision log は異議群の初回の判定が読んだ範囲(未帰責なら覆う修理子の登録より前)で切り、
+/** 第2回の入力: 当時の decision log は異議群の初回の判定が読んだ範囲(未帰責なら覆う子の登録より前)で切り、
  *  覆う RCA 子の decision log と完了 result を足す。起草の撃ち直しも同じ出所から組む。 */
 function secondRoundInput(db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput {
   const [initial] = listEvents(db, objectedId).flatMap((e) =>
@@ -316,7 +317,7 @@ function secondRoundInput(db: Db, objectedId: string, attribution: SecondRoundSo
     e.payload.entry_id === attribution.entry_id && bundleName(e.payload) === bundleName(attribution) ? [{ ...e.payload, id: e.id }] : [],
   );
   return {
-    ...objectionInput(db, attribution, initial ? readCut(initial) : repairRegistered(db, objectedId, bundleName(attribution))),
+    ...objectionInput(db, attribution, initial ? readCut(initial) : bundleRegistered(db, objectedId, bundleName(attribution))),
     rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
   };
 }

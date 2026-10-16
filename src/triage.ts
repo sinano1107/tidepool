@@ -21,6 +21,7 @@ import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
   type BoardTask,
   getTask,
+  interviewTargets,
   listBoard,
   moveTask,
   type RegisterTaskInput,
@@ -285,8 +286,11 @@ function registerRcaReview(
   );
 }
 
-/** One repair task per objected task: every direction comment raised against a
- *  task's log entries this session lands in a single work task's purpose.
+/** One repair task per objected task whose artifact remains on the board: every
+ *  direction comment raised against a task's log entries this session lands in a
+ *  single work task's purpose. An Interview root (its probe is fixed by retry,
+ *  not repair) and a cancelled task (its artifact is thrown away) get none —
+ *  attribution and the RCAs below still stand by cause (ADR 0268 決定3).
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
@@ -296,7 +300,8 @@ function registerRcaReview(
  *  decides what stands beside the repair (0115 決定3): only the entries whose
  *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
  *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
- *  with none of them gets the repair alone. The second attribution round picks
+ *  with none of them gets the repair alone (or nothing, where no repair stands —
+ *  an Interview root or a cancelled task). The second attribution round picks
  *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
@@ -360,36 +365,38 @@ function bundleObjections(
         at: now,
       });
     }
-    let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
-    let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
-    try {
-      assertAssigneeCanTake(assigneeDeps, assignee, "work");
-    } catch (err) {
-      if (!(err instanceof DomainError)) throw err;
-      assigneeNotCopied = { name: assignee!, reason: err.message };
-      assignee = undefined;
+    if (interviewTargets(db, taskId) === null && objected.status !== "cancelled") {
+      let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
+      let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
+      try {
+        assertAssigneeCanTake(assigneeDeps, assignee, "work");
+      } catch (err) {
+        if (!(err instanceof DomainError)) throw err;
+        assigneeNotCopied = { name: assignee!, reason: err.message };
+        assignee = undefined;
+      }
+      registerTask(
+        db,
+        {
+          type: "work",
+          title: `repair: ${objected.title}`,
+          purpose: renderObjectionPairs(
+            `objections raised against decisions of "${objected.title}"`,
+            pairs,
+            judgments,
+          ),
+          completion_criteria: "every objection direction above is addressed",
+          parent_id: taskId,
+          assignee,
+          assignee_not_copied: assigneeNotCopied,
+          workspace: objected.workspace ?? undefined,
+          objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
+        },
+        now,
+        HUMAN_WORKER_ID,
+        origin,
+      );
     }
-    registerTask(
-      db,
-      {
-        type: "work",
-        title: `repair: ${objected.title}`,
-        purpose: renderObjectionPairs(
-          `objections raised against decisions of "${objected.title}"`,
-          pairs,
-          judgments,
-        ),
-        completion_criteria: "every objection direction above is addressed",
-        parent_id: taskId,
-        assignee,
-        assignee_not_copied: assigneeNotCopied,
-        workspace: objected.workspace ?? undefined,
-        objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
-      },
-      now,
-      HUMAN_WORKER_ID,
-      origin,
-    );
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {

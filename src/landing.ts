@@ -186,7 +186,7 @@ export async function contentLeftBehind(
   const targets = (
     db
       .prepare(
-        `${subtreeSql("@root", true)}
+        `${subtreeSql("@root", "c.status <> 'cancelled'")}
        SELECT id FROM tasks
         WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
       )
