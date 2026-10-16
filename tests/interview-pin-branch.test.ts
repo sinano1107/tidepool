@@ -159,7 +159,7 @@ it("掃除は本番の task のブランチ自身の reflog とそこからだ�
   await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
 
   expect(git(workspace.path, "reflog", "show", `task/${work.id}`).split("\n").length).toBe(workReflog);
-  for (const object of [discarded, staged, git(workspace.path, "rev-parse", "origin/main")]) {
+  for (const object of [discarded, staged]) {
     expect(() => git(workspace.path, "cat-file", "-e", object)).not.toThrow();
   }
   expect(git(workspace.path, "log", "-1", "--format=%s", "origin/main")).toBe("a human merge");
