@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1762,30 +1762,31 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
-/** Interview の木の task(どの Interview でも): root(対象の一覧を持つ)と pin の子。 */
-const INTERVIEW_TREE_TASKS = "SELECT task_id FROM interview_targets UNION SELECT id FROM tasks WHERE interview_target_id IS NOT NULL";
-
-/** 受験者(pin の子)に無いものとするエントリ(ADR 0264 決定3): どの Interview でも、Interview の木の他の task が書いたもの —— 書いた
- *  task は作った書き込みの記録(ADR 0252)の task —— と、書き手を問わず出所の event の task が木の他の task であるもの(帰責
- *  `objection_attributed` はその entry_id が指す判断ログの行の task で見る。出所が commit のものは当たらない)。自分が書いたもの・
- *  自分の event を出所にするものは本番どおり読む(ADR 0263 決定1)。meta-review が畳んだ後継は出所が meta-review の decision なので
- *  当たらない。読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。 */
+/** 受験者(pin の子)に無いものとするエントリ(ADR 0264 決定3): どの Interview でも、Interview の木の task が書いたもの —— 書いた
+ *  task は作った書き込みの記録(ADR 0252)の task —— と、書き手を問わず出所の event の task が木の task(自分を含む)であるもの(帰責
+ *  `objection_attributed` はその entry_id が指す判断ログの行の task で見る。出所が commit のものは当たらない)。どちらも本文が同じ
+ *  後継を含む。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263 決定1・7)。meta-review が畳んだ後継は
+ *  出所が meta-review の decision なので当たらない。読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした
+ *  理由にも omitted にも dropped にも出ない。 */
 function examineeHidden(db: Db, taskId: string): Set<number> {
   if (getTask(db, taskId)?.interview_target_id == null) return new Set();
-  const rows = db
+  const written = (tasks: string) =>
+    `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
+  const hidden = db
     .prepare(
-      `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
-        WHERE e.kind = 'memory_written' AND e.task_id IN (${INTERVIEW_TREE_TASKS}) AND e.task_id != @taskId
+      `${written(INTERVIEW_TREE_SQL)}
        UNION
        SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
          JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
-        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_TASKS}) AND o.task_id != @taskId`,
+        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
     )
-    .all({ taskId }) as Array<{ id: number }>;
-  if (rows.length === 0) return new Set();
-  // 本文が同じ後継(移動の複製・復元の複製)は書き手の記録を持たないが、同じ答案なので一緒に外す
+    .all() as Array<{ id: number }>;
+  if (hidden.length === 0) return new Set();
+  // 本文が同じ後継(移動の複製・復元の複製)は書き手の記録を持たないが、同じ答案なので一緒に扱う
   const restored = restoredAs(db);
-  return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
+  const chains = (rows: Array<{ id: number }>) => rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id));
+  const own = new Set(chains(db.prepare(written("?")).all(taskId) as Array<{ id: number }>));
+  return new Set(chains(hidden).filter((id) => !own.has(id)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。

@@ -622,6 +622,34 @@ it("読み手が pin の子のとき、どの Interview の root が書いたエ
   }
 });
 
+it("読み手が pin の子のとき、自分が書いたエントリ(移された複製も)は出所が Interview の木でも見え、自分の event を出所に他の書き手が書いたエントリは見えず、出所が commit のものは hash が木の event の id と同じ数字でも当たらない(ADR 0264 決定3・ADR 0263 決定1)", () => {
+  const { db, task, reader, examinee } = examineeBoard();
+  const posed = listEvents(db, getTask(db, examinee.taskId)!.parent_id!).find((e) => e.kind === "decision_logged")!.id;
+  const knowledge = (title: string, source: { event_id: number } | { commit: string }, writer: { id: string }) =>
+    recordKnowledge(db, { scope: "tidepool", path: "tide", title, text: `tide ${title}`, source, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writer.id)
+      .entry_id;
+  const own = knowledge("own", { event_id: posed }, { id: examinee.taskId });
+  const movedOwn = moveMemory(db, { entry_id: knowledge("moved", { event_id: posed }, { id: examinee.taskId }), scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+  const onOwnDecision = recordBehavior(
+    db,
+    humanEntryInput(db, {
+      workspace: "tidepool",
+      path: "tide",
+      title: "tide behavior",
+      text: "tide behavior",
+      addressee: null,
+      source_event_id: logDecision(db, getTask(db, examinee.taskId)!, "chose the tide table", "deckhand", at, "worker"),
+    }),
+    "webui",
+    at,
+  ).entry_id;
+  const digitsCommit = knowledge("commit", { commit: String(posed).padStart(7, "0") }, task);
+  const ids = [own, movedOwn, onOwnDecision, digitsCommit];
+
+  expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: own }, { id: movedOwn }, { id: digitsCommit }], dropped: [] });
+  expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual(ids);
+});
+
 it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
   const { db, task, reader, examinee, sibling, write } = examineeBoard();
   const root = getTask(db, examinee.taskId)!.parent_id!;
