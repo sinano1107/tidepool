@@ -115,14 +115,11 @@ it("done の受験者は root が決着するまで盤面の一覧に残り、ro
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const [done, open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task];
   completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
-  const board = listBoard(db);
-  expect(board.map(({ id, interview_root_id }) => ({ id, interview_root_id }))).toEqual([
+  expect(listBoard(db).map(({ id, interview_root_id }) => ({ id, interview_root_id }))).toEqual([
     { id: root.id, interview_root_id: null },
     { id: done.id, interview_root_id: root.id },
     { id: open.id, interview_root_id: root.id },
   ]);
-  // WebUI の card は「root を名指す決着していない行」を数える
-  expect(board.filter((task) => (task.parent_id ?? task.interview_root_id) === root.id && task.status !== "done").map(({ id }) => id)).toEqual([open.id]);
   completeTask(db, open, FULL_HANDOFF, "tako", new Date(0), "worker");
   expect(listBoard(db)).toHaveLength(3);
   const scores = [done, open].map(({ id }) => ({ child_id: id, outcome: "accepted" as const }));

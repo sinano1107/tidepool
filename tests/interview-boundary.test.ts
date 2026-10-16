@@ -349,10 +349,7 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
 
 it("受験者の get_current_task は親の欄も親の history も持たない —— 本番の親の無い work と同じく自分の task だけを読む(ADR 0267 決定7)", async () => {
   const { pages } = await lastExaminee();
-  for (const page of pages) {
-    expect(page.parent ?? null).toBeNull();
-    expect(page.parent?.history).toBeUndefined();
-  }
+  for (const page of pages) expect(page.parent ?? null).toBeNull();
 });
 
 it("受験者の詳細と盤面の一覧の行は、その Interview の root の id を名指す(ADR 0267 決定6)", async () => {

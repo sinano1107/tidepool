@@ -1712,7 +1712,7 @@ export function answerQuestion(
         }
         // 受験者の abandon が倒すのは受験者だけ。採点できる答案も未決着の答案も残らない Interview は、この答えで終える(ADR 0247 決定1 / ADR 0267 決定3)
         if (failed.interview_target_id !== null) {
-          const rootId = interviewRootOf(db, failed);
+          const rootId = db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(failed.interview_target_id) as string;
           ended = interviewLeftEmpty(db, rootId) ? { rootId, eventId: cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin) } : undefined;
         }
         if (ended?.eventId !== undefined) settleUnrunnableTargetQuestions(db, ended.rootId, ended.eventId, now);
@@ -1898,11 +1898,6 @@ function interviewLeftEmpty(db: Db, rootId: string): boolean {
     listExaminees(db, rootId).every((examinee) => examinee.status === "cancelled") &&
     db.prepare(`SELECT 1 FROM tasks WHERE parent_id = ? AND ${unsettledSql("status")} LIMIT 1`).get(rootId) === undefined
   );
-}
-
-/** 受験者の Interview の root(対象の行を経由して引く、ADR 0267 決定1)。 */
-function interviewRootOf(db: Db, examinee: Pick<Task, "interview_target_id">): string {
-  return db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(examinee.interview_target_id) as string;
 }
 
 /** The scope shared by abandon and held (ADR 0048): the failed task itself,
