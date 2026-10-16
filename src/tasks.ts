@@ -882,6 +882,10 @@ export function registerTask(
   assertReviewFieldsTakeEffect(input, input.review_by, input.review_tier);
   assertReviewByDistinct(input.review_by);
   assertInterviewTargets(db, input);
+  // ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)
+  if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
+    throw new DomainError("an Interview's answer task takes no work or review children — only a question");
+  }
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);

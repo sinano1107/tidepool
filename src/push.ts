@@ -180,7 +180,11 @@ function getDigestCursor(db: Db): number {
 function countLogEntriesSince(db: Db, lastReported: number): number {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   const { count } = db
-    .prepare(`SELECT COUNT(*) AS count FROM events WHERE id > ? AND kind IN (${placeholders})`)
+    // 受験者の行は流し読みに出ないので数えない(ADR 0268 決定1)
+    .prepare(
+      `SELECT COUNT(*) AS count FROM events JOIN tasks ON tasks.id = events.task_id
+        WHERE events.id > ? AND events.kind IN (${placeholders}) AND tasks.interview_target_id IS NULL`,
+    )
     .get(lastReported, ...HUMAN_FACING_KINDS) as { count: number };
   return count;
 }

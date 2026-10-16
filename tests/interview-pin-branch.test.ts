@@ -2,10 +2,11 @@ import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { prepareWorkspaceAtPickup, releaseWorkspace, resolveTaskBranchLineage, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { prepareWorkspaceAtPickup, releaseWorkspace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -270,13 +271,12 @@ it("写しを書いた後でブランチを外す前に落ちても、次の pic
   db.close();
 });
 
-it("ref の無い決着した受験者を祖先に持つ task の lineage は投げない", async () => {
+it("決着した受験者の下に repair の work を登録すると拒まれる —— 受験者を祖先に持つ task は無く、lineage は受験者の祖先を考えない(ADR 0268 決定5)", async () => {
   const workspace = await makeWorkspace("pin-lineage-without-ref");
   const db = openDb(":memory:");
   const [child] = posed(db, workspace) as [Task];
   const settled = completeTask(db, child, FULL_HANDOFF, "tako", NOW, "worker");
-  const repair = registerTask(db, { type: "work", title: "repair", purpose: "fix the answer", completion_criteria: "fixed", parent_id: settled.id }, NOW, ...HUMAN_WEBUI);
 
-  expect(() => resolveTaskBranchLineage(db, workspace, repair)).not.toThrow();
+  expect(() => registerTask(db, { type: "work", title: "repair", purpose: "fix the answer", completion_criteria: "fixed", parent_id: settled.id }, NOW, ...HUMAN_WEBUI)).toThrow(DomainError);
   db.close();
 });
