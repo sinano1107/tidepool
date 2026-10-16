@@ -107,10 +107,12 @@ it("human retry maps failure to a visible error, then lands while excluding the 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json).toMatchObject({
     status: "done",
     question_answer: ["retry"],
+    settled_by_observation: null,
   });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}`)).json).toMatchObject({
     status: "done",
     question_answer: null,
+    settled_by_observation: "pr_promotion_observed",
   });
   expect(
     (await api(t.baseUrl, "GET", `/api/tasks/${sibling.id}/events`)).json,
