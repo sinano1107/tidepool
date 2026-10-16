@@ -1,10 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { getTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import {
@@ -217,6 +218,7 @@ const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
 const CONTINUE_COMMENT = "continue-comment-mark-4d2";
 const SIBLING_MEMORY = "sibling-memory-mark-4d2";
+const TREE_MEMORY = "tree-memory-mark-b85";
 
 it("走れない対象を写す retry の拒否は、WebUI の回答 API では回答の拒否の status(409)に、管理MCP の answer_question では isError に写り、どちらも対象と abandon を名指す(ADR 0253 決定3)", async () => {
   t = await boot();
@@ -252,7 +254,8 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
  *  判断ログの行と question を持つ。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で
  *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
  *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
- *  read)で兄弟の Knowledge を探した応答。`injection` はその子の直近の spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと
+ *  read)で兄弟の Knowledge と、root が書いた目印つきの Knowledge・人間が出題の event を出所に書いた目印つきの Exemplar(ADR 0264
+ *  決定3)を探した応答。`injection` はその子の直近の spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと
  *  同じ引数(盤面が渡した task と query、task の workspace 名、worker の agent 名)で組む。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
@@ -267,7 +270,22 @@ async function lastExaminee() {
     })
   ).json;
   await callAsTask(t, root.id, "log_decision", { line: "chose the parser probe over the lexer one" });
+  const rootKnowledge = { path: "parser", title: `parser ${TREE_MEMORY}`, text: `the parser ${TREE_MEMORY}`, source: { commit: "0a46a46" } };
+  const rootEntry = JSON.parse((await callAsTask(t, root.id, "record_knowledge", rootKnowledge)).content[0].text).entry_id;
   const [done, cancelled, reader] = JSON.parse((await callAsTask(t, root.id, "pose_probe", SWEEP_POSE)).content[0].text).child_ids;
+  const posed = listEvents(t.db, root.id).find((e) => e.payload.kind === "decision_logged" && e.payload.interview_probe)!.id;
+  const exemplar = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", {
+    workspace: getTask(t.db, root.id)!.workspace,
+    path: "parser",
+    title: `parser ${TREE_MEMORY}`,
+    addressee: null,
+    source_event_id: posed,
+    annotations: [{ anchor: "whole", polarity: "imitate", text: `the parser ${TREE_MEMORY}` }],
+  });
+  expect(exemplar.status).toBe(200);
+  // root の書き込みが記憶の meta-review を立てる —— pin の子より先に slot を取らせて、出題が立てた meta-review と一緒に終える
+  const memoryReview = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.meta_review_subject === "memory");
+  await api(t.baseUrl, "POST", `/api/tasks/${memoryReview.id}/move`, { after: null });
   await completeMetaReviews(t);
   registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", sonnet55.model), "the provider refused", t.clock.now());
   const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
@@ -299,7 +317,8 @@ async function lastExaminee() {
     const pulls = [
       { name: "browse_memory", arguments: { prefix: "parser" } },
       { name: "search_memory", arguments: { query: SIBLING_MEMORY } },
-      { name: "read_memory", arguments: { ids: [entry_id] } },
+      { name: "search_memory", arguments: { query: TREE_MEMORY } },
+      { name: "read_memory", arguments: { ids: [entry_id, rootEntry, exemplar.json.entry_id] } },
     ];
     const pulled = await Promise.all(pulls.map((call) => client.callTool(call)));
     const spawn = t.worker.started.map((task) => task.id).lastIndexOf(reader);
@@ -319,7 +338,7 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, CONTINUE_COMMENT, ...siblings]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, ...siblings]) {
     expect(read).not.toContain(text);
   }
 });
