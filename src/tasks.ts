@@ -466,15 +466,16 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
 }
 
 export interface TaskVerbSwap {
-  withheld: readonly ("decompose" | "redecompose" | "complete_task")[];
+  withheld: readonly ("decompose" | "redecompose" | "complete_task" | "record_knowledge" | "define_memory_branch")[];
   added: readonly ("pose_probe" | "complete_interview" | "report_broken_probe")[];
 }
 
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
- *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、root は complete_task も伏せて、出題前は出題の verb を、
+ *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、受験者は記憶を書く verb も伏せ(ADR 0268 決定2)、
+ *  root は complete_task も伏せて、出題前は出題の verb を、
  *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
-  if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose"], added: [] };
+  if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   if (interviewTargets(db, taskId) !== null) {
     const withheld = ["decompose", "redecompose", "complete_task"] as const;
     if (interviewProbe(db, taskId) === null) return { withheld, added: ["pose_probe"] };

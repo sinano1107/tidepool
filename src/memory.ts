@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type TargetKey, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -209,7 +209,6 @@ function writeSuperseding(
   origin: EventOrigin,
   at: Date,
   write: (replaced: MemoryEntry[]) => number,
-  writer?: string,
 ): { entry_id: number; event_id: number } {
   if (supersedes?.length === 0) throw new DomainError("supersedes needs at least one entry to replace; omit it to write without replacing");
   return db.transaction(() => {
@@ -217,7 +216,7 @@ function writeSuperseding(
     const replaced = (supersedes ?? []).map((id) => rowToEntry(requireLive(db, id, undefined, "approved")));
     const id = write(replaced);
     if (supersedes) foldMemoryEntries(db, { replaces: supersedes, successor_id: id, author }, origin, at);
-    requireOneTree(db, since, writer);
+    requireOneTree(db, since);
     return { entry_id: id, event_id: id };
   })();
 }
@@ -226,23 +225,18 @@ function writeSuperseding(
  *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
  *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
  *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
- *  受験者(pin の子)の書き込みはどの書き手にも数えない(ADR 0264 決定4)—— 書き手(writer)が受験者なら置く行はみな受験者の
- *  書き込みなので門は当たらず、他の書き手は本番の記録(readerHidden の外)だけを、本番の記録から見た生死(liveTo)で数えて名指す。
- *  SQL の無効化の条件は粗い前絞りで、後継なしで落ちた行だけを外す。
  *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
-function requireOneTree(db: Db, since: number, writer?: string): void {
-  if (writer !== undefined && getTask(db, writer)?.interview_target_id != null) return;
+function requireOneTree(db: Db, since: number): void {
   const pairs = db
     .prepare(
       `SELECT e.id AS e_id, e.kind AS e_kind, e.path AS e_path, ef.id AS e_from,
-              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from,
-              e.invalidation_reason AS e_reason, e.successor_id AS e_successor, d.invalidation_reason AS d_reason, d.successor_id AS d_successor
+              d.id AS d_id, d.path AS d_path, d.scope AS d_scope, df.id AS d_from
          FROM memory_entries e JOIN memory_entries d
-           ON d.kind = 'definition' AND d.scope IS NOT NULL AND (d.invalidation_reason IS NULL OR d.successor_id IS NOT NULL)
+           ON d.kind = 'definition' AND d.scope IS NOT NULL AND d.invalidation_reason IS NULL
           AND (e.path = d.path OR substr(e.path, 1, length(d.path) + 1) = d.path || '/')
          LEFT JOIN memory_entries ef ON ef.invalidation_reason = 'path_moved' AND ef.successor_id = e.id
          LEFT JOIN memory_entries df ON df.invalidation_reason = 'path_moved' AND df.successor_id = d.id
-        WHERE e.scope IS NULL AND (e.invalidation_reason IS NULL OR e.successor_id IS NOT NULL) AND (e.id > ? OR d.id > ?)
+        WHERE e.scope IS NULL AND e.invalidation_reason IS NULL AND (e.id > ? OR d.id > ?)
         ORDER BY e.id, d.id`,
     )
     .all(since, since) as Array<{
@@ -254,19 +248,11 @@ function requireOneTree(db: Db, since: number, writer?: string): void {
     d_path: string;
     d_scope: string;
     d_from: number | null;
-    e_reason: InvalidationReason | null;
-    e_successor: number | null;
-    d_reason: InvalidationReason | null;
-    d_successor: number | null;
   }>;
-  const examineeWrites = pairs.length === 0 ? new Set<number>() : readerHidden(db, undefined);
-  const counts = (id: number, invalidation_reason: InvalidationReason | null, successor_id: number | null) =>
-    !examineeWrites.has(id) && liveTo(db, examineeWrites, { invalidation_reason, successor_id });
-  const counted = pairs.filter((p) => counts(p.e_id, p.e_reason, p.e_successor) && counts(p.d_id, p.d_reason, p.d_successor));
-  if (counted.length === 0) return;
+  if (pairs.length === 0) return;
   // 置かれる側は巻き戻る id でなく、移動なら移動元の id で名指す
   const side = (id: number, from: number | null) => ({ id: id <= since ? id : from, existing: id <= since });
-  const named: OneTreePair[] = counted.map((p) => ({
+  const named: OneTreePair[] = pairs.map((p) => ({
     entry: { ...side(p.e_id, p.e_from), kind: p.e_kind, path: p.e_path },
     definition: { ...side(p.d_id, p.d_from), path: p.d_path, scope: p.d_scope },
   }));
@@ -377,7 +363,6 @@ export function recordKnowledge(
   return withOptionalWriteRecord(db, writer, fields.author.name, at, () =>
     writeSuperseding(db, supersedes, fields.author, origin, at, (replaced) =>
       createEntry(db, { ...fields, kind: "knowledge", state: "approved", original: inheritedOriginal(fields.original, replaced), addressee: null }, origin, at),
-      writer,
     ),
   );
 }
@@ -410,7 +395,7 @@ export function defineMemoryBranch(
       const unseen = rows.filter((row) => hidden.has(row.id) && row.invalidation_reason === null).map((row) => row.id);
       if (unseen.length > 0) foldMemoryEntries(db, { replaces: unseen, successor_id: id, author: fields.author }, origin, at);
       return id;
-    }, writer),
+    }),
   );
 }
 
@@ -1574,7 +1559,7 @@ type InvalidatedBy = { question_id: string } | { activity: MemoryEntryFields["au
 /** 人間の面の一覧(spec #586 F): candidate・無効化済みも出す(id 順)。
  *  scope は完全一致(null = 盤面全体、省略 = すべて)、state の invalidated は無効化済み、
  *  approved / candidate は無効化されていないもの。path はその枝と配下 P/…(#1209)。人間の面は hidden を渡さない。meta-review の
- *  読み口は hidden(readerHidden)を除き、行をその読み手から見た形(seenRow)にして絞る(ADR 0264 決定1・4)。 */
+ *  読み口は hidden(readerHidden)を除き、行をその読み手から見た形(seenRow)にして絞る(ADR 0264 決定2・4)。 */
 export function listMemoryEntries(
   db: Db,
   filter: { scope?: string | null; kind?: MemoryEntryFields["kind"]; state?: MemoryEntryFields["state"] | "invalidated"; path?: string },
@@ -1801,7 +1786,7 @@ type Invalidation = Pick<EntryRow, "invalidation_reason" | "successor_id">;
 
 /** 視界の3段目(未無効化)の正本: 無効化されていないか、後継が hidden にあってその先に読み手に見える後継が無い —— 読み手の視界に
  *  無い後継による無効化は、その読み手には起きていない(ADR 0264 決定4)。hidden の後継のその後(生死・落ちたこと)は問わない。
- *  読みの門・定義の門・一木の門・meta-review の読み口(seenRow)が読む。 */
+ *  読みの門・定義の門・meta-review の読み口(seenRow)が読む。 */
 function liveTo(db: Db, hidden: Set<number>, row: Invalidation): boolean {
   return row.invalidation_reason === null || (row.successor_id !== null && hidden.has(row.successor_id) && seenSuccessor(db, hidden, row.successor_id) === null);
 }
@@ -1827,59 +1812,32 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
-/** 読み手(task)に無いエントリ。書いた task は作った書き込みの記録(ADR 0252)の task で引き、どれも本文が同じ後継(移動の複製・
- *  復元の複製)を含む。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の
- *  専用 verb と材料もこの集合を外す。
- *  - 読み手が pin の子でない(agent の読み手。taskId 無しは一木の門が数えない受験者の書き込み): どの Interview でも、pin の子が
- *    書いたもの —— 受験者の書き込みは本番の記録ではない(ADR 0264 決定1)。
- *  - 読み手が pin の子(受験者、ADR 0264 決定3): どの Interview でも、Interview の木の task が書いたものと、書き手を問わず出所の
- *    event の task が木の task(自分を含む)であるもの(帰責 `objection_attributed` はその entry_id が指す判断ログの行の task で
- *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
- *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
-function readerHidden(db: Db, taskId: string | undefined): Set<number> {
-  if (taskId === undefined || getTask(db, taskId)?.interview_target_id == null) return new Set(examineeWrites(db).keys());
-  const own = withSameBodyCopies(db, writtenBy("?"), taskId);
-  return new Set([...examineeHidden(db)].filter((id) => !own.has(id)));
+/** 読み手(task)に無いエントリ。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。
+ *  受験者(pin の子)は記憶を書かない(ADR 0268 決定2)ので、無い集合を持つのは受験者だけ —— どの Interview でも、root が
+ *  書いたものと、書き手を問わず出所の event の task が木の task であるもの(帰責 `objection_attributed` はその
+ *  entry_id が指す判断ログの行の task で見る。出所が commit のものは当たらない)、どれも本文が同じ後継(移動の複製・復元の複製)を
+ *  含む(ADR 0264 決定3)。書いた task は作った書き込みの記録(ADR 0252)の task で引く。meta-review が畳んだ後継は出所が
+ *  meta-review の decision なので当たらない。他の読み手には空。 */
+function readerHidden(db: Db, taskId: string): Set<number> {
+  return getTask(db, taskId)?.interview_target_id == null ? new Set() : examineeHidden(db);
 }
 
-/** 受験者の視界に無い集合(ADR 0264 決定3)の、自分の書き込みの例外を引く前の形 —— どの受験者にも共通。readerHidden と採点者の印(readerSight)が使う。 */
+/** 受験者の視界に無い集合(ADR 0264 決定3)とその本文が同じ後継(移動・復元の複製)—— どの受験者にも共通。readerHidden と採点者の印
+ *  (readerSight)が使う。 */
 function examineeHidden(db: Db): Set<number> {
-  return withSameBodyCopies(
-    db,
-    `${writtenBy(INTERVIEW_TREE_SQL)}
-     UNION
-     SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
-       JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
-      WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
-  );
-}
-
-const writtenBy = (tasks: string) =>
-  `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
-
-/** sql が返すエントリと、どれも本文が同じ後継(移動・復元の複製)。 */
-function withSameBodyCopies(db: Db, sql: string, ...params: string[]): Set<number> {
-  const rows = db.prepare(sql).all(...params) as Array<{ id: number }>;
+  const rows = db
+    .prepare(
+      `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
+        WHERE e.kind = 'memory_written' AND e.task_id IN (SELECT task_id FROM interview_targets)
+       UNION
+       SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+         JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
+    )
+    .all() as Array<{ id: number }>;
   if (rows.length === 0) return new Set();
   const restored = restoredAs(db);
   return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
-}
-
-export type ExamineeWriter = { task_id: string } & TargetKey;
-
-/** 受験者の書き込み(どの Interview でも pin の子が書いたもの)と、その本文が同じ後継(移動・復元の複製)→ 書いた pin の子の task と
- *  その Interview の対象(ADR 0264 決定1)。agent の読み手には無く(readerHidden)、人間の面にはこの印つきで出る。 */
-export function examineeWrites(db: Db): Map<number, ExamineeWriter> {
-  const rows = db
-    .prepare(
-      `SELECT c.value AS id, e.task_id, it.provider, it.model, it.effort FROM events e, json_each(e.payload, '$.created') c
-         JOIN tasks t ON t.id = e.task_id JOIN interview_targets it ON it.id = t.interview_target_id
-        WHERE e.kind = 'memory_written'`,
-    )
-    .all() as Array<{ id: number } & ExamineeWriter>;
-  if (rows.length === 0) return new Map();
-  const restored = restoredAs(db);
-  return new Map(rows.flatMap(({ id, ...writer }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => [row.id, writer] as const)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
@@ -2007,7 +1965,7 @@ export function browseMemory(
 /** 枝の一覧(ADR 0122 追記 #1209): approved・未無効化のエントリ(4種別・全 scope・宛先を問わない)の path とすべての上位の prefix を
  *  1枝1行、木の順(親の直後に配下、同じ階層は segment の名前順)で。行はその path の Definition と、その path か配下にエントリ
  *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま(hidden は空)、meta-review は
- *  readerHidden を除いてその読み手から見た生死で数え(listMemoryEntries、ADR 0264 決定1・4)、pullMemoryBranches が原文を落とす。 */
+ *  readerHidden を除いてその読み手から見た生死で数え(listMemoryEntries、ADR 0264 決定2・4)、pullMemoryBranches が原文を落とす。 */
 export function listMemoryBranches(db: Db, hidden = new Set<number>()) {
   const entries = listMemoryEntries(db, { state: "approved" }, hidden);
   const paths = new Set(entries.flatMap((e) => e.path.split("/").map((_, i, segments) => segments.slice(0, i + 1).join("/"))));
@@ -2067,7 +2025,7 @@ export function pullMemoryList(
 }
 
 /** 一覧2つの行(meta-review の行の形)。pull と材料の節の candidate の部分が共有する。list_memory_entries は人間の面の一覧から
- *  hidden(readerHidden)を除く(ADR 0264 決定1)。 */
+ *  hidden(readerHidden)を除く(ADR 0264 決定2)。 */
 function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: MemoryListInput, hidden = new Set<number>()) {
   // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
   // (か、修正つきの統合に置き換えられた candidate)
@@ -2353,7 +2311,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
     const missing: number[] = [];
     for (const id of new Set(ids)) {
       // 視界の外は missing にも載せず黙って落とす(存在を知らせない)。見える行の鎖が視界の外へ続くことは無い —— 移動・復元の
-      // 複製を作るのは人間・meta-review・修理 task で、受験者の書き込みにならない
+      // 複製を作るのは人間・meta-review・修理 task で、受験者は記憶を書かない(ADR 0268 決定2)
       if (hidden.has(id)) continue;
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
       if (!row) {
@@ -2523,7 +2481,7 @@ export function recordMemoryInjection(
 
 /** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
  *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
- *  candidate の行は candidate の部分が持つので載せない。hidden(readerHidden)も載せない(ADR 0264 決定1)。 */
+ *  candidate の行は candidate の部分が持つので載せない。hidden(readerHidden)も載せない(ADR 0264 決定2)。 */
 function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
@@ -2554,7 +2512,7 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
 }
 
 /** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
- *  (readerHidden)を載せない(ADR 0264 決定1)。 */
+ *  (readerHidden)を載せない(ADR 0264 決定2)。 */
 function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) {
   const parts = {
     store_changes: storeChanges(db, window, hidden),

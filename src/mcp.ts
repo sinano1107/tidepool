@@ -494,8 +494,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
-  // ADR 0245 決定1・3 / ADR 0253 決定4・5: Interview の木では分解の verb を登録せず、root には complete_task の代わりに出題前は出題の、
-  // 出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)
+  // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
+  // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -842,7 +842,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
-  if (subject === null) {
+  if (subject === null && !withheld.includes("record_knowledge")) {
     server.registerTool(
       "record_knowledge",
       {
@@ -909,33 +909,35 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0252 決定4: 書き込みの行への異議の修理 task にだけ記憶の修理 verb を足す
   if (attributedTaskId !== null && repairableEntries(deps.db, attributedTaskId).size > 0) registerMemoryRepairVerbs(server, deps, attributedTaskId);
 
-  server.registerTool(
-    "define_memory_branch",
-    {
-      description:
-        "Define a memory branch (a path prefix such as build/tests) for this workspace: one line declaring " +
-        "what is filed under it — not a summary of what is there now, but a sentence that stays true as " +
-        "entries come and go. It is kept as-is (no approval step). " +
-        "A path that holds whole-board entries at or under it cannot be defined for this workspace: file under the branch as it is, or define a sub-branch. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { prefix: requiredTextSchema, definition: requiredTextSchema },
-    },
-    async (input) =>
-      runVerb(deps, attributedTaskId, (task) =>
-        defineMemoryBranch(
-          deps.db,
-          {
-            scope: memoryScope(deps, task),
-            path: input.prefix,
-            text: input.definition,
-            author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
-          },
-          "worker",
-          deps.clock.now(),
-          task.id,
+  if (!withheld.includes("define_memory_branch")) {
+    server.registerTool(
+      "define_memory_branch",
+      {
+        description:
+          "Define a memory branch (a path prefix such as build/tests) for this workspace: one line declaring " +
+          "what is filed under it — not a summary of what is there now, but a sentence that stays true as " +
+          "entries come and go. It is kept as-is (no approval step). " +
+          "A path that holds whole-board entries at or under it cannot be defined for this workspace: file under the branch as it is, or define a sub-branch. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { prefix: requiredTextSchema, definition: requiredTextSchema },
+      },
+      async (input) =>
+        runVerb(deps, attributedTaskId, (task) =>
+          defineMemoryBranch(
+            deps.db,
+            {
+              scope: memoryScope(deps, task),
+              path: input.prefix,
+              text: input.definition,
+              author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+            },
+            "worker",
+            deps.clock.now(),
+            task.id,
+          ),
         ),
-      ),
-  );
+    );
+  }
 
   // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
   // (Precedent の memory マーカーの結合キー)。
@@ -1234,7 +1236,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "list_memory_entries",
     {
       description:
-        "List the memory entries the human settings view lists, except those Interview examinees wrote, each entry's original wording omitted — candidates and invalidated entries " +
+        "List the memory entries the human settings view lists, each entry's original wording omitted — candidates and invalidated entries " +
         "included. scope: a workspace name, null for board-wide only, omit for all. " +
         "path: only the entries at that branch or under it (path/…). " +
         nextDescription("list_memory_entries", "entries"),
@@ -1257,7 +1259,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing; entries Interview examinees wrote are not returned. " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
         "Entries come in id order. " +
         nextDescription("read_memory_entries", "entries", "`missing` comes"),
       inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
