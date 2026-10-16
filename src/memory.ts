@@ -1655,8 +1655,8 @@ interface MemoryReader {
 }
 
 /** search の候補が返らなかった理由(spec #586 D)。関連度の閾値は持たない(ADR 0083
- *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外と
- *  candidate は候補になる前の SQL の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
+ *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外・
+ *  candidate・受験者に無いもの(examineeHidden)は候補になる前の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
 export type MemoryDropReason = "addressee" | "invalidated" | "response_budget";
 
 /** snapshot 識別子 = 店を変える memory 系 event の最大 id(approvedMemoryEntries が再生する種別)。 */
@@ -1743,15 +1743,16 @@ function rankedEntries(db: Db, match: string, reader: Pick<MemoryReader, "taskId
   ).filter((row) => !hidden.has(row.id));
 }
 
-/** 受験者(pin の子)に無いものとするエントリ(ADR 0263 決定7): どの Interview でも pin の子が書いたもの —— 書いた task は作った
- *  書き込みの記録(ADR 0252)の task。読み手が pin の子でなければ空。可視の門(INDEX と注入・search の候補・read の視界)が
- *  すべてこれで外すので、落とした理由にも omitted にも dropped にも出ない。 */
+/** 受験者(pin の子)に無いものとするエントリ(ADR 0263 決定7): どの Interview でも、他の pin の子が書いたもの —— 書いた task は
+ *  作った書き込みの記録(ADR 0252)の task。自分が書いたものは本番どおり読む(決定1、CONTEXT.md「他の受験者が書いた記憶」)。
+ *  読み手が pin の子でなければ空。可視の門(INDEX と注入・search の候補・read の視界)がすべてこれで外すので、落とした理由にも
+ *  omitted にも dropped にも出ない。 */
 function examineeHidden(db: Db, taskId: string): Set<number> {
+  if (getTask(db, taskId)?.interview_target_id == null) return new Set();
   const rows = db
     .prepare(
       `SELECT c.value AS id FROM events e JOIN tasks t ON t.id = e.task_id, json_each(e.payload, '$.created') c
-        WHERE e.kind = 'memory_written' AND t.interview_target_id IS NOT NULL
-          AND EXISTS (SELECT 1 FROM tasks WHERE id = ? AND interview_target_id IS NOT NULL)`,
+        WHERE e.kind = 'memory_written' AND t.interview_target_id IS NOT NULL AND e.task_id != ?`,
     )
     .all(taskId) as Array<{ id: number }>;
   if (rows.length === 0) return new Set();

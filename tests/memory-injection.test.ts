@@ -375,7 +375,7 @@ it("読み手が pin の子のとき、どの Interview の pin の子が書い�
     );
   const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
   const [examinee, sibling] = interview([opus, { ...opus, effort: "low" }]);
-  const [otherInterview] = interview([opus]);
+  const [otherPinChild] = interview([opus]);
   const write = (writer: { id: string }, path: string, title: string) =>
     recordKnowledge(
       db,
@@ -385,15 +385,15 @@ it("読み手が pin の子のとき、どの Interview の pin の子が書い�
       writer.id,
     ).entry_id;
   const production = write(task, "parser", "parser production");
-  const siblings = write(sibling!, "parser/answers", "parser sibling");
-  const elsewhere = write(otherInterview!, "lexer", "parser elsewhere");
+  const siblingEntry = write(sibling!, "parser/answers", "parser sibling");
+  const elsewhere = write(otherPinChild!, "lexer", "parser elsewhere");
 
   const injection = buildMemoryInjection(db, examinee!, "tidepool", "deckhand");
 
   expect(injection).toMatchObject({ entries: [{ id: production }], omitted: 0, index_max_depth: 1 });
   expect(injection.section).toContain("### Index\n\n- parser/ — (undefined)\n\n### Relevant entries\n\n");
   expect(injection.section).not.toMatch(/answers|lexer|sibling|elsewhere/);
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblings, elsewhere]);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblingEntry, elsewhere]);
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
 });

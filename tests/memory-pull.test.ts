@@ -522,7 +522,7 @@ it("無効化済み・candidate・宛先外・他 workspace のエントリは I
 });
 
 const INTERVIEW = { type: "review" as const, title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
-const PROBE = { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" };
+const POSE = { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" };
 const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
 const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 
@@ -531,9 +531,9 @@ const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, 
 function examineeBoard() {
   const { db, task, reader } = board();
   const interview = (targets: object[]) =>
-    poseProbe(db, registerTask(db, { ...INTERVIEW, interview_targets: targets as never }, at, ...HUMAN_WEBUI), PROBE, "auditor", at, "worker");
+    poseProbe(db, registerTask(db, { ...INTERVIEW, interview_targets: targets as never }, at, ...HUMAN_WEBUI), POSE, "auditor", at, "worker");
   const [examinee, sibling] = interview([opus, haiku]);
-  const [otherInterview] = interview([opus]);
+  const [otherPinChild] = interview([opus]);
   const write = (writer: { id: string }, title: string, path = "tide") =>
     recordKnowledge(
       db,
@@ -542,38 +542,39 @@ function examineeBoard() {
       at,
       writer.id,
     ).entry_id;
-  return { db, task, reader, examinee: { ...reader, taskId: examinee!.id }, sibling: sibling!, otherInterview: otherInterview!, write };
+  return { db, task, reader, examinee: { ...reader, taskId: examinee!.id }, sibling: sibling!, otherPinChild: otherPinChild!, write };
 }
 
-it("読み手が pin の子のとき、search はどの Interview の pin の子が書いたエントリも返さず、memory_pulled の候補にも落とした理由つきでも載せない —— 本番の task には返る(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherInterview, write } = examineeBoard();
+it("読み手が pin の子のとき、search はどの Interview の他の pin の子が書いたエントリも返さず、memory_pulled の候補にも落とした理由つきでも載せない —— 自分が書いたものと本番の task には返る(ADR 0263 決定7)", () => {
+  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
-  const siblings = write(sibling, "sibling");
-  const elsewhere = write(otherInterview, "elsewhere");
+  const own = write({ id: examinee.taskId }, "own");
+  const siblingEntry = write(sibling, "sibling");
+  const elsewhere = write(otherPinChild, "elsewhere");
   const invalidated = write(sibling, "invalidated");
   invalidateMemoryEntry(db, { entry_id: invalidated, reason: "environment" }, "human", "webui", at);
 
   const search = searchMemory(db, examinee, { query: "tide" }, at);
 
-  expect(search.results.map((r) => r.id)).toEqual([production]);
-  expect(getEvent(db, search.event_id)?.payload).toMatchObject({ candidates: [{ id: production, dropped: null }] });
-  expect(searchMemory(db, reader, { query: "tide" }, at).results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, siblings, elsewhere]);
+  expect(search.results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, own]);
+  expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id).sort((a, b) => a - b)).toEqual([production, own]);
+  expect(searchMemory(db, reader, { query: "tide" }, at).results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, own, siblingEntry, elsewhere]);
 });
 
 it("読み手が pin の子のとき、browse はどの Interview の pin の子が書いた leaf も、それだけが置かれた枝も出さない —— 本番の task には出る(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherInterview, write } = examineeBoard();
+  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
-  const siblings = write(sibling, "sibling");
-  write(otherInterview, "elsewhere", "tide/answers");
+  const siblingEntry = write(sibling, "sibling");
+  write(otherPinChild, "elsewhere", "tide/answers");
 
   expect(browseMemory(db, examinee, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
-  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [{ name: "tide/answers" }], entries: [{ id: production }, { id: siblings }] });
+  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [{ name: "tide/answers" }], entries: [{ id: production }, { id: siblingEntry }] });
 });
 
 it("読み手が pin の子のとき、read は pin の子が書いた id(移された複製・無効化済みも)を名指されても視界の外として黙って落とし、その後継も見えない後継として扱う —— 本番の task には見える(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherInterview, write } = examineeBoard();
+  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
-  const elsewhere = write(otherInterview, "elsewhere");
+  const elsewhere = write(otherPinChild, "elsewhere");
   const moved = moveMemory(db, { entry_id: write(sibling, "moved"), scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
   const invalidated = write(sibling, "invalidated");
   invalidateMemoryEntry(db, { entry_id: invalidated, reason: "environment" }, "human", "webui", at);
