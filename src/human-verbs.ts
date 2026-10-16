@@ -966,7 +966,7 @@ export async function submitAnswer(
   let tierTarget: Tier | undefined;
   let registryCommit: string | undefined;
   // merge の回答が merge した PR の根 —— 決着はここに、回答と同じトランザクションで刻む(ADR 0265 決定1)
-  let merged: { root: string; pr: number } | undefined;
+  let mergeRecord: { root: string; pr: number } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
     switch (kind.kind) {
@@ -1081,7 +1081,7 @@ export async function submitAnswer(
           } catch (err) {
             throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
           }
-          merged = { root: landingTaskId, pr: mergePr };
+          mergeRecord = { root: landingTaskId, pr: mergePr };
         }
         break;
       }
@@ -1132,12 +1132,12 @@ export async function submitAnswer(
         origin,
         deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName },
       );
-      if (merged) {
+      if (mergeRecord) {
         appendEvent(deps.db, {
-          taskId: merged.root,
+          taskId: mergeRecord.root,
           workerId: HUMAN_WORKER_ID,
           origin,
-          payload: { kind: "pr_merged", pr_number: merged.pr },
+          payload: { kind: "pr_merged", pr_number: mergeRecord.pr },
           at: now(),
         });
       }
