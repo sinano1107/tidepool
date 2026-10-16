@@ -1062,6 +1062,7 @@ it.each([
 
   commitTriage(db, at, [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
 
+  // done の work には完了時レビューも付くので、異議の束ねが立てた子だけを見る
   expect(listChildren(db, registered.id).filter((child) => child.type !== "review" || child.title.startsWith("rca")).map((child) => child.title)).toEqual(titles);
   expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual([
     expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" }),

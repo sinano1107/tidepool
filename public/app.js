@@ -4619,10 +4619,10 @@ function App() {
       cursorNote = " \xB7 read cursor NOT advanced (retry from the log)";
     }
     const answered = Object.values(answers).filter(Boolean).length;
-    const repairTasks = new Set([...commitPendingObjectionKeys(data.log, objections)].map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
+    const objectedTasks = new Set([...commitPendingObjectionKeys(data.log, objections)].map((k) => data.log.find((e) => String(e.id) === String(k))?.taskId).filter(Boolean)).size;
     const summary = [`${data.log.filter((entry) => entry.unread).length} read`];
     if (answered) summary.push(`${answered} answered`);
-    if (repairTasks) summary.push(`${repairTasks} repair`);
+    if (objectedTasks) summary.push(`${objectedTasks} objected`);
     if (scratch.length) summary.push(`${scratch.length} scratchpad applied`);
     let message;
     let outcomeNote = "";

@@ -300,7 +300,8 @@ function registerRcaReview(
  *  decides what stands beside the repair (0115 決定3): only the entries whose
  *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
  *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
- *  with none of them gets the repair alone. The second attribution round picks
+ *  with none of them gets the repair alone (or nothing, where no repair stands —
+ *  an Interview root or a cancelled task). The second attribution round picks
  *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
