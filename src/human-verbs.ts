@@ -85,6 +85,7 @@ import {
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
+import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
@@ -514,12 +515,14 @@ export interface QuarantineCheckDeps {
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0259 決定5: (codex, workspace) の組の検査。Absent → その組への回答は拒まれる。 */
   codexWorkspaceContainment?: CodexWorkspaceCheck;
+  /** ADR 0266 決定3: 盤面の記録の器の dir —— 解放の検査はここへ一時ファイルを書いて消す。Absent → その確認への回答は拒まれる。 */
+  recordDir?: string;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment } = deps;
+  const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -635,6 +638,16 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 検査そのものが後始末の再実行なので、投げれば question は開いたまま残り、人間は
     // 直してもう一度答えられる。
     ...(teardownQuarantine && { failedTeardown: (value) => teardownQuarantine(value!) }),
+    // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの
+    ...(recordDir !== undefined && {
+      recordContainer: async () => {
+        try {
+          probeRecordContainer(recordDir);
+        } catch (err) {
+          throw new DomainError(`the board's record container ${recordDir} still cannot be written: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    }),
     ...(registryReachability && {
       registryReachability: async () => {
         const reachability = await registryReachability();
