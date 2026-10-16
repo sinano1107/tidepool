@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { humanDecomposeTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -11,6 +11,7 @@ import {
   bootTidepool,
   FIXTURE_SPAWNED_EVENT_ID,
   FIXTURE_TASK,
+  FULL_HANDOFF,
   HOUR,
   HUMAN_WEBUI,
   loggedEntry,
@@ -1039,4 +1040,30 @@ it.each([
     ["rca (auditor): t", BOARD_WORKER_ID, "board"],
   ]);
   expect(listEvents(db, staged.id).find((e) => e.kind === "task_moved")).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin });
+});
+
+it.each([
+  ["cancelled", ["rca (self): t", "rca (auditor): t"]],
+  ["done", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["in_progress", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+] as const)("%s の本番 work への異議の commit が立てる子は %j —— 修理子は捨てた成果には立たず、帰責 event は状態に依らない(ADR 0268 決定3)", (status, titles) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-16T00:00:00.000Z");
+  const registered = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const entry = logDecision(db, registered, "deckhand's call", "deckhand", at, "worker");
+  if (status === "cancelled") cancelTaskDirectly(db, registered, null, at, {}, "webui");
+  else {
+    const running = pickupTask(db, registered, "deckhand", at)!;
+    if (status === "done") completeTask(db, running, FULL_HANDOFF, "deckhand", at, "worker");
+  }
+  expect(getTask(db, registered.id)!.status).toBe(status);
+  startTriage(db, at);
+  raiseObjection(db, entry, "redo it", at);
+
+  commitTriage(db, at, [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, registered.id).filter((child) => child.type !== "review" || child.title.startsWith("rca")).map((child) => child.title)).toEqual(titles);
+  expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual([
+    expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" }),
+  ]);
 });

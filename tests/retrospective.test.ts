@@ -5,7 +5,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, listMemoryEntries, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -1572,6 +1572,30 @@ it.each([
     expect(client.calls.map((c) => c.input.decision_log)).toEqual(Array(judged).fill(["skipped the fixtures"]));
     expect(drafter.calls.map((c) => c.input.decision_log)).toEqual(Array(retry ? 2 : 1).fill(["skipped the fixtures"]));
     expect(listMemoryEntries(db, {}).map((m) => m.title)).toEqual(["Keep fixtures"]);
+  } finally {
+    db.close();
+  }
+});
+
+it("修理子の無い未帰責の異議群(cancelled の task への異議)も、第2回の当時の decision log を commit の登録で切る(ADR 0268 決定3)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const entry = logDecision(db, task, "skipped the fixtures", "deckhand", at, "worker");
+    cancelTaskDirectly(db, task, null, at, {}, "webui");
+    startTriage(db, at);
+    raiseObjection(db, entry, "keep the fixtures", at);
+    commitTriage(db, at, [], new Map());
+    const rcas = listChildren(db, task.id);
+    expect(rcas.map((c) => c.type)).toEqual(["review", "review"]);
+    for (const rca of rcas) completeTask(db, rca, undefined, "auditor", at, "worker");
+    const client = new FakeAttributionClient();
+    client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
+
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(client.calls.map((c) => c.input.decision_log)).toEqual([["skipped the fixtures"]]);
   } finally {
     db.close();
   }

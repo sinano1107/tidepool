@@ -1319,7 +1319,9 @@ export function escalateTask(
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name
- *  why — an abandon answer or a human's direct cancel) to each. `done`
+ *  why — an abandon answer or a human's direct cancel) to each. An attached
+ *  review child and everything below it is spared (`survivesParentCancelSql`,
+ *  ADR 0268 決定4). `done`
  *  descendants are left untouched (nothing degrades a completed record);
  *  `cancelled` counts as finished for the blocked derivation, which is what
  *  lets the cancelled tree's own parent return to `todo` and pick up work
@@ -1344,6 +1346,7 @@ function cancelUnsettledSubtree(
          UNION
          SELECT c.id FROM tasks c LEFT JOIN interview_targets it ON it.id = c.interview_target_id
            JOIN subtree s ON s.id = COALESCE(c.parent_id, it.task_id)
+           WHERE NOT ${survivesParentCancelSql("c")}
        )
        SELECT subtree.id FROM subtree JOIN tasks ON tasks.id = subtree.id
        WHERE ${unsettledSql("tasks.status")}`,
@@ -1425,9 +1428,14 @@ export interface CancelDefaults {
  *     the task's workspace or resolved assignee is in `defaults.quarantined`.
  *
  *  The subtree follows `parent_id` only, so an Interview root's examinees and their
- *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3). */
+ *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3).
+ *  Like the cascade, it stops at an attached review: what stands under one is not
+ *  cancelled, so it gates nothing (ADR 0268 決定4). */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const subtree = subtreeSql("@root");
+  const subtree = `WITH RECURSIVE subtree(id) AS (
+      SELECT @root
+      UNION
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id WHERE NOT ${survivesParentCancelSql("c")})`;
   const failure = db
     .prepare(
       `${subtree}
@@ -3059,6 +3067,14 @@ function earlyIntegrationReturnSql(parentRef: string): string {
 function awaitedChildSql(rowRef: string): string {
   // 提案を運ぶ question は付帯子(ADR 0120 決定3): 適用は盤面が行うので親は見届けない
   return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
+}
+
+/** An attached child the parent's cancel leaves running (ADR 0268 決定4): the line is whether its artifact
+ *  rides the lineage back into the dying branch. A review commits nothing and is skipped by the lineage
+ *  (ADR 0053), so it still reads the parent's log and delivers its findings; an attached work (repair) or
+ *  proposal question falls with the parent. */
+function survivesParentCancelSql(rowRef: string): string {
+  return `(${rowRef}.type = 'review' AND NOT ${awaitedChildSql(rowRef)})`;
 }
 
 /** The parent this row is holding up, or NULL — `listYourTasks` and `questionBlocking` share it. */

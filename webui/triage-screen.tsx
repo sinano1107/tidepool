@@ -1146,7 +1146,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           <div>
             {nObjections > 0 && (
               <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: 0 }}>
-                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle into repair tasks at commit — one per objected task, queue tail
+                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle at commit — one repair task per objected task at the queue tail, none for an Interview root or a cancelled task
               </p>
             )}
             {scratch.length > 0 && (

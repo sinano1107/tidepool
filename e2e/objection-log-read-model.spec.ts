@@ -29,7 +29,7 @@ test("異議を打った後にリロードしても、同じエントリに注�
   await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
   await page.getByRole("button", { name: "Wrap up" }).click();
-  await expect(page.getByText("1 objection bundle into repair tasks at commit")).toBeVisible();
+  await expect(page.getByText("1 objection bundle at commit")).toBeVisible();
 });
 
 // issue #371: 打った異議は束ねられた後もログエントリの注釈として残る
@@ -63,7 +63,7 @@ test("異議を打ったセッションが commit で閉じた後にリロード
   await page.getByRole("button", { name: "Merge decisions" }).click();
   await page.getByRole("button", { name: "Queue check" }).click();
   await page.getByRole("button", { name: "Wrap up" }).click();
-  await expect(page.getByText(/objections? bundle into repair tasks at commit/)).not.toBeVisible();
+  await expect(page.getByText(/objections? bundle at commit/)).not.toBeVisible();
 });
 
 test("異議注釈の横に最新の cause が読み取り専用で並び uncertain は未確定と分かる(issue #576)", async ({

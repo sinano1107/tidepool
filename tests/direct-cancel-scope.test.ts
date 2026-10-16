@@ -15,11 +15,13 @@ import {
   listBoard,
   listChildren,
   logDecision,
+  nextSlotTask,
   registerTask,
   type Task,
+  taskHistoryRows,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { closedRootTree, decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, closedRootTree, decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI } from "./harness.js";
 
 /** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
  *  root(question を除く)」、Edit は「文面の書き手が人間の task」。 */
@@ -182,4 +184,50 @@ it("carriesHumanWords は承認で実体化した子では false、人間の roo
   expect(carriesHumanWords(db, root.id)).toBe(true);
   expect(carriesHumanWords(db, humanChild.id)).toBe(true);
   expect(carriesHumanWords(db, approvedChild.id)).toBe(false);
+});
+
+// cancel の cascade は修理子を倒し、review の付帯子は残す(ADR 0268 決定4)
+
+/** 人間が登録した work の判断行に異議を打って commit し、修理子と RCA(self / auditor)を付ける。 */
+function objectedAndCommitted(db: Db) {
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const entry = logDecision(db, parent, "deckhand's call", "deckhand", NOW, "worker");
+  startTriage(db, NOW);
+  raiseObjection(db, entry, "redo it", NOW);
+  commitTriage(db, NOW, [], new Map());
+  const kids = listChildren(db, parent.id);
+  return { parent: getTask(db, parent.id)!, repair: kids.find((c) => c.type === "work")!, rcas: kids.filter((c) => c.type === "review") };
+}
+
+it.each(["直接 cancel", "failure question の abandon"] as const)(
+  "異議 → commit の後の親の%sで、修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0268 決定4)",
+  (path) => {
+    db = openDb(":memory:");
+    const { parent, repair, rcas } = objectedAndCommitted(db);
+    expect(rcas.map((rca) => rca.title)).toEqual(["rca (self): t", "rca (auditor): t"]);
+
+    if (path === "直接 cancel") cancelTaskDirectly(db, parent, null, NOW, {}, "webui");
+    else answerQuestionViaWebui(db, failureQuestion(db, parent.id, NOW), ["abandon"], NOW);
+
+    expect([parent, repair].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled"]);
+    expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+    expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
+    for (const rca of rcas) {
+      expect(taskHistoryRows(db, parent.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
+      expect(completeTask(db, getTask(db, rca.id)!, undefined, "auditor", NOW, "worker").status).toBe("done");
+    }
+  },
+);
+
+it.each(["開いた failure question", "資源の quarantine"] as const)("残る review の付帯子の下の%sは、親の直接 cancel を塞がない —— cascade と同じ範囲(ADR 0268 決定4)", (gate) => {
+  db = openDb(":memory:");
+  const { parent, rcas } = objectedAndCommitted(db);
+  const auditorRca = rcas.find((rca) => rca.assignee === null)!;
+  const question = gate === "開いた failure question" ? failureQuestion(db, auditorRca.id, NOW) : undefined;
+  const quarantined = gate === "資源の quarantine" ? { workspaces: [], assignees: ["fugu"] } : undefined;
+
+  cancelTaskDirectly(db, parent, null, NOW, { auditorName: "fugu", quarantined }, "webui");
+
+  expect(getTask(db, parent.id)!.status).toBe("cancelled");
+  for (const task of [auditorRca, question]) if (task) expect(getTask(db, task.id)!.status).toBe("todo");
 });
