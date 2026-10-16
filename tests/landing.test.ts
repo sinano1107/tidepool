@@ -1413,6 +1413,39 @@ it("external の根の PR が外で squash merge されれば、収束の1回目
   expect(github.stateChecks).toEqual([]);
 });
 
+// ADR 0265 決定3 / ADR 0250 決定1: 開いた PR の根の子孫は候補にならず、根が内容で終わった後の修理は自分で根になる
+it("external の根の PR が開いている間、根のブランチへ帰る子孫は撃たれず、外で merge された後に完了した修理は根が内容で終わった回に自分で根になって着地する", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-descendant", "external");
+  finish(db, clock, work);
+  const child = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${child.id}`);
+  commitWork(workspace.path, "child.txt", "merged back\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
+  finish(db, clock, child);
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: work.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
+  ]);
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
+  commitWork(workspace.path, "repair.txt", "after the merge\n");
+  finish(db, clock, repair);
+
+  // 根へ帰っていた子孫も自分で根になるが、その内容は根の PR と一緒に届いている
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: work.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: child.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
+  ]);
+  expect(boardEvents(db, work.id, "landing_finished").map(({ payload }) => payload)).toEqual([
+    { kind: "landing_finished", pr_number: 1, basis: "content" },
+  ]);
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
+});
+
 // ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
 it.each([
   ["auto_if_ci_green", "auto_merge"],
