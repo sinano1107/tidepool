@@ -446,6 +446,17 @@ it.each([
   expect(() => enabledSkills(result, ["/board/fixture/ws/B"])).toThrow("/board/fixture/ws/B");
 });
 
+// 実物の `skills/list` 応答の `result`(codex-cli 0.147.0、Lima VM、#893 の実測)。CODEX_HOME に `skills/foo698/SKILL.md` と、
+// その path を `[[skills.config]] enabled = false` にする config.toml を置き、上と同じ要求を `cwds:[C9]` で流したもの。
+// 盤面所有の config.toml(列挙の app-server は読む)が disable した skill も、`skills[]` から消えずに `enabled: false` で返る。
+// spawn は `--ignore-user-config` でその config.toml を読まない —— 列挙が有効な skill だけを閉じると、この skill は worker に載る。
+it("盤面所有の config.toml が disable した user skill も、列挙は enabled を見ずに閉じる —— worker はその disable を読まない(#893 / ADR 0147)", () => {
+  const result = JSON.parse(
+    readFileSync(new URL("fixtures/codex-skills-list-user-config-disabled.json", import.meta.url), "utf8"),
+  );
+  expect(listedSkillPaths(result, ["/board/fixture/ws/C9"])).toContain("/board/fixture/codex-home/skills/foo698/SKILL.md");
+});
+
 it("閉じた設定を当てた skills/list の応答から、まだ有効と報告された skill を名前と path で拾う(ADR 0259 決定3)", () => {
   expect(enabledSkills(codexSkillsList("closed"), FIXTURE_CWDS)).toEqual([]);
   expect(enabledSkills(codexSkillsList("one-enabled"), FIXTURE_CWDS)).toEqual([
