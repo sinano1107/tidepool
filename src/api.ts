@@ -1419,6 +1419,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           agentRegistered,
           defaultAgentName,
           auditorName,
+          taskExecutionCandidates,
         },
         task,
         parsed.data.answers,

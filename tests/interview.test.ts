@@ -402,6 +402,48 @@ it("報告の question への retry で root はその question を出自に can
   expect(nextSlotTask(db)?.id).toBe(again.id);
 });
 
+/** 既定 agent の entry と、それを読む判定の口(ADR 0253 決定3)。entry はテストが後から書き換える。 */
+function runnablePort(db: Db, ...providers: Provider[]) {
+  const entry = agent(false, ...providers);
+  return { entry, runnable: { candidates: (task: Parameters<typeof executionSettingsFor>[2]) => executionSettingsFor(db, entry, task) } };
+}
+/** 旧い root 以外の root の数 —— retry が登録した新しい Interview。 */
+const otherRoots = (db: Db, root: Task) => listBoard(db).filter((task) => task.parent_id === null && task.id !== root.id).length;
+const UNRUNNABLE_RETRY = /target \{"provider":"anthropic","model":"claude-opus-5-5".*cannot run as the default agent.*answer "retry" again.*answer "abandon"/;
+
+it("登録の後に既定 agent の entry から対象の Provider が外れた盤面で、前提の破綻の question への retry は対象と abandon を名指して答えごと拒まれ、question は todo のまま、root は cancel されず、新しい Interview も登録されない —— entry を戻せば retry が通る(ADR 0253 決定3 / ADR 0248 決定2)", () => {
+  const { db, root, failed } = twoPinnedChildren();
+  const question = breachQuestion(db, failed);
+  const { entry, runnable } = runnablePort(db, "openai");
+  expect(() => answerQuestionViaWebui(db, question, ["retry"], new Date(0), { runnable })).toThrow(UNRUNNABLE_RETRY);
+  expect([question.id, root.id, failed.id].map((id) => getTask(db, id)!.status)).toEqual(["todo", "todo", "todo"]);
+  expect(otherRoots(db, root)).toBe(0);
+  entry.provider = [{ name: "anthropic", advisor: false }];
+  answerQuestionViaWebui(db, getTask(db, question.id)!, ["retry"], new Date(0), { runnable });
+  expect(getTask(db, root.id)!.status).toBe("cancelled");
+  expect(otherRoots(db, root)).toBe(1);
+});
+
+it("同じ盤面で、probe の破綻の報告の question への retry も答えごと拒まれ、question は todo のまま、root は cancel されず、新しい Interview も登録されない(ADR 0253 決定3 / ADR 0251 決定2)", () => {
+  const { db, root } = scoringRoot();
+  const question = report(db, root);
+  const { runnable } = runnablePort(db, "openai");
+  expect(() => answerQuestionViaWebui(db, question, ["retry"], new Date(1), { runnable })).toThrow(UNRUNNABLE_RETRY);
+  expect([question.id, root.id].map((id) => getTask(db, id)!.status)).toEqual(["todo", "todo"]);
+  expect(otherRoots(db, root)).toBe(0);
+});
+
+it("走れない対象を抱えたままでも、前提の破綻の question と probe の破綻の報告の question への continue と abandon は今どおり通る(ADR 0253 決定3)", () => {
+  for (const answer of ["continue", "abandon"]) {
+    const breach = twoPinnedChildren();
+    answerQuestionViaWebui(breach.db, breachQuestion(breach.db, breach.failed), [answer], new Date(0), runnablePort(breach.db, "openai"));
+    const scoring = scoringRoot();
+    answerQuestionViaWebui(scoring.db, report(scoring.db, scoring.root), [answer], new Date(1), runnablePort(scoring.db, "openai"));
+    expect(getTask(breach.db, breach.root.id)!.status).toBe(answer === "abandon" ? "cancelled" : "todo");
+    expect(getTask(scoring.db, scoring.root.id)!.status).toBe(answer === "abandon" ? "cancelled" : "todo");
+  }
+});
+
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
 function pinnedChild(target: Record<string, unknown>, ceiling: AdvisorCeiling = "off") {
   const { db, root } = registerInterview(undefined, [target]);

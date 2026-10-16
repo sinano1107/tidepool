@@ -466,6 +466,8 @@ export interface SubmitAnswerDeps {
   agentRegistered?: (name: string) => boolean;
   defaultAgentName?: string;
   auditorName?: string;
+  /** Interview の retry が写す対象を既定 agent が走らせられるかの判定の口(ADR 0253 決定3)。Absent → 検査しない。 */
+  taskExecutionCandidates?: TaskExecutionCandidates;
 }
 
 /** 門の検査の材料。合成 root が一度だけ `quarantineChecks` に束ね、回答の口
@@ -1124,6 +1126,7 @@ export async function submitAnswer(
         comment,
         amended,
         origin,
+        deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName },
       );
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);

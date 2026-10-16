@@ -217,6 +217,24 @@ const SIBLING_ANSWER = "sibling-answer-mark-91c";
 const CONTINUE_COMMENT = "continue-comment-mark-4d2";
 const SIBLING_MEMORY = "sibling-memory-mark-4d2";
 
+it("走れない対象を写す retry の拒否は、WebUI の回答 API では回答の拒否の status(409)に、管理MCP の answer_question では isError に写り、どちらも対象と abandon を名指す(ADR 0253 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [child] = await pose(root.id);
+  await runNow(t, child);
+  expect((await callAsTask(t, child, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
+  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done");
+  definition.provider = [{ name: "openai", advisor: false }];
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
+  expect(refused.status).toBe(409);
+  for (const text of [`${JSON.stringify(opus46)} cannot run as fake-worker`, `answer "abandon"`]) expect(refused.json.error).toContain(text);
+  const client = await managementMcpClient(t.baseUrl);
+  const viaMcp: any = await client.callTool({ name: "answer_question", arguments: { task_id: question.id, answers: ["retry"] } });
+  await client.close();
+  expect(viaMcp.isError).toBe(true);
+  for (const text of [`${JSON.stringify(opus46)} cannot run as fake-worker`, `answer "abandon"`]) expect(viaMcp.content[0].text).toContain(text);
+});
+
 /** 読み手に立った未回答の question に人間が答え、読み手が slot に戻るまで進める。 */
 async function answerReaderQuestion(reader: string, answers: string[], comment?: string) {
   await new Promise((resolve) => setImmediate(resolve));
