@@ -30,7 +30,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { closedRootOf, contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, type ExamineeWriter, examineeWrites, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -705,20 +705,16 @@ function resolveWorkspaceForAnswer(
   }
 }
 
-/** Shared human-surface defaults for direct cancel's quarantine-question gate,
+/** Shared human-surface defaults for direct cancel's scope and quarantine-question gates,
  *  computed here once so the WebUI and MCP cancel routes can't drift apart. */
-function humanCancelDefaults(
-  db: Db,
-  workspace: WorkspaceConfig | undefined,
-  defaultAgentName: string | undefined,
-  auditorName: string | undefined,
-  quarantineResolvers?: QuarantineResolvers,
-): CancelDefaults {
+function humanCancelDefaults(deps: CancelThroughHumanDoorDeps): CancelDefaults {
   return {
-    defaultWorkspaceName: workspace?.name,
-    defaultAgentName,
-    auditorName,
-    quarantined: quarantineStops(db, quarantineResolvers),
+    defaultWorkspaceName: deps.workspace?.name,
+    defaultAgentName: deps.defaultAgentName,
+    auditorName: deps.auditorName,
+    quarantined: quarantineStops(deps.db, deps.quarantineResolvers),
+    // 閉じた根に塞がれた子(ADR 0265 決定6)—— pickup が飛ばすのと同じ1本
+    closedRootOf: closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
   };
 }
 
@@ -761,6 +757,7 @@ export interface CancelThroughHumanDoorDeps {
   db: Db;
   pollNow: () => void;
   workspace?: WorkspaceConfig;
+  resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
   quarantineResolvers?: QuarantineResolvers;
@@ -853,13 +850,7 @@ export async function cancelThroughHumanDoor(
       task,
       reason ?? null,
       now(),
-      humanCancelDefaults(
-        deps.db,
-        deps.workspace,
-        deps.defaultAgentName,
-        deps.auditorName,
-        deps.quarantineResolvers,
-      ),
+      humanCancelDefaults(deps),
       origin,
     );
     deps.pollNow();

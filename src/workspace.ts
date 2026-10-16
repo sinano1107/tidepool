@@ -286,7 +286,7 @@ export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): bo
 export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
-  task: Task,
+  task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   if (task.type === "review") {
     return {
@@ -328,7 +328,7 @@ export function resolveTaskBranchLineage(
 export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
-  task: Task,
+  task: Pick<Task, "type" | "parent_id">,
 ): string | undefined {
   return resolveTaskBranchLineage(db, workspace, task).branch;
 }

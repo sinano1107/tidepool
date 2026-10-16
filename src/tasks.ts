@@ -1375,6 +1375,16 @@ export interface ResourceStops {
   assignees: string[];
 }
 
+/** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根と、その PR。 */
+export interface ClosedRoot {
+  task_id: string;
+  pr_number: number;
+}
+
+/** 「閉じた根に塞がれた子」の唯一の述語の形(landing.ts の `closedRootOf` が作る)。git を読むので呼び手が渡す ——
+ *  pickup の候補(`nextSlotTask`)・キューの skipped(`listQueue`)・直接 cancel の範囲が同じ1本を受け取る。 */
+export type ClosedRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">) => ClosedRoot | null;
+
 /** The pointers the direct-cancel question gate's quarantine half resolves an
  *  unset workspace/assignee against (issue #130), same fallbacks the pickup
  *  gate uses (ADR 0009 / issue #36 / issue #42), plus what open quarantines
@@ -1384,6 +1394,8 @@ export interface CancelDefaults {
   defaultAgentName?: string;
   auditorName?: string;
   quarantined?: ResourceStops;
+  /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
+  closedRootOf?: ClosedRootOf;
 }
 
 /** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
@@ -1459,7 +1471,7 @@ export function cancelTaskDirectly(
   defaults: CancelDefaults,
   origin: EventOrigin,
 ): void {
-  assertDirectlyCancellableScope(db, task);
+  assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
   db.transaction(() => {
     const cancelEventId = cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
@@ -2369,19 +2381,19 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
  *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
- *  決着を持っていれば null で刻まない —— question だけを閉じる。 */
+ *  決着を持っていれば null で刻まない —— question だけを閉じる。観測 event を刻んだら true。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
   payload: TaskScopedPayload,
   now: Date,
   recordOn: string | null = questionId,
-): void {
-  db.transaction(() => {
+): boolean {
+  return db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
       .run(questionId);
-    if (changes === 0 || recordOn === null) return;
+    if (changes === 0 || recordOn === null) return false;
     appendEvent(db, {
       taskId: recordOn,
       workerId: BOARD_WORKER_ID,
@@ -2389,6 +2401,7 @@ export function settleQuestionAsObserved(
       payload,
       at: now,
     });
+    return true;
   })();
 }
 
@@ -2801,14 +2814,19 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
- *  is an input the rules require, so both stay out. Approved children retain
- *  their agent's decomposition judgment and also stay out (ADR 0211). */
-function assertDirectlyCancellableScope(db: Db, task: Task): void {
-  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || (task.parent_id === null && task.type !== "question");
+ *  is an input the rules require, so both stay out — except under a root whose PR
+ *  was closed outside the board, where they are no longer required (ADR 0265 決定6).
+ *  Approved children retain their agent's decomposition judgment and also stay out (ADR 0211). */
+function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
+  const inScope =
+    getTextAuthor(db, task.id) === HUMAN_WORKER_ID ||
+    (task.parent_id === null && task.type !== "question") ||
+    !!closedRootOf?.(task);
   if (!inScope) {
     throw new DomainError(
-      "only a human-authored task or a board-registered root other than a question can be directly cancelled — " +
-        "an agent-authored child (including an approved child), a board-named attached child, and a board-named question are out of scope",
+      "only a human-authored task, a board-registered root other than a question, or a task held by a root whose PR was " +
+        "closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
+        "a board-named attached child, and a board-named question are out of scope",
     );
   }
   assertUnsettledNotInProgress(task, "cancelled");
@@ -3200,6 +3218,8 @@ export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof store
    *  listUnnotifiedHumanTasks). registerTask always writes exactly one such
    *  event, so the join is one-to-one. */
   registrant?: string;
+  /** キューの読み口だけ: この行を skipped にしている閉じた根(ADR 0265 決定6)。 */
+  closed_root?: ClosedRoot;
 };
 
 /** Who registered `taskId` — its own `task_registered` event's worker id.
@@ -3399,6 +3419,8 @@ export function listQueue(
    *  引けない。`nextSlotTask` の `excludedTaskIds` と同じ1つの式
    *  (scheduler.ts の `pickupExclusions` + selector)から渡す。 */
   isSkipped?: (task: BoardTask) => boolean,
+  /** 閉じた根に塞がれた子は skipped で、理由に閉じた根と PR を持つ(ADR 0265 決定6)。`nextSlotTask` と同じ1本を渡す。 */
+  closedRootOf?: ClosedRootOf,
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
@@ -3417,9 +3439,12 @@ export function listQueue(
   return rows
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
     .map((row) => toBoardTask(db, row))
-    .map((task) =>
-      task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,
-    );
+    .map((task) => {
+      if (task.status !== "todo") return task;
+      const closed_root = closedRootOf?.(task);
+      if (closed_root) return { ...task, status: "skipped" as const, closed_root };
+      return isSkipped?.(task) ? { ...task, status: "skipped" as const } : task;
+    });
 }
 
 /** How a your-tasks row appears (issue #301): `blocking` names the parent this
@@ -3727,9 +3752,11 @@ export function nextSlotTask(
    *  provider 全体の窓は今も agent 単位(`stopped`)—— そちらは
    *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
   excludedTaskIds?: string[],
+  /** 閉じた根に塞がれた子を飛ばす(ADR 0265 決定6)。Absent → 飛ばさない。 */
+  closedRootOf?: ClosedRootOf,
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
-  const row = db
+  const statement = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
        SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
@@ -3742,15 +3769,20 @@ export function nextSlotTask(
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
-    )
-    .get({
+    );
+  const excluded = [...(excludedTaskIds ?? [])];
+  for (;;) {
+    const row = statement.get({
       defaultWorkspaceName: defaultWorkspaceName ?? null,
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
       stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
       stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
-      excludedTaskIds: excludedTaskIds?.length ? JSON.stringify(excludedTaskIds) : null,
+      excludedTaskIds: excluded.length ? JSON.stringify(excluded) : null,
     }) as TaskRow | undefined;
-  return row && rowToTask(row);
+    const task = row && rowToTask(row);
+    if (!task || !closedRootOf?.(task)) return task;
+    excluded.push(task.id);
+  }
 }

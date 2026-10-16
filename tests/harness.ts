@@ -49,6 +49,7 @@ import {
   humanDecomposeTask,
   listBoard,
   listChildren,
+  logDecision,
   poseProbe,
   type RegisterTaskInput,
   recordPrOpened,
@@ -58,6 +59,7 @@ import {
 } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
@@ -735,6 +737,44 @@ export async function squashTaskIntoOrigin(
   git(merger, "merge", "--squash", "landed");
   git(merger, "commit", "-m", "squash task outside the board");
   git(merger, "push", "origin", "main");
+}
+
+/** done の根(内容はタスクブランチにだけある)の下に、異議由来の修理と RCA review(盤面名義の付帯子)が未決着で残る木。
+ *  `closed` なら根の PR #1 が盤面の外で閉じられたと観測されている(ADR 0265 決定6)。`decomposed` なら根は分解子を1つ持ち
+ *  (内容は根のブランチへ merge 済み)、異議はその分解子に出る。 */
+export async function closedRootTree(
+  name: string,
+  { decomposed = false, closed = true } = {},
+): Promise<{ workspace: WorkspaceConfig; db: Db; root: Task; repairs: Task[] }> {
+  const now = new Date("2026-10-16T00:00:00.000Z");
+  const workspace = await makeWorkspace(name);
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
+  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  let objected = root;
+  if (decomposed) {
+    [objected] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "part", purpose: "p", completion_criteria: "c" }] }, "deckhand", now) as [Task];
+    git(workspace.path, "checkout", "-b", `task/${objected.id}`);
+    commitWork(workspace.path, "part.txt", "part\n");
+    git(workspace.path, "checkout", `task/${root.id}`);
+    git(workspace.path, "merge", "--no-edit", `task/${objected.id}`);
+    completeTask(db, objected, FULL_HANDOFF, "deckhand", now, "worker");
+  } else {
+    commitWork(workspace.path, "feature.txt", "ready\n");
+  }
+  git(workspace.path, "checkout", "main");
+  const entry = logDecision(db, objected, "ship it", "deckhand", now, "worker");
+  completeTask(db, getTask(db, root.id)!, FULL_HANDOFF, "deckhand", now, "worker");
+  settleReviews(db, now);
+  startTriage(db, now);
+  raiseObjection(db, entry, "redo it", now);
+  commitTriage(db, now);
+  if (closed) {
+    appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
+  }
+  const repairs = listChildren(db, objected.id).filter((child) => child.status === "todo");
+  expect(repairs.map((child) => child.type).sort()).toEqual(["review", "review", "work"]);
+  return { workspace, db, root, repairs };
 }
 
 export async function registerWork(
