@@ -327,7 +327,7 @@ function mapData(
       // from `assignee` above, which is resolved for display and would
       // misrepresent an unset assignee here
       status: col, rawAssignee: t.raw_assignee,
-      parent_id: t.parent_id, review_flag: t.review_flag, review_by: t.review_by,
+      parent_id: t.parent_id, interview_root_id: t.interview_root_id, review_flag: t.review_flag, review_by: t.review_by,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
@@ -545,7 +545,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
 function completionReviewLine(task: BoardScreenTask): string | null {
   if (!TidepoolRules.completionReviewFires({
     type: task.type, parent_id: task.parent_id, assignee: task.rawAssignee,
-    review_flag: task.review_flag, risk_flag: task.risk,
+    review_flag: task.review_flag, risk_flag: task.risk, examinee: task.interview_root_id != null,
   })) return null;
   return `review → ${task.review_by?.length ? task.review_by.join(', ') : 'board auditor'}`;
 }

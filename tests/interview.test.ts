@@ -10,6 +10,7 @@ import type { Provider } from "../src/provider.js";
 import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
+import { whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
@@ -77,7 +78,7 @@ it("Interview の root は作り直せない —— 出題済みの root の red
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   const replan = { reason: "a fixed probe", children: [CHILD] };
   expect(() => redecompose(db, getTask(db, root.id)!, replan, "auditor", new Date(0), undefined, undefined, "worker")).toThrow(
-    "an Interview is not redecomposed: a broken probe is the human's premise-breach question to settle (continue, abandon or retry)",
+    "an Interview is not redecomposed: score every done answer with complete_interview, or report the probe broken with report_broken_probe",
   );
   expect(listExaminees(db, root.id).map(({ id, status }) => ({ id, status }))).toEqual([{ id: child!.id, status: "todo" }]);
 });
@@ -111,7 +112,7 @@ it("受験者の前提の破綻の宣言は、本番の親の無い work と同�
   expect({ board: listBoard(db).length, events: listEvents(db, examinee.id).length }).toEqual(before);
 });
 
-it("done の受験者は root が決着するまで盤面の一覧に残り、root の決着で一緒に退く —— 受験者の行は Interview の root を名指し、root の未決着の子に未決着の答案が数えられる(ADR 0267 決定6)", () => {
+it("done の受験者は root が決着するまで盤面の一覧に残り、root の決着で一緒に退く —— 受験者の行は Interview の root を名指す(ADR 0267 決定6)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const [done, open] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task];
   completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
@@ -161,11 +162,6 @@ function twoExaminees() {
   return { db, root, failed: failed!, sibling: sibling! };
 }
 
-
-
-
-
-
 const ONLY_THIS_TARGET = /answer and comment reach only this target/;
 
 it("受験者の failure question の context は答えとコメントがこの対象にだけ届くと人間に言い、自分の history はその文を外して答えとコメントを運ぶ(ADR 0263 決定9)", () => {
@@ -208,7 +204,6 @@ it("本番の work の failure と escalation の question の context は「こ
     questions.map((q) => ({ child_outside_the_decomposition: expect.objectContaining({ purpose: q.purpose, comment: q.question_answer_comment }) })),
   );
 });
-
 
 it("retry 後の受験者の failure question の history は失敗の理由と再実行の帰結を残し、Interview の帰結だけを伏せる —— 人間の context は残る(ADR 0245 決定2 / ADR 0247 決定1)", () => {
   const { db, failed } = twoExaminees();
@@ -254,14 +249,14 @@ it("受験者の失敗理由に引用された Interview の帰結は逐語で�
   ]);
 });
 
-it("受験者の failure question への abandon は、その子だけを cancel する —— 兄弟の受験者は todo のまま、root は blocked のまま(ADR 0245 決定5)", () => {
+it("受験者の failure question への abandon は、その受験者だけを cancel する —— 他の対象の受験者は todo のまま、root は blocked のまま(ADR 0267 決定1)", () => {
   const { db, root, failed, sibling } = twoExaminees();
   answerQuestionViaWebui(db, failureQuestion(db, failed.id, new Date(0)), ["abandon"], new Date(0));
   expect([getTask(db, failed.id)!.status, getTask(db, sibling.id)!.status]).toEqual(["cancelled", "todo"]);
   expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
 });
 
-it("done の兄弟が居れば、最後の受験者の failure question への abandon は root を cancel せず先頭へも動かさない —— 通常どおり起きる(ADR 0245 決定5 / ADR 0247 決定1)", () => {
+it("他の対象の答案が done なら、最後の受験者の failure question への abandon は root を cancel せず先頭へも動かさない —— 通常どおり起きる(ADR 0267 決定1 / ADR 0247 決定1)", () => {
   const { db, root, failed, sibling } = twoExaminees();
   completeTask(db, sibling, FULL_HANDOFF, "tako", new Date(0), "worker");
   const before = getTask(db, root.id)!.sort_key;
@@ -270,16 +265,12 @@ it("done の兄弟が居れば、最後の受験者の failure question への a
   expect(getTask(db, root.id)!.sort_key).toBe(before);
 });
 
-it("受験者の failure question の abandon の文は、分解判断の破棄も兄弟の件数も言わず、他の対象が残らなければ Interview も終わると条件付きで言う(ADR 0245 決定5 / ADR 0247 決定1)", () => {
+it("受験者の failure question の abandon の文は、分解判断の破棄も他の対象の件数も言わず、他の対象が残らなければ Interview も終わると条件付きで言う(ADR 0267 決定1 / ADR 0247 決定1)", () => {
   const { db, failed } = twoExaminees();
   expect(abandonConsequence(db, failed)).toBe(
     `"abandon" cancels this task and its remaining work. If no other target of this Interview is done or still unsettled, the Interview ends too.`,
   );
 });
-
-
-
-
 
 /** 対象3つの root が出題し、受験者の1人は done、1人は failure question、1人は escalation の question を開いたまま。 */
 function examineesWithOpenQuestions() {
@@ -299,6 +290,29 @@ it("出題済みの root の直接 cancel は、受験者の failure question �
     expect(listEvents(db, task.id).find((event) => event.kind === "task_cancelled_directly")!.payload).toEqual({ kind: "task_cancelled_directly", reason: "measuring the wrong thing" });
   }
   expect(nextSlotTask(db)).toBeUndefined();
+});
+
+it("直接 cancel の門は受験者の資源の quarantine も数えない —— 受験者だけが使う agent が止まっていても root の cancel は通る(ADR 0267 決定3)", () => {
+  const { db, root, unsettled } = examineesWithOpenQuestions();
+  const defaults = { defaultAgentName: "tako", auditorName: "auditor", quarantined: { workspaces: [], assignees: ["tako"] } };
+  cancelTaskDirectly(db, root, null, new Date(1), defaults, "webui");
+  expect([root, ...unsettled].map(({ id }) => getTask(db, id)!.status)).toEqual(["cancelled", "cancelled", "cancelled"]);
+});
+
+it("受験者は人間の直接 cancel の範囲の外 —— root の agent が登録した task なので拒まれ、何も cancel されない。受験者を外すのは failure の abandon か「この対象は測らない」(ADR 0198 / ADR 0267 決定1)", () => {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  expect(() => cancelTaskDirectly(db, examinee, null, new Date(1), {}, "webui")).toThrow(DomainError);
+  expect(getTask(db, examinee.id)!.status).toBe("todo");
+});
+
+it("受験者の完了は完了時レビューを立てない —— 規則の正本が理由を言い、完了の起票も同じ規則を読む(ADR 0267 決定1 / ADR 0111 追記8)", () => {
+  expect(whyNoCompletionReview({ type: "work", parent_id: null, examinee: true })).toMatch(/Interview examinee/);
+  expect(whyReviewFlagIsInert({ type: "work", parent_id: null, examinee: true })).toMatch(/Interview examinee/);
+  const { db, root } = registerInterview();
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  completeTask(db, examinee, FULL_HANDOFF, "tako", new Date(0), "worker");
+  expect(listBoard(db).filter((task) => task.type === "review").map(({ id }) => id)).toEqual([root.id]);
 });
 
 /** 採点の段階の root: 出題して対象ごとの受験者を全部 done にした(答案は FULL_HANDOFF)。 */
@@ -392,7 +406,6 @@ function runnablePort(db: Db, ...providers: Provider[]) {
 /** 旧い root 以外の root の数 —— retry が登録した新しい Interview。 */
 const otherRoots = (db: Db, root: Task) => listBoard(db).filter((task) => task.parent_id === null && task.interview_root_id === null && task.id !== root.id).length;
 const UNRUNNABLE_RETRY = /target \{"provider":"anthropic","model":"claude-opus-5-5".*cannot run as the default agent.*answer "retry" again.*answer "abandon"/;
-
 
 it("同じ盤面で、probe の破綻の報告の question への retry も答えごと拒まれ、question は todo のまま、root は cancel されず、新しい Interview も登録されない(ADR 0253 決定3 / ADR 0251 決定2)", () => {
   const { db, root } = scoringRoot();
@@ -645,7 +658,6 @@ it("2度目の出題・Interview でない task・受験者への出題は拒ま
   expect(listBoard(db)).toHaveLength(before);
   expect(listEvents(db, root.id).filter((event) => event.kind === "decision_logged")).toHaveLength(1);
 });
-
 
 it("Interview の root は agent の decompose でも人間の扉でも分けられない —— 出題の前も後も拒まれ、何も登録されない(ADR 0253 決定5 / ADR 0111 決定6)", () => {
   const { db, root } = registerInterview();

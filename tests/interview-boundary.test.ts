@@ -356,7 +356,6 @@ it("受験者の詳細と盤面の一覧の行は、その Interview の root �
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [examinee] = await pose(root.id);
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${examinee}`)).json).toMatchObject({ parent_id: null, interview_root_id: root.id });
-  expect((await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.id === examinee)).toMatchObject({ interview_root_id: root.id });
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.interview_root_id).toBeNull();
+  // 行の中身(どの受験者がどの root を名指すか)は interview.test.ts の domain 層で言う。ここは詳細の wire に欄が載る写像だけ
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${examinee}`)).json.interview_root_id).toBe(root.id);
 });

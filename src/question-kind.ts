@@ -8,7 +8,7 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "escalation" }
   /** watchdog の kill と scheduler の issue-gone(escalateTask 経由、ADR 0006)。cancel_option で答えると分解判断ごとの abandon。 */
   | { kind: "failure"; cancel_option: string }
-  /** 失敗 question と違い、pin の子でも abandon の範囲は分解判断ごと(ADR 0245 決定5)。 */
+  /** abandon の範囲は宣言者の分解判断ごと(ADR 0121)。受験者は分解判断に乗らないので宣言できない(ADR 0267 決定7)。 */
   | { kind: "premise_breach"; cancel_option: string; breached_decision: number }
   /** Interview の root の probe の破綻の報告(ADR 0251): reason は root が書いた理由で、retry が新しい root に見せる。 */
   | { kind: "broken_probe"; reason: string }

@@ -1154,8 +1154,7 @@ function finishTask(
       },
       at: now,
     });
-    // 受験者は root の採点だけが評価する —— 親の無い work でも完了時レビューを立てない(ADR 0267 決定1)
-    if (task.interview_target_id === null && completionReviewFires(task)) {
+    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null })) {
       for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
         registerTask(
           db,
@@ -2014,11 +2013,9 @@ export function redecompose(
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
   origin: EventOrigin,
 ): Task[] {
-  // ADR 0245 決定3: Interview の root は作り直さない
+  // ADR 0245 決定3: Interview の root は作り直さない。破綻した probe は root が報告する(ADR 0251 決定5 / ADR 0267 決定4)
   if (interviewTargets(db, parent.id) !== null) {
-    throw new DomainError(
-      "an Interview is not redecomposed: a broken probe is the human's premise-breach question to settle (continue, abandon or retry)",
-    );
+    throw new DomainError(`an Interview is not redecomposed: ${POSED_INTERVIEW_EXITS}`);
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return db.transaction(() => {
@@ -2572,7 +2569,7 @@ export function decomposeTask(
   if (interviewTargets(db, parent.id) !== null) {
     throw new DomainError(
       interviewProbe(db, parent.id) === null
-        ? "an Interview root is not decomposed: pose its probe with pose_probe and the board registers one child per target"
+        ? "an Interview root is not decomposed: pose its probe with pose_probe and the board registers one answer task per target"
         : `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`,
     );
   }
@@ -2773,19 +2770,21 @@ function assertHumanEditableScope(db: Db, task: Task): void {
 }
 
 /** The direct-cancel scope gate (ADR 0198 / 0211, CONTEXT.md's Cancel): the task must
- *  be human-authored or a root other than a question, unsettled, and not
- *  in_progress. An agent registers only children (decompose children,
+ *  be human-authored or a root other than a question (an Interview examinee has no
+ *  parent but is no root), unsettled, and not in_progress. An agent registers only children (decompose children,
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
  *  is an input the rules require, so both stay out. Approved children retain
  *  their agent's decomposition judgment and also stay out (ADR 0211). */
 function assertDirectlyCancellableScope(db: Db, task: Task): void {
-  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || (task.parent_id === null && task.type !== "question");
+  // 受験者は親を持たないが root ではない —— root の agent が登録した答案で、外すのは failure の abandon か対象外し(ADR 0267 決定1)
+  const root = task.parent_id === null && task.interview_target_id === null && task.type !== "question";
+  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || root;
   if (!inScope) {
     throw new DomainError(
       "only a human-authored task or a board-registered root other than a question can be directly cancelled — " +
-        "an agent-authored child (including an approved child), a board-named attached child, and a board-named question are out of scope",
+        "an agent-authored child (including an approved child), an Interview examinee, a board-named attached child, and a board-named question are out of scope",
     );
   }
   assertUnsettledNotInProgress(task, "cancelled");
@@ -3091,9 +3090,8 @@ function stoppedSql(taskRef: string, fallback: string): string {
  *  everything its abandon answer could cancel out of the slot. A general
  *  question still holds its parent's children downward. A failure question
  *  holds the failed task's descendants plus each unfinished same-decision
- *  sibling itself and its descendants — no siblings for an Interview pin
- *  child's failure question, though its premise-breach question keeps them
- *  (ADR 0245 決定2・5). Seeding siblings themselves prevents pickup
+ *  sibling itself and its descendants — an Interview examinee rests on no
+ *  decision, so its question holds only itself and below (ADR 0267 決定1). Seeding siblings themselves prevents pickup
  *  immediately before the answer. Questions stay answerable outside
  *  the slot and are excluded from held presentation. The set is derived only. */
 const HELD_IDS_CTE = `
