@@ -59,8 +59,8 @@ export interface AdvisorRecord {
    *
    *  It counts the **parent thread only** — a **subagent's own advisor
    *  consultations** never appear in the parent's stream (measured 2026-08-04,
-   *  issue #33; not re-verified against the 2.1.237 fixture of issue #386)
-   *  while their cost still lands in the session total, so this and `usage`
+   *  issue #33; re-measured on 2.1.286, 2026-10-16, issue #1612) while their
+   *  cost still lands in the session total, so this and `usage`
    *  have different denominators and **`usage` is not divisible by
    *  `consultations`**: any per-consultation cost derived from the pair is
    *  wrong. By the same asymmetry, a session where only subagents consulted
@@ -70,7 +70,8 @@ export interface AdvisorRecord {
    *  The narrow subject matters: the subagent's *other* activity — its prompt,
    *  its `tool_use` and `tool_result` — **does** appear in the parent's stream,
    *  carrying `parent_tool_use_id` (measured on 2.1.237, issue #386 / ADR 0083
-   *  追記 2). That is what `projectEpisode` reads to flag subagent-origin
+   *  追記 2; re-verified on 2.1.286, issue #1612). That is what
+   *  `projectEpisode` reads to flag subagent-origin
    *  actions; only the advisor block is absent. */
   consultations: number;
   /** The advisor's own slice of the session's consumption — the same shape the
@@ -98,8 +99,9 @@ export interface AdvisorRecord {
    *  Verbatim rather than mapped to board words because the board never
    *  branches on it (ADR 0214 決定3, like `spawn_failed.error_code`). A failure
    *  is evidence the advisor was attached, so a failure-only session still
-   *  has a non-null record. Parent thread only, for the same reason as
-   *  `consultations`. */
+   *  has a non-null record. Parent thread only: a subagent's failed call
+   *  (`advisor_tool_result_error`) is absent from the parent's stream too
+   *  (measured on 2.1.286, 2026-10-16, issue #1612). */
   failed_calls: (string | null)[];
 }
 
