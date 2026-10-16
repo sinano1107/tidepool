@@ -264,3 +264,45 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
     [7, "preference"],
   ]);
 });
+
+/** escalate の merge question を盤面に置く(ADR 0079 決定1): FIXTURE_TASK の PR 7 に、workspace を持つ question。
+ *  question の id に記録を刻む `record` と、投影済みの Episode の prMerged を読む `prMerged` を返す。 */
+async function seedEscalatedMerge(questionWorkspace: string) {
+  const db = seedFixtureBoard();
+  projectAndPersist(db, {
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(await logDir(), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
+  });
+  // setup のみ: タスクの PR と、その PR の merge question
+  db.prepare("UPDATE tasks SET pr_number = 7 WHERE id = ?").run(FIXTURE_TASK);
+  db.prepare(
+    `INSERT INTO tasks (id, type, status, workspace, title, purpose, completion_criteria, risk_flag, review_flag, sort_key,
+       created_at, question_pending_merge_pr)
+     VALUES ('merge-q', 'question', 'done', ?, 'merge', 'merge', 'merge', 0, 0, 2, '2026-08-20T05:50:48.374Z', 7)`,
+  ).run(questionWorkspace);
+  const record = (kind: "pr_merged" | "pr_merge_observed" | "pr_close_observed") =>
+    appendEvent(db, { taskId: "merge-q", workerId: "human", origin: "webui", payload: { kind, pr_number: 7 }, at: new Date() });
+  const prMerged = () => listEpisodes(db, { workspace: "sandbox", agent: "tako" })[0]!.prMerged;
+  return { record, prMerged };
+}
+
+it.each(["pr_merged", "pr_merge_observed"] as const)(
+  "merge question の id に刻まれた %s は、そのタスクの Episode の prMerged になる(issue #1822)",
+  async (kind) => {
+    const { record, prMerged } = await seedEscalatedMerge("sandbox");
+    record(kind);
+    expect(prMerged()).toBe(7);
+  },
+);
+
+it("別の workspace の同じ番号の PR の merge question は、そのタスクの prMerged に入らない(issue #1822)", async () => {
+  const { record, prMerged } = await seedEscalatedMerge("other");
+  record("pr_merged");
+  expect(prMerged()).toBeNull();
+});
+
+it("pr_close_observed だけの PR の prMerged は null(issue #1822)", async () => {
+  const { record, prMerged } = await seedEscalatedMerge("sandbox");
+  record("pr_close_observed");
+  expect(prMerged()).toBeNull();
+});
