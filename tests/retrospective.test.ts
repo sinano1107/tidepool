@@ -5,7 +5,7 @@ import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, listMemoryEntries, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { completeTask, listChildren, logDecision, pickupTask, poseProbe, registerTask } from "../src/tasks.js";
+import { completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -21,6 +21,7 @@ import {
   HOUR,
   HUMAN_WEBUI,
   haltedRefires,
+  interviewPinChild,
   KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
@@ -571,16 +572,9 @@ it("起草に渡す注入節(異議された task を読み手にした INDEX)�
   const s = await objectedForDraft("naming", { initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
   const at = t.clock.now();
-  const [pinChild] = poseProbe(
-    t.db,
-    registerTask(t.db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never }, at, ...HUMAN_WEBUI),
-    { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" },
-    "auditor",
-    at,
-    "worker",
-  );
+  const pinChild = interviewPinChild(t.db, at);
   rememberedNote(t, "Attic ladder");
-  recordKnowledge(t.db, { scope: null, path: "examinee", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, pinChild!.id);
+  recordKnowledge(t.db, { scope: null, path: "examinee", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, pinChild.id);
   s.behaviorDraftClient.scriptDraft(s.entry.id, KEEP_FIXTURES);
 
   await commit(t, s.task.id, "naming");

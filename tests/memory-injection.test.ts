@@ -18,7 +18,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, interviewPinChild } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -402,27 +402,16 @@ it("読み手が pin の子のとき、どの Interview の pin の子が書い�
 it("読み手が pin の子でないとき、どの Interview の pin の子が書いた Knowledge と Definition も、その移動・復元の複製も INDEX・関連 leaf に出ず、上限で落とした件数にも数えない(ADR 0264 決定1)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
-  const interview = (targets: object[]) =>
-    poseProbe(
-      db,
-      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: targets as never }, at, ...HUMAN_WEBUI),
-      { ...probe, probe: probe.purpose, rubric: "tests pass" },
-      "auditor",
-      at,
-      "worker",
-    );
-  const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-  const [pinChild] = interview([opus]);
-  const [otherPinChild] = interview([opus]);
+  const [pinChild, otherPinChild] = [interviewPinChild(db, at), interviewPinChild(db, at)];
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const write = (writer: { id: string }, path: string, title: string) =>
     recordKnowledge(db, { scope: "tidepool", path, title, text: "the parser", source: { commit: "0a46a46" }, author }, "worker", at, writer.id).entry_id;
   const human = { activity: "human" as const, name: "human" };
   const production = write(task, "parser", "parser production");
-  write(pinChild!, "parser/answers", "parser answers");
-  defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", at, pinChild!.id);
-  moveMemory(db, { entry_id: write(otherPinChild!, "parser/drafts", "parser moved"), scope: "tidepool", path: "lexer", mover: human }, "webui", at);
-  const dropped = write(pinChild!, "grammar", "parser restored");
+  write(pinChild, "parser/answers", "parser answers");
+  defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", at, pinChild.id);
+  moveMemory(db, { entry_id: write(otherPinChild, "parser/drafts", "parser moved"), scope: "tidepool", path: "lexer", mover: human }, "webui", at);
+  const dropped = write(pinChild, "grammar", "parser restored");
   invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at);
   restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at);
 

@@ -29,8 +29,8 @@ import {
   searchMemoryEntries,
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
-import { getTask, logDecision, type MemoryProposal, poseProbe, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
+import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, interviewPinChild, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -813,16 +813,7 @@ it("search_memory_entries は応答予算で切って next と remaining を言�
 /** どの Interview でも pin の子(受験者)が書いた Knowledge と Definition、その移動・復元の複製と、本番の Knowledge(ADR 0264 決定1)。 */
 function examineeWrites(fixture: ReturnType<typeof board>) {
   const { db } = fixture;
-  const interview = () =>
-    poseProbe(
-      db,
-      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never }, at, ...HUMAN_WEBUI),
-      { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" },
-      "auditor",
-      at,
-      "worker",
-    )[0]!;
-  const [pinChild, otherPinChild] = [interview(), interview()];
+  const [pinChild, otherPinChild] = [interviewPinChild(db, at), interviewPinChild(db, at)];
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const write = (writer: { id: string }, path: string) =>
     recordKnowledge(db, { scope: "tidepool", path, title: `parser ${path}`, text: "The parser.", source: { commit: "0a46a46" }, author }, "worker", at, writer.id).entry_id;
