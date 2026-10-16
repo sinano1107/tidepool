@@ -2748,34 +2748,24 @@ function escalatedRoot(db: Db, clock: FakeClock, prNumber: number, workspace?: s
 }
 
 // ADR 0265 決定1: 観測で閉じた question は回答なしの done、PR の決着は PR を開いた根に残る
-it("遅い走査は、盤面の外で閉じられた PR の open な merge question を回答なしで閉じ、閉じた観測を根に刻む(ADR 0229 決定4)", async () => {
-  const workspace = await makeWorkspace("landing-scan-closed");
+it.each([
+  ["閉じられた", "pr_close_observed"],
+  ["merge された", "pr_merge_observed"],
+] as const)("遅い走査は、盤面の外で%s PR の open な merge question を回答なしで閉じ、%s を根に刻む(ADR 0229 決定4)", async (_, kind) => {
+  const workspace = await makeWorkspace("landing-scan-settled");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const { root, question } = escalatedRoot(db, clock, 1);
-  github.scriptClosedOutside(1);
+  if (kind === "pr_close_observed") github.scriptClosedOutside(1);
+  else github.scriptMergedOutside(1);
 
   await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
 
   expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
-  expect(boardEvents(db, question.id, "pr_close_observed")).toEqual([]);
-  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
-});
-
-it("遅い走査は、盤面の外で merge された PR の merge の観測を根に刻む", async () => {
-  const workspace = await makeWorkspace("landing-scan-merged");
-  const { db, clock } = await openBoard();
-  const github = new FakeGitHubClient();
-  const { root, question } = escalatedRoot(db, clock, 1);
-  github.scriptMergedOutside(1);
-
-  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
-
-  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
-  expect(boardEvents(db, question.id, "pr_merge_observed")).toEqual([]);
-  expect(boardEvents(db, root.id, "pr_merge_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  expect(boardEvents(db, question.id, kind)).toEqual([]);
+  expect(boardEvents(db, root.id, kind)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind, pr_number: 1 } },
   ]);
 });
 
@@ -2922,7 +2912,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
 it("遅い走査で UnknownWorkspaceError を投げる workspace は quarantine に落ち、tick は落ちない", async () => {
   const workspace = await makeWorkspace("landing-scan-unknown-workspace");
   const { db, clock } = await openBoard();
-  const question = mergeQuestion(db, clock, { pending_merge_pr: 1 }, "gone");
+  const { question } = escalatedRoot(db, clock, 1, "gone");
   const landing = createLanding({
     defaultAgentName: "tako",
     db,
