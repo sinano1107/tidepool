@@ -2922,6 +2922,44 @@ it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
 });
 
+// ADR 0265 決定6: 閉じた根の付帯子は cancel せず、観測の時点で走らない子と出口2つを判断行で言う
+it("遅い走査が外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行だけ流れ、PR・子・出口2つを言う", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge", clock.now());
+  await landing.converge();
+
+  const lines = boardEvents(db, root.id, "decision_logged");
+  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.any(String) } }]);
+  for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
+});
+
+it("回答直前のバックストップが外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行流れる", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+
+  await expect(landing.observePullRequestOutcome(getTask(db, question.id)!)).resolves.toBe(true);
+  await landing.tick("outside_merge", clock.now());
+
+  const lines = boardEvents(db, root.id, "decision_logged");
+  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+});
+
+it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge", clock.now());
+
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual([]);
+});
+
 it("遅い走査が外で閉じたと観測した根への retry は、閉じたことを理由に verdict で拒まれる", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-retry");
   registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());

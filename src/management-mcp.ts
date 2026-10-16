@@ -36,7 +36,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
-import type { Landing } from "./landing.js";
+import { closedRootOf, type Landing } from "./landing.js";
 import {
   JUDGED_AFTER_THE_EDIT,
   MEMORY_BRANCHES_DESCRIPTION,
@@ -118,7 +118,7 @@ import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
-import { GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
@@ -378,6 +378,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.auditorName,
           quarantineStops(deps.db),
           skippedByEntries(deps),
+          // 閉じた根に塞がれた子(ADR 0265 決定6)—— scheduler と同じ1本
+          closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
         );
         return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });
       }),
@@ -957,7 +959,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-authored, or a board-registered root other than a question. ${TASK_ACK_DESCRIPTION}`,
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
