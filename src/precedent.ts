@@ -831,7 +831,7 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
 
 /** タスクごとの merge 済み PR。盤面が merge した場合と、merge 済みだと観測した
  *  場合の両方(ADR 0079 決定4)。記録はタスクの id か、その PR の merge question の
- *  id(人間の merge 回答と question の観測、ADR 0079 決定1)にある —— 後者の読みは
+ *  id(人間の merge 回答と question の観測、ADR 0079 決定1・決定3)にある —— 後者の読みは
  *  収束の `prMergedSql`(landing.ts)と同じ述語。Episode ごとに1本引かず平らに1本
  *  (`listLog` が異議を引くのと同じ形)。 */
 function mergedPrByTask(db: Db, taskIds: string[]): Map<string, number> {

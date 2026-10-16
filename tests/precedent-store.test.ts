@@ -266,13 +266,14 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
 });
 
 /** escalate の merge question を盤面に置く(ADR 0079 決定1): FIXTURE_TASK の PR 7 に、workspace を持つ question。
- *  投影済みの Episode と question の id を返す。 */
+ *  question の id に記録を刻む `record` と、投影済みの Episode の prMerged を読む `prMerged` を返す。 */
 async function seedEscalatedMerge(questionWorkspace: string) {
   const db = seedFixtureBoard();
   projectAndPersist(db, {
     workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
     transcriptPath: writeFixtureTranscript(await logDir(), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
   });
+  // setup のみ: タスクの PR と、その PR の merge question
   db.prepare("UPDATE tasks SET pr_number = 7 WHERE id = ?").run(FIXTURE_TASK);
   db.prepare(
     `INSERT INTO tasks (id, type, status, workspace, title, purpose, completion_criteria, risk_flag, review_flag, sort_key,
