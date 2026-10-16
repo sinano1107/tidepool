@@ -4029,8 +4029,9 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   }));
   const openChildren = {};
   for (const t of board) {
-    if (t.parent_id && t.status !== "done") {
-      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    const parent = t.parent_id ?? t.interview_root_id;
+    if (parent && t.status !== "done") {
+      openChildren[parent] = (openChildren[parent] || 0) + 1;
     }
   }
   const cols = { todo: [], in_progress: [], blocked: [], done: [] };

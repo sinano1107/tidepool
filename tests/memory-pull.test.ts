@@ -27,7 +27,7 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { examineeRootId, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -595,8 +595,8 @@ it("読み手が pin の子のとき、read は pin の子が書いた id(移さ
 
 it("読み手が pin の子のとき、どの Interview の root が書いたエントリ(移された複製も)も search・browse・read に出ず、search の候補にも載らない —— root と本番の task には見える(ADR 0264 決定3)", () => {
   const { db, task, reader, examinee, otherPinChild, write } = examineeBoard();
-  const root = { id: getTask(db, examinee.taskId)!.parent_id! };
-  const otherRoot = { id: getTask(db, otherPinChild.id)!.parent_id! };
+  const root = { id: examineeRootId(db, examinee.taskId) };
+  const otherRoot = { id: examineeRootId(db, otherPinChild.id) };
   const production = write(task, "production");
   const rootEntry = write(root, "root", "tide/probes");
   const moved = moveMemory(db, { entry_id: write(otherRoot, "moved"), scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
@@ -616,7 +616,7 @@ it("読み手が pin の子のとき、どの Interview の root が書いたエ
 
 it("読み手が pin の子のとき、自分が書いたエントリ(移された複製も)は出所が Interview の木でも見え、自分の event を出所に他の書き手が書いたエントリは見えず、出所が commit のものは hash が木の event の id と同じ数字でも当たらない(ADR 0264 決定3・ADR 0263 決定1)", () => {
   const { db, task, reader, examinee } = examineeBoard();
-  const posed = listEvents(db, getTask(db, examinee.taskId)!.parent_id!).find((e) => e.kind === "decision_logged")!.id;
+  const posed = listEvents(db, examineeRootId(db, examinee.taskId)).find((e) => e.kind === "decision_logged")!.id;
   const knowledge = (title: string, source: { event_id: number } | { commit: string }, writer: { id: string }) =>
     recordKnowledge(db, { scope: "tidepool", path: "tide", title, text: `tide ${title}`, source, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writer.id)
       .entry_id;
@@ -685,7 +685,7 @@ it("読み手の視界に無い後継の先で視界にある後継に置き換�
 
 it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
   const { db, task, reader, examinee, sibling, write } = examineeBoard();
-  const root = getTask(db, examinee.taskId)!.parent_id!;
+  const root = examineeRootId(db, examinee.taskId);
   const attributed = (entryTask: { id: string }, eventTask: { id: string }) => {
     const entry_id = logDecision(db, getTask(db, entryTask.id)!, "chose the tide table", "deckhand", at, "worker");
     const payload = { kind: "objection_attributed" as const, entry_id, objection_event_ids: [], cause: "capability" as const, evidence: "e", entries: null, round: "initial" as const };
@@ -727,7 +727,7 @@ it("読み手が pin の子のとき、出所が帰責(objection_attributed)の�
 
 it("読み手が Interview の root のとき、browse・search・read の応答はエントリごとに not_shown_to_examinees を持ち、受験者の視界に無いもの(root の書き込みとその移動の複製・Interview の木を出所にするもの)で true —— 本番の worker と pin の子の応答には欄が無い(ADR 0264 決定6)", () => {
   const { db, task, reader, examinee, write } = examineeBoard();
-  const root = { ...reader, taskId: getTask(db, examinee.taskId)!.parent_id! };
+  const root = { ...reader, taskId: examineeRootId(db, examinee.taskId) };
   const posed = listEvents(db, root.taskId).find((e) => e.kind === "decision_logged")!.id;
   const production = write(task, "production");
   const rootNote = write({ id: root.taskId }, "root");

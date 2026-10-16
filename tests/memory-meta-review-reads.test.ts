@@ -30,7 +30,7 @@ import {
 } from "../src/memory.js";
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, interviewPinChild, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, examineeRootId, HUMAN_WEBUI, interviewPinChild, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -846,7 +846,7 @@ it("受験者の書き込みが畳んだ本番の行は、meta-review の一覧�
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const define = (text: string, writer?: string, supersedes?: number[]) =>
     defineMemoryBranch(db, { scope: "tidepool", path: "build", text, author, supersedes }, writer ? "worker" : "webui", at, writer).entry_id;
-  const root = define("What the root files.", examinee.parent_id!);
+  const root = define("What the root files.", examineeRootId(db, examinee.id));
   const examineeDefinition = define("What the examinee files.", examinee.id);
   const production = recordKnowledge(db, { scope: "tidepool", path: "build", title: "build fact", text: "The build.", source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
   const examineeFact = recordKnowledge(

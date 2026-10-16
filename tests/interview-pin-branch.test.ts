@@ -9,7 +9,7 @@ import { prepareWorkspaceAtPickup, releaseWorkspace, resolveTaskBranchLineage, t
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
-// pin の子の checkout(ADR 0263 決定5・6 / ADR 0111 追記12)。分岐の土台と、決着した pin の子のブランチを外すこと。
+// 受験者の checkout(ADR 0263 決定5・6 / ADR 0111 追記12)。分岐の土台と、決着した受験者のブランチを外すこと。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -19,7 +19,7 @@ const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: 
 const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
 
-/** Interview を登録して出題し、pin の子を返す。head は既定で今の main。 */
+/** Interview を登録して出題し、受験者を返す。head は既定で今の main。 */
 function posed(db: Db, workspace: WorkspaceConfig, targets: object[] = [opusHigh], head = git(workspace.path, "rev-parse", "main")): Task[] {
   const root = registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
   return poseProbe(db, root, POSE, "auditor", NOW, "worker", head);
@@ -37,8 +37,6 @@ it("受験者の新しいブランチは、出題の後に main が進んでも�
   const workspace = await makeWorkspace("pin-posed-head");
   const db = openDb(":memory:");
   const [examinee] = posed(db, workspace);
-  // 受験者は分解判断に乗らない(ADR 0267 決定1・5)
-  db.prepare("UPDATE tasks SET based_on_decision = NULL WHERE id = ?").run(examinee!.id);
   const child = getTask(db, examinee!.id);
   const posedHead = git(workspace.path, "rev-parse", "main");
   commitWork(workspace.path, "later.txt", "main moved on after the probe was posed\n");
@@ -50,7 +48,7 @@ it("受験者の新しいブランチは、出題の後に main が進んでも�
   db.close();
 });
 
-it("failure の retry で再開する pin の子は、既存のブランチのまま走る", async () => {
+it("failure の retry で再開する受験者は、既存のブランチのまま走る", async () => {
   const workspace = await makeWorkspace("pin-retry-resumes");
   const db = openDb(":memory:");
   const [child] = posed(db, workspace);
@@ -79,7 +77,7 @@ it("出題が記録した head を checkout で引けなければ、pickup の�
   db.close();
 });
 
-it("pin の子の pickup の準備は、決着した pin の子(別の Interview のものも)のブランチを外して head を記録し、決着していない pin の子と pin の子でない task のブランチは残す —— ref の検査は違反を立てない", async () => {
+it("受験者の pickup の準備は、決着した受験者(別の Interview のものも)のブランチを外して head を記録し、決着していない受験者と受験者でない task のブランチは残す —— ref の検査は違反を立てない", async () => {
   const workspace = await makeWorkspace("pin-settled-branches");
   const db = openDb(":memory:");
   const [done, pending, picked] = posed(db, workspace, [opusHigh, sonnetHigh, haikuNull]) as [Task, Task, Task];
@@ -100,7 +98,7 @@ it("pin の子の pickup の準備は、決着した pin の子(別の Interview
   db.close();
 });
 
-/** 決着した pin の子1人(答案つき)と、これから拾われる pin の子1人。 */
+/** 決着した受験者1人(答案つき)と、これから拾われる受験者1人。 */
 async function settledSibling(name: string) {
   const workspace = await makeWorkspace(name);
   const recordDir = await tempDir(`tidepool-${name}-records-`);
@@ -111,7 +109,7 @@ async function settledSibling(name: string) {
   return { workspace, recordDir, db, done, picked, head };
 }
 
-it("決着した pin の子の答案は、外す前に盤面の記録の器へ bundle で写され、event は head と写した先を持つ", async () => {
+it("決着した受験者の答案は、外す前に盤面の記録の器へ bundle で写され、event は head と写した先を持つ", async () => {
   const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-answer-copy");
 
   await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
@@ -169,7 +167,7 @@ it("掃除は本番の task のブランチ自身の reflog とそこからだ�
   db.close();
 });
 
-it("外すものの無い pin の子の pickup の準備は HEAD の reflog を減らさない", async () => {
+it("外すものの無い受験者の pickup の準備は HEAD の reflog を減らさない", async () => {
   const workspace = await makeWorkspace("pin-nothing-to-remove");
   const recordDir = await tempDir("tidepool-pin-nothing-to-remove-records-");
   const db = openDb(":memory:");
@@ -220,7 +218,7 @@ it("答案の bundle が git 側の理由で作れなければ、準備の他の
   db.close();
 });
 
-it("commit の無い決着した pin の子(head が出題の head)は写さず、event は head だけ持つ", async () => {
+it("commit の無い決着した受験者(head が出題の head)は写さず、event は head だけ持つ", async () => {
   const workspace = await makeWorkspace("pin-no-answer-copy");
   const recordDir = await tempDir("tidepool-pin-no-answer-copy-records-");
   const db = openDb(":memory:");
@@ -237,7 +235,7 @@ it("commit の無い決着した pin の子(head が出題の head)は写さず�
   db.close();
 });
 
-it("出題の head の祖先に留まる決着した pin の子(出題の head から commit が無い)は写さず、ブランチを外す", async () => {
+it("出題の head の祖先に留まる決着した受験者(出題の head から commit が無い)は写さず、ブランチを外す", async () => {
   const workspace = await makeWorkspace("pin-behind-posed-head");
   const recordDir = await tempDir("tidepool-pin-behind-posed-head-records-");
   const db = openDb(":memory:");
@@ -272,7 +270,7 @@ it("写しを書いた後でブランチを外す前に落ちても、次の pic
   db.close();
 });
 
-it("ref の無い決着した pin の子を祖先に持つ task の lineage は投げない", async () => {
+it("ref の無い決着した受験者を祖先に持つ task の lineage は投げない", async () => {
   const workspace = await makeWorkspace("pin-lineage-without-ref");
   const db = openDb(":memory:");
   const [child] = posed(db, workspace) as [Task];

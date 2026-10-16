@@ -41,7 +41,7 @@ import {
 import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
 
-import { bundledObjection, HUMAN_WEBUI, interviewPinChild, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { bundledObjection, examineeRootId, HUMAN_WEBUI, interviewPinChild, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -2306,7 +2306,7 @@ it("門の拒否は DomainError の派生で、当たった組をすべて構造
 it("一木の門は受験者(pin の子)の書き込みをどの書き手にも数えない —— 受験者の定義の上下に盤面全体のエントリを置け、人間の書き込みは本番の記録だけを数えて名指す。受験者は自分の視界に無い盤面全体のエントリの上も視界にあるものの上も定義できる(ADR 0264 決定4)", () => {
   const { db } = board();
   const examinee = interviewPinChild(db, at);
-  const root = getTask(db, examinee.parent_id!)!;
+  const root = getTask(db, examineeRootId(db, examinee.id))!;
   const examineeDefines = (path: string) => defineMemoryBranch(db, { ...definition, path }, "worker", at, examinee.id).entry_id;
   const wholeBoard = (path: string, writer?: string) => recordKnowledge(db, { ...knowledge, scope: null, path, source: { commit: "0a46a46" } }, "worker", at, writer).entry_id;
 
@@ -2326,7 +2326,7 @@ it("一木の門は受験者(pin の子)の書き込みをどの書き手にも�
 it("受験者の define が畳んだ本番の Definition は、一木の門には生きた定義として数えられる —— その配下に盤面全体のエントリを置く人間の書き込みは拒まれ、その定義を名指す(ADR 0264 決定4 / ADR 0178)", () => {
   const { db } = board();
   const examinee = interviewPinChild(db, at);
-  const root = defineMemoryBranch(db, { ...definition, text: "What the root files." }, "worker", at, examinee.parent_id!).entry_id;
+  const root = defineMemoryBranch(db, { ...definition, text: "What the root files." }, "worker", at, examineeRootId(db, examinee.id)).entry_id;
   defineMemoryBranch(db, { ...definition, text: "What the examinee files." }, "worker", at, examinee.id);
 
   expect(() => recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at)).toThrow(

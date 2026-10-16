@@ -31,7 +31,7 @@ import {
   passthroughContainers,
   recordingSpawn,
 } from "./fakes.js";
-import { bootTidepool, HUMAN_WEBUI, mcpClient, quarantineQuestion, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { bootTidepool, examineeRootId, HUMAN_WEBUI, mcpClient, quarantineQuestion, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -79,7 +79,7 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
   return poseProbe(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker")[0]!;
 }
-const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, pinnedChild(db).parent_id!)!;
+const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 
 /** 記憶の書き込みの行への異議の修理 task —— 記憶の修理 verb はこれにだけ足される(ADR 0252 決定4)。 */
 function writeRepairTask(db: ReturnType<typeof openDb>) {

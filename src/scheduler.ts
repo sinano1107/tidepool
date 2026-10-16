@@ -64,7 +64,7 @@ import {
   returnToQueueHead,
   type Task,
   type TaskContent,
-  unrowedPinChildren,
+  unrowedExaminees,
   unrowedTarget,
 } from "./tasks.js";
 import {
@@ -314,7 +314,7 @@ export function startScheduler(deps: {
    *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
    *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
   registry?: RegistrySource;
-  /** 盤面の記録の器(ADR 0266 決定2): pin の子の pickup の準備が決着した兄弟の答案を写す先。Absent → 写さない。 */
+  /** 盤面の記録の器(ADR 0266 決定2): 受験者の pickup の準備が決着した他の受験者の答案を写す先。Absent → 写さない。 */
   recordDir?: string;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
@@ -631,9 +631,9 @@ export function startScheduler(deps: {
           registerQuarantine(db, "tableRowEffort", value, unlisted.reason, now);
         }
       }
-      // 行でない Interview の対象も、未決着の pin の子が待つものを同じ一覧で照合し、spawn の前に対象の question を立てる
+      // 行でない Interview の対象も、未決着の受験者が待つものを同じ一覧で照合し、spawn の前に対象の question を立てる
       // (ADR 0199 決定4 / ADR 0218 決定2)。question が開いている対象はもう走らないので照合しない
-      for (const { task, target } of unrowedPinChildren(db)) {
+      for (const { task, target } of unrowedExaminees(db)) {
         if (task.status !== "todo" || target.provider !== "openai" || refusedTargetQuestion(db, target)) continue;
         const unlisted = whyRowUnlisted(result, target.model, target.effort ?? undefined);
         if (!unlisted) continue;

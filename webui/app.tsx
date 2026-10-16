@@ -306,9 +306,10 @@ function mapData(
     }));
   const openChildren: Record<string, number> = {};
   for (const t of board) {
-    // cancelled never reaches here (server-side board filter, issue #35)
-    if (t.parent_id && t.status !== 'done') {
-      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    // cancelled never reaches here (server-side board filter, issue #35)。受験者は親でなく Interview の root を名指す(ADR 0267 決定6)
+    const parent = t.parent_id ?? t.interview_root_id;
+    if (parent && t.status !== 'done') {
+      openChildren[parent] = (openChildren[parent] || 0) + 1;
     }
   }
   const cols: Record<BoardScreenColumn, BoardScreenTask[]> = { todo: [], in_progress: [], blocked: [], done: [] };
