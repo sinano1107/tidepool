@@ -79,6 +79,7 @@ import {
   type RegisterTaskInput,
   type RegistryProposal,
   registerTask,
+  retryInterviewRoot,
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
@@ -869,6 +870,30 @@ export async function cancelThroughHumanDoor(
     );
     deps.pollNow();
     return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
+  } catch (err) {
+    if (err instanceof DomainError) {
+      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+    }
+    throw err;
+  }
+}
+
+/** Shared human-surface retry of a posed Interview root (ADR 0267 決定4): the direct cancel's gates and spread, then a new root.
+ *  Returns the new root. */
+export function retryInterviewThroughHumanDoor(
+  deps: CancelThroughHumanDoorDeps & { taskExecutionCandidates?: TaskExecutionCandidates },
+  taskId: string,
+  comment: string | undefined,
+  now: () => Date,
+  origin: EventOrigin,
+): HumanVerbResult<BoardTask> {
+  const task = getTask(deps.db, taskId);
+  if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    const runnable = deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName };
+    const again = retryInterviewRoot(deps.db, task, comment, now(), humanCancelDefaults(deps), origin, runnable);
+    deps.pollNow();
+    return { ok: true, value: presentTask(deps.db, again, deps.defaultAgentName, deps.auditorName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };

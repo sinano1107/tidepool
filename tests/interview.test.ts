@@ -7,7 +7,8 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
@@ -21,8 +22,8 @@ const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "hig
 const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
 
-function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh]) {
-  return { db, root: registerTask(db, { ...ROOT, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
+function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: { workspace?: string; review_tier?: string } = {}) {
+  return { db, root: registerTask(db, { ...ROOT, ...fields, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
 }
 
 it("Interview の root は対象の一覧を持つ —— 対象は表の行でなくてよく、effort の「無い」も対象の値(ADR 0199 決定1・2 / ADR 0218 決定5)", () => {
@@ -273,8 +274,8 @@ it("受験者の failure question の abandon の文は、分解判断の破棄�
 });
 
 /** 対象3つの root が出題し、受験者の1人は done、1人は failure question、1人は escalation の question を開いたまま。 */
-function examineesWithOpenQuestions() {
-  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh]);
+function examineesWithOpenQuestions(fields: { workspace?: string; review_tier?: string } = {}) {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh], fields);
   const [done, failing, escalating] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task, Task];
   completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
   const questions = [failureQuestion(db, failing.id, new Date(0)), escalateTask(db, escalating, ESCALATION, "tako", new Date(0), "worker")];
@@ -422,6 +423,70 @@ it("走れない対象を抱えたままでも、probe の破綻の報告の que
     answerQuestionViaWebui(scoring.db, report(scoring.db, scoring.root), [answer], new Date(1), runnablePort(scoring.db, "openai"));
     expect(getTask(scoring.db, scoring.root.id)!.status).toBe(answer === "abandon" ? "cancelled" : "todo");
   }
+});
+
+// ── root の retry(ADR 0267 決定3・4 / ADR 0248 決定3) ──
+
+const retryRoot = (db: Db, root: Task, comment?: string, runnable?: ReturnType<typeof runnablePort>["runnable"]) =>
+  retryInterviewRoot(db, getTask(db, root.id)!, comment, new Date(1), {}, "webui", runnable);
+
+it("出題済みで未決着の root の retry は、未決着の受験者とその question を回答なしで決着させて root を cancel し、同じ対象・題・目的・完了基準・workspace・review tier の Interview を人間名義で登録して、その history に旧い root・probe・rubric・コメントを見せる —— done の答案は残る", () => {
+  const { db, root, done, unsettled, questions } = examineesWithOpenQuestions({ workspace: "reef", review_tier: "frontier" });
+  // 受験者の escalation の question は今までどおり、受験者の書いた選択肢だけを持つ(retry は root の面にある)
+  expect(questions[1]!.question_items![0]!.options).toEqual(ESCALATION.questions[0]!.options);
+
+  const again = retryRoot(db, root, "the probe names the answer");
+
+  expect(getTask(db, done.id)!.status).toBe("done");
+  for (const task of [root, ...unsettled, ...questions]) expect(getTask(db, task.id)).toMatchObject({ status: "cancelled", question_answer: null });
+  expect(getRegistrant(db, again.id)).toBe(HUMAN_WORKER_ID);
+  expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull, sonnetHigh]);
+  expect(again).toMatchObject({ title: root.title, purpose: root.purpose, completion_criteria: root.completion_criteria, workspace: "reef", review_tier: "frontier", status: "todo" });
+  const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, comment: "the probe names the answer" };
+  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ retry_of: retry }]);
+  expect(nextSlotTask(db)?.id).toBe(again.id);
+});
+
+it("走れない対象を写す root の retry は対象を名指して拒まれ、root・受験者・question は変わらず、新しい Interview も登録されない(ADR 0253 決定3)", () => {
+  const { db, root, unsettled, questions } = examineesWithOpenQuestions();
+  const { runnable } = runnablePort(db, "openai");
+  expect(() => retryRoot(db, root, undefined, runnable)).toThrow(/target \{"provider":"anthropic","model":"claude-opus-5-5".*cannot run as the default agent/);
+  expect([root, ...unsettled, ...questions].map(({ id }) => getTask(db, id)!.status)).toEqual(["todo", "todo", "todo", "todo", "todo"]);
+  expect(otherRoots(db, root)).toBe(0);
+});
+
+it("出題前の root・Interview でない task・受験者・決着済みの root への retry は DomainError で、何も変わらない", () => {
+  const { db, root, done } = examineesWithOpenQuestions();
+  const unposed = registerInterview(db).root;
+  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const settled = registerInterview(db).root;
+  poseProbe(db, settled, POSE, "auditor", new Date(0), "worker");
+  cancelTaskDirectly(db, getTask(db, settled.id)!, null, new Date(0), {}, "webui");
+  const before = listBoard(db).map(({ id, status }) => ({ id, status }));
+  for (const task of [unposed, plain, done, settled]) expect(() => retryRoot(db, task)).toThrow(DomainError);
+  expect(() => retryRoot(db, unposed)).toThrow(/not posed/);
+  expect(listBoard(db).map(({ id, status }) => ({ id, status }))).toEqual(before);
+  expect(getTask(db, root.id)!.status).toBe("todo");
+
+  // 採点完了で done になった root も決着済み
+  const graded = scoringRoot();
+  const scores = graded.children.map(({ id }) => ({ child_id: id, outcome: "accepted" as const }));
+  completeInterview(graded.db, graded.root, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  expect(() => retryRoot(graded.db, graded.root)).toThrow(DomainError);
+  expect(otherRoots(graded.db, graded.root)).toBe(0);
+});
+
+it("断られた対象の question が開いたまま root を retry すると、新しい root がその対象を持つので question は開いたままで、決着の記録も無い(ADR 0199 追記)", () => {
+  const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
+  const { db, root } = registerInterview(undefined, [unrowed]);
+  poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
+  const question = listBoard(db).find((task) => task.question_quarantine_kind === "interviewTarget")!;
+
+  retryRoot(db, root);
+
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */

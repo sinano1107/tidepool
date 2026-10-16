@@ -213,6 +213,33 @@ it("受験者の pickup は、学習器が昇格していない盤面でも shad
   expect(shadow.filter((row: any) => row.task_id === childId)).toEqual([]);
 });
 
+it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新しい root を返し、走れない対象の拒否を回答の拒否の status(409)と isError に写して対象を名指す(ADR 0267 決定4 / ADR 0253 決定3)", async () => {
+  t = await boot();
+  const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await pose(first.id);
+  const client = await managementMcpClient(t.baseUrl);
+  definition.provider = [{ name: "openai", advisor: false }];
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {});
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
+  const refusedMcp: any = await client.callTool({ name: "retry_interview", arguments: { task_id: first.id } });
+  expect(refusedMcp.isError).toBe(true);
+  expect(refusedMcp.content[0].text).toContain(`${JSON.stringify(opus46)} cannot run as fake-worker`);
+
+  definition.provider = [{ name: "anthropic", advisor: true }];
+  const viaApi = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, { comment: "the probe names the answer" });
+  expect(viaApi.status).toBe(200);
+  expect(viaApi.json.id).not.toBe(first.id);
+
+  // 新しい root を拾わせて出題し、管理MCP から retry する
+  await runNow(t, viaApi.json.id);
+  await pose(viaApi.json.id);
+  const viaMcp: any = await client.callTool({ name: "retry_interview", arguments: { task_id: viaApi.json.id } });
+  await client.close();
+  expect(viaMcp.isError).toBeFalsy();
+  expect(JSON.parse(viaMcp.content[0].text).id).not.toBe(viaApi.json.id);
+});
+
 const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
 const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };

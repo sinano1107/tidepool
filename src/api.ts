@@ -34,6 +34,7 @@ import {
   gatedHumanEntryInput,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
+  retryInterviewThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
@@ -270,6 +271,11 @@ const editTaskSchema = z.strictObject({
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
 const cancelTaskSchema = z.object({
   reason: requiredTextSchema.optional(),
+});
+
+// root の retry の payload(ADR 0267 決定4): コメントは任意
+const retryInterviewSchema = z.object({
+  comment: requiredTextSchema.optional(),
 });
 
 const draftTaskSchema = z.object({
@@ -1390,6 +1396,27 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
     if (!result.ok) {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
+      return;
+    }
+    sendJson(res, result.value);
+  });
+
+  // Interview の root の retry(ADR 0267 決定4): 拒否は回答の拒否と同じ 409
+  router.post("/tasks/:id/retry", (req, res) => {
+    const parsed = retryInterviewSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
+      return;
+    }
+    const result = retryInterviewThroughHumanDoor(
+      { db, pollNow, workspace, resolveWorkspace, defaultAgentName, auditorName, quarantineResolvers, taskExecutionCandidates },
+      req.params.id,
+      parsed.data.comment,
+      () => clock.now(),
+      "webui",
+    );
+    if (!result.ok) {
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;
     }
     sendJson(res, result.value);

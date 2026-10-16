@@ -178,9 +178,9 @@ export type EventPayload =
   // line は宣言の理由。resolved はその宣言が閉じた帰結(question = 人間の question に渡した)。
   | { kind: "premise_breached"; line: string; based_on_decision: number }
   | { kind: "premise_breach_resolved"; outcome: "continue" | "redecompose" | "question" }
-  // ADR 0248 決定3: 前提の破綻の question への retry が登録した新しい Interview の root に、盤面が積む旧い root の id・出題の
-  // probe と rubric・破綻の理由(宣言の line)・人間の答えのコメント。root の history にだけ並ぶ(人間向け kind ではない)
-  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason: string; comment?: string }
+  // ADR 0248 決定3 / ADR 0267 決定4: probe の破綻の報告への retry と root の retry が登録した新しい Interview の root に、盤面が積む
+  // 旧い root の id・出題の probe と rubric・報告の理由(報告への retry だけ)・人間のコメント。root の history にだけ並ぶ(人間向け kind ではない)
+  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
