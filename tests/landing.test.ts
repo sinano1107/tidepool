@@ -8,13 +8,14 @@ import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   contentLeftBehind,
-  countTasksAwaitingLanding,
-  countTasksAwaitingLandingInWorkspace,
   createLanding,
   type Landing,
   landingAnnotation,
+  landingState,
   registerLocalMergeQuestion,
   registerPrPromotionFailureQuestion,
+  taskIdsAwaitingLanding,
+  taskIdsAwaitingLandingInWorkspace,
 } from "../src/landing.js";
 import { type AuthorityProfile, loadRegistry, type MergeDial, UnknownAgentError } from "../src/registry.js";
 import {
@@ -1480,7 +1481,7 @@ it("PR が開いている external の根が未回答の失敗 question で止�
   commitWork(workspace.path, "repair.txt", "after the merge\n");
   finish(db, clock, repair);
 
-  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(1);
+  expect(taskIdsAwaitingLanding(db, () => workspace, "tako", "tako")).toHaveLength(1);
   await expect(landing.converge()).resolves.toEqual([
     { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
   ]);
@@ -4740,10 +4741,10 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
   });
 
   await landing.observeAutoMergeOutcomes("shako");
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(1);
   await landing.observeAutoMergeOutcomes("tako");
 
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(0);
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
     { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
   ]);
@@ -4767,7 +4768,7 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
 
   await landing.observeAutoMergeOutcomes("tako");
 
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(0);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([
     { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 7 } },
   ]);
@@ -4792,7 +4793,7 @@ it("quarantine 回答前の観測は、盤面の外で閉じられたキュー�
 
   await landing.observeAutoMergeOutcomes("tako");
 
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(0);
   expect(boardEvents(db, work.id, "pr_close_observed")).toEqual(closeObserved(7));
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
@@ -4809,9 +4810,9 @@ it.each(["auto_merge", "promotion_failure"] as const)("assignee 未指定の完�
     registerPrPromotionFailureQuestion(db, work, "boom", clock.now());
   }
 
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
-  expect(countTasksAwaitingLanding(db, undefined, "shako", "tako")).toBe(0);
-  expect(countTasksAwaitingLanding(db, undefined, "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toEqual([work.id]);
+  expect(taskIdsAwaitingLanding(db, undefined, "shako", "tako")).toHaveLength(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako")).toHaveLength(0);
 });
 
 // ADR 0241 決定6: 待ちの証拠の寄せ集めではなく、収束が導く根から数える —— quarantine が抱えている根は失敗 question を持たない
@@ -4829,7 +4830,7 @@ it("着地を待つ完了タスクは、PR をまだ開いていない未着地�
   answerQuestion(db, getTask(db, failure!.id)!, ["retry"], now, undefined, undefined, undefined, "webui");
   completedWork(db, now, "tako");
 
-  expect(countTasksAwaitingLanding(db, undefined, "tako")).toBe(5);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako")).toHaveLength(5);
 });
 
 /** 失敗 question に abandon promotion と答えた完了 work —— 断念が効いている。 */
@@ -4857,7 +4858,7 @@ it("着地済み・未完了・別 agent・PR 昇格を abandon した・祖先�
   completedWork(db, now, "tako", parent.id);
 
   // 根かどうかを lineage で読ませる —— 祖先が未決着なら git を呼ばずにその枝へ帰るので、checkout の実体は要らない
-  expect(countTasksAwaitingLanding(db, () => ({ name: "reef", path: "/nonexistent/reef" }), "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, () => ({ name: "reef", path: "/nonexistent/reef" }), "tako")).toHaveLength(0);
 });
 
 // ADR 0241 決定6: 1回の要求で導出は1回。数えは何も書かない —— 根かどうか読めない候補を workspace の quarantine に落とさない
@@ -4873,7 +4874,7 @@ it("数えは導出を1回だけ走らせ、workspace を解決できない候�
     throw new UnknownWorkspaceError(name ?? "reef");
   };
 
-  expect(countTasksAwaitingLanding(db, resolve, "tako")).toBe(3);
+  expect(taskIdsAwaitingLanding(db, resolve, "tako")).toHaveLength(3);
   expect(resolved).toBe(3);
   expect(quarantineQuestion(db, "workspace", "ghost")).toBeUndefined();
 });
@@ -4885,13 +4886,15 @@ const completedWorkIn = (board: Db, now: Date, workspace?: string) =>
 it("workspace 名でも、無人 merge キューにいる・PR 昇格失敗の question が開いている・PR をまだ開いていない完了タスクを数える", () => {
   db = openDb(":memory:");
   const now = new Date("2026-10-09T00:00:00.000Z");
-  recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, {
+  const queued = completedWorkIn(db, now, "reef");
+  recordPrOpenedViaWorker(db, queued, 7, "tako", now, {
     authority: { merge: "auto_if_ci_green" },
   });
-  registerPrPromotionFailureQuestion(db, completedWorkIn(db, now, "reef"), "boom", now);
-  completedWorkIn(db, now, "reef");
+  const failed = completedWorkIn(db, now, "reef");
+  registerPrPromotionFailureQuestion(db, failed, "boom", now);
+  const unopened = completedWorkIn(db, now, "reef");
 
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "reef")).toBe(3);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, "reef").sort()).toEqual([queued.id, failed.id, unopened.id].sort());
 });
 
 it("workspace 名では、abandon 済み・着地済み・別 workspace・workspace 未指定の完了タスクを数えない", async () => {
@@ -4909,8 +4912,8 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
   completedWorkIn(db, now, "lagoon");
   completedWorkIn(db, now);
 
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "reef")).toBe(0);
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "lagoon")).toBe(1);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, "reef")).toHaveLength(0);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, "lagoon")).toHaveLength(1);
 });
 
 // ADR 0234: 未決着タスクは、決着したときに着地し直す完了した work の祖先の workspace も参照する
@@ -5101,7 +5104,7 @@ it("PR 昇格を abandon した後、内容を変えない付帯子が決着し�
   expect(github.requests).toHaveLength(1);
   expect(openPromotionQuestions(db, work.id)).toEqual([]);
   expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
-  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, () => workspace, "tako", "tako")).toHaveLength(0);
 });
 
 it("PR 昇格を abandon した後、修理が内容を変えて決着すると、profile を読まず PR も開かずに昇格の question を1つ立て直し、retry と答えると PR が開く", async () => {
@@ -5124,7 +5127,7 @@ it("PR 昇格を abandon した後、修理が内容を変えて決着すると�
       question_items: [{ options: ["retry", "abandon promotion"], recommendation: "retry" }],
     },
   ]);
-  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(1);
+  expect(taskIdsAwaitingLanding(db, () => workspace, "tako", "tako")).toHaveLength(1);
 
   authority.resolve = () => profile("escalate");
   await answerPromotion(db, clock, landing, workspace, reasked[0]!, "retry");
@@ -5343,8 +5346,8 @@ it("既定 workspace a で pickup した workspace 未指定の完了タスク�
     resolveAuthority: () => profile("auto_if_ci_green"),
   });
 
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, a.name)).toBe(2);
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, b.name)).toBe(0);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, a.name)).toHaveLength(2);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, b.name)).toHaveLength(0);
 
   await landing.observeAutoMergeOutcomes("tako");
   await landing.tick("auto_merge", clock.now());
@@ -5397,8 +5400,8 @@ it("既定 agent a で pickup した assignee 未指定の完了タスクの PR 
     resolveAuthority: (assignee) => profile(assignee === "a" ? "auto_if_ci_green" : "escalate"),
   });
 
-  expect(countTasksAwaitingLanding(db, undefined, "a", "b")).toBe(1);
-  expect(countTasksAwaitingLanding(db, undefined, "b", "b")).toBe(0);
+  expect(taskIdsAwaitingLanding(db, undefined, "a", "b")).toHaveLength(1);
+  expect(taskIdsAwaitingLanding(db, undefined, "b", "b")).toHaveLength(0);
 
   await landing.tick("auto_merge", clock.now());
 
@@ -5636,4 +5639,81 @@ it("merge 済みの根の保護ブランチの読み直しの失敗に retry を
 
   await expect(convergeOn(landing, work.id, failures[0]!.id)).resolves.toEqual(first);
   expect(promotionFailures(db, work.id)).toEqual(failures);
+});
+
+// ADR 0265 決定7: done の work の着地の状態は記録から導く —— 導きはここ(domain 層)で1度だけ述べる(ADR 0107)。
+// サーバ境界のテストは「読み口が状態を写す」ことだけを述べる。
+const stateOf = (db: Db, taskId: string) => landingState(db, getTask(db, taskId)!);
+
+it("auto_if_ci_green で PR を開いた根は auto_merge_queue で、無人 merge の後は merged になる", async () => {
+  const { db, clock, landing, work } = await openPushedPr("landing-state-auto-merged", "auto_if_ci_green");
+  finish(db, clock, work);
+  expect(stateOf(db, work.id)).toBe("auto_merge_queue");
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(stateOf(db, work.id)).toBe("merged");
+});
+
+it.each([
+  ["merge_observed", (github: FakeGitHubClient) => github.scriptMergedOutside(1)],
+  ["close_observed", (github: FakeGitHubClient) => github.scriptClosedOutside(1)],
+] as const)("無人 merge キューの PR が盤面の外で決着すると、根は %s になる", async (state, settleOutside) => {
+  const { db, clock, github, landing, work } = await openPushedPr(`landing-state-${state}`, "auto_if_ci_green");
+  finish(db, clock, work);
+  settleOutside(github);
+
+  await landing.tick("auto_merge", clock.now());
+
+  expect(stateOf(db, work.id)).toBe(state);
+});
+
+it("キューから取り下げられた PR の根は withdrawn になる", async () => {
+  const { workspace, db, clock, github, work } = await openPushedPr("landing-state-withdrawn", "auto_if_ci_green");
+  finish(db, clock, work);
+
+  await autoMerging(db, clock, workspace, github, () => profile("external")).tick("auto_merge", clock.now());
+
+  expect(stateOf(db, work.id)).toBe("withdrawn");
+});
+
+it("escalate の根は merge question が開いている間 merge_question で、人間の merge 回答の後は merged になる", async () => {
+  const pr = await openPushedPr("landing-state-escalate", "escalate");
+  finish(pr.db, pr.clock, pr.work);
+  expect(stateOf(pr.db, pr.work.id)).toBe("merge_question");
+
+  await answerMergeQuestion(pr);
+
+  expect(stateOf(pr.db, pr.work.id)).toBe("merged");
+});
+
+it("external の根は内容で終わった後 landed になる", async () => {
+  const { workspace, db, clock, landing, work } = await openPushedPr("landing-state-landed", "external");
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+
+  await landing.converge();
+
+  expect(stateOf(db, work.id)).toBe("landed");
+});
+
+type StopBeforePr = (db: Db, clock: FakeClock, workspace: WorkspaceConfig, task: Task) => void;
+it.each<[string, StopBeforePr]>([
+  ["gate", (db, clock, _, task) => void attachUnsettledChild(db, clock, task.id)],
+  ["quarantine", (db, clock, workspace) => quarantineWorkspace(db, workspace.name, new Error("repair"), clock.now())],
+  ["failure-question", (db, clock, _, task) => registerPrPromotionFailureQuestion(db, task, "push failed", clock.now())],
+])("PR を開く前に %s で止まっている根の着地の状態は null", async (stoppedBy, stop) => {
+  const { workspace } = await makeRemoteBackedWorkspace(`landing-state-stopped-${stoppedBy}`);
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: new FakeGitHubClient() });
+  const task = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${task.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  stop(db, clock, workspace, finish(db, clock, task));
+
+  await landing.converge();
+
+  expect(getTask(db, task.id)!.pr_number).toBeNull();
+  expect(stateOf(db, task.id)).toBeNull();
 });

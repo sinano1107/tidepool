@@ -32,7 +32,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
-import type { RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
+import type { LandingState, RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   boardRefWriter,
@@ -100,24 +100,24 @@ function countUnbundledObjections(db: Db, taskId: string): number {
   return n;
 }
 
-/** 着地を待つ完了タスクを agent 名の参照で数える(ADR 0217 決定4)—— agent 名の quarantine の解除と
- *  agent 削除の扉。集合の定義は `tasksAwaitingLanding` にある。 */
-export function countTasksAwaitingLanding(
+/** 着地を待つ完了タスクの id を agent 名の参照で返す(ADR 0217 決定4)—— agent 名の quarantine の解除と agent 削除の扉。
+ *  集合の定義は `tasksAwaitingLanding` にある。 */
+export function taskIdsAwaitingLanding(
   db: Db,
   resolve: WorkspaceResolver | undefined,
   agentName: string,
   defaultAgentName?: string,
-): number {
-  return tasksAwaitingLanding(db, resolve).filter((task) => (task.assignee ?? defaultAgentName) === agentName).length;
+): string[] {
+  return tasksAwaitingLanding(db, resolve)
+    .filter((task) => (task.assignee ?? defaultAgentName) === agentName)
+    .map(({ id }) => id);
 }
 
-/** 同じ集合を、タスクの `workspace` の参照で数える —— workspace の削除の扉(ADR 0226)。 */
-export function countTasksAwaitingLandingInWorkspace(
-  db: Db,
-  resolve: WorkspaceResolver | undefined,
-  workspaceName: string,
-): number {
-  return tasksAwaitingLanding(db, resolve).filter((task) => task.workspace === workspaceName).length;
+/** 同じ集合を、タスクの `workspace` の参照で返す —— workspace の削除の扉(ADR 0226)。 */
+export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceResolver | undefined, workspaceName: string): string[] {
+  return tasksAwaitingLanding(db, resolve)
+    .filter((task) => task.workspace === workspaceName)
+    .map(({ id }) => id);
 }
 
 /** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、PR をまだ開いていない
@@ -348,6 +348,21 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "worksp
   if (question.question_pending_merge_pr === null) return row.kind;
   const outcome = rootPrOutcome(db, taskIdForPr(db, question.question_pending_merge_pr, question.workspace));
   return outcome && (outcome.observed ? OBSERVED[outcome.state] : "pr_merged");
+}
+
+/** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 内容で終わった(`landing_finished`)→ 無人 merge キュー →
+ *  開いた merge question → キューからの取り下げ、の順に記録から導く。どれも無ければ(PR を開く前で止まっている根・
+ *  根でない行)null。キューに残る理由は名指さない(#1866)。 */
+export function landingState(db: Db, task: Pick<Task, "id" | "workspace" | "pr_number">): LandingState | null {
+  const outcome = rootPrOutcome(db, task.id);
+  if (outcome) return outcome.state === "CLOSED" ? "close_observed" : outcome.observed ? "merge_observed" : "merged";
+  if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
+  if (isQueuedForAutoMerge(db, task.id)) return "auto_merge_queue";
+  const openQuestion = db
+    .prepare("SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr = ? AND workspace IS ?")
+    .get(task.pr_number, task.workspace);
+  if (openQuestion) return "merge_question";
+  return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 
 /** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */

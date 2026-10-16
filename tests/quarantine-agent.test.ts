@@ -159,7 +159,7 @@ describe("verifyAgentRepaired", () => {
     );
   });
 
-  // 数えの規則は tests/landing.test.ts の countTasksAwaitingLanding が持つ。ここは「数えが正なら拒む」だけ。
+  // 数えの規則は tests/landing.test.ts の taskIdsAwaitingLanding が持つ。ここは「数えが正なら拒む」だけ。
   it("registry に復活しておらず、着地を待つ完了タスクが残っていれば拒否する", () => {
     const db = openDb(":memory:");
     queuedForAutoMerge(db, NOW, "navigator");

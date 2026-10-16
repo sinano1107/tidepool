@@ -20,7 +20,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskCount: 0 };
+const NO_REFERENCES = { unsettledTaskCount: 0, awaitingLandingTaskIds: [] };
 
 describe("deleteWorkspace: 正常系(issue #205 / ADR 0087 決定1・決定4)", () => {
   it("workspaces.yaml からエントリを除去するコミットが着地し、残る checkout の場所を返す", async () => {
@@ -95,13 +95,13 @@ describe("deleteWorkspace: 確認で買えない拒否(ADR 0087 決定2/3)", () 
           registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
           workspacesBaseDir: "/workspaces",
           ...NO_REFERENCES,
-          awaitingLandingTaskCount: 2,
+          awaitingLandingTaskIds: ["t1", "t2"],
         },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
-      message: 'workspace "tidepool" cannot be deleted: 2 completed task(s) still await landing through it',
-      reasons: [{ code: "tasks_awaiting_landing", count: 2 }],
+      message: 'workspace "tidepool" cannot be deleted: 2 completed task(s) still await landing through it: t1, t2',
+      reasons: [{ code: "tasks_awaiting_landing", count: 2, task_ids: ["t1", "t2"] }],
     });
 
     expect(loadRegistry(registryDir, "purely-local").workspaces.tidepool).toBeDefined();

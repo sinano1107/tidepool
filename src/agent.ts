@@ -1,5 +1,5 @@
 import type { Db } from "./db.js";
-import { countTasksAwaitingLanding } from "./landing.js";
+import { taskIdsAwaitingLanding } from "./landing.js";
 import { openQuarantineQuestion, quarantineAgent } from "./quarantine.js";
 import {
   type AgentDefinition,
@@ -147,7 +147,7 @@ export function verifyAgentRepaired(
   }
   // done のタスクは Edit で付け替えられないので、その profile を読んで着地を待つものが
   // 残る限り、registry を直さずに解除しても次の着地でまた落ちる(ADR 0217 決定4)
-  const awaitingLanding = countTasksAwaitingLanding(db, resolveWorkspace, agentName, defaultAgentName);
+  const awaitingLanding = taskIdsAwaitingLanding(db, resolveWorkspace, agentName, defaultAgentName).length;
   if (awaitingLanding > 0) {
     throw new Error(
       `${notBack} and still has ${awaitingLanding} ` +

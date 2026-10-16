@@ -17,6 +17,8 @@ type BoardScreenTask = NonNullable<import('../design-system/components/board/Tas
   githubIssueNumber?: number | null;
   /** 観測で閉じた question の札の文言(ADR 0265 決定7)。 */
   settledByObservation?: string;
+  /** done の work の行の着地の状態の札の文言(ADR 0265 決定7)。 */
+  landingState?: string;
 };
 type BoardScreenColumn = 'todo' | 'in_progress' | 'blocked' | 'done';
 interface BoardScreenProps {
@@ -48,6 +50,9 @@ function BoardScreen({ data, onOpenTask }: BoardScreenProps) {
                     <TaskCard task={{ ...t, status: key }} onClick={() => onOpenTask(t)} />
                     {t.settledByObservation && (
                       <span data-testid={`settled-by-observation-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.settledByObservation}</span>
+                    )}
+                    {t.landingState && (
+                      <span data-testid={`landing-state-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.landingState}</span>
                     )}
                   </div>
                 ))}

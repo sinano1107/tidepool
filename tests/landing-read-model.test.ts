@@ -10,6 +10,7 @@ import {
   HOUR,
   makeWorkspace,
   questions,
+  queuedForAutoMerge,
   registerQuestion,
   registerWork,
   type Tidepool,
@@ -66,4 +67,14 @@ it("単体ビューの読み口は一覧と同じ landing を返す(ADR 0190)", 
     expect((await api(t.baseUrl, "GET", `/api/tasks/${row.id}`)).json.landing).toEqual(row.landing);
   }
   expect(rows.map((q: any) => q.landing)).toEqual(expect.arrayContaining([{ blocked_by: "attached_children" }, null]));
+});
+
+it("done の work の行は、一覧と単体ビューで着地の状態を運ぶ(ADR 0265 決定7 / ADR 0190)", async () => {
+  t = await bootTidepool();
+  const queued = queuedForAutoMerge(t.db, t.clock.now(), "tako");
+
+  const rows = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+
+  expect(rows.find((row: any) => row.id === queued.id).landing_state).toBe("auto_merge_queue");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${queued.id}`)).json.landing_state).toBe("auto_merge_queue");
 });

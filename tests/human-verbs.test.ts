@@ -16,7 +16,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
-import { countTasksAwaitingLanding, createLanding, type LandingDeps, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { createLanding, type LandingDeps, registerPrPromotionFailureQuestion, taskIdsAwaitingLanding } from "../src/landing.js";
 import { defineMemoryBranch, invalidateMemoryEntry, moveMemory, recordKnowledge, restoreMemoryEntry } from "../src/memory.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
@@ -1194,10 +1194,10 @@ it("agent quarantine の解除検査は、盤面の外で merge 済みのキュ�
   }).agent!("specialist");
 
   expect({
-    awaiting: countTasksAwaitingLanding(db, undefined, "specialist"),
+    awaiting: taskIdsAwaitingLanding(db, undefined, "specialist"),
     observed: listEvents(db, queued.id).filter((event) => event.kind === "pr_merge_observed"),
   }).toEqual({
-    awaiting: 0,
+    awaiting: [],
     observed: [
       expect.objectContaining({
         worker_id: BOARD_WORKER_ID,
