@@ -1,6 +1,18 @@
 import { closeSync, createWriteStream, openSync, type WriteStream } from "node:fs";
 import { join } from "node:path";
 
+/** 盤面の記録の器(worker transcript と受験者の答案の写しを置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
+ *  どの task の・どの path への書き込みが・どの例外で落ちたかを運ぶ —— 原因の所在は断言しない。 */
+export class RecordContainerError extends Error {
+  constructor(
+    readonly taskId: string,
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`the board's record container could not be written for ${taskId} at ${path}: ${reason}`);
+  }
+}
+
 /** 走ってから書けなくなった transcript の観測(ADR 0149 決定4)。 */
 export interface TranscriptFailure {
   taskId: string;
@@ -27,7 +39,8 @@ export class TranscriptStore {
   /** 走ってから書けなくなった観測の盤面側の一撃。盤面(`startServer`)が差し込む。 */
   onFailed: (failure: TranscriptFailure) => void = () => {};
 
-  constructor(private readonly dir: string) {}
+  /** 盤面の記録の器(ADR 0266)—— 受験者の答案の写しも同じ dir に置く。 */
+  constructor(readonly dir: string) {}
 
   /** `worker_spawned` の後・spawn の前に同期で開く。開けなければ例外が呼び手へ返る
    *  (ADR 0118 の族、`spawn_failed`)。ファイル名は event id でセッションごとに一意

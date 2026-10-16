@@ -312,6 +312,8 @@ export function startScheduler(deps: {
    *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
    *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
   registry?: RegistrySource;
+  /** 盤面の記録の器(ADR 0266 決定2): pin の子の pickup の準備が決着した兄弟の答案を写す先。Absent → 写さない。 */
+  recordDir?: string;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
@@ -343,6 +345,7 @@ export function startScheduler(deps: {
     cliAuth,
     githubAuth,
     registry,
+    recordDir,
     agents,
     retrospectiveCalls,
     translationClient,
@@ -454,7 +457,7 @@ export function startScheduler(deps: {
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
       try {
-        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, now: clock.now() });
+        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;
