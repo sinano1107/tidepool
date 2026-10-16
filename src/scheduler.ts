@@ -57,6 +57,7 @@ import {
   carriesHumanWords,
   contentSourceFor,
   escalateTask,
+  getTask,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
@@ -503,7 +504,7 @@ export function startScheduler(deps: {
    *  the "#N" placeholder never reaches the worker or its memory injection),
    *  `{}` for an ordinary task, or null when the pickup may not proceed — a
    *  null from the gone-branch has already registered the failure question as
-   *  its side effect. */
+   *  its side effect, unless a human door changed the head meanwhile. */
   async function issuePickupGate(head: Task): Promise<Partial<TaskContent> | null> {
     if (head.github_issue_number == null || !github) return {};
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
@@ -520,30 +521,36 @@ export function startScheduler(deps: {
         // as registerFailureQuestion, minus the teardown (nothing was acquired
         // yet). The unanswered question holds the task out of nextSlotTask,
         // so the gate never re-fires for it until a human answers.
-        escalateTask(
-          db,
-          head,
-          {
-            context:
-              `the GitHub issue this task references is gone ` +
-              `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
-              `its content cannot be expanded for spawn.\n\n` +
-              `"retry" re-reads the issue and restarts this task from the queue head — ` +
-              `pick it after reopening or restoring the issue. ` +
-              abandonConsequence(db, head),
-            questions: [
-              {
-                title: `issue reference is gone: ${head.title}`,
-                options: ["retry", "abandon"],
-                recommendation: "retry",
-              },
-            ],
-            question_kind: { kind: "failure", cancel_option: "abandon" },
-          },
-          BOARD_WORKER_ID,
-          clock.now(),
-          "board",
-        );
+        // 取得の await の間に人間の扉が head を書き換えた(cancel・付け替え)なら何も記録せず、次の poll に
+        // 任せる —— 確かめと記録は同じ transaction で(issue #973)
+        db.transaction(() => {
+          const row = getTask(db, head.id);
+          if (row?.status !== "todo" || row.assignee !== head.assignee) return;
+          escalateTask(
+            db,
+            head,
+            {
+              context:
+                `the GitHub issue this task references is gone ` +
+                `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
+                `its content cannot be expanded for spawn.\n\n` +
+                `"retry" re-reads the issue and restarts this task from the queue head — ` +
+                `pick it after reopening or restoring the issue. ` +
+                abandonConsequence(db, head),
+              questions: [
+                {
+                  title: `issue reference is gone: ${head.title}`,
+                  options: ["retry", "abandon"],
+                  recommendation: "retry",
+                },
+              ],
+              question_kind: { kind: "failure", cancel_option: "abandon" },
+            },
+            BOARD_WORKER_ID,
+            clock.now(),
+            "board",
+          );
+        })();
         return null;
       }
       // 一時的失敗: fail-closed, no human — the next poll retries

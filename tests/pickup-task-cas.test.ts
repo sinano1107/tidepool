@@ -7,11 +7,11 @@ import { HUMAN_WEBUI } from "./harness.js";
 // scheduler は head を選んでから pickupTask までに実 I/O を await する(issue #972)。
 // その窓で人間の扉が行を書き換えたら、選んだときの古い Task で in_progress にしない
 describe("pickupTask は選んだ後に書き換わった head を拾わない(issue #972)", () => {
-  function queued() {
+  function queued(workspace?: string) {
     const db = openDb(":memory:");
     const task = registerTask(
       db,
-      { type: "work", title: "head", purpose: "p", completion_criteria: "c" },
+      { type: "work", title: "head", purpose: "p", completion_criteria: "c", workspace },
       new Date(0),
       ...HUMAN_WEBUI,
     );
@@ -35,6 +35,27 @@ describe("pickupTask は選んだ後に書き換わった head を拾わない(i
     expect(pickupTask(db, task, "deckhand", new Date(2))).toBeNull();
 
     expect(getTask(db, task.id)!.status).toBe("cancelled");
+    expect(listEvents(db, task.id).some((e) => e.kind === "task_picked_up")).toBe(false);
+  });
+
+  // 実行設定と event の帰属は選んだ head から決まる(issue #973): 別の agent や別の workspace の行は拾わない
+  it("窓の間に assignee が別の agent に付け替えられた task は pickup されず、event も残らない(issue #973)", () => {
+    const { db, task } = queued();
+    editTask(db, task, { assignee: "codex-agent" }, new Date(1), "webui");
+
+    expect(pickupTask(db, task, "deckhand", new Date(2))).toBeNull();
+
+    expect(getTask(db, task.id)!.status).toBe("todo");
+    expect(listEvents(db, task.id).some((e) => e.kind === "task_picked_up")).toBe(false);
+  });
+
+  it("窓の間に workspace が別の名前に替えられた task は pickup されず、event も残らない(issue #973)", () => {
+    const { db, task } = queued("prod");
+    editTask(db, task, { workspace: "sandbox" }, new Date(1), "webui");
+
+    expect(pickupTask(db, task, "deckhand", new Date(2))).toBeNull();
+
+    expect(getTask(db, task.id)!.status).toBe("todo");
     expect(listEvents(db, task.id).some((e) => e.kind === "task_picked_up")).toBe(false);
   });
 });

@@ -1051,12 +1051,18 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
  *  `task` is the head the scheduler chose before awaiting real I/O (issue
  *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
  *  row no longer matches and the pickup is abandoned (null, no event). The
- *  fills test the row, not `task`, so a name set in that window is kept. */
+ *  execution setting and the event's attribution were resolved from `task`,
+ *  so a row whose assignee — or named workspace — changed in that window is
+ *  abandoned too (issue #973). The fills test the row, not `task`, so a
+ *  workspace named in that window onto an empty one is kept. */
 export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill: ResolvedFromDefault = {}): Task | null {
   return db.transaction(() => {
     const { changes } = db
-      .prepare("UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ?")
-      .run(task.id, HUMAN_WORKER_ID);
+      .prepare(
+        `UPDATE tasks SET status = 'in_progress' WHERE id = @id AND status = 'todo' AND assignee IS NOT @human
+           AND assignee IS @assignee AND (@workspace IS NULL OR workspace = @workspace)`,
+      )
+      .run({ id: task.id, human: HUMAN_WORKER_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {
