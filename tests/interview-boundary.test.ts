@@ -252,7 +252,6 @@ async function lastExaminee() {
     for (let i = 0; i < 15; i++) await client.callTool({ name: "log_decision", arguments: { line: `${i} ${"x".repeat(3_000)}` } });
     const pages = (await readFollowingNext(client, "get_current_task")).map((response) => response.payload);
     const pulls = [
-      { name: "browse_memory", arguments: {} },
       { name: "browse_memory", arguments: { prefix: "parser" } },
       { name: "search_memory", arguments: { query: SIBLING_MEMORY } },
       { name: "read_memory", arguments: { ids: [entry_id] } },

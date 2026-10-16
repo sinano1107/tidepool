@@ -393,8 +393,7 @@ it("読み手が pin の子のとき、どの Interview の pin の子が書い�
   expect(injection).toMatchObject({ entries: [{ id: production }], omitted: 0, index_max_depth: 1 });
   expect(injection.section).toContain("### Index\n\n- parser/ — (undefined)\n\n### Relevant entries\n\n");
   expect(injection.section).not.toMatch(/answers|lexer|sibling|elsewhere/);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblings, elsewhere]);
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
-  changeMemorySettings(db, { injection_token_cap: 2000 }, "webui", at);
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblings, elsewhere]);
 });

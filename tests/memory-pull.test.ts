@@ -529,7 +529,7 @@ const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, 
 /** 受験者の盤面(ADR 0263 決定7): Interview A の pin の子2つ(読み手と兄弟)と、別の Interview B の pin の子。`write` は書き手の
  *  task の書き込みの記録つきで Knowledge を書く。読み手 `examinee` は A の1つ目、`reader` は本番の task。 */
 function examineeBoard() {
-  const { db, task, reader, define } = board();
+  const { db, task, reader } = board();
   const interview = (targets: object[]) =>
     poseProbe(db, registerTask(db, { ...INTERVIEW, interview_targets: targets as never }, at, ...HUMAN_WEBUI), PROBE, "auditor", at, "worker");
   const [examinee, sibling] = interview([opus, haiku]);
@@ -542,7 +542,7 @@ function examineeBoard() {
       at,
       writer.id,
     ).entry_id;
-  return { db, task, reader, define, examinee: { ...reader, taskId: examinee!.id }, sibling: sibling!, otherInterview: otherInterview!, write };
+  return { db, task, reader, examinee: { ...reader, taskId: examinee!.id }, sibling: sibling!, otherInterview: otherInterview!, write };
 }
 
 it("読み手が pin の子のとき、search はどの Interview の pin の子が書いたエントリも返さず、memory_pulled の候補にも落とした理由つきでも載せない —— 本番の task には返る(ADR 0263 決定7)", () => {
