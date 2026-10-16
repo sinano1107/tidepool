@@ -541,7 +541,8 @@ export function questionRefusedTarget(
   evidence: string,
   now: Date,
 ): void {
-  const root = getTask(db, child.parent_id!)!;
+  // 受験者の root は対象の行から引く(ADR 0267 決定1)
+  const root = getTask(db, db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(child.interview_target_id) as string)!;
   const reason = `Task ${child.id} of Interview "${root.title}" (${root.id}) ${evidence}`;
   if (refusal.cause === "effort_not_advertised") {
     registerQuarantine(db, "interviewTargetEffort", tableRowEffortValue(refusal.provider, refusal.model, refusal.effort), reason, now);

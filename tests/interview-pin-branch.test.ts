@@ -33,7 +33,7 @@ function answeredBranch(workspace: WorkspaceConfig, taskId: string): string {
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
 
-it("pin の子の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
+it("受験者の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
   const workspace = await makeWorkspace("pin-posed-head");
   const db = openDb(":memory:");
   const [examinee] = posed(db, workspace);
