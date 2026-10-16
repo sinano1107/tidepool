@@ -737,7 +737,11 @@ export function listEpisodes(
     )
     .all(...rows.map((r) => r.id)) as MarkerRow[];
   const decisions = decisionOutcomes(db, markerRows);
-  const mergedPrs = mergedPrByTask(db, [...new Set(rows.map((r) => r.task_id))]);
+  // merge 済みの PR —— 盤面の merge と merge の観測の両方(ADR 0079 決定4)。根の PR の決着の1本の読みで読む(ADR 0265 決定2)
+  const mergedPr = (taskId: string) => {
+    const outcome = rootPrOutcome(db, taskId);
+    return outcome?.state === "MERGED" ? outcome.prNumber : null;
+  };
 
   return rows.map((row) => ({
     workerSpawnedEventId: row.worker_spawned_event_id,
@@ -757,7 +761,7 @@ export function listEpisodes(
     workerExitedEventId: row.worker_exited_event_id,
     lines: JSON.parse(row.lines) as EpisodeLineStats,
     unrecognizedFormat: row.unrecognized_format === 1,
-    prMerged: mergedPrs.get(row.task_id) ?? null,
+    prMerged: mergedPr(row.task_id),
     actions: actionRows
       .filter((a) => a.episode_id === row.id)
       .map((a) => ({
@@ -828,17 +832,6 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   // cause は entry の今の判定 —— 最後の異議群の判定(ADR 0170 決定2)
   for (const [entryId, { cause, entries }] of currentAttributions(db, ids)) Object.assign(out.get(entryId)!, { cause, entries });
   return out;
-}
-
-/** タスクごとの merge 済み PR —— 盤面が merge した場合と、merge 済みだと観測した場合の両方(ADR 0079 決定4)。
- *  決着は PR を開いた根に刻まれ、収束と同じ1本の読み(`rootPrOutcome`、ADR 0265 決定2)で読む。 */
-function mergedPrByTask(db: Db, taskIds: string[]): Map<string, number> {
-  const merged = new Map<string, number>();
-  for (const taskId of taskIds) {
-    const outcome = rootPrOutcome(db, taskId);
-    if (outcome?.state === "MERGED") merged.set(taskId, outcome.prNumber);
-  }
-  return merged;
 }
 
 interface EpisodeRow {
