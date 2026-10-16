@@ -5,6 +5,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { tierIdOf } from "../src/tier.js";
+import type { WatchdogConfig } from "../src/watchdog.js";
 import {
   api,
   bootTidepool,
@@ -18,6 +19,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
+  QUIET_EXIT,
   questions,
   readFollowingNext,
   registerQuestion,
@@ -47,7 +49,7 @@ const pose = async (rootId: string): Promise<[string, ...string[]]> => JSON.pars
 let workspacePath: string;
 /** 既定 agent の定義。テストが entry を差し替えて、登録の後に走れなくなった盤面を作れる。 */
 let definition: { provider: Array<{ name: string; advisor: boolean }>; tier: undefined };
-async function boot({ promoted = true } = {}): Promise<Tidepool> {
+async function boot({ promoted = true, watchdog }: { promoted?: boolean; watchdog?: WatchdogConfig } = {}): Promise<Tidepool> {
   const workspace = await makeWorkspace("reef");
   workspacePath = workspace.path;
   definition = { provider: [{ name: "anthropic", advisor: true }], tier: undefined };
@@ -55,6 +57,7 @@ async function boot({ promoted = true } = {}): Promise<Tidepool> {
     workspace,
     agentAdmin: { list: () => [{ name: "fake-worker", provider: "anthropic" } as AgentView] },
     taskExecutionCandidates: (task) => executionSettingsFor(board.db, definition, task),
+    watchdog,
   });
   applyExecutionSettingsChange(board.db, { setting: "advisor_ceiling", value: "fable" }, "webui", board.clock.now());
   if (promoted) applyExecutionSettingsChange(board.db, { setting: "learner_promoted", value: true }, "webui", board.clock.now());
@@ -211,14 +214,29 @@ const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "m
 const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
+const CONTINUE_COMMENT = "continue-comment-mark-4d2";
 const SIBLING_MEMORY = "sibling-memory-mark-4d2";
+
+/** 読み手に立った未回答の question に人間が答え、読み手が slot に戻るまで進める。 */
+async function answerReaderQuestion(reader: string, answers: string[], comment?: string) {
+  await new Promise((resolve) => setImmediate(resolve));
+  const question = (await questions(t)).find((q) => q.parent_id === reader && q.status !== "done");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers, comment })).status).toBe(200);
+  await t.clock.advance(HOUR);
+  // 兄弟が書いた Knowledge が記憶の meta-review を立て、先に slot を取る —— 終えて読み手に戻す
+  await completeMetaReviews(t);
+  await runNow(t, reader);
+  expect(t.worker.started.at(-1)!.id).toBe(reader);
+}
 
 /** 最後の受験者が読む盤面(ADR 0263 決定10 の sweep の状況): 人間が書いた root の題・目的は「Interview」を持ち、root は出題以外の
  *  判断ログの行と question を持つ。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で
- *  cancel、最後の対象の子が slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の
- *  pull verb(browse・search・read)で兄弟の Knowledge を探した応答。 */
+ *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
+ *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
+ *  read)で兄弟の Knowledge を探した応答。 */
 async function lastExaminee() {
-  t = await boot();
+  // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
+  t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
   const root = (
     await api(t.baseUrl, "POST", "/api/tasks", {
       type: "review",
@@ -240,6 +258,13 @@ async function lastExaminee() {
   expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(reader);
+  t.worker.exitWith(reader, { ...QUIET_EXIT, exit_code: 1 });
+  await answerReaderQuestion(reader, ["retry"], "retry with the streaming API");
+  expect((await callAsTask(t, reader, "declare_premise_breach", { reason: "the samples contradict the probe" })).isError).toBeFalsy();
+  await answerReaderQuestion(reader, ["continue"], CONTINUE_COMMENT);
+  const escalation = { context: "the sample config has two formats", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
+  expect((await callAsTask(t, reader, "escalate", escalation)).isError).toBeFalsy();
+  await answerReaderQuestion(reader, ["toml"], "toml only");
   registerQuestion(t, {
     parent_id: root.id,
     title: "a root question",
@@ -263,14 +288,16 @@ async function lastExaminee() {
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印が出ない(ADR 0263 決定7・10)", async () => {
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印が出ない(ADR 0263 決定7・8・10)", async () => {
   const { siblings, pages, pulls, tools } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, ...siblings]) expect(read).not.toContain(text);
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, CONTINUE_COMMENT, ...siblings]) {
+    expect(read).not.toContain(text);
+  }
 });
 
 it("get_current_task は受験者から見える親を欄と history の両方に使い、続き(ADR 0195)は親を載せない(ADR 0263 決定3・4)", async () => {

@@ -7,7 +7,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } f
 import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, examineeParent, getRegistrant, getTask, interviewTargets, listBoard, listChildren, logDecision, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, examineeParent, getRegistrant, getTask, interviewTargets, listBoard, listChildren, logDecision, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
 import { failTask } from "../src/watchdog.js";
@@ -145,15 +145,65 @@ it("pin の子の前提の破綻の question の、人間が答える context �
   for (const text of ["the probe is broken", POSE.probe, POSE.rubric, `"retry"`]) expect(getTask(db, question.id)!.purpose).toContain(text);
 });
 
-it("continue の後、宣言した pin の子が読む自分の history の破綻の question は人間の答えを運び、context(rubric・Interview の帰結)を運ばない(ADR 0253 決定2 / ADR 0245 決定2)", () => {
+it("continue の後、宣言した pin の子が読む自分の history の破綻の question は人間の答えを運び、context(rubric・Interview の帰結)も continue のコメントも運ばない —— コメントは question の記録に残る(ADR 0253 決定2 / ADR 0245 決定2 / ADR 0263 決定8)", () => {
   const { db, failed } = twoPinnedChildren();
-  answerQuestionViaWebui(db, breachQuestion(db, failed), ["continue"], new Date(0), { comment: "the probe holds" });
+  const question = breachQuestion(db, failed);
+  answerQuestionViaWebui(db, question, ["continue"], new Date(0), { comment: "the probe holds" });
   const history = taskHistoryRows(db, failed.id).map((row) => row.entry);
   expect(history).toEqual([
-    { child_outside_the_decomposition: expect.objectContaining({ title: `premise breach: ${POSE.title}`, answer: ["continue"], comment: "the probe holds" }) },
+    { child_outside_the_decomposition: expect.objectContaining({ title: `premise breach: ${POSE.title}`, answer: ["continue"], comment: null }) },
   ]);
   expect(JSON.stringify(history)).not.toContain(POSE.rubric);
   expect(JSON.stringify(history)).not.toMatch(/interview/i);
+  expect(getTask(db, question.id)!.question_answer_comment).toBe("the probe holds");
+});
+
+it("pin の子の前提の破綻の question の context は、continue のコメントが受験者に届かず、probe を直すなら retry だと人間に言う(ADR 0263 決定8)", () => {
+  const { db, failed } = twoPinnedChildren();
+  expect(getTask(db, breachQuestion(db, failed).id)!.purpose).toMatch(/comment given with "continue" reaches no target .*"retry"/);
+});
+
+const ONLY_THIS_TARGET = /answer and comment reach only this target/;
+
+it("pin の子の failure question の context は答えとコメントがこの対象にだけ届くと人間に言い、自分の history はその文を外して答えとコメントを運ぶ(ADR 0263 決定9)", () => {
+  const { db, failed } = twoPinnedChildren();
+  failTask(db, failed, "worker timed out", "The worker exceeded its time limit.", undefined, new Date(0));
+  const question = listChildren(db, failed.id)[0]!;
+  expect(getTask(db, question.id)!.purpose).toMatch(ONLY_THIS_TARGET);
+  answerQuestionViaWebui(db, question, ["retry"], new Date(0), { comment: "use the streaming API" });
+  const [row] = taskHistoryRows(db, failed.id).map((r) => r.entry);
+  expect(row).toEqual({ child_outside_the_decomposition: expect.objectContaining({ answer: ["retry"], comment: "use the streaming API" }) });
+  expect(JSON.stringify(row)).not.toMatch(ONLY_THIS_TARGET);
+  expect(JSON.stringify(row)).not.toMatch(/interview/i);
+});
+
+const ESCALATION = { context: "the sample config has two formats", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
+
+it("pin の子が escalate した question の context は、agent の書いた context の後ろに盤面が「この対象にだけ届く」を足し、自分の history は agent の context と答え・コメントを運ぶ(ADR 0263 決定9)", () => {
+  const { db, failed } = twoPinnedChildren();
+  const question = escalateTask(db, failed, ESCALATION, "tako", new Date(0), "worker");
+  const purpose = getTask(db, question.id)!.purpose;
+  expect(purpose.startsWith(ESCALATION.context)).toBe(true);
+  expect(purpose.slice(ESCALATION.context.length)).toMatch(ONLY_THIS_TARGET);
+  answerQuestionViaWebui(db, question, ["toml"], new Date(0), { comment: "toml only" });
+  expect(taskHistoryRows(db, failed.id).map((r) => r.entry)).toEqual([
+    { child_outside_the_decomposition: expect.objectContaining({ purpose: ESCALATION.context, answer: ["toml"], comment: "toml only" }) },
+  ]);
+});
+
+it("本番の work の failure と escalation の question の context は「この対象にだけ届く」を持たず、history は purpose をそのまま運ぶ", () => {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { ...CHILD, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  failTask(db, task, "worker failed", "The worker exceeded its time limit.", undefined, new Date(0));
+  answerQuestionViaWebui(db, listChildren(db, task.id)[0]!, ["retry"], new Date(0));
+  const escalated = escalateTask(db, getTask(db, task.id)!, ESCALATION, "tako", new Date(0), "worker");
+  expect(escalated.purpose).toBe(ESCALATION.context);
+  answerQuestionViaWebui(db, escalated, ["toml"], new Date(0), { comment: "toml only" });
+  const questions = listChildren(db, task.id);
+  for (const q of questions) expect(q.purpose).not.toMatch(ONLY_THIS_TARGET);
+  expect(taskHistoryRows(db, task.id).map((r) => r.entry)).toEqual(
+    questions.map((q) => ({ child_outside_the_decomposition: expect.objectContaining({ purpose: q.purpose, comment: q.question_answer_comment }) })),
+  );
 });
 
 it("pin の子の failure question は兄弟の pin の子を held にしない —— 兄弟はそのまま pickup できる(ADR 0245 決定5)", () => {
