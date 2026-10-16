@@ -329,7 +329,15 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
     )
     .pluck()
     .all(id) as string[];
-  if (openPrAncestors.some((ancestor) => rootPrOutcome(db, ancestor) === null && !abandonEventInForce(db, ancestor))) return undefined;
+  if (
+    openPrAncestors.some(
+      (ancestor) =>
+        rootPrOutcome(db, ancestor) === null &&
+        !abandonEventInForce(db, ancestor) &&
+        openPrPromotionQuestionIds(db, ancestor).length === 0,
+    )
+  )
+    return undefined;
   const task = getTask(db, id)!;
   let workspace: WorkspaceConfig | undefined;
   try {

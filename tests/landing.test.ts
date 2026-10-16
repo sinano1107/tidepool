@@ -1454,6 +1454,25 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
 });
 
+// ADR 0265 帰結 / ADR 0240 決定2: 未回答の失敗 question で止まった根は内容の確かめに届かないので、子孫を記録で外さない
+it("PR が開いている external の根が未回答の失敗 question で止まっていれば、外で merge された後に完了した修理は自分で根になって着地し、着地を待つ完了タスクに数えられる", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-blocked-root", "external");
+  finish(db, clock, work);
+  registerPrPromotionFailureQuestion(db, getTask(db, work.id)!, "push failed earlier", clock.now());
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
+  commitWork(workspace.path, "repair.txt", "after the merge\n");
+  finish(db, clock, repair);
+
+  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(1);
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
+  ]);
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
+});
+
 // ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
 it.each([
   ["auto_if_ci_green", "auto_merge", 0],
