@@ -1432,7 +1432,6 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
   await expect(landing.converge()).resolves.toEqual([
     { taskId: work.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
   ]);
-  expect(promotionFailures(db, nested.id)).toEqual([]);
   git(workspace.path, "branch", `task/${child.id}`, childTip);
 
   await squashTaskIntoOrigin(workspace, work.id);

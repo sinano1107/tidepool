@@ -301,18 +301,17 @@ function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): Lan
 
 /** 候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。 */
 function landingCandidateIds(db: Db): string[] {
-  return (
-    db
-      .prepare(
-        `SELECT t.id FROM tasks t
-          WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
-            AND t.interview_target_id IS NULL
-            AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
-            AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
-          ORDER BY t.rowid`,
-      )
-      .all() as Array<{ id: string }>
-  ).map(({ id }) => id);
+  return db
+    .prepare(
+      `SELECT t.id FROM tasks t
+        WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
+          AND t.interview_target_id IS NULL
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
+          AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
+        ORDER BY t.rowid`,
+    )
+    .pluck()
+    .all() as string[];
 }
 
 /** 候補が根ならその根を返す。閉じた PR の根と、PR が開いている根(終わっていない・決着していない・断念していない)の
@@ -328,8 +327,9 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
         WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))`,
     )
-    .all(id) as Array<{ id: string }>;
-  if (openPrAncestors.some((a) => rootPrOutcome(db, a.id) === null && !abandonEventInForce(db, a.id))) return undefined;
+    .pluck()
+    .all(id) as string[];
+  if (openPrAncestors.some((ancestor) => rootPrOutcome(db, ancestor) === null && !abandonEventInForce(db, ancestor))) return undefined;
   const task = getTask(db, id)!;
   let workspace: WorkspaceConfig | undefined;
   try {
