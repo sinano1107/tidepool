@@ -1413,6 +1413,32 @@ it("external の根の PR が外で squash merge されれば、収束の1回目
   expect(github.stateChecks).toEqual([]);
 });
 
+// ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
+it.each([
+  ["auto_if_ci_green", "auto_merge"],
+  ["escalate", "outside_merge"],
+] as const)("%s の根が内容で終わっても決裁はそのまま残り、その後の %s の読み取りが外での merge を観測として決着させる", async (dial, tick) => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr(`landing-content-keeps-${dial}`, dial);
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const openMergeQuestions = () => listBoard(db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+  const decisions = openMergeQuestions().length;
+
+  await convergeOn(landing, work.id);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
+  expect(openMergeQuestions()).toHaveLength(decisions);
+
+  github.scriptMergedOutside(1);
+  await landing.tick(tick, clock.now());
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
+  expect(openMergeQuestions()).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+});
+
 it("盤面が merge した直後で保護ブランチの写しがまだ古くても、収束は保護ブランチを読み直し、運ぶ内容が無ければ失敗 question を立てず着地が終わったと刻む", async () => {
   const { workspace, db, clock, github, landing, root } = await rootWithOpenedPr("landing-merged-stale-main");
   await mergeOnGitHub(workspace, root.id);
