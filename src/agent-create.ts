@@ -323,7 +323,7 @@ export interface AgentDeletionReferences {
   unsettledTaskCount: number;
   /** そのうち work だけの件数 —— 組み込みを shadow するエントリの扉が数える(ADR 0228 決定3)。 */
   unsettledWorkTaskCount: number;
-  /** この agent の profile を読んで着地を待つ完了タスクのid —— agent 名の quarantine の
+  /** この agent の profile を読んで着地を待つ完了タスクの id —— agent 名の quarantine の
    *  解除が数えるのと同じ集合(ADR 0217 決定4)。 */
   awaitingLandingTaskIds: string[];
   /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、

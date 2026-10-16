@@ -358,10 +358,7 @@ export function landingState(db: Db, task: Pick<Task, "id" | "workspace" | "pr_n
   if (outcome) return outcome.state === "CLOSED" ? "close_observed" : outcome.observed ? "merge_observed" : "merged";
   if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   if (isQueuedForAutoMerge(db, task.id)) return "auto_merge_queue";
-  const openQuestion = db
-    .prepare("SELECT 1 FROM tasks WHERE type = 'question' AND status = 'todo' AND question_pending_merge_pr = ? AND workspace IS ?")
-    .get(task.pr_number, task.workspace);
-  if (openQuestion) return "merge_question";
+  if (listOpenMergeQuestions(db).some((q) => q.pr_number === task.pr_number && q.workspace === task.workspace)) return "merge_question";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 

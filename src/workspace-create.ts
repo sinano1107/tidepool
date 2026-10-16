@@ -364,7 +364,7 @@ export interface DeleteWorkspaceInput {
 export interface WorkspaceDeletionReferences {
   /** この workspace を持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
-  /** この workspace で着地を待つ完了タスクのid(ADR 0226)。 */
+  /** この workspace で着地を待つ完了タスクの id(ADR 0226)。 */
   awaitingLandingTaskIds: string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
