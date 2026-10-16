@@ -239,12 +239,8 @@ export function landingAnnotation(
       landingTaskId = kind.task_id;
       break;
     case "pr_merge":
-      try {
-        landingTaskId = taskIdForPr(db, kind.pr, task.workspace);
-      } catch (error) {
-        if (!(error instanceof DomainError)) throw error;
-        return { blocked_by: "attached_children" };
-      }
+      // `recordPrOpened` が PR 番号を記録してから merge question を立てるので、根は必ず引ける(`taskIdForPr`)
+      landingTaskId = taskIdForPr(db, kind.pr, task.workspace);
       break;
     case "escalation":
     case "failure":
@@ -270,20 +266,27 @@ interface LandingRoot {
   lineageError?: unknown;
 }
 
-/** PR の merge を記録した(盤面が merge した・merge を観測した)SQL 述語。人間の merge 回答と merge question の観測は、
- *  記録を question の側に刻む。 */
-function prMergedSql(t: string): string {
-  return `(${t}.pr_number IS NOT NULL AND EXISTS (SELECT 1 FROM events m
-             WHERE m.kind IN ('pr_merged', 'pr_merge_observed')
-               AND json_extract(m.payload, '$.pr_number') = ${t}.pr_number
-               AND (m.task_id = ${t}.id OR m.task_id IN (SELECT q.id FROM tasks q
-                      WHERE q.question_pending_merge_pr = ${t}.pr_number AND q.workspace IS ${t}.workspace))))`;
+/** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
+const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
+
+/** 根の PR の決着(ADR 0265 決定2): merge されたか閉じられたか、盤面の執行(`pr_merged`)か観測か。決着していなければ null。
+ *  決着はどの経路でも PR を開いた根の id に刻まれる(決定1)ので、根の記録だけを読む。読み手はすべてこれを通る。 */
+export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOSED"; observed: boolean; prNumber: number } | null {
+  const row = db
+    .prepare(
+      `SELECT kind, json_extract(payload, '$.pr_number') AS pr_number FROM events
+        WHERE task_id = ? AND kind IN ('pr_merged', '${OBSERVED.MERGED}', '${OBSERVED.CLOSED}') ORDER BY id DESC LIMIT 1`,
+    )
+    .get(taskId) as { kind: string; pr_number: number } | undefined;
+  if (!row) return null;
+  return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
  *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
- *  比例させ、盤面の歴史の長さには比例させない。候補から外すのは、着地が終わった根(`landing_finished` /
- *  `nothing_to_land`)、盤面の外で閉じた PR の根、ローカル着地の question を持つ根である。着地の終わっていない根
+ *  比例させ、盤面の歴史の長さには比例させない。SQL が外すのは、着地が終わった根(`landing_finished` /
+ *  `nothing_to_land`)とローカル着地の question を持つ根で、盤面の外で閉じた PR の根は lineage の前に根の PR の
+ *  決着の読み(`rootPrOutcome`)で外す。着地の終わっていない根
  *  (PR が開いている・閉じた・断念した)の子孫は記録で外さず、lineage に任せる(ADR 0250)—— 根の内容が別の経路で
  *  保護ブランチに届いた後(`external` のダイヤルは盤面の外の merge を観測しない)に完了した子孫は、自分で根になっている。
  *  閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
@@ -297,14 +300,14 @@ function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): Lan
       `SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id
-                            AND e.kind IN ('landing_finished', 'nothing_to_land', 'pr_close_observed'))
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
         ORDER BY t.rowid`,
     )
     .all() as Array<{ id: string }>;
   const roots: LandingRoot[] = [];
   for (const { id } of ids) {
+    if (rootPrOutcome(db, id)?.state === "CLOSED") continue;
     const task = getTask(db, id)!;
     let workspace: WorkspaceConfig | undefined;
     try {
@@ -468,9 +471,6 @@ export function recordPrPromotionAbandoned(
   });
 }
 
-/** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
-const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
-
 /** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
  *  already merged or closed outside the board. Deliberately not `answerQuestion`:
  *  nobody decided anything, so there is no `question_answered` event, no
@@ -481,12 +481,15 @@ const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as
  *  a second observation must not re-stamp an already-closed question. */
 function settleMergeQuestionAsObserved(
   db: Db,
-  questionId: string,
+  question: Pick<Task, "id" | "workspace">,
   prNumber: number,
   state: keyof typeof OBSERVED,
   now: Date,
 ): void {
-  settleQuestionAsObserved(db, questionId, { kind: OBSERVED[state], pr_number: prNumber }, now);
+  // ADR 0265 決定1: 観測は PR を開いた根に1回だけ刻み(収束が先に刻んでいれば重ねない)、question は回答なしの done で閉じる
+  const root = taskIdForPr(db, prNumber, question.workspace);
+  const recordOn = rootPrOutcome(db, root) === null ? root : null;
+  settleQuestionAsObserved(db, question.id, { kind: OBSERVED[state], pr_number: prNumber }, now, recordOn);
 }
 
 /** 収束が着地を成立させたら、同じタスクを指す PR 昇格失敗の question はもう誰にも訊く
@@ -858,11 +861,12 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // lineage が読めなかった候補は、根かどうか分からないまま人間に見せる(根ごとの失敗)
       if (lineageError !== undefined) return failed(task, "promotion_failed", lineageError, ctx);
-      const merged = deps.db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${prMergedSql("t")}`).get(task.id) !== undefined;
+      const outcome = rootPrOutcome(deps.db, task.id);
+      const mergedPr = outcome?.state === "MERGED" ? outcome.prNumber : undefined;
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
-      if (merged) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
+      if (mergedPr !== undefined) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
       if (!taskHasContentToLand(workspace, task.id)) {
-        if (merged) return finishLanding(task, workspace, task.pr_number!, ctx);
+        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, ctx);
         const base = protectedBranchRef(workspace);
         if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
         retireFailures(task.id, ctx);
@@ -875,7 +879,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 門は quarantine より先に読む(ADR 0241 決定3)
       if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
-      if (merged) return alreadyMerged(task, task.pr_number!, ctx);
+      if (mergedPr !== undefined) return alreadyMerged(task, mergedPr, ctx);
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
@@ -911,12 +915,9 @@ export function createLanding(deps: LandingDeps): Landing {
       if (task.pr_number !== null) {
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
         // 盤面の外で決着した PR は観測として1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。
-        // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
-        if (
-          state !== "OPEN" &&
-          !isMarked(task.workspace, task.pr_number) &&
-          latestEventOfTask(deps.db, task.id, OBSERVED[state])?.payload.pr_number !== task.pr_number
-        ) {
+        // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
+        // 根へ刻んだ観測を重ねない(ADR 0236 決定3)
+        if (state !== "OPEN" && !isMarked(task.workspace, task.pr_number) && rootPrOutcome(deps.db, task.id) === null) {
           retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
         }
         if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
@@ -1016,14 +1017,15 @@ export function createLanding(deps: LandingDeps): Landing {
     for (const questionId of answering) {
       const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
       if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
-      const closed = latestEventOfTask(deps.db, taskId, OBSERVED.CLOSED);
+      const outcome = rootPrOutcome(deps.db, taskId);
       verdicts.push({
         taskId,
-        verdict: closed
+        verdict:
+          outcome?.state === "CLOSED"
           ? {
               kind: "excluded",
               reason: "pull_request_closed",
-              error: `PR #${closed.payload.pr_number} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
+              error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
             }
           : { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` },
       });
@@ -1064,7 +1066,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
-      settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
+      settleMergeQuestionAsObserved(deps.db, question, prNumber, state, deps.clock.now());
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
@@ -1106,7 +1108,7 @@ export function createLanding(deps: LandingDeps): Landing {
               .catch(() => null);
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (state && state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
-              settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
+              settleMergeQuestionAsObserved(deps.db, { id, workspace: taskWorkspace }, pr_number, state, now);
             }
           } catch (error) {
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む

@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { questionAnnotations } from "../src/memory.js";
-import { type RegisterTaskInput, registerTask } from "../src/tasks.js";
+import { type RegisterTaskInput, recordPrNumber, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -23,6 +23,8 @@ const QUESTIONS = {
 function freeTextOf(kind: keyof typeof QUESTIONS) {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  // merge question は PR 7 を開いた根から立つ(ADR 0265)
+  recordPrNumber(db, parent.id, 7);
   const { options, ...fields } = QUESTIONS[kind];
   const question = registerTask(
     db,
