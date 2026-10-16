@@ -976,8 +976,8 @@ function answerEscalatedMergeQuestion(github: FakeGitHubClient, resolveWorkspace
   const question = onlyQuestion(db);
   const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, resolveWorkspace });
   const answer = (value: string) =>
-    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, question, [value], undefined, () => NOW, "webui");
-  return { question, answer };
+    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, [value], undefined, () => NOW, "webui");
+  return { question, landing, answer };
 }
 
 // ADR 0079 決定3 / ADR 0229 決定4: バックストップが握りつぶしてよいのは読みの失敗だけ —— 決着の書き込みの失敗は回答を失敗させる
@@ -1015,20 +1015,9 @@ it.each([
 
 /** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
 function escalatedMergeQuestion() {
-  db = openDb(":memory:");
-  const work = registerTask(
-    db,
-    { type: "work", title: "ship", purpose: "deliver the change", completion_criteria: "merged" },
-    NOW,
-    ...HUMAN_WEBUI,
-  );
-  recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
-  const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
-  const answer = () =>
-    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
-  return { question, github, landing, answer };
+  const { question, landing, answer } = answerEscalatedMergeQuestion(github);
+  return { question, github, landing, answer: () => answer("merge") };
 }
 
 /** 上の question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める。 */
