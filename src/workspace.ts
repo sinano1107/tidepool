@@ -126,13 +126,30 @@ export class GitDirNotADirectoryError extends Error {
   }
 }
 
-/** ADR 0146: `.git` が存在してディレクトリでない checkout(linked worktree・submodule)は
- *  workspace にならない。判定は stat の形だけで git を通さない。`.git` が無いパスは
- *  何もしない —— 今日どおり git 側の失敗で落ちる。pickup・修理確認・登録の3つの門が
- *  この1つを共有する。 */
+export class NoOwnGitDirError extends Error {
+  constructor(path: string, toplevel: string) {
+    super(`${path} has no .git of its own — it is a subdirectory of the repository at ${toplevel} and cannot be a workspace`);
+    this.name = "NoOwnGitDirError";
+  }
+}
+
+/** ADR 0146: workspace の checkout は `.git` をディレクトリに持つ。`.git` が存在して
+ *  ディレクトリでない checkout(linked worktree・submodule)は stat の形だけで拒む。
+ *  `.git` が無いパスは、git が外側の repo の作業ツリーとして解決するとき(部分ディレクトリ、
+ *  ADR 0146 追記 / issue #1964)だけ拒む —— 放せば git 操作が親 repo 全体に効く。
+ *  どの repo にも属さないパス(と作業ツリーを持たない bare repo)は何もせず、今日どおり
+ *  各門の git 側の失敗で落ちる。pickup・修理確認・登録の3つの門がこの1つを共有する。 */
 export function assertGitDirIsDirectory(path: string): void {
   const stat = statSync(join(path, ".git"), { throwIfNoEntry: false });
   if (stat && !stat.isDirectory()) throw new GitDirNotADirectoryError(path);
+  if (stat) return;
+  let toplevel: string;
+  try {
+    toplevel = git(path, "rev-parse", "--show-toplevel");
+  } catch {
+    return;
+  }
+  throw new NoOwnGitDirError(path, toplevel);
 }
 
 /** ADR 0009: `task.workspace` is a reference to a registry name, resolved

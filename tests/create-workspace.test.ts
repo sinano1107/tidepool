@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
+import { NoOwnGitDirError } from "../src/workspace.js";
 import {
   BoardStateOverlapError,
   createWorkspace,
@@ -230,6 +231,24 @@ describe("createWorkspace: register モード(issue #57)", () => {
     await expect(
       createWorkspace({ mode: "register", name: "sandbox", path: checkout, confirm: true }, deps),
     ).rejects.toThrow("linked worktrees and submodules cannot be workspaces");
+    expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
+    expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
+  });
+
+  // issue #1964: 部分ディレクトリは git が親 repo を見つけて通ってしまうが、git 操作は
+  // 親 repo 全体に効く —— `.git` がファイルの形と同じく同意しても動かないので拒否する
+  it("親 repo の部分ディレクトリの登録は、自分の `.git` を持たないという理由で拒否され、コミットを積まない", async () => {
+    const registryDir = await makeMainRegistry();
+    const before = git(registryDir, "rev-parse", "HEAD");
+    const deps = await makeDeps(registryDir);
+    const parent = await makeLocalOnlyCheckout();
+    await mkdir(join(parent, "sub"));
+    await writeFile(join(parent, "sub", "file.md"), "sub\n");
+    commitAll(parent, "add sub");
+
+    await expect(
+      createWorkspace({ mode: "register", name: "sandbox", path: join(parent, "sub"), confirm: true }, deps),
+    ).rejects.toThrow(NoOwnGitDirError);
     expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox).toBeUndefined();
     expect(git(registryDir, "rev-parse", "HEAD")).toBe(before);
   });

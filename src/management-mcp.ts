@@ -118,7 +118,7 @@ import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
-import { GitDirNotADirectoryError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,
@@ -217,6 +217,7 @@ function registryToolError(err: unknown) {
     err instanceof RepoAccessMissingError ||
     err instanceof NotAGitRepositoryError ||
     err instanceof GitDirNotADirectoryError ||
+    err instanceof NoOwnGitDirError ||
     err instanceof UnknownWorkspaceError ||
     err instanceof RegistrySelfUnprotectError ||
     err instanceof WorkspaceAlreadyPublishedError ||
