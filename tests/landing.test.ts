@@ -1393,7 +1393,7 @@ it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1 } },
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 
   // 読めば壊れていると分かる checkout でも、終わった根は読まれない
@@ -1403,6 +1403,131 @@ it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった
   expect(promotionFailures(db, root.id)).toEqual([]);
   expect(boardEvents(db, root.id, "landing_finished")).toHaveLength(1);
   expect(github.stateChecks).toEqual([]);
+});
+
+// ADR 0265 決定3: `external` の根は内容で終わる —— GitHub を読まず、merge の記録が無くても1回で候補を外れる(#1849)
+it("external の根の PR が外で squash merge されれば、収束の1回目が根拠 content の着地の終わりを1件刻み、2回目はその根の git を読まない", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-content-finished", "external");
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
+  expect(boardEvents(db, work.id, "landing_finished")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "content" } },
+  ]);
+
+  // 読めば壊れていると分かる checkout でも、終わった根は読まれない
+  git(workspace.path, "checkout", "main");
+  git(workspace.path, "branch", "-D", `task/${work.id}`);
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+  expect(boardEvents(db, work.id, "nothing_to_land")).toEqual([]);
+  expect(github.stateChecks).toEqual([]);
+});
+
+// ADR 0265 決定3 / ADR 0250 決定1: 開いた PR の根の子孫は候補にならず、根が内容で終わった後の修理は自分で根になる
+it("external の根の PR が開いている間、根のブランチへ帰る子孫は撃たれず、外で merge された後に完了した修理は根が内容で終わった回に自分で根になって着地する", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-descendant", "external");
+  finish(db, clock, work);
+  const child = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${child.id}`);
+  commitWork(workspace.path, "child.txt", "merged back\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  git(workspace.path, "merge", "--no-edit", `task/${child.id}`);
+  const nested = attachUnsettledChild(db, clock, child.id);
+  git(workspace.path, "branch", `task/${nested.id}`, `task/${child.id}`);
+  finish(db, clock, nested);
+  finish(db, clock, child);
+  // 読めば壊れていると分かる checkout でも、PR の開いた根の子孫の lineage は読まれない(記録で外れる)
+  const childTip = git(workspace.path, "rev-parse", `task/${child.id}`);
+  git(workspace.path, "branch", "-D", `task/${child.id}`);
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: work.id, verdict: { kind: "landed", form: "open_pull_request_updated", prNumber: 1 } },
+  ]);
+  git(workspace.path, "branch", `task/${child.id}`, childTip);
+
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
+  commitWork(workspace.path, "repair.txt", "after the merge\n");
+  finish(db, clock, repair);
+
+  // 根へ帰っていた子孫も自分で根になるが、その内容は根の PR と一緒に届いている
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: work.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: child.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: nested.id, verdict: { kind: "nothing_to_land", base: "refs/remotes/origin/main" } },
+    { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
+  ]);
+  expect(boardEvents(db, work.id, "landing_finished").map(({ payload }) => payload)).toEqual([
+    { kind: "landing_finished", pr_number: 1, basis: "content" },
+  ]);
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
+});
+
+// ADR 0265 帰結 / ADR 0240 決定2: 未回答の失敗 question で止まった根は内容の確かめに届かないので、子孫を記録で外さない
+it("PR が開いている external の根が未回答の失敗 question で止まっていれば、外で merge された後に完了した修理は自分で根になって着地し、着地を待つ完了タスクに数えられる", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-blocked-root", "external");
+  finish(db, clock, work);
+  registerPrPromotionFailureQuestion(db, getTask(db, work.id)!, "push failed earlier", clock.now());
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, "refs/remotes/origin/main");
+  commitWork(workspace.path, "repair.txt", "after the merge\n");
+  finish(db, clock, repair);
+
+  expect(countTasksAwaitingLanding(db, () => workspace, "tako", "tako")).toBe(1);
+  await expect(landing.converge()).resolves.toEqual([
+    { taskId: repair.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 2 } },
+  ]);
+  expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
+});
+
+// ADR 0265 帰結 / ADR 0241 決定5: 根の PR が開いている間に子孫の失敗 question へ答えた retry は、待っている根の PR を理由に拒まれる
+it("PR が開いている根の子孫の失敗 question に retry を答える回の verdict は、根の PR が着地を終えるのを待つ、である", async () => {
+  const { workspace, db, clock, landing, work } = await openPushedPr("landing-retry-under-open-pr", "external");
+  finish(db, clock, work);
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "branch", `task/${repair.id}`, `task/${work.id}`);
+  finish(db, clock, repair);
+  registerPrPromotionFailureQuestion(db, getTask(db, repair.id)!, "push failed earlier", clock.now());
+  const [failure] = promotionFailures(db, repair.id);
+
+  await expect(convergeOn(landing, repair.id, failure!.id)).resolves.toEqual({
+    kind: "excluded",
+    reason: "root_pull_request_open",
+    error: `task ${repair.id} waits for its root task ${work.id}'s PR #1 to finish landing; answer again once it has`,
+  });
+});
+
+// ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
+it.each([
+  ["auto_if_ci_green", "auto_merge", 0],
+  ["escalate", "outside_merge", 1],
+] as const)("%s の根が内容で終わっても決裁はそのまま残り、その後の %s の読み取りが外での merge を観測として決着させる", async (dial, tick, openQuestions) => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr(`landing-content-keeps-${dial}`, dial);
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+  const openMergeQuestions = () => listBoard(db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
+  expect(openMergeQuestions()).toHaveLength(openQuestions);
+
+  await convergeOn(landing, work.id);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
+  expect(openMergeQuestions()).toHaveLength(openQuestions);
+
+  github.scriptMergedOutside(1);
+  await landing.tick(tick, clock.now());
+  expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
+  expect(openMergeQuestions()).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
 });
 
 it("盤面が merge した直後で保護ブランチの写しがまだ古くても、収束は保護ブランチを読み直し、運ぶ内容が無ければ失敗 question を立てず着地が終わったと刻む", async () => {
@@ -2986,7 +3111,7 @@ it("遅い走査が外で merge されたと観測した根は、収束が GitHu
   expect(github.stateChecks).toHaveLength(stateChecks);
   expect(boardEvents(db, root.id, "pr_merge_observed")).toHaveLength(1);
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1 } },
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 });
 

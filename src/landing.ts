@@ -68,7 +68,7 @@ export type LandingVerdict =
   // 開いている PR に積み残しが無い —— push も GitHub の読み取りもしない(ADR 0241)
   | { kind: "up_to_date"; prNumber: number }
   // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
-  | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "not_a_root"; error: string }
+  | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "root_pull_request_open" | "not_a_root"; error: string }
   // 止まっている原因が quarantine の question としてすでに出ている —— 失敗 question を重ねない(ADR 0241 決定6)。error は retry の拒否文
   | { kind: "quarantined"; error: string }
   | {
@@ -126,8 +126,8 @@ export function countTasksAwaitingLandingInWorkspace(
  *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)は除く。立て直した
  *  昇格の question が開いていれば、その retry が profile を読むので数える。 */
 function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): Task[] {
-  const roots = deriveLandingRoots(db, resolve)
-    .map(({ task }) => task)
+  const roots = landingCandidateIds(db)
+    .flatMap((id) => landingRootOf(db, resolve, id)?.task ?? [])
     .filter(
       (task) =>
         task.pr_number === null &&
@@ -349,49 +349,96 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "worksp
   const outcome = rootPrOutcome(db, taskIdForPr(db, question.question_pending_merge_pr, question.workspace));
   return outcome && (outcome.observed ? OBSERVED[outcome.state] : "pr_merged");
 }
-/** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
- *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
- *  比例させ、盤面の歴史の長さには比例させない。SQL が外すのは、着地が終わった根(`landing_finished` /
- *  `nothing_to_land`)とローカル着地の question を持つ根で、盤面の外で閉じた PR の根は lineage の前に根の PR の
- *  決着の読み(`rootPrOutcome`)で外す。着地の終わっていない根
- *  (PR が開いている・閉じた・断念した)の子孫は記録で外さず、lineage に任せる(ADR 0250)—— 根の内容が別の経路で
- *  保護ブランチに届いた後(`external` のダイヤルは盤面の外の merge を観測しない)に完了した子孫は、自分で根になっている。
- *  閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
+
+/** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */
+const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land')";
+
+/** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
+ *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
+ *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
+ *  (ADR 0265 決定3) / `nothing_to_land`)とローカル着地の question を持つ根である。人間が担当した work は盤面の
  *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
- *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。lineage が祖先のブランチへ帰る done の work
- *  は根ではない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側が
- *  その根の失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
-function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
-  const ids = db
+ *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
+function landingCandidateIds(db: Db): string[] {
+  return db
     .prepare(
       `SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
         ORDER BY t.rowid`,
     )
-    .all() as Array<{ id: string }>;
-  const roots: LandingRoot[] = [];
-  for (const { id } of ids) {
-    if (rootPrOutcome(db, id)?.state === "CLOSED") continue;
-    const task = getTask(db, id)!;
-    let workspace: WorkspaceConfig | undefined;
-    try {
-      workspace = resolve?.(task.workspace);
-    } catch {}
-    if (!workspace) {
-      roots.push({ task, outlivedForkSource: false });
-      continue;
-    }
-    try {
-      const lineage = resolveTaskBranchLineage(db, workspace, task);
-      if (!lineage.branch) roots.push({ task, outlivedForkSource: lineage.outlivedForkSource });
-    } catch (lineageError) {
-      roots.push({ task, outlivedForkSource: false, lineageError });
-    }
+    .pluck()
+    .all() as string[];
+}
+
+/** ADR 0241 決定1 / ADR 0240 決定2: 候補が収束の根ならその根を返す —— 記録と内容から導き、読むだけで書かない
+ *  (quarantine にも落とさない)。収束の回と着地を待つ完了タスクの数えはどちらもこれを通る。盤面の外で閉じた PR の根は
+ *  lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。PR が開いている根の子孫も lineage の前に記録で外す
+ *  (`openPrRootAbove`、ADR 0265 帰結 —— ADR 0250 決定3 を置き換えた): 根の内容が別の経路で保護ブランチに届けば根は
+ *  内容で終わり(ADR 0265 決定3)、子孫は次に導くとき自分で根になる。今の記録を読むので、同じ回で先に終わった根の子孫は
+ *  その回で自分で根になる。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)—— 閉じた根には
+ *  push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。lineage が祖先のブランチへ帰る done の work は根では
+ *  ない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側がその根の
+ *  失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
+function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string): LandingRoot | undefined {
+  if (rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
+  const task = getTask(db, id)!;
+  let workspace: WorkspaceConfig | undefined;
+  try {
+    workspace = resolve?.(task.workspace);
+  } catch {}
+  if (!workspace) return { task, outlivedForkSource: false };
+  try {
+    const lineage = resolveTaskBranchLineage(db, workspace, task);
+    return lineage.branch ? undefined : { task, outlivedForkSource: lineage.outlivedForkSource };
+  } catch (lineageError) {
+    return { task, outlivedForkSource: false, lineageError };
   }
-  return roots;
+}
+
+/** `id` の祖先のうち、PR が開いていて子孫を記録で外している根を返す(ADR 0265 帰結)—— 着地が終わっておらず、PR が決着も
+ *  断念もしておらず、未回答の失敗 question で止まってもいない根。止まっている根は内容の確かめに届かず内容で終わらない
+ *  (ADR 0240 決定2)ので、子孫を外さない —— 子孫は lineage に任せる。 */
+function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } | undefined {
+  const unfinishedPrAncestors = db
+    .prepare(
+      `WITH RECURSIVE ancestors(id) AS (
+          SELECT parent_id FROM tasks WHERE id = ?
+          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+       SELECT t.id, t.pr_number AS prNumber FROM tasks t
+        WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})`,
+    )
+    .all(id) as Array<{ id: string; prNumber: number }>;
+  return unfinishedPrAncestors.find(
+    (ancestor) =>
+      rootPrOutcome(db, ancestor.id) === null &&
+      !abandonEventInForce(db, ancestor.id) &&
+      openPrPromotionQuestionIds(db, ancestor.id).length === 0,
+  );
+}
+
+/** retry が答えている根を回が候補にしなかった理由(ADR 0241 決定5)。error は回答の拒否文。 */
+function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "excluded" }> {
+  const outcome = rootPrOutcome(db, taskId);
+  if (outcome?.state === "CLOSED") {
+    return {
+      kind: "excluded",
+      reason: "pull_request_closed",
+      error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
+    };
+  }
+  const root = openPrRootAbove(db, taskId);
+  if (root) {
+    return {
+      kind: "excluded",
+      reason: "root_pull_request_open",
+      error: `task ${taskId} waits for its root task ${root.id}'s PR #${root.prNumber} to finish landing; answer again once it has`,
+    };
+  }
+  return { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` };
 }
 
 /** 根の木(根自身を含む)に、後始末が未了の行があるか —— その後始末の merge back がまだ根へ帰っていない(ADR 0240 決定2)。 */
@@ -861,9 +908,15 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: deps.clock.now() });
-  /** merge 済みの PR の根の着地は終わった —— 事実を1回刻み、以後この根は候補に入らない(ADR 0241 決定1)。 */
-  const finishLanding = (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext): LandingVerdict => {
-    recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber });
+  /** PR の根の着地は終わった —— 事実を根拠つきで1回刻み、以後この根は候補に入らない(ADR 0241 決定1 / ADR 0265 決定3)。 */
+  const finishLanding = (
+    task: Task,
+    workspace: WorkspaceConfig,
+    prNumber: number,
+    basis: Extract<TaskScopedPayload, { kind: "landing_finished" }>["basis"],
+    ctx: RootContext,
+  ): LandingVerdict => {
+    recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber, basis });
     retireFailures(task.id, ctx);
     return { kind: "nothing_to_land", base: protectedBranchRef(workspace) };
   };
@@ -880,14 +933,14 @@ export function createLanding(deps: LandingDeps): Landing {
     await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
     return taskHasContentToLand(workspace, task.id)
       ? alreadyMerged(task, prNumber, ctx)
-      : finishLanding(task, workspace, prNumber, ctx);
+      : finishLanding(task, workspace, prNumber, "merge", ctx);
   };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
   const inFlight = new Set<string>();
   const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
   const isMarked = (workspace: string | null, prNumber: number) => inFlight.has(markKey(workspace, prNumber));
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
-   *  quarantine → ローカルか remote か → PR の有無と状態 → profile。lineage は導出(`deriveLandingRoots`)が解いた。
+   *  quarantine → ローカルか remote か → PR の有無と状態 → profile。lineage は導出(`landingRootOf`)が解いた。
    *  撃たずに外した根は undefined を返す。 */
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
@@ -973,9 +1026,11 @@ export function createLanding(deps: LandingDeps): Landing {
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
       if (mergedPr !== undefined) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
       if (!taskHasContentToLand(workspace, task.id)) {
-        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, ctx);
+        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, "merge", ctx);
+        // ADR 0265 決定3: merge の記録が無い PR の根は内容で終わる。キューの行と merge question は PR の状態の読み取りが閉じる
+        if (task.pr_number !== null) return finishLanding(task, workspace, task.pr_number, "content", ctx);
         const base = protectedBranchRef(workspace);
-        if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
+        recordBoardFact(task.id, { kind: "nothing_to_land", base });
         retireFailures(task.id, ctx);
         return { kind: "nothing_to_land", base };
       }
@@ -1106,38 +1161,30 @@ export function createLanding(deps: LandingDeps): Landing {
   /** 収束の1回(ADR 0241 決定1): 根を導き、根ごとに撃つ。根ごとの失敗はその根に閉じ込め、回は残りの根へ進む。
    *  候補の読み取りそのものの失敗はログに出して回を終え、次の突きで走り直す。 */
   const pass = async (answering: ReadonlySet<string>): Promise<RootVerdict[]> => {
-    let roots: LandingRoot[];
+    let ids: string[];
     try {
-      roots = deriveLandingRoots(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
+      ids = landingCandidateIds(deps.db);
     } catch (error) {
       console.error("[landing] reading the landing roots failed; the next trigger runs the convergence again:", error);
       return [];
     }
+    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     const verdicts: RootVerdict[] = [];
-    for (const root of roots) {
+    // 候補ごとに、撃つ直前に根かを導く —— 同じ回で先に終わった根の子孫が、取り残されずにこの回で自分で根になる(ADR 0265 決定3・帰結)
+    for (const id of ids) {
       try {
-        const verdict = await landRoot(root, answering);
-        if (verdict) verdicts.push({ taskId: root.task.id, verdict });
+        const root = landingRootOf(deps.db, resolve, id);
+        const verdict = root && (await landRoot(root, answering));
+        if (verdict) verdicts.push({ taskId: id, verdict });
       } catch (error) {
-        console.error(`[landing] landing root ${root.task.id} failed; the pass goes on with the rest:`, error);
+        console.error(`[landing] landing root ${id} failed; the pass goes on with the rest:`, error);
       }
     }
     // retry が答えている根をこの回が候補にしなかったなら、なぜかを verdict にする —— 回答はそれで拒まれる
     for (const questionId of answering) {
       const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
       if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
-      const outcome = rootPrOutcome(deps.db, taskId);
-      verdicts.push({
-        taskId,
-        verdict:
-          outcome?.state === "CLOSED"
-          ? {
-              kind: "excluded",
-              reason: "pull_request_closed",
-              error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
-            }
-          : { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` },
-      });
+      verdicts.push({ taskId, verdict: exclusionOf(deps.db, taskId) });
     }
     return verdicts;
   };

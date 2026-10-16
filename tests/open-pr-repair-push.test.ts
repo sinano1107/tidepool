@@ -124,7 +124,7 @@ it("祖先の PR が既に merge 済みなら push しない", async () => {
   expect(t.github.stateChecks).toContainEqual({ path: workspace.path, number: work.pr_number });
 });
 
-it("squash merge 後に review 子が決着しただけの再発火は、push も question も event も増やさない", async () => {
+it("squash merge 後に review 子が決着しただけの再発火は、push も question も nothing_to_land も増やさない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("merged-pr-review-settlement");
   t = await bootTidepool({ workspace });
   const work = await registerWork(t, "ship work reviewed after PR open");
