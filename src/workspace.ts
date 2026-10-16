@@ -355,16 +355,15 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
 /** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
 function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)
-  const head =
-    (db
-      .prepare(
-        `SELECT json_extract(e.payload, '$.head') FROM events e JOIN interview_targets it ON it.task_id = e.task_id
-         WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL`,
-      )
-      .pluck()
-      .get(task.interview_target_id) as string | null | undefined) ?? undefined;
+  const head = db
+    .prepare(
+      `SELECT json_extract(e.payload, '$.head') FROM events e JOIN interview_targets it ON it.task_id = e.task_id
+       WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL`,
+    )
+    .pluck()
+    .get(task.interview_target_id) as string | null | undefined;
   try {
-    if (head !== undefined) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
+    if (head != null) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
   } catch (err) {
     // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
     if ((err as { status?: number } | null)?.status !== 1) throw err;
