@@ -1727,15 +1727,18 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
 
+/** 採点者の印の欄(ADR 0264 決定6): 受験者の視界に無いエントリなら true。読み手が Interview の root のときだけある。 */
+type ExamineeMark = { not_shown_to_examinees?: boolean };
+
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
  *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
- *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。
- *  読み手に無い集合は呼び出しごとに1度だけ組む。 */
+ *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。mark は採点者の印
+ *  (ADR 0264 決定6)で、読み手が Interview の root のときだけ欄を持つ。読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
   const hidden = readerHidden(db, reader.taskId);
-  // 採点者の印(ADR 0264 決定6): 読み手が Interview の root なら、受験者の視界に無い集合。それ以外の読み手には欄ごと出さない
-  const unseen = interviewTargets(db, reader.taskId) === null ? null : examineeHidden(db);
+  // 読み手が Interview の root なら、受験者の視界に無い集合。それ以外の読み手には欄ごと出さない
+  const hiddenFromExaminees = interviewTargets(db, reader.taskId) === null ? null : examineeHidden(db);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
   const live = (row: EntryRow) => row.invalidation_reason === null;
@@ -1744,7 +1747,7 @@ function readerSight(db: Db, reader: MemoryReader) {
     scope: reader.scope,
     has: (row: EntryRow, layer: 1 | 2 | 3) => layers.slice(0, layer).every((inLayer) => inLayer(row)),
     dropReason: (row: EntryRow): MemoryDropReason | null => (!live(row) ? "invalidated" : !addressed(row) ? "addressee" : null),
-    mark: (row: EntryRow): { not_shown_to_examinees?: boolean } => (unseen === null ? {} : { not_shown_to_examinees: unseen.has(row.id) }),
+    mark: (row: EntryRow): ExamineeMark => (hiddenFromExaminees === null ? {} : { not_shown_to_examinees: hiddenFromExaminees.has(row.id) }),
   };
 }
 
@@ -1775,16 +1778,16 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
 function readerHidden(db: Db, taskId: string): Set<number> {
-  if (getTask(db, taskId)?.interview_target_id == null) return hiddenChains(db, written("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"));
-  const own = hiddenChains(db, written("?"), taskId);
+  if (getTask(db, taskId)?.interview_target_id == null) return withSameBodyCopies(db, writtenBy("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"));
+  const own = withSameBodyCopies(db, writtenBy("?"), taskId);
   return new Set([...examineeHidden(db)].filter((id) => !own.has(id)));
 }
 
 /** 受験者の視界に無い集合(ADR 0264 決定3)の、自分の書き込みの例外を引く前の形 —— どの受験者にも共通。readerHidden と採点者の印(readerSight)が使う。 */
 function examineeHidden(db: Db): Set<number> {
-  return hiddenChains(
+  return withSameBodyCopies(
     db,
-    `${written(INTERVIEW_TREE_SQL)}
+    `${writtenBy(INTERVIEW_TREE_SQL)}
      UNION
      SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
        JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
@@ -1792,11 +1795,11 @@ function examineeHidden(db: Db): Set<number> {
   );
 }
 
-const written = (tasks: string) =>
+const writtenBy = (tasks: string) =>
   `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
 
 /** sql が返すエントリと、どれも本文が同じ後継(移動・復元の複製)。 */
-function hiddenChains(db: Db, sql: string, ...params: string[]): Set<number> {
+function withSameBodyCopies(db: Db, sql: string, ...params: string[]): Set<number> {
   const rows = db.prepare(sql).all(...params) as Array<{ id: number }>;
   if (rows.length === 0) return new Set();
   const restored = restoredAs(db);
@@ -1811,7 +1814,7 @@ export function searchMemory(
   reader: MemoryReader,
   input: { query?: string; next?: string },
   at: Date,
-): Packed<{ results: Array<{ id: number; title: string; path: string; not_shown_to_examinees?: boolean }>; event_id: number }> {
+): Packed<{ results: Array<{ id: number; title: string; path: string } & ExamineeMark>; event_id: number }> {
   const read = readPosition("search_memory", input);
   if (read.args.query === undefined) throw new DomainError("pass query, or next from a previous search_memory");
   const match = ftsQuery(read.args.query);
@@ -1898,8 +1901,8 @@ export function browseMemory(
   input: { prefix?: string; next?: string },
   at: Date,
 ): Packed<{
-  children: Array<{ name: string; definition: string | null; not_shown_to_examinees?: boolean }>;
-  entries: Array<{ id: number; title: string; not_shown_to_examinees?: boolean }>;
+  children: Array<{ name: string; definition: string | null } & ExamineeMark>;
+  entries: Array<{ id: number; title: string } & ExamineeMark>;
   event_id: number;
 }> {
   const read = readPosition("browse_memory", input);
@@ -2198,8 +2201,7 @@ export function readMemory(
       source_kind: "fact" | "inference";
       case: MemoryCase | null;
       annotations?: Array<Omit<ExemplarAnnotation, "original">>;
-      not_shown_to_examinees?: boolean;
-    }>;
+    } & ExamineeMark>;
     event_id: number;
   },
   { dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> }
