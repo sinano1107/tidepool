@@ -5171,9 +5171,6 @@ it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map
 
 // #1864: merge 済みの根の保護ブランチの読み直しが落ちても、根ごとの手順の catch が決着を書く(ADR 0241 決定6)。
 // 回のログ(その根を撃てなかった)に逃がさない。読み直しは PR の状態を読んだ後に撃つので、効果は読みの直後に起こす
-const WORKSPACE_QUARANTINED = (workspace: WorkspaceConfig) =>
-  `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`;
-
 /** origin を届かなくする。`quarantine` なら workspace も quarantine に落とす。PR を読んだ直後に起こす。 */
 function afterPrRead(
   github: FakeGitHubClient,
@@ -5233,7 +5230,10 @@ it.each([
 ])("%s根の保護ブランチの読み直しが失敗しても、workspace の quarantine が抱えていれば失敗 question を立てずその quarantine を名乗る", async (_, setup) => {
   const { workspace, db, work, landing } = await setup("merged-refresh-fails-quarantined", true);
 
-  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "quarantined", error: WORKSPACE_QUARANTINED(workspace) });
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
