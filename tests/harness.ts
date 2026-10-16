@@ -124,9 +124,9 @@ export function answerQuestionViaWebui(
   question: Task,
   answers: string[],
   now: Date,
-  { comment, amendment }: { comment?: string; amendment?: Parameters<typeof answerQuestion>[6] } = {},
+  { comment, amendment, runnable }: { comment?: string; amendment?: Parameters<typeof answerQuestion>[6]; runnable?: Parameters<typeof answerQuestion>[8] } = {},
 ): Task {
-  return answerQuestion(db, question, answers, now, undefined, comment, amendment, "webui");
+  return answerQuestion(db, question, answers, now, undefined, comment, amendment, "webui", runnable);
 }
 
 /** worker として分解する。保護 workspace は無い。 */

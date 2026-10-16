@@ -1628,6 +1628,8 @@ export function answerQuestion(
    *  同じく event に運ぶだけ。修正つきの回答は推奨どおりに数えない。 */
   amendment: ProposalAmendment | undefined,
   origin: EventOrigin,
+  /** retry が写す対象を既定 agent が走らせられるかの判定の口(ADR 0253 決定3)。Absent → 登録の扉と同じく検査しない。 */
+  runnable?: { candidates: TaskExecutionCandidates; agentName?: string },
 ): Task {
   answers = assertAnswerable(question, answers, comment);
   const items = question.question_items!;
@@ -1697,7 +1699,7 @@ export function answerQuestion(
           // pin の子の失敗は分解判断を破棄しないので、親は先頭へ戻さない(ADR 0245 決定5)。破綻した probe か、
           // 採点できる答案も未決着の子も残らない Interview は、この答えで終える(ADR 0247 決定1・2)
           else if (breach || interviewLeftEmpty(db, plan.id)) rootCancel = { rootId: plan.id, eventId: cancelTask(db, plan, question.id, HUMAN_WORKER_ID, now, origin) };
-          if (retry) retryInterview(db, plan, premiseBreachReason(db, failed.id), comment, now, origin);
+          if (retry) retryInterview(db, plan, premiseBreachReason(db, failed.id), comment, now, origin, runnable);
         } else {
           rootCancel = { rootId: failed.id, eventId: cancelTask(db, failed, question.id, HUMAN_WORKER_ID, now, origin) };
         }
@@ -1747,7 +1749,7 @@ export function answerQuestion(
         // abandon も retry も Interview を終える(ADR 0251 決定2 / ADR 0248 決定2・3)。子は全部決着済みで root は起こさない
         const root = getTask(db, question.parent_id!)!;
         cancelTask(db, root, question.id, HUMAN_WORKER_ID, now, origin);
-        if (answer === "retry") retryInterview(db, root, kind.reason, comment, now, origin);
+        if (answer === "retry") retryInterview(db, root, kind.reason, comment, now, origin, runnable);
         break;
       }
       case "escalation":
@@ -1775,8 +1777,17 @@ export function answerQuestion(
 }
 
 /** retry(ADR 0248 決定2・3 / ADR 0251 決定2): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した
- *  probe と破綻の理由(pin の子の宣言か root の報告)を盤面名義の event で新しい root の history に渡す。 */
-function retryInterview(db: Db, previousRoot: Task, reason: string, comment: string | undefined, now: Date, origin: EventOrigin): void {
+ *  probe と破綻の理由(pin の子の宣言か root の報告)を盤面名義の event で新しい root の history に渡す。写した対象が走れなければ
+ *  人間の登録の扉と同じ判定で拒み、回答ごと巻き戻す(ADR 0253 決定3)。 */
+function retryInterview(
+  db: Db,
+  previousRoot: Task,
+  reason: string,
+  comment: string | undefined,
+  now: Date,
+  origin: EventOrigin,
+  runnable: { candidates: TaskExecutionCandidates; agentName?: string } | undefined,
+): void {
   const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
   const root = registerTask(
     db,
@@ -1793,6 +1804,10 @@ function retryInterview(db: Db, previousRoot: Task, reason: string, comment: str
     HUMAN_WORKER_ID,
     origin,
   );
+  if (runnable) {
+    const agentName = runnable.agentName ?? "the default agent";
+    assertTargetsRunnable(db, root.id, runnable.candidates, agentName, ` — fix ${agentName}'s entry and answer "retry" again, or answer "abandon" and register the Interview again`);
+  }
   appendEvent(db, {
     taskId: root.id,
     workerId: BOARD_WORKER_ID,
