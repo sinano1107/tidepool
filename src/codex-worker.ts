@@ -47,7 +47,7 @@ import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import type { TranscriptStore } from "./transcript-store.js";
+import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import {
@@ -300,6 +300,8 @@ export interface CodexWorkerOptions {
   boardState?: BoardStatePath[];
   /** ADR 0118: `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
+  onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
@@ -1400,8 +1402,14 @@ export class CodexWorker implements WorkerAdapter {
       // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
       // 稀な経路)。積み上がりが観測されたらここで destroy する。
       // ADR 0149 決定6: scheduler の catch の外なので、検査のあとの同期 throw(quarantine の登録、spawn まで、
-      // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない
+      // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない
+      // 器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       this.running.delete(task.id);
+      if (error instanceof RecordContainerError) {
+        removeTaskTemp();
+        this.options.onRecordContainerFailed?.(task.id, error);
+        return;
+      }
       spawnFailed({
         error_code: (error as NodeJS.ErrnoException).code ?? null,
         message: error instanceof Error ? error.message : String(error),

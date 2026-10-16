@@ -45,6 +45,7 @@ it("次の pickup は spawn の手前で registry を refresh する(ADR 0052)",
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     // GitHub 身元なしの盤面(ローカルの bare remote なので認証は要らない)
     registryReachability: async () => refreshRegistry(registryDir, undefined, writeUnannounced),
@@ -80,6 +81,7 @@ it("registry に到達できない間は盤面全体の pickup を止め、確�
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     registryReachability: async () => ({
       available: false,

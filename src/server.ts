@@ -58,13 +58,14 @@ import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./
 import { Slot } from "./slot.js";
 import { getTask, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
-import type { TranscriptStore } from "./transcript-store.js";
+import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import {
   capInterruptionHandler,
   type PendingReclaim,
   RECLAIM_TIMEOUT,
+  recordContainerHaltHandler,
   registerFailureAndMarkTeardown,
   rowRefusalHandler,
   spawnFailureHandler,
@@ -104,6 +105,8 @@ export type WorkerFactory = (deps: {
   onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** ADR 0118: Node の `spawn()` が失敗した pickup を受ける盤面側の一撃(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
+  onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
@@ -460,6 +463,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
+  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
+  const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
   options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);
   const worker = options.worker({
@@ -472,6 +477,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     openaiUsage: options.openaiUsage,
     onRowRefused,
     onSpawnFailed,
+    onRecordContainerFailed,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
     transcripts: options.transcripts,
@@ -579,6 +585,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     worker,
     containers,
     onSpawnFailed,
+    onRecordContainerFailed,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
