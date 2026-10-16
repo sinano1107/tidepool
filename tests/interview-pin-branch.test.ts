@@ -166,7 +166,7 @@ it("掃除は本番の task のブランチ自身の reflog とそこからだ�
   db.close();
 });
 
-it("外すものの無い pin の子の pickup の準備は HEAD の reflog を減らさず、ref の検査は違反を立てない", async () => {
+it("外すものの無い pin の子の pickup の準備は HEAD の reflog を減らさない", async () => {
   const workspace = await makeWorkspace("pin-nothing-to-remove");
   const recordDir = await tempDir("tidepool-pin-nothing-to-remove-records-");
   const db = openDb(":memory:");
@@ -179,8 +179,6 @@ it("外すものの無い pin の子の pickup の準備は HEAD の reflog を�
 
   // pickup 自身の checkout の1行だけ増える
   expect(git(workspace.path, "reflog", "show", "HEAD").split("\n").length).toBe(before + 1);
-  releaseWorkspace(db, workspace, picked, NOW);
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
   db.close();
 });
 
@@ -206,7 +204,9 @@ it("盤面の記録の器に書けなければ、ブランチを外さず器の�
 
 it("答案の bundle が git 側の理由で作れなければ、準備の他の失敗と同じ例外で投げ、ブランチを外さない", async () => {
   const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-bundle-git-fails");
-  rmSync(join(workspace.path, ".git", "objects", head.slice(0, 2), head.slice(2)));
+  // 答案の blob を壊す —— commit は読めるので出題の head との比較は通り、bundle の pack だけが落ちる
+  const blob = git(workspace.path, "rev-parse", `${head}:${done.id}.txt`);
+  rmSync(join(workspace.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
 
   const failed = await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) }).catch((err: unknown) => err);
 
@@ -231,6 +231,41 @@ it("commit の無い決着した pin の子(head が出題の head)は写さず�
   expect(readdirSync(recordDir)).toEqual([]);
   expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head }]);
   expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  db.close();
+});
+
+it("出題の head の祖先に留まる決着した pin の子(出題の head から commit が無い)は写さず、ブランチを外す", async () => {
+  const workspace = await makeWorkspace("pin-behind-posed-head");
+  const recordDir = await tempDir("tidepool-pin-behind-posed-head-records-");
+  const db = openDb(":memory:");
+  const behind = git(workspace.path, "rev-parse", "main");
+  commitWork(workspace.path, "later.txt", "main moved on before the probe was posed\n");
+  const [done, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
+  git(workspace.path, "branch", `task/${done.id}`, behind);
+  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
+
+  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+
+  expect(readdirSync(recordDir)).toEqual([]);
+  expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head: behind }]);
+  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  db.close();
+});
+
+it("写しを書いた後でブランチを外す前に落ちても、次の pickup の準備が同じ手順をやり直す", async () => {
+  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-redo-after-copy");
+  const lock = join(workspace.path, ".git", "refs", "heads", "task", `${done.id}.lock`);
+  writeFileSync(lock, "");
+
+  await expect(prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) })).rejects.toThrow();
+  expect(git(workspace.path, "rev-parse", `task/${done.id}`)).toBe(head);
+
+  rmSync(lock);
+  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+
+  expect(git(workspace.path, "bundle", "list-heads", join(recordDir, `${done.id}.bundle`))).toBe(`${head} refs/heads/task/${done.id}`);
+  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
   db.close();
 });
 

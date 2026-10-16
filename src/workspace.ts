@@ -1,6 +1,6 @@
 import { lstatSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent, getEvent } from "./events.js";
 import { git, gitBytes } from "./git.js";
@@ -585,7 +585,9 @@ export async function prepareWorkspaceAtPickup(
 
 /** ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子が兄弟(どの Interview のものでも)の答案を git で読めないように、
  *  この checkout にある決着した pin の子のタスクブランチの ref を外し、head をその子の event に残す。走るのは自分のブランチを
- *  checkout した後なので、外すブランチが checkout 中であることは無い。 */
+ *  checkout した後なので、外すブランチが checkout 中であることは無い。
+ *  ADR 0266 決定1・2: 外す前に答案を盤面の記録の器へ写し、1本でも外したら HEAD の reflog と到達できない object を落とす。
+ *  器を持たない盤面(`recordDir` 無し)は写せないので掃除もしない —— 写しの無いまま答案の object を消さない */
 function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir: string | undefined, now: Date): void {
   const branches = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/heads/task/");
   let removed = 0;
@@ -598,7 +600,7 @@ function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir:
     git(workspace.path, "branch", "-D", taskBranch(id));
     removed += 1;
   }
-  if (removed === 0) return;
+  if (removed === 0 || recordDir === undefined) return;
   // ADR 0266 決定1: HEAD の reflog を全部消し、どこからも辿れない object を pack からも loose からも落とす。
   // ブランチ自身の reflog は触らない —— 本番のタスクブランチの記録はそこに残る
   git(workspace.path, "reflog", "expire", "--expire=now", "HEAD");
@@ -611,10 +613,12 @@ function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir:
  *  `RecordContainerError` になる。 */
 function copyAnswer(db: Db, workspace: WorkspaceConfig, pinChild: Task, head: string, recordDir: string): string | undefined {
   const posedHead = resolvablePosedHead(db, workspace, pinChild);
-  if (head === posedHead) return undefined;
+  // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
+  if (isAncestor(workspace, head, posedHead)) return undefined;
   // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
   const bundle = gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`);
-  const path = join(recordDir, `${pinChild.id}.bundle`);
+  // event に残る path は盤面の cwd に依らない絶対 path(既定の器は相対の `worker-logs`)
+  const path = resolve(recordDir, `${pinChild.id}.bundle`);
   try {
     writeFileSync(path, bundle);
   } catch (err) {

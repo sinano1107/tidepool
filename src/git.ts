@@ -34,15 +34,19 @@ export function withoutAutoGc(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  *  stderr captured, not inherited: git narrates checkouts on stderr and the
  *  board's console is not the place for it. */
 export function git(cwd: string, ...args: string[]): string {
-  return gitBytes(cwd, ...args).toString().trim();
+  return run(cwd, args).toString().trim();
 }
 
-/** `git` の生の stdout(`bundle create -` のような binary の出力用)。 */
+/** `git` の生の stdout(`bundle create -` のような binary の出力用)。大きさは答案次第なので上限を外す。 */
 export function gitBytes(cwd: string, ...args: string[]): Buffer {
+  return run(cwd, args, Infinity);
+}
+
+function run(cwd: string, args: string[], maxBuffer?: number): Buffer {
   return execFileSync("git", args, {
     cwd,
     env: withoutAutoGc({ ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV }),
     stdio: ["ignore", "pipe", "pipe"],
-    maxBuffer: Infinity,
+    ...(maxBuffer !== undefined && { maxBuffer }),
   });
 }
