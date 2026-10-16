@@ -15,7 +15,7 @@ import {
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
-import { countTasksAwaitingLanding, createLanding, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { countTasksAwaitingLanding, createLanding, type LandingDeps, registerPrPromotionFailureQuestion } from "../src/landing.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
@@ -963,8 +963,8 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
   });
 });
 
-/** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
-function escalatedMergeQuestion() {
+/** escalate の PR #42 の merge question と、本物の Landing を通して `answer` と答える手。 */
+function escalatedMergeQuestionWith(github: FakeGitHubClient, resolveWorkspace?: LandingDeps["resolveWorkspace"]) {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -974,11 +974,50 @@ function escalatedMergeQuestion() {
   );
   recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
+  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github, resolveWorkspace });
+  const answer = (value: string) =>
+    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, [value], undefined, () => NOW, "webui");
+  return { question, landing, answer };
+}
+
+// ADR 0079 決定3 / ADR 0229 決定4: バックストップが握りつぶしてよいのは読みの失敗だけ —— 決着の書き込みの失敗は回答を失敗させる
+it.each(["merge", "hold"])("盤面の外で merge された PR の観測の書き込みが失敗したら、「%s」の回答は拒まれ question は開いたまま残る", async (value) => {
   const github = new FakeGitHubClient();
-  const landing = createLanding({ defaultAgentName: "tako", db, clock: new FakeClock(), workspace: PRODUCT, github });
-  const answer = () =>
-    submitAnswer({ db, pollNow: () => {}, github, workspace: PRODUCT, landing }, getTask(db, question.id)!, ["merge"], undefined, () => NOW, "webui");
-  return { question, github, landing, answer };
+  github.scriptMergedOutside(42);
+  const { question, answer } = escalatedMergeQuestionWith(github);
+  db.exec(
+    "CREATE TRIGGER fail_observed BEFORE INSERT ON events WHEN NEW.kind = 'pr_merge_observed' BEGIN SELECT RAISE(ABORT, 'observed write failed'); END",
+  );
+
+  await expect(answer(value)).rejects.toThrow("observed write failed");
+  expect({
+    status: getTask(db, question.id)?.status,
+    kinds: listEvents(db, question.id).map((event) => event.kind),
+  }).toEqual({ status: "todo", kinds: expect.not.arrayContaining(["question_answered"]) });
+});
+
+it.each([
+  ["PR の状態が読めない", () => {
+    const github = new FakeGitHubClient();
+    github.scriptStateReadFailure(42, new Error("gh: network unreachable"));
+    return escalatedMergeQuestionWith(github);
+  }],
+  ["workspace が引けない", () =>
+    escalatedMergeQuestionWith(new FakeGitHubClient(), () => {
+      throw new Error("workspace gone");
+    })],
+])("%s merge question への「hold」は、今日どおり回答として記録される", async (_, setup) => {
+  const { question, answer } = setup();
+
+  await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+  expect(listEvents(db, question.id).map((event) => event.kind)).toContain("question_answered");
+});
+
+/** escalate の PR #42 の merge question と、それに本物の Landing を通して「merge」と答える手(ADR 0236)。 */
+function escalatedMergeQuestion() {
+  const github = new FakeGitHubClient();
+  const { question, landing, answer } = escalatedMergeQuestionWith(github);
+  return { question, github, landing, answer: () => answer("merge") };
 }
 
 /** 上の question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める。 */

@@ -1050,16 +1050,17 @@ export function createLanding(deps: LandingDeps): Landing {
       const prNumber = question.question_pending_merge_pr;
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       if (prNumber === null || !resolve || !deps.github) return false;
+      // 握りつぶすのは読みの失敗だけ。決着の書き込みの失敗は呼び手(回答)へ投げる
+      let state: PrState;
       try {
-        const workspace = resolve(question.workspace);
-        const state = await deps.github.getPullRequestState({ path: workspace.path, number: prNumber });
-        // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
-        if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
-        settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
-        return true;
+        state = await deps.github.getPullRequestState({ path: resolve(question.workspace).path, number: prNumber });
       } catch {
         return false;
       }
+      // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
+      if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
+      settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
+      return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
     // (ADR 0079 決定3)に届かない。盤面の外で merge された・閉じられたもの(ADR 0229 決定4)は

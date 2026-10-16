@@ -1003,6 +1003,7 @@ export async function submitAnswer(
         // 「hold」の回答も決定として記録されてはならない(誰も決めていない)。座礁を
         // 置換するだけの機構なので、workspace が引けない・網が届かない場合は今日どおりの
         // 経路に落ちる(正しさは失われない: merge 実行は依然失敗し question は開いたまま)。
+        // 観測決着の書き込みの失敗は落とさず投げる —— 回答は失敗し question は開いたまま。
         if (await deps.landing.observePullRequestOutcome(task)) {
           return presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName);
         }
