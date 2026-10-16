@@ -217,7 +217,8 @@ export function rowRefusalHandler(
 /** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)の盤面側の一撃。入口は pickup の準備の答案の写しと transcript の open で、
  *  観測点は scheduler の catch と adapter の launch の catch。process は1つも起きていないので失敗にせず、停止・
  *  `record_container_unwritable`・`todo` 先頭への復帰を1 transaction で決着させてから slot を解放する(先例は行の拒否の先頭復帰、
- *  ADR 0184 決定4)。作業ツリーに手は入っていないので後始末は通さず、盤面が止まったので pickup の契機も撃たない。 */
+ *  ADR 0184 決定4)。後始末は通さない —— checkout は準備が切った task のブランチの上にあり、worker はまだ何も書いていない。
+ *  踏んだ task は解放後の pickup でそのブランチのまま続ける(#2094 の再 pickup と同じ)。盤面が止まったので pickup の契機も撃たない。 */
 export function recordContainerHaltHandler(
   deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
 ): (taskId: string, err: RecordContainerError) => void {
