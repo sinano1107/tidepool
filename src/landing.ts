@@ -759,7 +759,7 @@ export function createLanding(deps: LandingDeps): Landing {
     task: Task,
     workspace: WorkspaceConfig,
     prNumber: number,
-    basis: "merge" | "content",
+    basis: Extract<TaskScopedPayload, { kind: "landing_finished" }>["basis"],
     ctx: RootContext,
   ): LandingVerdict => {
     recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber, basis });

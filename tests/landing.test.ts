@@ -1448,20 +1448,20 @@ it("external の根の PR が開いている間、根のブランチへ帰る子
 
 // ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
 it.each([
-  ["auto_if_ci_green", "auto_merge"],
-  ["escalate", "outside_merge"],
-] as const)("%s の根が内容で終わっても決裁はそのまま残り、その後の %s の読み取りが外での merge を観測として決着させる", async (dial, tick) => {
+  ["auto_if_ci_green", "auto_merge", 0],
+  ["escalate", "outside_merge", 1],
+] as const)("%s の根が内容で終わっても決裁はそのまま残り、その後の %s の読み取りが外での merge を観測として決着させる", async (dial, tick, openQuestions) => {
   const { workspace, db, clock, github, landing, work } = await openPushedPr(`landing-content-keeps-${dial}`, dial);
   finish(db, clock, work);
   await squashTaskIntoOrigin(workspace, work.id);
   git(workspace.path, "fetch", "origin", "main");
   const openMergeQuestions = () => listBoard(db).filter((q) => q.question_pending_merge_pr === 1 && q.status === "todo");
-  const decisions = openMergeQuestions().length;
+  expect(openMergeQuestions()).toHaveLength(openQuestions);
 
   await convergeOn(landing, work.id);
   expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
   expect(autoMergeOutcomeEvents(db, work.id)).toEqual([]);
-  expect(openMergeQuestions()).toHaveLength(decisions);
+  expect(openMergeQuestions()).toHaveLength(openQuestions);
 
   github.scriptMergedOutside(1);
   await landing.tick(tick, clock.now());

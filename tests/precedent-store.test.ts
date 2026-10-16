@@ -267,7 +267,8 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
 });
 
 /** FIXTURE_TASK が PR 7 を開いた盤面と、別の workspace で同じ番号の PR を開いた根 `other-root`。決着は PR を開いた根に
- *  刻まれる(ADR 0265 決定1)。根に決着を刻む `record` と、投影済みの Episode の prMerged を読む `prMerged` を返す。 */
+ *  刻まれる(ADR 0265 決定1)。根に決着を刻む `record`、投影済みの Episode の prMerged を読む `prMerged`、
+ *  setup 用の `db` を返す。 */
 async function seedRootWithPr() {
   const db = seedFixtureBoard();
   projectAndPersist(db, {
