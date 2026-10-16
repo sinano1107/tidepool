@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
+import { rootPrOutcome } from "./landing.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
 import { entryObjections } from "./triage.js";
@@ -829,24 +830,15 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
   return out;
 }
 
-/** タスクごとの merge 済み PR。盤面が merge した場合と、merge 済みだと観測した
- *  場合の両方(ADR 0079 決定4)。記録はタスクの id か、その PR の merge question の
- *  id(人間の merge 回答と question の観測、ADR 0079 決定1・決定3)にある —— 後者の読みは
- *  収束の `prMergedSql`(landing.ts)と同じ述語。Episode ごとに1本引かず平らに1本
- *  (`listLog` が異議を引くのと同じ形)。 */
+/** タスクごとの merge 済み PR —— 盤面が merge した場合と、merge 済みだと観測した場合の両方(ADR 0079 決定4)。
+ *  決着は PR を開いた根に刻まれ、収束と同じ1本の読み(`rootPrOutcome`、ADR 0265 決定2)で読む。 */
 function mergedPrByTask(db: Db, taskIds: string[]): Map<string, number> {
-  const rows = db
-    .prepare(
-      `SELECT t.id AS task_id, json_extract(m.payload, '$.pr_number') AS pr_number FROM tasks t
-         JOIN events m ON m.kind IN ('pr_merged', 'pr_merge_observed')
-          AND (m.task_id = t.id
-               OR (json_extract(m.payload, '$.pr_number') = t.pr_number
-                   AND m.task_id IN (SELECT q.id FROM tasks q
-                         WHERE q.question_pending_merge_pr = t.pr_number AND q.workspace IS t.workspace)))
-        WHERE t.id IN (${taskIds.map(() => "?").join(", ")}) ORDER BY m.id`,
-    )
-    .all(...taskIds) as Array<{ task_id: string; pr_number: number }>;
-  return new Map(rows.map((r) => [r.task_id, r.pr_number]));
+  const merged = new Map<string, number>();
+  for (const taskId of taskIds) {
+    const outcome = rootPrOutcome(db, taskId);
+    if (outcome?.state === "MERGED") merged.set(taskId, outcome.prNumber);
+  }
+  return merged;
 }
 
 interface EpisodeRow {
