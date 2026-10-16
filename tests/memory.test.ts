@@ -361,12 +361,12 @@ it("同じ枝の定義は supersedes にその生きた定義を含めれば書�
   ]);
 });
 
-/** 1つの Interview の pin の子を targets の数だけ(setup のみ)。 */
-function pinChildren(db: ReturnType<typeof openDb>, targets: number): ReturnType<typeof poseProbe> {
+/** 1つの Interview の pin の子2つ(兄弟、setup のみ)。 */
+function siblingPinChildren(db: ReturnType<typeof openDb>): ReturnType<typeof poseProbe> {
   const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
   const interview = registerTask(
     db,
-    { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: Array.from({ length: targets }, (_, i) => ({ ...target, effort: ["high", "low"][i] })) as never },
+    { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [target, { ...target, effort: "low" }] as never },
     at,
     ...HUMAN_WEBUI,
   );
@@ -376,7 +376,7 @@ function pinChildren(db: ReturnType<typeof openDb>, targets: number): ReturnType
 it("同じ scope・path に書き手の視界に無い生きた Definition があれば、define は拒まずに通り、新しい Definition がそれを後継つき superseded にし、書き手の書き込みの記録には載せない —— 受験者どうし(前の Interview・兄弟)も、本番の worker が受験者の定義に当たるときも。視界にある生きた Definition があれば拒み、拒否文は視界に無い id を名指さない(ADR 0264 決定4)", () => {
   const { db, task } = board();
   const earlier = interviewPinChild(db, at);
-  const [examinee, sibling] = pinChildren(db, 2) as [Task, Task];
+  const [examinee, sibling] = siblingPinChildren(db) as [Task, Task];
   const define = (writer: Task, text: string) => () => defineMemoryBranch(db, { ...definition, text }, "worker", at, writer.id).entry_id;
 
   const first = define(earlier, "What the earlier examinee files.")();
