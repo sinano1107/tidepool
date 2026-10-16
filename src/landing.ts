@@ -350,15 +350,17 @@ export function settledByObservation(db: Db, question: Pick<Task, "id" | "worksp
   return outcome && (outcome.observed ? OBSERVED[outcome.state] : "pr_merged");
 }
 
-/** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 内容で終わった(`landing_finished`)→ 無人 merge キュー →
- *  開いた merge question → キューからの取り下げ、の順に記録から導く。どれも無ければ(PR を開く前で止まっている根・
- *  根でない行)null。キューに残る理由は名指さない(#1866)。 */
-export function landingState(db: Db, task: Pick<Task, "id" | "workspace" | "pr_number">): LandingState | null {
+/** done の work の着地の状態(ADR 0265 決定7): 根の PR の決着 → 無人 merge キュー → 開いた merge question → 内容で
+ *  終わった(`landing_finished`)→ キューからの取り下げ、の順に記録から導く。内容で終わっても決裁は残る(決定3)ので、
+ *  生きているキューの行と merge question を先に言う。done の work でない行と、どれも無い行(PR を開く前で止まっている根・
+ *  根でない行)は null。キューに残る理由は名指さない(#1866)。 */
+export function landingState(db: Db, task: Pick<Task, "id" | "type" | "workspace" | "pr_number"> & { status: string }): LandingState | null {
+  if (task.type !== "work" || task.status !== "done") return null;
   const outcome = rootPrOutcome(db, task.id);
   if (outcome) return outcome.state === "CLOSED" ? "close_observed" : outcome.observed ? "merge_observed" : "merged";
-  if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   if (isQueuedForAutoMerge(db, task.id)) return "auto_merge_queue";
   if (listOpenMergeQuestions(db).some((q) => q.pr_number === task.pr_number && q.workspace === task.workspace)) return "merge_question";
+  if (latestEventOfTask(db, task.id, "landing_finished")) return "landed";
   return latestEventOfTask(db, task.id, "auto_merge_withdrawn") ? "withdrawn" : null;
 }
 

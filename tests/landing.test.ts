@@ -5668,6 +5668,26 @@ it.each([
   expect(stateOf(db, work.id)).toBe(state);
 });
 
+// ADR 0265 決定3: 内容で終わっても決裁は残る —— 生きているキューの行を landed で隠さない
+it("auto_if_ci_green の根が内容で終わってもキューの行が残る間は auto_merge_queue のまま", async () => {
+  const { workspace, db, clock, landing, work } = await openPushedPr("landing-state-content-queued", "auto_if_ci_green");
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+
+  await convergeOn(landing, work.id);
+
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+  expect(stateOf(db, work.id)).toBe("auto_merge_queue");
+});
+
+it("done でない work の行は、キューの行を持っていても着地の状態は null", async () => {
+  const { db, clock } = await openBoard();
+  const work = queueAutoMerge(db, clock, 1);
+
+  expect(stateOf(db, work.id)).toBeNull();
+});
+
 it("キューから取り下げられた PR の根は withdrawn になる", async () => {
   const { workspace, db, clock, github, work } = await openPushedPr("landing-state-withdrawn", "auto_if_ci_green");
   finish(db, clock, work);
