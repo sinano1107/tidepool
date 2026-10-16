@@ -4,7 +4,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
-import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace } from "../src/landing.js";
+import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
@@ -537,8 +537,8 @@ it("受験者は着地しない —— 完了しても着地の根にも「着�
   completeTask(db, plain, FULL_HANDOFF, "tako", new Date(0), "worker");
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
-  expect(countTasksAwaitingLandingInWorkspace(db, undefined, "reef")).toBe(1);
-  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(1);
+  expect(taskIdsAwaitingLandingInWorkspace(db, undefined, "reef")).toHaveLength(1);
+  expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(1);
 });
 
 it("未決着の Interview の対象が名指す段は消せない —— root が決着すれば消せる(ADR 0200 決定2)", () => {

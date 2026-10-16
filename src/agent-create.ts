@@ -323,9 +323,9 @@ export interface AgentDeletionReferences {
   unsettledTaskCount: number;
   /** そのうち work だけの件数 —— 組み込みを shadow するエントリの扉が数える(ADR 0228 決定3)。 */
   unsettledWorkTaskCount: number;
-  /** この agent の profile を読んで着地を待つ完了タスクの件数 —— agent 名の quarantine の
+  /** この agent の profile を読んで着地を待つ完了タスクの id —— agent 名の quarantine の
    *  解除が数えるのと同じ集合(ADR 0217 決定4)。 */
-  awaitingLandingTaskCount: number;
+  awaitingLandingTaskIds: string[];
   /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、
    *  指し先を消せば assignee 未指定のタスクが全部止まる。 */
   defaultAgentName?: string;
@@ -364,9 +364,8 @@ export async function deleteAgent(
   const shadowsBuiltIn = isBuiltInAgentName(input.name);
   const unsettled = shadowsBuiltIn ? deps.unsettledWorkTaskCount : deps.unsettledTaskCount;
   if (unsettled > 0) reasons.push({ code: "unsettled_tasks", count: unsettled });
-  if (deps.awaitingLandingTaskCount > 0) {
-    reasons.push({ code: "tasks_awaiting_landing", count: deps.awaitingLandingTaskCount });
-  }
+  const awaiting = deps.awaitingLandingTaskIds;
+  if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
   if (deps.auditorName === input.name && !shadowsBuiltIn) reasons.push({ code: "board_auditor" });
   if (reasons.length > 0) throw new DeletionBlockedError("agent", input.name, reasons);

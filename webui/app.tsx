@@ -22,6 +22,16 @@ const SETTLED_BY_OBSERVATION_COPY = {
   routing_proposal_stale: 'observed · routing proposal stale',
   memory_proposal_stale: 'observed · memory proposal stale',
 } satisfies Record<import('../src/wire-contract').SettledByObservation, string>;
+/** done の work の行の着地の状態の札(ADR 0265 決定7)。状態を足して文言を足さないと typecheck が落ちる。 */
+const LANDING_STATE_COPY = {
+  auto_merge_queue: 'landing · auto-merge queue',
+  merge_question: 'landing · merge question',
+  merged: 'landing · merged by the board',
+  merge_observed: 'landing · merged outside',
+  close_observed: 'landing · PR closed',
+  withdrawn: 'landing · withdrawn from auto-merge',
+  landed: 'landing · landed',
+} satisfies Record<import('../src/wire-contract').LandingState, string>;
 /** assignee 名 → アイコン(GET /api/registry/candidates、issue #52)。 */
 type AppIcons = Record<string, string | undefined>;
 /** サーバ応答の形の正本(ADR 0138)。`api()` がこの表のキーで引く。 */
@@ -343,6 +353,7 @@ function mapData(
       // editTask on the server is the real gate
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : undefined,
+      landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : undefined,
     });
   }
   // 後始末中の session の行は「走っている」ではない (issue #561 / ADR 0113 決定2) ——

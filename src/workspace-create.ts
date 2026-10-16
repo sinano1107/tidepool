@@ -364,8 +364,8 @@ export interface DeleteWorkspaceInput {
 export interface WorkspaceDeletionReferences {
   /** この workspace を持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
-  /** この workspace で着地を待つ完了タスクの件数(ADR 0226)。 */
-  awaitingLandingTaskCount: number;
+  /** この workspace で着地を待つ完了タスクの id(ADR 0226)。 */
+  awaitingLandingTaskIds: string[];
   /** 盤面の既定 workspace 名。一致すれば消せない —— 既定はポインタである。 */
   defaultWorkspaceName?: string;
 }
@@ -395,9 +395,8 @@ export async function deleteWorkspace(
   if (deps.unsettledTaskCount > 0) {
     reasons.push({ code: "unsettled_tasks", count: deps.unsettledTaskCount });
   }
-  if (deps.awaitingLandingTaskCount > 0) {
-    reasons.push({ code: "tasks_awaiting_landing", count: deps.awaitingLandingTaskCount });
-  }
+  const awaiting = deps.awaitingLandingTaskIds;
+  if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultWorkspaceName === input.name) reasons.push({ code: "board_default" });
   if (reasons.length > 0) throw new DeletionBlockedError("workspace", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("workspace", input.name);

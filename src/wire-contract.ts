@@ -50,6 +50,9 @@ export type SettledByObservation =
   | "routing_proposal_stale"
   | "memory_proposal_stale";
 
+/** done の work の行の着地の状態(ADR 0265 決定7、src/landing.ts の landingState)。WebUI の札の文言表がこれで欠けを落とす。 */
+export type LandingState = "auto_merge_queue" | "merge_question" | "merged" | "merge_observed" | "close_observed" | "withdrawn" | "landed";
+
 /** 回答の応答と question の行が運ぶ印。 */
 export interface SettledMark {
   settled_by_observation: SettledByObservation | null;
@@ -179,6 +182,8 @@ export interface WireContract {
       /** 自由記述の回答を受けるか —— 固定選択肢の question は false(issue #1309)。 */
       free_text?: boolean;
       settled_by_observation?: SettledByObservation | null;
+      /** question でない行だけ: 着地の状態(question 行の `landing` 注釈とは別物)。 */
+      landing_state?: LandingState | null;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
@@ -191,6 +196,7 @@ export interface WireContract {
     needs_comment?: string[];
     free_text?: boolean;
     settled_by_observation?: SettledByObservation | null;
+    landing_state?: LandingState | null;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

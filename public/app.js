@@ -1055,7 +1055,7 @@ function TpSingleQuestion({ q, onAnswer, onClose, onTranslate, onOpenSettings })
 function BoardScreen({ data, onOpenTask }) {
   const { FadeScroll, TaskCard } = window.TidepoolDesignSystem_8a0ead;
   const cols = ["todo", "in_progress", "blocked", "done"];
-  return /* @__PURE__ */ React.createElement("div", { style: { height: "100%", display: "flex", flexDirection: "column", minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px 0" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Board"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "progress overview \xB7 queue order lives in the queue")), /* @__PURE__ */ React.createElement("div", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowX: "auto", display: "flex" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "inline-flex", gap: 12, alignItems: "stretch", padding: "0 16px 16px", minHeight: "100%", boxSizing: "border-box" } }, cols.map((key) => /* @__PURE__ */ React.createElement("div", { key, style: { width: 210, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, background: "var(--surface-recessed)", borderRadius: "var(--radius-md)", padding: 10, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, padding: "2px 4px 10px", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--text-secondary)" } }, key), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.board[key].length)), /* @__PURE__ */ React.createElement(FadeScroll, { style: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 } }, data.board[key].map((t) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { flexShrink: 0, display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(TaskCard, { task: { ...t, status: key }, onClick: () => onOpenTask(t) }), t.settledByObservation && /* @__PURE__ */ React.createElement("span", { "data-testid": `settled-by-observation-${t.id}`, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", padding: "0 4px" } }, t.settledByObservation)))))))));
+  return /* @__PURE__ */ React.createElement("div", { style: { height: "100%", display: "flex", flexDirection: "column", minHeight: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px 0" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Board"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, "progress overview \xB7 queue order lives in the queue")), /* @__PURE__ */ React.createElement("div", { className: "tp-scroll", style: { flex: 1, minHeight: 0, overflowX: "auto", display: "flex" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "inline-flex", gap: 12, alignItems: "stretch", padding: "0 16px 16px", minHeight: "100%", boxSizing: "border-box" } }, cols.map((key) => /* @__PURE__ */ React.createElement("div", { key, style: { width: 210, flexShrink: 0, display: "flex", flexDirection: "column", minHeight: 0, background: "var(--surface-recessed)", borderRadius: "var(--radius-md)", padding: 10, boxSizing: "border-box" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 6, padding: "2px 4px 10px", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--text-secondary)" } }, key), /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.board[key].length)), /* @__PURE__ */ React.createElement(FadeScroll, { style: { flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8, paddingRight: 2 } }, data.board[key].map((t) => /* @__PURE__ */ React.createElement("div", { key: t.id, style: { flexShrink: 0, display: "flex", flexDirection: "column", gap: 4 } }, /* @__PURE__ */ React.createElement(TaskCard, { task: { ...t, status: key }, onClick: () => onOpenTask(t) }), t.settledByObservation && /* @__PURE__ */ React.createElement("span", { "data-testid": `settled-by-observation-${t.id}`, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", padding: "0 4px" } }, t.settledByObservation), t.landingState && /* @__PURE__ */ React.createElement("span", { "data-testid": `landing-state-${t.id}`, style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", padding: "0 4px" } }, t.landingState)))))))));
 }
 
 // webui/register-screen.tsx
@@ -3864,6 +3864,15 @@ const SETTLED_BY_OBSERVATION_COPY = {
   routing_proposal_stale: "observed \xB7 routing proposal stale",
   memory_proposal_stale: "observed \xB7 memory proposal stale"
 };
+const LANDING_STATE_COPY = {
+  auto_merge_queue: "landing \xB7 auto-merge queue",
+  merge_question: "landing \xB7 merge question",
+  merged: "landing \xB7 merged by the board",
+  merge_observed: "landing \xB7 merged outside",
+  close_observed: "landing \xB7 PR closed",
+  withdrawn: "landing \xB7 withdrawn from auto-merge",
+  landed: "landing \xB7 landed"
+};
 class ApiError extends Error {
   status;
   detail;
@@ -4072,7 +4081,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
       githubIssueNumber: t.github_issue_number,
-      settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : void 0
+      settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : void 0,
+      landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : void 0
     });
   }
   const running = board.find((t) => t.status === "in_progress" && t.id !== teardown?.taskId);

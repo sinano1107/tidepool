@@ -38,7 +38,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { closedRootOf, countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace, type Landing } from "./landing.js";
+import { closedRootOf, type Landing, landingState, taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -1093,7 +1093,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
           unsettledWorkTaskCount: countUnsettledWorkAssignedTo(db, req.params.name),
-          awaitingLandingTaskCount: countTasksAwaitingLanding(
+          awaitingLandingTaskIds: taskIdsAwaitingLanding(
             db,
             buildWorkspaceResolver(resolveWorkspace, workspace),
             req.params.name,
@@ -1131,7 +1131,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "workspace", req.params.name),
-          awaitingLandingTaskCount: countTasksAwaitingLandingInWorkspace(
+          awaitingLandingTaskIds: taskIdsAwaitingLandingInWorkspace(
             db,
             buildWorkspaceResolver(resolveWorkspace, workspace),
             req.params.name,
@@ -2105,7 +2105,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     sendJson(
       res,
       board.map((task) =>
-        task.type === "question" ? { ...task, ...questionAnnotations(db, task) } : task,
+        task.type === "question" ? { ...task, ...questionAnnotations(db, task) } : { ...task, landing_state: landingState(db, task) },
       ) satisfies WireContract["GET /api/tasks"],
     );
   });
@@ -2158,7 +2158,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     sendJson(res, {
       ...presented!,
-      ...(task.type === "question" && questionAnnotations(db, task)),
+      ...(task.type === "question" ? questionAnnotations(db, task) : { landing_state: landingState(db, task) }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

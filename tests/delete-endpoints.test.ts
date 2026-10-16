@@ -66,7 +66,7 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
   expect(refs).toEqual([
-    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskCount: 0, defaultAgentName: "tako", auditorName: "fugu" },
+    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskIds: [], defaultAgentName: "tako", auditorName: "fugu" },
   ]);
 });
 
@@ -167,11 +167,12 @@ it("DELETE /api/workspaces/:name はその workspace で着地を待つ完了タ
     },
   });
   const now = new Date();
-  registerPrPromotionFailureQuestion(t.db, completedWork(t.db, now, "tako", undefined, "lagoon"), "boom", now);
+  const work = completedWork(t.db, now, "tako", undefined, "lagoon");
+  registerPrPromotionFailureQuestion(t.db, work, "boom", now);
 
   await api(t.baseUrl, "DELETE", "/api/workspaces/lagoon", { confirm: true });
 
-  expect(refs[0]?.awaitingLandingTaskCount).toBe(1);
+  expect(refs[0]?.awaitingLandingTaskIds).toEqual([work.id]);
 });
 
 it("DELETE /api/workspaces/:name は盤面自身の registry clone を 403 で拒む", async () => {
