@@ -1073,10 +1073,9 @@ export function createLanding(deps: LandingDeps): Landing {
         const reason = error instanceof Error ? error.message : String(error);
         throw new DomainError(`PR #${prNumber}'s state could not be read (${reason}), so the answer was not accepted`);
       }
-      const { state, mergedBy } = read;
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
-      if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
-      settleMergeQuestionAsObserved(deps.db, question, prNumber, prOutcomeKind(state, mergedBy), deps.clock.now());
+      if (read.state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
+      settleMergeQuestionAsObserved(deps.db, question, prNumber, prOutcomeKind(read.state, read.mergedBy), deps.clock.now());
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
@@ -1095,11 +1094,10 @@ export function createLanding(deps: LandingDeps): Landing {
         } catch {
           continue;
         }
-        const { state, mergedBy } = read;
         // 印は await の後に見る —— 前に見ると、await の間に執行側が印を取れる。印の付いた PR の決着は
         // 執行側が書く(ADR 0236 決定3)。キューの確認は、quarantine 回答が重なったときの観測同士の競合を防ぐ
-        if (state === "OPEN" || isMarked(task.workspace, pr_number) || !isQueuedForAutoMerge(deps.db, task_id)) continue;
-        retireAutoMerge(deps.db, task_id, { kind: prOutcomeKind(state, mergedBy), pr_number }, deps.clock.now());
+        if (read.state === "OPEN" || isMarked(task.workspace, pr_number) || !isQueuedForAutoMerge(deps.db, task_id)) continue;
+        retireAutoMerge(deps.db, task_id, { kind: prOutcomeKind(read.state, read.mergedBy), pr_number }, deps.clock.now());
       }
     },
     async tick(kind, now) {

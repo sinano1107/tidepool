@@ -186,11 +186,6 @@ export interface RepoSlug {
 
 const PR_URL_RE = /\/pull\/(\d+)\s*$/;
 
-/** `gh pr view --json mergedBy` の1人。App は `{"is_bot":true,"login":"app/<slug>"}`(#2079 で実測)。 */
-interface GhActor {
-  login: string;
-}
-
 /** One entry of `gh pr view --json statusCheckRollup`: a CheckRun carries its
  *  verdict in `conclusion`, a StatusContext in `state`. Only those two fields
  *  are read — `status` is implied by an empty `conclusion`. */
@@ -274,7 +269,7 @@ export class GhCliClient implements GitHubClient {
     // `gh pr view --json statusCheckRollup` は未設定なら exit 0 + 空配列を返し、
     // 非ゼロ終了は「読めなかった」だけを意味する。token 取得(仲介への往復)も
     // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
-    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: GhActor | null };
+    let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: { login: string } | null };
     try {
       const output = execFileSync(
         "gh",
@@ -307,7 +302,7 @@ export class GhCliClient implements GitHubClient {
       env: await this.envFor(ref.path),
       stdio: ["ignore", "pipe", "pipe"],
     }).toString();
-    const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: GhActor | null };
+    const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null };
     return { state, mergedBy: mergedBy?.login ?? null };
   }
 
