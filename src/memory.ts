@@ -1786,7 +1786,7 @@ type Invalidation = Pick<EntryRow, "invalidation_reason" | "successor_id">;
 
 /** 視界の3段目(未無効化)の正本: 無効化されていないか、後継が hidden にあってその先に読み手に見える後継が無い —— 読み手の視界に
  *  無い後継による無効化は、その読み手には起きていない(ADR 0264 決定4)。hidden の後継のその後(生死・落ちたこと)は問わない。
- *  読みの門・定義の門・一木の門・meta-review の読み口(seenRow)が読む。 */
+ *  読みの門・定義の門・meta-review の読み口(seenRow)が読む。 */
 function liveTo(db: Db, hidden: Set<number>, row: Invalidation): boolean {
   return row.invalidation_reason === null || (row.successor_id !== null && hidden.has(row.successor_id) && seenSuccessor(db, hidden, row.successor_id) === null);
 }
@@ -2311,7 +2311,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
     const missing: number[] = [];
     for (const id of new Set(ids)) {
       // 視界の外は missing にも載せず黙って落とす(存在を知らせない)。見える行の鎖が視界の外へ続くことは無い —— 移動・復元の
-      // 複製を作るのは人間・meta-review・修理 task で、受験者の書き込みにならない
+      // 複製を作るのは人間・meta-review・修理 task で、受験者は記憶を書かない(ADR 0268 決定2)
       if (hidden.has(id)) continue;
       const row = db.prepare("SELECT * FROM memory_entries WHERE id = ?").get(id) as EntryRow | undefined;
       if (!row) {

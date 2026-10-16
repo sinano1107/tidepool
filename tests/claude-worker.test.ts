@@ -819,7 +819,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(child!, setting(child!));
     const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(systemPrompt).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose"], added: [] }));
+    expect(systemPrompt).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
   });
 
   it("出題前の Interview の root の system prompt には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {

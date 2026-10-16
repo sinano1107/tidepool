@@ -577,7 +577,7 @@ describe("CodexWorker (ADR 0098)", () => {
     await f.start(pinnedChild(f.db));
     const developer = developerInstructions(f.process.calls[0]!.args);
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
-    expect(developer).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose"], added: [] }));
+    expect(developer).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
   });
 
   it("出題前の Interview の root の developer_instructions には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
