@@ -97,6 +97,7 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
       worker: new ScriptedWorker(clock, "tako"),
       containers: fakeContainers(),
       onSpawnFailed: () => {},
+      onRecordContainerFailed: () => {},
       taskExecutionCandidates: implicitTaskExecutionCandidates(db),
       workspace,
       resolveWorkspace: defaultingTo(workspace),

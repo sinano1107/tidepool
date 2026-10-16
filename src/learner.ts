@@ -205,7 +205,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
     .prepare(
       `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted, interview_target_id IS NOT NULL AS interview,
          (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored'
-            AND (SELECT status FROM tasks root WHERE root.id = tasks.parent_id) = 'done') AS score
+            AND (SELECT root.status FROM interview_targets it JOIN tasks root ON root.id = it.task_id WHERE it.id = tasks.interview_target_id) = 'done') AS score
        FROM tasks
         WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )

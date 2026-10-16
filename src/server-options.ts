@@ -90,7 +90,7 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
 import { resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import { TranscriptStore } from "./transcript-store.js";
+import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
 import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
@@ -264,6 +264,7 @@ export function buildWorkerOptions(
     onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
     onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+    onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit) => void;
     transcripts: TranscriptStore;
   },
@@ -302,6 +303,8 @@ export function buildWorkerOptions(
     onRowRefused: session.onRowRefused,
     // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
     onSpawnFailed: session.onSpawnFailed,
+    // ADR 0266 決定4: 渡し忘れは「transcript を開けない pickup が in_progress のまま枠を握る」形で静かに fail する
+    onRecordContainerFailed: session.onRecordContainerFailed,
     // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
     onWorkerExited: session.onWorkerExited,
     // ADR 0149: transcript は盤面側の器が開く
@@ -333,6 +336,7 @@ export function buildCodexWorkerOptions(
     boardCall: session.boardCall,
     boardState: board.boardState,
     onSpawnFailed: session.onSpawnFailed,
+    onRecordContainerFailed: session.onRecordContainerFailed,
     onWorkerExited: session.onWorkerExited,
     // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
     // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない

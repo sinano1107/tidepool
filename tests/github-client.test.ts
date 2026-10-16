@@ -231,13 +231,13 @@ it("readPullRequest は gh が非ゼロ終了したら(到達不能)CI を pendi
   expect(pr).toEqual({ ci: "pending", state: "unreadable" });
 });
 
-// ADR 0229 決定2 / ADR 0231 決定1: 状態と head は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
-it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRefOid で CI と状態と head を読む", async () => {
+// ADR 0229 決定2 / ADR 0231 決定1 / ADR 0265 決定5: 状態と head と merge した名義は CI と同じ1回の読み取りに載せる —— tick の網の呼び出しを増やさない
+it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRefOid,mergedBy で CI と状態と head と merge した名義を読む", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"state":"CLOSED","statusCheckRollup":[{"conclusion":"SUCCESS"}],"headRefOid":"abc123"}'\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\nprintf '{"headRefOid":"abc123","mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED","statusCheckRollup":[{"conclusion":"SUCCESS"}]}'\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
@@ -245,9 +245,9 @@ it("readPullRequest は1回の gh pr view --json state,statusCheckRollup,headRef
 
   const pr = await new GhCliClient(await makeAuth()).readPullRequest({ path: "/tmp", number: 7 });
 
-  expect(pr).toEqual({ ci: "success", state: "CLOSED", head: "abc123" });
+  expect(pr).toEqual({ ci: "success", state: "MERGED", head: "abc123", mergedBy: "app/tidepool-board" });
   expect((await readFile(logPath, "utf8")).trim().split("\n")).toEqual([
-    "pr view 7 --json state,statusCheckRollup,headRefOid",
+    "pr view 7 --json state,statusCheckRollup,headRefOid,mergedBy",
   ]);
 });
 
@@ -376,24 +376,25 @@ it("mergePullRequest は CI を読んだ head を --match-head-commit に渡し�
   expect(invocations.trim().split("\n")).toEqual(["pr merge 7 --merge --match-head-commit abc123"]);
 });
 
-it("getPullRequestState は gh pr view --json state を読み、状態をそのまま返す(ADR 0079 / ADR 0229)", async () => {
+// ADR 0265 決定5: merge した名義は状態と同じ1回の読み取りで読む。7 の綴りは App が merge した PR の実測(#2079)
+it("getPullRequestState は gh pr view --json state,mergedBy を1回読み、状態と merge した名義の login を返す(ADR 0079 / ADR 0229)", async () => {
   const dir = await tempDir("tidepool-fakebin-");
   const logPath = join(dir, "gh-invocations.log");
   writeFileSync(
     join(dir, "gh"),
-    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"state":"MERGED"}';; 8) printf '{"state":"CLOSED"}';; *) printf '{"state":"OPEN"}';; esac\n`,
+    `#!/bin/sh\necho "$@" >> "${logPath}"\ncase "$3" in 7) printf '{"mergedBy":{"is_bot":true,"login":"app/tidepool-board"},"state":"MERGED"}';; 8) printf '{"mergedBy":null,"state":"CLOSED"}';; *) printf '{"mergedBy":null,"state":"OPEN"}';; esac\n`,
   );
   chmodSync(join(dir, "gh"), 0o755);
   originalPath = process.env.PATH;
   process.env.PATH = `${dir}:${originalPath}`;
 
   const client = new GhCliClient(await makeAuth());
-  expect(await client.getPullRequestState({ path: "/tmp", number: 7 })).toBe("MERGED");
-  expect(await client.getPullRequestState({ path: "/tmp", number: 8 })).toBe("CLOSED");
-  expect(await client.getPullRequestState({ path: "/tmp", number: 9 })).toBe("OPEN");
+  expect(await client.getPullRequestState({ path: "/tmp", number: 7 })).toEqual({ state: "MERGED", mergedBy: "app/tidepool-board" });
+  expect(await client.getPullRequestState({ path: "/tmp", number: 8 })).toEqual({ state: "CLOSED", mergedBy: null });
+  expect(await client.getPullRequestState({ path: "/tmp", number: 9 })).toEqual({ state: "OPEN", mergedBy: null });
 
   const invocations = await readFile(logPath, "utf8");
-  expect(invocations).toContain("pr view 7 --json state");
+  expect(invocations.trim().split("\n")).toEqual(["pr view 7 --json state,mergedBy", "pr view 8 --json state,mergedBy", "pr view 9 --json state,mergedBy"]);
 });
 
 it("addIssueComment は gh issue comment --body を呼ぶ(issue #49 設計点4: 承認済みサジェストの追記)", async () => {

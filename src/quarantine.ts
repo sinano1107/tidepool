@@ -152,7 +152,7 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
 }
 
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
- *  registryReachability)で、資源単位の種類がその後に続く。 */
+ *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,
@@ -200,6 +200,21 @@ export const QUARANTINES = [
         "a repair note. If the board's GitHub login was revoked or is missing, run " +
         "`npm run github-login` on the board host first.",
       completion_criteria: "the registry remote main is reachable again",
+    }),
+  },
+  {
+    kind: "recordContainer" satisfies HaltKind,
+    scope: "board",
+    // 断言するのは、どの task の・どの path への書き込みが・どの例外で落ちたか(reason)だけで、原因の所在は言わない(ADR 0266 決定3)。
+    // 踏んだ task がどうなったか(先頭へ戻った / 自分の failure question を持つ)は入口ごとに違うので、観測した入口が reason に書く
+    prose: (_value: string | null, reason: string): QuarantineProse => ({
+      title: "the board's record container cannot be written — pickup is stopped",
+      purpose:
+        `${reason}\n\n` +
+        "No task is picked up while this stands. " +
+        "Answering checks the same container by writing a file to that directory and removing it: if the write " +
+        "still fails the answer is refused and this question stays open. Any answer text is kept as a repair note.",
+      completion_criteria: "the board's record container can be written again",
     }),
   },
   {
@@ -541,7 +556,8 @@ export function questionRefusedTarget(
   evidence: string,
   now: Date,
 ): void {
-  const root = getTask(db, child.parent_id!)!;
+  // 受験者の root は対象の行から引く(ADR 0267 決定1)
+  const root = getTask(db, db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(child.interview_target_id) as string)!;
   const reason = `Task ${child.id} of Interview "${root.title}" (${root.id}) ${evidence}`;
   if (refusal.cause === "effort_not_advertised") {
     registerQuarantine(db, "interviewTargetEffort", tableRowEffortValue(refusal.provider, refusal.model, refusal.effort), reason, now);

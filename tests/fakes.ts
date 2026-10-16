@@ -33,6 +33,7 @@ import type {
   PrRef,
   PrResult,
   PrState,
+  PrStateRead,
   PrStatus,
   PushBranchInput,
   RepoRef,
@@ -435,7 +436,8 @@ export class FakeGitHubClient implements GitHubClient {
   private heads = new Map<number, string>();
   private prBranches = new Map<number, string>();
   private unreadable = new Set<number>();
-  private mergedOutside = new Set<number>();
+  /** merge 済みの PR と、merge した名義(`gh pr view --json mergedBy` の login)。 */
+  private mergers = new Map<number, string>();
   private closedOutside = new Set<number>();
   private mergeFailures = new Map<number, Error>();
   private stateReadFailures = new Map<number, Error>();
@@ -487,7 +489,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   private stateOf(number: number): PrState {
-    if (this.mergedOutside.has(number)) return "MERGED";
+    if (this.mergers.has(number)) return "MERGED";
     return this.closedOutside.has(number) ? "CLOSED" : "OPEN";
   }
 
@@ -502,7 +504,7 @@ export class FakeGitHubClient implements GitHubClient {
   async readPullRequest(ref: PrRef): Promise<PrStatus> {
     this.ciChecks.push(ref);
     if (this.unreadable.has(ref.number)) return { ci: "pending", state: "unreadable" };
-    return { ci: this.ciStatus, state: this.stateOf(ref.number), head: this.headOf(ref.path, ref.number) };
+    return { ci: this.ciStatus, head: this.headOf(ref.path, ref.number), ...this.stateRead(ref.number) };
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
@@ -555,11 +557,15 @@ export class FakeGitHubClient implements GitHubClient {
     this.unreadable.add(number);
   }
 
-  async getPullRequestState(ref: PrRef): Promise<PrState> {
+  async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
     this.stateChecks.push(ref);
     const failure = this.stateReadFailures.get(ref.number);
     if (failure) throw failure;
-    return this.stateOf(ref.number);
+    return this.stateRead(ref.number);
+  }
+
+  private stateRead(number: number): PrStateRead {
+    return { state: this.stateOf(number), mergedBy: this.mergers.get(number) ?? null };
   }
 
   /** Makes the state read on one PR throw — an offline Pi, a repo the token
@@ -577,7 +583,15 @@ export class FakeGitHubClient implements GitHubClient {
   /** Scripts the PR as merged by someone on GitHub's own surface, behind the
    *  board's back (ADR 0079) — every later merge attempt on it fails. */
   scriptMergedOutside(number: number): void {
-    this.mergedOutside.add(number);
+    this.mergers.set(number, "octocat");
+  }
+
+  /** Scripts the PR as merged under the board's own name — the board merged it and fell before recording it
+   *  (ADR 0265 決定5). The login is the spelling measured on a PR the App merged (#2079): `gh pr view --json
+   *  mergedBy` gives `{"is_bot":true,"login":"app/tidepool-board"}` (REST `merged_by.login` would be
+   *  `tidepool-board[bot]`). Written out, not derived from the slug, so a drift in the board's derivation fails. */
+  scriptMergedByBoard(number: number): void {
+    this.mergers.set(number, "app/tidepool-board");
   }
 
   /** Scripts the PR as closed without merging on GitHub's own surface (ADR 0229). */

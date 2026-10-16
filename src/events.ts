@@ -190,6 +190,9 @@ export type EventPayload =
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
   // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
   | ({ kind: "row_refused" } & (RowRefusal | ListedRefusal))
+  // ADR 0266 決定3: pickup の準備が盤面の記録の器に書けず、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
+  // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
+  | { kind: "record_container_unwritable"; path: string; reason: string }
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }

@@ -622,6 +622,20 @@ it("merge 済み PR に残った修理は閉じた理由で失敗し failure que
   expect(github.pushes).toEqual([]);
 });
 
+// ADR 0265 決定5: 収束の PR の状態の読み取りも、merge した名義で執行と観測を分ける
+it.each([
+  ["盤面の名義", "pr_merged", (github: FakeGitHubClient) => github.scriptMergedByBoard(1)],
+  ["人間の名義", "pr_merge_observed", (github: FakeGitHubClient) => github.scriptMergedOutside(1)],
+] as const)("%sで merge 済みの PR を収束が読むと、根に %s を1件だけ刻む", async (_, kind, scriptMerged) => {
+  const { workspace, db, github, landing, root } = await rootWithOpenedPr("landing-converge-merged-by");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  scriptMerged(github);
+
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ reason: "pull_request_already_merged" });
+  const merges = listEvents(db, root.id).filter((e) => e.kind === "pr_merged" || e.kind === "pr_merge_observed");
+  expect(merges.map((e) => e.payload)).toEqual([{ kind, pr_number: 1 }]);
+});
+
 // ADR 0241 決定3: 盤面の外で閉じられた PR には push せず、閉じたことを観測として刻む(#1734)
 it("盤面の外で閉じた PR を持つ根の収束は push せず、閉じた観測を1件だけ刻み、着地したと返さず失敗 question も立てない。次の回からは候補に入らず、retry は閉じたことを理由に拒まれる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-closed-pr");
@@ -2725,6 +2739,26 @@ it.each(["failure", "pending"] as const)("盤面の外で merge 済みの PR は
   ]);
 });
 
+// ADR 0265 決定5(#1820): merge の後・記録の前に落ちた盤面の merge は、再起動後に執行として刻む
+it("盤面の名義(app/tidepool-board)で merge 済みの PR がキューに残っていれば、行為の前の読み取りで pr_merged を根に刻んでキューを外れる", async () => {
+  const workspace = await makeWorkspace("landing-board-merged-queued");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  github.scriptMergedByBoard(1);
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(github.merged).toEqual([]);
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+  ]);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
+});
+
 it("CI を読んだ後に閉じられて merge が失敗した PR は、読み直した状態で閉じた観測になり question を立てない", async () => {
   const workspace = await makeWorkspace("landing-closed-during-merge");
   const { db, clock } = await openBoard();
@@ -2759,6 +2793,24 @@ it("CI を読んだ後に盤面の外で merge されて merge が失敗した P
     { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
   ]);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
+});
+
+it("merge が失敗した後の読み直しで盤面の名義で merge 済みと読めた PR は、pr_merged を根に刻んでキューを外れる(ADR 0265 決定5)", async () => {
+  const workspace = await makeWorkspace("landing-board-merged-during-merge");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = queueAutoMerge(db, clock, 1);
+  afterCiRead(github, () => github.scriptMergedByBoard(1));
+
+  const landing = autoMerging(db, clock, workspace, github);
+  await landing.tick("auto_merge", clock.now());
+
+  expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
+  expect(mergeQuestions(db)).toEqual([]);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+  ]);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
 
 it("merge が失敗し状態の読み直しも失敗した PR は、tick を落とさず question も event も残さずキューに残る", async () => {
@@ -2894,6 +2946,24 @@ it.each([
   ]);
 });
 
+// ADR 0265 決定5(#1820): merge 回答の merge の後・記録の前に落ちた盤面。回答の記録は失われているので question は観測の経路で閉じる
+it("遅い走査は、盤面の名義で merge 済みの PR の open な merge question を回答なしで閉じ、pr_merged を根に刻む", async () => {
+  const workspace = await makeWorkspace("landing-scan-board-merged");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const { root, question } = escalatedRoot(db, clock, 1);
+  github.scriptMergedByBoard(1);
+
+  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
+
+  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
+  expect(boardEvents(db, root.id, "pr_merged")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+  ]);
+  expect(boardEvents(db, root.id, "pr_merge_observed")).toEqual([]);
+});
+
 it("別の workspace の同じ番号の PR の観測は、それぞれの workspace の根に1件ずつ刻まれ混ざらない", async () => {
   const workspace = await makeWorkspace("landing-scan-same-number");
   const { db, clock } = await openBoard();
@@ -2975,6 +3045,44 @@ it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測
 
   await expect(converging).resolves.toMatchObject({ reason: "pull_request_closed" });
   expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+// ADR 0265 決定6: 閉じた根の付帯子は cancel せず、観測の時点で走らない子と出口2つを判断行で言う
+it("遅い走査が外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行だけ流れ、PR・子・出口2つを言う", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-announce");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge", clock.now());
+  await landing.tick("outside_merge", clock.now());
+  await landing.converge();
+
+  const lines = boardEvents(db, root.id, "decision_logged");
+  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.any(String) } }]);
+  for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
+});
+
+it("回答直前のバックストップが外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行流れる", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+
+  await expect(landing.observePullRequestOutcome(getTask(db, question.id)!)).resolves.toBe(true);
+  await landing.tick("outside_merge", clock.now());
+
+  const lines = boardEvents(db, root.id, "decision_logged");
+  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+});
+
+it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
+  github.scriptClosedOutside(1);
+
+  await landing.tick("outside_merge", clock.now());
+
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, root.id, "decision_logged")).toEqual([]);
 });
 
 it("遅い走査が外で閉じたと観測した根への retry は、閉じたことを理由に verdict で拒まれる", async () => {
@@ -4639,6 +4747,31 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
     { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
   ]);
+});
+
+it("quarantine 回答前の観測は、盤面の名義で merge 済みのキューの PR を pr_merged として根に刻みキューから外す(ADR 0265 決定5)", async () => {
+  const { db, clock } = await openBoard();
+  const work = completeTask(db, landingWork(db, clock), FULL_HANDOFF, "tako", clock.now(), "worker");
+  recordPrOpenedViaWorker(db, work, 7, "tako", clock.now(), {
+    authority: { merge: "auto_if_ci_green" },
+  });
+  const github = new FakeGitHubClient();
+  github.scriptMergedByBoard(7);
+  const landing = createLanding({
+    db,
+    clock,
+    workspace: { name: "reef", path: "/reef", repo: "https://github.com/test/reef" },
+    github,
+    defaultAgentName: "tako",
+  });
+
+  await landing.observeAutoMergeOutcomes("tako");
+
+  expect(countTasksAwaitingLanding(db, undefined, "tako", "tako")).toBe(0);
+  expect(boardEvents(db, work.id, "pr_merged")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 7 } },
+  ]);
+  expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
 
 it("quarantine 回答前の観測は、盤面の外で閉じられたキューの PR を閉じた観測としてキューから外す(ADR 0229 決定4)", async () => {

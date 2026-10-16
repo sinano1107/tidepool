@@ -994,6 +994,27 @@ it.each([
   });
 });
 
+// ADR 0265 決定5(#1820): 盤面が merge 回答の merge の後・記録の前に落ちた —— 回答の記録は無いので question は観測の経路で閉じる
+it.each(["merge", "hold"])("盤面の名義で merge 済みの PR の merge question に「%s」と答えると、merge せず回答なしで閉じ、pr_merged を根に刻む", async (value) => {
+  const github = new FakeGitHubClient();
+  github.scriptMergedByBoard(42);
+  const { work, question, answer } = escalatedMergeQuestionWith(github);
+
+  const answered = await answer(value);
+
+  expect({
+    status: answered.status,
+    merged: github.merged,
+    kinds: listEvents(db, question.id).map((event) => event.kind),
+    observed: prOutcomes(),
+  }).toEqual({
+    status: "done",
+    merged: [],
+    kinds: expect.not.arrayContaining(["question_answered"]),
+    observed: [{ task_id: work.id, payload: { kind: "pr_merged", pr_number: 42 } }],
+  });
+});
+
 /** escalate の PR #42 の merge question と、本物の Landing を通して `answer` と答える手。 */
 function escalatedMergeQuestionWith(github: FakeGitHubClient, landingDeps: Partial<LandingDeps> = {}) {
   db = openDb(":memory:");

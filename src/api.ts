@@ -37,7 +37,7 @@ import {
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
-import { countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace, type Landing } from "./landing.js";
+import { closedRootOf, countTasksAwaitingLanding, countTasksAwaitingLandingInWorkspace, type Landing } from "./landing.js";
 import {
   changeMemorySettings,
   defineMemoryBranch,
@@ -713,6 +713,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   /** 「この行は全 entry が除外されているか」。scheduler の poll が同じ式を、同じ
    *  poll で観測し直した除外集合に対して当てる(ADR 0110 決定3)。 */
   const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates, workspace?.name);
+  // 閉じた根に塞がれた子(ADR 0265 決定6): Pickable head とキューの skipped が scheduler と同じ1本を通る
+  const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1294,6 +1296,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         auditorName,
         quarantineStops(db),
         skipped,
+        closedRoot,
       );
       if (!head || !excluded(head)) return head;
       skipped.push(head.id);
@@ -1375,6 +1378,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         db,
         pollNow,
         workspace,
+        resolveWorkspace,
         defaultAgentName,
         auditorName,
         quarantineResolvers,
@@ -1431,7 +1435,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      sendJson(res, question);
+      sendJson(res, question satisfies WireContract["POST /api/tasks/:id/answer"]);
     } catch (err) {
       if (err instanceof DomainError) {
         sendJson(res.status(409), { error: err.message });
@@ -2107,6 +2111,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           auditorName,
           quarantineStops(db),
           entriesAllExcluded(),
+          closedRoot,
         ),
       ),
     } satisfies WireContract["GET /api/queue"]);

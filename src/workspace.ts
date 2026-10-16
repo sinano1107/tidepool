@@ -1,8 +1,8 @@
-import { lstatSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent } from "./events.js";
+import { appendEvent } from "./events.js";
 import { git, gitBytes } from "./git.js";
 import {
   authedGitBounded,
@@ -29,7 +29,7 @@ import {
   issueRefPlaceholder,
   type Task,
 } from "./tasks.js";
-import { RecordContainerError } from "./transcript-store.js";
+import { writeAnswerCopy } from "./transcript-store.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
@@ -286,7 +286,7 @@ export function taskBranchExists(workspace: WorkspaceConfig, taskId: string): bo
 export function resolveTaskBranchLineage(
   db: Db,
   workspace: WorkspaceConfig,
-  task: Task,
+  task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   if (task.type === "review") {
     return {
@@ -328,7 +328,7 @@ export function resolveTaskBranchLineage(
 export function lineageTaskBranch(
   db: Db,
   workspace: WorkspaceConfig,
-  task: Task,
+  task: Pick<Task, "type" | "parent_id">,
 ): string | undefined {
   return resolveTaskBranchLineage(db, workspace, task).branch;
 }
@@ -354,10 +354,16 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
 
 /** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
 function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  const posed = task.based_on_decision === null ? undefined : getEvent(db, task.based_on_decision)?.payload;
-  const head = posed?.kind === "decision_logged" ? posed.head : undefined;
+  // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)
+  const head = db
+    .prepare(
+      `SELECT json_extract(e.payload, '$.head') FROM events e JOIN interview_targets it ON it.task_id = e.task_id
+       WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL`,
+    )
+    .pluck()
+    .get(task.interview_target_id) as string | null | undefined;
   try {
-    if (head !== undefined) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
+    if (head != null) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
   } catch (err) {
     // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
     if ((err as { status?: number } | null)?.status !== 1) throw err;
@@ -608,23 +614,15 @@ function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir:
   git(workspace.path, "prune", "--expire=now");
 }
 
-/** ADR 0266 決定2: 答案を `<recordDir>/<task id>.bundle` に写し、その path を返す。出題の head から commit が無ければ写さない。
- *  bundle は git が stdout に出し、器へは node が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の例外だけが
- *  `RecordContainerError` になる。 */
+/** ADR 0266 決定2: 答案を盤面の記録の器に写し、その path を返す。出題の head から commit が無ければ写さない。
+ *  bundle は git が stdout に出し、器へは `writeAnswerCopy` が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の
+ *  例外だけが `RecordContainerError` になる。 */
 function copyAnswer(db: Db, workspace: WorkspaceConfig, pinChild: Task, head: string, recordDir: string): string | undefined {
   const posedHead = resolvablePosedHead(db, workspace, pinChild);
   // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
   if (isAncestor(workspace, head, posedHead)) return undefined;
   // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
-  const bundle = gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`);
-  // event に残る path は盤面の cwd に依らない絶対 path(既定の器は相対の `worker-logs`)
-  const path = resolve(recordDir, `${pinChild.id}.bundle`);
-  try {
-    writeFileSync(path, bundle);
-  } catch (err) {
-    throw new RecordContainerError(pinChild.id, path, err instanceof Error ? err.message : String(err));
-  }
-  return path;
+  return writeAnswerCopy(recordDir, pinChild.id, gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`));
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も

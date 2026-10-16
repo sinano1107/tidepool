@@ -1209,15 +1209,18 @@ export function moveTask(
   return getTask(db, task.id)!;
 }
 
+/** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
+type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>;
+
 /** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
  *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
  *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
- *  行の拒否(ADR 0184 決定4)も同じ一撃で、刻む event だけが違う。 */
+ *  行の拒否(ADR 0184 決定4)と盤面の記録の器が書けない pickup(ADR 0266 決定3)も同じ一撃で、刻む event だけが違う。 */
 export function returnToQueueHead(
   db: Db,
   task: Task,
-  payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>,
+  payload: QueueReturnPayload,
   now: Date,
 ): void {
   db.transaction(() => {
@@ -1228,7 +1231,7 @@ export function returnToQueueHead(
 
 /** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
  *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
-export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" }>, now: Date): void {
+export function returnToQueue(db: Db, task: Task, payload: QueueReturnPayload, now: Date): void {
   db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
   appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }
@@ -1375,6 +1378,16 @@ export interface ResourceStops {
   assignees: string[];
 }
 
+/** 子を塞いでいる閉じた根(ADR 0265 決定6)—— 盤面の外で閉じた PR の根と、その PR。 */
+export interface ClosedRoot {
+  task_id: string;
+  pr_number: number;
+}
+
+/** 「閉じた根に塞がれた子」の唯一の述語の形(landing.ts の `closedRootOf` が作る)。git を読むので呼び手が渡す ——
+ *  pickup の候補(`nextSlotTask`)・キューの skipped(`listQueue`)・直接 cancel の範囲が同じ1本を受け取る。 */
+export type ClosedRootOf = (task: Pick<Task, "type" | "parent_id" | "workspace">) => ClosedRoot | null;
+
 /** The pointers the direct-cancel question gate's quarantine half resolves an
  *  unset workspace/assignee against (issue #130), same fallbacks the pickup
  *  gate uses (ADR 0009 / issue #36 / issue #42), plus what open quarantines
@@ -1384,6 +1397,8 @@ export interface CancelDefaults {
   defaultAgentName?: string;
   auditorName?: string;
   quarantined?: ResourceStops;
+  /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
+  closedRootOf?: ClosedRootOf;
 }
 
 /** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
@@ -1459,7 +1474,7 @@ export function cancelTaskDirectly(
   defaults: CancelDefaults,
   origin: EventOrigin,
 ): void {
-  assertDirectlyCancellableScope(db, task);
+  assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
   db.transaction(() => {
     const cancelEventId = cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
@@ -1836,19 +1851,16 @@ function retryInterview(
  *  question を出自に cancel する。兄弟も親も動かさないが、採点できる答案も未決着の子も残らない Interview はこの答えで終える
  *  (ADR 0247 決定1)。 */
 function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOrigin): void {
-  // この question が止めている子
-  const children = (
-    db
-      .prepare(
-        `SELECT t.id FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
-         WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL}
-           AND @value = ${refusedTargetValueSql("@kind")}`,
-      )
-      .pluck()
-      .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as string[]
-  ).map((id) => getTask(db, id)!);
-  for (const child of children) cancelTask(db, child, question.id, HUMAN_WORKER_ID, now, origin);
-  for (const rootId of new Set(children.map((child) => child.parent_id!))) {
+  // この question が止めている受験者と、その対象の root
+  const children = db
+    .prepare(
+      `SELECT t.id, it.task_id AS rootId FROM tasks t JOIN interview_targets it ON it.id = t.interview_target_id
+       WHERE ${unsettledSql("t.status")} AND ${UNROWED_TARGET_SQL}
+         AND @value = ${refusedTargetValueSql("@kind")}`,
+    )
+    .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as Array<{ id: string; rootId: string }>;
+  for (const { id } of children) cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
+  for (const rootId of new Set(children.map((child) => child.rootId))) {
     if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
   }
 }
@@ -1884,7 +1896,7 @@ function settleUnrunnableTargetQuestions(db: Db, cancelledRootId: string, observ
 /** retry が写す対象(ADR 0248 決定2・追記): 登録時の一覧から、断られた対象の question への「この対象は測らない」で外した対象だけを除く
  *  —— abandon / reject で外れた対象は写す。 */
 function retriedTargets(db: Db, rootId: string): InterviewTarget[] {
-  const children = listChildren(db, rootId);
+  const children = listExaminees(db, rootId);
   return targetRows(db, rootId)
     .filter(({ id }) => {
       const child = children.find((task) => task.interview_target_id === id);
@@ -1893,11 +1905,12 @@ function retriedTargets(db: Db, rootId: string): InterviewTarget[] {
     .map(({ id: _, ...target }) => target);
 }
 
-/** 採点できる答案(done の pin の子)も未決着の子も残っていない Interview の root か(ADR 0247 決定1)。 */
+/** 採点できる答案(done の受験者)も未決着の答案も、root 自身の未決着の子も残っていない Interview の root か(ADR 0247 決定1 / ADR 0267 決定3)。 */
 function interviewLeftEmpty(db: Db, rootId: string): boolean {
-  return db
-    .prepare(`SELECT 1 FROM tasks WHERE parent_id = ? AND ((interview_target_id IS NOT NULL AND status = 'done') OR ${unsettledSql("status")}) LIMIT 1`)
-    .get(rootId) === undefined;
+  return (
+    listExaminees(db, rootId).every((examinee) => examinee.status === "cancelled") &&
+    db.prepare(`SELECT 1 FROM tasks WHERE parent_id = ? AND interview_target_id IS NULL AND ${unsettledSql("status")} LIMIT 1`).get(rootId) === undefined
+  );
 }
 
 /** The scope shared by abandon and held (ADR 0048): the failed task itself,
@@ -2200,16 +2213,16 @@ export function completeInterview(
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root completes with complete_interview");
   if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview has no probe to score yet: pose it with pose_probe first");
   if (handoff?.outcome === undefined || whyBlank(handoff.outcome)) throw new DomainError("complete_interview requires the findings in handoff.outcome");
-  const pins = new Map(listChildren(db, root.id).flatMap((child) => (child.interview_target_id === null ? [] : [[child.id, child] as const])));
+  const examinees = new Map(listExaminees(db, root.id).map((examinee) => [examinee.id, examinee] as const));
   const scored = new Set<string>();
   for (const { child_id } of scores) {
-    const child = pins.get(child_id);
+    const child = examinees.get(child_id);
     if (!child) throw new DomainError(`${child_id} is not a child of this Interview`);
     if (child.status !== "done") throw new DomainError(`${child_id} is not done: only a done child is scored`);
     if (scored.has(child_id)) throw new DomainError(`${child_id} is scored more than once: score each done child exactly once`);
     scored.add(child_id);
   }
-  const unscored = [...pins.values()].filter((child) => child.status === "done" && !scored.has(child.id)).map(({ id }) => id);
+  const unscored = [...examinees.values()].filter((child) => child.status === "done" && !scored.has(child.id)).map(({ id }) => id);
   if (unscored.length > 0) throw new DomainError(`score every done child exactly once; unscored: ${unscored.join(", ")}`);
   // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
   return db.transaction(() => {
@@ -2238,7 +2251,7 @@ export function reportBrokenProbe(
       "this Interview's probe was already reported broken once and the human answered continue: score every done answer with complete_interview, or escalate if you still disagree",
     );
   }
-  const answers = listChildren(db, root.id).filter((child) => child.interview_target_id !== null && child.status === "done");
+  const answers = listExaminees(db, root.id).filter((child) => child.status === "done");
   return escalateTask(
     db,
     root,
@@ -2369,19 +2382,19 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
  *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
- *  決着を持っていれば null で刻まない —— question だけを閉じる。 */
+ *  決着を持っていれば null で刻まない —— question だけを閉じる。観測 event を刻んだら true。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
   payload: TaskScopedPayload,
   now: Date,
   recordOn: string | null = questionId,
-): void {
-  db.transaction(() => {
+): boolean {
+  return db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
       .run(questionId);
-    if (changes === 0 || recordOn === null) return;
+    if (changes === 0 || recordOn === null) return false;
     appendEvent(db, {
       taskId: recordOn,
       workerId: BOARD_WORKER_ID,
@@ -2389,6 +2402,7 @@ export function settleQuestionAsObserved(
       payload,
       at: now,
     });
+    return true;
   })();
 }
 
@@ -2801,14 +2815,20 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
- *  is an input the rules require, so both stay out. Approved children retain
- *  their agent's decomposition judgment and also stay out (ADR 0211). */
-function assertDirectlyCancellableScope(db: Db, task: Task): void {
-  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || (task.parent_id === null && task.type !== "question");
+ *  is an input the rules require, so both stay out. Approved children retain their agent's decomposition
+ *  judgment and also stay out (ADR 0211). Every one of these comes into scope once it is stranded under a
+ *  root whose PR was closed outside the board — the same one predicate pickup skips by, which reaches any
+ *  todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
+function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
+  const inScope =
+    getTextAuthor(db, task.id) === HUMAN_WORKER_ID ||
+    (task.parent_id === null && task.type !== "question") ||
+    !!closedRootOf?.(task);
   if (!inScope) {
     throw new DomainError(
-      "only a human-authored task or a board-registered root other than a question can be directly cancelled — " +
-        "an agent-authored child (including an approved child), a board-named attached child, and a board-named question are out of scope",
+      "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
+        "was closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
+        "a board-named attached child, and a board-named question are out of scope",
     );
   }
   assertUnsettledNotInProgress(task, "cancelled");
@@ -3200,6 +3220,8 @@ export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof store
    *  listUnnotifiedHumanTasks). registerTask always writes exactly one such
    *  event, so the join is one-to-one. */
   registrant?: string;
+  /** キューの読み口だけ: この行を skipped にしている閉じた根(ADR 0265 決定6)。 */
+  closed_root?: ClosedRoot;
 };
 
 /** Who registered `taskId` — its own `task_registered` event's worker id.
@@ -3399,6 +3421,8 @@ export function listQueue(
    *  引けない。`nextSlotTask` の `excludedTaskIds` と同じ1つの式
    *  (scheduler.ts の `pickupExclusions` + selector)から渡す。 */
   isSkipped?: (task: BoardTask) => boolean,
+  /** 閉じた根に塞がれた子は skipped で、理由に閉じた根と PR を持つ(ADR 0265 決定6)。`nextSlotTask` と同じ1本を渡す。 */
+  closedRootOf?: ClosedRootOf,
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
   const rows = boardRows(
@@ -3417,9 +3441,12 @@ export function listQueue(
   return rows
     .filter((row) => row.assignee !== HUMAN_WORKER_ID)
     .map((row) => toBoardTask(db, row))
-    .map((task) =>
-      task.status === "todo" && isSkipped?.(task) ? { ...task, status: "skipped" as const } : task,
-    );
+    .map((task) => {
+      if (task.status !== "todo") return task;
+      const closed_root = closedRootOf?.(task);
+      if (closed_root) return { ...task, status: "skipped" as const, closed_root };
+      return isSkipped?.(task) ? { ...task, status: "skipped" as const } : task;
+    });
 }
 
 /** How a your-tasks row appears (issue #301): `blocking` names the parent this
@@ -3545,10 +3572,13 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     | { eventId: number; kind: "entry"; value: TaskHistoryEntry }
   > = [];
   const decisions = new Map<number, WorkingDecision>();
+  // 受験者は出題の判断の下に並べる(対象 → root で引く、ADR 0267 決定1)
+  let posed: number | undefined;
   for (const event of taskDecisionLog(db, taskId)) {
     if (event.payload.kind === "decision_logged") {
       const decision = { decision: event.payload.line, children: [] };
       decisions.set(event.id, decision);
+      if (event.payload.interview_probe) posed = event.id;
       timeline.push({ eventId: event.id, kind: "decision", value: decision });
     } else if (event.payload.kind === "task_completed") {
       timeline.push({
@@ -3566,10 +3596,10 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
   }
   const pinChild = getTask(db, taskId)?.interview_target_id != null;
-  for (const child of listChildren(db, taskId)) {
+  for (const child of [...listChildren(db, taskId).filter((child) => child.interview_target_id === null), ...listExaminees(db, taskId)]) {
     const registered = latestEventOfTask(db, child.id, "task_registered");
     if (!registered) continue;
-    const { based_on_decision } = registered.payload;
+    const based_on_decision = child.interview_target_id === null ? registered.payload.based_on_decision : posed;
     const examineeBreach = pinChild && child.question_breached_decision !== null;
     const context: HistoryChildContext = {
       title: child.title,
@@ -3690,6 +3720,17 @@ export function listChildren(db: Db, parentId: string): Task[] {
   return rows.map(rowToTask);
 }
 
+/** Interview の root の答案の task(受験者)全部を、対象 → root の結びで盤面の順に(ADR 0267 決定1)。 */
+export function listExaminees(db: Db, rootId: string): Task[] {
+  const rows = db
+    .prepare(
+      `SELECT tasks.*, ${taskTierNamesSql("tasks")} FROM tasks JOIN interview_targets it ON it.id = tasks.interview_target_id
+       WHERE it.task_id = ? ORDER BY tasks.sort_key`,
+    )
+    .all(rootId) as TaskRow[];
+  return rows.map(rowToTask);
+}
+
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
  *  an unfinished child it waits for never enters the slot — and questions never enter it
@@ -3727,9 +3768,11 @@ export function nextSlotTask(
    *  provider 全体の窓は今も agent 単位(`stopped`)—— そちらは
    *  その agent のどのタスクも走れないので、広さが実態と一致する。 */
   excludedTaskIds?: string[],
+  /** 閉じた根に塞がれた子を飛ばす(ADR 0265 決定6)。Absent → 飛ばさない。 */
+  closedRootOf?: ClosedRootOf,
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
-  const row = db
+  const statement = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
        SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
@@ -3742,15 +3785,20 @@ export function nextSlotTask(
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
-    )
-    .get({
+    );
+  const excluded = [...(excludedTaskIds ?? [])];
+  for (;;) {
+    const row = statement.get({
       defaultWorkspaceName: defaultWorkspaceName ?? null,
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
       stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
       stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
-      excludedTaskIds: excludedTaskIds?.length ? JSON.stringify(excludedTaskIds) : null,
+      excludedTaskIds: excluded.length ? JSON.stringify(excluded) : null,
     }) as TaskRow | undefined;
-  return row && rowToTask(row);
+    const task = row && rowToTask(row);
+    if (!task || !closedRootOf?.(task)) return task;
+    excluded.push(task.id);
+  }
 }

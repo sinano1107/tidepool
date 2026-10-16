@@ -23,7 +23,7 @@ ADR 0048 が abandon カスケードのために切る集合(分解判断に乗�
 
 ## Status(ステータス)
 
-`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、**その行に固有の資源単位の事情**(実行 workspace / agent の quarantine、agent の正準経路に使う Harness の封じ込め能力、その Harness と実行 workspace の組の封じ込め(workspace の封じ込め)、agent の喋る Provider の認証・使用量観測・Provider / model throttle、要求ティアの行がすべて走れない行として quarantine されていること)が今は slot に入れさせないことを示す。盤面全体の停止(トリアージセッション・Pause・レジストリ到達性)は行の性質ではないため行には現れず、キューの読み口が停止の列挙として1回で答える(盤面全体の停止 参照、ADR 0068 — 旧・skipped に盤面側全体の事情を含める線は改訂。Provider / Harness 単位への細分化は 2026-08-24 の grilling、issue #195)。`held` もステータスではなく導出される表示状態(Held 参照)。
+`todo` / `in_progress` / `blocked` / `done` / `cancelled` の5つ。`skipped` はステータスではなく `todo` 上の表示用モディファイア(キュービューのみ)— タスク自身にもキュー順序にも問題はないが、**その行に固有の事情**が今は slot に入れさせないことを示す。事情は資源単位のもの(実行 workspace / agent の quarantine、agent の正準経路に使う Harness の封じ込め能力、その Harness と実行 workspace の組の封じ込め(workspace の封じ込め)、agent の喋る Provider の認証・使用量観測・Provider / model throttle、要求ティアの行がすべて走れない行として quarantine されていること)か、**閉じた根に塞がれていること** —— lineage の帰り先が盤面の外で閉じた PR の根のブランチで、根の内容がまだ保護ブランチに無い。走っても閉じた根のブランチへ帰るだけなので飛ばし、行の理由はその根と PR を指す。根の内容が保護ブランチに届けば外れる(着地 参照、ADR 0265 決定6)。盤面全体の停止(トリアージセッション・Pause・レジストリ到達性)は行の性質ではないため行には現れず、キューの読み口が停止の列挙として1回で答える(盤面全体の停止 参照、ADR 0068 — 旧・skipped に盤面側全体の事情を含める線は改訂。Provider / Harness 単位への細分化は 2026-08-24 の grilling、issue #195)。`held` もステータスではなく導出される表示状態(Held 参照)。
 
 ## Settled(決着)
 
@@ -291,7 +291,7 @@ agent が委譲判断の材料として受け取る worker の一覧。各行は
 
 ## Transcript(トランスクリプト)
 
-worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream と stderr の2本で**1単位**であり、どちらか一方だけが欠けた session は成立しない。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければその pickup は process を1つも持たなかった session として記録され(ADR 0118 の族)、走ってから書けなくなれば盤面がその場で強制回収する(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)— ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力(MCP 設定・sandbox 設定)は transcript ではない。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
+worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream と stderr の2本で**1単位**であり、どちらか一方だけが欠けた session は成立しない。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければ盤面の記録の器が書けないこととして盤面全体が止まり、踏んだ task は失敗にせず todo の先頭へ戻る(盤面全体の停止 参照、ADR 0266 / ADR 0149 追記1)。走ってから書けなくなれば盤面がその場で強制回収し(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)、その session の failure question を残したまま同じ停止も立つ — ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力(MCP 設定・sandbox 設定)は transcript ではない。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
 _Avoid_: worker log、stderr ログ(片方だけを指す言い方)
 
 ## 容器(Process container)

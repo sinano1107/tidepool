@@ -526,6 +526,8 @@ it("学習器は採点完了で入った Interview の子の採点を、同じ�
   for (const [root, child, outcome] of [[roots[0]!, accepted, "accepted"], [roots[1]!, rejected, "rejected"]] as const) {
     completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child.id, outcome }], handoff: FINDINGS }, "auditor", new Date(1), "worker");
   }
+  // 受験者は root の子ではない(ADR 0267 決定1)—— 学習器は対象 → root で root の決着を引く
+  db.prepare("UPDATE tasks SET parent_id = NULL, based_on_decision = NULL WHERE interview_target_id IS NOT NULL").run();
   const episodes = loadEpisodes(db);
   expect(episodes.map(({ task_id, outcome, interview }) => ({ task_id, outcome, interview }))).toEqual([
     { task_id: accepted.id, outcome: "accepted", interview: true },
@@ -549,6 +551,8 @@ it("root が cancelled や未決着の Interview の子の採点は、採点の�
     if (cancelled) cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui");
     return children;
   });
+  // 受験者は root の子ではない(ADR 0267 決定1)—— 学習器は対象 → root で root の決着を引く
+  db.prepare("UPDATE tasks SET parent_id = NULL, based_on_decision = NULL WHERE interview_target_id IS NOT NULL").run();
   const episodes = loadEpisodes(db);
   expect(episodes.map(({ task_id, outcome }) => ({ task_id, outcome }))).toEqual(scored.flat().map(({ id }) => ({ task_id: id, outcome: "excluded" })));
   expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([]);
