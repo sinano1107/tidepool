@@ -10,7 +10,7 @@ import type { Provider } from "../src/provider.js";
 import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, examineeParent, getRegistrant, getTask, interviewTargets, listBoard, listChildren, logDecision, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
 import { listLog } from "../src/triage.js";
-import { failTask } from "../src/watchdog.js";
+import { registerFailureQuestion } from "../src/watchdog.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
@@ -167,7 +167,7 @@ const ONLY_THIS_TARGET = /answer and comment reach only this target/;
 
 it("pin の子の failure question の context は答えとコメントがこの対象にだけ届くと人間に言い、自分の history はその文を外して答えとコメントを運ぶ(ADR 0263 決定9)", () => {
   const { db, failed } = twoPinnedChildren();
-  failTask(db, failed, "worker timed out", "The worker exceeded its time limit.", undefined, new Date(0));
+  registerFailureQuestion(db, failed, "worker timed out", "The worker exceeded its time limit.", new Date(0));
   const question = listChildren(db, failed.id)[0]!;
   expect(getTask(db, question.id)!.purpose).toMatch(ONLY_THIS_TARGET);
   answerQuestionViaWebui(db, question, ["retry"], new Date(0), { comment: "use the streaming API" });
@@ -194,7 +194,7 @@ it("pin の子が escalate した question の context は、agent の書いた 
 it("本番の work の failure と escalation の question の context は「この対象にだけ届く」を持たず、history は purpose をそのまま運ぶ", () => {
   const db = openDb(":memory:");
   const task = registerTask(db, { ...CHILD, type: "work" }, new Date(0), ...HUMAN_WEBUI);
-  failTask(db, task, "worker failed", "The worker exceeded its time limit.", undefined, new Date(0));
+  registerFailureQuestion(db, task, "worker failed", "The worker exceeded its time limit.", new Date(0));
   answerQuestionViaWebui(db, listChildren(db, task.id)[0]!, ["retry"], new Date(0));
   const escalated = escalateTask(db, getTask(db, task.id)!, ESCALATION, "tako", new Date(0), "worker");
   expect(escalated.purpose).toBe(ESCALATION.context);
@@ -215,7 +215,7 @@ it("pin の子の failure question は兄弟の pin の子を held にしない 
 
 it("retry 後の pin の子の failure question の history は失敗の理由と再実行の帰結を残し、Interview の帰結だけを伏せる —— 人間の context は残る(ADR 0245 決定2 / ADR 0247 決定1)", () => {
   const { db, failed } = twoPinnedChildren();
-  failTask(db, failed, "worker timed out", "The worker exceeded its time limit. Last utterance: still parsing.", undefined, new Date(0));
+  registerFailureQuestion(db, failed, "worker timed out", "The worker exceeded its time limit. Last utterance: still parsing.", new Date(0));
   const question = listChildren(db, failed.id)[0]!;
   answerQuestionViaWebui(db, question, ["retry"], new Date(0));
 
@@ -235,7 +235,7 @@ it("retry 後の pin の子の failure question の history は失敗の理由�
 it("通常の task の failure question の history は Interview の帰結と同じ文が理由にあっても purpose をそのまま運ぶ", () => {
   const db = openDb(":memory:");
   const task = registerTask(db, { ...CHILD, type: "work" }, new Date(0), ...HUMAN_WEBUI);
-  failTask(db, task, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", undefined, new Date(0));
+  registerFailureQuestion(db, task, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", new Date(0));
   const question = listChildren(db, task.id)[0]!;
   answerQuestionViaWebui(db, question, ["retry"], new Date(0));
   expect(taskHistoryRows(db, task.id).map((row) => row.entry)).toEqual([
@@ -245,7 +245,7 @@ it("通常の task の failure question の history は Interview の帰結と�
 
 it("pin の子の失敗理由に引用された Interview の帰結は逐語で残し、末尾の生成文だけを history から外す", () => {
   const { db, failed } = twoPinnedChildren();
-  failTask(db, failed, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", undefined, new Date(0));
+  registerFailureQuestion(db, failed, "worker failed", "Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.", new Date(0));
   const question = listChildren(db, failed.id)[0]!;
   answerQuestionViaWebui(db, question, ["retry"], new Date(0));
   expect(taskHistoryRows(db, failed.id).map((row) => row.entry)).toEqual([

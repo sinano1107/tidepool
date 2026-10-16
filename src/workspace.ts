@@ -1055,7 +1055,7 @@ export function guardRegistryDefaultBranch(
 }
 
 /** The one fallback shape shared by every board-driven workspace consumer
- *  (scheduler pickup, mcp release, watchdog/restart failTask): prefer the
+ *  (scheduler pickup, mcp release, watchdog/restart teardown): prefer the
  *  registry-backed resolver when configured, else fall back to a fixed
  *  single workspace (pre-#26 shape, and still today's shape for a caller
  *  with no registry at all). Undefined means no workspace tracking exists —

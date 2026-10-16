@@ -517,7 +517,7 @@ export function startScheduler(deps: {
       if (err instanceof IssueGoneError) {
         // 確定的失敗 (ADR 0016): the reference is dead for good, not this
         // cycle's weather — the same watchdog-shaped retry/abandon question
-        // as failTask, minus the workspace release (nothing was acquired
+        // as registerFailureQuestion, minus the teardown (nothing was acquired
         // yet). The unanswered question holds the task out of nextSlotTask,
         // so the gate never re-fires for it until a human answers.
         escalateTask(
