@@ -137,9 +137,9 @@ export class NoOwnGitDirError extends Error {
  *  ディレクトリでない checkout(linked worktree・submodule)は stat の形だけで拒む。
  *  `.git` が無いパスは、git が外側の repo の作業ツリーとして解決するとき(部分ディレクトリ、
  *  ADR 0146 追記 / issue #1964)だけ拒む —— 放せば git 操作が親 repo 全体に効く。
- *  どの repo にも属さないパス(と作業ツリーを持たない bare repo)は何もせず、今日どおり
- *  各門の git 側の失敗で落ちる。pickup・修理確認・登録の3つの門がこの1つを共有する。 */
-export function assertGitDirIsDirectory(path: string): void {
+ *  どの repo にも属さないパスは何もせず、今日どおり各門の git 側の失敗で落ちる。作業ツリーを
+ *  持たない bare repo も素通りし、今日の扱いのまま。pickup・修理確認・登録の3つの門がこの1つを共有する。 */
+export function assertOwnGitDirectory(path: string): void {
   const stat = statSync(join(path, ".git"), { throwIfNoEntry: false });
   if (stat && !stat.isDirectory()) throw new GitDirNotADirectoryError(path);
   if (stat) return;
@@ -568,7 +568,7 @@ export async function prepareWorkspaceAtPickup(
   task: Task,
   board: { githubAuth?: GitHubAuth; registry?: RegistrySource; now: Date },
 ): Promise<void> {
-  assertGitDirIsDirectory(workspace.path);
+  assertOwnGitDirectory(workspace.path);
   assertRegistryRoleAgrees(workspace, board.registry);
   assertRemoteDeclarationMatchesClone(workspace);
   await ensureWorkspaceToken(workspace, board.githubAuth);
@@ -931,7 +931,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
  *  the same, fail-closed, same posture as the tree rule's own dirty-after-
  *  WIP-commit check. */
 export function verifyWorkspaceClean(workspace: WorkspaceConfig): void {
-  assertGitDirIsDirectory(workspace.path);
+  assertOwnGitDirectory(workspace.path);
   let status: string;
   try {
     status = git(workspace.path, "status", "--porcelain");
