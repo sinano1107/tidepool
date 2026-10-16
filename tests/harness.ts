@@ -49,6 +49,7 @@ import {
   humanDecomposeTask,
   listBoard,
   listChildren,
+  poseProbe,
   type RegisterTaskInput,
   recordPrOpened,
   registerTask,
@@ -795,6 +796,17 @@ export function rememberedNote(t: Tidepool, title: string): number {
     "worker",
     t.clock.now(),
   ).entry_id;
+}
+
+/** setup のみ: 対象1つの Interview を登録して probe を出し、その pin の子(受験者)を返す。 */
+export function interviewPinChild(db: Db, at: Date): Task {
+  const interview = registerTask(
+    db,
+    { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never },
+    at,
+    ...HUMAN_WEBUI,
+  );
+  return poseProbe(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker")[0]!;
 }
 
 /** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。

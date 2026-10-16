@@ -9,14 +9,16 @@ import {
   defineMemoryBranch,
   humanEntryInput,
   invalidateMemoryEntry,
+  moveMemory,
   readMemorySettings,
   recordBehavior,
   recordExemplar,
   recordKnowledge,
   recordMemoryInjection,
+  restoreMemoryEntry,
 } from "../src/memory.js";
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, interviewPinChild } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -361,7 +363,7 @@ it("注入上限は未設定なら 2,000 トークンで、変更は読み口に
   expect(getEvent(db, eventId)?.payload).toEqual({ kind: "memory_settings_changed", injection_token_cap: 500 });
 });
 
-it("読み手が pin の子のとき、どの Interview の pin の子が書いたエントリも INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 本番の task には出る(ADR 0263 決定7)", () => {
+it("読み手が pin の子のとき、どの Interview の pin の子が書いたエントリも INDEX・関連 leaf に出ず、上限で落とした件数にも数えない(ADR 0263 決定7)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
   const interview = (targets: object[]) =>
@@ -385,20 +387,44 @@ it("読み手が pin の子のとき、どの Interview の pin の子が書い�
       writer.id,
     ).entry_id;
   const production = write(task, "parser", "parser production");
-  const siblingEntry = write(sibling!, "parser/answers", "parser sibling");
-  const elsewhere = write(otherPinChild!, "lexer", "parser elsewhere");
+  write(sibling!, "parser/answers", "parser sibling");
+  write(otherPinChild!, "lexer", "parser elsewhere");
 
   const injection = buildMemoryInjection(db, examinee!, "tidepool", "deckhand");
 
   expect(injection).toMatchObject({ entries: [{ id: production }], omitted: 0, index_max_depth: 1 });
   expect(injection.section).toContain("### Index\n\n- parser/ — (undefined)\n\n### Relevant entries\n\n");
   expect(injection.section).not.toMatch(/answers|lexer|sibling|elsewhere/);
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblingEntry, elsewhere]);
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
 });
 
-it("読み手が pin の子のとき、出所の event の task がどの Interview の root か pin の子であるエントリは、書き手を問わず INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 出所が commit のもの・自分が書いたものと、本番の task と root には出る(ADR 0264 決定3)", () => {
+it("読み手が pin の子でないとき、どの Interview の pin の子が書いた Knowledge と Definition も、その移動・復元の複製も INDEX・関連 leaf に出ず、上限で落とした件数にも数えない(ADR 0264 決定1)", () => {
+  const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
+  const { db, task } = board(probe);
+  const [pinChild, otherPinChild] = [interviewPinChild(db, at), interviewPinChild(db, at)];
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const write = (writer: { id: string }, path: string, title: string) =>
+    recordKnowledge(db, { scope: "tidepool", path, title, text: "the parser", source: { commit: "0a46a46" }, author }, "worker", at, writer.id).entry_id;
+  const human = { activity: "human" as const, name: "human" };
+  const production = write(task, "parser", "parser production");
+  write(pinChild, "parser/answers", "parser answers");
+  defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", at, pinChild.id);
+  moveMemory(db, { entry_id: write(otherPinChild, "parser/drafts", "parser moved"), scope: "tidepool", path: "lexer", mover: human }, "webui", at);
+  const dropped = write(pinChild, "grammar", "parser restored");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at);
+  restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at);
+
+  const injection = buildMemoryInjection(db, task, "tidepool", "deckhand");
+
+  expect(injection).toMatchObject({ entries: [{ id: production }], omitted: 0, index_max_depth: 1 });
+  expect(injection.section).toContain("### Index\n\n- parser/ — (undefined)\n\n### Relevant entries\n\n");
+  expect(injection.section).not.toMatch(/answers|lexer|grammar|examinee|moved|restored/);
+  changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
+});
+
+it("読み手が pin の子のとき、出所の event の task がどの Interview の root か pin の子であるエントリは、書き手を問わず INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 出所が commit のもの・自分が書いたものには出て、本番の task と root には受験者の書き込みを除いて出る(ADR 0264 決定1・3)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
   const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
@@ -441,7 +467,7 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
   expect(injection.section).not.toMatch(/answers|probes|cited|exemplar|behavior/);
   // root の題は probe の語を持たないので、関連 leaf を同じ語で引くよう題を揃える
   for (const reader of [task, { ...probe, id: root.id }]) {
-    expect(buildMemoryInjection(db, reader, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, own, fromSibling, exemplar, behavior]);
+    expect(buildMemoryInjection(db, reader, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, fromSibling, exemplar, behavior]);
   }
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 2 });

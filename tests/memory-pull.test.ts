@@ -546,12 +546,12 @@ function examineeBoard() {
   return { db, task, reader, examinee: { ...reader, taskId: examinee!.id }, sibling: sibling!, otherPinChild: otherPinChild!, write };
 }
 
-it("読み手が pin の子のとき、search はどの Interview の他の pin の子が書いたエントリも返さず、memory_pulled の候補にも落とした理由つきでも載せない —— 自分が書いたものと本番の task には返る(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
+it("読み手が pin の子のとき、search はどの Interview の他の pin の子が書いたエントリも返さず、memory_pulled の候補にも落とした理由つきでも載せない —— 自分が書いたものと本番の task が書いたものは返る(ADR 0263 決定7)", () => {
+  const { db, task, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
   const own = write({ id: examinee.taskId }, "own");
-  const siblingEntry = write(sibling, "sibling");
-  const elsewhere = write(otherPinChild, "elsewhere");
+  write(sibling, "sibling");
+  write(otherPinChild, "elsewhere");
   const invalidated = write(sibling, "invalidated");
   invalidateMemoryEntry(db, { entry_id: invalidated, reason: "environment" }, "human", "webui", at);
 
@@ -559,21 +559,19 @@ it("読み手が pin の子のとき、search はどの Interview の他の pin 
 
   expect(search.results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, own]);
   expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id).sort((a, b) => a - b)).toEqual([production, own]);
-  expect(searchMemory(db, reader, { query: "tide" }, at).results.map((r) => r.id).sort((a, b) => a - b)).toEqual([production, own, siblingEntry, elsewhere]);
 });
 
-it("読み手が pin の子のとき、browse はどの Interview の pin の子が書いた leaf も、それだけが置かれた枝も出さない —— 本番の task には出る(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
+it("読み手が pin の子のとき、browse はどの Interview の pin の子が書いた leaf も、それだけが置かれた枝も出さない(ADR 0263 決定7)", () => {
+  const { db, task, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
-  const siblingEntry = write(sibling, "sibling");
+  write(sibling, "sibling");
   write(otherPinChild, "elsewhere", "tide/answers");
 
   expect(browseMemory(db, examinee, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
-  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [{ name: "tide/answers" }], entries: [{ id: production }, { id: siblingEntry }] });
 });
 
-it("読み手が pin の子のとき、read は pin の子が書いた id(移された複製・無効化済みも)を名指されても視界の外として黙って落とし、その後継も見えない後継として扱う —— 本番の task には見える(ADR 0263 決定7)", () => {
-  const { db, task, reader, examinee, sibling, otherPinChild, write } = examineeBoard();
+it("読み手が pin の子のとき、read は pin の子が書いた id(移された複製・無効化済みも)を名指されても視界の外として黙って落とし、その後継も見えない後継として扱う(ADR 0263 決定7)", () => {
+  const { db, task, examinee, sibling, otherPinChild, write } = examineeBoard();
   const production = write(task, "production");
   const elsewhere = write(otherPinChild, "elsewhere");
   const moved = moveMemory(db, { entry_id: write(sibling, "moved"), scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
@@ -593,12 +591,6 @@ it("読み手が pin の子のとき、read は pin の子が書いた id(移さ
 
   expect(read.entries.map((e) => e.id)).toEqual([production]);
   expect(read.dropped).toEqual([{ id: replaced, reason: "superseded", successor: null }]);
-  const seen = readMemory(db, reader, { ids }, at);
-  expect(seen.entries.map((e) => e.id)).toEqual([production, elsewhere, moved, successor]);
-  expect(seen.dropped).toEqual([
-    { id: invalidated, reason: "environment", successor: null },
-    { id: replaced, reason: "superseded", successor },
-  ]);
 });
 
 it("読み手が pin の子のとき、どの Interview の root が書いたエントリ(移された複製も)も search・browse・read に出ず、search の候補にも載らない —— root と本番の task には見える(ADR 0264 決定3)", () => {
@@ -647,7 +639,8 @@ it("読み手が pin の子のとき、自分が書いたエントリ(移され�
   const ids = [own, movedOwn, onOwnDecision, digitsCommit];
 
   expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: own }, { id: movedOwn }, { id: digitsCommit }], dropped: [] });
-  expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual(ids);
+  // 本番の読み手には受験者の書き込み(own・movedOwn)が無い(ADR 0264 決定1)
+  expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual([onOwnDecision, digitsCommit]);
 });
 
 it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
@@ -1201,4 +1194,31 @@ it("店に刻まれた tokenizer id が今の版と違えば、open 後の照合
   expect(getEvent(db, eventId!)).toMatchObject({ task_id: null, worker_id: "tidepool", origin: "board", payload: { kind: "memory_index_rebuilt" } });
   expect(searchMemory(db, reader, { query: "派生" }, at).results.map((r) => r.title)).toEqual(["tsc"]);
   expect(ensureMemoryIndex(db, at)).toBeNull();
+});
+
+it("読み手が pin の子でないとき、search・browse・read はどの Interview の pin の子が書いたエントリも、その移動・復元の複製も返さず、memory_pulled の候補にも read の dropped にも載せない —— pin の子が書いた後継は見えない後継として扱う(ADR 0264 決定1)", () => {
+  const { db, task, reader, sibling, otherPinChild, write } = examineeBoard();
+  const production = write(task, "production");
+  const siblingEntry = write(sibling, "sibling");
+  const answers = write(otherPinChild, "answers", "tide/answers");
+  const moved = moveMemory(db, { entry_id: write(sibling, "moved"), scope: "tidepool", path: "tide/moved", mover: human }, "webui", at).entry_id;
+  const dropped = write(otherPinChild, "restored");
+  invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at);
+  const restored = restoreMemoryEntry(db, { entry_id: dropped, restorer: human }, "webui", at).entry_id;
+  const replaced = write(task, "replaced");
+  const successor = recordKnowledge(
+    db,
+    { scope: "tidepool", path: "tide", title: "successor", text: "tide successor", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" }, supersedes: [replaced] },
+    "worker",
+    at,
+    sibling.id,
+  ).entry_id;
+
+  const search = searchMemory(db, reader, { query: "tide" }, at);
+  expect(search.results.map((r) => r.id)).toEqual([production]);
+  expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id).sort((a, b) => a - b)).toEqual([production, replaced]);
+  expect(browseMemory(db, reader, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
+  const read = readMemory(db, reader, { ids: [production, siblingEntry, answers, moved, dropped, restored, replaced, successor] }, at);
+  expect(read.entries.map((e) => e.id)).toEqual([production]);
+  expect(read.dropped).toEqual([{ id: replaced, reason: "superseded", successor: null }]);
 });

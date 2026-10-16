@@ -11,11 +11,13 @@ import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
   editThroughHumanDoor,
+  listMemoryEntriesForHuman,
   quarantineChecks,
   registerThroughHumanDoor,
   submitAnswer,
 } from "../src/human-verbs.js";
 import { countTasksAwaitingLanding, createLanding, type LandingDeps, registerPrPromotionFailureQuestion } from "../src/landing.js";
+import { defineMemoryBranch, recordKnowledge } from "../src/memory.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import {
   cancelTaskDirectly,
@@ -36,6 +38,7 @@ import {
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   initWorkspaceCheckout,
+  interviewPinChild,
   queuedForAutoMerge,
 } from "./harness.js";
 
@@ -1438,4 +1441,14 @@ it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll
   ];
 
   expect({ ok: results.map((r) => r.ok), polls }).toEqual({ ok: [false, false, false], polls: 0 });
+});
+
+it("人間の面の記憶の一覧は、pin の子(受験者)が書いたエントリも返す(ADR 0264 決定1)", () => {
+  db = openDb(":memory:");
+  const pinChild = interviewPinChild(db, NOW);
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const knowledge = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author }, "worker", NOW, pinChild.id).entry_id;
+  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", NOW, pinChild.id).entry_id;
+
+  expect(listMemoryEntriesForHuman({ db: db }, {}).map((e) => e.id)).toEqual([knowledge, definition]);
 });

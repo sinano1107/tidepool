@@ -1237,7 +1237,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
     "list_memory_entries",
     {
       description:
-        "List the memory entries the human settings view lists, each entry's original wording omitted — candidates and invalidated entries " +
+        "List the memory entries the human settings view lists, except those Interview examinees wrote, each entry's original wording omitted — candidates and invalidated entries " +
         "included. scope: a workspace name, null for board-wide only, omit for all. " +
         "path: only the entries at that branch or under it (path/…). " +
         nextDescription("list_memory_entries", "entries"),
@@ -1260,7 +1260,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing; entries Interview examinees wrote are not returned. " +
         "Entries come in id order. " +
         nextDescription("read_memory_entries", "entries", "`missing` comes"),
       inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
