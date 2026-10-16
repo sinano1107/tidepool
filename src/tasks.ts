@@ -1432,10 +1432,7 @@ export interface CancelDefaults {
  *  Like the cascade, it stops at an attached review: what stands under one is not
  *  cancelled, so it gates nothing (ADR 0268 決定4). */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const subtree = `WITH RECURSIVE subtree(id) AS (
-      SELECT @root
-      UNION
-      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id WHERE NOT ${survivesParentCancelSql("c")})`;
+  const subtree = subtreeSql("@root", `NOT ${survivesParentCancelSql("c")}`);
   const failure = db
     .prepare(
       `${subtree}
@@ -3084,14 +3081,14 @@ function blockingSql(rowRef: string): string {
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
  *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
- *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`skipCancelled` なら cancelled の
- *  タスクとその下へは降りない(根自身は残す)—— 積み残しが abandon で捨てられた判断の内側を
+ *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`where`(子の行 `c` の条件)に当たらない子
+ *  とその下へは降りない(根自身は残す)—— 積み残しは cancelled の子を除き、abandon で捨てられた判断の内側を
  *  運ばない(ADR 0239 決定1)。 */
-export function subtreeSql(rootRef: string, skipCancelled = false): string {
+export function subtreeSql(rootRef: string, where?: string): string {
   return `WITH RECURSIVE subtree(id) AS (
       SELECT ${rootRef}
       UNION
-      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id${skipCancelled ? " WHERE c.status <> 'cancelled'" : ""})`;
+      SELECT c.id FROM tasks c JOIN subtree s ON c.parent_id = s.id${where ? ` WHERE ${where}` : ""})`;
 }
 
 /** 着地の門(ADR 0092 決定1): 着地するタスクの子孫全体に付いた、未決着の付帯子の数。
