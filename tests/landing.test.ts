@@ -2741,26 +2741,97 @@ it("merge に失敗した開いたままの PR も、question を立てる直前
   ]);
 });
 
-it("遅い走査は、盤面の外で閉じられた PR の open な merge question を閉じた観測として決着させる(ADR 0229 決定4)", async () => {
+/** escalate の PR `prNumber` を開いた根(workspace は `workspace`)と、PR を開いたときに立った merge question。 */
+function escalatedRoot(db: Db, clock: FakeClock, prNumber: number, workspace?: string) {
+  const root = registerTask(
+    db,
+    { type: "work", title: "ship", purpose: "ship an agreed change", completion_criteria: "the change is ready", workspace },
+    clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  recordPrOpenedViaWorker(db, root, prNumber, "worker", clock.now(), { authority: { merge: "escalate" } });
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === prNumber && q.workspace === root.workspace)!;
+  return { root, question };
+}
+
+// ADR 0265 決定1: 観測で閉じた question は回答なしの done、PR の決着は PR を開いた根に残る
+it("遅い走査は、盤面の外で閉じられた PR の open な merge question を回答なしで閉じ、閉じた観測を根に刻む(ADR 0229 決定4)", async () => {
   const workspace = await makeWorkspace("landing-scan-closed");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const question = mergeQuestion(db, clock, { pending_merge_pr: 1 });
+  const { root, question } = escalatedRoot(db, clock, 1);
   github.scriptClosedOutside(1);
 
   await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
 
-  expect(getTask(db, question.id)!.status).toBe("done");
-  expect(boardEvents(db, question.id, "question_answered")).toEqual([]);
-  expect(boardEvents(db, question.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
+  expect(boardEvents(db, question.id, "pr_close_observed")).toEqual([]);
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("遅い走査は、盤面の外で merge された PR の merge の観測を根に刻む", async () => {
+  const workspace = await makeWorkspace("landing-scan-merged");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const { root, question } = escalatedRoot(db, clock, 1);
+  github.scriptMergedOutside(1);
+
+  await autoMerging(db, clock, workspace, github).tick("outside_merge", clock.now());
+
+  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(boardEvents(db, question.id, "pr_merge_observed")).toEqual([]);
+  expect(boardEvents(db, root.id, "pr_merge_observed")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+  ]);
+});
+
+it("別の workspace の同じ番号の PR の観測は、それぞれの workspace の根に1件ずつ刻まれ混ざらない", async () => {
+  const workspace = await makeWorkspace("landing-scan-same-number");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const here = escalatedRoot(db, clock, 1, "here");
+  const there = escalatedRoot(db, clock, 1, "there");
+  github.scriptClosedOutside(1);
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, resolveWorkspace: () => workspace, github });
+
+  await landing.tick("outside_merge", clock.now());
+
+  expect(boardEvents(db, here.root.id, "pr_close_observed")).toEqual(closeObserved(1));
+  expect(boardEvents(db, there.root.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+// #2026: 外で閉じた escalate の根の閉じた記録が question の側にあり、収束が読めずに撃ち続けていた
+it("遅い走査が外で閉じたと観測した escalate の根は、次の収束で候補から外れ、git も読まれず verdict にも出ない", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-scan-closed-root");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = autoMerging(db, clock, workspace, github, () => profile("escalate"));
+  const root = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, root);
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened", prNumber: 1 });
+  github.scriptClosedOutside(1);
+  const pushes = github.pushes.length;
+
+  await landing.tick("outside_merge", clock.now());
+  // 読めば壊れていると分かる checkout でも、閉じた根は読まれない
+  git(workspace.path, "checkout", "main");
+  git(workspace.path, "branch", "-D", `task/${root.id}`);
+
+  await expect(landing.converge()).resolves.toEqual([]);
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(promotionFailures(db, root.id)).toEqual([]);
+  expect(github.pushes).toHaveLength(pushes);
 });
 
 it("遅い走査は、workspace の解決が分類できない失敗で落ちた question を open のまま残し、tick は落ちず後ろの question は決着する(ADR 0229 決定1)", async () => {
   const workspace = await makeWorkspace("landing-scan-resolve-throws");
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
-  const broken = mergeQuestion(db, clock, { pending_merge_pr: 1 }, "broken");
-  const closed = mergeQuestion(db, clock, { pending_merge_pr: 2 }, "healthy");
+  const broken = escalatedRoot(db, clock, 1, "broken").question;
+  const { root: closedRoot, question: closed } = escalatedRoot(db, clock, 2, "healthy");
   github.scriptClosedOutside(2);
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   const landing = createLanding({
@@ -2778,7 +2849,7 @@ it("遅い走査は、workspace の解決が分類できない失敗で落ちた
 
   expect(getTask(db, broken.id)!.status).toBe("todo");
   expect(getTask(db, closed.id)!.status).toBe("done");
-  expect(boardEvents(db, closed.id, "pr_close_observed")).toEqual(closeObserved(2));
+  expect(boardEvents(db, closedRoot.id, "pr_close_observed")).toEqual(closeObserved(2));
   expect(logged).toHaveBeenCalledWith(expect.stringContaining(`PR #1 (question ${broken.id})`), expect.any(Error));
 });
 

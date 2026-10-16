@@ -478,12 +478,14 @@ const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as
  *  a second observation must not re-stamp an already-closed question. */
 function settleMergeQuestionAsObserved(
   db: Db,
-  questionId: string,
+  question: Pick<Task, "id" | "workspace">,
   prNumber: number,
   state: keyof typeof OBSERVED,
   now: Date,
 ): void {
-  settleQuestionAsObserved(db, questionId, { kind: OBSERVED[state], pr_number: prNumber }, now);
+  // ADR 0265 決定1: 観測は PR を開いた根に刻み、question は回答なしの done で閉じる
+  const root = taskIdForPr(db, prNumber, question.workspace);
+  settleQuestionAsObserved(db, question.id, { kind: OBSERVED[state], pr_number: prNumber }, now, root);
 }
 
 /** 収束が着地を成立させたら、同じタスクを指す PR 昇格失敗の question はもう誰にも訊く
@@ -1059,7 +1061,7 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
       if (state === "OPEN" || isMarked(question.workspace, prNumber)) return false;
-      settleMergeQuestionAsObserved(deps.db, question.id, prNumber, state, deps.clock.now());
+      settleMergeQuestionAsObserved(deps.db, question, prNumber, state, deps.clock.now());
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
@@ -1101,7 +1103,7 @@ export function createLanding(deps: LandingDeps): Landing {
               .catch(() => null);
             // 印は await の後に見る —— merge 回答が merge 中の PR の決着は回答が書く(ADR 0236 決定3)
             if (state && state !== "OPEN" && !isMarked(taskWorkspace, pr_number)) {
-              settleMergeQuestionAsObserved(deps.db, id, pr_number, state, now);
+              settleMergeQuestionAsObserved(deps.db, { id, workspace: taskWorkspace }, pr_number, state, now);
             }
           } catch (error) {
             // ADR 0229 決定1: 分類できない失敗はログに出し、その question は open のまま残して次へ進む

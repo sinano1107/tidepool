@@ -2364,12 +2364,14 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
 /** 観測決着の1つの綴り: `status='todo'` 限定の UPDATE で question を閉じ、盤面名義の
  *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
- *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。 */
+ *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
+ *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻む(ADR 0265 決定1)。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
   payload: TaskScopedPayload,
   now: Date,
+  recordOn = questionId,
 ): void {
   db.transaction(() => {
     const { changes } = db
@@ -2377,7 +2379,7 @@ export function settleQuestionAsObserved(
       .run(questionId);
     if (changes === 0) return;
     appendEvent(db, {
-      taskId: questionId,
+      taskId: recordOn,
       workerId: BOARD_WORKER_ID,
       origin: "board",
       payload,
