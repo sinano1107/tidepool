@@ -535,6 +535,9 @@ export type EventPayload =
       /** cause `memory` のとき名指された誤った entry の id(読んだ集合の内側、ADR 0166 決定3)。他の cause は null。 */
       entries: number[] | null;
       round: "initial" | "after_rca";
+      /** 初回だけ: 判定が読んだ decision log の最後の entry の id(#1572)。判定の入力を組んだ後、commit までに異議された
+       *  task へ entry が書かれたときだけ持つ —— 無ければこの event の id より前が当時の decision log(#1572 より前の記録も同じ)。 */
+      decision_log_through?: number;
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
   // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。

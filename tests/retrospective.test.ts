@@ -1529,6 +1529,54 @@ it.each([
   }
 });
 
+it.each([
+  ["初回 preference の起草", "preference", false, "await"],
+  ["初回 uncertain の第2回とそこからの起草", "uncertain", false, "await"],
+  ["初回 preference の起草の撃ち直し", "preference", true, "await"],
+  ["初回 uncertain の第2回からの起草の撃ち直し", "uncertain", true, "await"],
+  ["判定が返った後・commit の前に判断が書かれた初回 preference の起草", "preference", false, "after"],
+] as const)("%s は、初回の判定の後に書かれた判断を、初回の判定と同じく当時の decision log に含めない(#1572)", async (_, cause, retry, when) => {
+  const db = openDb(":memory:");
+  try {
+    const registered = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", at)!;
+    const entry = logDecision(db, task, "skipped the fixtures", "deckhand", at, "worker");
+    const session = startTriage(db, at);
+    raiseObjection(db, entry, "keep the fixtures", at);
+    const client = new FakeAttributionClient();
+    const drafter = new FakeBehaviorDraftClient();
+    const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+    let release!: () => void;
+    client.scriptJudgment(entry, new Promise((resolve) => (release = () => resolve({ cause, evidence: "taste" }))));
+    const attributing = attributeObjections(db, deps, session.id, at);
+    const decideLater = () => logDecision(db, task, "decided after the judgment read the log", "deckhand", at, "worker");
+    if (when === "await") decideLater();
+    release();
+    const judgments = await attributing;
+    if (when === "after") decideLater();
+    commitTriage(db, at, [], judgments);
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) completeTask(db, rca, undefined, "auditor", at, "worker");
+    client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
+    const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
+    drafter.scriptDraft(entry, retry ? new Error("temporary draft failure") : draft);
+
+    refireRetrospectiveCalls(db, deps, at);
+    await new Promise((resolve) => setImmediate(resolve));
+    if (retry) {
+      drafter.scriptDraft(entry, draft);
+      refireRetrospectiveCalls(db, deps, new Date(at.getTime() + HOUR));
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+
+    const judged = cause === "uncertain" ? 2 : 1;
+    expect(client.calls.map((c) => c.input.decision_log)).toEqual(Array(judged).fill(["skipped the fixtures"]));
+    expect(drafter.calls.map((c) => c.input.decision_log)).toEqual(Array(retry ? 2 : 1).fill(["skipped the fixtures"]));
+    expect(listMemoryEntries(db, {}).map((m) => m.title)).toEqual(["Keep fixtures"]);
+  } finally {
+    db.close();
+  }
+});
+
 /** 同じ task に2つの異議群を並べる: session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
  *  `same` なら同じ X を、でなければ entry Y を異議して commit する。どちらも初回は未帰責(第2回を待つ)。
  *  各 RCA 子には異議群ごとに見分けのつく decision を書く。子は題でなく登録の異議 id 列で見分ける。 */

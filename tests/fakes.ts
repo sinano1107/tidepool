@@ -886,14 +886,14 @@ export class FakeAllocationClient implements AllocationClient {
 
 /** Scripted stand-in at the AttributionClient seam (issue #574): records every
  *  input it was asked to judge; the answer is scripted **per objected entry**
- *  (a judgment, or an Error to throw for that entry alone), and an entry
- *  nothing was scripted for answers `uncertain`. */
+ *  (a judgment, an Error to throw for that entry alone, or a promise to hold
+ *  the call open), and an entry nothing was scripted for answers `uncertain`. */
 export class FakeAttributionClient implements AttributionClient {
   readonly calls: Array<{
     input: AttributionInput;
     setting: Pick<ExecutionSettingRow, "model" | "effort">;
   }> = [];
-  private readonly scripted = new Map<number, AttributionJudgment | Error>();
+  private readonly scripted = new Map<number, AttributionJudgment | Error | Promise<AttributionJudgment>>();
 
   async judge(
     input: AttributionInput,
@@ -905,7 +905,7 @@ export class FakeAttributionClient implements AttributionClient {
     return answer;
   }
 
-  scriptJudgment(entryId: number, judgment: AttributionJudgment | Error): void {
+  scriptJudgment(entryId: number, judgment: AttributionJudgment | Error | Promise<AttributionJudgment>): void {
     this.scripted.set(entryId, judgment);
   }
 }
