@@ -271,7 +271,7 @@ it("写しを書いた後でブランチを外す前に落ちても、次の pic
   db.close();
 });
 
-it("決着した受験者の下に repair の work を登録すると拒まれる —— 受験者を祖先に持つ task は無く、lineage は受験者の祖先を考えない(ADR 0268 決定5)", async () => {
+it("決着した受験者の下に repair の work を登録すると拒まれる(ADR 0268 決定5)", async () => {
   const workspace = await makeWorkspace("pin-lineage-without-ref");
   const db = openDb(":memory:");
   const [child] = posed(db, workspace) as [Task];
