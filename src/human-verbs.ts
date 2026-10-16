@@ -87,6 +87,7 @@ import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import type { SettledMark } from "./wire-contract.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
@@ -873,7 +874,9 @@ export async function cancelThroughHumanDoor(
 }
 
 /** 回答の応答: 盤面の行と同じ形に、観測で閉じた印を添える(ADR 0265 決定7)。HTTP と管理 MCP の扉がこれを返す。 */
-function presentAnswered(deps: SubmitAnswerDeps, task: Task) {
+export type AnsweredTask = BoardTask & SettledMark;
+
+function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
   return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), settled_by_observation: settledByObservation(deps.db, task) };
 }
 
@@ -942,7 +945,7 @@ export async function submitAnswer(
   origin: EventOrigin,
   openTriage = false,
   amendment?: unknown,
-): Promise<ReturnType<typeof presentAnswered>> {
+): Promise<AnsweredTask> {
   // 空・空白だけの comment は「comment なし」に畳む(issue #1310)。空白でない comment は手を加えない。以降はこの値だけを見る
   if (comment === undefined || whyBlank(comment)) comment = undefined;
   // Every special-case side effect below must come after this validation.

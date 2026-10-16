@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { appendEvent } from "../src/events.js";
+import { settleQuestionAsObserved } from "../src/tasks.js";
 import {
   addTaskChange,
   api,
@@ -272,6 +274,24 @@ it.each([
   expect(settled.question_answer).toBeNull();
   expect(settled.settled_by_observation).toBe(mark);
   expect(t.github.merged).toEqual([]);
+});
+
+it("盤面の名義の merge(根の pr_merged)で回答の記録なしに閉じた merge question は、外の merge と別の印を持つ(ADR 0265 決定5 / 決定7)", async () => {
+  const { workspace: ws } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({
+    workspace: ws,
+    resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
+  });
+  const { task, question } = await completeUnderEscalate(t, ws.path);
+  // 盤面が merge した直後に落ち、回答の記録だけが失われた形(#1820): 根に執行の記録、question は観測の経路で閉じる
+  appendEvent(t.db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "pr_merged", pr_number: 1 }, at: t.clock.now() });
+  settleQuestionAsObserved(t.db, question.id, { kind: "pr_merge_observed", pr_number: 1 }, t.clock.now(), null);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json).toMatchObject({
+    status: "done",
+    question_answer: null,
+    settled_by_observation: "pr_merged",
+  });
 });
 
 it("走査中に1枚の PR が読めなくても、走査は倒れず残りの question を観測する(快適性の機構は盤面を落とせない)", async () => {

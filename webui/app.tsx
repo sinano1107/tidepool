@@ -14,6 +14,7 @@ const tabs = [
 type HaltKind = import('../src/halt-kind').HaltKind;
 /** 観測で閉じた question の札(ADR 0265 決定7)。種類を足して文言を足さないと typecheck が落ちる。 */
 const SETTLED_BY_OBSERVATION_COPY = {
+  pr_merged: 'board merged · no answer recorded',
   pr_merge_observed: 'observed · PR merged',
   pr_close_observed: 'observed · PR closed',
   pr_promotion_observed: 'observed · PR promoted',
@@ -501,7 +502,13 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
     // TpQuestionCard keeps its own Submit disabled while this is in flight (#1233)
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
+      const answered = await api('POST /api/tasks/:id/answer', { params: { id: questionId }, body: { answers, amendment, comment } });
+      // 盤面が観測で閉じた —— 回答は記録されていないので、盤面へ戻さずその札を見せる(ADR 0265 決定7)
+      if (answered.settled_by_observation) {
+        setRawTask((task) => task && { ...task, settled_by_observation: answered.settled_by_observation });
+        setQ(null);
+        return;
+      }
       onDone(rawTask);
     } catch (e) {
       setErr(String((e as Error).message || e));
@@ -1008,7 +1015,7 @@ function App() {
   // per item, in item order)
   const answerNow = async (q: TpTriageQuestion, a: string[], amendment?: TpAmendment, comment?: string) => {
     try {
-      const answered = await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment }) as Pick<WireContract['GET /api/tasks/:id'], 'settled_by_observation'>;
+      const answered = await api('POST /api/tasks/:id/answer', { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
       // 回答の直前に盤面が観測で閉じた —— 回答は記録されていないことを札の文言で言う(ADR 0265 決定7)
       if (answered.settled_by_observation) say('warn', 'settled by the board, not by your answer', SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
     } catch (err) {

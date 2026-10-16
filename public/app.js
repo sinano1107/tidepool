@@ -3855,6 +3855,7 @@ const tabs = [
   { key: "settings", label: "Settings", icon: "settings" }
 ];
 const SETTLED_BY_OBSERVATION_COPY = {
+  pr_merged: "board merged \xB7 no answer recorded",
   pr_merge_observed: "observed \xB7 PR merged",
   pr_close_observed: "observed \xB7 PR closed",
   pr_promotion_observed: "observed \xB7 PR promoted",
@@ -4192,7 +4193,12 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
   const answer = async (answers, amendment, comment) => {
     setErr(null);
     try {
-      await api(`/api/tasks/${questionId}/answer`, { answers, amendment, comment });
+      const answered = await api("POST /api/tasks/:id/answer", { params: { id: questionId }, body: { answers, amendment, comment } });
+      if (answered.settled_by_observation) {
+        setRawTask((task) => task && { ...task, settled_by_observation: answered.settled_by_observation });
+        setQ(null);
+        return;
+      }
       onDone(rawTask);
     } catch (e) {
       setErr(String(e.message || e));
@@ -4511,7 +4517,7 @@ function App() {
   };
   const answerNow = async (q, a, amendment, comment) => {
     try {
-      const answered = await api(`/api/tasks/${q.id}/answer`, { answers: a, triage: true, amendment, comment });
+      const answered = await api("POST /api/tasks/:id/answer", { params: { id: q.id }, body: { answers: a, triage: true, amendment, comment } });
       if (answered.settled_by_observation) say("warn", "settled by the board, not by your answer", SETTLED_BY_OBSERVATION_COPY[answered.settled_by_observation]);
     } catch (err) {
       say("danger", "answer failed", String(err.message || err));
