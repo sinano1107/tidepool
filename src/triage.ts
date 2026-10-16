@@ -12,6 +12,7 @@ import {
   isDecisionLogEntry,
   listEventsOfKinds,
   parseEventRow,
+  SKIM_TASK_SQL,
   sessionSpawnOf,
   taskDecisionLog,
 } from "./events.js";
@@ -672,7 +673,7 @@ export interface LogEntry extends DecisionLogEntry {
   evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
-  /** task の行と同じ Interview の印(ADR 0268 決定6)。受験者の行は一覧に出ないので、運ぶのは root の行だけ。 */
+  /** Interview の印(ADR 0268 決定6)。受験者の行は一覧に出ないので、運ぶのは root の行だけ。 */
   interview: { role: "examinee" | "root"; root_id: string } | null;
 }
 
@@ -687,7 +688,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
       `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace,
               EXISTS (SELECT 1 FROM interview_targets WHERE task_id = tasks.id) AS interview_root
          FROM events JOIN tasks ON tasks.id = events.task_id
-        WHERE events.kind IN (${placeholders}) AND tasks.interview_target_id IS NULL ORDER BY events.id`,
+        WHERE events.kind IN (${placeholders}) AND ${SKIM_TASK_SQL} ORDER BY events.id`,
     )
     .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
     .map((r) => parseEventRow<{ workspace: string | null; interview_root: number }>(r));
