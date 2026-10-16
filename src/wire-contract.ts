@@ -358,6 +358,9 @@ export interface WireContract {
       restored_as: number | null;
       /** superseded でこの行を後継に指す id(ADR 0162 の畳みの跡)。 */
       replaced_ids: number[];
+      /** 受験者の印(ADR 0264 決定1): 受験者(Interview の pin の子)の書き込みとその本文が同じ後継なら、書いた pin の子と
+       *  Interview の対象(src/memory.ts の ExamineeWriter)。他は null。 */
+      examinee: { task_id: string; provider: string; model: string; effort: string | null } | null;
       /** 孤立の印(ADR 0173 決定5): 宛先の agent・scope の workspace のどちらが registry に無いか。registry の無い盤面では欄が無い。 */
       orphaned?: "addressee" | "scope" | "both" | null;
       cause: string | null;

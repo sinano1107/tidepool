@@ -728,6 +728,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "workspace matches exactly; board_wide lists only board-wide entries; " +
         "state invalidated lists invalidated entries, approved / candidate the rest. On a board with a registry each entry carries orphaned: " +
         "\"addressee\", \"scope\" or \"both\" when its addressee agent or scope workspace is no longer registered, null otherwise. " +
+        "Each entry carries examinee: when an Interview's examinee (a pin child) wrote it, or it is a move or restore copy of such an entry, " +
+        "the writing task's task_id and the Interview target's provider, model and effort; null otherwise. " +
         "path lists only the entries at that branch or under it (path/…). Entries come as `entries`, oldest first (id ascending). " +
         `${nextDescription("list_memory_entries", "entries")} \`next\` keeps the filters of the first call: pass it alone.`,
       inputSchema: memoryListFilterSchema.extend({ board_wide: z.boolean().optional(), next: z.string().optional() }).shape,

@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type TargetKey, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1778,7 +1778,7 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
 function readerHidden(db: Db, taskId: string): Set<number> {
-  if (getTask(db, taskId)?.interview_target_id == null) return withSameBodyCopies(db, writtenBy("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"));
+  if (getTask(db, taskId)?.interview_target_id == null) return new Set(examineeWrites(db).keys());
   const own = withSameBodyCopies(db, writtenBy("?"), taskId);
   return new Set([...examineeHidden(db)].filter((id) => !own.has(id)));
 }
@@ -1804,6 +1804,23 @@ function withSameBodyCopies(db: Db, sql: string, ...params: string[]): Set<numbe
   if (rows.length === 0) return new Set();
   const restored = restoredAs(db);
   return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
+}
+
+export type ExamineeWriter = { task_id: string } & TargetKey;
+
+/** 受験者の書き込み(どの Interview でも pin の子が書いたもの)と、その本文が同じ後継(移動・復元の複製)→ 書いた pin の子の task と
+ *  その Interview の対象(ADR 0264 決定1)。agent の読み手には無く(readerHidden)、人間の面にはこの印つきで出る。 */
+export function examineeWrites(db: Db): Map<number, ExamineeWriter> {
+  const rows = db
+    .prepare(
+      `SELECT c.value AS id, e.task_id, it.provider, it.model, it.effort FROM events e, json_each(e.payload, '$.created') c
+         JOIN tasks t ON t.id = e.task_id JOIN interview_targets it ON it.id = t.interview_target_id
+        WHERE e.kind = 'memory_written'`,
+    )
+    .all() as Array<{ id: number } & ExamineeWriter>;
+  if (rows.length === 0) return new Map();
+  const restored = restoredAs(db);
+  return new Map(rows.flatMap(({ id, ...writer }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => [row.id, writer] as const)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。

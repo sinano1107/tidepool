@@ -788,13 +788,14 @@ export async function loggedEntry(t: Tidepool, taskId: string, line: string): Pr
   return log.entries.find((e: any) => e.payload.line === line);
 }
 
-/** 盤面全体の knowledge entry を1件置き、その id を返す(setup のみ)。 */
-export function rememberedNote(t: Tidepool, title: string): number {
+/** 盤面全体の knowledge entry を1件置き、その id を返す(setup のみ)。taskId があればその task の書き込みとして記録する。 */
+export function rememberedNote(t: Tidepool, title: string, taskId?: string): number {
   return recordKnowledge(
     t.db,
     { scope: null, path: "build", title, text: `${title}.`, source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
     "worker",
     t.clock.now(),
+    taskId,
   ).entry_id;
 }
 

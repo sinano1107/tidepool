@@ -31,7 +31,7 @@ import {
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
 import { contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
-import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { approveMemoryProposal, type ExamineeWriter, examineeWrites, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
@@ -298,12 +298,14 @@ export function gatedHumanEntryInput<T extends { workspace: string | null; addre
 
 /** 人間の面(WebUI と管理MCP)が共有する記憶の一覧(ADR 0173 決定5)。孤立の印 orphaned は宛先の agent・scope の
  *  workspace のどちらが registry で解決できないかを読むときに導出する(保存しない)。null の宛先・scope は孤立しない。
- *  registry の無い盤面(agentRegistered が無い)では欄ごと付けない。registry は名前ごとに1度だけ引く。 */
+ *  registry の無い盤面(agentRegistered が無い)では欄ごと付けない。registry は名前ごとに1度だけ引く。受験者の書き込みには
+ *  examinee(書いた pin の子と Interview の対象)が付き、他は null(ADR 0264 決定1)。 */
 export function listMemoryEntriesForHuman(
   deps: MemoryReferenceDeps & { db: Db },
   filter: Parameters<typeof listMemoryEntries>[1],
-): Array<ReturnType<typeof listMemoryEntries>[number] & { orphaned?: "addressee" | "scope" | "both" | null }> {
-  const entries = listMemoryEntries(deps.db, filter);
+): Array<ReturnType<typeof listMemoryEntries>[number] & { examinee: ExamineeWriter | null; orphaned?: "addressee" | "scope" | "both" | null }> {
+  const examinees = examineeWrites(deps.db);
+  const entries = listMemoryEntries(deps.db, filter).map((entry) => ({ ...entry, examinee: examinees.get(entry.id) ?? null }));
   if (!deps.agentRegistered) return entries;
   const dead = (names: Array<string | null>, known: (name: string) => boolean) =>
     new Set([...new Set(names)].filter((name) => name !== null && !known(name)));
