@@ -1,6 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
@@ -88,6 +85,7 @@ import {
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
+import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
@@ -640,13 +638,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 検査そのものが後始末の再実行なので、投げれば question は開いたまま残り、人間は
     // 直してもう一度答えられる。
     ...(teardownQuarantine && { failedTeardown: (value) => teardownQuarantine(value!) }),
-    // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの —— 先行の検査は無く、書けるかは書いてみて知る
+    // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの
     ...(recordDir !== undefined && {
       recordContainer: async () => {
-        const probe = join(recordDir, `.write-check-${randomUUID()}`);
         try {
-          writeFileSync(probe, "");
-          rmSync(probe);
+          probeRecordContainer(recordDir);
         } catch (err) {
           throw new DomainError(`the board's record container ${recordDir} still cannot be written: ${err instanceof Error ? err.message : String(err)}`);
         }

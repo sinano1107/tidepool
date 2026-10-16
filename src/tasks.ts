@@ -1209,6 +1209,9 @@ export function moveTask(
   return getTask(db, task.id)!;
 }
 
+/** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
+type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>;
+
 /** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
  *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
@@ -1217,7 +1220,7 @@ export function moveTask(
 export function returnToQueueHead(
   db: Db,
   task: Task,
-  payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>,
+  payload: QueueReturnPayload,
   now: Date,
 ): void {
   db.transaction(() => {
@@ -1228,7 +1231,7 @@ export function returnToQueueHead(
 
 /** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
  *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
-export function returnToQueue(db: Db, task: Task, payload: Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>, now: Date): void {
+export function returnToQueue(db: Db, task: Task, payload: QueueReturnPayload, now: Date): void {
   db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
   appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
 }
