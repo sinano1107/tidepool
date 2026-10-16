@@ -1477,6 +1477,8 @@ export function cancelTaskDirectly(
   now: Date,
   defaults: CancelDefaults,
   origin: EventOrigin,
+  /** root の retry の登録(`retryInterviewRoot`)。対象の question を引く前に走る —— 写った対象の question は開いたまま(ADR 0199 追記)。 */
+  beforeSettle?: () => void,
 ): void {
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
@@ -1485,8 +1487,29 @@ export function cancelTaskDirectly(
       kind: "task_cancelled_directly",
       reason,
     }, origin);
+    beforeSettle?.();
     if (cancelEventId !== undefined) settleUnrunnableTargetQuestions(db, task.id, cancelEventId, now);
   })();
+}
+
+/** root の retry(ADR 0267 決定3・4): 出題済みで未決着の Interview の root を人間の直接 cancel と同じ門と波及で cancel し、報告の
+ *  question の retry と同じ登録(`retryInterview`)で新しい root を立てる。理由は人間のコメント。返り値は新しい root。 */
+export function retryInterviewRoot(
+  db: Db,
+  root: Task,
+  comment: string | undefined,
+  now: Date,
+  defaults: CancelDefaults,
+  origin: EventOrigin,
+  runnable?: { candidates: TaskExecutionCandidates; agentName?: string },
+): Task {
+  if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root is retried");
+  if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview's probe is not posed yet, so there is nothing to retry: cancel it to end it");
+  let again: Task;
+  cancelTaskDirectly(db, root, comment ?? null, now, defaults, origin, () => {
+    again = retryInterview(db, root, { comment }, now, origin, runnable, " — fix the default agent's entry and retry again, or cancel the Interview and register it again");
+  });
+  return again!;
 }
 
 /** The six pure preconditions an answer submission must clear before any
@@ -1771,7 +1794,9 @@ export function answerQuestion(
         // abandon も retry も Interview を終える(ADR 0251 決定2 / ADR 0248 決定2・3)。root の cancel は対象経由で受験者に及び、root は起こさない
         const root = getTask(db, question.parent_id!)!;
         cancelTask(db, root, question.id, HUMAN_WORKER_ID, now, origin);
-        if (answer === "retry") retryInterview(db, root, kind.reason, comment, now, origin, runnable);
+        if (answer === "retry") {
+          retryInterview(db, root, { reason: kind.reason, comment }, now, origin, runnable, ' — fix the default agent\'s entry and answer "retry" again, or answer "abandon" and register the Interview again');
+        }
         break;
       }
       case "escalation":
@@ -1798,18 +1823,18 @@ export function answerQuestion(
   return getTask(db, question.id)!;
 }
 
-/** retry(ADR 0248 決定2・3 / ADR 0251 決定2): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で登録し、破綻した
- *  probe と root の報告の理由を盤面名義の event で新しい root の history に渡す。写した対象が走れなければ
- *  人間の登録の扉と同じ判定で拒み、回答ごと巻き戻す(ADR 0253 決定3)。 */
+/** retry(ADR 0248 決定2・3 / ADR 0251 決定2 / ADR 0267 決定4): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で
+ *  登録し、破綻した probe と、報告の理由(報告の question の retry だけ)・人間のコメントを盤面名義の event で新しい root の history に
+ *  渡す。写した対象が走れなければ人間の登録の扉と同じ判定で拒み、呼び手の transaction ごと巻き戻す(ADR 0253 決定3)。 */
 function retryInterview(
   db: Db,
   previousRoot: Task,
-  reason: string,
-  comment: string | undefined,
+  { reason, comment }: { reason?: string; comment: string | undefined },
   now: Date,
   origin: EventOrigin,
   runnable: { candidates: TaskExecutionCandidates; agentName?: string } | undefined,
-): void {
+  remedy: string,
+): Task {
   const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
   const root = registerTask(
     db,
@@ -1826,9 +1851,7 @@ function retryInterview(
     HUMAN_WORKER_ID,
     origin,
   );
-  if (runnable) {
-    assertTargetsRunnable(db, root.id, runnable.candidates, runnable.agentName, ' — fix the default agent\'s entry and answer "retry" again, or answer "abandon" and register the Interview again');
-  }
+  if (runnable) assertTargetsRunnable(db, root.id, runnable.candidates, runnable.agentName, remedy);
   appendEvent(db, {
     taskId: root.id,
     workerId: BOARD_WORKER_ID,
@@ -1838,11 +1861,12 @@ function retryInterview(
       previous_root_id: previousRoot.id,
       probe,
       rubric,
-      reason,
+      ...(reason !== undefined && { reason }),
       ...(comment !== undefined && { comment }),
     },
     at: now,
   });
+  return root;
 }
 
 /** 断られた行でない対象の question への「この対象は測らない」(ADR 0199 決定4・追記): その対象を pin した未決着の受験者だけを、この

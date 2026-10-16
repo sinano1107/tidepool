@@ -34,6 +34,7 @@ import {
   gatedHumanEntryInput,
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
+  retryInterviewThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
 import { closedRootOf, type Landing } from "./landing.js";
@@ -970,6 +971,20 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
+      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
+    },
+  );
+  server.registerTool(
+    "retry_interview",
+    {
+      description:
+        "Retry a posed, unsettled Interview root: cancel it as cancel_task does (its unsettled examinees and their questions too), then register " +
+        "a new Interview with the same targets (minus those dropped as not measured), title, purpose, criteria, workspace and review tier, " +
+        "whose root sees the old root, its probe and rubric, and your comment. Returns the new root's id, type, status, assignee and raw_assignee only; read the rest with get_task.",
+      inputSchema: { task_id: z.string(), comment: requiredTextSchema.optional() },
+    },
+    async ({ task_id, comment }) => {
+      const result = retryInterviewThroughHumanDoor(deps, task_id, comment, () => deps.clock.now(), "mcp");
       return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
     },
   );
