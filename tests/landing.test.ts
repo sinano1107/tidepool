@@ -1379,7 +1379,7 @@ it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1 } },
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 
   // 読めば壊れていると分かる checkout でも、終わった根は読まれない
@@ -1388,6 +1388,28 @@ it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった
   await expect(landing.converge()).resolves.toEqual([]);
   expect(promotionFailures(db, root.id)).toEqual([]);
   expect(boardEvents(db, root.id, "landing_finished")).toHaveLength(1);
+  expect(github.stateChecks).toEqual([]);
+});
+
+// ADR 0265 決定3: `external` の根は内容で終わる —— GitHub を読まず、merge の記録が無くても1回で候補を外れる(#1849)
+it("external の根の PR が外で squash merge されれば、収束の1回目が根拠 content の着地の終わりを1件刻み、2回目はその根の git を読まない", async () => {
+  const { workspace, db, clock, github, landing, work } = await openPushedPr("landing-external-content-finished", "external");
+  finish(db, clock, work);
+  await squashTaskIntoOrigin(workspace, work.id);
+  git(workspace.path, "fetch", "origin", "main");
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
+  expect(boardEvents(db, work.id, "landing_finished")).toEqual([
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "content" } },
+  ]);
+
+  // 読めば壊れていると分かる checkout でも、終わった根は読まれない
+  git(workspace.path, "checkout", "main");
+  git(workspace.path, "branch", "-D", `task/${work.id}`);
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+  expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
+  expect(boardEvents(db, work.id, "nothing_to_land")).toEqual([]);
   expect(github.stateChecks).toEqual([]);
 });
 
@@ -2878,7 +2900,7 @@ it("遅い走査が外で merge されたと観測した根は、収束が GitHu
   expect(github.stateChecks).toHaveLength(stateChecks);
   expect(boardEvents(db, root.id, "pr_merge_observed")).toHaveLength(1);
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1 } },
+    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 });
 

@@ -754,9 +754,15 @@ export function createLanding(deps: LandingDeps): Landing {
   };
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
     appendEvent(deps.db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: deps.clock.now() });
-  /** merge 済みの PR の根の着地は終わった —— 事実を1回刻み、以後この根は候補に入らない(ADR 0241 決定1)。 */
-  const finishLanding = (task: Task, workspace: WorkspaceConfig, prNumber: number, ctx: RootContext): LandingVerdict => {
-    recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber });
+  /** PR の根の着地は終わった —— 事実を根拠つきで1回刻み、以後この根は候補に入らない(ADR 0241 決定1 / ADR 0265 決定3)。 */
+  const finishLanding = (
+    task: Task,
+    workspace: WorkspaceConfig,
+    prNumber: number,
+    basis: "merge" | "content",
+    ctx: RootContext,
+  ): LandingVerdict => {
+    recordBoardFact(task.id, { kind: "landing_finished", pr_number: prNumber, basis });
     retireFailures(task.id, ctx);
     return { kind: "nothing_to_land", base: protectedBranchRef(workspace) };
   };
@@ -773,7 +779,7 @@ export function createLanding(deps: LandingDeps): Landing {
     await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
     return taskHasContentToLand(workspace, task.id)
       ? alreadyMerged(task, prNumber, ctx)
-      : finishLanding(task, workspace, prNumber, ctx);
+      : finishLanding(task, workspace, prNumber, "merge", ctx);
   };
   // ADR 0236: 処理中の印。決着を書く経路はすべてこのプロセスの中にあるので、DB には持たない
   const inFlight = new Set<string>();
@@ -866,9 +872,11 @@ export function createLanding(deps: LandingDeps): Landing {
       // merge 済みの根は、保護ブランチの写しを読み直してから比べる —— merge の直後の写しは merge された内容をまだ持たない
       if (mergedPr !== undefined) await refreshProtectedBranch(deps.db, workspace, deps.githubAuth);
       if (!taskHasContentToLand(workspace, task.id)) {
-        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, ctx);
+        if (mergedPr !== undefined) return finishLanding(task, workspace, mergedPr, "merge", ctx);
+        // ADR 0265 決定3: merge の記録が無い PR の根は内容で終わる。キューの行と merge question は PR の状態の読み取りが閉じる
+        if (task.pr_number !== null) return finishLanding(task, workspace, task.pr_number, "content", ctx);
         const base = protectedBranchRef(workspace);
-        if (task.pr_number === null) recordBoardFact(task.id, { kind: "nothing_to_land", base });
+        recordBoardFact(task.id, { kind: "nothing_to_land", base });
         retireFailures(task.id, ctx);
         return { kind: "nothing_to_land", base };
       }
