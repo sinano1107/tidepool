@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type TargetKey, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1772,25 +1772,40 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
 function readerHidden(db: Db, taskId: string): Set<number> {
-  const written = (tasks: string) =>
-    `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
-  const examinee = getTask(db, taskId)?.interview_target_id != null;
+  if (getTask(db, taskId)?.interview_target_id == null) return new Set(examineeWrites(db).keys());
   const hidden = db
     .prepare(
-      examinee
-        ? `${written(INTERVIEW_TREE_SQL)}
-           UNION
-           SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
-             JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
-            WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`
-        : written("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"),
+      `SELECT id FROM (${writtenSql(INTERVIEW_TREE_SQL)})
+       UNION
+       SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+         JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
     )
     .all() as Array<{ id: number }>;
   if (hidden.length === 0) return new Set();
   const restored = restoredAs(db);
   const chains = (rows: Array<{ id: number }>) => rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id));
-  const own = new Set(examinee ? chains(db.prepare(written("?")).all(taskId) as Array<{ id: number }>) : []);
+  const own = new Set(chains(db.prepare(writtenSql("?")).all(taskId) as Array<{ id: number }>));
   return new Set(chains(hidden).filter((id) => !own.has(id)));
+}
+
+/** tasks(`IN (...)` に入れる SELECT)の task が作った書き込みの記録(ADR 0252)のエントリ id と書いた task。 */
+const writtenSql = (tasks: string) =>
+  `SELECT c.value AS id, e.task_id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
+
+export type ExamineeMark = { task_id: string } & TargetKey;
+
+/** 受験者の書き込み(どの Interview でも pin の子が書いたもの)と、その本文が同じ後継(移動・復元の複製)→ 書いた pin の子の task と
+ *  その Interview の対象(ADR 0264 決定1)。agent の読み手には無く(readerHidden)、人間の面にはこの印つきで出る。 */
+export function examineeWrites(db: Db): Map<number, ExamineeMark> {
+  const rows = db
+    .prepare(
+      `SELECT w.id, w.task_id, it.provider, it.model, it.effort FROM (${writtenSql("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL")}) w
+         JOIN tasks t ON t.id = w.task_id JOIN interview_targets it ON it.id = t.interview_target_id`,
+    )
+    .all() as Array<{ id: number } & ExamineeMark>;
+  const restored = restoredAs(db);
+  return new Map(rows.flatMap(({ id, ...mark }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => [row.id, mark] as const)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
