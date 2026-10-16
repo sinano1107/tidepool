@@ -652,6 +652,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     clock: options.clock,
     harnessContainment,
     codexWorkspaceContainment: options.codexWorkspaceContainment,
+    recordDir: options.transcripts.dir,
     // ADR 0040: quarantine 解除の検証が撃ち直す先。boot の一斉検査と pickup の
     // 床と同じ1つの配列(3箇所で別々に組み立てない)
     boardState: options.boardState?.paths,

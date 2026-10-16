@@ -1,4 +1,5 @@
-import { closeSync, createWriteStream, openSync, type WriteStream } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { closeSync, createWriteStream, openSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /** 盤面の記録の器(worker transcript と受験者の答案の写しを置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
@@ -9,8 +10,16 @@ export class RecordContainerError extends Error {
     readonly path: string,
     readonly reason: string,
   ) {
-    super(`the board's record container could not be written for ${taskId} at ${path}: ${reason}`);
+    super(`the board's record container could not be written for task ${taskId} at ${path}: ${reason}`);
   }
+}
+
+/** 記録の器の停止の解放の門(ADR 0266 決定3): 同じ dir へ一時ファイルを書いて消す。先行の検査は無く、書けるかは書いてみて知る。
+ *  書けなければ fs の例外をそのまま投げる。 */
+export function probeRecordContainer(dir: string): void {
+  const probe = join(dir, `.write-check-${randomUUID()}`);
+  writeFileSync(probe, "");
+  rmSync(probe);
 }
 
 /** 走ってから書けなくなった transcript の観測(ADR 0149 決定4)。 */

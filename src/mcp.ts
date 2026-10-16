@@ -77,7 +77,7 @@ import {
   HUMAN_ROSTER_AGENT,
   interviewTargets,
   joinHistory,
-  listChildren,
+  listExaminees,
   logDecision,
   poseProbe,
   redecompose,
@@ -527,7 +527,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
         // 対象の一覧は出題の前に読むためのもの。pin した子が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
-        const targets = !listChildren(deps.db, task.id).some((child) => child.interview_target_id !== null) && interviewTargets(deps.db, task.id);
+        const targets = listExaminees(deps.db, task.id).length === 0 && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
             ...(await taskContext(deps, task)),
