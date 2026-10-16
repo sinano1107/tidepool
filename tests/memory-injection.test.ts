@@ -15,7 +15,7 @@ import {
   recordKnowledge,
   recordMemoryInjection,
 } from "../src/memory.js";
-import { logDecision, registerTask } from "../src/tasks.js";
+import { logDecision, poseProbe, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -359,4 +359,41 @@ it("注入上限は未設定なら 2,000 トークンで、変更は読み口に
   expect(readMemorySettings(db)).toEqual({ injection_token_cap: 500 });
   expect(getEvent(db, eventId)).toMatchObject({ task_id: null, worker_id: "human", origin: "webui" });
   expect(getEvent(db, eventId)?.payload).toEqual({ kind: "memory_settings_changed", injection_token_cap: 500 });
+});
+
+it("読み手が pin の子のとき、どの Interview の pin の子が書いたエントリも INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 本番の task には出る(ADR 0263 決定7)", () => {
+  const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
+  const { db, task } = board(probe);
+  const interview = (targets: object[]) =>
+    poseProbe(
+      db,
+      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: targets as never }, at, ...HUMAN_WEBUI),
+      { ...probe, probe: probe.purpose, rubric: "tests pass" },
+      "auditor",
+      at,
+      "worker",
+    );
+  const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
+  const [examinee, sibling] = interview([opus, { ...opus, effort: "low" }]);
+  const [otherPinChild] = interview([opus]);
+  const write = (writer: { id: string }, path: string, title: string) =>
+    recordKnowledge(
+      db,
+      { scope: "tidepool", path, title, text: "the parser", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+      "worker",
+      at,
+      writer.id,
+    ).entry_id;
+  const production = write(task, "parser", "parser production");
+  const siblingEntry = write(sibling!, "parser/answers", "parser sibling");
+  const elsewhere = write(otherPinChild!, "lexer", "parser elsewhere");
+
+  const injection = buildMemoryInjection(db, examinee!, "tidepool", "deckhand");
+
+  expect(injection).toMatchObject({ entries: [{ id: production }], omitted: 0, index_max_depth: 1 });
+  expect(injection.section).toContain("### Index\n\n- parser/ — (undefined)\n\n### Relevant entries\n\n");
+  expect(injection.section).not.toMatch(/answers|lexer|sibling|elsewhere/);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id).sort((a, b) => a - b)).toEqual([production, siblingEntry, elsewhere]);
+  changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
+  expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
 });
