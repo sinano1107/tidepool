@@ -1762,17 +1762,26 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
-/** 受験者(pin の子)に無いものとするエントリ(ADR 0263 決定7): どの Interview でも、他の pin の子が書いたもの —— 書いた task は
- *  作った書き込みの記録(ADR 0252)の task。自分が書いたものは本番どおり読む(決定1、CONTEXT.md「他の受験者が書いた記憶」)。
- *  読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。 */
+/** Interview の木の task(どの Interview でも): root(対象の一覧を持つ)と pin の子。 */
+const INTERVIEW_TREE_TASKS = "SELECT task_id FROM interview_targets UNION SELECT id FROM tasks WHERE interview_target_id IS NOT NULL";
+
+/** 受験者(pin の子)に無いものとするエントリ(ADR 0264 決定3): どの Interview でも、Interview の木の他の task が書いたもの —— 書いた
+ *  task は作った書き込みの記録(ADR 0252)の task —— と、書き手を問わず出所の event の task が木の他の task であるもの(帰責
+ *  `objection_attributed` はその entry_id が指す判断ログの行の task で見る。出所が commit のものは当たらない)。自分が書いたもの・
+ *  自分の event を出所にするものは本番どおり読む(ADR 0263 決定1)。meta-review が畳んだ後継は出所が meta-review の decision なので
+ *  当たらない。読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。 */
 function examineeHidden(db: Db, taskId: string): Set<number> {
   if (getTask(db, taskId)?.interview_target_id == null) return new Set();
   const rows = db
     .prepare(
-      `SELECT c.value AS id FROM events e JOIN tasks t ON t.id = e.task_id, json_each(e.payload, '$.created') c
-        WHERE e.kind = 'memory_written' AND t.interview_target_id IS NOT NULL AND e.task_id != ?`,
+      `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
+        WHERE e.kind = 'memory_written' AND e.task_id IN (${INTERVIEW_TREE_TASKS}) AND e.task_id != @taskId
+       UNION
+       SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+         JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_TASKS}) AND o.task_id != @taskId`,
     )
-    .all(taskId) as Array<{ id: number }>;
+    .all({ taskId }) as Array<{ id: number }>;
   if (rows.length === 0) return new Set();
   // 本文が同じ後継(移動の複製・復元の複製)は書き手の記録を持たないが、同じ答案なので一緒に外す
   const restored = restoredAs(db);

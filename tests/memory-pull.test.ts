@@ -9,6 +9,7 @@ import {
   createBehaviorCandidate,
   defineMemoryBranch,
   ensureMemoryIndex,
+  foldMemory,
   humanEntryInput,
   invalidateMemoryEntry,
   moveMemory,
@@ -23,7 +24,7 @@ import {
 } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { logDecision, poseProbe, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
@@ -598,6 +599,69 @@ it("読み手が pin の子のとき、read は pin の子が書いた id(移さ
     { id: invalidated, reason: "environment", successor: null },
     { id: replaced, reason: "superseded", successor },
   ]);
+});
+
+it("読み手が pin の子のとき、どの Interview の root が書いたエントリ(移された複製も)も search・browse・read に出ず、search の候補にも載らない —— root と本番の task には見える(ADR 0264 決定3)", () => {
+  const { db, task, reader, examinee, otherPinChild, write } = examineeBoard();
+  const root = { id: getTask(db, examinee.taskId)!.parent_id! };
+  const otherRoot = { id: getTask(db, otherPinChild.id)!.parent_id! };
+  const production = write(task, "production");
+  const rootEntry = write(root, "root", "tide/probes");
+  const moved = moveMemory(db, { entry_id: write(otherRoot, "moved"), scope: "tidepool", path: "elsewhere", mover: human }, "webui", at).entry_id;
+  const ids = [production, rootEntry, moved];
+
+  const search = searchMemory(db, examinee, { query: "tide" }, at);
+
+  expect(search.results.map((r) => r.id)).toEqual([production]);
+  expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id)).toEqual([production]);
+  expect(browseMemory(db, examinee, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
+  expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: production }], dropped: [] });
+  for (const seer of [reader, { ...reader, taskId: root.id }]) {
+    expect(searchMemory(db, seer, { query: "tide" }, at).results.map((r) => r.id).sort((a, b) => a - b)).toEqual(ids);
+    expect(readMemory(db, seer, { ids }, at).entries.map((e) => e.id)).toEqual(ids);
+  }
+});
+
+it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
+  const { db, task, reader, examinee, sibling, write } = examineeBoard();
+  const root = getTask(db, examinee.taskId)!.parent_id!;
+  const attributed = (entryTask: { id: string }, eventTask: { id: string }) => {
+    const entry_id = logDecision(db, getTask(db, entryTask.id)!, "chose the tide table", "deckhand", at, "worker");
+    const payload = { kind: "objection_attributed" as const, entry_id, objection_event_ids: [], cause: "capability" as const, evidence: "e", entries: null, round: "initial" as const };
+    const event_id = appendEvent(db, { taskId: eventTask.id, workerId: "board", origin: "board", payload, at });
+    const candidate = createBehaviorCandidate(
+      db,
+      { scope: "tidepool", path: "tide", title: "tide call", text: "tide call", addressee: null, source: { event_id }, author: { activity: "rca", name: "auditor" } },
+      "board",
+      at,
+    ).entry_id;
+    approve(db, candidate);
+    return candidate;
+  };
+  const onRootDecision = attributed({ id: root }, task);
+  const onProductionDecision = attributed(task, sibling);
+  const metaReview = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const folded = write({ id: root }, "folded");
+  const successor = foldMemory(
+    db,
+    metaReview.id,
+    {
+      scope: "tidepool",
+      path: "tide",
+      title: "tide fold",
+      text: "tide fold",
+      replaces: [folded],
+      based_on_decision: logDecision(db, metaReview, "these say the same", "auditor", at, "worker"),
+      author: { activity: "meta_review", name: "auditor" },
+    },
+    "worker",
+    at,
+  ).entry_id;
+  const ids = [onRootDecision, onProductionDecision, folded, successor];
+
+  expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: onProductionDecision }, { id: successor }], dropped: [] });
+  expect(searchMemory(db, examinee, { query: "tide" }, at).results.map((r) => r.id)).toEqual([onProductionDecision, successor]);
+  expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual([onRootDecision, onProductionDecision, successor]);
 });
 
 /** #386 のフィクスチャの session(worker_spawned 5、decision 6・7・8、完了 9)を投影した盤面と、その task の reader。 */
