@@ -481,9 +481,10 @@ function settleMergeQuestionAsObserved(
   state: keyof typeof OBSERVED,
   now: Date,
 ): void {
-  // ADR 0265 決定1: 観測は PR を開いた根に刻み、question は回答なしの done で閉じる
+  // ADR 0265 決定1: 観測は PR を開いた根に1回だけ刻み(収束が先に刻んでいれば重ねない)、question は回答なしの done で閉じる
   const root = taskIdForPr(db, prNumber, question.workspace);
-  settleQuestionAsObserved(db, question.id, { kind: OBSERVED[state], pr_number: prNumber }, now, root);
+  const recordOn = rootPrOutcome(db, root) === null ? root : null;
+  settleQuestionAsObserved(db, question.id, { kind: OBSERVED[state], pr_number: prNumber }, now, recordOn);
 }
 
 /** 収束が着地を成立させたら、同じタスクを指す PR 昇格失敗の question はもう誰にも訊く
@@ -909,7 +910,8 @@ export function createLanding(deps: LandingDeps): Landing {
       if (task.pr_number !== null) {
         const state = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
         // 盤面の外で決着した PR は観測として1回だけ刻み、キューからも外す —— tick が同じ観測を重ねない。
-        // 印の付いた PR の決着は執行側が書く。印は await の後に見る(ADR 0236 決定3)
+        // 印の付いた PR の決着は執行側が書く。印と根の決着は await の後に見る —— 読んでいる間に遅い走査が
+        // 根へ刻んだ観測を重ねない(ADR 0236 決定3)
         if (state !== "OPEN" && !isMarked(task.workspace, task.pr_number) && rootPrOutcome(deps.db, task.id) === null) {
           retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
         }

@@ -2365,19 +2365,20 @@ export function taskIdForPr(db: Db, prNumber: number, workspace: string | null):
  *  観測 event を1件だけ残す。`answerQuestion` を通さないので `question_answered` も
  *  決定ログも立たない —— 誰も決めていないものを決定として読み戻させないため。
  *  既に閉じた question を二度目の観測が再スタンプしないのも同じ1本で守る。観測 event は
- *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻む(ADR 0265 決定1)。 */
+ *  既定で question に、PR の決着なら `recordOn`(PR を開いた根)に刻み(ADR 0265 決定1)、根が既に
+ *  決着を持っていれば null で刻まない —— question だけを閉じる。 */
 export function settleQuestionAsObserved(
   db: Db,
   questionId: string,
   payload: TaskScopedPayload,
   now: Date,
-  recordOn = questionId,
+  recordOn: string | null = questionId,
 ): void {
   db.transaction(() => {
     const { changes } = db
       .prepare("UPDATE tasks SET status = 'done' WHERE id = ? AND status = 'todo'")
       .run(questionId);
-    if (changes === 0) return;
+    if (changes === 0 || recordOn === null) return;
     appendEvent(db, {
       taskId: recordOn,
       workerId: BOARD_WORKER_ID,

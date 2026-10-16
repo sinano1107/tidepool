@@ -2826,6 +2826,42 @@ async function escalatedRootWithOpenedPr(name: string) {
   return { workspace, db, clock, github, landing, root: getTask(db, root.id)! };
 }
 
+// 観測の重複除け: 根の決着は経路の順によらず1件だけ刻まれ、question は回答なしの done で閉じる
+it("収束が先に閉じた PR を観測した根の merge question は、遅い走査が回答なしで閉じ、根に閉じた観測を重ねない", async () => {
+  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-converge-then-scan");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+
+  await expect(convergeOn(landing, root.id)).resolves.toMatchObject({ reason: "pull_request_closed" });
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  await landing.tick("outside_merge", clock.now());
+
+  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
+it("収束が PR の状態を読んでいる間に遅い走査が閉じた観測を刻めば、収束は観測を重ねない", async () => {
+  const { workspace, db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-during-converge");
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  github.scriptClosedOutside(1);
+  const gate = awaitWindow();
+  const read = github.getPullRequestState.bind(github);
+  github.getPullRequestState = async (ref) => {
+    const state = await read(ref);
+    await gate.hold();
+    return state;
+  };
+
+  const converging = convergeOn(landing, root.id);
+  await gate.entered;
+  await landing.tick("outside_merge", clock.now());
+  gate.open();
+
+  await expect(converging).resolves.toMatchObject({ reason: "pull_request_closed" });
+  expect(boardEvents(db, root.id, "pr_close_observed")).toEqual(closeObserved(1));
+});
+
 it("遅い走査が外で閉じたと観測した根への retry は、閉じたことを理由に verdict で拒まれる", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-retry");
   registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
