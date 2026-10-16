@@ -2353,7 +2353,7 @@ export function buildMemoryInjection(
         .filter(isBranch)
         .flatMap((branch) => [{ ...branch, depth }, ...tree(branch.name, depth + 1)]);
     const branches = tree("", 1);
-    const markText = (row: EntryRow) => (sight.mark(row).not_shown_to_examinees ? " — not shown to examinees" : "");
+    const markText = (row: EntryRow | null) => (row && sight.mark(row).not_shown_to_examinees ? " — not shown to examinees" : "");
     const maxDepth = Math.max(...branches.map((b) => b.depth));
     // 語が残らなければ(空 / stopword だけ)関連 leaf は無い。spawn は落とさない
     const match = ftsQuery(query && "view" in query ? query.view : injectionQueryText(task), " OR ");
@@ -2376,7 +2376,7 @@ export function buildMemoryInjection(
         "",
         ...branches
           .filter((b) => b.depth <= depth)
-          .map((b) => `${"  ".repeat(b.depth - 1)}- ${b.name.split("/").at(-1)}/ — ${b.definition?.text ?? "(undefined)"}${b.definition ? markText(b.definition) : ""}`),
+          .map((b) => `${"  ".repeat(b.depth - 1)}- ${b.name.split("/").at(-1)}/ — ${b.definition?.text ?? "(undefined)"}${markText(b.definition)}`),
         ...(shown.length === 0
           ? []
           : [
