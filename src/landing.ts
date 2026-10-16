@@ -1,7 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
-import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
 import type { GitHubClient, PrState } from "./github.js";
@@ -239,12 +238,8 @@ export function landingAnnotation(
       landingTaskId = kind.task_id;
       break;
     case "pr_merge":
-      try {
-        landingTaskId = taskIdForPr(db, kind.pr, task.workspace);
-      } catch (error) {
-        if (!(error instanceof DomainError)) throw error;
-        return { blocked_by: "attached_children" };
-      }
+      // merge question は PR を開いた根から、同じ workspace で立つ —— 根は必ず引ける(ADR 0265)
+      landingTaskId = taskIdForPr(db, kind.pr, task.workspace);
       break;
     case "escalation":
     case "failure":

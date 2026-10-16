@@ -2053,13 +2053,6 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   ]);
 });
 
-it("PR から着地タスクを引けない merge question は fail-closed で attached_children を名乗る", async () => {
-  const { db, clock } = await openBoard();
-  const question = mergeQuestion(db, clock, { pending_merge_pr: 99 });
-
-  expect(landingAnnotation(db, question)).toEqual({ blocked_by: "attached_children" });
-});
-
 // ADR 0217 決定1・2: 無人 merge キューの PR は merge の瞬間に着地の面を読み直す。
 // 以下はこの読み直しを述べる唯一の場所(ADR 0107)。
 const profile = (merge: MergeDial) => ({
