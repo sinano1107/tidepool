@@ -1656,7 +1656,7 @@ interface MemoryReader {
 
 /** search の候補が返らなかった理由(spec #586 D)。関連度の閾値は持たない(ADR 0083
  *  決定9)ので「関連度で切った」は FTS だけでは起きず、型にも置かない。スコープ外・
- *  candidate・受験者に無いもの(examineeHidden)は候補になる前の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
+ *  candidate・受験者に無いもの(hiddenExamineeWrites)は候補になる前の絞り込み。`response_budget` は見えるが、この応答には予算で入らず、続きに回った候補(ADR 0195)。 */
 export type MemoryDropReason = "addressee" | "invalidated" | "response_budget";
 
 /** snapshot 識別子 = 店を変える memory 系 event の最大 id(approvedMemoryEntries が再生する種別)。 */
@@ -1728,12 +1728,12 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
 }
 
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
- *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(examineeHidden)、
+ *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(hiddenExamineeWrites)、
  *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。
  *  読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
-  const hidden = examineeHidden(db, reader.taskId);
+  const hidden = hiddenExamineeWrites(db, reader.taskId);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
   const live = (row: EntryRow) => row.invalidation_reason === null;
@@ -1766,7 +1766,7 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
  *  記録(ADR 0252)の task。受験者の書き込みは本番の記録ではない(ADR 0264 決定1)ので本番の読み手にも無く、pin の子は自分が
  *  書いたものだけを本番どおり読む(ADR 0263 決定7・決定1、CONTEXT.md「他の受験者が書いた記憶」)。視界の1段目(readerSight)の
  *  条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の専用 verb と材料もこの集合を外す。 */
-function examineeHidden(db: Db, taskId: string): Set<number> {
+function hiddenExamineeWrites(db: Db, taskId: string): Set<number> {
   const rows = db
     .prepare(
       `SELECT c.value AS id FROM events e JOIN tasks t ON t.id = e.task_id, json_each(e.payload, '$.created') c
@@ -1818,7 +1818,7 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
     const restored = restoredAs(db);
     // like の行と本文が同じ鎖(両向き)は末尾が一致する
     const tailOf = (row: EntryRow) => sameBodyChain(db, row, restored).at(-1)!.id;
-    const hidden = examineeHidden(db, reader.taskId);
+    const hidden = hiddenExamineeWrites(db, reader.taskId);
     // 視界の外の like は存在しない id と同じに断る —— 存在を知らせない
     if (args.like !== undefined && hidden.has(args.like)) throw new DomainError(`no memory entry ${args.like}`);
     const like = args.like === undefined ? undefined : requireEntry(db, args.like);
@@ -1892,8 +1892,8 @@ export function browseMemory(
 
 /** 枝の一覧(ADR 0122 追記 #1209): approved・未無効化のエントリ(4種別・全 scope・宛先を問わない)の path とすべての上位の prefix を
  *  1枝1行、木の順(親の直後に配下、同じ階層は segment の名前順)で。行はその path の Definition と、その path か配下にエントリ
- *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま、meta-review は
- *  pullMemoryBranches が原文を落とす。 */
+ *  (Definition も)を持つ scope(null = 盤面全体)。件数・未定義の印・leaf は載せない。人間の面はこのまま(hidden は空)、meta-review は
+ *  hiddenExamineeWrites を除き(ADR 0264 決定1)、pullMemoryBranches が原文を落とす。 */
 export function listMemoryBranches(db: Db, hidden = new Set<number>()) {
   const entries = approvedMemoryEntries(db).filter((e) => !hidden.has(e.id));
   const paths = new Set(entries.flatMap((e) => e.path.split("/").map((_, i, segments) => segments.slice(0, i + 1).join("/"))));
@@ -1916,7 +1916,7 @@ const withoutOriginal = <T extends { original?: unknown; original_language?: unk
 export function pullMemoryBranches(db: Db, reader: Pick<MemoryReader, "taskId" | "agent">, input: { next?: string }, at: Date) {
   const read = readPosition("list_memory_branches", input);
   return db.transaction(() => {
-    const rows = metaReviewBranches(db, examineeHidden(db, reader.taskId));
+    const rows = metaReviewBranches(db, hiddenExamineeWrites(db, reader.taskId));
     const packed = packItems(read, "branches", rows, {}, { keyOf: (row) => row.path, every: PENDING_EVENT_ID }) as Packed<{ branches: typeof rows; event_id: number }>;
     const returned_ids = packed.branches.flatMap((row) => row.definitions.map((d) => d.id));
     return recordPull(db, reader, { verb: "list_memory_branches", input: read.args, returned_ids }, packed, at);
@@ -1946,14 +1946,14 @@ export function pullMemoryList(
 ) {
   const read = readPosition<MemoryListInput>(verb, input);
   return db.transaction(() => {
-    const rows = memoryListRows(db, verb, read.args, verb === "list_memory_entries" ? examineeHidden(db, reader.taskId) : undefined);
+    const rows = memoryListRows(db, verb, read.args, verb === "list_memory_entries" ? hiddenExamineeWrites(db, reader.taskId) : undefined);
     const packed = packItems(read, "entries", rows, {}, { every: PENDING_EVENT_ID }) as Packed<{ entries: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb, input: read.args, returned_ids: packed.entries.map((e) => e.id) }, packed, at);
   })();
 }
 
 /** 一覧2つの行(meta-review の行の形)。pull と材料の節の candidate の部分が共有する。list_memory_entries は人間の面の一覧から
- *  hidden(examineeHidden)を除く(ADR 0264 決定1)。 */
+ *  hidden(hiddenExamineeWrites)を除く(ADR 0264 決定1)。 */
 function memoryListRows(db: Db, verb: Parameters<typeof pullMemoryList>[2], input: MemoryListInput, hidden = new Set<number>()) {
   // 過去の提案の読み物(ADR 0152 決定2): 後継の文言を載せる —— 人間名義の後継なら修正つきで承認された candidate
   // (か、修正つきの統合に置き換えられた candidate)
@@ -2232,7 +2232,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
   if (!ids?.length) throw new DomainError("pass ids, or next from a previous read_memory_entries");
   return db.transaction(() => {
     const restored = restoredAs(db);
-    const hidden = examineeHidden(db, reader.taskId);
+    const hidden = hiddenExamineeWrites(db, reader.taskId);
     const found = new Map<number, number | undefined>();
     const missing: number[] = [];
     for (const id of new Set(ids)) {
@@ -2406,7 +2406,7 @@ export function recordMemoryInjection(
 
 /** 材料の節の店の変更(ADR 0180 決定1): 窓の中に作成か無効化の材料の event(meta-review 自身の産物は除く —— due と同じ述語)が
  *  あるエントリを、本文が同じ鎖の末尾の行1つにまとめ、材料になった変更を添える。移動の `path_moved` は本文の変更でないので数えない。
- *  candidate の行は candidate の部分が持つので載せない。 */
+ *  candidate の行は candidate の部分が持つので載せない。hidden(hiddenExamineeWrites)も載せない(ADR 0264 決定1)。 */
 function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
@@ -2428,13 +2428,13 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window, examineeHidden(db, taskId));
+    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window, hiddenExamineeWrites(db, taskId));
     return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
 }
 
 /** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
- *  (examineeHidden)を載せない(ADR 0264 決定1)。 */
+ *  (hiddenExamineeWrites)を載せない(ADR 0264 決定1)。 */
 function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) {
   const parts = {
     store_changes: storeChanges(db, window, hidden),

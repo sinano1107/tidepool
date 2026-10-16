@@ -811,7 +811,7 @@ it("search_memory_entries は応答予算で切って next と remaining を言�
 });
 
 /** どの Interview でも pin の子(受験者)が書いた Knowledge と Definition、その移動・復元の複製と、本番の Knowledge(ADR 0264 決定1)。 */
-function examineeWrites(fixture: ReturnType<typeof board>) {
+function examineeWrites(fixture: Pick<ReturnType<typeof board>, "db">) {
   const { db } = fixture;
   const [pinChild, otherPinChild] = [interviewPinChild(db, at), interviewPinChild(db, at)];
   const author = { activity: "worker_verb" as const, name: "deckhand" };

@@ -1410,11 +1410,11 @@ it("人間の完了の扉と cancel の扉は拒否された呼び出しで poll
 });
 
 it("人間の面の記憶の一覧は、pin の子(受験者)が書いたエントリも返す(ADR 0264 決定1)", () => {
-  const memoryDb = openDb(":memory:");
-  const pinChild = interviewPinChild(memoryDb, NOW);
+  db = openDb(":memory:");
+  const pinChild = interviewPinChild(db, NOW);
   const author = { activity: "worker_verb" as const, name: "deckhand" };
-  const knowledge = recordKnowledge(memoryDb, { scope: "tidepool", path: "parser", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author }, "worker", NOW, pinChild.id).entry_id;
-  const definition = defineMemoryBranch(memoryDb, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", NOW, pinChild.id).entry_id;
+  const knowledge = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "Examinee answer", text: "The answer.", source: { commit: "0a46a46" }, author }, "worker", NOW, pinChild.id).entry_id;
+  const definition = defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the examinee filed.", author }, "worker", NOW, pinChild.id).entry_id;
 
-  expect(listMemoryEntriesForHuman({ db: memoryDb }, {}).map((e) => e.id)).toEqual([knowledge, definition]);
+  expect(listMemoryEntriesForHuman({ db: db }, {}).map((e) => e.id)).toEqual([knowledge, definition]);
 });
