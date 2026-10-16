@@ -217,7 +217,7 @@ const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "m
 const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
-const ROOT_MARK = "root-history-mark-3e9";
+const ROOT_MARK = "root-mark-3e9";
 const SIBLING_MEMORY = "sibling-memory-mark-4d2";
 const TREE_MEMORY = "tree-memory-mark-b85";
 
@@ -333,8 +333,12 @@ async function lastExaminee() {
     const injection = buildMemoryInjection(t.db, spawned, spawned.workspace, t.worker.id, t.worker.startedQueries[spawn]).section;
     const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
     const productionClient = await mcpClient(t.mcpBaseUrl, work.id);
-    const production = (await productionClient.listTools()).tools;
-    await productionClient.close();
+    let production: Awaited<ReturnType<typeof productionClient.listTools>>["tools"];
+    try {
+      production = (await productionClient.listTools()).tools;
+    } finally {
+      await productionClient.close();
+    }
     return { rootId: root.id, siblings: [done, cancelled], siblingDefinition, pages, pulls: pulled, injection, tools: (await client.listTools()).tools, production };
   } finally {
     await client.close();
@@ -354,9 +358,10 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
   for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, ROOT_MARK, DEFAULT_AUDITOR_NAME, "not shown to examinees", ...siblings, `entry ${siblingDefinition}`]) {
     expect(read).not.toContain(text);
   }
-  // 本番の親なし work の tools/list(名前・説明文・schema)との差は分解の verb だけ(ADR 0267 決定7)
+  // 写像: 本番の親なし work の tools/list(名前・説明文・schema)との差は分解の verb だけ(ADR 0267 決定7)。どの verb を
+  // 外すかは interview.test.ts の taskVerbSwap が言う
+  expect(production.map((tool) => tool.name)).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
   expect(tools).toEqual(production.filter((tool) => tool.name !== "decompose" && tool.name !== "redecompose"));
-  expect(production.length - tools.length).toBe(2);
 });
 
 it("受験者の詳細と盤面の一覧の行は、その Interview の root の id を名指す(ADR 0267 決定6)", async () => {
