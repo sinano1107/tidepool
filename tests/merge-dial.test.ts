@@ -201,7 +201,7 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { task, question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptMergedOutside(1);
   // merge 済み PR は CI が赤/pending でも観測決着に到達しなければならない
   t.github.scriptCiStatus("pending");
@@ -217,14 +217,6 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
 
   const settled = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(settled.status).toBe("done");
-
-  // ADR 0265 決定1: PR の決着は PR を開いた根に刻まれる
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toEqual([
-    expect.objectContaining({ payload: { kind: "pr_merge_observed", pr_number: 1 } }),
-  ]);
-  // 観測は執行と区別して綴られる(ADR 0079 決定4)
-  expect(events.filter((e: any) => e.kind === "pr_merged")).toEqual([]);
 });
 
 it("同じ question に「hold」で回答しても観測決着になり、hold は決定として記録されない(ADR 0079 決定3)", async () => {
@@ -233,7 +225,7 @@ it("同じ question に「hold」で回答しても観測決着になり、hold 
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { task, question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptMergedOutside(1);
 
   const answered = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
@@ -245,12 +237,6 @@ it("同じ question に「hold」で回答しても観測決着になり、hold 
   expect(settled.status).toBe("done");
   // 誰も決めていない: 保留の決定が事後に捏造されてはならない
   expect(settled.question_answer).toBeNull();
-
-  const questionEvents = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(questionEvents.filter((e: any) => e.kind === "question_answered")).toEqual([]);
-  // ADR 0265 決定1: PR の決着は PR を開いた根に刻まれる
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toHaveLength(1);
 });
 
 const MINUTE = 60 * 1000;
@@ -263,7 +249,7 @@ it("open な merge question の PR が盤面の外で merge されていたら�
     workspace: ws,
     resolveAuthority: () => ({ name: "standard", guidance: "", merge: "escalate" }),
   });
-  const { task, question } = await completeUnderEscalate(t, ws.path);
+  const { question } = await completeUnderEscalate(t, ws.path);
   t.github.scriptMergedOutside(1);
 
   // 60秒面は一切広げない — CI poll の周期では走査は動かない
@@ -277,12 +263,6 @@ it("open な merge question の PR が盤面の外で merge されていたら�
   expect(settled.status).toBe("done");
   expect(settled.question_answer).toBeNull();
   expect(t.github.merged).toEqual([]);
-
-  // ADR 0265 決定1: PR の決着は PR を開いた根に刻まれる
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toEqual([
-    expect.objectContaining({ payload: { kind: "pr_merge_observed", pr_number: 1 } }),
-  ]);
 });
 
 it("走査中に1枚の PR が読めなくても、走査は倒れず残りの question を観測する(快適性の機構は盤面を落とせない)", async () => {

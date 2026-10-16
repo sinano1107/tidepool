@@ -944,7 +944,12 @@ const prOutcomes = () =>
   listEventsOfKinds(db, ["pr_merged", "pr_merge_observed", "pr_close_observed"]).map(({ task_id, payload }) => ({ task_id, payload }));
 
 // ADR 0229 決定4: 回答受理直前のバックストップは閉じた PR も観測する —— 回答の値に依らず、決定としては記録しない
-it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question に「%s」と答えると、merge せず閉じた観測として決着する", async (answer) => {
+it.each([
+  ["閉じられた", "merge", "pr_close_observed"],
+  ["閉じられた", "hold", "pr_close_observed"],
+  ["merge された", "merge", "pr_merge_observed"],
+  ["merge された", "hold", "pr_merge_observed"],
+] as const)("盤面の外で%s PR の merge question に「%s」と答えると、merge せず回答なしで閉じ、%s を根に刻む", async (_, answer, observedKind) => {
   db = openDb(":memory:");
   const work = registerTask(
     db,
@@ -955,7 +960,8 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
   recordPrOpened(db, work, 42, fakeHead(42), "worker", NOW, { merge: "escalate" }, undefined, "worker");
   const question = onlyQuestion(db);
   const github = new FakeGitHubClient();
-  github.scriptClosedOutside(42);
+  if (observedKind === "pr_close_observed") github.scriptClosedOutside(42);
+  else github.scriptMergedOutside(42);
 
   const answered = await submitAnswer(
     {
@@ -981,7 +987,7 @@ it.each(["merge", "hold"])("盤面の外で閉じられた PR の merge question
     status: "done",
     merged: [],
     kinds: expect.not.arrayContaining(["question_answered"]),
-    observed: [{ task_id: work.id, payload: { kind: "pr_close_observed", pr_number: 42 } }],
+    observed: [{ task_id: work.id, payload: { kind: observedKind, pr_number: 42 } }],
   });
 });
 
