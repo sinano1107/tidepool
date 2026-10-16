@@ -522,7 +522,8 @@ function settleMergeQuestionAsObserved(
   kind: ReturnType<typeof prOutcomeKind>,
   now: Date,
 ): void {
-  // ADR 0265 決定1: 観測は PR を開いた根に1回だけ刻み(収束が先に刻んでいれば重ねない)、question は回答なしの done で閉じる
+  // ADR 0265 決定1: 決着(観測、または盤面の名義の merge の執行)は PR を開いた根に1回だけ刻み(収束が先に刻んでいれば
+  // 重ねない)、question は回答なしの done で閉じる
   const root = taskIdForPr(db, prNumber, question.workspace);
   const recordOn = rootPrOutcome(db, root) === null ? root : null;
   settleQuestionAsObserved(db, question.id, { kind, pr_number: prNumber }, now, recordOn);
@@ -976,6 +977,7 @@ export function createLanding(deps: LandingDeps): Landing {
       // ADR 0241 決定4: 作る前に同じタスクブランチの PR を探す —— 作成の後・記録の前に落ちた盤面が2つ目を作らない
       const found = await deps.github.findPullRequestByHead({ path: workspace.path, branch: taskBranch(task.id) });
       if (found && found.state !== "OPEN") {
+        // 名義を見ない —— 盤面は記録した PR 番号にしか merge を撃たないので、番号の記録が無い PR は盤面の merge ではない
         const observed = { kind: OBSERVED[found.state], pr_number: found.number };
         deps.db.transaction(() => {
           recordPrNumber(deps.db, task.id, found.number);
@@ -1107,8 +1109,8 @@ export function createLanding(deps: LandingDeps): Landing {
       return true;
     },
     // ADR 0217 決定5: agent 名の quarantine に落ちた agent のキューの PR は、tick の観測
-    // (ADR 0079 決定3)に届かない。盤面の外で merge された・閉じられたもの(ADR 0229 決定4)は
-    // 回答の受理直前にここで観測する。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
+    // (ADR 0079 決定3)に届かない。merge された・閉じられたもの(ADR 0229 決定4)は回答の受理直前にここで決着を
+    // 刻む —— 盤面の名義の merge(落ちた後)は執行、それ以外は観測(ADR 0265 決定5)。読めない PR は飛ばす —— キューに残り、着地待ちに数えられる。
     async observeAutoMergeOutcomes(agentName) {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
       const github = deps.github;

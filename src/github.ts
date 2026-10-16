@@ -93,12 +93,12 @@ export interface FoundPr {
   head: string;
 }
 
-/** One read of a PR, CI, state and head together (ADR 0229 決定2 / ADR 0231
- *  決定1): `head` is the commit the CI was read on, the one a merge pins to. A
+/** One read of a PR, CI, state, merger and head together (ADR 0229 決定2 / ADR 0231
+ *  決定1 / ADR 0265 決定5): `head` is the commit the CI was read on, the one a merge pins to. A
  *  read that failed is CI "pending" and state "unreadable" with no head —
  *  never a state the caller would act on. */
 export type PrStatus =
-  | { ci: CiStatus; state: PrState; head: string; mergedBy: string | null }
+  | (PrStateRead & { ci: CiStatus; head: string })
   | { ci: "pending"; state: "unreadable" };
 
 /** ADR 0016's 確定的失敗 (permanent failure) of an issue-backed task's live
@@ -142,7 +142,7 @@ export interface GitHubClient {
   /** Merges only while the PR's head is still `head` — the one whose CI was
    *  read (ADR 0231 決定1); GitHub refuses it once the head has moved. */
   mergePullRequest(ref: PrRef, head: string): Promise<void>;
-  /** The PR's state (ADR 0079 決定3 / ADR 0229) — the read the board needs to
+  /** The PR's state and who merged it (ADR 0079 決定3 / ADR 0229 / ADR 0265 決定5) — the read the board needs to
    *  tell "the merge is still mine to make" from "someone merged or closed it
    *  outside the board". Only asked on the two surfaces the board holds a
    *  decision on (an open merge question, the auto-merge queue) and before
