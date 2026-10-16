@@ -529,7 +529,7 @@ UUID=68A9-671B /mnt/ssd exfat defaults,nofail,uid=1000,gid=1000,fmask=0022,dmask
 
 12. **依存は、workspace の `allowed_domains` が閉じている場合はホスト側で用意する**(#309 / ADR 0072)。`cp -a /opt/tidepool/node_modules <workspace>/` で配る —— `package-lock.json` の md5 が一致していることを先に確認する。非空の `allowed_domains` はその workspace の worker だけに列挙ドメインへの egress を開く。許可外への取得は retry しない。
 
-13. **実行中のタスクは UI からキャンセルできない**(`assertHumanEditableScope` が `in_progress` を除く)。止める手は2つ —— watchdog を待つ(work 90分)か、**Pi 上でプロセスを kill してからサービスを再起動する**。再起動が `failTask` を撃ち(ADR 0001)、retry / abandon の question が立って slot が解放される。**kill だけでは解放されない** —— `worker_exited` は記録されるが、タスクは `in_progress` のまま残る。
+13. **実行中のタスクは UI からキャンセルできない**(`assertHumanEditableScope` が `in_progress` を除く)。止める手は2つ —— watchdog を待つ(work 90分)か、**Pi 上でプロセスを kill してからサービスを再起動する**。再起動が再起動中断を記録して後始末へ入れ(ADR 0001 / ADR 0254)、retry / abandon の question が立ち、後始末を経て slot が解放される。**kill だけでは解放されない** —— `worker_exited` は記録されるが、タスクは `in_progress` のまま残る。
 
     再開したいなら **question を未回答のまま置く**とよい。未回答の question はタスクを `nextSlotTask` から外すので、その間にホスト側の手当てを済ませてから `retry` と答えられる。
 

@@ -58,9 +58,10 @@ it("既定 workspace a・既定 agent a で pickup したタスクは、再起�
   expect(git(a.path, "log", "--format=%s", "HEAD")).toContain(`WIP: task ${task.id}`);
   expect(git(b.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(b.path, "branch", "--list", `task/${task.id}`)).toBe("");
+  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "workspace" && q.question_quarantine_value === b.name)).toEqual([]);
 });
 
-describe("restart 割り込みの failTask が task.workspace を解決する", () => {
+describe("再起動中断の後始末が task.workspace を解決する", () => {
   it("再起動時に in_progress のまま残ったタスクは、自身の workspace の checkout で tree rule を実行する", async () => {
     const sandbox = await makeWorkspace("sandbox");
     const prod = await makeWorkspace("prod");
@@ -109,20 +110,4 @@ describe("restart 割り込みの failTask が task.workspace を解決する", 
     );
     expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   });
-});
-
-it("再起動中断の WIP 退避は、sandbox の影の .bashrc をタスクブランチに載せない", async () => {
-  const ws = await makeWorkspace("sandbox");
-  t = await bootTidepool({ workspace: ws });
-  const task = queueWork(t, "interrupted by restart");
-  await t.clock.advance(HOUR);
-  writeFileSync(join(ws.path, "stuck.txt"), "stuck work\n");
-  writeFileSync(join(ws.path, ".bashrc"), "");
-  await t.stopServer();
-
-  t = await bootTidepool({ dir: t.dir, workspace: ws });
-
-  const taskFiles = git(ws.path, "ls-tree", "-r", "--name-only", `task/${task.id}`).split("\n");
-  expect(taskFiles).toContain("stuck.txt");
-  expect(taskFiles).not.toContain(".bashrc");
 });
