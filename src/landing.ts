@@ -63,7 +63,7 @@ export type LandingVerdict =
   // 開いている PR に積み残しが無い —— push も GitHub の読み取りもしない(ADR 0241)
   | { kind: "up_to_date"; prNumber: number }
   // retry が答えている根を、この回の収束は撃たなかった(ADR 0241 決定5)。error は回答の拒否文
-  | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "not_a_root"; error: string }
+  | { kind: "excluded"; reason: "pull_request_closed" | "teardown_unfinished" | "root_pull_request_open" | "not_a_root"; error: string }
   // 止まっている原因が quarantine の question としてすでに出ている —— 失敗 question を重ねない(ADR 0241 決定6)。error は retry の拒否文
   | { kind: "quarantined"; error: string }
   | {
@@ -317,27 +317,7 @@ function landingCandidateIds(db: Db): string[] {
 /** 候補が根ならその根を返す。閉じた PR の根と、PR が開いている根(終わっていない・決着していない・断念していない)の
  *  子孫は、lineage の前に記録で外す。今の記録を読むので、同じ回で先に終わった祖先の子孫は自分で根になれる。 */
 function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string): LandingRoot | undefined {
-  if (rootPrOutcome(db, id)?.state === "CLOSED") return undefined;
-  const openPrAncestors = db
-    .prepare(
-      `WITH RECURSIVE ancestors(id) AS (
-          SELECT parent_id FROM tasks WHERE id = ?
-          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
-       SELECT t.id FROM tasks t
-        WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))`,
-    )
-    .pluck()
-    .all(id) as string[];
-  if (
-    openPrAncestors.some(
-      (ancestor) =>
-        rootPrOutcome(db, ancestor) === null &&
-        !abandonEventInForce(db, ancestor) &&
-        openPrPromotionQuestionIds(db, ancestor).length === 0,
-    )
-  )
-    return undefined;
+  if (rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
   const task = getTask(db, id)!;
   let workspace: WorkspaceConfig | undefined;
   try {
@@ -350,6 +330,48 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
   } catch (lineageError) {
     return { task, outlivedForkSource: false, lineageError };
   }
+}
+
+/** `id` の祖先のうち、PR が開いていて子孫を記録で外している根を返す —— 着地が終わっておらず、PR が決着も断念もしておらず、
+ *  未回答の失敗 question で止まってもいない根。止まっている根は内容の確かめに届かず内容で終わらないので、子孫を外さない。 */
+function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } | undefined {
+  const unfinishedPrAncestors = db
+    .prepare(
+      `WITH RECURSIVE ancestors(id) AS (
+          SELECT parent_id FROM tasks WHERE id = ?
+          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+       SELECT t.id, t.pr_number AS prNumber FROM tasks t
+        WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))`,
+    )
+    .all(id) as Array<{ id: string; prNumber: number }>;
+  return unfinishedPrAncestors.find(
+    (ancestor) =>
+      rootPrOutcome(db, ancestor.id) === null &&
+      !abandonEventInForce(db, ancestor.id) &&
+      openPrPromotionQuestionIds(db, ancestor.id).length === 0,
+  );
+}
+
+/** retry が答えている根を回が候補にしなかった理由(ADR 0241 決定5)。error は回答の拒否文。 */
+function exclusionOf(db: Db, taskId: string): Extract<LandingVerdict, { kind: "excluded" }> {
+  const outcome = rootPrOutcome(db, taskId);
+  if (outcome?.state === "CLOSED") {
+    return {
+      kind: "excluded",
+      reason: "pull_request_closed",
+      error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
+    };
+  }
+  const root = openPrRootAbove(db, taskId);
+  if (root) {
+    return {
+      kind: "excluded",
+      reason: "root_pull_request_open",
+      error: `task ${taskId} waits for its root task ${root.id}'s PR #${root.prNumber} to finish landing; answer again once it has`,
+    };
+  }
+  return { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` };
 }
 
 /** 根の木(根自身を含む)に、後始末が未了の行があるか —— その後始末の merge back がまだ根へ帰っていない(ADR 0240 決定2)。 */
@@ -1053,18 +1075,7 @@ export function createLanding(deps: LandingDeps): Landing {
     for (const questionId of answering) {
       const taskId = getTask(deps.db, questionId)?.question_pending_pr_promotion_task_id;
       if (!taskId || verdicts.some((root) => root.taskId === taskId)) continue;
-      const outcome = rootPrOutcome(deps.db, taskId);
-      verdicts.push({
-        taskId,
-        verdict:
-          outcome?.state === "CLOSED"
-          ? {
-              kind: "excluded",
-              reason: "pull_request_closed",
-              error: `PR #${outcome.prNumber} was closed outside the board, so ${taskBranch(taskId)} is not pushed to it`,
-            }
-          : { kind: "excluded", reason: "not_a_root", error: `task ${taskId} is no longer awaiting PR promotion` },
-      });
+      verdicts.push({ taskId, verdict: exclusionOf(deps.db, taskId) });
     }
     return verdicts;
   };

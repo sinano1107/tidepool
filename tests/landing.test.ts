@@ -1473,6 +1473,23 @@ it("PR が開いている external の根が未回答の失敗 question で止�
   expect(github.requests.map(({ branch }) => branch)).toEqual([`task/${repair.id}`]);
 });
 
+// ADR 0265 帰結 / ADR 0241 決定5: 根の PR が開いている間に子孫の失敗 question へ答えた retry は、待っている根の PR を理由に拒まれる
+it("PR が開いている根の子孫の失敗 question に retry を答える回の verdict は、根の PR が着地を終えるのを待つ、である", async () => {
+  const { workspace, db, clock, landing, work } = await openPushedPr("landing-retry-under-open-pr", "external");
+  finish(db, clock, work);
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "branch", `task/${repair.id}`, `task/${work.id}`);
+  finish(db, clock, repair);
+  registerPrPromotionFailureQuestion(db, getTask(db, repair.id)!, "push failed earlier", clock.now());
+  const [failure] = promotionFailures(db, repair.id);
+
+  await expect(convergeOn(landing, repair.id, failure!.id)).resolves.toEqual({
+    kind: "excluded",
+    reason: "root_pull_request_open",
+    error: `task ${repair.id} waits for its root task ${work.id}'s PR #1 to finish landing; answer again once it has`,
+  });
+});
+
 // ADR 0265 決定3 / ADR 0236: 内容で終わることは決裁を引退させない —— キューの行と merge question を閉じるのは PR の状態の読み取りだけ
 it.each([
   ["auto_if_ci_green", "auto_merge", 0],
