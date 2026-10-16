@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1727,13 +1727,18 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
   return terms.length === 0 ? null : terms.map((term) => `"${term.replaceAll('"', '""')}"`).join(join);
 }
 
+/** 採点者の印の欄(ADR 0264 決定6): 受験者の視界に無いエントリなら true。読み手が Interview の root のときだけある。 */
+type ExamineeMark = { not_shown_to_examinees?: boolean };
+
 /** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
  *  2段目 宛先、3段目 未無効化。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
- *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。
- *  読み手に無い集合は呼び出しごとに1度だけ組む。 */
+ *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。mark は採点者の印
+ *  (ADR 0264 決定6)で、読み手が Interview の root のときだけ欄を持つ。読み手に無い集合は呼び出しごとに1度だけ組む。 */
 function readerSight(db: Db, reader: MemoryReader) {
   const hidden = readerHidden(db, reader.taskId);
+  // 読み手が Interview の root なら、受験者の視界に無い集合。それ以外の読み手には欄ごと出さない
+  const hiddenFromExaminees = interviewTargets(db, reader.taskId) === null ? null : examineeHidden(db);
   const base = (row: EntryRow) => row.state === "approved" && (row.scope === null || row.scope === reader.scope) && !hidden.has(row.id);
   const addressed = (row: EntryRow) => row.addressee === null || row.addressee === reader.agent;
   const live = (row: EntryRow) => row.invalidation_reason === null;
@@ -1742,6 +1747,7 @@ function readerSight(db: Db, reader: MemoryReader) {
     scope: reader.scope,
     has: (row: EntryRow, layer: 1 | 2 | 3) => layers.slice(0, layer).every((inLayer) => inLayer(row)),
     dropReason: (row: EntryRow): MemoryDropReason | null => (!live(row) ? "invalidated" : !addressed(row) ? "addressee" : null),
+    mark: (row: EntryRow): ExamineeMark => (hiddenFromExaminees === null ? {} : { not_shown_to_examinees: hiddenFromExaminees.has(row.id) }),
   };
 }
 
@@ -1772,25 +1778,32 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
  *    見る。出所が commit のものは当たらない)。自分が書いたもの(とその後継)だけは、出所が木でも本番どおり読む(ADR 0263
  *    決定1・7)。meta-review が畳んだ後継は出所が meta-review の decision なので当たらない。 */
 function readerHidden(db: Db, taskId: string): Set<number> {
-  const written = (tasks: string) =>
-    `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
-  const examinee = getTask(db, taskId)?.interview_target_id != null;
-  const hidden = db
-    .prepare(
-      examinee
-        ? `${written(INTERVIEW_TREE_SQL)}
-           UNION
-           SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
-             JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
-            WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`
-        : written("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"),
-    )
-    .all() as Array<{ id: number }>;
-  if (hidden.length === 0) return new Set();
+  if (getTask(db, taskId)?.interview_target_id == null) return withSameBodyCopies(db, writtenBy("SELECT id FROM tasks WHERE interview_target_id IS NOT NULL"));
+  const own = withSameBodyCopies(db, writtenBy("?"), taskId);
+  return new Set([...examineeHidden(db)].filter((id) => !own.has(id)));
+}
+
+/** 受験者の視界に無い集合(ADR 0264 決定3)の、自分の書き込みの例外を引く前の形 —— どの受験者にも共通。readerHidden と採点者の印(readerSight)が使う。 */
+function examineeHidden(db: Db): Set<number> {
+  return withSameBodyCopies(
+    db,
+    `${writtenBy(INTERVIEW_TREE_SQL)}
+     UNION
+     SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+       JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+      WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
+  );
+}
+
+const writtenBy = (tasks: string) =>
+  `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
+
+/** sql が返すエントリと、どれも本文が同じ後継(移動・復元の複製)。 */
+function withSameBodyCopies(db: Db, sql: string, ...params: string[]): Set<number> {
+  const rows = db.prepare(sql).all(...params) as Array<{ id: number }>;
+  if (rows.length === 0) return new Set();
   const restored = restoredAs(db);
-  const chains = (rows: Array<{ id: number }>) => rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id));
-  const own = new Set(examinee ? chains(db.prepare(written("?")).all(taskId) as Array<{ id: number }>) : []);
-  return new Set(chains(hidden).filter((id) => !own.has(id)));
+  return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
@@ -1801,7 +1814,7 @@ export function searchMemory(
   reader: MemoryReader,
   input: { query?: string; next?: string },
   at: Date,
-): Packed<{ results: Array<{ id: number; title: string; path: string }>; event_id: number }> {
+): Packed<{ results: Array<{ id: number; title: string; path: string } & ExamineeMark>; event_id: number }> {
   const read = readPosition("search_memory", input);
   if (read.args.query === undefined) throw new DomainError("pass query, or next from a previous search_memory");
   const match = ftsQuery(read.args.query);
@@ -1809,7 +1822,7 @@ export function searchMemory(
   return db.transaction(() => {
     const sight = readerSight(db, reader);
     const hits = rankedEntries(db, match, sight);
-    const visible = hits.filter((row) => sight.has(row, 3)).map(({ id, title, path }) => ({ id, title, path }));
+    const visible = hits.filter((row) => sight.has(row, 3)).map((row) => ({ id: row.id, title: row.title, path: row.path, ...sight.mark(row) }));
     const packed = packItems(read, "results", visible, {}, { every: PENDING_EVENT_ID }) as ReturnType<typeof searchMemory>;
     const returned = new Set(packed.results.map((r) => r.id));
     // 前の応答で返した候補は外す —— それらは前の応答の pull に dropped: null で残っている
@@ -1887,16 +1900,23 @@ export function browseMemory(
   reader: MemoryReader,
   input: { prefix?: string; next?: string },
   at: Date,
-): Packed<{ children: Array<{ name: string; definition: string | null }>; entries: Array<{ id: number; title: string }>; event_id: number }> {
+): Packed<{
+  children: Array<{ name: string; definition: string | null } & ExamineeMark>;
+  entries: Array<{ id: number; title: string } & ExamineeMark>;
+  event_id: number;
+}> {
   const read = readPosition("browse_memory", input);
   const prefix = read.args.prefix ? checkedPath(read.args.prefix) : "";
   return db.transaction(() => {
     // 枝の後に leaf の順で1列に詰め、枝は children・leaf は entries に置く。枝の境目の鍵は名前(path)、leaf は id
-    const children = indexChildren(visibleEntries(db, readerSight(db, reader)), prefix).map((child) =>
-      isBranch(child) ? { name: child.name, definition: child.definition?.text ?? null } : { id: child.id, title: child.title },
+    const sight = readerSight(db, reader);
+    const children = indexChildren(visibleEntries(db, sight), prefix).map((child) =>
+      isBranch(child)
+        ? { name: child.name, definition: child.definition?.text ?? null, ...(child.definition && sight.mark(child.definition)) }
+        : { id: child.id, title: child.title, ...sight.mark(child) },
     );
     const packed = packItems(read, ["children", "entries"], children, {}, {
-      keyOf: (child) => child.id ?? child.name!,
+      keyOf: (child) => ("name" in child ? child.name : child.id),
       listOf: (child) => ("name" in child ? "children" : "entries"),
       every: PENDING_EVENT_ID,
     }) as ReturnType<typeof browseMemory>;
@@ -2181,7 +2201,7 @@ export function readMemory(
       source_kind: "fact" | "inference";
       case: MemoryCase | null;
       annotations?: Array<Omit<ExemplarAnnotation, "original">>;
-    }>;
+    } & ExamineeMark>;
     event_id: number;
   },
   { dropped: Array<{ id: number; reason: InvalidationReason; successor: number | null }> }
@@ -2224,6 +2244,7 @@ export function readMemory(
           case: kind === "behavior" || kind === "exemplar" ? renderCase(db, source) : null,
           // 原文は人間の面のもの —— worker には英語の正文だけ(ADR 0015)
           annotations: annotations?.map(withoutOriginal),
+          ...sight.mark(row),
         };
       });
     const packed = packItems(read, "entries", entries, { dropped }, { every: PENDING_EVENT_ID }) as ReturnType<typeof readMemory>;
@@ -2334,6 +2355,7 @@ export function buildMemoryInjection(
         .filter(isBranch)
         .flatMap((branch) => [{ ...branch, depth }, ...tree(branch.name, depth + 1)]);
     const branches = tree("", 1);
+    const markText = (row: EntryRow | null) => (row && sight.mark(row).not_shown_to_examinees ? " — not shown to examinees" : "");
     const maxDepth = Math.max(...branches.map((b) => b.depth));
     // 語が残らなければ(空 / stopword だけ)関連 leaf は無い。spawn は落とさない
     const match = ftsQuery(query && "view" in query ? query.view : injectionQueryText(task), " OR ");
@@ -2356,14 +2378,14 @@ export function buildMemoryInjection(
         "",
         ...branches
           .filter((b) => b.depth <= depth)
-          .map((b) => `${"  ".repeat(b.depth - 1)}- ${b.name.split("/").at(-1)}/ — ${b.definition?.text ?? "(undefined)"}`),
+          .map((b) => `${"  ".repeat(b.depth - 1)}- ${b.name.split("/").at(-1)}/ — ${b.definition?.text ?? "(undefined)"}${markText(b.definition)}`),
         ...(shown.length === 0
           ? []
           : [
               "",
               "### Relevant entries",
               "",
-              ...shown.map((row) => `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})`),
+              ...shown.map((row) => `- #${row.id} ${row.title} (path: ${row.path}, source: ${SOURCE_KIND[row.source_kind]})${markText(row)}`),
             ]),
         ...(omissionNote === "" ? [] : ["", omissionNote]),
       ].join("\n");
