@@ -483,3 +483,32 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 2 });
 });
+
+it("読み手が Interview の root のとき、受験者の視界に無いエントリ(root の書き込み・Interview の木を出所にするもの)の INDEX の行と関連 leaf の行に `not shown to examinees` の印が付き、本番の worker と pin の子の注入には印が出ず、受験者の書き込みは root に出ない(ADR 0264 決定6)", () => {
+  const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
+  const { db, task } = board(probe);
+  const examinee = interviewPinChild(db, at);
+  const root = getTask(db, examinee.parent_id!)!;
+  const posed = listEvents(db, root.id).find((e) => e.kind === "decision_logged")!.id;
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const commit = { commit: "0a46a46" };
+  const define = (writer: { id: string }, path: string, text: string) => defineMemoryBranch(db, { scope: "tidepool", path, text, author }, "worker", at, writer.id);
+  const write = (writer: { id: string }, path: string, title: string, source: { commit: string } | { event_id: number }) =>
+    recordKnowledge(db, { scope: "tidepool", path, title, text: "the parser", source, author }, "worker", at, writer.id).entry_id;
+  define(task, "lexer", "Lexer notes.");
+  define(root, "probes", "How probes are set.");
+  const production = write(task, "lexer", "parser production", commit);
+  const cited = write(task, "parser", "parser cited", { event_id: posed });
+  const rootNote = write(root, "probes", "parser probe note", commit);
+  write(examinee, "lexer", "parser answers", commit);
+  const MARK = " — not shown to examinees";
+
+  const injection = buildMemoryInjection(db, { ...probe, id: root.id }, "tidepool", "deckhand");
+
+  expect(injection.section).toContain(`### Index\n\n- lexer/ — Lexer notes.\n- parser/ — (undefined)\n- probes/ — How probes are set.${MARK}\n\n`);
+  expect(injection.section).toContain(`- #${production} parser production (path: lexer, source: fact)\n`);
+  expect(injection.section).toContain(`- #${cited} parser cited (path: parser, source: inference)${MARK}`);
+  expect(injection.section).toContain(`- #${rootNote} parser probe note (path: probes, source: fact)${MARK}`);
+  expect(injection.section).not.toContain("answers");
+  for (const reader of [task, examinee]) expect(buildMemoryInjection(db, reader, "tidepool", "deckhand").section).not.toContain("not shown to examinees");
+});

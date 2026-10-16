@@ -725,6 +725,43 @@ it("読み手が pin の子のとき、出所が帰責(objection_attributed)の�
   expect(readMemory(db, reader, { ids }, at).entries.map((e) => e.id)).toEqual([onRootDecision, onProductionDecision, successor]);
 });
 
+it("読み手が Interview の root のとき、browse・search・read の応答はエントリごとに not_shown_to_examinees を持ち、受験者の視界に無いもの(root の書き込みとその移動の複製・Interview の木を出所にするもの)で true —— 本番の worker と pin の子の応答には欄が無い(ADR 0264 決定6)", () => {
+  const { db, task, reader, examinee, write } = examineeBoard();
+  const root = { ...reader, taskId: getTask(db, examinee.taskId)!.parent_id! };
+  const posed = listEvents(db, root.taskId).find((e) => e.kind === "decision_logged")!.id;
+  const production = write(task, "production");
+  const rootNote = write({ id: root.taskId }, "root");
+  const moved = moveMemory(db, { entry_id: write({ id: root.taskId }, "moved", "elsewhere"), scope: "tidepool", path: "tide", mover: human }, "webui", at).entry_id;
+  const cited = recordKnowledge(
+    db,
+    { scope: "tidepool", path: "tide", title: "cited", text: "tide cited", source: { event_id: posed }, author: { activity: "worker_verb", name: "deckhand" } },
+    "worker",
+    at,
+    task.id,
+  ).entry_id;
+  defineMemoryBranch(db, { scope: "tidepool", path: "tide/probes", text: "How probes are set.", author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, root.taskId);
+  write({ id: examinee.taskId }, "answers");
+  const ids = [production, rootNote, moved, cited];
+  const marked = ids.map((id) => ({ id, not_shown_to_examinees: id !== production }));
+  const pulls = (seer: typeof reader) => [
+    browseMemory(db, seer, { prefix: "tide" }, at),
+    searchMemory(db, seer, { query: "tide" }, at),
+    readMemory(db, seer, { ids }, at),
+  ] as const;
+
+  const [browse, search, read] = pulls(root);
+
+  expect(browse).toMatchObject({ children: [{ name: "tide/probes", not_shown_to_examinees: true }] });
+  expect(browse.entries.map(({ id, not_shown_to_examinees }) => ({ id, not_shown_to_examinees }))).toEqual(marked);
+  expect(search.results.map(({ id, not_shown_to_examinees }) => ({ id, not_shown_to_examinees })).sort((a, b) => a.id - b.id)).toEqual(marked);
+  expect(read.entries.map(({ id, not_shown_to_examinees }) => ({ id, not_shown_to_examinees }))).toEqual(marked);
+  for (const seer of [reader, examinee]) {
+    const [browse, search, read] = pulls(seer);
+    for (const item of [...browse.children, ...browse.entries, ...search.results, ...read.entries]) expect(item).not.toHaveProperty("not_shown_to_examinees");
+    expect(browse.entries.length + search.results.length + read.entries.length).toBeGreaterThan(0);
+  }
+});
+
 /** #386 のフィクスチャの session(worker_spawned 5、decision 6・7・8、完了 9)を投影した盤面と、その task の reader。 */
 async function projectedBoard() {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");

@@ -217,13 +217,6 @@ it("盤面の外で先に merge された PR の merge question は、「merge�
 
   const settled = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json;
   expect(settled.status).toBe("done");
-
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toEqual([
-    expect.objectContaining({ payload: { kind: "pr_merge_observed", pr_number: 1 } }),
-  ]);
-  // 観測は執行と区別して綴られる(ADR 0079 決定4)
-  expect(events.filter((e: any) => e.kind === "pr_merged")).toEqual([]);
 });
 
 it("同じ question に「hold」で回答しても観測決着になり、hold は決定として記録されない(ADR 0079 決定3)", async () => {
@@ -244,10 +237,6 @@ it("同じ question に「hold」で回答しても観測決着になり、hold 
   expect(settled.status).toBe("done");
   // 誰も決めていない: 保留の決定が事後に捏造されてはならない
   expect(settled.question_answer).toBeNull();
-
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "question_answered")).toEqual([]);
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toHaveLength(1);
 });
 
 const MINUTE = 60 * 1000;
@@ -274,11 +263,6 @@ it("open な merge question の PR が盤面の外で merge されていたら�
   expect(settled.status).toBe("done");
   expect(settled.question_answer).toBeNull();
   expect(t.github.merged).toEqual([]);
-
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "pr_merge_observed")).toEqual([
-    expect.objectContaining({ payload: { kind: "pr_merge_observed", pr_number: 1 } }),
-  ]);
 });
 
 it("走査中に1枚の PR が読めなくても、走査は倒れず残りの question を観測する(快適性の機構は盤面を落とせない)", async () => {

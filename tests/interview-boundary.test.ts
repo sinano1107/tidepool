@@ -336,14 +336,14 @@ async function lastExaminee() {
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)と兄弟が定義した枝の define の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印が出ず、define は通る(ADR 0263 決定7・8・10 / ADR 0264 決定4)", async () => {
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)と兄弟が定義した枝の define の応答・記憶の注入の節に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印・採点者の印が出ず、define は通る(ADR 0263 決定7・8・10、ADR 0264 決定4・6)", async () => {
   const { siblings, siblingDefinition, pages, pulls, injection, tools } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, ...siblings, `entry ${siblingDefinition}`]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, TREE_MEMORY, CONTINUE_COMMENT, "not shown to examinees", ...siblings, `entry ${siblingDefinition}`]) {
     expect(read).not.toContain(text);
   }
 });
