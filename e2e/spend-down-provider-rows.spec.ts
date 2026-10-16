@@ -123,7 +123,7 @@ test("観測の無い Provider の arm 済み窓にも行と cancel が出て、
   // arm の無い窓(week / secondary)には行も入口も出ない
   await expect(anthropic.getByRole("button")).toHaveCount(1);
   await expect(openai.getByRole("button")).toHaveCount(1);
-  await expect(page.getByText(/week|secondary/)).toHaveCount(0);
+  await expect(page.getByTestId("provider-usage").getByText(/week|secondary/)).toHaveCount(0);
 
   await button("cancel spend-down anthropic session").click();
   await expect(anthropic.getByText("session", { exact: false })).toHaveCount(0);

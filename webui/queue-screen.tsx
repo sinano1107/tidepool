@@ -191,7 +191,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   const providerUsage = data.providerUsage ?? [];
   // 観測の無い Provider でも arm 済みの窓は描く —— 次の窓に結んだ arm は失効しないので、
   // 見えないと人間が取り消せないまま残る(ADR 0260 決定3・5)
-  const providers = [...new Set([
+  const shownProviders = [...new Set([
     ...providerUsage.map((usage) => usage.provider),
     ...Object.keys(spendDown).filter((provider) => Object.values(spendDown[provider] ?? {}).some(Boolean)),
   ])];
@@ -251,13 +251,13 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
           : slot.color,
       }}></div>
 
-      {providers.length > 0 && (
+      {shownProviders.length > 0 && (
         <Card data-testid="provider-usage" style={{ padding: '10px 12px', marginBottom: 14 }}>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
             provider usage
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {providers.map((provider) => {
+            {shownProviders.map((provider) => {
               const usage = providerUsage.find((candidate) => candidate.provider === provider);
               return (
               <div key={provider} data-testid={`provider-usage-${provider}`}>
