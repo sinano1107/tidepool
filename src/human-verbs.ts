@@ -965,6 +965,8 @@ export async function submitAnswer(
   let release: (() => void) | null = null;
   let tierTarget: Tier | undefined;
   let registryCommit: string | undefined;
+  // merge の回答が merge した PR の根 —— 決着はここに、回答と同じトランザクションで刻む(ADR 0265 決定1)
+  let merged: { root: string; pr: number } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
     switch (kind.kind) {
@@ -1079,6 +1081,7 @@ export async function submitAnswer(
           } catch (err) {
             throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
           }
+          merged = { root: landingTaskId, pr: mergePr };
         }
         break;
       }
@@ -1129,6 +1132,15 @@ export async function submitAnswer(
         origin,
         deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName },
       );
+      if (merged) {
+        appendEvent(deps.db, {
+          taskId: merged.root,
+          workerId: HUMAN_WORKER_ID,
+          origin,
+          payload: { kind: "pr_merged", pr_number: merged.pr },
+          at: now(),
+        });
+      }
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
         else if (answers[0] === "reject") rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
@@ -1158,15 +1170,6 @@ export async function submitAnswer(
       }
       return answered;
     })();
-    if (kind.kind === "pr_merge" && answers[0] === MERGE_QUESTION_OPTIONS[0]) {
-      appendEvent(deps.db, {
-        taskId: task.id,
-        workerId: HUMAN_WORKER_ID,
-        origin,
-        payload: { kind: "pr_merged", pr_number: kind.pr },
-        at: now(),
-      });
-    }
     // Giving up promotion otherwise leaves no trace beyond a settled question;
     // preserve the reason on the immutable decision log of that question.
     // 断念した内容(その時点の head)は盤面名義の事実としてタスクに刻む(ADR 0225 決定1)
