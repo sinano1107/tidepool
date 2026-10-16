@@ -1739,6 +1739,7 @@ function readerSight(db: Db, reader: MemoryReader) {
   const live = (row: EntryRow) => row.invalidation_reason === null;
   const layers = [base, addressed, live];
   return {
+    scope: reader.scope,
     has: (row: EntryRow, layer: 1 | 2 | 3) => layers.slice(0, layer).every((inLayer) => inLayer(row)),
     dropReason: (row: EntryRow): MemoryDropReason | null => (!live(row) ? "invalidated" : !addressed(row) ? "addressee" : null),
   };
@@ -1749,7 +1750,7 @@ type ReaderSight = ReturnType<typeof readerSight>;
 /** FTS に当たった行(順位順)のうち視界の1段目にあるもの。SQL は FTS の照合と粗い前絞り(approved・scope)だけ。Definition は
  *  当てない —— worker に届くのは INDEX だけで、search の候補にも注入の関連 leaf にもならない(ADR 0083 追記7)。宛先と無効化は
  *  ここで落とさない —— search はそれを候補の落ちた理由として残す。 */
-function rankedEntries(db: Db, match: string, reader: Pick<MemoryReader, "scope">, sight: ReaderSight): EntryRow[] {
+function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   return (
     db
       .prepare(
@@ -1757,13 +1758,13 @@ function rankedEntries(db: Db, match: string, reader: Pick<MemoryReader, "scope"
           WHERE memory_fts MATCH ? AND e.state = 'approved' AND (e.scope IS NULL OR e.scope = ?)
           ORDER BY memory_fts.rank, e.id`,
       )
-      .all(match, reader.scope) as EntryRow[]
+      .all(match, sight.scope) as EntryRow[]
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
 /** 受験者(pin の子)に無いものとするエントリ(ADR 0263 決定7): どの Interview でも、他の pin の子が書いたもの —— 書いた task は
  *  作った書き込みの記録(ADR 0252)の task。自分が書いたものは本番どおり読む(決定1、CONTEXT.md「他の受験者が書いた記憶」)。
- *  読み手が pin の子でなければ空。視界の1段目(readerSight)にあるので、落とした理由にも omitted にも dropped にも出ない。 */
+ *  読み手が pin の子でなければ空。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。 */
 function examineeHidden(db: Db, taskId: string): Set<number> {
   if (getTask(db, taskId)?.interview_target_id == null) return new Set();
   const rows = db
@@ -1793,7 +1794,7 @@ export function searchMemory(
   if (match === null) throw new DomainError("query has no searchable terms: it is empty or only stopwords");
   return db.transaction(() => {
     const sight = readerSight(db, reader);
-    const hits = rankedEntries(db, match, reader, sight);
+    const hits = rankedEntries(db, match, sight);
     const visible = hits.filter((row) => sight.has(row, 3)).map(({ id, title, path }) => ({ id, title, path }));
     const packed = packItems(read, "results", visible, {}, { every: PENDING_EVENT_ID }) as ReturnType<typeof searchMemory>;
     const returned = new Set(packed.results.map((r) => r.id));
@@ -1835,9 +1836,9 @@ export function searchMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" 
 }
 
 /** INDEX(browse と注入)の行(spec #586 B): 視界の3段目(readerSight)を id 順に。SQL は粗い前絞り(approved・scope)だけ。 */
-function visibleEntries(db: Db, reader: MemoryReader, sight = readerSight(db, reader)): EntryRow[] {
+function visibleEntries(db: Db, sight: ReaderSight): EntryRow[] {
   return (
-    db.prepare("SELECT * FROM memory_entries WHERE state = 'approved' AND (scope IS NULL OR scope = ?) ORDER BY id").all(reader.scope) as EntryRow[]
+    db.prepare("SELECT * FROM memory_entries WHERE state = 'approved' AND (scope IS NULL OR scope = ?) ORDER BY id").all(sight.scope) as EntryRow[]
   ).filter((row) => sight.has(row, 3));
 }
 
@@ -1874,7 +1875,7 @@ export function browseMemory(
   const prefix = read.args.prefix ? checkedPath(read.args.prefix) : "";
   return db.transaction(() => {
     // 枝の後に leaf の順で1列に詰め、枝は children・leaf は entries に置く。枝の境目の鍵は名前(path)、leaf は id
-    const children = indexChildren(visibleEntries(db, reader), prefix).map((child) =>
+    const children = indexChildren(visibleEntries(db, readerSight(db, reader)), prefix).map((child) =>
       isBranch(child) ? { name: child.name, definition: child.definition?.text ?? null } : { id: child.id, title: child.title },
     );
     const packed = packItems(read, ["children", "entries"], children, {}, {
@@ -2143,7 +2144,7 @@ function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: s
 
 /** id で本文を読む(ADR 0167)。無効化済みの id は本文が同じ後継(`path_moved` の鎖・復元の複製)を見える行の内側でたどり、
  *  末尾の本文に requested_id(求めた旧 id)を添える —— 同じ行は1件で、自身を求めた id が勝つ。末尾が無効化済みなら本文は返さず
- *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・存在しない)は黙って落とす。case は
+ *  dropped に末尾の理由と、見える後継を載せる。見えない id(スコープ・宛先・candidate・受験者に無いもの・存在しない)は黙って落とす。case は
  *  Behavior と Exemplar が、annotations は Exemplar が持つ。 */
 export function readMemory(
   db: Db,
@@ -2303,7 +2304,7 @@ export function buildMemoryInjection(
     const watermark = memoryWatermark(db);
     const reader = { taskId: task.id, scope, agent };
     const sight = readerSight(db, reader);
-    const visible = metaReviewSubjectOf(db, task.id) !== null ? [] : visibleEntries(db, reader, sight);
+    const visible = metaReviewSubjectOf(db, task.id) !== null ? [] : visibleEntries(db, sight);
     if (visible.length === 0) return { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
     const tree = (prefix: string, depth: number): Array<IndexBranch & { depth: number }> =>
       indexChildren(visible, prefix)
@@ -2316,7 +2317,7 @@ export function buildMemoryInjection(
     const relevant =
       match === null
         ? []
-        : rankedEntries(db, match, reader, sight).filter((row) => sight.has(row, 3));
+        : rankedEntries(db, match, sight).filter((row) => sight.has(row, 3));
     const render = (shown: EntryRow[], depth: number) => {
       const omitted = relevant.length - shown.length;
       const omissionNote = [
