@@ -232,7 +232,6 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
       const halt = await servedQuarantineQuestion(t, "recordContainer", null);
       const [question, ...more] = (await questions(t)).filter((q: any) => q.id !== halt.id);
       expect(more).toEqual([]);
-      expect(halt.purpose).toContain(task.id);
       expect(halt.purpose).toContain(`${task.id}.${spawned.id}.${file === "stream" ? "stream.jsonl" : "stderr.log"}`);
       expect(halt.purpose).toContain("ENOSPC");
       expect(halt.purpose).toContain("its own failure question");
