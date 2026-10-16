@@ -38,11 +38,14 @@ export interface ReviewSubject {
   assignee?: string | null;
   review_flag?: boolean | number | null;
   risk_flag?: boolean | number | null;
+  /** Interview の受験者か。親は無いが root ではない(ADR 0267 決定1)。 */
+  examinee?: boolean;
 }
 
 /** 完了時レビューが立たない理由(拒否の文の後半)。立つなら undefined。 */
 export function whyNoCompletionReview(t: ReviewSubject): string | undefined {
   if (t.type !== "work") return "completion review fires for work tasks only";
+  if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
   if (t.assignee === HUMAN_WORKER_ID) return "completion review does not fire for a task assigned to human";
   if (t.parent_id && !t.review_flag && !t.risk_flag) {
     return "a child task's completion raises a review only with review_flag or risk_flag";
@@ -52,7 +55,7 @@ export function whyNoCompletionReview(t: ReviewSubject): string | undefined {
 
 /** review_flag が意味を持たない理由。持つなら undefined。 */
 export function whyReviewFlagIsInert(t: ReviewSubject): string | undefined {
-  if (t.type === "work" && !t.parent_id) return "every root is already reviewed on completion";
+  if (t.type === "work" && !t.parent_id && !t.examinee) return "every root is already reviewed on completion";
   return whyNoCompletionReview({ ...t, review_flag: true });
 }
 

@@ -159,6 +159,7 @@ var TidepoolRules = (() => {
   }
   function whyNoCompletionReview(t) {
     if (t.type !== "work") return "completion review fires for work tasks only";
+    if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
     if (t.assignee === HUMAN_WORKER_ID) return "completion review does not fire for a task assigned to human";
     if (t.parent_id && !t.review_flag && !t.risk_flag) {
       return "a child task's completion raises a review only with review_flag or risk_flag";
@@ -166,7 +167,7 @@ var TidepoolRules = (() => {
     return void 0;
   }
   function whyReviewFlagIsInert(t) {
-    if (t.type === "work" && !t.parent_id) return "every root is already reviewed on completion";
+    if (t.type === "work" && !t.parent_id && !t.examinee) return "every root is already reviewed on completion";
     return whyNoCompletionReview({ ...t, review_flag: true });
   }
   function whyExecutionRequestIsInert(t) {
@@ -4038,8 +4039,9 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
   }));
   const openChildren = {};
   for (const t of board) {
-    if (t.parent_id && t.status !== "done") {
-      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    const parent = t.parent_id ?? t.interview_root_id;
+    if (parent && t.status !== "done") {
+      openChildren[parent] = (openChildren[parent] || 0) + 1;
     }
   }
   const cols = { todo: [], in_progress: [], blocked: [], done: [] };
@@ -4063,6 +4065,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       status: col,
       rawAssignee: t.raw_assignee,
       parent_id: t.parent_id,
+      interview_root_id: t.interview_root_id,
       review_flag: t.review_flag,
       review_by: t.review_by,
       // issue #130: the edit form hides content/workspace for an issue-backed
@@ -4230,7 +4233,8 @@ function completionReviewLine(task) {
     parent_id: task.parent_id,
     assignee: task.rawAssignee,
     review_flag: task.review_flag,
-    risk_flag: task.risk
+    risk_flag: task.risk,
+    examinee: task.interview_root_id != null
   })) return null;
   return `review \u2192 ${task.review_by?.length ? task.review_by.join(", ") : "board auditor"}`;
 }

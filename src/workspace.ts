@@ -314,7 +314,7 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
-    // 決着した pin の子のブランチは外れうる(ADR 0263 決定5)。外れた後の分岐元は #1886 で決める —— ここでは落ちないだけ
+    // 決着した受験者のブランチは外れうる(ADR 0263 決定5)。外れた後の分岐元は #1886 で決める —— ここでは落ちないだけ
     if (ancestor.interview_target_id !== null && !taskBranchExists(workspace, ancestor.id)) continue;
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
@@ -334,7 +334,7 @@ export function lineageTaskBranch(
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
- *  A fresh task forks from its live lineage — a pin child from the head its
+ *  A fresh task forks from its live lineage — an examinee from the head its
  *  probe recorded (ADR 0263 決定6); a resumed task only checks its existing
  *  branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
@@ -582,26 +582,26 @@ export async function prepareWorkspaceAtPickup(
   await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
-  if (task.interview_target_id !== null) removeSettledPinBranches(db, workspace, board.recordDir, board.now);
+  if (task.interview_target_id !== null) removeSettledExamineeBranches(db, workspace, board.recordDir, board.now);
   // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
-  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した pin の子のブランチを外すのも
+  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した受験者のブランチを外すのも
   // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ
   snapshotRefs(db, workspace);
 }
 
-/** ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子が兄弟(どの Interview のものでも)の答案を git で読めないように、
- *  この checkout にある決着した pin の子のタスクブランチの ref を外し、head をその子の event に残す。走るのは自分のブランチを
+/** ADR 0263 決定5 / ADR 0111 追記12: 後から走る受験者が他の受験者(どの Interview のものでも)の答案を git で読めないように、
+ *  この checkout にある決着した受験者のタスクブランチの ref を外し、head をその受験者の event に残す。走るのは自分のブランチを
  *  checkout した後なので、外すブランチが checkout 中であることは無い。
  *  ADR 0266 決定1・2: 外す前に答案を盤面の記録の器へ写し、1本でも外したら HEAD の reflog と到達できない object を落とす。
  *  器を持たない盤面(`recordDir` 無し)は写せないので掃除もしない —— 写しの無いまま答案の object を消さない */
-function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir: string | undefined, now: Date): void {
+function removeSettledExamineeBranches(db: Db, workspace: WorkspaceConfig, recordDir: string | undefined, now: Date): void {
   const branches = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/heads/task/");
   let removed = 0;
   for (const [head, id] of branches.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string])) {
-    const pinChild = getTask(db, id);
-    if (pinChild?.interview_target_id == null || !isSettled(pinChild.status)) continue;
+    const examinee = getTask(db, id);
+    if (examinee?.interview_target_id == null || !isSettled(examinee.status)) continue;
     // 写し → 記録 → 外す の順(ADR 0266 決定2)—— 外した後で落ちると、答案がどこにも残らない
-    const path = recordDir === undefined ? undefined : copyAnswer(db, workspace, pinChild, head, recordDir);
+    const path = recordDir === undefined ? undefined : copyAnswer(db, workspace, examinee, head, recordDir);
     appendEvent(db, { taskId: id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "task_branch_removed", head, ...(path && { path }) }, at: now });
     git(workspace.path, "branch", "-D", taskBranch(id));
     removed += 1;
@@ -617,12 +617,12 @@ function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir:
 /** ADR 0266 決定2: 答案を盤面の記録の器に写し、その path を返す。出題の head から commit が無ければ写さない。
  *  bundle は git が stdout に出し、器へは `writeAnswerCopy` が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の
  *  例外だけが `RecordContainerError` になる。 */
-function copyAnswer(db: Db, workspace: WorkspaceConfig, pinChild: Task, head: string, recordDir: string): string | undefined {
-  const posedHead = resolvablePosedHead(db, workspace, pinChild);
+function copyAnswer(db: Db, workspace: WorkspaceConfig, examinee: Task, head: string, recordDir: string): string | undefined {
+  const posedHead = resolvablePosedHead(db, workspace, examinee);
   // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
   if (isAncestor(workspace, head, posedHead)) return undefined;
   // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
-  return writeAnswerCopy(recordDir, pinChild.id, gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`));
+  return writeAnswerCopy(recordDir, examinee.id, gitBytes(workspace.path, "bundle", "create", "-", taskBranch(examinee.id), `^${posedHead}`));
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も

@@ -793,24 +793,29 @@ const WATCHDOG = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout:
 
 const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium", tier: "standard" };
 
-it("前提の破綻の question の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
+it("probe の破綻の報告の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
   // 報告なき exit の failure question は watchdog の持つ経路
   const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46, OPUS_55_MEDIUM], [], WATCHDOG);
-  const [, failing, declarer] = board.childIds;
+  const [, failing, answering] = board.childIds;
   expect((await board.answer("do not measure this target")).status).toBe(200);
   // 2つ目の対象の子は報告なく終わり、failure question を abandon する
   board.proc.emitExitAt(board.proc.processes.length - 1, 1, null);
   await settle();
   const failure = (await questions(t)).find((q) => q.parent_id === failing && q.status === "todo")!;
   expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["abandon"] })).status).toBe(200);
-  // 3つ目の対象の子が前提の破綻を宣言し、人間が retry する
+  // 3つ目の対象の受験者が答案を出し、root が probe の破綻を報告して、人間が retry する
   await t.clock.advance(HOUR);
-  expect((await callAsTask(t, declarer!, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
-  const breach = (await questions(t)).find((q) => q.parent_id === declarer && q.status === "todo")!;
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${breach.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+  expect((await callAsTask(t, answering!, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  // 答案を出した受験者の session を終えて、採点に起きた root を拾わせる
+  board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
+  await settle();
+  await t.clock.advance(HOUR);
+  expect((await callAsTask(t, board.rootId, "report_broken_probe", { reason: "the probe is broken", recommendation: "retry" })).isError).toBeFalsy();
+  const broken = (await questions(t)).find((q) => q.parent_id === board.rootId && q.status === "todo")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${broken.id}/answer`, { answers: ["retry"] })).status).toBe(200);
 
   const again = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.title === INTERVIEW.title && task.id !== board.rootId);
-  // 枠を握る session(宣言者、その後に拾われる周期の meta-review)を終えて、新しい root を拾わせ、その対象の一覧を読む
+  // 枠を握る session(報告した root、その後に拾われる周期の meta-review)を終えて、新しい root を拾わせ、その対象の一覧を読む
   for (let i = 0; i < 2; i++) {
     board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
     await settle();
@@ -849,49 +854,6 @@ it("root の直接 cancel が決着させるのはその Interview の対象の 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("done");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${other.id}`)).json.status).toBe("todo");
   expect(await releases(other.id)).toEqual([]);
-});
-
-/** 対象の question が開いたまま、兄弟の子が前提の破綻を宣言した盤面。 */
-async function breachBesideRefusedTarget() {
-  const board = await refuseUnrowedTarget([SONNET_MEDIUM, OPUS_46], [], WATCHDOG);
-  const [, declarer] = board.childIds;
-  await t.clock.advance(HOUR);
-  expect((await callAsTask(t, declarer!, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
-  const breach = (await questions(t)).find((q) => q.parent_id === declarer && q.status === "todo")!;
-  return { ...board, answerBreach: (answer: string) => api(t.baseUrl, "POST", `/api/tasks/${breach.id}/answer`, { answers: [answer] }) };
-}
-
-it("前提の破綻の question を abandon して Interview が cancel されると、対象の question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
-  const board = await breachBesideRefusedTarget();
-
-  expect((await board.answerBreach("abandon")).status).toBe(200);
-
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json).toMatchObject({ status: "done", question_answer: null });
-  const cancelled = (await events(board.rootId)).find((e) => e.kind === "task_cancelled");
-  expect(await releases(board.question.id)).toEqual([
-    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTarget", value: "anthropic/claude-sonnet-5-5", observed_event_id: cancelled.id }],
-  ]);
-});
-
-it("前提の破綻の question を retry すると、写った対象の question は開いたままで、新しい Interview が出題すると写った子も同じ question で skipped になる", async () => {
-  const board = await breachBesideRefusedTarget();
-
-  expect((await board.answerBreach("retry")).status).toBe(200);
-
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.question.id}`)).json.status).toBe("todo");
-  const again = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.title === INTERVIEW.title && task.id !== board.rootId);
-  // 枠を握る session(宣言者、その後に拾われる周期の meta-review)を終えて、新しい root を拾わせる
-  for (let i = 0; i < 2; i++) {
-    board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
-    await settle();
-    await t.clock.advance(HOUR);
-  }
-  const [copied] = JSON.parse((await callAsTask(t, again.id, "pose_probe", POSE)).content[0].text).child_ids;
-  await t.clock.advance(HOUR);
-
-  expect(await queueStatus(copied)).toBe("skipped");
-  expect((await questions(t)).filter((q) => q.question_quarantine_kind === "interviewTarget").map((q) => [q.id, q.status])).toEqual([[board.question.id, "todo"]]);
-  expect(await releases(board.question.id)).toEqual([]);
 });
 
 it("同じ (provider, model) を pin した Interview がもう1つ残っていれば、片方の root を直接 cancel しても対象の question は開いたままで、もう片方の子は skipped のまま", async () => {

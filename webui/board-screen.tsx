@@ -10,6 +10,8 @@ type BoardScreenTask = NonNullable<import('../design-system/components/board/Tas
   /** 解決前の assignee —— 表示用の `assignee` と別枠(app.tsx の mapData)。 */
   rawAssignee?: string | null;
   parent_id: string | null;
+  /** 受験者なら Interview の root の id(ADR 0267 決定6)。 */
+  interview_root_id: string | null;
   review_flag: number;
   review_by: string[] | null;
   githubIssueNumber?: number | null;

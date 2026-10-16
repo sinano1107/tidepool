@@ -70,7 +70,6 @@ import {
   decomposeTask,
   describeHandoffFields,
   escalateTask,
-  examineeParent,
   getTask,
   HANDOFF_FIELDS,
   type HistoryRow,
@@ -518,22 +517,20 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       runVerb(deps, attributedTaskId, async (task) => {
         const read = readPosition("get_current_task", input);
         const parent = task.parent_id ? (getTask(deps.db, task.parent_id) ?? null) : null;
-        // 受験者から見える親は出題そのもの(ADR 0263 決定3・4)
-        const examineeView = task.interview_target_id !== null ? examineeParent(deps.db, task) : null;
         // 親の history の後に task の history を、decision の子ごとの行で1列に詰める(ADR 0195)。境目の鍵は行の event id
         const rows = [
-          ...(parent ? (examineeView?.rows ?? taskHistoryRows(deps.db, parent.id, task.id)).map((row) => ({ ...row, list: "parent.history" })) : []),
+          ...(parent ? taskHistoryRows(deps.db, parent.id, task.id).map((row) => ({ ...row, list: "parent.history" })) : []),
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
-        // 対象の一覧は出題の前に読むためのもの。pin した子が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
+        // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
         const targets = listExaminees(deps.db, task.id).length === 0 && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
             ...(await taskContext(deps, task)),
             type: task.type,
             ...(targets && { interview_targets: targets }),
-            parent: parent && (examineeView?.context ?? { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc }),
+            parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
           keyOf: (_, i) => rows[i]!.id,
@@ -669,9 +666,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Pose this Interview's probe, once: the title, the probe (the problem statement every target solves), the completion " +
           "criteria and the rubric you will score the answers against. The board logs all four as one decision, registers one " +
-          "child per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
-          "completion criteria, blocks this task until every child settles, and frees the slot. The children never read the " +
-          "rubric. Once every child settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
+          "answer task per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
+          "completion criteria, blocks this task until every answer settles, and frees the slot. The answer tasks never read the " +
+          "rubric. Once every answer settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
           title: requiredTextSchema,
@@ -690,8 +687,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
             }
-            const children = poseProbe(deps.db, task, input, workerId, now, "worker", head);
-            return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
+            const examinees = poseProbe(deps.db, task, input, workerId, now, "worker", head);
+            return { child_ids: examinees.map((c) => c.id), parent_status: "blocked" };
           },
           (_task, workspace) => {
             head = protectedBranchHead(workspace);

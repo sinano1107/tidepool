@@ -71,6 +71,8 @@ export interface QueueTask {
 export interface BoardTask extends QueueTask {
   type: "work" | "question" | "review";
   parent_id: string | null;
+  /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。 */
+  interview_root_id: string | null;
   review_flag: number;
   review_by: string[] | null;
   raw_assignee?: string | null;

@@ -18,7 +18,7 @@ import {
   restoreMemoryEntry,
 } from "../src/memory.js";
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI, interviewPinChild } from "./harness.js";
+import { examineeRootId, HUMAN_WEBUI, interviewPinChild } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -450,7 +450,7 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
     );
   const [examinee, sibling] = interview([opus, { ...opus, effort: "low" }]);
   const [otherPinChild] = interview([opus]);
-  const root = getTask(db, examinee!.parent_id!)!;
+  const root = getTask(db, examineeRootId(db, examinee!.id))!;
   const posed = listEvents(db, root.id).find((e) => e.kind === "decision_logged")!.id;
   const worker = (writer: { id: string }, path: string, title: string, source: { commit: string } | { event_id: number }) =>
     recordKnowledge(db, { scope: "tidepool", path, title, text: "the parser", source, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writer.id).entry_id;
@@ -488,7 +488,7 @@ it("読み手が Interview の root のとき、受験者の視界に無いエ�
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
   const examinee = interviewPinChild(db, at);
-  const root = getTask(db, examinee.parent_id!)!;
+  const root = getTask(db, examineeRootId(db, examinee.id))!;
   const posed = listEvents(db, root.id).find((e) => e.kind === "decision_logged")!.id;
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const commit = { commit: "0a46a46" };

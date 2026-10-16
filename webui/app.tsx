@@ -316,9 +316,10 @@ function mapData(
     }));
   const openChildren: Record<string, number> = {};
   for (const t of board) {
-    // cancelled never reaches here (server-side board filter, issue #35)
-    if (t.parent_id && t.status !== 'done') {
-      openChildren[t.parent_id] = (openChildren[t.parent_id] || 0) + 1;
+    // cancelled never reaches here (server-side board filter, issue #35)。受験者は親でなく Interview の root を名指す(ADR 0267 決定6)
+    const parent = t.parent_id ?? t.interview_root_id;
+    if (parent && t.status !== 'done') {
+      openChildren[parent] = (openChildren[parent] || 0) + 1;
     }
   }
   const cols: Record<BoardScreenColumn, BoardScreenTask[]> = { todo: [], in_progress: [], blocked: [], done: [] };
@@ -336,7 +337,7 @@ function mapData(
       // from `assignee` above, which is resolved for display and would
       // misrepresent an unset assignee here
       status: col, rawAssignee: t.raw_assignee,
-      parent_id: t.parent_id, review_flag: t.review_flag, review_by: t.review_by,
+      parent_id: t.parent_id, interview_root_id: t.interview_root_id, review_flag: t.review_flag, review_by: t.review_by,
       // issue #130: the edit form hides content/workspace for an issue-backed
       // task (immutable — the source of truth is GitHub); a display cue only,
       // editTask on the server is the real gate
@@ -563,7 +564,7 @@ function QuestionDeepLinkView({ questionId, onDone, onTranslate, onOpenSettings 
 function completionReviewLine(task: BoardScreenTask): string | null {
   if (!TidepoolRules.completionReviewFires({
     type: task.type, parent_id: task.parent_id, assignee: task.rawAssignee,
-    review_flag: task.review_flag, risk_flag: task.risk,
+    review_flag: task.review_flag, risk_flag: task.risk, examinee: task.interview_root_id != null,
   })) return null;
   return `review → ${task.review_by?.length ? task.review_by.join(', ') : 'board auditor'}`;
 }

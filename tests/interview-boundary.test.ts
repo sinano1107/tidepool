@@ -44,7 +44,7 @@ const INTERVIEW = { type: "review", title: "interview", purpose: "the original t
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
 const FINDINGS = { outcome: "the parser probe separates the targets" };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
-/** root が出題し、立った pin の子の id を返す。 */
+/** root が出題し、立った受験者の id を返す。 */
 const pose = async (rootId: string): Promise<[string, ...string[]]> => JSON.parse((await callAsTask(t, rootId, "pose_probe", POSE)).content[0].text).child_ids;
 
 /** 既定 agent(scripted worker の id)を anthropic の advisor つき entry 1つで持つ盤面。上限は fable、学習器は既定で昇格済み。 */
@@ -108,7 +108,7 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id)).toEqual([]);
 });
 
-it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview と report_broken_probe を持つ。pin の子は分解の verb だけを持たず、普通の work は分解の verb を持ち、pin の子と普通の work はどの差し替えの verb も持たない(ADR 0253 決定4・5 / ADR 0251 決定1・2)", async () => {
+it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview と report_broken_probe を持つ。受験者は分解の verb だけを持たず、普通の work は分解の verb を持ち、受験者と普通の work はどの差し替えの verb も持たない(ADR 0253 決定4・5 / ADR 0251 決定1・2)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -142,7 +142,7 @@ it("出題の event は、出題の verb が呼ばれた checkout の保護ブ�
   expect(posed.payload.head).toBe(git(workspacePath, "rev-parse", "main"));
 });
 
-it("出題で立った pin の子は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {
+it("出題で立った受験者は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
@@ -195,7 +195,7 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   expect(shadow.find((r: any) => r.task_id === work.id)).toMatchObject({ actual: { model: "claude-opus-4-6" }, actual_record: { board: { interview: { accepted: 1 } } } });
 });
 
-it("pin の子の pickup は、学習器が昇格していない盤面でも shadow 行を残さない(選ぶ余地が無い)", async () => {
+it("受験者の pickup は、学習器が昇格していない盤面でも shadow 行を残さない(選ぶ余地が無い)", async () => {
   t = await boot({ promoted: false });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
@@ -225,8 +225,9 @@ it("走れない対象を写す retry の拒否は、WebUI の回答 API では�
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [child] = await pose(root.id);
   await runNow(t, child);
-  expect((await callAsTask(t, child, "declare_premise_breach", { reason: "the probe is broken" })).isError).toBeFalsy();
-  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done");
+  expect((await callAsTask(t, child, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  expect((await callAsTask(t, root.id, "report_broken_probe", { reason: "the probe is broken", recommendation: "retry" })).isError).toBeFalsy();
+  const question = (await questions(t)).find((q) => q.parent_id === root.id && q.status !== "done");
   definition.provider = [{ name: "openai", advisor: false }];
   const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["retry"] });
   expect(refused.status).toBe(409);
@@ -284,7 +285,7 @@ async function lastExaminee() {
     annotations: [{ anchor: "whole", polarity: "imitate", text: `the parser ${TREE_MEMORY}` }],
   });
   expect(exemplar.status).toBe(200);
-  // root の書き込みが記憶の meta-review を立てる —— pin の子より先に slot を取らせて、出題が立てた meta-review と一緒に終える
+  // root の書き込みが記憶の meta-review を立てる —— 受験者より先に slot を取らせて、出題が立てた meta-review と一緒に終える
   const memoryReview = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.meta_review_subject === "memory");
   await api(t.baseUrl, "POST", `/api/tasks/${memoryReview.id}/move`, { after: null });
   await completeMetaReviews(t);
@@ -301,8 +302,6 @@ async function lastExaminee() {
   expect(t.worker.started.at(-1)!.id).toBe(reader);
   t.worker.exitWith(reader, { ...QUIET_EXIT, exit_code: 1 });
   await answerReaderQuestion(reader, ["retry"], "retry with the streaming API");
-  expect((await callAsTask(t, reader, "declare_premise_breach", { reason: "the samples contradict the probe" })).isError).toBeFalsy();
-  await answerReaderQuestion(reader, ["continue"], CONTINUE_COMMENT);
   const escalation = { context: "the sample config has two formats", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
   expect((await callAsTask(t, reader, "escalate", escalation)).isError).toBeFalsy();
   await answerReaderQuestion(reader, ["toml"], "toml only");
@@ -348,10 +347,15 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
   }
 });
 
-it("get_current_task は受験者から見える親を欄と history の両方に使い、続き(ADR 0195)は親を載せない(ADR 0263 決定3・4)", async () => {
-  const { rootId, pages } = await lastExaminee();
-  // 見え方の中身は interview.test.ts の domain 層で言う。ここは get_current_task が欄と history の両方をそれで組む写像だけ
-  expect(pages[0].parent).toMatchObject({ id: rootId, title: SWEEP_POSE.title, handoff_doc: null, history: [{ children: [{ you: true }] }] });
-  expect(pages[0].parent.history).toHaveLength(1);
-  for (const page of pages.slice(1)) expect(page.parent).toBeUndefined();
+it("受験者の get_current_task は親の欄も親の history も持たない —— 本番の親の無い work と同じく自分の task だけを読む(ADR 0267 決定7)", async () => {
+  const { pages } = await lastExaminee();
+  for (const page of pages) expect(page.parent ?? null).toBeNull();
+});
+
+it("受験者の詳細と盤面の一覧の行は、その Interview の root の id を名指す(ADR 0267 決定6)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [examinee] = await pose(root.id);
+  // 行の中身(どの受験者がどの root を名指すか)は interview.test.ts の domain 層で言う。ここは詳細の wire に欄が載る写像だけ
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${examinee}`)).json.interview_root_id).toBe(root.id);
 });

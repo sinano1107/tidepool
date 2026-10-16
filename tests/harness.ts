@@ -51,6 +51,7 @@ import {
   listChildren,
   logDecision,
   poseProbe,
+  presentTask,
   type RegisterTaskInput,
   recordPrOpened,
   registerTask,
@@ -839,7 +840,12 @@ export function rememberedNote(t: Tidepool, title: string, taskId?: string): num
   ).entry_id;
 }
 
-/** setup のみ: 対象1つの Interview を登録して probe を出し、その pin の子(受験者)を返す。 */
+/** setup のみ: 受験者の Interview の root の id。受験者は親を持たないので、詳細の読み口が名指す root を引く(ADR 0267 決定1・6)。 */
+export function examineeRootId(db: Db, examineeId: string): string {
+  return presentTask(db, { id: examineeId }).interview_root_id!;
+}
+
+/** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */
 export function interviewPinChild(db: Db, at: Date): Task {
   const interview = registerTask(
     db,

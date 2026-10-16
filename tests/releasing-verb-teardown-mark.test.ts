@@ -51,15 +51,14 @@ const interview: Arrange = async () => {
   return { id: root.json.id };
 };
 
-/** 出題し、pin の子 C が完了して統合復帰した root。引数は C の採点。 */
+/** 出題し、受験者 C が完了して統合復帰した root。引数は C の採点。 */
 const answered: Arrange = async () => {
   const { id: root } = await interview();
-  await callAsTask(t, root, "pose_probe", POSE);
+  const [c] = JSON.parse((await callAsTask(t, root, "pose_probe", POSE)).content[0].text).child_ids;
   await t.clock.advance(HOUR);
-  const [c] = await childrenOf(root);
-  await callAsTask(t, c.id, "complete_task", { handoff: FULL_HANDOFF });
+  await callAsTask(t, c, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
-  return { id: root, args: { scores: [{ child_id: c.id, outcome: "accepted" }], handoff: { outcome: "findings" } } };
+  return { id: root, args: { scores: [{ child_id: c, outcome: "accepted" }], handoff: { outcome: "findings" } } };
 };
 
 it.each<[string, Arrange, Record<string, unknown>]>([
