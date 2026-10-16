@@ -5168,3 +5168,79 @@ it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map
     ]);
   },
 );
+
+// #1864: merge 済みの根の保護ブランチの読み直しが落ちても、根ごとの手順の catch が決着を書く(ADR 0241 決定6)。
+// 回のログ(その根を撃てなかった)に逃がさない。読み直しは PR の状態を読んだ後に撃つので、効果は読みの直後に起こす
+const WORKSPACE_QUARANTINED = (workspace: WorkspaceConfig) =>
+  `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`;
+
+/** origin を届かなくする。`quarantine` なら workspace も quarantine に落とす。PR を読んだ直後に起こす。 */
+function afterPrRead(
+  github: FakeGitHubClient,
+  read: "getPullRequestState" | "findPullRequestByHead",
+  { workspace, db, clock }: { workspace: WorkspaceConfig; db: Db; clock: FakeClock },
+  quarantine: boolean,
+): void {
+  const original = github[read].bind(github) as (input: never) => Promise<unknown>;
+  (github as unknown as Record<string, unknown>)[read] = async (input: never) => {
+    const result = await original(input);
+    git(workspace.path, "remote", "set-url", "origin", join(workspace.path, "unreachable"));
+    if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+    return result;
+  };
+}
+
+/** 盤面の外で merge された開いている PR の根(積み残しがあり、収束は PR を読みに行く)。 */
+async function mergedOutsideOpenPr(name: string, quarantine = false) {
+  const pr = await openPushedPr(name, "escalate");
+  commitWork(pr.workspace.path, "repair.txt", "fixed\n");
+  finish(pr.db, pr.clock, pr.work);
+  pr.github.scriptMergedOutside(1);
+  afterPrRead(pr.github, "getPullRequestState", pr, quarantine);
+  return pr;
+}
+
+/** 作成の後・記録の前に落ち、その PR が盤面の外で merge された根。 */
+async function mergedOutsideFoundPr(name: string, quarantine = false) {
+  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  github.scriptMergedOutside(github.scriptPullRequestOnBranch(`task/${work.id}`));
+  finish(db, clock, work);
+  afterPrRead(github, "findPullRequestByHead", { workspace, db, clock }, quarantine);
+  return { workspace, db, clock, github, work, landing };
+}
+
+it.each([
+  ["開いている PR が盤面の外で merge された", mergedOutsideOpenPr],
+  ["同じ head の merge 済み PR が見つかった", mergedOutsideFoundPr],
+])("%s根の保護ブランチの読み直しが失敗すれば、promotion_failed を返し失敗 question を1枚立て、回のログに逃がさない", async (_, setup) => {
+  const { db, work, landing } = await setup("merged-refresh-fails");
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  expect(promotionFailures(db, work.id)).toHaveLength(1);
+  expect(logged).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["開いている PR が盤面の外で merge された", mergedOutsideOpenPr],
+  ["同じ head の merge 済み PR が見つかった", mergedOutsideFoundPr],
+])("%s根の保護ブランチの読み直しが失敗しても、workspace の quarantine が抱えていれば失敗 question を立てずその quarantine を名乗る", async (_, setup) => {
+  const { workspace, db, work, landing } = await setup("merged-refresh-fails-quarantined", true);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "quarantined", error: WORKSPACE_QUARANTINED(workspace) });
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it("merge 済みの根の保護ブランチの読み直しの失敗に retry を答える回の verdict は、その失敗であって not_a_root ではない", async () => {
+  const { db, work, landing } = await mergedOutsideOpenPr("merged-refresh-fails-retry");
+  await landing.converge();
+  const [failure] = promotionFailures(db, work.id);
+
+  await expect(convergeOn(landing, work.id, failure!.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+});

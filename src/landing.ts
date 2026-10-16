@@ -916,7 +916,7 @@ export function createLanding(deps: LandingDeps): Landing {
         ) {
           retireAutoMerge(deps.db, task.id, { kind: OBSERVED[state], pr_number: task.pr_number }, deps.clock.now());
         }
-        if (state === "MERGED") return settleMerged(task, workspace, task.pr_number, ctx);
+        if (state === "MERGED") return await settleMerged(task, workspace, task.pr_number, ctx);
         // ADR 0241 決定3: 盤面の外で閉じられた PR には push しない。人間の close を question で問い返さない
         if (state === "CLOSED") {
           return {
@@ -940,7 +940,7 @@ export function createLanding(deps: LandingDeps): Landing {
           recordPrNumber(deps.db, task.id, found.number);
           retireAutoMerge(deps.db, task.id, observed, deps.clock.now());
         })();
-        if (found.state === "MERGED") return settleMerged(task, workspace, found.number, ctx);
+        if (found.state === "MERGED") return await settleMerged(task, workspace, found.number, ctx);
         return {
           kind: "failed",
           reason: "pull_request_closed",
