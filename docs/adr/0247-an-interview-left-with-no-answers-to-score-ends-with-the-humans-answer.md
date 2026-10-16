@@ -51,3 +51,8 @@ retry も root ごと cancel するのは abandon と同じで、そのうえで
 ## 追記4(2026-10-15、issue #1410 / ADR 0199 追記)
 
 決定1 の「人間の abandon / reject の答え」に、断られた Interview の対象の question への「この対象は測らない」も含める。
+
+## 追記5(2026-10-16 の grilling、issue #2099 / ADR 0267)
+
+決定1・2 の「root の子」を数える判定は、対象の答案(対象に結ばれた受験者)を数える形に置き換わった。決定2 の「前提の破綻の
+abandon」は、受験者が前提の破綻を持たなくなったので、probe の破綻の報告(ADR 0251)と root の面の abandon / retry に移る。
