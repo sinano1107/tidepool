@@ -1822,22 +1822,19 @@ function readerHidden(db: Db, taskId: string): Set<number> {
   return getTask(db, taskId)?.interview_target_id == null ? new Set() : examineeHidden(db);
 }
 
-/** 受験者の視界に無い集合(ADR 0264 決定3)—— どの受験者にも共通。readerHidden と採点者の印(readerSight)が使う。 */
+/** 受験者の視界に無い集合(ADR 0264 決定3)とその本文が同じ後継(移動・復元の複製)—— どの受験者にも共通。readerHidden と採点者の印
+ *  (readerSight)が使う。 */
 function examineeHidden(db: Db): Set<number> {
-  return withSameBodyCopies(
-    db,
-    `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
-      WHERE e.kind = 'memory_written' AND e.task_id IN (SELECT task_id FROM interview_targets)
-     UNION
-     SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
-       JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
-      WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
-  );
-}
-
-/** sql が返すエントリと、どれも本文が同じ後継(移動・復元の複製)。 */
-function withSameBodyCopies(db: Db, sql: string): Set<number> {
-  const rows = db.prepare(sql).all() as Array<{ id: number }>;
+  const rows = db
+    .prepare(
+      `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
+        WHERE e.kind = 'memory_written' AND e.task_id IN (SELECT task_id FROM interview_targets)
+       UNION
+       SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
+         JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
+        WHERE m.source_kind != 'commit' AND o.task_id IN (${INTERVIEW_TREE_SQL})`,
+    )
+    .all() as Array<{ id: number }>;
   if (rows.length === 0) return new Set();
   const restored = restoredAs(db);
   return new Set(rows.flatMap(({ id }) => sameBodyChain(db, requireEntry(db, id), restored).map((row) => row.id)));
