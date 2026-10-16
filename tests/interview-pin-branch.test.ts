@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, getTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
 import { prepareWorkspaceAtPickup, releaseWorkspace, resolveTaskBranchLineage, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
@@ -33,10 +33,13 @@ function answeredBranch(workspace: WorkspaceConfig, taskId: string): string {
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
 
-it("pin の子の新しいブランチは、出題の後に main が進んでも、出題が記録した保護ブランチの head から分岐する", async () => {
+it("pin の子の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
   const workspace = await makeWorkspace("pin-posed-head");
   const db = openDb(":memory:");
-  const [child] = posed(db, workspace);
+  const [examinee] = posed(db, workspace);
+  // 受験者は分解判断に乗らない(ADR 0267 決定1・5)
+  db.prepare("UPDATE tasks SET based_on_decision = NULL WHERE id = ?").run(examinee!.id);
+  const child = getTask(db, examinee!.id);
   const posedHead = git(workspace.path, "rev-parse", "main");
   commitWork(workspace.path, "later.txt", "main moved on after the probe was posed\n");
 
