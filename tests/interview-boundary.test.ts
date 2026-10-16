@@ -215,6 +215,7 @@ const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
 const CONTINUE_COMMENT = "continue-comment-mark-4d2";
+const SIBLING_MEMORY = "sibling-memory-mark-4d2";
 
 /** 読み手に立った未回答の question に人間が答え、読み手が slot に戻るまで進める。 */
 async function answerReaderQuestion(reader: string, answers: string[], comment?: string) {
@@ -222,13 +223,17 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
   const question = (await questions(t)).find((q) => q.parent_id === reader && q.status !== "done");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers, comment })).status).toBe(200);
   await t.clock.advance(HOUR);
+  // 兄弟が書いた Knowledge が記憶の meta-review を立て、先に slot を取る —— 終えて読み手に戻す
+  await completeMetaReviews(t);
+  await runNow(t, reader);
   expect(t.worker.started.at(-1)!.id).toBe(reader);
 }
 
 /** 最後の受験者が読む盤面(ADR 0263 決定10 の sweep の状況): 人間が書いた root の題・目的は「Interview」を持ち、root は出題以外の
- *  判断ログの行と question を持つ。兄弟の1つは目印つきの handoff で done、1つは「この対象は測らない」で cancel、最後の対象の子は
- *  failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから slot に居て、自分の
- *  history の長さで get_current_task が続き(ADR 0195)を持つ。 */
+ *  判断ログの行と question を持つ。兄弟の1つは目印つきの Knowledge を書いて目印つきの handoff で done、1つは「この対象は測らない」で
+ *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
+ *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
+ *  read)で兄弟の Knowledge を探した応答。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
@@ -248,6 +253,8 @@ async function lastExaminee() {
   const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${refusal.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
   commitWork(workspacePath, "probe.txt", "probe\n");
+  const knowledge = { path: "parser", title: `parser ${SIBLING_MEMORY}`, text: `the parser ${SIBLING_MEMORY}`, source: { commit: "0a46a46" } };
+  const { entry_id } = JSON.parse((await callAsTask(t, done, "record_knowledge", knowledge)).content[0].text);
   expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(reader);
@@ -269,19 +276,26 @@ async function lastExaminee() {
   try {
     for (let i = 0; i < 15; i++) await client.callTool({ name: "log_decision", arguments: { line: `${i} ${"x".repeat(3_000)}` } });
     const pages = (await readFollowingNext(client, "get_current_task")).map((response) => response.payload);
-    return { rootId: root.id, siblings: [done, cancelled], reader, pages, tools: (await client.listTools()).tools };
+    const pulls = [
+      { name: "browse_memory", arguments: { prefix: "parser" } },
+      { name: "search_memory", arguments: { query: SIBLING_MEMORY } },
+      { name: "read_memory", arguments: { ids: [entry_id] } },
+    ];
+    const pulled = await Promise.all(pulls.map((call) => client.callTool(call)));
+    return { rootId: root.id, siblings: [done, cancelled], reader, pages, pulls: pulled, tools: (await client.listTools()).tools };
   } finally {
     await client.close();
   }
 }
 
-it("最後の受験者が読む get_current_task の全ページと tools/list の全説明文に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案の目印・continue のコメントの目印が出ない(ADR 0263 決定8・10)", async () => {
-  const { siblings, pages, tools } = await lastExaminee();
+it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答に、Interview の語・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・continue のコメントの目印が出ない(ADR 0263 決定7・8・10)", async () => {
+  const { siblings, pages, pulls, tools } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
+  for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
-  const read = [...pages, ...tools].map((item) => JSON.stringify(item)).join("\n");
+  const read = [...pages, ...pulls, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, CONTINUE_COMMENT, ...siblings]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, SIBLING_MEMORY, CONTINUE_COMMENT, ...siblings]) {
     expect(read).not.toContain(text);
   }
 });
