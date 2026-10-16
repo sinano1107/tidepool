@@ -291,7 +291,7 @@ agent が委譲判断の材料として受け取る worker の一覧。各行は
 
 ## Transcript(トランスクリプト)
 
-worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream と stderr の2本で**1単位**であり、どちらか一方だけが欠けた session は成立しない。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければその pickup は process を1つも持たなかった session として記録され(ADR 0118 の族)、走ってから書けなくなれば盤面がその場で強制回収する(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)— ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力(MCP 設定・sandbox 設定)は transcript ではない。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
+worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream と stderr の2本で**1単位**であり、どちらか一方だけが欠けた session は成立しない。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければ盤面の記録の器が書けないこととして盤面全体が止まり、踏んだ task は失敗にせず todo の先頭へ戻る(盤面全体の停止 参照、ADR 0266 / ADR 0149 追記1)。走ってから書けなくなれば盤面がその場で強制回収し(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)、その session の failure question を残したまま同じ停止も立つ — ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力(MCP 設定・sandbox 設定)は transcript ではない。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
 _Avoid_: worker log、stderr ログ(片方だけを指す言い方)
 
 ## 容器(Process container)

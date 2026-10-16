@@ -50,7 +50,7 @@ import {
   taskVerbSwap,
 } from "./tasks.js";
 import { tierNames } from "./tier.js";
-import type { Transcript, TranscriptStore } from "./transcript-store.js";
+import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
@@ -1108,6 +1108,9 @@ export interface ClaudeWorkerOptions {
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
    *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
+   *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
+  onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
@@ -1872,8 +1875,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // for `cat`, not just for the Skill tool).
       const denied = new Set(deny);
       const permittedSkills = enumerated.filter((skill) => !denied.has(skill));
-      // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw
-      // (transcript が開けない等)をこの continuation が `spawn_failed` に落とす
+      // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
+      // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
         this.launch(task, workspace, agent, registry, {
           deny,
@@ -1881,6 +1884,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           permittedSkills,
         }, routing, query);
       } catch (err) {
+        if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
         this.recordSpawnFailed(task, agent, {
           error_code: (err as NodeJS.ErrnoException).code ?? null,
           message: err instanceof Error ? err.message : String(err),
@@ -2052,8 +2056,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       });
       recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
-      // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ例外が呼び手へ返り、
-      // process は1つも起きない(ADR 0118 の族)
+      // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
+      // process は1つも起きない(ADR 0266 決定4)
       transcript = this.options.transcripts.open(task.id, spawnedEventId);
       // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
       // 通らずに直接動かされた adapter でも `open` が器を作るので、force /

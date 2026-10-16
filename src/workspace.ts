@@ -1,6 +1,6 @@
-import { lstatSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
 import { git, gitBytes } from "./git.js";
@@ -29,7 +29,7 @@ import {
   issueRefPlaceholder,
   type Task,
 } from "./tasks.js";
-import { RecordContainerError } from "./transcript-store.js";
+import { writeAnswerCopy } from "./transcript-store.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
@@ -614,23 +614,15 @@ function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir:
   git(workspace.path, "prune", "--expire=now");
 }
 
-/** ADR 0266 決定2: 答案を `<recordDir>/<task id>.bundle` に写し、その path を返す。出題の head から commit が無ければ写さない。
- *  bundle は git が stdout に出し、器へは node が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の例外だけが
- *  `RecordContainerError` になる。 */
+/** ADR 0266 決定2: 答案を盤面の記録の器に写し、その path を返す。出題の head から commit が無ければ写さない。
+ *  bundle は git が stdout に出し、器へは `writeAnswerCopy` が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の
+ *  例外だけが `RecordContainerError` になる。 */
 function copyAnswer(db: Db, workspace: WorkspaceConfig, pinChild: Task, head: string, recordDir: string): string | undefined {
   const posedHead = resolvablePosedHead(db, workspace, pinChild);
   // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
   if (isAncestor(workspace, head, posedHead)) return undefined;
   // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
-  const bundle = gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`);
-  // event に残る path は盤面の cwd に依らない絶対 path(既定の器は相対の `worker-logs`)
-  const path = resolve(recordDir, `${pinChild.id}.bundle`);
-  try {
-    writeFileSync(path, bundle);
-  } catch (err) {
-    throw new RecordContainerError(pinChild.id, path, err instanceof Error ? err.message : String(err));
-  }
-  return path;
+  return writeAnswerCopy(recordDir, pinChild.id, gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`));
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も

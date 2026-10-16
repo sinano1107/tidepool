@@ -1,5 +1,6 @@
-import { rm } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { ClaudeCodeWorker, type ClaudeWorkerOptions } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
@@ -17,6 +18,7 @@ import {
   mcpClient,
   questions,
   queueWork,
+  servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -99,13 +101,14 @@ async function bootCodex() {
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });
   const codexHome = await tempDir("transcript-failure-codex-home-");
-  return bootWithAdapter(
-    ({ db, clock, containers, onSpawnFailed, onWorkerExited, transcripts }) =>
+  const booted = await bootWithAdapter(
+    ({ db, clock, containers, onSpawnFailed, onRecordContainerFailed, onWorkerExited, transcripts }) =>
       new CodexWorker({
         db,
         clock,
         containers,
         onSpawnFailed,
+        onRecordContainerFailed,
         onWorkerExited,
         transcripts,
         registry: { dir: registryDir, mode: "purely-local" },
@@ -120,18 +123,16 @@ async function bootCodex() {
       }),
     "openai",
   );
+  return { ...booted, workspace };
 }
 
 /** 列挙が要る skill の許可リストを持つ agent —— spawn は skill 列挙の `.then` の中から起きる。 */
-const bootClaudeAfterSkillEnumeration = () =>
-  bootClaude(
-    {
-      "agents/deckhand.md":
-        "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
-        "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
-    },
-    { enumerateSkills: async () => ["code-review"] },
-  );
+const SKILLED_DECKHAND = {
+  "agents/deckhand.md":
+    "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+    "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
+};
+const bootClaudeAfterSkillEnumeration = () => bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"] });
 
 const HARNESSES = [
   ["Claude", () => bootClaude()],
@@ -140,28 +141,72 @@ const HARNESSES = [
 ] as const;
 
 for (const [harness, boot] of HARNESSES) {
-  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、spawn_failed と question 1枚を残して枠を空ける`, async () => {
+  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、盤面全体が記録の器の停止で止まり、踏んだ task は todo の先頭へ戻る —— 器が直って回答すれば先頭から走り直す`, async () => {
     const { proc, transcriptDir } = await boot();
     await rm(transcriptDir, { recursive: true });
     const task = queueWork(t, "no transcript");
+    const behind = queueWork(t, "behind it");
     await t.clock.advance(HOUR);
     await settle();
 
     expect(proc.calls).toHaveLength(0);
-    const failed = (await events(task.id)).filter((e: any) => e.kind === "spawn_failed");
-    expect(failed).toHaveLength(1);
-    expect(failed[0].payload.message).toContain("ENOENT");
-    expect(failed[0].payload.message).toContain(".stream.jsonl");
-    const all = await questions(t);
-    expect(all.map((q: any) => q.title)).toEqual(["worker never started for task: no transcript"]);
+    const recorded = await events(task.id);
+    // worker_spawned が運ぶ事実は process の有無に依らない(ADR 0149 決定2)
+    const spawned = recorded.filter((e: any) => e.kind === "worker_spawned");
+    expect(spawned).toHaveLength(1);
+    expect(recorded.filter((e: any) => e.kind === "spawn_failed")).toEqual([]);
+    expect(recorded.filter((e: any) => e.kind === "record_container_unwritable").map((e: any) => e.payload)).toEqual([
+      {
+        kind: "record_container_unwritable",
+        path: join(transcriptDir, `${task.id}.${spawned[0].id}.stream.jsonl`),
+        reason: expect.stringContaining("ENOENT"),
+      },
+    ]);
+    const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+    expect(queue.halts).toEqual([{ kind: "recordContainer" }]);
+    const halt = await servedQuarantineQuestion(t, "recordContainer", null);
+    expect((await questions(t)).map((q: any) => q.id)).toEqual([halt.id]);
+    expect(halt.purpose).toContain(task.id);
+    expect(halt.purpose).toContain("returned to the queue head");
+    expect(queue.tasks.filter((x: any) => x.type === "work").map((x: any) => [x.id, x.status])).toEqual([
+      [task.id, "todo"],
+      [behind.id, "todo"],
+    ]);
+    expect(queue.teardown).toBeUndefined();
+
+    await mkdir(transcriptDir);
+    const answered = await api(t.baseUrl, "POST", `/api/tasks/${halt.id}/answer`, { answers: ["repaired by hand"] });
+    expect(answered.status).toBe(200);
+    await vi.waitFor(() => expect(proc.calls).toHaveLength(1));
+    expect((await events(task.id)).filter((e: any) => e.kind === "worker_spawned")).toHaveLength(2);
+    expect(await status(task.id)).toBe("in_progress");
+    expect(await status(behind.id)).toBe("todo");
+  });
+}
+
+/** transcript の open より前で落ちる同期の失敗 —— 器の失敗ではない。 */
+const NON_OPEN_FAILURES = [
+  ["Claude(skill の列挙の失敗)", () => bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => null })],
+  ["Codex(checkout が無い)", async () => rm((await bootCodex()).workspace, { recursive: true })],
+] as const;
+
+for (const [harness, boot] of NON_OPEN_FAILURES) {
+  it(`${harness}: transcript の open 以外の同期の失敗は今までどおり spawn_failed と failure question 1枚で、盤面は止まらない`, async () => {
+    await boot();
+    const task = queueWork(t, "never starts");
+    await t.clock.advance(HOUR);
+    await settle();
+
+    expect((await events(task.id)).filter((e: any) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect((await questions(t)).map((q: any) => q.title)).toEqual(["worker never started for task: never starts"]);
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
     expect(await status(task.id)).toBe("blocked");
-    expect(await teardown()).toBeUndefined();
   });
 }
 
 for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
   for (const file of ["stream", "stderr"] as const) {
-    it(`${harness} adapter: 走ってから ${file} が書けなくなった session は、その場で強制回収され、理由つき question が1枚だけ立つ`, async () => {
+    it(`${harness} adapter: 走ってから ${file} が書けなくなった session は、その場で強制回収されて理由つきの failure question を残し、盤面全体も記録の器の停止で止まる`, async () => {
       const { proc, transcripts } = await boot();
       const task = queueWork(t, "loses its transcript");
       await t.clock.advance(HOUR);
@@ -184,8 +229,14 @@ for (const [harness, boot] of [HARNESSES[0], HARNESSES[2]] as const) {
         file,
         worker_spawned_event_id: spawned.id,
       });
-      const [question, ...more] = await questions(t);
+      const halt = await servedQuarantineQuestion(t, "recordContainer", null);
+      const [question, ...more] = (await questions(t)).filter((q: any) => q.id !== halt.id);
       expect(more).toEqual([]);
+      expect(halt.purpose).toContain(task.id);
+      expect(halt.purpose).toContain(`${task.id}.${spawned.id}.${file === "stream" ? "stream.jsonl" : "stderr.log"}`);
+      expect(halt.purpose).toContain("ENOSPC");
+      expect(halt.purpose).toContain("its own failure question");
+      expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([{ kind: "recordContainer" }]);
       expect(question.title).toBe("worker transcript could not be written: loses its transcript");
       expect(question.question_items[0].options).toEqual(["retry", "abandon"]);
       expect(question.question_items[0].recommendation).toBe("retry");

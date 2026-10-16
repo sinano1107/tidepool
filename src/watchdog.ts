@@ -5,7 +5,7 @@ import type { Db } from "./db.js";
 import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
-import { openQuarantineValues, questionRefusedTarget } from "./quarantine.js";
+import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
 import { abandonConsequence, escalateTask, getTask, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
@@ -16,7 +16,7 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "./teardown.js";
-import type { TranscriptFailure } from "./transcript-store.js";
+import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
@@ -214,6 +214,26 @@ export function rowRefusalHandler(
   };
 }
 
+/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)の盤面側の一撃。入口は pickup の準備の答案の写しと transcript の open で、
+ *  観測点は scheduler の catch と adapter の launch の catch。process は1つも起きていないので失敗にせず、停止・
+ *  `record_container_unwritable`・`todo` 先頭への復帰を1 transaction で決着させてから slot を解放する(先例は行の拒否の先頭復帰、
+ *  ADR 0184 決定4)。作業ツリーに手は入っていないので後始末は通さず、盤面が止まったので pickup の契機も撃たない。 */
+export function recordContainerHaltHandler(
+  deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
+): (taskId: string, err: RecordContainerError) => void {
+  return (taskId, err) => {
+    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+    const task = getTask(deps.db, taskId);
+    if (task?.status !== "in_progress") return;
+    const now = deps.clock.now();
+    deps.db.transaction(() => {
+      registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue head, not failed`, now);
+      returnToQueueHead(deps.db, task, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
+    })();
+    deps.slot.release();
+  };
+}
+
 /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃。観測点は3つ ——
  *  scheduler が捕まえる `start` の同期 throw、adapter が捕まえる `spawn()` の非同期
  *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event はそれぞれの観測点が書く。
@@ -238,12 +258,13 @@ export function spawnFailureHandler(
 /** 走ってから transcript が書けなくなった session(ADR 0149 決定4)の盤面側の一撃。
  *  event は常に書く。question と強制回収は、まだ後始末に入っていない session だけ ——
  *  決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽になる。後始末の印が
- *  先に置かれるので、続く exit で ADR 0145 の question は立たない。 */
+ *  先に置かれるので、続く exit で ADR 0145 の question は立たない。止めた session は、その failure question を
+ *  残したまま盤面全体の記録の器の停止も立てる(ADR 0266 決定4)—— 先頭へは戻さない。 */
 export function transcriptFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (failure: TranscriptFailure) => void {
-  return ({ taskId, workerSpawnedEventId, file, error_code, message }) => {
+  return ({ taskId, workerSpawnedEventId, file, error_code, message, path }) => {
     appendEvent(deps.db, {
       taskId,
       // worker_spawned は open より先に書かれている(ADR 0149 決定2)
@@ -252,31 +273,42 @@ export function transcriptFailureHandler(
       payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
       at: deps.clock.now(),
     });
-    failAndReclaim(deps, containers, taskId, (task) => [
+    const stopped = failAndReclaim(deps, containers, taskId, (task) => [
       `worker transcript could not be written: ${task.title}`,
       `the board force-reclaimed the worker for task "${task.title}" (${task.id}) because its ` +
         `transcript could not be written (${error_code ?? "no error code"}, ${file} file):\n\n${message}`,
     ]);
+    if (stopped) {
+      registerQuarantine(
+        deps.db,
+        "recordContainer",
+        null,
+        `while task ${taskId} was running, the board's record container could not be written at ${path}: ${message}. ` +
+          "That session was force-reclaimed and has its own failure question",
+        deps.clock.now(),
+      );
+    }
   };
 }
 
 /** 盤面が観測した瞬間に失敗を記録して後始末へ入れる(ADR 0118 の型)。記録を回収済み観測の
  *  **前**に置くので、後始末中の status は `todo` になり、経路はエスカレーションの step に
- *  読まれる(ADR 0113 決定3)。 */
+ *  読まれる(ADR 0113 決定3)。止めたら true —— slot の主でない・決着済みの session には何もしない。 */
 function failAndReclaim(
   deps: TeardownDeps,
   containers: ProcessContainers,
   taskId: string,
   wording: (task: Task) => [title: string, reason: string],
-): void {
-  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
+): boolean {
+  if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return false;
   const task = getTask(deps.db, taskId);
-  if (task?.status !== "in_progress") return;
+  if (task?.status !== "in_progress") return false;
   const now = deps.clock.now();
   registerFailureAndMarkTeardown(deps.db, task, ...wording(task), now);
   deps.slot.enterTeardown();
   containers.forceReclaim(taskId);
   void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
+  return true;
 }
 
 /** Process-internal watchdog (#9): an absolute per-type time limit on the

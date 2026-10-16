@@ -61,7 +61,6 @@ import {
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
-  returnToQueueHead,
   type Task,
   type TaskContent,
   unrowedPinChildren,
@@ -77,6 +76,7 @@ import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
+import { recordContainerHaltHandler } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
@@ -354,6 +354,7 @@ export function startScheduler(deps: {
     converge,
   } = deps;
   let inFlight = false;
+  const onRecordContainerFailed = recordContainerHaltHandler({ db, clock, slot });
   const resumeTimer = createResumeTimers(clock, pollNow);
 
   async function pickupBlocked(): Promise<boolean> {
@@ -461,18 +462,8 @@ export function startScheduler(deps: {
       try {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
-        if (err instanceof RecordContainerError) {
-          // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まり、踏んだ task は失敗にせず先頭へ戻る。
-          // 先例は行の拒否の先頭復帰(ADR 0184 決定4)で、停止・event・先頭復帰を1 transaction で決着させてから slot を
-          // 解放する。session は無いので回収は無く、盤面が止まったので pickup の契機も撃たない
-          const now = clock.now();
-          db.transaction(() => {
-            registerQuarantine(db, "recordContainer", null, `while picking up task ${picked.id}, ${err.message}`, now);
-            returnToQueueHead(db, picked, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
-          })();
-          slot.release();
-          return;
-        }
+        // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
+        if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;
       }
@@ -482,6 +473,8 @@ export function startScheduler(deps: {
     try {
       worker.start(started, setting, query);
     } catch (err) {
+      // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
+      if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
       // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
