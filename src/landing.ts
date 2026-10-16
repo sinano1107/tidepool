@@ -265,13 +265,16 @@ interface LandingRoot {
   lineageError?: unknown;
 }
 
+/** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
+const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
+
 /** 根の PR の決着(ADR 0265 決定2): merge されたか閉じられたか、盤面の執行(`pr_merged`)か観測か。決着していなければ null。
  *  決着はどの経路でも PR を開いた根の id に刻まれる(決定1)ので、根の記録だけを読む。読み手はすべてこれを通る。 */
 export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOSED"; observed: boolean; prNumber: number } | null {
   const row = db
     .prepare(
       `SELECT kind, json_extract(payload, '$.pr_number') AS pr_number FROM events
-        WHERE task_id = ? AND kind IN ('pr_merged', 'pr_merge_observed', 'pr_close_observed') ORDER BY id DESC LIMIT 1`,
+        WHERE task_id = ? AND kind IN ('pr_merged', '${OBSERVED.MERGED}', '${OBSERVED.CLOSED}') ORDER BY id DESC LIMIT 1`,
     )
     .get(taskId) as { kind: string; pr_number: number } | undefined;
   if (!row) return null;
@@ -462,9 +465,6 @@ export function recordPrPromotionAbandoned(
     at: now,
   });
 }
-
-/** 盤面の外で決着した PR の観測の綴り —— merge と閉じたことを、互いにも執行とも区別する(ADR 0079 決定4 / ADR 0229 決定4)。 */
-const OBSERVED = { MERGED: "pr_merge_observed", CLOSED: "pr_close_observed" } as const;
 
 /** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
  *  already merged or closed outside the board. Deliberately not `answerQuestion`:
