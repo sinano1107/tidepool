@@ -189,6 +189,12 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
   // 残るのは pause ボタン・波線・文字色といった pause の操作面のためである。
   const slot = data.slot;
   const providerUsage = data.providerUsage ?? [];
+  // 観測の無い Provider でも arm 済みの窓は描く —— 次の窓に結んだ arm は失効しないので、
+  // 見えないと人間が取り消せないまま残る(ADR 0260 決定3・5)
+  const shownProviders = [...new Set([
+    ...providerUsage.map((usage) => usage.provider),
+    ...Object.keys(spendDown).filter((provider) => Object.values(spendDown[provider] ?? {}).some(Boolean)),
+  ])];
   // the true queue head, by id — not a rendered-position computation, so a
   // sliced view (Triage's previewQueue) never mislabels it (issue #82 follow-up)
   const headId = data.queue[0]?.id ?? null;
@@ -245,24 +251,26 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
           : slot.color,
       }}></div>
 
-      {providerUsage.length > 0 && (
+      {shownProviders.length > 0 && (
         <Card data-testid="provider-usage" style={{ padding: '10px 12px', marginBottom: 14 }}>
           <div style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 8 }}>
             provider usage
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {providerUsage.map((usage) => (
-              <div key={usage.provider} data-testid={`provider-usage-${usage.provider}`}>
+            {shownProviders.map((provider) => {
+              const usage = providerUsage.find((candidate) => candidate.provider === provider);
+              return (
+              <div key={provider} data-testid={`provider-usage-${provider}`}>
                 <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--text-body)' }}>{usage.provider}</span>
-                  <span style={{ fontSize: 'var(--text-xs)', color: usage.status === 'observed' ? 'var(--tide-5)' : 'var(--coral-4)' }}>{usage.status}</span>
-                  {usage.plan && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{usage.plan}</span>}
-                  {usage.observedAt && <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>observed {new Date(usage.observedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--text-body)' }}>{provider}</span>
+                  {usage && <span style={{ fontSize: 'var(--text-xs)', color: usage.status === 'observed' ? 'var(--tide-5)' : 'var(--coral-4)' }}>{usage.status}</span>}
+                  {usage?.plan && <span style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{usage.plan}</span>}
+                  {usage?.observedAt && <span style={{ marginLeft: 'auto', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>observed {new Date(usage.observedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
                 </div>
-                {usage.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
-                {usage.windows.map((window) => {
+                {usage?.reason && <div style={{ marginTop: 3, fontSize: 'var(--text-xs)', color: 'var(--coral-4)' }}>{usage.reason}</div>}
+                {usage?.windows.map((window) => {
                   // Spend-down (ADR 0143 / 0260): 入口は既知の組の窓の行と、下の idle の行だけ —— キーの集合はサーバが返す
-                  const spend = spendDown[usage.provider]?.[window.window];
+                  const spend = spendDown[provider]?.[window.window];
                   return (
                     <div key={`${window.window}:${window.model ?? ''}`} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: window.throttled ? 'var(--coral-4)' : spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
                       <span style={{ flex: 1, minWidth: 0 }}>
@@ -270,21 +278,23 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
                           ? spendDownText(spend)
                           : `offset ${window.offset}pt · ${window.throttled ? `paced${window.resumesAt ? ` until ${new Date(window.resumesAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : ''}` : 'on pace'}`}
                       </span>
-                      {spend !== undefined && spendDownButton(usage.provider, window.window, spend, 'spend down')}
+                      {spend !== undefined && spendDownButton(provider, window.window, spend, 'spend down')}
                     </div>
                   );
                 })}
-                {/* Idle の窓(観測に現れない既知の組)にも次に開く窓への入口を置く(ADR 0260 決定3)。観測不能の Provider には足さない */}
-                {usage.status === 'observed' && Object.entries(spendDown[usage.provider] ?? {})
-                  .filter(([name]) => !usage.windows.some((window) => window.window === name))
+                {/* Idle の窓(観測に現れない既知の組)にも次に開く窓への入口を置く(ADR 0260 決定3)。観測済みでない
+                   Provider には arm 済みの窓の行(取り消し)だけを足し、arm の入口は足さない */}
+                {Object.entries(spendDown[provider] ?? {})
+                  .filter(([name, spend]) => (usage?.status === 'observed' || spend) && !usage?.windows.some((window) => window.window === name))
                   .map(([name, spend]) => (
                     <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 3, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: spend ? 'var(--text-body)' : 'var(--text-muted)' }}>
                       <span style={{ flex: 1, minWidth: 0 }}>{name} · {spend ? spendDownText(spend) : 'idle'}</span>
-                      {spendDownButton(usage.provider, name, spend, 'spend down next window')}
+                      {spendDownButton(provider, name, spend, 'spend down next window')}
                     </div>
                   ))}
               </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
