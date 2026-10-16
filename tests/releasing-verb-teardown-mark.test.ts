@@ -1,17 +1,10 @@
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, HOUR, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, failTeardownMark, HOUR, registerWork, type Tidepool } from "./harness.js";
 
 // issue #2025: 最終 verb の記録と後始末の印は同じ transaction —— 印が落ちれば記録も巻き戻り、印の無い決着済み session は残らない。
 
 let t: Tidepool;
 afterEach(() => t?.stop());
-
-/** 後始末の印の書き込みだけを落とす(setup、ADR 0107 決定4)。 */
-const failTeardownMark = () =>
-  t.db.exec(
-    "CREATE TRIGGER fail_teardown_mark BEFORE UPDATE OF teardown_started_at ON tasks " +
-      "BEGIN SELECT RAISE(ABORT, 'teardown mark failed'); END",
-  );
 
 /** 盤面の全 task と、その event の全部。 */
 async function boardRecord() {
@@ -83,7 +76,7 @@ it.each<[string, Arrange, Record<string, unknown>]>([
   t = await bootTidepool();
   const arranged = await arrange();
   const before = await boardRecord();
-  failTeardownMark();
+  failTeardownMark(t.db); // setup(ADR 0107 決定4)
 
   const res = await callAsTask(t, arranged.id, verb, { ...arranged.args, ...args });
 

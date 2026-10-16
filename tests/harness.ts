@@ -544,6 +544,15 @@ export function quarantineTestAgent(db: Db, name: string): void {
   quarantineAgent(db, name, "test quarantine", new Date(0));
 }
 
+/** 後始末の印の書き込みだけを落とす(setup、issue #1935 / #2025)—— 記録と印が同じ
+ *  transaction なら記録も巻き戻る。 */
+export function failTeardownMark(db: Db): void {
+  db.exec(
+    "CREATE TRIGGER fail_teardown_mark BEFORE UPDATE OF teardown_started_at ON tasks " +
+      "BEGIN SELECT RAISE(ABORT, 'teardown mark failed'); END",
+  );
+}
+
 /** A real git checkout for tree-rule/branch-discipline/quarantine tests —
  *  stderr captured, not inherited, same as src/git.ts's `git`. */
 export function git(dir: string, ...args: string[]): string {

@@ -314,7 +314,8 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
   );
 }
 
-/** Verbs that end the slot session (complete, decompose, escalate): run the
+/** Verbs that end the slot session (complete, decompose, escalate, and the other
+ *  releasing verbs registered below): run the
  *  domain verb attributed to the slot worker, then hand the release to the
  *  session's 後始末. Work completion opts into lineage merge-back; every other
  *  release only stashes WIP. A domain error keeps the slot — the session
@@ -345,8 +346,9 @@ function runReleasingVerb(
     // session であり、この事実は再起動をまたぐので行にも持つ(ADR 0109 決定5)。
     // 記録と印は同じ transaction(issue #2025)—— 間で落ちると印の無い決着済み session が残る。
     const result = deps.db.transaction(() => {
-      const recorded = record(attributedWorkerId(deps, task), deps.clock.now());
-      markTeardown(deps.db, task.id, deps.clock.now());
+      const now = deps.clock.now();
+      const recorded = record(attributedWorkerId(deps, task), now);
+      markTeardown(deps.db, task.id, now);
       return recorded;
     })();
     deps.slot.enterTeardown();
