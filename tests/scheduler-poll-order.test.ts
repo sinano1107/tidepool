@@ -27,6 +27,7 @@ it("poll が封じ込め検査の await に居る間に登録されたタスク�
     worker,
     containers: fakeContainers(),
     onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     containment: () => {
       entered();

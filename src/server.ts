@@ -463,7 +463,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。transcript の open を scheduler の catch の外で観測する adapter が呼ぶ
+  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
   options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);
@@ -585,6 +585,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     worker,
     containers,
     onSpawnFailed,
+    onRecordContainerFailed,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,

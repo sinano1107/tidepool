@@ -76,7 +76,6 @@ import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
-import { recordContainerHaltHandler } from "./watchdog.js";
 import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
@@ -265,6 +264,9 @@ export function startScheduler(deps: {
   containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
+  /** ADR 0266 決定3・4: 記録の器が書けない pickup(準備の答案の写し・`start` の中の transcript の open)の一撃
+   *  (`recordContainerHaltHandler` 製)。 */
+  onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -334,6 +336,7 @@ export function startScheduler(deps: {
     worker,
     containers,
     onSpawnFailed,
+    onRecordContainerFailed,
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
@@ -354,7 +357,6 @@ export function startScheduler(deps: {
     converge,
   } = deps;
   let inFlight = false;
-  const onRecordContainerFailed = recordContainerHaltHandler({ db, clock, slot });
   const resumeTimer = createResumeTimers(clock, pollNow);
 
   async function pickupBlocked(): Promise<boolean> {
