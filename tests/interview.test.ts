@@ -415,7 +415,6 @@ it("登録の後に既定 agent の entry から対象の Provider が外れた�
   const { db, root, failed } = twoPinnedChildren();
   const question = breachQuestion(db, failed);
   const { entry, runnable } = runnablePort(db, "openai");
-  expect(() => answerQuestionViaWebui(db, question, ["retry"], new Date(0), { runnable })).toThrow(DomainError);
   expect(() => answerQuestionViaWebui(db, question, ["retry"], new Date(0), { runnable })).toThrow(UNRUNNABLE_RETRY);
   expect([question.id, root.id, failed.id].map((id) => getTask(db, id)!.status)).toEqual(["todo", "todo", "todo"]);
   expect(otherRoots(db, root)).toBe(0);

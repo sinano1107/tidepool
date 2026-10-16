@@ -1805,8 +1805,7 @@ function retryInterview(
     origin,
   );
   if (runnable) {
-    const agentName = runnable.agentName ?? "the default agent";
-    assertTargetsRunnable(db, root.id, runnable.candidates, agentName, ` — fix ${agentName}'s entry and answer "retry" again, or answer "abandon" and register the Interview again`);
+    assertTargetsRunnable(db, root.id, runnable.candidates, runnable.agentName, ' — fix the default agent\'s entry and answer "retry" again, or answer "abandon" and register the Interview again');
   }
   appendEvent(db, {
     taskId: root.id,
