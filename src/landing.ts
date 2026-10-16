@@ -121,8 +121,8 @@ export function countTasksAwaitingLandingInWorkspace(
  *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)は除く。立て直した
  *  昇格の question が開いていれば、その retry が profile を読むので数える。 */
 function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): Task[] {
-  const roots = deriveLandingRoots(db, resolve)
-    .map(({ task }) => task)
+  const roots = landingCandidateIds(db)
+    .flatMap((id) => landingRootOf(db, resolve, id)?.task ?? [])
     .filter(
       (task) =>
         task.pr_number === null &&
@@ -282,31 +282,22 @@ export function rootPrOutcome(db: Db, taskId: string): { state: "MERGED" | "CLOS
   return { state: row.kind === OBSERVED.CLOSED ? "CLOSED" : "MERGED", observed: row.kind !== "pr_merged", prNumber: row.pr_number };
 }
 
-/** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
- *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
- *  比例させ、盤面の歴史の長さには比例させない。SQL が外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の
- *  `landing_finished`(ADR 0265 決定3) / `nothing_to_land`)とローカル着地の question を持つ根で、盤面の外で閉じた
- *  PR の根は lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。PR が開いている根(決着も断念も無い)の子孫も
- *  lineage の前に記録で外す(ADR 0265 決定3 が ADR 0250 決定3 を置き換えた)—— 根の内容が別の経路で保護ブランチに
- *  届けば根は内容で終わり、子孫は次に導くとき自分で根になる。収束の回は候補を祖先から順に撃つ直前に導くので、同じ回で
- *  終わった根の子孫はその回で着地する。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)
- *  —— 閉じた根には push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。人間が担当した work は盤面の
- *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
- *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。lineage が祖先のブランチへ帰る done の work
- *  は根ではない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側が
- *  その根の失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
-function deriveLandingRoots(db: Db, resolve: WorkspaceResolver | undefined): LandingRoot[] {
-  return landingCandidateIds(db).flatMap((id) => landingRootOf(db, resolve, id) ?? []);
-}
+/** 着地が終わった根の記録(ADR 0265 決定3 の内容で終わった根を含む)。これを持つ行は候補にも、子孫を外す根にもならない。 */
+const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land')";
 
-/** 候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。 */
+/** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
+ *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
+ *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
+ *  (ADR 0265 決定3) / `nothing_to_land`)とローカル着地の question を持つ根である。人間が担当した work は盤面の
+ *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
+ *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
 function landingCandidateIds(db: Db): string[] {
   return db
     .prepare(
       `SELECT t.id FROM tasks t
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
           AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
         ORDER BY t.rowid`,
     )
@@ -314,8 +305,15 @@ function landingCandidateIds(db: Db): string[] {
     .all() as string[];
 }
 
-/** 候補が根ならその根を返す。閉じた PR の根と、PR が開いている根(終わっていない・決着していない・断念していない)の
- *  子孫は、lineage の前に記録で外す。今の記録を読むので、同じ回で先に終わった祖先の子孫は自分で根になれる。 */
+/** ADR 0241 決定1 / ADR 0240 決定2: 候補が収束の根ならその根を返す —— 記録と内容から導き、読むだけで書かない
+ *  (quarantine にも落とさない)。収束の回と着地を待つ完了タスクの数えはどちらもこれを通る。盤面の外で閉じた PR の根は
+ *  lineage の前に根の PR の決着の読み(`rootPrOutcome`)で外す。PR が開いている根の子孫も lineage の前に記録で外す
+ *  (`openPrRootAbove`、ADR 0265 帰結 —— ADR 0250 決定3 を置き換えた): 根の内容が別の経路で保護ブランチに届けば根は
+ *  内容で終わり(ADR 0265 決定3)、子孫は次に導くとき自分で根になる。今の記録を読むので、同じ回で先に終わった根の子孫は
+ *  その回で自分で根になる。閉じた根と断念した根の子孫は記録で外さず、lineage に任せる(ADR 0250 決定1・2)—— 閉じた根には
+ *  push せず、断念した根には撃たないので、どちらの根も子孫を運ばない。lineage が祖先のブランチへ帰る done の work は根では
+ *  ない。workspace を解決できない候補と lineage が読めない候補は根かどうか分からないので根として返し、撃つ側がその根の
+ *  失敗として人間に見せる。後始末が未了の木は、撃つ直前に根ごとに読む(`landRoot`)。 */
 function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: string): LandingRoot | undefined {
   if (rootPrOutcome(db, id)?.state === "CLOSED" || openPrRootAbove(db, id)) return undefined;
   const task = getTask(db, id)!;
@@ -332,8 +330,9 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
   }
 }
 
-/** `id` の祖先のうち、PR が開いていて子孫を記録で外している根を返す —— 着地が終わっておらず、PR が決着も断念もしておらず、
- *  未回答の失敗 question で止まってもいない根。止まっている根は内容の確かめに届かず内容で終わらないので、子孫を外さない。 */
+/** `id` の祖先のうち、PR が開いていて子孫を記録で外している根を返す(ADR 0265 帰結)—— 着地が終わっておらず、PR が決着も
+ *  断念もしておらず、未回答の失敗 question で止まってもいない根。止まっている根は内容の確かめに届かず内容で終わらない
+ *  (ADR 0240 決定2)ので、子孫を外さない —— 子孫は lineage に任せる。 */
 function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } | undefined {
   const unfinishedPrAncestors = db
     .prepare(
@@ -342,7 +341,7 @@ function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } |
           UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
        SELECT t.id, t.pr_number AS prNumber FROM tasks t
         WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ('landing_finished', 'nothing_to_land'))`,
+          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})`,
     )
     .all(id) as Array<{ id: string; prNumber: number }>;
   return unfinishedPrAncestors.find(
@@ -833,7 +832,7 @@ export function createLanding(deps: LandingDeps): Landing {
   const markKey = (workspace: string | null, prNumber: number) => JSON.stringify([workspace, prNumber]);
   const isMarked = (workspace: string | null, prNumber: number) => inFlight.has(markKey(workspace, prNumber));
   /** 根ごとの手順(ADR 0241 決定1・3、spec #1839 A): 除外 → workspace の解決 → 運ぶ内容 → 門 → workspace の
-   *  quarantine → ローカルか remote か → PR の有無と状態 → profile。lineage は導出(`deriveLandingRoots`)が解いた。
+   *  quarantine → ローカルか remote か → PR の有無と状態 → profile。lineage は導出(`landingRootOf`)が解いた。
    *  撃たずに外した根は undefined を返す。 */
   const landRoot = async (
     { task, outlivedForkSource, lineageError }: LandingRoot,
@@ -1061,7 +1060,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
     const verdicts: RootVerdict[] = [];
-    // 候補ごとに、撃つ直前に根かを導く —— 同じ回で先に終わった根の子孫が、取り残されずにこの回で自分で根になる
+    // 候補ごとに、撃つ直前に根かを導く —— 同じ回で先に終わった根の子孫が、取り残されずにこの回で自分で根になる(ADR 0265 決定3・帰結)
     for (const id of ids) {
       try {
         const root = landingRootOf(deps.db, resolve, id);
