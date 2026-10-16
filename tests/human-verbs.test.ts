@@ -1030,10 +1030,9 @@ it("PR の読みが戻れば回答は通り、盤面の外で merge 済みなら
 
   await expect(answer("hold")).rejects.toThrow(DomainError);
   await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
-  expect(listEvents(db, question.id).map((event) => event.kind)).toEqual(
-    expect.arrayContaining(["pr_merge_observed"]),
-  );
-  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("question_answered");
+  const kinds = listEvents(db, question.id).map((event) => event.kind);
+  expect(kinds).toContain("pr_merge_observed");
+  expect(kinds).not.toContain("question_answered");
 });
 
 // 「観測しなかった」のうち「該当しない」(GitHub 未設定・純ローカル)は、今日どおり回答を通す
