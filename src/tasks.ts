@@ -1059,9 +1059,10 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
   return db.transaction(() => {
     const { changes } = db
       .prepare(
-        "UPDATE tasks SET status = 'in_progress' WHERE id = ? AND status = 'todo' AND assignee IS NOT ? AND assignee IS ? AND (? IS NULL OR workspace = ?)",
+        `UPDATE tasks SET status = 'in_progress' WHERE id = @id AND status = 'todo' AND assignee IS NOT @human
+           AND assignee IS @assignee AND (@workspace IS NULL OR workspace = @workspace)`,
       )
-      .run(task.id, HUMAN_WORKER_ID, task.assignee, task.workspace, task.workspace);
+      .run({ id: task.id, human: HUMAN_WORKER_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {
