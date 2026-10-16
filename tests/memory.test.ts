@@ -2323,6 +2323,17 @@ it("一木の門は受験者(pin の子)の書き込みをどの書き手にも�
   examineeDefines("ci");
 });
 
+it("受験者の define が畳んだ本番の Definition は、一木の門には生きた定義として数えられる —— その配下に盤面全体のエントリを置く人間の書き込みは拒まれ、その定義を名指す(ADR 0264 決定4 / ADR 0178)", () => {
+  const { db } = board();
+  const examinee = interviewPinChild(db, at);
+  const root = defineMemoryBranch(db, { ...definition, text: "What the root files." }, "worker", at, examinee.parent_id!).entry_id;
+  defineMemoryBranch(db, { ...definition, text: "What the examinee files." }, "worker", at, examinee.id);
+
+  expect(() => recordKnowledge(db, { ...knowledge, scope: null, path: "build/x", source: { commit: "0a46a46" } }, "worker", at)).toThrow(
+    `the whole-board knowledge being placed at build/x lies at or under workspace definition ${root} at build in scope tidepool: `,
+  );
+});
+
 it("workspace が build と build/x を定義していれば、盤面全体の Knowledge を build/x/y に置くには上の build から盤面全体へ広げる —— 下の build/x を先に広げると上の build に当たって何も変えず、上から順なら build/x も Knowledge も通る(ADR 0221 決定3)", () => {
   const { db } = board();
   const [build, buildX] = ["build", "build/x"].map((path) => defineMemoryBranch(db, { ...definition, path }, "worker", at).entry_id) as [number, number];

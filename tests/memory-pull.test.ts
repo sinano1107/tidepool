@@ -661,6 +661,28 @@ it("読み手の視界に無い後継による無効化はその読み手には�
   expect(getEvent(db, search.event_id)!.payload).toMatchObject({ candidates: [{ id: ownFact, dropped: null }] });
 });
 
+it("読み手の視界に無い後継がその後に落とされても、その読み手には自分の定義の無効化が起きていないまま —— 生きて INDEX に出て read が本文を返す(ADR 0264 決定4)", () => {
+  const { db, examinee, sibling } = examineeBoard();
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (writer: string, text: string) => defineMemoryBranch(db, { scope: "tidepool", path: "tide", text, author }, "worker", at, writer).entry_id;
+  const own = define(examinee.taskId, "What the examinee files.");
+  invalidateMemoryEntry(db, { entry_id: define(sibling.id, "What the sibling files."), reason: "environment" }, "human", "webui", at);
+
+  expect(browseMemory(db, examinee, {}, at).children).toEqual([{ name: "tide", definition: "What the examinee files." }]);
+  expect(readMemory(db, examinee, { ids: [own] }, at)).toMatchObject({ entries: [{ id: own }], dropped: [] });
+});
+
+it("読み手の視界に無い後継の先で視界にある後継に置き換えられた行は、read の dropped が視界に無い後継を飛ばして視界にある後継を指す(ADR 0264 決定4)", () => {
+  const { db, task, examinee, sibling } = examineeBoard();
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (writer: string, text: string) => defineMemoryBranch(db, { scope: "tidepool", path: "tide", text, author }, "worker", at, writer).entry_id;
+  const own = define(examinee.taskId, "What the examinee files.");
+  define(sibling.id, "What the sibling files.");
+  const production = define(task.id, "What this workspace files.");
+
+  expect(readMemory(db, examinee, { ids: [own] }, at)).toMatchObject({ entries: [], dropped: [{ id: own, reason: "superseded", successor: production }] });
+});
+
 it("読み手が pin の子のとき、出所が帰責(objection_attributed)のエントリは帰責 event の task でなくその entry_id の判断ログの行の task で判定し、meta-review が畳んだ後継は追わない(ADR 0264 決定3)", () => {
   const { db, task, reader, examinee, sibling, write } = examineeBoard();
   const root = getTask(db, examinee.taskId)!.parent_id!;

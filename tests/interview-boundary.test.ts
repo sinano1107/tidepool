@@ -255,8 +255,9 @@ async function answerReaderQuestion(reader: string, answers: string[], comment?:
  *  cancel、最後の対象の子は failure を retry で、前提の破綻を目印つきのコメントの continue で再開し、escalate して答えを受けてから
  *  slot に居て、自分の history の長さで get_current_task が続き(ADR 0195)を持つ。`pulls` はその子が記憶の pull verb(browse・search・
  *  read)で兄弟の Knowledge と、root が書いた目印つきの Knowledge・人間が出題の event を出所に書いた目印つきの Exemplar(ADR 0264
- *  決定3)を探した応答と、最後に兄弟が目印つきで定義した枝を定義した応答(ADR 0264 決定4)。`injection` はその子の直近の spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと
- *  同じ引数(盤面が渡した task と query、task の workspace 名、worker の agent 名)で組む。 */
+ *  決定3)を探した応答と、最後に兄弟が目印つきで定義した枝を定義した応答(ADR 0264 決定4)。`injection` はその子の直近の
+ *  spawn で adapter が組むはずの記憶の注入の節で、adapter が渡すのと同じ引数(盤面が渡した task と query、task の workspace 名、
+ *  worker の agent 名)で組む。 */
 async function lastExaminee() {
   // 時限は見ない watchdog: 報告なき exit を failure question にする口だけを使う(ADR 0145)
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });

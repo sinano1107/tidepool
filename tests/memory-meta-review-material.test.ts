@@ -364,3 +364,20 @@ it("店の変更と枝の一覧に、どの Interview の pin の子が書いた
   expect(parts.branches).toEqual([{ path: "parser", definitions: [], scopes: ["tidepool"] }]);
   expect(section).not.toMatch(/answers|drafts|lexer|grammar|examinee/);
 });
+
+it("受験者の書き込みが本番の行を畳んだ無効化は店の変更に載らない —— 本番の行は作成だけの変更で生きた行として出て、受験者の後継を名指さない(ADR 0264 決定4)", () => {
+  const db = openDb(":memory:");
+  const examinee = interviewPinChild(db, at);
+  register(db, "memory", true);
+  const production = knowledge(db, "parser");
+  recordKnowledge(
+    db,
+    { scope: "tidepool", path: "parser", title: "parser examinee", text: "parser.", source: { commit: "0a46a46" }, author: deckhand, supersedes: [production] },
+    "worker",
+    at,
+    examinee.id,
+  );
+  const review = register(db, "memory");
+
+  expect(memoryMaterialOf(db, review).parts.store_changes).toMatchObject([{ id: production, invalidation_reason: null, successor_id: null, changes: ["created"] }]);
+});
