@@ -830,14 +830,20 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
 }
 
 /** タスクごとの merge 済み PR。盤面が merge した場合と、merge 済みだと観測した
- *  場合の両方(ADR 0079 決定4)。Episode ごとに1本引かず平らに1本(`listLog` が
- *  異議を引くのと同じ形)。 */
+ *  場合の両方(ADR 0079 決定4)。記録はタスクの id か、その PR の merge question の
+ *  id(人間の merge 回答と question の観測、ADR 0079 決定1)にある —— 後者の読みは
+ *  収束の `prMergedSql`(landing.ts)と同じ述語。Episode ごとに1本引かず平らに1本
+ *  (`listLog` が異議を引くのと同じ形)。 */
 function mergedPrByTask(db: Db, taskIds: string[]): Map<string, number> {
   const rows = db
     .prepare(
-      `SELECT task_id, json_extract(payload, '$.pr_number') AS pr_number FROM events
-        WHERE kind IN ('pr_merged', 'pr_merge_observed')
-          AND task_id IN (${taskIds.map(() => "?").join(", ")}) ORDER BY id`,
+      `SELECT t.id AS task_id, json_extract(m.payload, '$.pr_number') AS pr_number FROM tasks t
+         JOIN events m ON m.kind IN ('pr_merged', 'pr_merge_observed')
+          AND (m.task_id = t.id
+               OR (json_extract(m.payload, '$.pr_number') = t.pr_number
+                   AND m.task_id IN (SELECT q.id FROM tasks q
+                         WHERE q.question_pending_merge_pr = t.pr_number AND q.workspace IS t.workspace)))
+        WHERE t.id IN (${taskIds.map(() => "?").join(", ")}) ORDER BY m.id`,
     )
     .all(...taskIds) as Array<{ task_id: string; pr_number: number }>;
   return new Map(rows.map((r) => [r.task_id, r.pr_number]));
