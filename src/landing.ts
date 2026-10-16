@@ -31,6 +31,7 @@ import {
   taskIdForPr,
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
+import type { RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   boardRefWriter,
@@ -316,6 +317,31 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
   };
 }
 
+/** question 自身の記録に残る観測(ADR 0265 決定1)。根から導く種類を除いた印の全部 —— 種類を足してここを足さないと typecheck が落ちる。 */
+const QUESTION_RECORDED_SQL = Object.keys({
+  pr_promotion_observed: true,
+  quarantine_released: true,
+  routing_proposal_stale: true,
+  memory_proposal_stale: true,
+} satisfies Record<Exclude<SettledByObservation, RootSettledByObservation>, true>)
+  .map((kind) => `'${kind}'`)
+  .join(", ");
+
+/** 観測で閉じた question の印(ADR 0265 決定7): 回答なしで done の question の観測の種類、それ以外は null。merge question の
+ *  決着は根に刻まれる(決定1)ので根の決着の読みから、他の観測は question 自身の記録から引く。 */
+export function settledByObservation(db: Db, question: Pick<Task, "id" | "workspace" | "question_pending_merge_pr">): SettledByObservation | null {
+  const row = db
+    .prepare(
+      `SELECT status = 'done' AND NOT EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'question_answered') AS observed,
+         (SELECT kind FROM events WHERE task_id = tasks.id AND kind IN (${QUESTION_RECORDED_SQL}) ORDER BY id DESC LIMIT 1) AS kind
+         FROM tasks WHERE id = ?`,
+    )
+    .get(question.id) as { observed: number; kind: SettledByObservation | null };
+  if (!row.observed) return null;
+  if (question.question_pending_merge_pr === null) return row.kind;
+  const outcome = rootPrOutcome(db, taskIdForPr(db, question.question_pending_merge_pr, question.workspace));
+  return outcome && (outcome.observed ? OBSERVED[outcome.state] : "pr_merged");
+}
 /** ADR 0241 決定1 / ADR 0240 決定2: 収束の根を記録と内容から導く。読むだけで、書かない(quarantine にも落とさない)。
  *  候補は SQL で先に絞り、lineage は候補にだけ解く —— 1回の git の呼び出しの数を、着地の終わっていない木の大きさに
  *  比例させ、盤面の歴史の長さには比例させない。SQL が外すのは、着地が終わった根(`landing_finished` /

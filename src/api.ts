@@ -1435,7 +1435,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         parsed.data.triage,
         parsed.data.amendment,
       );
-      sendJson(res, question);
+      sendJson(res, question satisfies WireContract["POST /api/tasks/:id/answer"]);
     } catch (err) {
       if (err instanceof DomainError) {
         sendJson(res.status(409), { error: err.message });

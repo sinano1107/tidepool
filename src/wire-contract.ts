@@ -39,6 +39,22 @@ export interface ProviderUsage {
   }>;
 }
 
+/** merge question の印は根に刻まれた PR の決着から導く(ADR 0265 決定2)。`pr_merged` は盤面の名義の merge で、回答の記録が無いもの(決定5)。 */
+export type RootSettledByObservation = "pr_merged" | "pr_merge_observed" | "pr_close_observed";
+
+/** 観測で閉じた question の印(ADR 0265 決定7): 回答なしで盤面が閉じたときの種類。WebUI の札の文言表がこれで欠けを落とす。 */
+export type SettledByObservation =
+  | RootSettledByObservation
+  | "pr_promotion_observed"
+  | "quarantine_released"
+  | "routing_proposal_stale"
+  | "memory_proposal_stale";
+
+/** 回答の応答と question の行が運ぶ印。 */
+export interface SettledMark {
+  settled_by_observation: SettledByObservation | null;
+}
+
 export interface QueueTask {
   id: string;
   title: string;
@@ -160,6 +176,7 @@ export interface WireContract {
       needs_comment?: string[];
       /** 自由記述の回答を受けるか —— 固定選択肢の question は false(issue #1309)。 */
       free_text?: boolean;
+      settled_by_observation?: SettledByObservation | null;
     }
   >;
   "GET /api/tasks/:id": BoardTask & {
@@ -171,6 +188,7 @@ export interface WireContract {
     blocking?: string | null;
     needs_comment?: string[];
     free_text?: boolean;
+    settled_by_observation?: SettledByObservation | null;
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;
@@ -235,6 +253,8 @@ export interface WireContract {
       }
     | { status: "throttled" };
   "POST /api/tasks": Pick<BoardTask, "id" | "type">;
+  /** 観測決着も 200 で、印が回答は記録されていないことを言う(ADR 0265 決定7)。 */
+  "POST /api/tasks/:id/answer": SettledMark;
   /** 登録の門の 422(src/human-verbs.ts の issue_rejected)。`api()` のキーには出ない。 */
   "POST /api/tasks 422": { missing: string; suggested_comment: string };
   "POST /api/tasks/draft": {

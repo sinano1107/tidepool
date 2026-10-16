@@ -62,6 +62,7 @@ import {
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
+  returnToQueueHead,
   type Task,
   type TaskContent,
   unrowedPinChildren,
@@ -73,6 +74,7 @@ import {
   type ProviderUsageObservation,
   reportProviderUsage,
 } from "./throttle.js";
+import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
@@ -411,7 +413,7 @@ export function startScheduler(deps: {
    *
    *  戻り値は `start` が同期で投げたときの後始末の一撃で、呼び手が poll の外で撃つ。
    *  pickup の中で slot を解放してはならない —— 解放が撃つ pickup の契機は `inFlight` の間
-   *  捨てられる(ADR 0119 決定5)。 */
+   *  捨てられる(ADR 0119 決定5)。例外は記録の器が書けない pickup で、盤面が止まるので捨てられる契機が無い(ADR 0266 決定3)。 */
   async function pickup(
     task: Task,
     setting: ExecutionSetting,
@@ -460,6 +462,18 @@ export function startScheduler(deps: {
       try {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
+        if (err instanceof RecordContainerError) {
+          // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まり、踏んだ task は失敗にせず先頭へ戻る。
+          // 先例は行の拒否の先頭復帰(ADR 0184 決定4)で、停止・event・先頭復帰を1 transaction で決着させてから slot を
+          // 解放する。session は無いので回収は無く、盤面が止まったので pickup の契機も撃たない
+          const now = clock.now();
+          db.transaction(() => {
+            registerQuarantine(db, "recordContainer", null, `while picking up task ${picked.id}, ${err.message}`, now);
+            returnToQueueHead(db, picked, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
+          })();
+          slot.release();
+          return;
+        }
         await quarantineWithRepoAccessGuidance(resolved, err);
         return;
       }
