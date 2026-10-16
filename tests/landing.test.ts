@@ -5171,19 +5171,25 @@ it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map
 
 // #1864: merge 済みの根の保護ブランチの読み直しが落ちても、根ごとの手順の catch が決着を書く(ADR 0241 決定6)。
 // 回のログ(その根を撃てなかった)に逃がさない。読み直しは PR の状態を読んだ後に撃つので、効果は読みの直後に起こす
-/** origin を届かなくする。`quarantine` なら workspace も quarantine に落とす。PR を読んだ直後に起こす。 */
+/** PR を読んだ直後に change を走らせる —— merge 済みの決着が読み直す前に、盤面の外の状態を変える。 */
 function afterPrRead(
   github: FakeGitHubClient,
   read: "getPullRequestState" | "findPullRequestByHead",
-  { workspace, db, clock }: { workspace: WorkspaceConfig; db: Db; clock: FakeClock },
-  quarantine: boolean,
+  change: () => void,
 ): void {
   const original = github[read].bind(github) as (input: never) => Promise<unknown>;
   (github as unknown as Record<string, unknown>)[read] = async (input: never) => {
     const result = await original(input);
+    change();
+    return result;
+  };
+}
+
+/** origin を届かなくする —— 保護ブランチの読み直しが落ちる。`quarantine` なら workspace も quarantine に落とす。 */
+function breakRefresh({ workspace, db, clock }: { workspace: WorkspaceConfig; db: Db; clock: FakeClock }, quarantine: boolean) {
+  return () => {
     git(workspace.path, "remote", "set-url", "origin", join(workspace.path, "unreachable"));
     if (quarantine) quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
-    return result;
   };
 }
 
@@ -5193,7 +5199,7 @@ async function mergedOutsideOpenPr(name: string, quarantine = false) {
   commitWork(pr.workspace.path, "repair.txt", "fixed\n");
   finish(pr.db, pr.clock, pr.work);
   pr.github.scriptMergedOutside(1);
-  afterPrRead(pr.github, "getPullRequestState", pr, quarantine);
+  afterPrRead(pr.github, "getPullRequestState", breakRefresh(pr, quarantine));
   return pr;
 }
 
@@ -5208,7 +5214,7 @@ async function mergedOutsideFoundPr(name: string, quarantine = false) {
   commitWork(workspace.path, "feature.txt", "ready\n");
   github.scriptMergedOutside(github.scriptPullRequestOnBranch(`task/${work.id}`));
   finish(db, clock, work);
-  afterPrRead(github, "findPullRequestByHead", { workspace, db, clock }, quarantine);
+  afterPrRead(github, "findPullRequestByHead", breakRefresh({ workspace, db, clock }, quarantine));
   return { workspace, db, clock, github, work, landing };
 }
 
@@ -5237,10 +5243,12 @@ it.each([
   expect(promotionFailures(db, work.id)).toEqual([]);
 });
 
-it("merge 済みの根の保護ブランチの読み直しの失敗に retry を答える回の verdict は、その失敗であって not_a_root ではない", async () => {
+// 同じ head で見つけた形は、最初の回で PR の番号を記録するので、retry の回は開いている PR の形を通る
+it("merge 済みの根の保護ブランチの読み直しの失敗に retry を答える回の verdict は、その失敗であって not_a_root ではなく、失敗 question を立て直さない", async () => {
   const { db, work, landing } = await mergedOutsideOpenPr("merged-refresh-fails-retry");
-  await landing.converge();
-  const [failure] = promotionFailures(db, work.id);
+  const first = await convergeOn(landing, work.id);
+  const failures = promotionFailures(db, work.id);
 
-  await expect(convergeOn(landing, work.id, failure!.id)).resolves.toMatchObject({ kind: "failed", reason: "promotion_failed" });
+  await expect(convergeOn(landing, work.id, failures[0]!.id)).resolves.toEqual(first);
+  expect(promotionFailures(db, work.id)).toEqual(failures);
 });
