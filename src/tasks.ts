@@ -2814,9 +2814,10 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
- *  is an input the rules require, so both stay out — except under a root whose PR
- *  was closed outside the board, where they are no longer required (ADR 0265 決定6).
- *  Approved children retain their agent's decomposition judgment and also stay out (ADR 0211). */
+ *  is an input the rules require, so both stay out. Approved children retain their agent's decomposition
+ *  judgment and also stay out (ADR 0211). Every one of these comes into scope once it is stranded under a
+ *  root whose PR was closed outside the board — the same one predicate pickup skips by, which reaches any
+ *  todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
 function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
   const inScope =
     getTextAuthor(db, task.id) === HUMAN_WORKER_ID ||
@@ -2824,8 +2825,8 @@ function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: Closed
     !!closedRootOf?.(task);
   if (!inScope) {
     throw new DomainError(
-      "only a human-authored task, a board-registered root other than a question, or a task held by a root whose PR was " +
-        "closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
+      "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
+        "was closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
         "a board-named attached child, and a board-named question are out of scope",
     );
   }

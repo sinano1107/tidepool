@@ -790,19 +790,19 @@ export function createLanding(deps: LandingDeps): Landing {
    *  観測は根に1回だけ刻まれるので、行も1つの観測に1回。子が無ければ流さない。 */
   const announceClosed = (rootId: string, prNumber: number, now: Date) => {
     const blocking = closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
-    const held = (
+    const stranded = (
       deps.db
         .prepare(
           `${subtreeSql("?")} SELECT id, type, parent_id, workspace FROM tasks WHERE id IN (SELECT id FROM subtree) AND status = 'todo' ORDER BY rowid`,
         )
         .all(rootId) as Array<Pick<Task, "id" | "type" | "parent_id" | "workspace">>
     ).filter((task) => blocking(task)?.task_id === rootId);
-    if (held.length === 0) return;
+    if (stranded.length === 0) return;
     logDecision(
       deps.db,
       getTask(deps.db, rootId)!,
-      `PR #${prNumber} was closed outside the board, so ${held.length} task(s) under it will not run: ` +
-        `${held.map(({ id }) => id).join(", ")}. To go on, reopen the PR on GitHub and merge it — once its content ` +
+      `PR #${prNumber} was closed outside the board, so ${stranded.length} task(s) under it will not run: ` +
+        `${stranded.map(({ id }) => id).join(", ")}. To go on, reopen the PR on GitHub and merge it — once its content ` +
         "reaches the protected branch, they run and land as roots of their own. To stop, cancel them.",
       BOARD_WORKER_ID,
       now,

@@ -959,7 +959,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task held by a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION}`,
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {

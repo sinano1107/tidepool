@@ -2867,6 +2867,19 @@ it("遅い走査が外で閉じたと観測した根の下に走らない子が�
   for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
 });
 
+it("回答直前のバックストップが外で閉じたと観測した根の下に走らない子があれば、盤面名義の判断行が1行流れる", async () => {
+  const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-backstop-closed-announce");
+  const child = attachUnsettledChild(db, clock, root.id);
+  github.scriptClosedOutside(1);
+  const question = listBoard(db).find((q) => q.question_pending_merge_pr === 1)!;
+
+  await expect(landing.observePullRequestOutcome(getTask(db, question.id)!)).resolves.toBe(true);
+  await landing.tick("outside_merge", clock.now());
+
+  const lines = boardEvents(db, root.id, "decision_logged");
+  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+});
+
 it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
   const { db, clock, github, landing, root } = await escalatedRootWithOpenedPr("landing-scan-closed-silent");
   github.scriptClosedOutside(1);
