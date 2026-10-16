@@ -1,9 +1,9 @@
-import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
+import { lstatSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent, getEvent } from "./events.js";
-import { git } from "./git.js";
+import { git, gitBytes } from "./git.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -29,6 +29,7 @@ import {
   issueRefPlaceholder,
   type Task,
 } from "./tasks.js";
+import { RecordContainerError } from "./transcript-store.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
@@ -566,7 +567,8 @@ export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource; now: Date },
+  /** `recordDir` は盤面の記録の器(worker transcript の dir)。Absent → 答案を写さない(器を持たない盤面・テスト)。 */
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource; recordDir?: string; now: Date },
 ): Promise<void> {
   assertOwnGitDirectory(workspace.path);
   assertRegistryRoleAgrees(workspace, board.registry);
@@ -574,7 +576,7 @@ export async function prepareWorkspaceAtPickup(
   await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
-  if (task.interview_target_id !== null) removeSettledPinBranches(db, workspace, board.now);
+  if (task.interview_target_id !== null) removeSettledPinBranches(db, workspace, board.recordDir, board.now);
   // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
   // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した pin の子のブランチを外すのも
   // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ
@@ -583,16 +585,46 @@ export async function prepareWorkspaceAtPickup(
 
 /** ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子が兄弟(どの Interview のものでも)の答案を git で読めないように、
  *  この checkout にある決着した pin の子のタスクブランチの ref を外し、head をその子の event に残す。走るのは自分のブランチを
- *  checkout した後なので、外すブランチが checkout 中であることは無い。 */
-function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, now: Date): void {
+ *  checkout した後なので、外すブランチが checkout 中であることは無い。
+ *  ADR 0266 決定1・2: 外す前に答案を盤面の記録の器へ写し、1本でも外したら HEAD の reflog と到達できない object を落とす。
+ *  器を持たない盤面(`recordDir` 無し)は写せないので掃除もしない —— 写しの無いまま答案の object を消さない */
+function removeSettledPinBranches(db: Db, workspace: WorkspaceConfig, recordDir: string | undefined, now: Date): void {
   const branches = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/heads/task/");
+  let removed = 0;
   for (const [head, id] of branches.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string])) {
     const pinChild = getTask(db, id);
     if (pinChild?.interview_target_id == null || !isSettled(pinChild.status)) continue;
-    // 記録を先に書く —— 外した後で記録が落ちると、答案の head がどこにも残らない
-    appendEvent(db, { taskId: id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "task_branch_removed", head }, at: now });
+    // 写し → 記録 → 外す の順(ADR 0266 決定2)—— 外した後で落ちると、答案がどこにも残らない
+    const path = recordDir === undefined ? undefined : copyAnswer(db, workspace, pinChild, head, recordDir);
+    appendEvent(db, { taskId: id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "task_branch_removed", head, ...(path && { path }) }, at: now });
     git(workspace.path, "branch", "-D", taskBranch(id));
+    removed += 1;
   }
+  if (removed === 0 || recordDir === undefined) return;
+  // ADR 0266 決定1: HEAD の reflog を全部消し、どこからも辿れない object を pack からも loose からも落とす。
+  // ブランチ自身の reflog は触らない —— 本番のタスクブランチの記録はそこに残る
+  git(workspace.path, "reflog", "expire", "--expire=now", "HEAD");
+  git(workspace.path, "repack", "-a", "-d");
+  git(workspace.path, "prune", "--expire=now");
+}
+
+/** ADR 0266 決定2: 答案を `<recordDir>/<task id>.bundle` に写し、その path を返す。出題の head から commit が無ければ写さない。
+ *  bundle は git が stdout に出し、器へは node が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の例外だけが
+ *  `RecordContainerError` になる。 */
+function copyAnswer(db: Db, workspace: WorkspaceConfig, pinChild: Task, head: string, recordDir: string): string | undefined {
+  const posedHead = resolvablePosedHead(db, workspace, pinChild);
+  // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
+  if (isAncestor(workspace, head, posedHead)) return undefined;
+  // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
+  const bundle = gitBytes(workspace.path, "bundle", "create", "-", taskBranch(pinChild.id), `^${posedHead}`);
+  // event に残る path は盤面の cwd に依らない絶対 path(既定の器は相対の `worker-logs`)
+  const path = resolve(recordDir, `${pinChild.id}.bundle`);
+  try {
+    writeFileSync(path, bundle);
+  } catch (err) {
+    throw new RecordContainerError(pinChild.id, path, err instanceof Error ? err.message : String(err));
+  }
+  return path;
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も

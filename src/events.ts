@@ -245,7 +245,8 @@ export type EventPayload =
   | { kind: "pr_promotion_abandoned"; head: string | null }
   // ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子の pickup の準備が、決着したこの pin の子のタスクブランチの ref を
   // 外した —— head は外した時点の値で、答案の diff はここから後で確かめる
-  | { kind: "task_branch_removed"; head: string }
+  // ADR 0266 決定2: path は盤面の記録の器に写した答案の bundle。出題の head から commit が無ければ写さないので持たない
+  | { kind: "task_branch_removed"; head: string; path?: string }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join
