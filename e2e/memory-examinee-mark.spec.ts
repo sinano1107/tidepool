@@ -1,4 +1,3 @@
-import { recordKnowledge } from "../src/memory.js";
 import { interviewPinChild, rememberedNote } from "../tests/harness.js";
 import { expect, test } from "./fixtures.js";
 
@@ -8,13 +7,7 @@ test("受験者が書いたエントリの行にだけ examinee の印が出る"
   const t = await boot();
   const production = rememberedNote(t, "Production note");
   const pinChild = interviewPinChild(t.db, t.clock.now());
-  const examinee = recordKnowledge(
-    t.db,
-    { scope: null, path: "build", title: "Examinee note", text: "Examinee note.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
-    "worker",
-    t.clock.now(),
-    pinChild.id,
-  ).entry_id;
+  const examinee = rememberedNote(t, "Examinee note", pinChild.id);
 
   await page.goto(t.baseUrl);
   await page.getByRole("button", { name: "Settings" }).click();

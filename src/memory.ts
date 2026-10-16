@@ -1762,6 +1762,10 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
   ).filter((row) => row.kind !== "definition" && sight.has(row, 1));
 }
 
+/** tasks(`IN (...)` に入れる SELECT)の task が作った書き込みの記録(ADR 0252)のエントリ id と書いた task。 */
+const writtenSql = (tasks: string) =>
+  `SELECT c.value AS id, e.task_id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
+
 /** 読み手(task)に無いエントリ。書いた task は作った書き込みの記録(ADR 0252)の task で引き、どれも本文が同じ後継(移動の複製・
  *  復元の複製)を含む。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。meta-review の
  *  専用 verb と材料もこの集合を外す。
@@ -1788,10 +1792,6 @@ function readerHidden(db: Db, taskId: string): Set<number> {
   const own = new Set(chains(db.prepare(writtenSql("?")).all(taskId) as Array<{ id: number }>));
   return new Set(chains(hidden).filter((id) => !own.has(id)));
 }
-
-/** tasks(`IN (...)` に入れる SELECT)の task が作った書き込みの記録(ADR 0252)のエントリ id と書いた task。 */
-const writtenSql = (tasks: string) =>
-  `SELECT c.value AS id, e.task_id FROM events e, json_each(e.payload, '$.created') c WHERE e.kind = 'memory_written' AND e.task_id IN (${tasks})`;
 
 export type ExamineeMark = { task_id: string } & TargetKey;
 
