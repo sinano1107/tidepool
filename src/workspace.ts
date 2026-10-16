@@ -314,8 +314,6 @@ export function resolveTaskBranchLineage(
       candidate = branch;
       continue;
     }
-    // 決着した受験者のブランチは外れうる(ADR 0263 決定5)。外れた後の分岐元は #1886 で決める —— ここでは落ちないだけ
-    if (ancestor.interview_target_id !== null && !taskBranchExists(workspace, ancestor.id)) continue;
     const effect = branchMergeEffect(workspace, base, branch);
     if (effect.changesCandidate) candidate = branch;
     else if (!effect.historyConverged) outlivedForkSource = true;

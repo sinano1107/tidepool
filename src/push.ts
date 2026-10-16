@@ -1,6 +1,6 @@
 import webpush from "web-push";
 import type { Db } from "./db.js";
-import { HUMAN_FACING_KINDS } from "./events.js";
+import { HUMAN_FACING_KINDS, SKIM_TASK_SQL } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
 import { isLandingQuestion, rowToTask, type Task, type TaskRow, taskTierNamesSql } from "./tasks.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
@@ -180,7 +180,10 @@ function getDigestCursor(db: Db): number {
 function countLogEntriesSince(db: Db, lastReported: number): number {
   const placeholders = HUMAN_FACING_KINDS.map(() => "?").join(", ");
   const { count } = db
-    .prepare(`SELECT COUNT(*) AS count FROM events WHERE id > ? AND kind IN (${placeholders})`)
+    .prepare(
+      `SELECT COUNT(*) AS count FROM events JOIN tasks ON tasks.id = events.task_id
+        WHERE events.id > ? AND events.kind IN (${placeholders}) AND ${SKIM_TASK_SQL}`,
+    )
     .get(lastReported, ...HUMAN_FACING_KINDS) as { count: number };
   return count;
 }

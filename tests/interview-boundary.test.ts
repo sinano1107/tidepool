@@ -143,6 +143,17 @@ it("出題の event は、出題の verb が呼ばれた checkout の保護ブ�
   expect(posed.payload.head).toBe(git(workspacePath, "rev-parse", "main"));
 });
 
+it("ログ API の root の行は Interview の印を運び、受験者の行への異議 API は 409 に写る(ADR 0268 決定1・6)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = await pose(root.id);
+  const answer = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "worker", at: t.clock.now(), payload: { kind: "decision_logged", line: "use a hand-written lexer" } });
+
+  const log = (await api(t.baseUrl, "GET", "/api/log")).json;
+  expect(log.entries.find((e: any) => e.task_id === root.id).interview).toEqual({ role: "root", root_id: root.id });
+  expect((await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: answer, comment: "redo it" })).status).toBe(409);
+});
+
 it("出題で立った受験者は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;

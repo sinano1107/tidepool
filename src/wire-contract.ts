@@ -234,6 +234,8 @@ export interface WireContract {
       objections: Array<{ comment: string; session_id: number }>;
       /** エントリを含む worker session の worker_spawned の id(src/triage.ts の LogEntry)。窓の外なら null。 */
       session_event_id: number | null;
+      /** Interview の印(src/triage.ts の LogEntry)。受験者の行は一覧に出ないので、印が付くのは root の行だけ。 */
+      interview: { role: "examinee" | "root"; root_id: string } | null;
     }>;
     cursor: number;
   };

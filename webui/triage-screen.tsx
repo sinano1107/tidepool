@@ -76,6 +76,7 @@ type TpLogEntry = NonNullable<import('../design-system/components/board/LogEntry
   workspace?: string | null;
   pendingObjections?: string[];
   bundledObjections?: string[];
+  interview?: WireContract['GET /api/log']['entries'][number]['interview'];
 };
 /** scratchpad の1行(サーバが id を振る)。 */
 interface TpScratchLine {
@@ -673,6 +674,7 @@ const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], ope
   memoryEntries: e.payload.kind === 'memory_written' ? [...e.payload.created, ...e.payload.invalidated] : undefined,
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
+  interview: e.interview,
 });
 
 // The entry keys with a commit-pending objection (ADR 0085): the union of
@@ -988,6 +990,10 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           const hasHandoff = l.kind === 'completion' && l.handoffPresent;
           return (
             <div key={k} data-entry-id={l.unread ? l.id : undefined}>
+              {/* ADR 0268 決定6: root の行の題は probe の題なので、Interview の行だと印で言う */}
+              {l.interview?.role === 'root' && (
+                <div style={{ padding: '6px 12px 0', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>interview</div>
+              )}
               <LogEntry
                 entry={{
                   ...l,
@@ -1028,6 +1034,11 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                   {objecting !== k && (
                     <button onClick={() => toggleObjecting(k)} style={{ background: 'none', border: 'none', color: 'var(--coral-4)', fontSize: 'var(--text-xs)', cursor: 'pointer', padding: '8px 0 0', display: 'block' }}>object to this entry…</button>
                   )}
+                </div>
+              )}
+              {objecting === k && l.interview?.role === 'root' && (
+                <div style={{ padding: '10px 12px 0', background: 'var(--coral-1)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
+                  An Interview entry: objecting raises no repair task — only attribution and an RCA.
                 </div>
               )}
               {objecting === k && (

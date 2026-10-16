@@ -12,6 +12,7 @@ import {
   isDecisionLogEntry,
   listEventsOfKinds,
   parseEventRow,
+  SKIM_TASK_SQL,
   sessionSpawnOf,
   taskDecisionLog,
 } from "./events.js";
@@ -130,6 +131,10 @@ export function raiseObjection(
 ): number {
   if (whyBlank(comment)) throw new TriageError("an objection carries a direction comment");
   const entry = requireLogEntry(db, entryId);
+  // ADR 0268 決定1: 受験者の答案は root の採点1本で観測する —— 採点への不服は root の行へ
+  if (getTask(db, entry.task_id)?.interview_target_id != null) {
+    throw new DomainError("this entry belongs to an Interview's answer task, which is judged only by the Interview's scoring — object to the Interview root's entries instead");
+  }
   const open = triageActivity(db, now, true)!;
   return appendEvent(db, {
     taskId: entry.task_id,
@@ -668,6 +673,8 @@ export interface LogEntry extends DecisionLogEntry {
   evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
+  /** Interview の印(ADR 0268 決定6)。受験者の行は一覧に出ないので、運ぶのは root の行だけ。 */
+  interview: { role: "examinee" | "root"; root_id: string } | null;
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -675,15 +682,16 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   // an inner join is safe here only because every HUMAN_FACING_KIND is
   // task-scoped (asserted against BOARD_SCOPED_KINDS next to HUMAN_FACING_KINDS) and tasks are never deleted
   // (append-only) — no log entry can end up orphaned, so this can never
-  // silently drop one
+  // silently drop one. 受験者の行は流し読みに出さない —— root の history と task の面では読める(ADR 0268 決定1)
   const rows = db
     .prepare(
-      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace
+      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace,
+              EXISTS (SELECT 1 FROM interview_targets WHERE task_id = tasks.id) AS interview_root
          FROM events JOIN tasks ON tasks.id = events.task_id
-        WHERE events.kind IN (${placeholders}) ORDER BY events.id`,
+        WHERE events.kind IN (${placeholders}) AND ${SKIM_TASK_SQL} ORDER BY events.id`,
     )
     .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
-    .map((r) => parseEventRow<{ workspace: string | null }>(r));
+    .map((r) => parseEventRow<{ workspace: string | null; interview_root: number }>(r));
   // a second, flat query rather than N+1 per entry — grouped in JS below
   const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
   for (const o of entryObjections(db)) {
@@ -695,11 +703,12 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
   const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
-  return rows.flatMap((entry) => {
+  return rows.flatMap(({ interview_root, ...entry }) => {
     if (!isDecisionLogEntry(entry)) return []; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
     const attribution = attributions.get(entry.id);
     return {
       ...entry,
+      interview: interview_root ? { role: "root" as const, root_id: entry.task_id } : null,
       objections: objectionsByEntry.get(entry.id) ?? [],
       cause: attribution?.cause ?? null,
       entries: attribution?.entries ?? null,

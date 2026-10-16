@@ -1992,7 +1992,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       const id = raiseObjection(db, parsed.data.entry_id, parsed.data.comment, clock.now());
       sendJson(res.status(201), { id });
     } catch (err) {
-      if (err instanceof TriageError) {
+      if (err instanceof TriageError || err instanceof DomainError) {
         sendJson(res.status(409), { error: err.message });
         return;
       }

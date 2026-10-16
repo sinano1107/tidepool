@@ -2,17 +2,19 @@ import { expect, it } from "vitest";
 import type { AdvisorCeiling } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
+import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf, tierNames } from "../src/tier.js";
+import { entryObjections, listLog, raiseObjection } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
@@ -677,7 +679,8 @@ it("着地しない受験者は、workspace の削除の扉が数える「着地
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
   // root も reef を指すので、採点完了させてから数える
   completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child!.id, outcome: "accepted" }], handoff: FINDINGS }, "auditor", new Date(0), "worker");
-  registerTask(db, { type: "work", ...CHILD, parent_id: child!.id, workspace: "other" }, new Date(0), ...HUMAN_WEBUI);
+  // 受験者の下に生えるのは question だけ(ADR 0268 決定5)
+  failureQuestion(db, child!.id, new Date(0));
   expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
 });
 
@@ -752,4 +755,55 @@ it("出題済みの root に届く拒否(decompose・complete_task・2度目の�
     expect(refused).toThrow(/report_broken_probe/);
     expect(refused).not.toThrow(/escalate|pose_probe/);
   }
+});
+
+/** 受験者の判断行・記憶の書き込み・完了の3件、root の出題の行、本番の work の判断行。 */
+function examineeLogBoard() {
+  const { db, root } = registerInterview();
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const examineeEntries = [
+    appendEvent(db, { taskId: child.id, workerId: "tako", origin: "worker", at: new Date(0), payload: { kind: "decision_logged", line: "use a hand-written lexer" } }),
+    appendEvent(db, { taskId: child.id, workerId: "tako", origin: "worker", at: new Date(0), payload: { kind: "memory_written", line: "wrote knowledge #1", created: [1], invalidated: [] } }),
+  ];
+  completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  examineeEntries.push(taskDecisionLog(db, child.id).at(-1)!.id);
+  const [rootEntry] = taskDecisionLog(db, root.id);
+  const production = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const productionEntry = appendEvent(db, { taskId: production.id, workerId: "tako", origin: "worker", at: new Date(0), payload: { kind: "decision_logged", line: "split the parser" } });
+  return { db, root, child, examineeEntries, rootEntry: rootEntry!.id, productionEntry };
+}
+
+it("受験者の判断行・完了・記憶の書き込みへの異議は拒まれ何も残らない —— 本番の work と Interview の root のエントリは今どおり異議を受ける(ADR 0268 決定1)", () => {
+  const { db, examineeEntries, rootEntry, productionEntry } = examineeLogBoard();
+  for (const id of examineeEntries) expect(() => raiseObjection(db, id, "redo it", new Date(1))).toThrow(DomainError);
+  expect(entryObjections(db)).toEqual([]);
+  raiseObjection(db, rootEntry, "the rubric is too loose", new Date(1));
+  raiseObjection(db, productionEntry, "redo it", new Date(1));
+  expect(entryObjections(db).map((o) => o.entry_id)).toEqual([rootEntry, productionEntry]);
+});
+
+it("流し読みの一覧に受験者の行は無く、root の行は Interview の印を運ぶ —— 受験者の task の判断ログには今どおり出る(ADR 0268 決定1・6)", () => {
+  const { db, root, child, examineeEntries, rootEntry, productionEntry } = examineeLogBoard();
+  expect(listLog(db).map((entry) => [entry.id, entry.interview])).toEqual([
+    [rootEntry, { role: "root", root_id: root.id }],
+    [productionEntry, null],
+  ]);
+  expect(taskDecisionLog(db, child.id).map((entry) => entry.id)).toEqual(examineeEntries);
+});
+
+it("朝の digest の新着ログ数は受験者の行を数えない(ADR 0268 決定1)", () => {
+  const { db } = examineeLogBoard();
+  expect(buildMorningDigest(db).logCount).toBe(2);
+});
+
+it("受験者を親にした work と review の登録は扉を問わず拒まれ、question は通る —— root を親にした review は通る(ADR 0268 決定5)", () => {
+  const { db, root } = registerInterview();
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const doors = [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const;
+  for (const type of ["work", "review"] as const) {
+    for (const [workerId, origin] of doors) expect(() => registerTask(db, { type, ...CHILD, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
+  }
+  expect(listChildren(db, child.id)).toEqual([]);
+  expect(failureQuestion(db, child.id, new Date(0)).parent_id).toBe(child.id);
+  expect(registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI).parent_id).toBe(root.id);
 });

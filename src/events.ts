@@ -732,6 +732,9 @@ export const HUMAN_FACING_KINDS = ["decision_logged", "task_completed", "premise
   BoardScopedKind
 >[];
 
+/** 流し読み(listLog と push の未読数)に出る行の task の条件。`tasks` を join した SQL に置く —— 受験者の行は出さない(ADR 0268 決定1)。 */
+export const SKIM_TASK_SQL = "tasks.interview_target_id IS NULL";
+
 export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
   task_id: string;
   payload: Extract<EventRow["payload"], { kind: (typeof HUMAN_FACING_KINDS)[number] }>;
