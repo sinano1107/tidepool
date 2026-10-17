@@ -104,3 +104,27 @@ it.each(["直接 cancel", "failure question の abandon"] as const)("捨てる d
 
   expect([root, doneChild].map((task) => getTask(db, task!.id)!.status)).toEqual(["cancelled", "done"]);
 });
+
+it("先の abandon で cancelled になった子の下の done の work は、後の直接 cancel の捨てるものに数えない —— 成果はもう捨てられている", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [doneSibling, failed, openSibling] = split(root, [{ title: "s1" }, { title: "f" }, { title: "s2" }]);
+  done(doneSibling!);
+  const [underSibling] = split(openSibling!, [{ title: "s2a" }]);
+  done(underSibling!);
+  answerQuestionViaWebui(db, failureQuestion(db, failed!.id, NOW), ["abandon"], NOW);
+
+  expect(getTask(db, openSibling!.id)!.status).toBe("cancelled");
+  expect(directCancelDiscards(db, getTask(db, root.id)!, undefined)).toEqual([{ id: doneSibling!.id, title: "s1" }]);
+});
+
+it("答えの済んだ failure question は捨てるものを見せない —— cancel option はもう選べない", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [doneChild] = split(root, [{ title: "a" }, { title: "b" }]);
+  done(doneChild!);
+  const question = failureQuestion(db, root.id, NOW);
+  answerQuestionViaWebui(db, question, ["retry"], NOW);
+
+  expect(questionCancelDiscards(db, getTask(db, question.id)!)).toEqual([]);
+});

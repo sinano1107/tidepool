@@ -328,9 +328,10 @@ const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and 
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const tierDescriptions = tierFieldDescriptions(deps.db);
+  // 閉じた根に塞がれた子(ADR 0265 決定6)—— scheduler と同じ1本
+  const closedRoot = closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace));
   /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定5)。閉じた根の述語は cancel の門と同じ1本。 */
-  const discardsOf = (taskId: string) =>
-    directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)));
+  const discardsOf = (taskId: string) => directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRoot);
   const server = floorEveryResponse(
     rejectUnknownArguments(
       new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
@@ -384,8 +385,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           deps.auditorName,
           quarantineStops(deps.db),
           skippedByEntries(deps),
-          // 閉じた根に塞がれた子(ADR 0265 決定6)—— scheduler と同じ1本
-          closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
+          closedRoot,
           deps.interviewerName,
         );
         return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });

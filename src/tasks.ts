@@ -1517,11 +1517,12 @@ export interface Discard {
 
 /** ADR 0271 決定4: cancel が cancelled にする根たちの配下で、成果が捨てられる done の work —— agent が実行したもの(Executor が
  *  人間でない)だけを盤面の順で。範囲は cascade と同じ述語(`survivesParentCancelSql` の付帯子の下へは降りない)で、
- *  受験者は親を持たないので parent_id の系譜に入らない。表示時に読み、保存しない。 */
+ *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
+ *  系譜に入らない。表示時に読み、保存しない。 */
 function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
   const rows = db
     .prepare(
-      `${subtreeSql("value FROM json_each(@roots)", `NOT ${survivesParentCancelSql("c")}`)}
+      `${subtreeSql("value FROM json_each(@roots)", `NOT ${survivesParentCancelSql("c")} AND c.status <> 'cancelled'`)}
        SELECT t.id, t.title, t.github_issue_number FROM tasks t JOIN subtree s ON s.id = t.id
        WHERE t.type = 'work' AND t.status = 'done'
          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.worker_id = @human)
@@ -1533,14 +1534,22 @@ function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
 
 /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定4・5)。直接 cancel できない task は空。 */
 export function directCancelDiscards(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): Discard[] {
-  const cancellable = !isSettled(task.status) && task.status !== "in_progress" && inDirectCancelScope(db, task, closedRootOf);
-  return cancellable ? cancelDiscards(db, [task.id]) : [];
+  // 直接 cancel の門と同じ1本で判定する —— 門が拒む task は cancel されないので捨てるものも無い
+  try {
+    assertDirectlyCancellableScope(db, task, closedRootOf);
+  } catch (error) {
+    if (error instanceof DomainError) return [];
+    throw error;
+  }
+  return cancelDiscards(db, [task.id]);
 }
 
 /** failure / premise-breach question の cancel option で捨てられる done の work(ADR 0271 決定4)—— 失敗 task の abandon の範囲で。
- *  cancel option を持たない question は空。 */
-export function questionCancelDiscards(db: Db, question: Pick<Task, "parent_id" | "question_cancel_option">): Discard[] {
-  return question.question_cancel_option === null ? [] : cancelDiscards(db, abandonScopeIds(db, question.parent_id!));
+ *  cancel option を持たない question と、答えの済んだ question は空。 */
+export function questionCancelDiscards(db: Db, question: Pick<Task, "id" | "parent_id" | "question_cancel_option">): Discard[] {
+  // 読み口(questionAnnotations)は表示用の status を持つ行を渡すので、答えの済みは保存された status で見る
+  if (question.question_cancel_option === null || getTask(db, question.id)!.status !== "todo") return [];
+  return cancelDiscards(db, abandonScopeIds(db, question.parent_id!));
 }
 
 /** root の retry(ADR 0267 決定3・4): 出題済みで未決着の Interview の root を人間の直接 cancel と同じ門と波及で cancel し、報告の
@@ -2869,15 +2878,11 @@ function assertHumanEditableScope(db: Db, task: Task): void {
  *  judgment and also stay out (ADR 0211). Every one of these comes into scope once it is stranded under a
  *  root whose PR was closed outside the board — the same one predicate pickup skips by, which reaches any
  *  todo the lineage returns to that root's branch, not only its attached children (ADR 0265 決定6). */
-function inDirectCancelScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): boolean {
+function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
   // 受験者は親を持たないが root ではない —— root の agent が登録した答案で、外すのは failure の abandon か対象外し(ADR 0267 決定1)
   const root = task.parent_id === null && task.interview_target_id === null && task.type !== "question";
-  return getTextAuthor(db, task.id) === HUMAN_WORKER_ID || root || !!closedRootOf?.(task);
-}
-
-/** 上の範囲に、unsettled で in_progress でないことを足した門。discards の読み(`directCancelDiscards`)も同じ2つで判定する。 */
-function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
-  if (!inDirectCancelScope(db, task, closedRootOf)) {
+  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || root || !!closedRootOf?.(task);
+  if (!inScope) {
     throw new DomainError(
       "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
         "was closed outside the board can be directly cancelled — an agent-authored child (including an approved child), " +
