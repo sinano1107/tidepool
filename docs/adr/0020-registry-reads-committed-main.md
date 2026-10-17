@@ -43,3 +43,9 @@ Considered options:
 - **checkout HEAD を読む** — HEAD はタスクブランチに動くため、読み取りが「今どのブランチにいるか」という偶然に依存する。
 - **origin/HEAD(git ネイティブの default branch)に追従する** — clone 時に固定され GitHub 側の変更に自動追従しない。静かに古い値を読む罠は main 固定より悪い。registry は盤面自身の資源であり、規約(main)を課せる立場。
 - **参照ブランチを workspaces.yaml の branch フィールド(issue #27)に置く** — 床が、その床が守るはずのデータの中に入る + 自己参照。#27 自体は一般 workspace の保護ブランチ設定としてこの決定と無干渉に生きる。
+
+## 追記: 組み込み agent の当時版は盤面の code から引く(2026-10-17 の grilling、issue #2156 / ADR 0270)
+
+組み込み agent(ADR 0117)の本文は registry commit に無い。その当時版は `worker_spawned.definition_version` が運ぶ本文の内容 hash で、
+盤面の code が持つ履歴表から引く(ADR 0270)。束ねの鍵は `(registry_commit, definition_version)` —— 上の追記「1 版に畳まない」は、
+registry が同じで盤面だけが更新された spawn にも当たる。表に無い hash は unresolved と同じ欠落宣言。

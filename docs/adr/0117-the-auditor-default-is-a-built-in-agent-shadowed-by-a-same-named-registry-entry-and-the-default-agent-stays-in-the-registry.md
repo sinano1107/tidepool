@@ -47,3 +47,8 @@ Auditor の registry エントリに何が残っているかを一つずつ当�
 
 本文を持つ最初の組み込み agent は Interviewer `suzumedai` 🐠(ADR 0269)。機構は決定1・2 のまま(review 専用、profile は reviewer 定数、
 shadow 可)で、役割ポインタは決定4 の2本に `TIDEPOOL_INTERVIEWER` が並ぶ。帰結の「専門 agent の本文の存在価値」(#567)は、これが走れば測れる。
+
+## 追記(2026-10-17 の grilling、issue #2156 / ADR 0270)
+
+帰結の 2026-09-16 追記が預けた「盤面の版」は ADR 0270 で決まった: 組み込みの当時版の鍵は本文の内容 hash で、`definition_version` の
+固定文字列 `"built-in"` は廃止、盤面は本文の履歴表を code に持つ。
