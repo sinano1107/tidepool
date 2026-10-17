@@ -77,3 +77,10 @@ root の checkout の保護ブランチの ref と HEAD の merge-base —— HE
 保護ブランチ上の sha にするため、pickup の ref の写し(baseline)でないのは盤面自身の書き込みで畳まれるためである。
 全 pin の子が同じ sha から分岐すること(決定6 の主眼)は変わらない。
 退けた形: 着地の収束の写しの更新に session の門を足す —— landing 側を変える案で、出題側で分岐元を記録すれば足りる。
+
+## 追記5(2026-10-17 の triage、issue #2021)
+
+root の workspace が解決できない(registry drift —— ADR 0009 が設計で認める経路)まま出題すると、head の無い出題が残り、受験者の
+pickup は head を引けず workspace の quarantine に落ち続け、直す道が Interview の retry しか無かった。出題は head を記録できないときに
+**拒む**: workspace を解決できなければ verb は domain error で止まり(session は続く)、root は escalate で人間に渡す。退けた形:
+head の無い出題を通し retry で直す —— 受験者が立ってから pickup のたびに同じ quarantine に戻るのは、root が出題の時点で知れた不備である。
