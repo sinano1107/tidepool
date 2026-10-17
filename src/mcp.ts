@@ -60,6 +60,7 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
+  ARTIFACT_DISCARDED_NOTICE,
   assertTargetsRunnable,
   assigneeNeedsApproval,
   completeInterview,
@@ -75,6 +76,7 @@ import {
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
   interviewTargets,
+  isArtifactDiscarded,
   joinHistory,
   listExaminees,
   logDecision,
@@ -500,7 +502,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
-  // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)
+  // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
+  // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -535,6 +538,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(await taskContext(deps, task)),
             type: task.type,
             ...(targets && { interview_targets: targets }),
+            // ADR 0271 決定2: 分解の verb を伏せた理由(spawn の文面と同じ1行)
+            ...(isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {

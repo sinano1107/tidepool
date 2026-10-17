@@ -16,10 +16,10 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { getTask, listBoard, listChildren, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, listBoard, listChildren, logDecision, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { commitTriage, raiseObjection } from "../src/triage.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import {
@@ -31,7 +31,17 @@ import {
   passthroughContainers,
   recordingSpawn,
 } from "./fakes.js";
-import { bootTidepool, examineeRootId, HUMAN_WEBUI, mcpClient, quarantineQuestion, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import {
+  bootTidepool,
+  decomposeTaskViaWorker,
+  examineeRootId,
+  FULL_HANDOFF,
+  HUMAN_WEBUI,
+  mcpClient,
+  quarantineQuestion,
+  type Tidepool,
+  WORKER_SPAWNED,
+} from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -90,6 +100,20 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   raiseObjection(db, event_id, "undo it", at);
   commitTriage(db, at);
   return listChildren(db, objected.id).find((child) => child.type === "work")!;
+}
+
+/** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
+function discardedRca(db: ReturnType<typeof openDb>) {
+  const at = new Date("2026-08-24T00:00:00.000Z");
+  const root = task(db, "discarded root");
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "c", purpose: "p", completion_criteria: "c" }] }, "codex-agent", at);
+  const entry = logDecision(db, child!, "codex-agent's call", "codex-agent", at, "worker");
+  completeTask(db, child!, FULL_HANDOFF, "codex-agent", at, "worker");
+  startTriage(db, at);
+  raiseObjection(db, entry, "redo it", at);
+  commitTriage(db, at);
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
+  return listChildren(db, child!.id).find((c) => c.title.startsWith("rca (self)"))!;
 }
 
 /** `-c <prefix>…` の引数をそのまま返す。 */
@@ -478,6 +502,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の pin の子", pinnedChild],
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
+    ["祖先の cancel の下の RCA", discardedRca],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     await f.start(register(f.db));
@@ -648,6 +673,14 @@ describe("CodexWorker (ADR 0098)", () => {
       `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n## Roster\n\ndeckhand — General work agent for the tidepool board\n\n## Board doctrine`,
     );
     expect(review).not.toContain("Prefer reversible actions.");
+  });
+
+  it("祖先の cancel の下の RCA の developer_instructions は、reviewer の Authority の文を変えずその直後に成果が捨てられた旨の1行を置く(ADR 0271 決定2)", async () => {
+    const f = await fixture();
+    await f.start(discardedRca(f.db));
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain(
+      `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${ARTIFACT_DISCARDED_NOTICE}\n\n## Roster`,
+    );
   });
 
   it("当事者レビューは当時版の定義を証拠として持ち、節は 定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory の順に並ぶ(ADR 0020 part 4 / ADR 0157 決定1)", async () => {

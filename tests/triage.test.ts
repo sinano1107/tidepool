@@ -9,6 +9,7 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
+  decomposeTaskViaWorker,
   FIXTURE_SPAWNED_EVENT_ID,
   FIXTURE_TASK,
   FULL_HANDOFF,
@@ -1043,19 +1044,23 @@ it.each([
 });
 
 it.each([
-  ["cancelled", ["rca (self): t", "rca (auditor): t"]],
-  ["done", ["repair: t", "rca (self): t", "rca (auditor): t"]],
-  ["in_progress", ["repair: t", "rca (self): t", "rca (auditor): t"]],
-] as const)("%s の本番 work への異議の commit が立てる子は %j —— 修理子は捨てた成果には立たず、帰責 event は状態に依らない(ADR 0268 決定3)", (status, titles) => {
+  ["cancelled", "", ["rca (self): t", "rca (auditor): t"]],
+  ["done", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["in_progress", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["done", "・cancelled の祖先あり", ["rca (self): t", "rca (auditor): t"]],
+] as const)("%s%s の本番 work への異議の commit が立てる子は %j —— 修理子は捨てた成果には立たず、帰責 event は状態に依らない(ADR 0268 決定3 / ADR 0271 決定1・2)", (status, ancestor, titles) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-16T00:00:00.000Z");
-  const registered = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" };
+  const root = ancestor ? registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI) : undefined;
+  const registered = root ? decomposeTaskViaWorker(db, root, { reason: "split", children: [spec] }, "deckhand", at)[0]! : registerTask(db, { type: "work", ...spec }, at, ...HUMAN_WEBUI);
   const entry = logDecision(db, registered, "deckhand's call", "deckhand", at, "worker");
   if (status === "cancelled") cancelTaskDirectly(db, registered, null, at, {}, "webui");
   else {
     const running = pickupTask(db, registered, "deckhand", at)!;
     if (status === "done") completeTask(db, running, FULL_HANDOFF, "deckhand", at, "worker");
   }
+  if (root) cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
   expect(getTask(db, registered.id)!.status).toBe(status);
   startTriage(db, at);
   raiseObjection(db, entry, "redo it", at);

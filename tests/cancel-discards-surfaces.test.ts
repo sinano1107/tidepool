@@ -1,15 +1,19 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { completeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
   answerQuestionViaWebui,
   api,
   bootTidepool,
+  callAsTask,
   decomposeTaskViaWorker,
   FULL_HANDOFF,
   failureQuestion,
   GIT_FIXTURE_TEST_TIMEOUT,
   HUMAN_WEBUI,
   managementMcpClient,
+  mcpClient,
+  nextPoll,
   type Tidepool,
 } from "./harness.js";
 
@@ -51,4 +55,34 @@ it("GET /api/tasks/:id・question の読み・管理MCP の get_task / list_boar
   } finally {
     await client.close();
   }
+});
+
+it("祖先の cancel の下の RCA の worker MCP は tools/list に分解の verb を出さず、get_current_task は成果が捨てられた旨の1行を運ぶ —— 祖先の cancel の前は今どおり(ADR 0271 決定2)", async () => {
+  t = await bootTidepool();
+  const now = t.clock.now();
+  const root = registerTask(t.db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
+  const [a] = decomposeTaskViaWorker(t.db, root, { reason: "split", children: [{ title: "a", purpose: "p", completion_criteria: "c" }] }, "deckhand", now);
+  const entry = logDecision(t.db, a!, "deckhand's call", "deckhand", now, "worker");
+  completeTask(t.db, a!, FULL_HANDOFF, "deckhand", now, "worker");
+  startTriage(t.db, now);
+  raiseObjection(t.db, entry, "redo it", now);
+  commitTriage(t.db, now, [], new Map());
+  const rca = listChildren(t.db, a!.id).find((child) => child.title.startsWith("rca (self)"))!;
+  const tools = async () => {
+    const client = await mcpClient(t.mcpBaseUrl, rca.id);
+    try {
+      return (await client.listTools()).tools.map((tool) => tool.name).sort();
+    } finally {
+      await client.close();
+    }
+  };
+  const live = await tools();
+  expect(live).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
+
+  cancelTaskDirectly(t.db, getTask(t.db, root.id)!, null, t.clock.now(), {}, "webui");
+  await nextPoll(t);
+
+  expect(await tools()).toEqual(live.filter((name) => name !== "decompose" && name !== "redecompose"));
+  expect(t.worker.started.at(-1)!.id).toBe(rca.id);
+  expect(JSON.parse((await callAsTask(t, rca.id, "get_current_task", {})).content[0].text).artifact_discarded).toBe(ARTIFACT_DISCARDED_NOTICE);
 });

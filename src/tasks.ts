@@ -436,9 +436,6 @@ export interface InterviewTarget {
   tier: Tier;
 }
 
-/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
- *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
- *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
@@ -446,6 +443,9 @@ function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "
   }
 }
 
+/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
+ *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
+ *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
 export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
   if (input.interview_targets === undefined) return;
   if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
@@ -473,7 +473,8 @@ export interface TaskVerbSwap {
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
  *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、受験者は記憶を書く verb も伏せ(ADR 0268 決定2)、
  *  root は complete_task も伏せて、出題前は出題の verb を、
- *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。 */
+ *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。
+ *  成果が捨てられた task(そこで走るのは今は RCA だけ)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   if (interviewTargets(db, taskId) !== null) {
@@ -481,6 +482,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
     if (interviewProbe(db, taskId) === null) return { withheld, added: ["pose_probe"] };
     return { withheld, added: brokenProbeReported(db, taskId) ? ["complete_interview"] : ["complete_interview", "report_broken_probe"] };
   }
+  if (isArtifactDiscarded(db, taskId)) return { withheld: ["decompose", "redecompose"], added: [] };
   return { withheld: [], added: [] };
 }
 
@@ -892,6 +894,7 @@ export function registerTask(
   assertReviewByDistinct(input.review_by);
   assertInterviewTargets(db, input);
   assertNoExamineeChild(db, input);
+  assertArtifactNotDiscarded(db, input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -2677,6 +2680,8 @@ export function decomposeTask(
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
+  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2)
+  assertArtifactNotDiscarded(db, { type: "work", parent_id: parent.id });
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -3127,23 +3132,44 @@ function survivesParentCancelSql(rowRef: string): string {
       AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
 }
 
-/** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。 */
+/** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。
+ *  `depth` は起点からの段数(親が 1)。 */
 export function ancestorsSql(taskRef: string): string {
-  return `WITH RECURSIVE ancestors(id) AS (
-      SELECT parent_id FROM tasks WHERE id = ${taskRef}
-      UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)`;
+  return `WITH RECURSIVE ancestors(id, depth) AS (
+      SELECT parent_id, 1 FROM tasks WHERE id = ${taskRef}
+      UNION SELECT t.parent_id, a.depth + 1 FROM tasks t JOIN ancestors a ON t.id = a.id)`;
 }
 
 /** 成果が捨てられた task か(ADR 0271 決定1): root との間(root を含み自身を除く)に cancelled の work の祖先を挟む。
  *  ADR 0239 決定1 と同じ線で、状態だけを読む。`parent_id` だけをたどる —— 受験者は親を持たないので Interview の root へは渡らない。 */
 export function isArtifactDiscarded(db: Db, taskId: string): boolean {
-  const row = db
+  return discardingAncestor(db, taskId) !== undefined;
+}
+
+/** 成果が捨てられた task で走る review に盤面が注入する1行(ADR 0271 決定2)。`get_current_task` の envelope と spawn の
+ *  文面が同じこれを運ぶ —— 分解の verb を伏せるだけでは reviewer の guidance「findings become repair tasks」が宙に浮く。 */
+export const ARTIFACT_DISCARDED_NOTICE =
+  "The artifact under review was discarded by a cancel in this task's lineage: no repair task can stand here, so write findings only.";
+
+/** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
+function discardingAncestor(db: Db, taskId: string): Task | undefined {
+  const id = db
     .prepare(
       `${ancestorsSql("?")}
-       SELECT 1 FROM tasks WHERE id IN (SELECT id FROM ancestors) AND type = 'work' AND status = 'cancelled' LIMIT 1`,
+       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND t.status = 'cancelled' ORDER BY a.depth DESC LIMIT 1`,
     )
-    .get(taskId);
-  return row !== undefined;
+    .pluck()
+    .get(taskId) as string | undefined;
+  return id === undefined ? undefined : getTask(db, id);
+}
+
+/** ADR 0271 決定2: 成果が捨てられた task の下に work は生えない(扉を問わず、ADR 0268 決定5 と同じ形)。 */
+function assertArtifactNotDiscarded(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
+  if (input.parent_id === undefined || input.type !== "work") return;
+  const ancestor = discardingAncestor(db, input.parent_id);
+  if (ancestor) {
+    throw new DomainError(`no work task grows here: the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`);
+  }
 }
 
 /** The parent this row is holding up, or NULL — `listYourTasks` and `questionBlocking` share it. */

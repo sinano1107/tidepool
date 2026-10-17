@@ -21,9 +21,22 @@ import {
   registerTask,
   type Task,
   taskHistoryRows,
+  taskVerbSwap,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { answerQuestionViaWebui, closedRootTree, decomposedChild, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI } from "./harness.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import {
+  answerQuestionViaWebui,
+  closedRootTree,
+  decomposedChild,
+  decomposeTaskViaWorker,
+  FULL_HANDOFF,
+  failureQuestion,
+  GIT_FIXTURE_TEST_TIMEOUT,
+  HOUR,
+  HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
+} from "./harness.js";
 
 /** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
  *  root(question を除く)」、Edit は「文面の書き手が人間の task」。 */
@@ -375,4 +388,59 @@ it("成果が捨てられた task は cancelled の work の祖先を挟む task
   expect(isArtifactDiscarded(db, failed.id)).toBe(false);
   expect(isArtifactDiscarded(db, done.id)).toBe(false);
   expect(isArtifactDiscarded(db, review.id)).toBe(false);
+});
+
+it("cancelled の work の祖先を挟む task を親にした work の登録は、registerTask・worker の decompose・人間の decompose のどれからも cancelled の祖先を名指す DomainError で拒まれ、question は通る —— 生きた系譜の task の下は今どおり(ADR 0271 決定2)", () => {
+  db = openDb(":memory:");
+  const { target, child, rcas } = doneChildrenWithAttachments(db);
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  const rca = getTask(db, rcas[0]!.id)!;
+  const discarded = new RegExp(`cancel of ancestor "A" \\(${target.id}\\) discarded`);
+  const split = { reason: "repair", children: [{ title: "fix", purpose: "p", completion_criteria: "c" }] };
+
+  for (const parent of [child, rca]) {
+    for (const [workerId, origin] of [HUMAN_WEBUI, ["auditor", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
+      expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, workerId, origin)).toThrow(discarded);
+    }
+  }
+  expect(() => decomposeTaskViaWorker(db, rca, split, "auditor", NOW)).toThrow(discarded);
+  expect(() => humanDecomposeTaskViaWebui(db, rca, split, NOW)).toThrow(discarded);
+  expect(listChildren(db, rca.id)).toEqual([]);
+  expect(failureQuestion(db, rca.id, NOW).parent_id).toBe(rca.id);
+
+  const live = registerTask(db, { type: "work", title: "L", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
+});
+
+it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "R", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const mid = registerTask(db, { type: "work", title: "M", purpose: "p", completion_criteria: "c", parent_id: root.id }, NOW, ...HUMAN_WEBUI);
+  const leaf = registerTask(db, { type: "review", title: "Q", purpose: "p", completion_criteria: "c", parent_id: mid.id }, NOW, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, mid, null, NOW, {}, "webui");
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
+
+  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: leaf.id }, NOW, BOARD_WORKER_ID, "board")).toThrow(
+    new RegExp(`cancel of ancestor "R" \\(${root.id}\\) discarded`),
+  );
+});
+
+it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2)", () => {
+  db = openDb(":memory:");
+  const { target, rcas } = doneChildrenWithAttachments(db);
+  expect(taskVerbSwap(db, rcas[0]!.id)).toEqual({ withheld: [], added: [] });
+
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  const cancelled = registerTask(db, { type: "work", title: "X", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const entry = logDecision(db, cancelled, "deckhand's call", "deckhand", NOW, "worker");
+  cancelTaskDirectly(db, cancelled, null, NOW, {}, "webui");
+  startTriage(db, NOW);
+  raiseObjection(db, entry, "redo it", NOW);
+  commitTriage(db, NOW, [], new Map());
+
+  const underCancel = [...rcas, ...listChildren(db, cancelled.id)];
+  expect(underCancel.map((task) => task.title)).toEqual(["rca (self): B", "rca (auditor): B", "rca (self): X", "rca (auditor): X"]);
+  for (const rca of underCancel) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  const { parent, done, review } = doneSiblingOfFailed(db);
+  for (const task of [target, cancelled, parent, done, review]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
 });
