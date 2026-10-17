@@ -3467,6 +3467,9 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(`### Live for your objected entry #${known}\n`);
+    expect(prompt).toContain(
+      "recorded at the commits you were spawned from (for a board built-in, as the board's code carried it at the version you were spawned under), ",
+    );
     expect(prompt).not.toContain(`### Live for your objected entry #${unknown}\n`);
     expect(prompt).toContain(
       `no definition version could be resolved for your objected entry #${unknown} ` +
