@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { completeTask, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { resolveTaskBranchLineage } from "../src/workspace.js";
 import {
   api,
@@ -71,7 +72,7 @@ it("memory_repair は review と同じ lineage —— ブランチを持たず�
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: workspace.name }, new Date(0), ...HUMAN_WEBUI);
   const lineage = (type: "work" | "review" | "memory_repair") =>
-    resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), ...HUMAN_WEBUI)).branch;
+    resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), BOARD_WORKER_ID, "board")).branch;
   expect(lineage("memory_repair")).toBeUndefined();
 
   git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");

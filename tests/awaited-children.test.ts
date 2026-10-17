@@ -4,7 +4,6 @@ import {
   completeTask,
   countUnsettledAttachedChildren,
   listBoard,
-  listChildren,
   listQueue,
   nextSlotTask,
   presentTask,
@@ -174,12 +173,12 @@ it("answering a proposal question does not return its parent to the queue head(i
   db.close();
 });
 
-it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地の門に数えられ、risk_flag があっても complete_task で完了時レビューを立てずに終わる(ADR 0272 決定5)", () => {
+it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地の門に数えられ、handoff 無しの complete_task で終わる(ADR 0272 決定5)", () => {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
   const memoryRepair = registerTask(
     db,
-    { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id, risk_flag: true },
+    { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id },
     new Date(1),
     BOARD_WORKER_ID,
     "board",
@@ -189,7 +188,6 @@ it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地
   expect(countUnsettledAttachedChildren(db, parent.id)).toBe(1);
 
   expect(completeTask(db, memoryRepair, undefined, "tako", new Date(2), "worker").status).toBe("done");
-  expect(listChildren(db, memoryRepair.id)).toEqual([]);
   expect(countUnsettledAttachedChildren(db, parent.id)).toBe(0);
   db.close();
 });

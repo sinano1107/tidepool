@@ -325,6 +325,20 @@ it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
   },
 );
 
+it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
+  "祖先の%sで、done の子の下の memory_repair は todo のまま残り、同じ子の work の修理子は cancelled(ADR 0272 決定1・6 / ADR 0271 決定3)",
+  (path) => {
+    db = openDb(":memory:");
+    const { target, child, repair } = doneChildrenWithAttachments(db);
+    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair: B", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, BOARD_WORKER_ID, "board");
+
+    if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+    else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
+
+    expect([target, repair, memoryRepair].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled", "todo"]);
+  },
+);
+
 /** 人間の root P を agent が同じ判断で S1・S2 に分解し(S1 は review_flag)、S1 だけ done にする。 */
 function doneSiblingOfFailed(db: Db) {
   const parent = registerTask(db, { type: "work", title: "P", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
@@ -428,6 +442,18 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
 
   const live = registerTask(db, { type: "work", title: "L", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
+});
+
+it("cancelled の work の祖先を挟む task を親にした memory_repair の登録は、祖先の cancel の後でも ADR 0271 決定2 の床に当たらず通る —— 床が拒むのは work だけ(ADR 0272 決定6)", () => {
+  db = openDb(":memory:");
+  const { target, child, rcas } = doneChildrenWithAttachments(db);
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+
+  for (const parent of [child, getTask(db, rcas[0]!.id)!]) {
+    expect(isArtifactDiscarded(db, parent.id)).toBe(true);
+    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, BOARD_WORKER_ID, "board");
+    expect(memoryRepair).toMatchObject({ type: "memory_repair", parent_id: parent.id, status: "todo" });
+  }
 });
 
 it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {

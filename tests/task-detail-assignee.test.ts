@@ -18,7 +18,7 @@ afterEach(() => t?.stop());
 
 const AUDITOR = "keeper-of-the-code";
 
-/** assignee を指定せずに登録した work・review・question と、取り消した work を置く。
+/** assignee を指定せずに登録した work・review・question・memory_repair と、取り消した work を置く。
  *  取り消しの扉は pickup の契機なので(ADR 0119 決定2)、ほかの行より先に取り消す。 */
 async function unsetAssigneeBoard(t: Tidepool) {
   const cancelled = queueWork(t, "cancelled work");

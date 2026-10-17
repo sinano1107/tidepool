@@ -439,7 +439,7 @@ export interface InterviewTarget {
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
-    throw new DomainError("an Interview's answer task takes no work or review children — only a question");
+    throw new DomainError("an Interview's answer task takes no children other than a question");
   }
 }
 
@@ -741,13 +741,19 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   return row.n;
 }
 
+/** 実行で work の側に立つ type —— 組み込み agent が走らせられない(ADR 0228 決定1 / ADR 0272 決定4)。削除の扉と
+ *  agent 名の quarantine の解除が同じこれで依存を数える。`rowRef` は tasks の行の SQL 別名。 */
+export function workSideTypeSql(rowRef: string): string {
+  return `${rowRef}.type IN ('work', 'memory_repair')`;
+}
+
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
- *  `assignee` に持つ未決着の work と memory_repair(ADR 0272 決定4)。review は組み込みへ落ちても壊れないので数えない。 */
-export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
+ *  `assignee` に持つ未決着の work 側の task(`workSideTypeSql`)。review は組み込みへ落ちても壊れないので数えない。 */
+export function countUnsettledWorkSideAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE assignee = ? AND type IN ('work', 'memory_repair') AND ${unsettledSql("status")}`,
+       WHERE assignee = ? AND ${workSideTypeSql("tasks")} AND ${unsettledSql("status")}`,
     )
     .get(name) as { n: number };
   return row.n;
@@ -3121,12 +3127,12 @@ function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
 }
 
-/** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4): only one whose
- *  work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115). It is told
- *  by its registration record carrying the objections it bundles, never by title. A completion review and a
- *  human-registered review child fall: their repair cannot land and their fitness is to a discarded criterion.
- *  An attached work (repair, which carries objection ids too) or proposal question falls with the parent. A
- *  memory_repair survives by its type: its artifact lives in the memory store, not the parent's branch (ADR 0272 決定1). */
+/** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4; ADR 0272 決定1): only
+ *  one whose work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115), and a
+ *  memory_repair, whose artifact lives in the memory store rather than the parent's branch. The RCA is told by its
+ *  registration record carrying the objections it bundles, never by title; a memory_repair by its type. A completion
+ *  review and a human-registered review child fall: their repair cannot land and their fitness is to a discarded
+ *  criterion. An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
   return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type = 'memory_repair' OR (${rowRef}.type = 'review'
     AND EXISTS (SELECT 1 FROM events registered WHERE registered.task_id = ${rowRef}.id AND registered.kind = 'task_registered'

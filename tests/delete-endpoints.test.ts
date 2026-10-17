@@ -66,7 +66,7 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
   expect(refs).toEqual([
-    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskIds: [], defaultAgentName: "tako", auditorName: "fugu", interviewerName: "suzumedai" },
+    { unsettledTaskCount: 4, unsettledWorkSideTaskCount: 2, awaitingLandingTaskIds: [], defaultAgentName: "tako", auditorName: "fugu", interviewerName: "suzumedai" },
   ]);
 });
 
