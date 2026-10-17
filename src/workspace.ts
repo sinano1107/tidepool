@@ -288,7 +288,8 @@ export function resolveTaskBranchLineage(
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
-  if (task.type === "review") {
+  // memory_repair は review と同じく lineage に透明(ADR 0272 決定6)
+  if (task.type === "review" || task.type === "memory_repair") {
     return {
       branch:
         task.parent_id && taskBranchExists(workspace, task.parent_id)

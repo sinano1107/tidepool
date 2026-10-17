@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -35,12 +36,21 @@ async function unsetAssigneeBoard(t: Tidepool) {
     completion_criteria: "answered",
     question: [{ title: "which way", options: ["left", "right"], recommendation: "left" }],
   });
+  // 記憶の修理子(ADR 0272)は異議の束ねだけが立てる(#2175)ので、盤面名義の登録で置く
+  const memoryRepair = registerTask(
+    t.db,
+    { type: "memory_repair", title: "unset memory repair", purpose: "repair a memory write", completion_criteria: "repaired", parent_id: work.id },
+    t.clock.now(),
+    BOARD_WORKER_ID,
+    "board",
+  );
   return {
     cancelled: cancelled.id,
     listed: [
       [work.id, "fake-worker"],
       [review.id, AUDITOR],
       [question.id, "human"],
+      [memoryRepair.id, "fake-worker"],
     ] as const,
   };
 }

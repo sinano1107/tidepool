@@ -234,6 +234,24 @@ it.each(["直接 cancel", "failure question の abandon"] as const)(
   },
 );
 
+it.each(["直接 cancel", "failure question の abandon"] as const)(
+  "親の%sで、親の下の memory_repair は todo のまま pickup 候補に残り、同じ親の work の修理子は cancelled —— 記憶の行の成果は店に残る(ADR 0272 決定1・6)",
+  (path) => {
+    db = openDb(":memory:");
+    const { parent, repair } = objectedAndCommitted(db);
+    // 立てるのは異議の束ね(#2175)。残るのは型で決まるので、異議の id は持たせない
+    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair: t", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, BOARD_WORKER_ID, "board");
+
+    if (path === "直接 cancel") cancelTaskDirectly(db, parent, null, NOW, {}, "webui");
+    else answerQuestionViaWebui(db, failureQuestion(db, parent.id, NOW), ["abandon"], NOW);
+
+    expect([parent, repair, memoryRepair].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled", "todo"]);
+    const picked: string[] = [];
+    for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "tako", NOW)!.id);
+    expect(picked).toContain(memoryRepair.id);
+  },
+);
+
 it.each(["開いた failure question", "資源の quarantine"] as const)("残る RCA の下の%sは、親の直接 cancel を塞がない —— cascade と同じ範囲(ADR 0271 決定3)", (gate) => {
   db = openDb(":memory:");
   const { parent, rcas } = objectedAndCommitted(db);

@@ -269,4 +269,15 @@ describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(
     expect(countUnsettledWorkAssignedTo(db, "deckhand")).toBe(1);
     db.close();
   });
+
+  it("未決着の memory_repair も work と同じく数え、review は数えない —— 組み込みへ落ちると走れない(ADR 0272 決定4)", () => {
+    const db = openDb(":memory:");
+    const at = new Date("2026-08-05T00:00:00.000Z");
+    for (const type of ["memory_repair", "review"] as const) {
+      registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+    }
+
+    expect(countUnsettledWorkAssignedTo(db, "deckhand")).toBe(1);
+    db.close();
+  });
 });

@@ -143,6 +143,15 @@ describe("verifyAgentRepaired", () => {
     expect(verify).not.toThrow();
   });
 
+  it("名前が組み込みに解決される間、その名前宛ての memory_repair が残る限り解除できない —— 組み込みは走らせられない(ADR 0272 決定4 / ADR 0228 決定4)", () => {
+    const db = openDb(":memory:");
+    register(db, "memory_repair", "fugu");
+
+    expect(() => verifyAgentRepaired(db, "fugu", "built-in", "tako", "fugu")).toThrow(
+      "agent fugu is not back in the registry and still has unsettled tasks assigned",
+    );
+  });
+
   it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {
     const db = openDb(":memory:");
     register(db, "work", "navigator");

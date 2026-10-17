@@ -138,7 +138,7 @@ export function verifyAgentRepaired(
     : `agent ${agentName} is not back in the registry`;
   const fallback = typeAwareDefaultAgentSql("tasks");
   // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
-  const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
+  const dependentTypes = resolution === "built-in" ? "type IN ('work', 'memory_repair')" : "type != 'question'";
   const stillUnsettled = db
     .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND ${unsettledSql("status")}
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
