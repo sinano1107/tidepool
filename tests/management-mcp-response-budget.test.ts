@@ -312,7 +312,7 @@ it("register_task・cancel_task・complete_task の ack は task の識別と状
     const done = (await call(client, { task_id: human.id, handoff: { outcome: KB } }, "complete_task")).payload;
 
     expect(registered).toEqual({ id: expect.any(String), type: "work", status: "todo", assignee: "fake-worker", raw_assignee: null });
-    expect(cancelled).toEqual({ ...registered, status: "cancelled" });
+    expect(cancelled).toEqual({ ...registered, status: "cancelled", discarded: [] });
     expect(done).toEqual({ id: human.id, type: "work", status: "done", assignee: "human", raw_assignee: "human" });
   } finally {
     await client.close();

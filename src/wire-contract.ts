@@ -97,6 +97,8 @@ export interface BoardTask extends QueueTask {
   /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
    *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */
   question_quarantine_kind: string | null;
+  /** failure / premise-breach question の cancel option の選択肢(question 画面が `discards` をその脇に出す、ADR 0271 決定4)。 */
+  question_cancel_option: string | null;
 }
 
 export interface ScratchpadLine {
@@ -155,6 +157,12 @@ interface LandingAnnotation {
   blocked_by: "attached_children" | "objections" | null;
 }
 
+/** cancel で成果が捨てられる done の work(ADR 0271 決定4、src/tasks.ts の Discard)。agent が実行したものだけ、盤面の順。 */
+interface Discard {
+  id: string;
+  title: string;
+}
+
 /** memory の提案 question の移動の注釈(ADR 0162 決定6, src/memory.ts の movedPins)。移された pin ごとに旧 id と `path_moved` の
  *  鎖の末尾の id・path・scope。question 行にだけ載り、移された pin が無ければ空。 */
 interface MovedPin {
@@ -182,6 +190,8 @@ export interface WireContract {
       /** 自由記述の回答を受けるか —— 固定選択肢の question は false(issue #1309)。 */
       free_text?: boolean;
       settled_by_observation?: SettledByObservation | null;
+      /** question 行だけ: failure / premise-breach question の cancel option が捨てる done の work(ADR 0271 決定4)。それ以外は空。 */
+      discards?: Discard[];
       /** question でない行だけ: 着地の状態(question 行の `landing` 注釈とは別物)。 */
       landing_state?: LandingState | null;
     }
@@ -197,6 +207,8 @@ export interface WireContract {
     free_text?: boolean;
     settled_by_observation?: SettledByObservation | null;
     landing_state?: LandingState | null;
+    /** question 行は cancel option の、それ以外はその task の直接 cancel の、捨てられる done の work(ADR 0271 決定4)。 */
+    discards: Discard[];
     completion_criteria: string;
     workspace: string | null;
     review_flag: number;

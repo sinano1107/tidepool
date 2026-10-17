@@ -107,6 +107,7 @@ import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } 
 import {
   type BoardTask,
   describeHandoffFields,
+  directCancelDiscards,
   getTask,
   HANDOFF_FIELDS,
   listBoard,
@@ -280,7 +281,7 @@ WebUI themselves. This implies:
   appear in their next triage session.`;
 
 const QUESTION_ANNOTATIONS_DESCRIPTION =
-  "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), and `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted). A non-question task carries none of these.";
+  "A question also carries `landing` (null for a general question; for a landing question, `blocked_by` says why a `merge` answer would be rejected right now — `attached_children` or `objections` — or null when it would be accepted), `approval` (for a child-approval question, whether approving raises the parent's risk; otherwise null), `blocking` (the id of the parent task it holds up, or null), `moved` (for a memory proposal, one element per pinned entry moved since the proposal was shown: `id` is the entry as pinned, `tail_id` is where it lives now with its current `path` / `scope`, and an answer applies to `tail_id`), `needs_comment` (the answers that `answer_question` refuses without a non-blank comment; empty when every answer takes an optional one), `free_text` (false when an answer must match one of the item's options verbatim; true when free text is accepted), and `discards` (for a failure or premise-breach question, the done agent-executed work, as `id` and `title`, whose artifact its cancel option discards; otherwise empty). A non-question task carries none of these; it carries `discards` instead: the done agent-executed work a direct cancel_task of it would discard, empty when it cannot be directly cancelled or nothing would be discarded.";
 
 const ORIGINAL_LANGUAGES = SUPPORTED_DISPLAY_LANGUAGES.join(", ");
 
@@ -327,6 +328,9 @@ const TASK_ACK_DESCRIPTION = "Returns the task's id, type, status, assignee and 
 
 function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   const tierDescriptions = tierFieldDescriptions(deps.db);
+  /** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定5)。閉じた根の述語は cancel の門と同じ1本。 */
+  const discardsOf = (taskId: string) =>
+    directCancelDiscards(deps.db, getTask(deps.db, taskId)!, closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)));
   const server = floorEveryResponse(
     rejectUnknownArguments(
       new McpServer({ name: "tidepool-management", version: "0.0.0" }, { instructions: MANAGEMENT_MCP_INSTRUCTIONS }),
@@ -346,7 +350,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           read,
           "tasks",
           listBoard(deps.db, deps.defaultAgentName, deps.auditorName, deps.interviewerName).map((task) =>
-            task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : task,
+            task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : { ...task, discards: discardsOf(task.id) },
           ),
         ),
       ),
@@ -409,7 +413,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         if (read.args.task_id === undefined) throw new DomainError("pass task_id, or next from a previous get_task");
         const task = getTask(deps.db, read.args.task_id);
         if (!task) throw new DomainError("task not found");
-        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
+        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), ...(task.type === "question" ? questionAnnotations(deps.db, task) : { discards: discardsOf(task.id) }) };
         return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: getTaskResumesByKey });
       }),
   );
@@ -960,10 +964,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION}`,
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION} The ack also carries \`discarded\`: the done agent-executed work (\`id\`, \`title\`) whose artifact this cancel discarded — relay it to the human.`,
       inputSchema: { task_id: z.string(), reason: z.string().optional() },
     },
     async ({ task_id, reason }) => {
+      // cancel の後は根が cancelled で読みが空になるので先に読む(ADR 0271 決定5)。gate にはしない
+      const discarded = getTask(deps.db, task_id) ? discardsOf(task_id) : [];
       const result = await cancelThroughHumanDoor(
         deps,
         task_id,
@@ -971,7 +977,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         () => deps.clock.now(),
         "mcp",
       );
-      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
+      return result.ok ? toolResult({ ...taskAck(result.value), discarded }) : toolError(result.failure.error);
     },
   );
   server.registerTool(

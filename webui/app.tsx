@@ -213,7 +213,7 @@ function liveTitle(t: Pick<import('../src/wire-contract').QueueTask, 'title' | '
 // Maps one raw question task into TpQuestionCard's shape — shared by the board's
 // question list (mapData) and the push deep-link's single-question view.
 function toQuestionCardShape(
-  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'needs_comment' | 'free_text' | 'question_proposal' | 'question_quarantine_kind'>,
+  q: Pick<WireContract['GET /api/tasks/:id'], 'id' | 'parent_id' | 'blocking' | 'registrant' | 'purpose' | 'question_items' | 'approval' | 'moved' | 'needs_comment' | 'free_text' | 'question_proposal' | 'question_quarantine_kind' | 'question_cancel_option'> & Partial<Pick<WireContract['GET /api/tasks/:id'], 'discards'>>,
   icons: AppIcons,
 ): TpQuestion {
   // who issued the question — the board itself (issue #261) or an agent
@@ -236,7 +236,8 @@ function toQuestionCardShape(
     // single-item bundle is the degenerate, most common case
     items: (q.question_items ?? []).map((item) => ({
       title: item.title, detail: item.detail, ...(movedNote && { movedNote }),
-      options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation })),
+      // cancel option の脇に、捨てられる done の work(ADR 0271 決定4)
+      options: item.options.map((o: string) => ({ label: o, recommended: o === item.recommendation, ...(o === q.question_cancel_option && { discards: q.discards ?? [] }) })),
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
@@ -749,6 +750,11 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  // ADR 0271 決定4: 捨てられる done の work は開いた時点で読む(盤面の行は持たない)
+  const [discards, setDiscards] = React.useState<{ id: string; title: string }[]>([]);
+  React.useEffect(() => {
+    api('GET /api/tasks/:id', { params: { id: task.id } }).then((t) => setDiscards(t.discards)).catch(() => {});
+  }, [task.id]);
   const submit = async () => {
     setBusy(true);
     try {
@@ -768,6 +774,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
         cancels "{task.title}" and its unfinished descendants — the record is kept, never erased
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <TpDiscards discards={discards} />
         <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, only the fact of the cancel is recorded" />
         <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Cancel this task</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep it</Button>

@@ -53,7 +53,8 @@ it("GET /api/tasks/:id は assignee 未指定のタスクを一覧と同じ解�
   for (const [id, resolved] of listed) {
     const single = (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
     expect(single).toMatchObject({ assignee: resolved });
-    expect(single).toEqual(list.find((x: any) => x.id === id));
+    // 直接 cancel の discards は HTTP では単体の読みだけが運ぶ(ADR 0271 決定4)—— 一覧の行との一致はそれ以外で言う
+    expect(single).toEqual({ ...list.find((x: any) => x.id === id), discards: single.discards });
   }
 
   // 一覧の絞り込みは単体に持ち込まない —— 取り消したタスクも返り、同じ解決を通る
