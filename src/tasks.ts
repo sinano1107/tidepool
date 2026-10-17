@@ -2875,6 +2875,7 @@ function inDirectCancelScope(db: Db, task: Task, closedRootOf: ClosedRootOf | un
   return getTextAuthor(db, task.id) === HUMAN_WORKER_ID || root || !!closedRootOf?.(task);
 }
 
+/** 上の範囲に、unsettled で in_progress でないことを足した門。discards の読み(`directCancelDiscards`)も同じ2つで判定する。 */
 function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
   if (!inDirectCancelScope(db, task, closedRootOf)) {
     throw new DomainError(
@@ -3122,7 +3123,8 @@ function blockingSql(rowRef: string): string {
 }
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
- *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
+ *  (`?` か名前つきパラメータ)、複数の根なら `value FROM json_each(@roots)` のような SELECT の残り(cancel の discards、
+ *  ADR 0271 決定4)。着地の門と直接 cancel の question gate、triage の異議
  *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`where`(子の行 `c` の条件)に当たらない子
  *  とその下へは降りない(根自身は残す)—— 積み残しは cancelled の子を除き、abandon で捨てられた判断の内側を
  *  運ばない(ADR 0239 決定1)。 */
