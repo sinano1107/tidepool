@@ -11,7 +11,7 @@ import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth
 import type { Clock } from "./clock.js";
 import { whyInvalidClockTime } from "./clock-time.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import {
   getDisplayLanguage,
   SUPPORTED_DISPLAY_LANGUAGES,
@@ -613,6 +613,7 @@ export interface ApiRouterDeps {
    *  `defaultAgentName` above — absent, this gate is skipped for the review
    *  rows that would have fallen back to it. */
   auditorName?: string;
+  /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
   /** The settings surface's workspace verbs (issue #57), threaded in by
    *  main.ts with the registry clone / base dir / GitHub deps already bound —
@@ -1105,6 +1106,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           defaultAgentName,
           // 解決側(mcp / scheduler)と同じ既定へ落とす —— ポインタは常に値を持つ
           auditorName: auditorName ?? DEFAULT_AUDITOR_NAME,
+          interviewerName: interviewerName ?? DEFAULT_INTERVIEWER_NAME,
         },
       );
       sendJson(res, {});

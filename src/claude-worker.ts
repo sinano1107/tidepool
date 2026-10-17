@@ -1060,6 +1060,9 @@ export interface ClaudeWorkerOptions {
    *  `DEFAULT_AUDITOR_NAME` (the pointer always resolves — CONTEXT.md's
    *  Auditor). */
   auditorName?: string;
+  /** The board's Interviewer pointer (ADR 0269 決定2): what an Interview
+   *  root's unset `assignee` resolves to at spawn, instead of `auditorName`.
+   *  Absent → `DEFAULT_INTERVIEWER_NAME`. */
   interviewerName?: string;
   /** Workspace name in the registry's workspaces.yaml — where tasks run. */
   workspace: string;

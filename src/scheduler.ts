@@ -278,6 +278,7 @@ export function startScheduler(deps: {
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
    *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset. */
   auditorName?: string;
+  /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
   /** The GitHub seam, for the issue-backed pickup gate (issue #49 / ADR
    *  0016's failure taxonomy): an issue-backed head's content is expanded
@@ -427,11 +428,11 @@ export function startScheduler(deps: {
   ): Promise<(() => void) | void> {
     // resolveTaskAgent is the three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor
-    // pointer, and unspecified work to the board's default agent. Questions
+    // pointer (an Interview root's to the Interviewer pointer, ADR 0269), and unspecified work to the board's default agent. Questions
     // never enter the execution slot. The default reference ends at pickup
     // (ADR 0233): pickupTask writes the default workspace's name and a work
     // task's resolved agent onto empty columns; a review's empty assignee is
-    // left as the reference to the Auditor pointer (ADR 0233 決定3).
+    // left as the reference to the Auditor / Interviewer pointer (ADR 0233 決定3).
     const agent = resolveTaskAgent(db, task, worker.id, auditorName, interviewerName);
     const picked = pickupTask(db, task, agent, clock.now(), {
       assignee: task.type === "work" ? agent : undefined,

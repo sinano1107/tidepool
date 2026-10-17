@@ -3112,7 +3112,8 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
 }
 
 /** Resolve the execution agent for a task that can enter the slot
- * (CONTEXT.md's Assignee/Auditor). Questions are answered by a human and have
+ * (CONTEXT.md's Assignee/Auditor; an Interview root's unset assignee goes to
+ * the Interviewer pointer, ADR 0269 決定2). Questions are answered by a human and have
  * no execution agent; accepting one here would hide a broken execution path. */
 export function resolveTaskAgent(
   db: Db,
