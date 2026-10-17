@@ -24,7 +24,7 @@ const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "hig
 const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
 const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
 
-function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: { workspace?: string; review_tier?: string } = {}) {
+function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: { workspace?: string; review_tier?: string; assignee?: string } = {}) {
   return { db, root: registerTask(db, { ...ROOT, ...fields, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
 }
 
@@ -276,7 +276,7 @@ it("受験者の failure question の abandon の文は、分解判断の破棄�
 });
 
 /** 対象3つの root が出題し、受験者の1人は done、1人は failure question、1人は escalation の question を開いたまま。 */
-function examineesWithOpenQuestions(fields: { workspace?: string; review_tier?: string } = {}) {
+function examineesWithOpenQuestions(fields: { workspace?: string; review_tier?: string; assignee?: string } = {}) {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull, sonnetHigh], fields);
   const [done, failing, escalating] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task, Task, Task];
   completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
@@ -319,8 +319,8 @@ it("受験者の完了は完了時レビューを立てない —— 規則の�
 });
 
 /** 採点の段階の root: 出題して対象ごとの受験者を全部 done にした(答案は FULL_HANDOFF)。 */
-function scoringRoot() {
-  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+function scoringRoot(fields: { assignee?: string } = {}) {
+  const { db, root } = registerInterview(undefined, [opusHigh, haikuNull], fields);
   const children = poseProbe(db, root, POSE, "auditor", new Date(0), "worker").map((child) => completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker"));
   return { db, root: getTask(db, root.id)!, children };
 }
@@ -388,6 +388,12 @@ it("報告の question への retry で root はその question を出自に can
   expect(nextSlotTask(db)?.id).toBe(again.id);
 });
 
+it("報告の question への retry でも、名指した agent は新しい root に引き継がれる(ADR 0248 追記3)", () => {
+  const { db, root } = scoringRoot({ assignee: "deckhand" });
+  answerQuestionViaWebui(db, report(db, root), ["retry"], new Date(1));
+  expect(listBoard(db).find((task) => task.parent_id === null && task.id !== root.id)!.assignee).toBe("deckhand");
+});
+
 it("probe の破綻の報告への abandon と retry も root の cancel を未決着の受験者とその question に及ぼし、それらは報告の question を出自に回答なしで cancel される(ADR 0267 決定3)", () => {
   for (const answer of ["abandon", "retry"]) {
     const { db, root, done, unsettled, questions } = examineesWithOpenQuestions();
@@ -433,7 +439,7 @@ const retryRoot = (db: Db, root: Task, comment?: string, runnable?: ReturnType<t
   retryInterviewRoot(db, getTask(db, root.id)!, comment, new Date(1), {}, "webui", runnable);
 
 it("出題済みで未決着の root の retry は、未決着の受験者とその question を回答なしで決着させて root を cancel し、同じ対象・題・目的・完了基準・workspace・review tier の Interview を人間名義で登録して、その history に旧い root・probe・rubric・コメントを見せる —— done の答案は残る", () => {
-  const { db, root, done, unsettled, questions } = examineesWithOpenQuestions({ workspace: "reef", review_tier: "frontier" });
+  const { db, root, done, unsettled, questions } = examineesWithOpenQuestions({ workspace: "reef", review_tier: "frontier", assignee: "deckhand" });
   // 受験者の escalation の question は今までどおり、受験者の書いた選択肢だけを持つ(retry は root の面にある)
   expect(questions[1]!.question_items![0]!.options).toEqual(ESCALATION.questions[0]!.options);
 
@@ -443,10 +449,15 @@ it("出題済みで未決着の root の retry は、未決着の受験者とそ
   for (const task of [root, ...unsettled, ...questions]) expect(getTask(db, task.id)).toMatchObject({ status: "cancelled", question_answer: null });
   expect(getRegistrant(db, again.id)).toBe(HUMAN_WORKER_ID);
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull, sonnetHigh]);
-  expect(again).toMatchObject({ title: root.title, purpose: root.purpose, completion_criteria: root.completion_criteria, workspace: "reef", review_tier: "frontier", status: "todo" });
+  expect(again).toMatchObject({ title: root.title, purpose: root.purpose, completion_criteria: root.completion_criteria, workspace: "reef", review_tier: "frontier", assignee: "deckhand", status: "todo" });
   const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, comment: "the probe names the answer" };
   expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ retry_of: retry }]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
+});
+
+it("名指していない root の retry は assignee を空のまま登録する —— Interviewer ポインタの名前は書き込まれない(ADR 0248 追記3 / ADR 0233 決定3)", () => {
+  const { db, root } = examineesWithOpenQuestions();
+  expect(retryRoot(db, root).assignee).toBeNull();
 });
 
 it("走れない対象を写す root の retry は対象を名指して拒まれ、root・受験者・question は変わらず、新しい Interview も登録されない(ADR 0253 決定3)", () => {

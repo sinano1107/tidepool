@@ -1842,7 +1842,8 @@ export function answerQuestion(
 
 /** retry(ADR 0248 決定2・3 / ADR 0251 決定2 / ADR 0267 決定4): cancel した Interview と同じ欄・対象の一覧で新しい root を人間名義で
  *  登録し、破綻した probe と、報告の理由(報告の question の retry だけ)・人間のコメントを盤面名義の event で新しい root の history に
- *  渡す。写した対象が走れなければ人間の登録の扉と同じ判定で拒み、呼び手の transaction ごと巻き戻す(ADR 0253 決定3)。 */
+ *  渡す。名指した採点者(assignee)も測る問いの一部なので引き継ぐ(ADR 0248 追記3)—— 登録の門は引かない(盤面の扉から通らない名前は作れない)。
+ *  写した対象が走れなければ人間の登録の扉と同じ判定で拒み、呼び手の transaction ごと巻き戻す(ADR 0253 決定3)。 */
 function retryInterview(
   db: Db,
   previousRoot: Task,
@@ -1862,6 +1863,7 @@ function retryInterview(
       completion_criteria: previousRoot.completion_criteria,
       workspace: previousRoot.workspace ?? undefined,
       review_tier: previousRoot.review_tier ?? undefined,
+      assignee: previousRoot.assignee ?? undefined,
       interview_targets: retriedTargets(db, previousRoot.id),
     },
     now,
