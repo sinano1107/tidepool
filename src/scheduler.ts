@@ -7,7 +7,7 @@ import {
   containmentPickupBlocked,
 } from "./containment.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
 import { appendEvent } from "./events.js";
 import {
@@ -91,7 +91,7 @@ export const HOURLY = 60 * 60 * 1000;
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
-export type ExecutionCandidateTarget = Pick<Task, "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
+export type ExecutionCandidateTarget = Pick<Task, "id" | "type" | "assignee" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => ExecutionSetting[];
 
 /** 開いた workspace の封じ込めの組(ADR 0259 決定1)を、task の候補から外す式。外れるのは、task の実行 workspace と
@@ -278,6 +278,7 @@ export function startScheduler(deps: {
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
    *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset. */
   auditorName?: string;
+  interviewerName?: string;
   /** The GitHub seam, for the issue-backed pickup gate (issue #49 / ADR
    *  0016's failure taxonomy): an issue-backed head's content is expanded
    *  before pickup, so an expansion failure never wedges a picked-up task.
@@ -341,6 +342,7 @@ export function startScheduler(deps: {
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
+    interviewerName = DEFAULT_INTERVIEWER_NAME,
     github,
     openaiUsage,
     credentialAbsence,
@@ -379,7 +381,7 @@ export function startScheduler(deps: {
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
     // workspace or agent halts only its own tasks, never the whole board.
     // No resolvers here: provider / Harness names are taken out by the poll below.
-    return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db));
+    return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName);
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
@@ -430,7 +432,7 @@ export function startScheduler(deps: {
     // (ADR 0233): pickupTask writes the default workspace's name and a work
     // task's resolved agent onto empty columns; a review's empty assignee is
     // left as the reference to the Auditor pointer (ADR 0233 決定3).
-    const agent = resolveTaskAgent(task, worker.id, auditorName);
+    const agent = resolveTaskAgent(db, task, worker.id, auditorName, interviewerName);
     const picked = pickupTask(db, task, agent, clock.now(), {
       assignee: task.type === "work" ? agent : undefined,
       workspace: workspace?.name,
@@ -692,11 +694,11 @@ export function startScheduler(deps: {
       const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
       // 閉じた根に塞がれた子は、走っても閉じた根のブランチへ帰るだけなので飛ばす(ADR 0265 決定6)
       const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
+      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName);
       const observedProviders = new Map<Provider, ProviderUsageObservation>();
       /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName);
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
@@ -734,7 +736,7 @@ export function startScheduler(deps: {
           return true;
         } catch (error) {
           if (!isUnresolvableAgentError(error)) throw error;
-          const assignee = resolveTaskAgent(task, worker.id, auditorName);
+          const assignee = resolveTaskAgent(db, task, worker.id, auditorName, interviewerName);
           quarantineAgent(db, assignee, error, clock.now());
           stopped.assignees.push(assignee);
           return false;

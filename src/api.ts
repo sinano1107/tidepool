@@ -613,6 +613,7 @@ export interface ApiRouterDeps {
    *  `defaultAgentName` above — absent, this gate is skipped for the review
    *  rows that would have fallen back to it. */
   auditorName?: string;
+  interviewerName?: string;
   /** The settings surface's workspace verbs (issue #57), threaded in by
    *  main.ts with the registry clone / base dir / GitHub deps already bound —
    *  the API layer never touches the registry clone itself. Absent (or a verb
@@ -699,6 +700,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     quarantineChecks,
     vapidPublicKey,
     auditorName,
+    interviewerName,
     workspaceAdmin,
     agentAdmin,
     profileAdmin,
@@ -743,6 +745,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         pollNow,
         defaultAgentName,
         auditorName,
+        interviewerName,
         taskExecutionCandidates,
       },
       parsed.data,
@@ -1262,7 +1265,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         // board never special-cases an issue-backed parent — CONTEXT.md's
         // Decompose point 6), same short-TTL cache/resolver GET routes use
         const live = await issueContent.present(
-          presentTask(db, parent, defaultAgentName, auditorName),
+          presentTask(db, parent, defaultAgentName, auditorName, interviewerName),
           github,
           displayWorkspacePath(parent.workspace),
           clock.now(),
@@ -1303,6 +1306,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         quarantineStops(db),
         skipped,
         closedRoot,
+        interviewerName,
       );
       if (!head || !excluded(head)) return head;
       skipped.push(head.id);
@@ -1347,7 +1351,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     if (after === null && moved.status === "todo" && headBefore === task.id) {
       pollNow();
     }
-    sendJson(res, presentTask(db, moved, defaultAgentName, auditorName));
+    sendJson(res, presentTask(db, moved, defaultAgentName, auditorName, interviewerName));
   });
 
   // The shared human door owns lookup, registry checks, and domain rules;
@@ -1359,7 +1363,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = editThroughHumanDoor(
-      { ...memoryRefDeps, resolvesToBuiltIn, defaultAgentName, auditorName },
+      { ...memoryRefDeps, resolvesToBuiltIn, defaultAgentName, auditorName, interviewerName },
       req.params.id,
       parsed.data,
       () => clock.now(),
@@ -1387,6 +1391,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         resolveWorkspace,
         defaultAgentName,
         auditorName,
+        interviewerName,
         quarantineResolvers,
       },
       req.params.id,
@@ -1409,7 +1414,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = retryInterviewThroughHumanDoor(
-      { db, pollNow, workspace, resolveWorkspace, defaultAgentName, auditorName, quarantineResolvers, taskExecutionCandidates },
+      { db, pollNow, workspace, resolveWorkspace, defaultAgentName, auditorName, interviewerName, quarantineResolvers, taskExecutionCandidates },
       req.params.id,
       parsed.data.comment,
       () => clock.now(),
@@ -1452,6 +1457,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           agentRegistered,
           defaultAgentName,
           auditorName,
+          interviewerName,
           taskExecutionCandidates,
         },
         task,
@@ -1480,7 +1486,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     const result = await completeThroughHumanDoor(
-      { db, pollNow, defaultAgentName, auditorName },
+      { db, pollNow, defaultAgentName, auditorName, interviewerName },
       req.params.id,
       parsed.data.handoff,
       () => clock.now(),
@@ -1960,7 +1966,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     const session = activeTriageSession(db);
     sendJson(res, {
       session: session ?? null,
-      queue: triagePreview(db, session?.id, defaultAgentName, auditorName),
+      queue: triagePreview(db, session?.id, defaultAgentName, auditorName, interviewerName),
       scratchpad: listScratchpad(db),
     } satisfies WireContract["GET /api/triage"]);
   });
@@ -2101,7 +2107,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   // 着地 question は `landing` を持ち、その `blocked_by` が回答可否そのもの — 判定は
   // ここ(盤面)で行い、WebUI は描画だけを担う。
   router.get("/tasks", async (_req, res) => {
-    const board = await presentLive(listBoard(db, defaultAgentName, auditorName));
+    const board = await presentLive(listBoard(db, defaultAgentName, auditorName, interviewerName));
     sendJson(
       res,
       board.map((task) =>
@@ -2139,6 +2145,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           quarantineStops(db),
           entriesAllExcluded(),
           closedRoot,
+          interviewerName,
         ),
       ),
     } satisfies WireContract["GET /api/queue"]);
@@ -2154,7 +2161,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(404), { error: "task not found" });
       return;
     }
-    const [presented] = await presentLive([presentTask(db, task, defaultAgentName, auditorName)]);
+    const [presented] = await presentLive([presentTask(db, task, defaultAgentName, auditorName, interviewerName)]);
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     sendJson(res, {
       ...presented!,

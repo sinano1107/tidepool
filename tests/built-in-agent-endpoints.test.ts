@@ -66,6 +66,26 @@ it("agent 一覧は組み込みの fugu を built-in として、同名の regis
   expect(agentRow(shadowed.json, "deckhand").shadowsBuiltIn).toBeUndefined();
 });
 
+it("agent 一覧は組み込みの Interviewer suzumedai も built-in として映す(ADR 0269 決定1)", async () => {
+  t = await bootWithRegistry();
+
+  const listed = await api(t.baseUrl, "GET", "/api/agents");
+
+  expect(agentRow(listed.json, "suzumedai")).toMatchObject({ builtin: true, icon: "🐠", skills: ["@workspace"] });
+});
+
+it("Interviewer ポインタを替えると、Interview の root の空の assignee はその名前に解決される —— 本番の review は Auditor のまま(ADR 0269 決定2)", async () => {
+  t = await bootTidepool({ auditorName: "fugu", interviewerName: "shako" });
+  const review = { type: "review", purpose: "p", completion_criteria: "c" };
+  const target = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+
+  const root = await api(t.baseUrl, "POST", "/api/tasks", { ...review, title: "interview", interview_targets: [target] });
+  const plain = await api(t.baseUrl, "POST", "/api/tasks", { ...review, title: "review" });
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.json.id}`)).json).toMatchObject({ assignee: "shako", raw_assignee: null });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${plain.json.id}`)).json).toMatchObject({ assignee: "fugu", raw_assignee: null });
+});
+
 it("fugu の作成は成功し、応答が組み込みを shadow することを告げる(ADR 0117 決定2: 静かな shadow は作らない)", async () => {
   t = await bootWithRegistry();
 

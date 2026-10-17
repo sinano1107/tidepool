@@ -4,7 +4,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { git } from "./git.js";
 import {
   authedGitBounded,
@@ -265,11 +265,35 @@ const BUILT_IN_AUDITOR: AgentDefinition = {
   builtin: true,
 };
 
+/** 組み込みの Interviewer(ADR 0269 決定1): Auditor と同じ機構で、本文に観点(probe・rubric・採点)だけを持つ。
+ *  手順(出題・採点完了の呼び方)は verb の説明が運ぶので書かない(ADR 0017)。 */
+const BUILT_IN_INTERVIEWER: AgentDefinition = {
+  ...BUILT_IN_AUDITOR,
+  name: DEFAULT_INTERVIEWER_NAME,
+  description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers.",
+  icon: "🐠",
+  systemPrompt: `You run Interviews: one probe that every target solves, and a score for each answer.
+
+Writing the probe and rubric:
+- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
+- Make the probe self-contained in the checkout. A target that fails because the probe was ambiguous measures the probe, not the target.
+- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.
+
+Scoring:
+- Score each answer against the rubric as written — not against the best answer you saw, and not against each other.
+- Judge the deliverable and its evidence (the diff, the tests that ran, handoff claims you verified), not the confidence of the prose.
+- Answers carry no agent or model name; do not guess one.
+- Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
+- Name, for each answer, what decided its score.`,
+};
+
+const BUILT_INS = [BUILT_IN_AUDITOR, BUILT_IN_INTERVIEWER];
+
 /** その名前を組み込みが持っているか(ADR 0117 決定2)。registry に同名の
  *  エントリがあるかどうかとは独立 —— 「shadow している」を言えるのは、この
  *  述語と loaded map の印の2つが揃ったときだけである。 */
 export function isBuiltInAgentName(name: string): boolean {
-  return name === BUILT_IN_AUDITOR.name;
+  return BUILT_INS.some((builtIn) => builtIn.name === name);
 }
 
 /** A task's `assignee` (or the board's default agent name) names an agent
@@ -835,7 +859,7 @@ function splitFrontmatter(raw: string): { frontmatter: string; body: string } | 
 
 /** One `agents/<name>.md` as it stood at a past commit: each field undefined
  *  when that commit's file does not carry it in a readable form. `builtin` marks
- *  the built-in Auditor standing in for a name with no file there. */
+ *  a built-in standing in for a name with no file there. */
 export interface AgentAtCommit {
   body?: string;
   authority?: string;
@@ -855,7 +879,7 @@ export interface RegistryAtCommit {
  *  name and `description`, and each profile's `guidance` / `assignable_to`.
  *  Deliberately schema-free — an older, differently-shaped registry is still
  *  valid evidence for "why did I decide", and this read must not reject it.
- *  The built-in Auditor joins under the same shadowing rule as `loadRegistry`.
+ *  The built-ins join under the same shadowing rule as `loadRegistry`.
  *  Best-effort: undefined when the commit is unreachable. */
 export function registryAtCommit(dir: string, commit: string): RegistryAtCommit | undefined {
   let files: Map<string, string>;
@@ -885,8 +909,8 @@ export function registryAtCommit(dir: string, commit: string): RegistryAtCommit 
           : undefined;
     }
   }
-  if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) {
-    agents[BUILT_IN_AUDITOR.name] = { description: BUILT_IN_AUDITOR.description, builtin: true };
+  for (const builtIn of BUILT_INS) {
+    if (!Object.hasOwn(agents, builtIn.name)) agents[builtIn.name] = { description: builtIn.description, builtin: true };
   }
   return { agents, authority };
 }
@@ -1139,7 +1163,7 @@ export function loadRegistry(dir: string, mode: RegistryMode): Registry {
   // spawn)は名前の解決では分岐を持たない。唯一の分岐は profile の解決
   // (`resolveExecutionAgent`)—— 組み込みの profile は registry に無いので、
   // そこだけが印を読む。
-  if (!Object.hasOwn(agents, BUILT_IN_AUDITOR.name)) agents[BUILT_IN_AUDITOR.name] = BUILT_IN_AUDITOR;
+  for (const builtIn of BUILT_INS) if (!Object.hasOwn(agents, builtIn.name)) agents[builtIn.name] = builtIn;
   const workspacesYaml = files.get("workspaces.yaml");
   if (workspacesYaml === undefined) throw new Error(`workspaces.yaml is missing at ${commit}`);
   const workspaces = workspacesSchema.parse(parseYaml(workspacesYaml));

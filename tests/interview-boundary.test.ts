@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
-import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
+import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection } from "../src/memory.js";
@@ -385,12 +385,12 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
   expect(pages.length).toBeGreaterThan(1);
   for (const page of pages) expect(page.parent ?? null).toBeNull();
   // 登録者は root の agent —— root の面には出ている名前で、受験者の面に出ないことを確かめる
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${rootId}`)).json.assignee).toBe(DEFAULT_AUDITOR_NAME);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${rootId}`)).json.assignee).toBe(DEFAULT_INTERVIEWER_NAME);
   for (const pull of pulls) expect(pull.isError).toBeFalsy();
   // tools/list は登録された verb を全部回す —— 新しい verb は自動で検査に入る
   const read = [...pages, ...pulls, ...refusals, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, TREE_MEMORY, ROOT_MARK, DEFAULT_AUDITOR_NAME, "not shown to examinees", ...siblings]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, TREE_MEMORY, ROOT_MARK, DEFAULT_INTERVIEWER_NAME, "not shown to examinees", ...siblings]) {
     expect(read).not.toContain(text);
   }
   // 写像: 本番の親なし work の tools/list(名前・説明文・schema)との差は分解の verb と記憶を書く verb だけ(ADR 0267 決定7 /

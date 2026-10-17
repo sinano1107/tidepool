@@ -428,10 +428,10 @@ describe("loadRegistry", () => {
     expect(registry.workspaces.sandbox!.path).toBeUndefined();
   });
 
-  it("agents/ と authority/ が無い registry は空として読む: agents は組み込みの Auditor だけ、authority は空(エラーにしない)", async () => {
+  it("agents/ と authority/ が無い registry は空として読む: agents は組み込み(Auditor と Interviewer)だけ、authority は空(エラーにしない)", async () => {
     const dir = await makeRegistry({}, { "workspaces.yaml": "tidepool:\n  path: /tmp/tidepool\n" });
     const registry = loadRegistry(dir, "purely-local");
-    expect(Object.keys(registry.agents).map(isBuiltInAgentName)).toEqual([true]);
+    expect(Object.keys(registry.agents).map(isBuiltInAgentName)).toEqual([true, true]);
     expect(registry.authority).toEqual({});
   });
 

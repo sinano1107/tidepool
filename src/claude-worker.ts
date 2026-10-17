@@ -17,7 +17,7 @@ import {
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
@@ -1060,6 +1060,7 @@ export interface ClaudeWorkerOptions {
    *  `DEFAULT_AUDITOR_NAME` (the pointer always resolves — CONTEXT.md's
    *  Auditor). */
   auditorName?: string;
+  interviewerName?: string;
   /** Workspace name in the registry's workspaces.yaml — where tasks run. */
   workspace: string;
   /** ADR 0018: base directory a workspace entry's path derives from when the
@@ -1782,9 +1783,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // work) — work keeps resolving to `this.options.agent`; questions have no
     // execution agent and must never reach this worker path.
     const taskAgent = resolveTaskAgent(
+      this.options.db,
       task,
       this.options.agent,
       this.options.auditorName ?? DEFAULT_AUDITOR_NAME,
+      this.options.interviewerName ?? DEFAULT_INTERVIEWER_NAME,
     );
     const agent = resolveAgentOrQuarantine(
       this.options.db,

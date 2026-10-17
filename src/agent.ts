@@ -130,18 +130,19 @@ export function verifyAgentRepaired(
   auditorName?: string,
   definitionFailure?: string,
   resolveWorkspace?: WorkspaceResolver,
+  interviewerName?: string,
 ): void {
   if (resolution === "registry") return;
   const notBack = definitionFailure
     ? `agent ${agentName}'s definition still does not hold (${definitionFailure})`
     : `agent ${agentName} is not back in the registry`;
-  const fallback = typeAwareDefaultAgentSql("type", "@defaultAgentName", "@auditorName");
+  const fallback = typeAwareDefaultAgentSql("tasks");
   // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
   const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
   const stillUnsettled = db
     .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND ${unsettledSql("status")}
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)
-    .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null });
+    .get({ agentName, defaultAgentName: defaultAgentName ?? null, auditorName: auditorName ?? null, interviewerName: interviewerName ?? null });
   if (stillUnsettled) {
     throw new Error(`${notBack} and still has unsettled tasks assigned`);
   }

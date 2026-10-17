@@ -14,6 +14,7 @@ import { openDb } from "./db.js";
 import {
   DEFAULT_AGENT_NAME,
   DEFAULT_AUDITOR_NAME,
+  DEFAULT_INTERVIEWER_NAME,
   DEFAULT_WORKSPACE_NAME,
 } from "./defaults.js";
 import { loadGitHubAuth } from "./github-auth.js";
@@ -41,6 +42,8 @@ const defaultAgentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
 // issue #15 layer 2 / CONTEXT.md's Auditor: same shape as TIDEPOOL_AGENT
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
+// ADR 0269 決定2: Interview の root の空の assignee が解決する先、同じ形のポインタ
+const interviewerName = process.env.TIDEPOOL_INTERVIEWER ?? DEFAULT_INTERVIEWER_NAME;
 
 // this board's own CONTEXT.md (issue #47): resolved against the module's own
 // file location, not process.cwd(), so it finds the checkout regardless of
@@ -153,6 +156,7 @@ const server = await startServer(
     workspacesDirSource,
     defaultAgentName,
     auditorName,
+    interviewerName,
     boardState,
     moonshotApiKeyFile,
     codexHome,

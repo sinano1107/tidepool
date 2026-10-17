@@ -1,6 +1,6 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, latestEventOfTask, type TaskScopedPayload } from "./events.js";
 import { git } from "./git.js";
@@ -488,6 +488,7 @@ export interface LandingDeps {
   resolveAuthority?: (assignee: string | null, taskType: TaskType) => AuthorityProfile | undefined;
   defaultAgentName: string;
   auditorName?: string;
+  interviewerName?: string;
   isProtectedWorkspace?: (name: string) => boolean;
   /** merge 済みの根を比べる前の保護ブランチの fetch(ADR 0241 決定1)が使う盤面の GitHub 身元(ADR 0093)。 */
   githubAuth?: GitHubAuth;
@@ -1157,7 +1158,7 @@ export function createLanding(deps: LandingDeps): Landing {
         task,
         prNumber,
         sha,
-        resolveTaskAgent(task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME),
+        resolveTaskAgent(deps.db, task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME, deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME),
         deps.clock.now(),
         resolved.profile,
         deps.isProtectedWorkspace?.(workspace.name),

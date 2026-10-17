@@ -116,6 +116,7 @@ export interface RegisterThroughHumanDoorDeps {
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   /** Interview の対象を既定 agent が走らせられるかの判定の口(ADR 0253 決定3)。Absent → 検査しない。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
 }
@@ -375,7 +376,7 @@ export async function registerThroughHumanDoor(
       }
       const task = result.value[0] ?? latestChild(deps.db, input.parent_id!);
       if (!task) throw new Error("human decompose did not register a child or approval question");
-      return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
+      return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
     }
     if (input.workspace !== undefined) {
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
@@ -440,7 +441,7 @@ export async function registerThroughHumanDoor(
       return registered;
     })();
     deps.pollNow();
-    return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
+    return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "invalid", error: err.message } };
@@ -469,6 +470,7 @@ export interface SubmitAnswerDeps {
   agentRegistered?: (name: string) => boolean;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   /** Interview の retry が写す対象を既定 agent が走らせられるかの判定の口(ADR 0253 決定3)。Absent → 検査しない。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
 }
@@ -479,6 +481,7 @@ export interface QuarantineCheckDeps {
   db: Db;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   github?: GitHubClient;
@@ -594,6 +597,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           deps.auditorName,
           definitionFailure,
           buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace),
+          deps.interviewerName,
         );
       } catch (err) {
         throw new DomainError(err instanceof Error ? err.message : String(err));
@@ -725,6 +729,7 @@ function humanCancelDefaults(deps: CancelThroughHumanDoorDeps): CancelDefaults {
     defaultWorkspaceName: deps.workspace?.name,
     defaultAgentName: deps.defaultAgentName,
     auditorName: deps.auditorName,
+    interviewerName: deps.interviewerName,
     quarantined: quarantineStops(deps.db, deps.quarantineResolvers),
     // 閉じた根に塞がれた子(ADR 0265 決定6)—— pickup が飛ばすのと同じ1本
     closedRootOf: closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
@@ -773,6 +778,7 @@ export interface CancelThroughHumanDoorDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   quarantineResolvers?: QuarantineResolvers;
 }
 
@@ -784,6 +790,7 @@ export interface EditThroughHumanDoorDeps {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
 }
 
 export interface CompleteThroughHumanDoorDeps {
@@ -791,6 +798,7 @@ export interface CompleteThroughHumanDoorDeps {
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
 }
 
 /** Shared human-surface completion for human-assignee tasks. */
@@ -812,7 +820,7 @@ export async function completeThroughHumanDoor(
     assertUnsettledNotInProgress(task, "completed");
     const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
     deps.pollNow();
-    return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName) };
+    return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -838,7 +846,7 @@ export function editThroughHumanDoor(
       assertWorkspaceKnown(input.workspace, deps.resolveWorkspace, deps.workspace);
     }
     editTask(deps.db, task, input, now(), origin);
-    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
+    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -867,7 +875,7 @@ export async function cancelThroughHumanDoor(
       origin,
     );
     deps.pollNow();
-    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName) };
+    return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -891,7 +899,7 @@ export function retryInterviewThroughHumanDoor(
     const runnable = deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName };
     const again = retryInterviewRoot(deps.db, task, comment, now(), humanCancelDefaults(deps), origin, runnable);
     deps.pollNow();
-    return { ok: true, value: presentTask(deps.db, again, deps.defaultAgentName, deps.auditorName) };
+    return { ok: true, value: presentTask(deps.db, again, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
@@ -904,7 +912,7 @@ export function retryInterviewThroughHumanDoor(
 export type AnsweredTask = BoardTask & SettledMark;
 
 function presentAnswered(deps: SubmitAnswerDeps, task: Task): AnsweredTask {
-  return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), settled_by_observation: settledByObservation(deps.db, task) };
+  return { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), settled_by_observation: settledByObservation(deps.db, task) };
 }
 
 /** tier の提案の approve の書き込み(issue #920 / spec #916 D): pin の照合 → 下げ先の検査 → registry への commit。pin が崩れて

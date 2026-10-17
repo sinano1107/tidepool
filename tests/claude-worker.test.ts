@@ -18,7 +18,7 @@ import {
   pinnedModelFlags,
 } from "../src/claude-worker.js";
 import { type Db, openDb } from "../src/db.js";
-import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
@@ -150,7 +150,7 @@ function pickedSetting(
   const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
   loadedRegistries.set(key, loaded);
   const { agents } = loaded;
-  return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName)] ?? agents[agent])!, task)[0]!;
+  return executionSettingsFor(db, (agents[resolveTaskAgent(db, task, agent, auditorName, DEFAULT_INTERVIEWER_NAME)] ?? agents[agent])!, task)[0]!;
 }
 
 /** A second registry agent for the 当時版 Roster tests (issue #1741). */
