@@ -161,8 +161,9 @@ export type EventPayload =
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string } }
   // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
-  // head は出題の時点の root の workspace の保護ブランチの head —— pin の子は全部ここから分岐する(ADR 0263 決定6)
-  | { kind: "decision_logged"; line: string; interview_probe?: InterviewProbe; head?: string }
+  // head は root の分岐元 —— pin の子は全部ここから分岐する(ADR 0263 決定6・追記4)。head の無い出題は無い(追記5)
+  | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
+  | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): root review が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された pin の子、worker は review の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }

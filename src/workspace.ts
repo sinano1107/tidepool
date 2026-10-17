@@ -265,9 +265,10 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
   return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
 }
 
-/** 出題の時点の保護ブランチの head(ADR 0263 決定6)。出題の verb が呼ばれた checkout で読み、fetch はしない。 */
-export function protectedBranchHead(workspace: WorkspaceConfig): string {
-  return git(workspace.path, "rev-parse", protectedBranchRef(workspace));
+/** root の分岐元(ADR 0263 追記4): root の checkout の保護ブランチの ref と HEAD の merge-base。今の ref は着地の収束が
+ *  session の最中にも進めるので読まない。共通祖先が無ければ投げる(ADR 0242 決定3)。 */
+export function rootForkPoint(workspace: WorkspaceConfig): string {
+  return git(workspace.path, "merge-base", protectedBranchRef(workspace), "HEAD");
 }
 
 /** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。 */
@@ -332,8 +333,8 @@ export function lineageTaskBranch(
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
- *  A fresh task forks from its live lineage — an examinee from the head its
- *  probe recorded (ADR 0263 決定6); a resumed task only checks its existing
+ *  A fresh task forks from its live lineage — an examinee from the root's fork
+ *  point its probe recorded (ADR 0263 決定6・追記4); a resumed task only checks its existing
  *  branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
@@ -359,15 +360,15 @@ function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): st
        WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL`,
     )
     .pluck()
-    .get(task.interview_target_id) as string | null | undefined;
+    .get(task.interview_target_id) as string;
   try {
-    if (head != null) return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
+    return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
   } catch (err) {
     // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
     if ((err as { status?: number } | null)?.status !== 1) throw err;
   }
   throw new Error(
-    `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head ?? "none recorded"}) ` +
+    `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head}) ` +
       "cannot be resolved in this checkout, so its branch is not forked",
   );
 }

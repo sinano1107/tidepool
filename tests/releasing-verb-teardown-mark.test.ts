@@ -1,7 +1,9 @@
-import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, failTeardownMark, HOUR, registerWork, type Tidepool } from "./harness.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, registerWork, type Tidepool } from "./harness.js";
 
 // issue #2025: 最終 verb の記録と後始末の印は同じ transaction —— 印が落ちれば記録も巻き戻り、印の無い決着済み session は残らない。
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -72,7 +74,7 @@ it.each<[string, Arrange, Record<string, unknown>]>([
   ["complete_interview", answered, {}],
   ["report_broken_probe", async () => ({ id: (await answered()).id }), { reason: "the probe was broken", recommendation: "retry" }],
 ])("%s: 後始末の印の書き込みが落ちると verb の記録も残らず、タスクは in_progress のまま印も無い", async (verb, arrange, args) => {
-  t = await bootTidepool();
+  t = await bootTidepool({ workspace: await makeWorkspace("teardown-mark") });
   const arranged = await arrange();
   const before = await boardRecord();
   failTeardownMark(t.db); // setup(ADR 0107 決定4)

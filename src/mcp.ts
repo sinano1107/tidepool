@@ -94,8 +94,8 @@ import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./te
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
-  protectedBranchHead,
   resolveOrQuarantine,
+  rootForkPoint,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -331,7 +331,8 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
  *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
  *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
- *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の head の読み —— ADR 0263 決定6)。門を持つ verb だけが workspace を
+ *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、root の分岐元の読み —— ADR 0263 決定6・追記4)。workspace が解決できなければ
+ *  門は飛ばす —— 出題の verb だけは head を記録できないので verb の側で拒む(追記5)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
  *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
  *  **解決できなかったとき(`null`)も含めて**そのまま後始末へ渡す —— `undefined` で渡すと
@@ -688,12 +689,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         },
       },
       async (input) => {
-        // ADR 0263 決定6: 出題の時点の保護ブランチの head を、この verb が呼ばれた checkout で読む(fetch しない)
+        // ADR 0263 決定6・追記4: root の分岐元を、この verb が呼ばれた checkout で読む(fetch しない)。
+        // 門が走らない(workspace が解決できない)出題は head を記録できないので拒む(追記5)
         let head: string | undefined;
         return runReleasingVerb(
           deps,
           attributedTaskId,
           (task) => (workerId, now) => {
+            if (head === undefined) {
+              throw new DomainError("this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded — this task cannot fix that: escalate so a human decides");
+            }
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
             }
@@ -701,7 +706,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             return { child_ids: examinees.map((c) => c.id), parent_status: "blocked" };
           },
           (_task, workspace) => {
-            head = protectedBranchHead(workspace);
+            head = rootForkPoint(workspace);
           },
         );
       },

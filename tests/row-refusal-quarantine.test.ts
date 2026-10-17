@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
@@ -13,12 +13,14 @@ import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, HOUR, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 行の拒否(CONTEXT.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
  *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに queue の先頭へ戻る。 */
+
+vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {
@@ -60,6 +62,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
   const moonshotApiKeyFile = join(logDir, "moonshot-api-key");
   writeFileSync(moonshotApiKeyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
   t = await bootTidepool({
+    workspace: await makeWorkspace("tidepool"),
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
@@ -249,6 +252,7 @@ const MEASURED_OPENAI_MODELS = new Map([
 /** openai だけを喋る agent の盤面。`probe` は観測のたびに呼ばれ、回答時の読み直しも同じ口を通る。 */
 async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResult>) {
   t = await bootTidepool({
+    workspace: await makeWorkspace("tidepool"),
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
     openaiUsage: probe,
@@ -912,7 +916,7 @@ it("行の Quarantine の question に「the row can run again」と答えると
 
 // 行の Quarantine は root(economy の review —— 種の economy 行は1行だけ)が拾われてから開く。出題の扉は止まらない
 it("model ごとの行の Quarantine は、表の行と effort の違う対象を pin した子も止め、別の model の兄弟の子は走る(ADR 0200 決定5)", async () => {
-  t = await bootTidepool();
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   const { childIds: [medium, opus] } = await poseInterview(undefined, [SONNET_MEDIUM, OPUS_46], () =>
     registerQuarantine(t.db, "tableRow", tableRowValue("anthropic", "claude-sonnet-5-5"), "refused", t.clock.now()),
   );
@@ -924,7 +928,7 @@ it("model ごとの行の Quarantine は、表の行と effort の違う対象�
 });
 
 it("effort ごとの行の Quarantine は、その effort の対象を pin した子だけを止める(ADR 0218 決定2)", async () => {
-  t = await bootTidepool();
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   const { childIds: [high, low] } = await poseInterview(undefined, [SONNET_ROW_TARGET, SONNET_LOW], () =>
     registerQuarantine(t.db, "tableRowEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "high"), "refused", t.clock.now()),
   );
