@@ -150,6 +150,8 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
 
   expect(resolved).toBeUndefined();
   expect(agentNeedsHuman(db, "suzumedai")).toBe(true);
+  // 未知の名前としてではなく、組み込みの検査で落ちる
+  expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", seedTierNames, "work")).toThrow(/runs reviews only/);
 });
 
 it("Interview の root の空の assignee は Interviewer ポインタに解決され、spawn の解決と pickup 候補の fallback が一致する —— 本番の review は Auditor、名指した root はその agent(ADR 0269 決定2)", () => {
