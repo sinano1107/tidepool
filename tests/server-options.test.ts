@@ -231,9 +231,9 @@ it("組み立てられたオプションは watchdog を持つ(#172)", async () 
 // 値は「一晩を無駄にしない上限」と「正常な長時間タスクを殺さない下限」の間の判断で
 // あって導出ではないので、動かすときに目に入るようここで固定する。すべて分単位に
 // 量子化される — WATCHDOG_TICK が 60秒なので、それ未満の差は tick に丸められる。
-it("時間リミットは work=90分 / review=45分、猶予は 1 tick(#172)", () => {
+it("時間リミットは work=90分 / review=45分 / memory_repair=90分(work と同じ、ADR 0272 決定4)、猶予は 1 tick(#172)", () => {
   expect(WATCHDOG).toEqual({
-    timeLimits: { work: 90 * 60_000, review: 45 * 60_000 },
+    timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000 },
     grace: 60_000,
   });
 });

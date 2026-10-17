@@ -5,6 +5,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { editTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
@@ -116,6 +117,34 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     expect(getTask(db, waiting.id)).toMatchObject({ status: "todo", assignee: null, workspace: null });
     expect(getTask(db, human.id)).toMatchObject({ assignee: "human", workspace: null });
     expect(getTask(db, question.id)).toMatchObject({ assignee: question.assignee, workspace: null });
+
+    scheduler.stop();
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("pickup された assignee 未指定の memory_repair には work と同じく既定 agent の名前が書かれる —— Auditor には落ちない(ADR 0272 決定4 / ADR 0233 決定2)", async () => {
+    const workspace = await makeWorkspace("pickup-fill-memory-repair");
+    const db = openDb(":memory:");
+    const clock = new FakeClock();
+    const scheduler = startScheduler({
+      retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
+      db,
+      clock,
+      slot: new Slot(),
+      worker: new ScriptedWorker(clock, "tako"),
+      containers: fakeContainers(),
+      onSpawnFailed: () => {},
+      onRecordContainerFailed: () => {},
+      taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+      workspace,
+      resolveWorkspace: defaultingTo(workspace),
+      auditorName: "fugu",
+    });
+    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c" }, clock.now(), BOARD_WORKER_ID, "board");
+
+    await clock.advance(HOURLY);
+
+    expect(getTask(db, memoryRepair.id)).toMatchObject({ status: "in_progress", assignee: "tako", workspace: workspace.name });
 
     scheduler.stop();
   }, GIT_FIXTURE_TEST_TIMEOUT);

@@ -395,7 +395,8 @@ try { (() => {
 const typeStyles = {
   work: { color: "var(--type-work-fg)", symbol: "\u25CF" },
   question: { color: "var(--type-question-fg)", symbol: "?" },
-  review: { color: "var(--type-review-fg)", symbol: "\u25CD" }
+  review: { color: "var(--type-review-fg)", symbol: "\u25CD" },
+  memory_repair: { color: "var(--type-work-fg)", symbol: "\u25D0" }
 };
 function TypeBadge({ type = "work", showLabel = true, style }) {
   const t = typeStyles[type];

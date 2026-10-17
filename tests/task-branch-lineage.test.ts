@@ -1,6 +1,10 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
+import { completeTask, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { resolveTaskBranchLineage } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -9,6 +13,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
@@ -61,6 +66,26 @@ async function rebaseLandOutside(workspacePath: string, taskId: string): Promise
   git(merger, "cherry-pick", "landed");
   git(merger, "push", "origin", "main");
 }
+
+it("memory_repair は review と同じ lineage —— ブランチを持たず、親のブランチがあれば保護ブランチへ merge 済みでもそれを読み口にし、無ければ保護ブランチ(ADR 0272 決定6)", async () => {
+  const workspace = await makeWorkspace("memory-repair-lineage");
+  const db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: workspace.name }, new Date(0), ...HUMAN_WEBUI);
+  const lineage = (type: "work" | "review" | "memory_repair") =>
+    resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), BOARD_WORKER_ID, "board")).branch;
+  expect(lineage("memory_repair")).toBeUndefined();
+
+  git(workspace.path, "checkout", "-b", `task/${parent.id}`, "main");
+  commitWork(workspace.path, "parent.txt", "parent work\n");
+  git(workspace.path, "checkout", "main");
+  git(workspace.path, "merge", "--no-ff", `task/${parent.id}`, "-m", "merge parent");
+  completeTask(db, parent, FULL_HANDOFF, "tako", new Date(0), "worker");
+
+  expect(lineage("work")).toBeUndefined();
+  expect(lineage("review")).toBe(`task/${parent.id}`);
+  expect(lineage("memory_repair")).toBe(`task/${parent.id}`);
+  db.close();
+});
 
 it("decompose の子は親ブランチから切られ、完了すると親ブランチへ戻って PR も着地 question も作らない", async () => {
   const workspace = await makeWorkspace("lineage");

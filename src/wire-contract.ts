@@ -72,7 +72,7 @@ export interface QueueTask {
 
 /** 盤面の行と task 詳細が共有する欄。 */
 export interface BoardTask extends QueueTask {
-  type: "work" | "question" | "review";
+  type: "work" | "question" | "review" | "memory_repair";
   parent_id: string | null;
   /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。 */
   interview_root_id: string | null;

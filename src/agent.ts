@@ -13,7 +13,7 @@ import {
   UnknownAgentError,
 } from "./registry.js";
 import { unsettledSql } from "./task-status.js";
-import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
+import { type TaskType, typeAwareDefaultAgentSql, workSideTypeSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
 import type { WorkspaceResolver } from "./workspace.js";
 
@@ -119,7 +119,7 @@ export function resolveAgentOrQuarantine(
  *  (`"absent"` when no registry is configured at all — in which case only the
  *  "no more unsettled tasks" path can ever clear it). The built-in never counts
  *  as "back" (ADR 0228 決定4): a name resolving to it is not repaired, and while
- *  it does, only work counts as a dependent. `"registry"` means the name passes
+ *  it does, only a work-side task (work or memory_repair, `workSideTypeSql`) counts as a dependent. `"registry"` means the name passes
  *  pickup's resolution, not merely that an entry exists (issue #1745): an entry
  *  whose definition does not hold is `"absent"`, and `definitionFailure` names why. */
 export function verifyAgentRepaired(
@@ -137,8 +137,8 @@ export function verifyAgentRepaired(
     ? `agent ${agentName}'s definition still does not hold (${definitionFailure})`
     : `agent ${agentName} is not back in the registry`;
   const fallback = typeAwareDefaultAgentSql("tasks");
-  // 名前が組み込みに解決される間、review は組み込みが走らせられるので依存に数えない(ADR 0228 決定4)
-  const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
+  // 名前が組み込みに解決される間、依存に数えるのは work 側の task だけ —— review は組み込みが走らせられる(ADR 0228 決定4)
+  const dependentTypes = resolution === "built-in" ? workSideTypeSql("tasks") : "type != 'question'";
   const stillUnsettled = db
     .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND ${unsettledSql("status")}
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)

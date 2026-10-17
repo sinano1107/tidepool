@@ -65,3 +65,15 @@ it("組み込み agent に解決される名前は work / question の assignee 
 it("組み込みに解決されない名前はどの type の assignee にも取れる —— shadow している組み込みの名前も同じ(ADR 0235 決定3)", () => {
   for (const type of ["work", "question", "review"]) expect(whyAssigneeCannotTake("fugu", type, false)).toBeUndefined();
 });
+
+import { whyExecutionRequestIsInert, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
+
+it("memory_repair は実行の設定で work の側 —— 組み込みに解決される名前は assignee に取れず、tier / priority の要求は効き、review_by / review_flag は効かない(ADR 0272 決定4・5 / ADR 0228 決定1)", () => {
+  expect(whyAssigneeCannotTake("fugu", "memory_repair", true)).toBe("agent fugu is the built-in agent, which runs reviews only");
+  expect(whyAssigneeCannotTake("fugu", "memory_repair", false)).toBeUndefined();
+  expect(whyExecutionRequestIsInert({ type: "memory_repair" })).toBeUndefined();
+  for (const parent_id of [null, "parent"]) {
+    expect(whyNoCompletionReview({ type: "memory_repair", parent_id, risk_flag: true })).toBe("completion review fires for work tasks only");
+    expect(whyReviewFlagIsInert({ type: "memory_repair", parent_id })).toBe("completion review fires for work tasks only");
+  }
+});
