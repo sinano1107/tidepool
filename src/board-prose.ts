@@ -269,7 +269,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   // by this worker at or before the entry. Map insertion order is
   // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
   // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)
-  const byVersion = new Map<string, { commit: string; version: string; entryIds: number[] }>();
+  const byVersion = new Map<string, number[]>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
     const spawned = events
@@ -286,14 +286,13 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
       { kind: "worker_spawned" }
     >;
     const key = JSON.stringify([registry_commit, definition_version]);
-    const group = byVersion.get(key) ?? { commit: registry_commit, version: definition_version, entryIds: [] };
-    group.entryIds.push(entryId);
-    byVersion.set(key, group);
+    byVersion.set(key, [...(byVersion.get(key) ?? []), entryId]);
   }
   const parent = getTask(db, task.parent_id);
   const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
   const resolved: Array<{ entryIds: number[]; agent: AgentAtCommit; registry: RegistryAtCommit }> = [];
-  for (const { commit, version, entryIds } of byVersion.values()) {
+  for (const [key, entryIds] of byVersion) {
+    const [commit, version]: [string, string] = JSON.parse(key);
     const registry = registryAtCommit(registryDir, commit);
     const atCommit = registry && ownEntry(registry.agents, task.assignee);
     // 組み込みの本文は registry commit に無く、記録の内容 hash で盤面の履歴表から引く(ADR 0270 決定3)
