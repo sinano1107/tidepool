@@ -1321,9 +1321,10 @@ export function escalateTask(
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name
  *  why — an abandon answer or a human's direct cancel) to each. An attached
- *  review child and everything below it is spared (`survivesParentCancelSql`,
- *  ADR 0268 決定4). `done`
- *  descendants are left untouched (nothing degrades a completed record);
+ *  RCA review and everything below it is spared (`survivesParentCancelSql`,
+ *  ADR 0271 決定3); a completion review or human-registered review under a `done`
+ *  descendant falls. `done` descendants are descended through but left untouched
+ *  (nothing degrades a completed record);
  *  `cancelled` counts as finished for the blocked derivation, which is what
  *  lets the cancelled tree's own parent return to `todo` and pick up work
  *  again. The plan is discarded wholesale rather than branch-by-branch — no
@@ -1431,8 +1432,8 @@ export interface CancelDefaults {
  *
  *  The subtree follows `parent_id` only, so an Interview root's examinees and their
  *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3).
- *  Like the cascade, it stops at an attached review: what stands under one is not
- *  cancelled, so it gates nothing (ADR 0268 決定4). */
+ *  Like the cascade, it stops at a surviving RCA review: what stands under one is not
+ *  cancelled, so it gates nothing; what stands under a falling review gates (ADR 0271 決定3). */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = subtreeSql("@root", `NOT ${survivesParentCancelSql("c")}`);
   const failure = db
@@ -3071,12 +3072,29 @@ function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
 }
 
-/** An attached child the parent's cancel leaves running (ADR 0268 決定4): the line is whether its artifact
- *  rides the lineage back into the dying branch. A review commits nothing and is skipped by the lineage
- *  (ADR 0053), so it still reads the parent's log and delivers its findings; an attached work (repair) or
- *  proposal question falls with the parent. */
+/** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4): only one whose
+ *  work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115). It is told
+ *  by its registration record carrying the objections it bundles, never by title. A completion review and a
+ *  human-registered review child fall: their repair cannot land and their fitness is to a discarded criterion.
+ *  An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
-  return `(${rowRef}.type = 'review' AND NOT ${awaitedChildSql(rowRef)})`;
+  return `(${rowRef}.type = 'review' AND NOT ${awaitedChildSql(rowRef)}
+    AND EXISTS (SELECT 1 FROM events registered WHERE registered.task_id = ${rowRef}.id AND registered.kind = 'task_registered'
+      AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
+}
+
+/** 成果が捨てられた task か(ADR 0271 決定1): root との間(root を含み自身を除く)に cancelled の work の祖先を挟む。
+ *  ADR 0239 決定1 と同じ線で、状態だけを読む。`parent_id` だけをたどる —— 受験者は親を持たないので Interview の root へは渡らない。 */
+export function isArtifactDiscarded(db: Db, taskId: string): boolean {
+  const row = db
+    .prepare(
+      `WITH RECURSIVE ancestors(id) AS (
+          SELECT parent_id FROM tasks WHERE id = ?
+          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+       SELECT 1 FROM tasks WHERE id IN (SELECT id FROM ancestors) AND type = 'work' AND status = 'cancelled' LIMIT 1`,
+    )
+    .get(taskId);
+  return row !== undefined;
 }
 
 /** The parent this row is holding up, or NULL — `listYourTasks` and `questionBlocking` share it. */

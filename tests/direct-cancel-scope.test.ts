@@ -12,10 +12,12 @@ import {
   completeTask,
   editTask,
   getTask,
+  isArtifactDiscarded,
   listBoard,
   listChildren,
   logDecision,
   nextSlotTask,
+  pickupTask,
   registerTask,
   type Task,
   taskHistoryRows,
@@ -186,7 +188,7 @@ it("carriesHumanWords は承認で実体化した子では false、人間の roo
   expect(carriesHumanWords(db, approvedChild.id)).toBe(false);
 });
 
-// cancel の cascade は修理子を倒し、review の付帯子は残す(ADR 0268 決定4)
+// cancel の cascade は修理子を倒し、RCA review は残す(ADR 0268 決定4 / ADR 0271 決定3)
 
 /** 人間が登録した work の判断行に異議を打って commit し、修理子と RCA(self / auditor)を付ける。 */
 function objectedAndCommitted(db: Db) {
@@ -200,7 +202,7 @@ function objectedAndCommitted(db: Db) {
 }
 
 it.each(["直接 cancel", "failure question の abandon"] as const)(
-  "異議 → commit の後の親の%sで、修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0268 決定4)",
+  "異議 → commit の後の親の%sで、修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0268 決定4 / ADR 0271 決定3)",
   (path) => {
     db = openDb(":memory:");
     const { parent, repair, rcas } = objectedAndCommitted(db);
@@ -219,7 +221,7 @@ it.each(["直接 cancel", "failure question の abandon"] as const)(
   },
 );
 
-it.each(["開いた failure question", "資源の quarantine"] as const)("残る review の付帯子の下の%sは、親の直接 cancel を塞がない —— cascade と同じ範囲(ADR 0268 決定4)", (gate) => {
+it.each(["開いた failure question", "資源の quarantine"] as const)("残る RCA の下の%sは、親の直接 cancel を塞がない —— cascade と同じ範囲(ADR 0271 決定3)", (gate) => {
   db = openDb(":memory:");
   const { parent, rcas } = objectedAndCommitted(db);
   const auditorRca = rcas.find((rca) => rca.assignee === null)!;
@@ -230,4 +232,129 @@ it.each(["開いた failure question", "資源の quarantine"] as const)("残る
 
   expect(getTask(db, parent.id)!.status).toBe("cancelled");
   for (const task of [auditorRca, question]) if (task) expect(getTask(db, task.id)!.status).toBe("todo");
+});
+
+// cancel が祖先に届いた done の work の付帯子: 完了時レビューと人間登録の review 子は倒れ、RCA だけ残る(ADR 0271 決定3)
+
+/** 人間の root A を agent が B・C に分解し(どちらも review_flag)、両方 done にする。B には人間登録の review 子と、
+ *  B の判断行への異議で修理子と RCA を付ける。C の完了時レビューは走行中にする。 */
+function doneChildrenWithAttachments(db: Db) {
+  const target = registerTask(db, { type: "work", title: "A", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [child, sibling] = decomposeTaskViaWorker(
+    db,
+    target,
+    {
+      reason: "split",
+      children: [
+        { title: "B", purpose: "p", completion_criteria: "c", review_flag: true },
+        { title: "C", purpose: "p", completion_criteria: "c", review_flag: true },
+      ],
+    },
+    "deckhand",
+    NOW,
+  );
+  const entry = logDecision(db, child!, "deckhand's call", "deckhand", NOW, "worker");
+  completeTask(db, child!, FULL_HANDOFF, "deckhand", NOW, "worker");
+  completeTask(db, sibling!, FULL_HANDOFF, "deckhand", NOW, "worker");
+  const humanReview = registerTask(db, { type: "review", title: "human review", purpose: "p", completion_criteria: "c", parent_id: child!.id }, NOW, ...HUMAN_WEBUI);
+  startTriage(db, NOW);
+  raiseObjection(db, entry, "redo it", NOW);
+  commitTriage(db, NOW, [], new Map());
+  const kids = listChildren(db, child!.id);
+  const runningReview = pickupTask(db, listChildren(db, sibling!.id)[0]!, "shako", NOW)!;
+  expect(runningReview.status).toBe("in_progress");
+  return {
+    target: getTask(db, target.id)!,
+    child: getTask(db, child!.id)!,
+    completionReview: kids.find((c) => c.title === "review: B")!,
+    humanReview,
+    runningReview,
+    repair: kids.find((c) => c.type === "work")!,
+    rcas: kids.filter((c) => c.title.startsWith("rca")),
+  };
+}
+
+it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
+  "祖先の%sで、done の子の完了時レビュー・人間登録の review 子・走行中の完了時レビュー・修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0271 決定3)",
+  (path) => {
+    db = openDb(":memory:");
+    const { target, child, completionReview, humanReview, runningReview, repair, rcas } = doneChildrenWithAttachments(db);
+    expect(rcas).toHaveLength(2);
+
+    if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+    else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
+
+    expect([target, completionReview, humanReview, runningReview, repair].map((task) => getTask(db, task.id)!.status)).toEqual(Array(5).fill("cancelled"));
+    expect(getTask(db, child.id)!.status).toBe("done");
+    expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
+    expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
+    for (const rca of rcas) {
+      expect(taskHistoryRows(db, child.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
+      expect(completeTask(db, getTask(db, rca.id)!, undefined, "auditor", NOW, "worker").status).toBe("done");
+    }
+  },
+);
+
+/** 人間の root P を agent が同じ判断で S1・S2 に分解し(S1 は review_flag)、S1 だけ done にする。 */
+function doneSiblingOfFailed(db: Db) {
+  const parent = registerTask(db, { type: "work", title: "P", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [done, failed] = decomposeTaskViaWorker(
+    db,
+    parent,
+    {
+      reason: "split",
+      children: [
+        { title: "S1", purpose: "p", completion_criteria: "c", review_flag: true },
+        { title: "S2", purpose: "p", completion_criteria: "c" },
+      ],
+    },
+    "deckhand",
+    NOW,
+  );
+  completeTask(db, done!, FULL_HANDOFF, "deckhand", NOW, "worker");
+  return { parent, done: done!, failed: failed!, review: listChildren(db, done!.id)[0]! };
+}
+
+it("兄弟の abandon(親は生きて再計画)では、done の兄弟の完了時レビューは todo のまま残る(ADR 0271 決定3)", () => {
+  db = openDb(":memory:");
+  const { parent, failed, review } = doneSiblingOfFailed(db);
+
+  answerQuestionViaWebui(db, failureQuestion(db, failed.id, NOW), ["abandon"], NOW);
+
+  expect(getTask(db, failed.id)!.status).toBe("cancelled");
+  expect(getTask(db, parent.id)!.status).not.toBe("cancelled");
+  expect(getTask(db, review.id)!.status).toBe("todo");
+});
+
+it("倒れる完了時レビューの下の開いた failure question は祖先の直接 cancel を塞ぎ、残る RCA の下のものは塞がない —— cascade と同じ述語(ADR 0271 決定3)", () => {
+  db = openDb(":memory:");
+  const falling = doneChildrenWithAttachments(db);
+  failureQuestion(db, falling.completionReview.id, NOW);
+  const surviving = doneChildrenWithAttachments(db);
+  const underRca = failureQuestion(db, surviving.rcas[0]!.id, NOW);
+
+  expect(() => cancelTaskDirectly(db, falling.target, null, NOW, {}, "webui")).toThrow(DomainError);
+  expect(getTask(db, falling.target.id)!.status).toBe("todo");
+  cancelTaskDirectly(db, surviving.target, null, NOW, {}, "webui");
+  expect(getTask(db, surviving.target.id)!.status).toBe("cancelled");
+  expect(getTask(db, underRca.id)!.status).toBe("todo");
+});
+
+it("成果が捨てられた task は cancelled の work の祖先を挟む task で、自身だけが cancelled の task・祖先が全部生きている task・兄弟 abandon 後の done の兄弟は当たらない(ADR 0271 決定1)", () => {
+  db = openDb(":memory:");
+  const { target, child, rcas } = doneChildrenWithAttachments(db);
+  expect(isArtifactDiscarded(db, child.id)).toBe(false);
+
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+
+  expect(isArtifactDiscarded(db, child.id)).toBe(true);
+  expect(isArtifactDiscarded(db, rcas[0]!.id)).toBe(true);
+  expect(isArtifactDiscarded(db, target.id)).toBe(false);
+
+  const { done, failed, review } = doneSiblingOfFailed(db);
+  answerQuestionViaWebui(db, failureQuestion(db, failed.id, NOW), ["abandon"], NOW);
+
+  expect(isArtifactDiscarded(db, failed.id)).toBe(false);
+  expect(isArtifactDiscarded(db, done.id)).toBe(false);
+  expect(isArtifactDiscarded(db, review.id)).toBe(false);
 });
