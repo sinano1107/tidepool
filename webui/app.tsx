@@ -751,7 +751,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   // ADR 0271 決定4: 捨てられる done の work は開いた時点で読む(盤面の行は持たない)
-  const [discards, setDiscards] = React.useState<{ id: string; title: string }[]>([]);
+  const [discards, setDiscards] = React.useState<TpDiscard[]>([]);
   React.useEffect(() => {
     api('GET /api/tasks/:id', { params: { id: task.id } }).then((t) => setDiscards(t.discards)).catch(() => {});
   }, [task.id]);
