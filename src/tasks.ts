@@ -1433,7 +1433,8 @@ export interface CancelDefaults {
  *  The subtree follows `parent_id` only, so an Interview root's examinees and their
  *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3).
  *  Like the cascade, it stops at a surviving RCA review: what stands under one is not
- *  cancelled, so it gates nothing; what stands under a falling review gates (ADR 0271 決定3). */
+ *  cancelled, so it gates nothing; what stands under a falling review gates (ADR 0271 決定3). The quarantine
+ *  half reads only unsettled rows, as the cascade marks only those: a settled review holds no resource. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
   const subtree = subtreeSql("@root", `NOT ${survivesParentCancelSql("c")}`);
   const failure = db
@@ -1456,7 +1457,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
     .prepare(
       `${subtree}
        SELECT 1 FROM tasks x
-       WHERE x.id IN (SELECT id FROM subtree)
+       WHERE x.id IN (SELECT id FROM subtree) AND ${unsettledSql("x.status")}
          AND (COALESCE(x.workspace, @defaultWorkspaceName) IN (SELECT value FROM json_each(@workspaces))
            OR COALESCE(x.assignee, ${fallback}) IN (SELECT value FROM json_each(@assignees)))
        LIMIT 1`,
@@ -3083,14 +3084,19 @@ function survivesParentCancelSql(rowRef: string): string {
       AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
 }
 
+/** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。 */
+export function ancestorsSql(taskRef: string): string {
+  return `WITH RECURSIVE ancestors(id) AS (
+      SELECT parent_id FROM tasks WHERE id = ${taskRef}
+      UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)`;
+}
+
 /** 成果が捨てられた task か(ADR 0271 決定1): root との間(root を含み自身を除く)に cancelled の work の祖先を挟む。
  *  ADR 0239 決定1 と同じ線で、状態だけを読む。`parent_id` だけをたどる —— 受験者は親を持たないので Interview の root へは渡らない。 */
 export function isArtifactDiscarded(db: Db, taskId: string): boolean {
   const row = db
     .prepare(
-      `WITH RECURSIVE ancestors(id) AS (
-          SELECT parent_id FROM tasks WHERE id = ?
-          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+      `${ancestorsSql("?")}
        SELECT 1 FROM tasks WHERE id IN (SELECT id FROM ancestors) AND type = 'work' AND status = 'cancelled' LIMIT 1`,
     )
     .get(taskId);
