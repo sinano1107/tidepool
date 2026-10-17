@@ -41,7 +41,7 @@ it("DELETE /api/agents/:name は名前と confirm を verb へ渡し、200 を�
   expect(calls).toEqual([{ name: "tako", confirm: true }]);
 });
 
-it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名・Auditor 名を参照検査の事実として渡す(issue #376)", async () => {
+it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名・Auditor 名・Interviewer 名を参照検査の事実として渡す(issue #376 / ADR 0269 決定2)", async () => {
   const refs: AgentDeletionReferences[] = [];
   t = await bootTidepool({
     workerId: "tako",
@@ -66,7 +66,7 @@ it("DELETE /api/agents/:name は未決着タスクの件数・既定 agent 名�
   await api(t.baseUrl, "DELETE", "/api/agents/fugu", { confirm: true });
 
   expect(refs).toEqual([
-    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskIds: [], defaultAgentName: "tako", auditorName: "fugu" },
+    { unsettledTaskCount: 4, unsettledWorkTaskCount: 2, awaitingLandingTaskIds: [], defaultAgentName: "tako", auditorName: "fugu", interviewerName: "suzumedai" },
   ]);
 });
 
