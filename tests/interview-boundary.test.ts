@@ -212,7 +212,7 @@ it("root の HEAD が保護ブランチと共通祖先を持たなければ出�
   git(workspacePath, "checkout", "--orphan", "lone");
   git(workspacePath, "commit", "--allow-empty", "-m", "no shared history");
 
-  const posed: any = await callAsTask(t, root.id, "pose_probe", POSE).catch((err: unknown) => ({ isError: true, err }));
+  const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
   expect(posed.isError).toBe(true);
   expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
