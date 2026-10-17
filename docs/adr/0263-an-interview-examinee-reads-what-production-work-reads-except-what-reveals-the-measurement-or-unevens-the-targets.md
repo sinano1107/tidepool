@@ -66,3 +66,13 @@
 決定7 の「書く verb は残す」は消えた —— 受験者は記憶を書かない(ADR 0268 決定2)。退けた案「pin の子に記憶を書く verb を見せない」の根拠
 「本番と違う条件を作る」は、決定2 の2つの理由のどちらでもなく、採点されるのは成果物で書き込みは副作用である。決定10 の sweep は、受験者の
 tools/list に記憶を書く verb が無いことも釘にする。
+
+## 追記4(2026-10-17 の triage、issue #2022)
+
+決定6 の「出題が記録した保護ブランチの head」は **root の分岐元** —— root の pickup の時点の保護ブランチの head —— を指す。
+出題の verb が呼ばれた時点の remote-tracking ref ではない: 着地の収束は root の session の最中にも保護ブランチの写しを進める
+(session を見る門があるのは merge back のやり直しだけ)ので、その時点の ref は root が probe を書いたときに読んでいたコードより
+新しくなりうる。#2014 の「root の pickup の fetch 以降、fetch はしていない」は偽だった。読み方は出題の verb の gate の中で、
+root の checkout の保護ブランチの ref と HEAD の merge-base —— HEAD そのものでないのは root の branch に commit があっても
+保護ブランチ上の sha にするため、pickup の ref の写し(baseline)でないのは盤面自身の書き込みで畳まれるためである。
+全 pin の子が同じ sha から分岐すること(決定6 の主眼)は変わらない。
