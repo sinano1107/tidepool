@@ -6,6 +6,7 @@ import { type EventPayload, listEvents } from "./events.js";
 import {
   type AgentAtCommit,
   type AuthorityProfile,
+  builtInBodyAt,
   ownEntry,
   REVIEWER_AUTHORITY_PROFILE,
   type Registry,
@@ -177,9 +178,10 @@ function versionEvidence(
   registry: RegistryAtCommit,
   parentReviewAssignableTo: string[] | undefined,
 ): string {
-  const body = agent.builtin
-    ? `You ran then as the board's built-in ${assignee}: it had no registry definition at that commit, so there is no body to show.`
-    : agent.body!;
+  const body =
+    agent.builtin && agent.body === ""
+      ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
+      : agent.body!;
   let then: { label: string; guidance: string; assignable_to: string[] };
   if (parentReviewAssignableTo !== undefined) {
     then = {
@@ -265,8 +267,9 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   ].sort((a, b) => a - b);
   // per entry: the spawn live when it was written — the latest worker_spawned
   // by this worker at or before the entry. Map insertion order is
-  // chronological because the entries are.
-  const byCommit = new Map<string, number[]>();
+  // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
+  // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)
+  const byVersion = new Map<string, { commit: string; version: string; entryIds: number[] }>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
     const spawned = events
@@ -278,19 +281,24 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
       unresolved.push(entryId);
       continue;
     }
-    const { registry_commit } = spawned.payload as Extract<
+    const { registry_commit, definition_version } = spawned.payload as Extract<
       EventPayload,
       { kind: "worker_spawned" }
     >;
-    byCommit.set(registry_commit, [...(byCommit.get(registry_commit) ?? []), entryId]);
+    const key = JSON.stringify([registry_commit, definition_version]);
+    const group = byVersion.get(key) ?? { commit: registry_commit, version: definition_version, entryIds: [] };
+    group.entryIds.push(entryId);
+    byVersion.set(key, group);
   }
   const parent = getTask(db, task.parent_id);
   const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
   const resolved: Array<{ entryIds: number[]; agent: AgentAtCommit; registry: RegistryAtCommit }> = [];
-  for (const [commit, entryIds] of byCommit) {
+  for (const { commit, version, entryIds } of byVersion.values()) {
     const registry = registryAtCommit(registryDir, commit);
-    const agent = registry && ownEntry(registry.agents, task.assignee);
-    if (registry === undefined || agent === undefined || (!agent.builtin && agent.body === undefined)) {
+    const atCommit = registry && ownEntry(registry.agents, task.assignee);
+    // 組み込みの本文は registry commit に無く、記録の内容 hash で盤面の履歴表から引く(ADR 0270 決定3)
+    const agent = atCommit?.builtin ? { ...atCommit, body: builtInBodyAt(task.assignee, version) } : atCommit;
+    if (registry === undefined || agent === undefined || agent.body === undefined) {
       unresolved.push(...entryIds);
     } else resolved.push({ entryIds, agent, registry });
   }
@@ -301,7 +309,11 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
       "\n\n## Definition under review (as it stood when you ran the objected task)\n\n" +
-      "This is your agent definition recorded at the commit you were spawned from, with the " +
+      `This is your agent definition ${
+        resolved[0]!.agent.builtin
+          ? "as the board's code carried it at the version you were spawned under"
+          : "recorded at the commit you were spawned from"
+      }, with the ` +
       "Authority and Roster it gave you — " +
       "the version that shaped the decision now under review. Read it as evidence for " +
       '"why did I make that call". You nonetheless carry out this review under your ' +
@@ -316,12 +328,13 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     unresolved.length === 0
       ? ""
       : "\n\nNote: no definition version could be resolved for your objected " +
-        `${entryLabels(unresolved)} (missing session record or ` +
-        "unreachable commit) — the evidence above is incomplete for those judgments.";
+        `${entryLabels(unresolved)} (missing session record, unreachable commit, ` +
+        "or a built-in version this board does not know) — the evidence above is incomplete for those judgments.";
   return (
     "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
     "These are your agent definition bodies recorded at the commits you were spawned " +
-    "from, each with the Authority and Roster it gave you, resolved per objected " +
+    `from${resolved.some((version) => version.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
+    "each with the Authority and Roster it gave you, resolved per objected " +
     "decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
     'for "why did I make that call". You nonetheless carry out this review under your ' +

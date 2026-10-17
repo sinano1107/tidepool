@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
@@ -249,30 +250,18 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
  *  `skills` を満たす正準経路だけが残る。`authority` は ADR 0013 の reviewer 定数の
  *  名前だが、profile map は引かれない(`resolveExecutionAgent` の1分岐)——
  *  組み込みは授権を増やさないので、profile を registry にも map にも生やさない。
- *  `version` は registry の刻印ではないので固定文字列で、spawn 記録の
- *  `definition_version` がこれを運ぶ(当時版は registry commit に無い、ADR 0020)。 */
+ *  `version` は本文の内容 hash で、spawn 記録の `definition_version` がこれを運ぶ
+ *  (当時版は registry commit に無く、本文履歴表から引く —— ADR 0270 決定1)。 */
 const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
-const BUILT_IN_AUDITOR: AgentDefinition = {
-  name: DEFAULT_AUDITOR_NAME,
-  version: "built-in",
-  authority: REVIEWER_AUTHORITY_PROFILE.name,
-  description: "Reviews work independently against its completion criteria.",
-  provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
-  retiredFields: [],
-  icon: "🐡",
-  skills: BUILT_IN_AUDITOR_SKILLS,
-  systemPrompt: "",
-  builtin: true,
-};
 
-/** 組み込みの Interviewer(ADR 0269 決定1): Auditor と同じ機構で、本文に観点(probe・rubric・採点)だけを持つ。
- *  手順(出題・採点完了の呼び方)は verb の説明が運ぶので書かない(ADR 0017)。 */
-const BUILT_IN_INTERVIEWER: AgentDefinition = {
-  ...BUILT_IN_AUDITOR,
-  name: DEFAULT_INTERVIEWER_NAME,
-  description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers.",
-  icon: "🐠",
-  systemPrompt: `You run Interviews: one probe that every target solves, and a score for each answer.
+/** 組み込みごとの本文の履歴(ADR 0270 決定2): 末尾が現在の本文。本文を変える PR は
+ *  旧本文を残して末尾に足す —— self RCA が記録の hash で当時の本文を引く。 */
+const BUILT_IN_BODY_HISTORY: Record<string, readonly string[]> = {
+  [DEFAULT_AUDITOR_NAME]: [""],
+  // 組み込みの Interviewer(ADR 0269 決定1): 本文に観点(probe・rubric・採点)だけを持つ。
+  // 手順(出題・採点完了の呼び方)は verb の説明が運ぶので書かない(ADR 0017)。
+  [DEFAULT_INTERVIEWER_NAME]: [
+    `You run Interviews: one probe that every target solves, and a score for each answer.
 
 Writing the probe and rubric:
 - Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
@@ -285,6 +274,42 @@ Scoring:
 - Answers carry no agent or model name; do not guess one.
 - Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
 - Name, for each answer, what decided its score.`,
+  ],
+};
+
+function bodyHash(body: string): string {
+  return createHash("sha256").update(body).digest("hex").slice(0, 16);
+}
+
+/** 組み込み `name` の、内容 hash が `hash` の版の本文。表に無ければ undefined(ADR 0270 決定3)。 */
+export function builtInBodyAt(name: string, hash: string): string | undefined {
+  return ownEntry(BUILT_IN_BODY_HISTORY, name)?.find((body) => bodyHash(body) === hash);
+}
+
+function builtInBody(name: string): { systemPrompt: string; version: string } {
+  const systemPrompt = BUILT_IN_BODY_HISTORY[name]!.at(-1)!;
+  return { systemPrompt, version: bodyHash(systemPrompt) };
+}
+
+const BUILT_IN_AUDITOR: AgentDefinition = {
+  name: DEFAULT_AUDITOR_NAME,
+  ...builtInBody(DEFAULT_AUDITOR_NAME),
+  authority: REVIEWER_AUTHORITY_PROFILE.name,
+  description: "Reviews work independently against its completion criteria.",
+  provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
+  retiredFields: [],
+  icon: "🐡",
+  skills: BUILT_IN_AUDITOR_SKILLS,
+  builtin: true,
+};
+
+/** 組み込みの Interviewer(ADR 0269 決定1): Auditor と同じ機構で、本文だけが違う。 */
+const BUILT_IN_INTERVIEWER: AgentDefinition = {
+  ...BUILT_IN_AUDITOR,
+  name: DEFAULT_INTERVIEWER_NAME,
+  ...builtInBody(DEFAULT_INTERVIEWER_NAME),
+  description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers.",
+  icon: "🐠",
 };
 
 const BUILT_INS = [BUILT_IN_AUDITOR, BUILT_IN_INTERVIEWER];
@@ -859,7 +884,8 @@ function splitFrontmatter(raw: string): { frontmatter: string; body: string } | 
 
 /** One `agents/<name>.md` as it stood at a past commit: each field undefined
  *  when that commit's file does not carry it in a readable form. `builtin` marks
- *  a built-in standing in for a name with no file there. */
+ *  a built-in standing in for a name with no file there — its body is not at the
+ *  commit, and the caller reads it by content hash via `builtInBodyAt` (ADR 0270). */
 export interface AgentAtCommit {
   body?: string;
   authority?: string;
