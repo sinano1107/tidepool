@@ -11,6 +11,7 @@ import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
 import {
+  ancestorsSql,
   type ClosedRootOf,
   contentSourceFor,
   countUnsettledAttachedChildren,
@@ -418,9 +419,7 @@ function landingRootOf(db: Db, resolve: WorkspaceResolver | undefined, id: strin
 function openPrRootAbove(db: Db, id: string): { id: string; prNumber: number } | undefined {
   const unfinishedPrAncestors = db
     .prepare(
-      `WITH RECURSIVE ancestors(id) AS (
-          SELECT parent_id FROM tasks WHERE id = ?
-          UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)
+      `${ancestorsSql("?")}
        SELECT t.id, t.pr_number AS prNumber FROM tasks t
         WHERE t.id IN (SELECT id FROM ancestors) AND t.pr_number IS NOT NULL
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})`,

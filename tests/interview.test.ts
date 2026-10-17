@@ -840,7 +840,7 @@ it.each(["出題", "採点"] as const)("root の%sの行への異議を commit �
   ]);
 });
 
-it("出題の行への異議から立った RCA は root の retry で倒れず、todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0268 決定4)", () => {
+it("出題の行への異議から立った RCA は root の retry で倒れず、todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0268 決定4 / ADR 0271 決定3)", () => {
   const { db, root } = registerInterview();
   const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
   const [posed] = taskDecisionLog(db, root.id);
