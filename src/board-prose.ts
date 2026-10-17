@@ -332,7 +332,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   return (
     "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
     "These are your agent definition bodies recorded at the commits you were spawned " +
-    `from${resolved.some((version) => version.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
+    `from${resolved.some((entry) => entry.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
     "each with the Authority and Roster it gave you, resolved per objected " +
     "decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +

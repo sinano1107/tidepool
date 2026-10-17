@@ -39,7 +39,9 @@ it("agents/fugu.md の無い registry を読むと、組み込みの fugu が印
   });
 });
 
-it("各組み込みの現在の本文の hash は、その組み込みの本文履歴表で現在の本文に引ける(ADR 0270 決定2)", async () => {
+// 現在の本文は表の末尾から組むので「本文を変えて表に足し忘れ」は形の上で起きない —— 起きうる誤りは末尾の行の
+// 書き換えで、それを捕まえるのは下の hash の釘である
+it("各組み込みの version は現在の本文の hash で、その hash で本文履歴表から現在の本文が引ける(ADR 0270 決定2)", async () => {
   const registry = loadRegistry(await makeRegistry(), "purely-local");
 
   for (const name of ["fugu", DEFAULT_INTERVIEWER_NAME]) {
