@@ -339,6 +339,14 @@ it("倒れる完了時レビューの下の開いた failure question は祖先�
   expect(getTask(db, underRca.id)!.status).toBe("todo");
 });
 
+it("倒れる完了時レビューが使う資源の quarantine は祖先の直接 cancel を塞ぐ(ADR 0271 決定3)", () => {
+  db = openDb(":memory:");
+  const { target } = doneChildrenWithAttachments(db);
+
+  expect(() => cancelTaskDirectly(db, target, null, NOW, { auditorName: "fugu", quarantined: { workspaces: [], assignees: ["fugu"] } }, "webui")).toThrow(DomainError);
+  expect(getTask(db, target.id)!.status).toBe("todo");
+});
+
 it("成果が捨てられた task は cancelled の work の祖先を挟む task で、自身だけが cancelled の task・祖先が全部生きている task・兄弟 abandon 後の done の兄弟は当たらない(ADR 0271 決定1)", () => {
   db = openDb(":memory:");
   const { target, child, rcas } = doneChildrenWithAttachments(db);
