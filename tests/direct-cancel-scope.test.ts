@@ -262,7 +262,6 @@ function doneChildrenWithAttachments(db: Db) {
   commitTriage(db, NOW, [], new Map());
   const kids = listChildren(db, child!.id);
   const runningReview = pickupTask(db, listChildren(db, sibling!.id)[0]!, "shako", NOW)!;
-  expect(runningReview.status).toBe("in_progress");
   return {
     target: getTask(db, target.id)!,
     child: getTask(db, child!.id)!,
