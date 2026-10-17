@@ -47,3 +47,9 @@
 
 - #1913 の問いは経路ごと消える。`resolveTaskBranchLineage` の「ブランチの無い受験者の祖先を飛ばす」分岐にはどの task も届かなくなる。
 - `interviewLeftEmpty` は root 自身の未決着の子も数えるので、開いた RCA を持つ root は最後の対象を外しても自動では cancel されない。
+
+## 追記(2026-10-17 の grilling、issue #2152 / ADR 0271)
+
+決定3 の「成果が盤面に残る」の判定は task 自身の status から「cancelled の work の祖先を挟まない」に広がり、決定4 の線は「review の付帯子は
+全部残る」から「仕事の宛先が親の生死に依らない付帯子(RCA)だけ残る」に引き直された —— 祖先の cancel が届いた done の work の完了時レビューと
+人間登録の review 子は倒れる(ADR 0271 決定1・3)。

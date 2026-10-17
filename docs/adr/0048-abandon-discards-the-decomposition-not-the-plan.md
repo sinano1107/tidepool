@@ -121,3 +121,8 @@ backfill する。ADR 0047 の `history`(未実装)も子ごとに同じ値を�
 
 決定1 の「失敗タスクのサブツリー」が倒すのは、親が待っている子と、成果が親のブランチに帰る付帯子(修理子)である。系譜に透明な review の
 付帯子(RCA、人間登録の review 子)は残って走る(ADR 0268 決定4)。
+
+## 追記2(2026-10-17 の grilling、issue #2152 / ADR 0271)
+
+残って走る review の付帯子は RCA だけになった。abandon が倒す範囲に cancelled になる祖先を持つ done の work の完了時レビューと人間登録の
+review 子は倒れる(ADR 0271 決定3)。兄弟の abandon では done の兄弟は範囲に入らないので、その review は今どおり残る。

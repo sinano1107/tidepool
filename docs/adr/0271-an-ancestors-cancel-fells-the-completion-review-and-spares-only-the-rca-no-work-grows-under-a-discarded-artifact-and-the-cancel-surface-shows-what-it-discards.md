@@ -1,0 +1,47 @@
+# 祖先の cancel は完了時レビューを倒して RCA だけ残し、捨てられた成果の下に work は生えず、cancel の面は捨てる done の work を見せる
+
+2026-10-17 の grilling(issue #2152)で決定。ADR 0268 決定4 で cancel の cascade が review の付帯子を残すようになり、
+abandon / 直接 cancel された祖先の下の **done の子に付いた完了時レビュー** も残る。実測(#2152 のコメント)で、残った review は
+pickup され、`decompose` で修理 work を立て、修理は pickup されて完了し、その成果は **cancelled の根のブランチへ merge back
+されて PR も question も立たず、誰にも知らされない**。done の子の成果が祖先の cancel で捨てられること自体は ADR 0239 決定1
+「abandon で捨てられた判断の内側に残った内容は、運ぶ相手がいない」の決定済みの線で、ADR 0268 が足したのは、捨てた成果の上で review と
+修理の worker が走ることだった。issue が high の根拠にした「修理が着地の根になる」は起きない。
+
+## 決定
+
+1. **成果が捨てられたことの判定は「task と root の間に cancelled の work の祖先を挟む」。** ADR 0239 決定1 と同じ線で、git は読まない。
+   ADR 0268 決定3 の「task 自身が cancelled」をこれに広げる —— done の子の成果は完了時の merge back で祖先のブランチに載っており、
+   祖先が cancelled ならその帰り先は確実に死んでいる。帰り先の生死を系譜(閉じた根・revert)で判定する一般形は root issue へ(帰結)。
+2. **捨てられた成果の下に work は生えない。** 床は domain —— `registerTask` が、決定1 に当たる task を親にする work の登録を扉を問わず
+   拒む(ADR 0268 決定5 と同じ形。人間の登録・人間 decompose も含む)。worker 面はそこで走る review から `decompose` / `redecompose`
+   を伏せ(ADR 0122 決定2 の差し替え)、「成果は祖先の cancel で捨てられている、修理は立たない、findings だけ書け」の1行を注入する ——
+   伏せるだけでは reviewer の guidance「findings become repair tasks」が宙に浮く。異議の commit は修理を飛ばし、帰責と RCA は立てる
+   (決定3 の cancelled の扱いと同じ)。
+3. **cancel の cascade は、cancel が祖先に届いた done の work に付いた完了時レビューと人間登録の review 子を倒し、RCA review だけを
+   残す。** ADR 0268 決定4 の線「review は成果を持たないので親の生死で仕事が変わらない」は RCA には成り立つが完了時レビューには成り立たない
+   —— 宛先(修理・配分評価)が両方とも親の計画と一緒に死ぬ。捨てた基準への適合度を配分評価の注釈にすればノイズになり、修理は着地しない。
+   線は **仕事の宛先が親の生死に依らない付帯子だけ残る** に引き直す: RCA の宛先は帰責(ADR 0115)で、異議は人間が「この判断は誤り」と名指し
+   した行為だから、成果が消えても判断の誤りは消えない。ADR 0198 決定3 が完了時レビューを守った理由「抜けば root がレビュー無しで着地する」
+   は、着地しない root には当たらない。兄弟の abandon(親は生きて再計画)では done の兄弟は範囲に入らず、その review は残る ——
+   成果は親と一緒に着地するので正しい。
+4. **cancel の面は、捨てられる done の work(agent が実行したもの)の件数と題を見せる。** 直接 cancel の確認と failure question の表示が
+   表示時に同じ読み口で読む(question の本文に焼き込まない —— 答えるまでに done の子は増える)。gate にはしない: cancel は人間の判断で、
+   盤面は材料を見せるだけ(ADR 0198 の「判断の主」)。使用量・所要時間は添えない。
+5. **管理MCP の `cancel_task` は通したうえで、ack に同じ欄を載せ、`get_task` / `list_board` にも出す**(ADR 0082 決定1 の形)。
+   確認を agent に肩代わりさせる引数は作らない。ADR 0088 が確認を WebUI に閉じた理由(worker の素材に仕込まれた指示が権限拡大に着地する)は
+   cancel には当たらない —— cancel は権限を広げず、その危険は今日の `cancel_task` にも同じだけある。
+
+## 退けた形
+
+- **完了時レビューを残し、修理だけ止める** —— review の token は回収できず、配分評価には捨てた基準への適合度が入る。
+- **RCA も倒す** —— ADR 0198 決定3「規則が要求する入力」を cancel 経由で越え、人間が異議で頼んだ学びを捨てる。
+- **修理を立てて pickup が飛ばす** —— ADR 0268 が退けた形。cancelled の根には reopen の道が無い。
+- **捨てる done の work があれば拒んで WebUI へ案内する(ADR 0088 の形)** —— 対話中の人間が最も使う「分解ツリーを捨てる」操作だけが
+  MCP で詰まる。
+- **判定を lineage の帰り先で行う** —— 閉じた根(#2121)・revert(#2120)も捕まえられるが登録時に git を読む。root issue の問いに置く。
+
+## 帰結
+
+- ADR 0268 決定3 の述語と決定4 の線はこの ADR が改める(0268 / 0048 / 0198 に追記)。
+- cancelled の祖先の下で残る review は RCA だけになるので、#2151(残った review が親のブランチの片づけ後に spawn できるか)は RCA に限る。
+- 「帰り先が死んだ系譜の上で付帯子が立ち・走る」の族(#2120 / #2121 / #1855)は root issue に寄せ、述語の一般形はそこで決める。

@@ -42,3 +42,8 @@
 決定3 が守った RCA review は、親の直接 cancel・Interview の root の retry・failure question の abandon の cascade でも倒れなくなった ——
 倒れるのは親が待っている子と修理子だけで、系譜に透明な review の付帯子は残って走る(ADR 0268 決定4)。親経由で「規則が要求する入力」を
 黙って抜く形はこれで閉じる。
+
+## 追記2(2026-10-17 の grilling、issue #2152 / ADR 0271)
+
+決定3 が完了時レビューを守った理由「抜けば root がレビュー無しで着地する」は、着地しない root には当たらない。祖先の cancel が届いた done の
+work の完了時レビューは cascade で倒れ、RCA review だけが残る(ADR 0271 決定3)。直接 cancel が完了時レビューを**名指し**できない線は変わらない。
