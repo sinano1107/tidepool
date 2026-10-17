@@ -69,9 +69,8 @@ async function rebaseLandOutside(workspacePath: string, taskId: string): Promise
 it("memory_repair は review と同じ lineage —— ブランチを持たず、親のブランチがあれば保護ブランチへ merge 済みでもそれを読み口にし、無ければ保護ブランチ(ADR 0272 決定6)", async () => {
   const workspace = await makeWorkspace("memory-repair-lineage");
   const db = openDb(":memory:");
-  type Attached = "work" | "review" | "memory_repair";
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: workspace.name }, new Date(0), ...HUMAN_WEBUI);
-  const lineage = (type: Attached) =>
+  const lineage = (type: "work" | "review" | "memory_repair") =>
     resolveTaskBranchLineage(db, workspace, registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", parent_id: parent.id }, new Date(0), ...HUMAN_WEBUI)).branch;
   expect(lineage("memory_repair")).toBeUndefined();
 
