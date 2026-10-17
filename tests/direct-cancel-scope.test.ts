@@ -412,6 +412,19 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
   expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
 });
 
+it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "R", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const mid = registerTask(db, { type: "work", title: "M", purpose: "p", completion_criteria: "c", parent_id: root.id }, NOW, ...HUMAN_WEBUI);
+  const leaf = registerTask(db, { type: "review", title: "Q", purpose: "p", completion_criteria: "c", parent_id: mid.id }, NOW, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, mid, null, NOW, {}, "webui");
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
+
+  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: leaf.id }, NOW, BOARD_WORKER_ID, "board")).toThrow(
+    new RegExp(`cancel of ancestor "R" \\(${root.id}\\) discarded`),
+  );
+});
+
 it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);

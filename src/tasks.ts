@@ -436,9 +436,6 @@ export interface InterviewTarget {
   tier: Tier;
 }
 
-/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
- *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
- *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
@@ -446,6 +443,9 @@ function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "
   }
 }
 
+/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
+ *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
+ *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
 export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
   if (input.interview_targets === undefined) return;
   if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
@@ -2680,7 +2680,7 @@ export function decomposeTask(
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
-  // 承認 question に包む子も、承認の時でなくここで拒む
+  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2)
   assertArtifactNotDiscarded(db, { type: "work", parent_id: parent.id });
   input = {
     ...input,
@@ -3132,11 +3132,12 @@ function survivesParentCancelSql(rowRef: string): string {
       AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
 }
 
-/** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。 */
+/** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。
+ *  `depth` は起点からの段数(親が 1)。 */
 export function ancestorsSql(taskRef: string): string {
-  return `WITH RECURSIVE ancestors(id) AS (
-      SELECT parent_id FROM tasks WHERE id = ${taskRef}
-      UNION SELECT t.parent_id FROM tasks t JOIN ancestors a ON t.id = a.id)`;
+  return `WITH RECURSIVE ancestors(id, depth) AS (
+      SELECT parent_id, 1 FROM tasks WHERE id = ${taskRef}
+      UNION SELECT t.parent_id, a.depth + 1 FROM tasks t JOIN ancestors a ON t.id = a.id)`;
 }
 
 /** 成果が捨てられた task か(ADR 0271 決定1): root との間(root を含み自身を除く)に cancelled の work の祖先を挟む。
@@ -3150,12 +3151,12 @@ export function isArtifactDiscarded(db: Db, taskId: string): boolean {
 export const ARTIFACT_DISCARDED_NOTICE =
   "The artifact under review was discarded by a cancel in this task's lineage: no repair task can stand here, so write findings only.";
 
-/** 決定1 に当てた cancelled の work の祖先(どれか1つ)。拒否文が名指す。 */
+/** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
 function discardingAncestor(db: Db, taskId: string): Task | undefined {
   const id = db
     .prepare(
       `${ancestorsSql("?")}
-       SELECT id FROM tasks WHERE id IN (SELECT id FROM ancestors) AND type = 'work' AND status = 'cancelled' LIMIT 1`,
+       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND t.status = 'cancelled' ORDER BY a.depth DESC LIMIT 1`,
     )
     .pluck()
     .get(taskId) as string | undefined;
