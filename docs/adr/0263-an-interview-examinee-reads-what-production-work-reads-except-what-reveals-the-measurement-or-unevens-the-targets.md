@@ -76,3 +76,4 @@ tools/list に記憶を書く verb が無いことも釘にする。
 root の checkout の保護ブランチの ref と HEAD の merge-base —— HEAD そのものでないのは root の branch に commit があっても
 保護ブランチ上の sha にするため、pickup の ref の写し(baseline)でないのは盤面自身の書き込みで畳まれるためである。
 全 pin の子が同じ sha から分岐すること(決定6 の主眼)は変わらない。
+退けた形: 着地の収束の写しの更新に session の門を足す —— landing 側を変える案で、出題側で分岐元を記録すれば足りる。
