@@ -57,6 +57,7 @@ function composition(): BoardComposition {
     workspacesDirSource: "configured",
     defaultAgentName: "tako",
     auditorName: "shako",
+    interviewerName: "suzumedai",
     boardState: [],
     moonshotApiKeyFile: "/nonexistent/moonshot-api-key",
     codexHome: "/nonexistent/codex-home",
@@ -400,7 +401,7 @@ it("harnessContainment は entry の Provider を正準 Harness に通し、ど�
   // entry の名前を canonicalHarness に通さず比べる変異: "openai" !== "codex" で codex が空になり赤
   expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt"]);
   // some → every の変異: both がどちらの Harness にも入らなくなって赤
-  expect(harnessContainment?.(["claude-code"])).toEqual(["both", "deckhand", "fugu"]);
+  expect(harnessContainment?.(["claude-code"])).toEqual(["both", "deckhand", "fugu", "suzumedai"]);
 });
 
 it("harnessContainment は anthropic だけの registry では codex を空で返す(#1013)", async () => {
@@ -415,7 +416,7 @@ it("harnessContainment は不正な定義の agent を throw せず除く(#1013)
   });
   // assertValidAgentDefinition の門を外すと canonicalHarness が未知の Provider で落ち、
   // throw して赤。registry の読み込みは倒れない(ADR 0097 決定3)
-  expect(harnessContainment?.(["claude-code"])).toEqual(["deckhand", "fugu"]);
+  expect(harnessContainment?.(["claude-code"])).toEqual(["deckhand", "fugu", "suzumedai"]);
 });
 
 it("providerAuth は entry の Provider 名を文字列のまま突き合わせ、どれか1つ該当すれば返す(#1013)", async () => {
@@ -425,7 +426,7 @@ it("providerAuth は entry の Provider 名を文字列のまま突き合わせ�
   });
   // some → every の変異: both が落ちて赤。全 agent を返す変異は下の anthropic 側で赤
   expect(providerAuth?.(["openai"])).toEqual(["both", "gpt"]);
-  expect(providerAuth?.(["anthropic"])).toEqual(["both", "deckhand", "fugu"]);
+  expect(providerAuth?.(["anthropic"])).toEqual(["both", "deckhand", "fugu", "suzumedai"]);
 });
 
 it("providerAuth は anthropic だけの registry では openai を空で返す(#1013)", async () => {
@@ -503,7 +504,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
   // 残りの registry 由来の口も、registry の中身をそのまま映していること
   // roster は組み込みを除き、候補は残して組み込みに解決される名前を別に添える(ADR 0235 決定1・3)
   expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand"]);
-  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "human"], builtIns: ["fugu"] });
+  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "suzumedai", "human"], builtIns: ["fugu", "suzumedai"] });
   // assignee 未設定は defaultAgentName へ。registry の知らない名前は「profile 無し」に
   // 潰さず、agent 名の quarantine の入口が受ける解決失敗として投げる(ADR 0217 決定3)
   expect(options.resolveAuthority?.(null, "work")).toBeDefined();
@@ -546,7 +547,7 @@ it("組み込みを shadow している盤面では、その名前は roster に
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
 
   expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
-  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "human"], builtIns: [] });
+  expect(options.registryCandidates?.()).toMatchObject({ assignees: ["deckhand", "fugu", "suzumedai", "human"], builtIns: ["suzumedai"] });
 });
 
 /** issue #1745: agent quarantine の解除検査の「registry に戻った」は pickup の解決に通ること。

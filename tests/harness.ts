@@ -249,6 +249,7 @@ export interface BootOptions {
   /** The board's Auditor pointer (issue #15 layer 2). Absent → falls back to
    *  `DEFAULT_AUDITOR_NAME` inside `commitTriage` itself. */
   auditorName?: string;
+  interviewerName?: string;
   /** Whether an explicitly named workspace is protected (issue #15 layer 2 /
    *  ADR 0013). Absent → no workspace is protected. */
   isProtectedWorkspace?: (name: string) => boolean;
@@ -376,6 +377,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     behaviorDraftClient: options.behaviorDraftClient,
     push,
     auditorName: options.auditorName,
+    interviewerName: options.interviewerName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     listAgents: options.listAgents,
     workspaceAdmin: options.workspaceAdmin,

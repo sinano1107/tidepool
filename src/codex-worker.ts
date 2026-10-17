@@ -27,7 +27,7 @@ import {
 } from "./codex-app-server.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { appendEvent, type EventPayload } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { git } from "./git.js";
@@ -282,6 +282,7 @@ export interface CodexWorkerOptions {
   registry: RegistrySource;
   agent: string;
   auditorName?: string;
+  interviewerName?: string;
   workspace: string;
   workspacesDir?: string;
   mcpUrl: string;
@@ -1159,7 +1160,13 @@ export class CodexWorker implements WorkerAdapter {
       quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now());
       return;
     }
-    const assignee = resolveTaskAgent(task, this.options.agent, this.options.auditorName ?? DEFAULT_AUDITOR_NAME);
+    const assignee = resolveTaskAgent(
+      this.options.db,
+      task,
+      this.options.agent,
+      this.options.auditorName ?? DEFAULT_AUDITOR_NAME,
+      this.options.interviewerName ?? DEFAULT_INTERVIEWER_NAME,
+    );
     const agent = resolveAgentOrQuarantine(
       this.options.db,
       (name) => resolveExecutionAgent(registry, this.options.agent, name, tierNames(this.options.db), task.type),

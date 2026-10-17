@@ -336,6 +336,9 @@ export interface AgentDeletionReferences {
    *  Auditor ポインタは常に値を持ち「未設定」が無い(CONTEXT.md)ので、解決側と
    *  同じく必ず名前が入る。 */
   auditorName: string;
+  /** 盤面の Interviewer 名(既定 `suzumedai` — ADR 0269 決定2)。Auditor と同じ第4のポインタで、
+   *  同じ規則で消せない。 */
+  interviewerName: string;
 }
 
 export async function deleteAgent(
@@ -368,6 +371,7 @@ export async function deleteAgent(
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });
   if (deps.defaultAgentName === input.name) reasons.push({ code: "board_default" });
   if (deps.auditorName === input.name && !shadowsBuiltIn) reasons.push({ code: "board_auditor" });
+  if (deps.interviewerName === input.name && !shadowsBuiltIn) reasons.push({ code: "board_interviewer" });
   if (reasons.length > 0) throw new DeletionBlockedError("agent", input.name, reasons);
   if (input.confirm !== true) throw new DeletionConfirmationRequiredError("agent", input.name);
   commitToRegistry(

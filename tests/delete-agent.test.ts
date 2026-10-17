@@ -21,7 +21,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実 —— 拒否の門を跨がない既定の refs。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, unsettledWorkTaskCount: 0, awaitingLandingTaskIds: [], auditorName: "fugu" };
+const NO_REFERENCES = { unsettledTaskCount: 0, unsettledWorkTaskCount: 0, awaitingLandingTaskIds: [], auditorName: "fugu", interviewerName: "suzumedai" };
 
 describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
   it("agents/<name>.md を committed main から除去するコミットが着地し、loadRegistry から消える", async () => {
@@ -148,6 +148,24 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
       reasons: [{ code: "board_auditor" }],
+    });
+  });
+
+  it("盤面の Interviewer は confirm があっても消せない —— Auditor と同じポインタの規則(ADR 0269 決定2)", async () => {
+    const registryDir = await makeMainRegistry();
+
+    await expect(
+      deleteAgent(
+        { name: "deckhand", confirm: true },
+        {
+          registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced },
+          ...NO_REFERENCES,
+          interviewerName: "deckhand",
+        },
+      ),
+    ).rejects.toMatchObject({
+      name: "DeletionBlockedError",
+      reasons: [{ code: "board_interviewer" }],
     });
   });
 

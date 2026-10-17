@@ -62,6 +62,7 @@ export type DeletionBlockedReason =
   | { code: "tasks_awaiting_landing"; count: number; task_ids: string[] }
   | { code: "board_default" }
   | { code: "board_auditor" }
+  | { code: "board_interviewer" }
   | { code: "built_in" }
   | { code: "referenced_by_agents"; agents: string[] };
 
@@ -85,6 +86,7 @@ function describeReason(reason: DeletionBlockedReason): string {
   }
   if (reason.code === "board_default") return "it is the board's default";
   if (reason.code === "board_auditor") return "it is the board's Auditor";
+  if (reason.code === "board_interviewer") return "it is the board's Interviewer";
   // ADR 0117 決定2: 組み込みは registry のファイルではないので削除の対象にならない。
   // 「無い」(404)ではなく「消せない」であることが、この文言の要点である。
   if (reason.code === "built_in") return "it is a built-in agent, not a registry entry";

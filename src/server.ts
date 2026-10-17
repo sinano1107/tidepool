@@ -24,7 +24,7 @@ import {
   quarantineContainment,
 } from "./containment.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
 import type { RowRefusal } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
@@ -197,6 +197,8 @@ export interface ServerOptions {
    *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset,
    *  resolved once here rather than by each consumer separately. */
   auditorName?: string;
+  /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
+  interviewerName?: string;
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
    *  protected workspace / ADR 0013), read fresh against the registry by the
    *  caller — a decompose child naming a protected workspace converts to an
@@ -518,6 +520,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — defense in
   // depth.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
+  const interviewerName = options.interviewerName ?? DEFAULT_INTERVIEWER_NAME;
   const landing = createLanding({
     db,
     clock: options.clock,
@@ -527,6 +530,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     resolveAuthority: options.resolveAuthority,
     defaultAgentName: worker.id,
     auditorName,
+    interviewerName,
     isProtectedWorkspace: options.isProtectedWorkspace,
     githubAuth: options.githubAuth,
     // scheduler は後で組まれ、起動完了で解決される(pollNow と同じ遅延束縛)
@@ -589,6 +593,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,
+    interviewerName,
     github: options.github,
     openaiUsage: options.openaiUsage,
     credentialAbsence: options.credentialAbsence,
@@ -642,6 +647,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     db,
     defaultAgentName: worker.id,
     auditorName,
+    interviewerName,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     github: options.github,
@@ -719,6 +725,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       quarantineChecks: checks,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
+      interviewerName,
       workspaceAdmin,
       agentAdmin,
       profileAdmin,
@@ -745,6 +752,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       draftClient: options.draftClient,
       defaultAgentName: worker.id,
       auditorName,
+      interviewerName,
       agentRegistered: options.agentRegistered,
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
@@ -780,6 +788,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolveAuthority: options.resolveAuthority,
       defaultAgentName: worker.id,
       auditorName,
+      interviewerName,
       agentRegistered: options.agentRegistered,
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,

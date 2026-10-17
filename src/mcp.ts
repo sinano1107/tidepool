@@ -5,7 +5,7 @@ import type { AgentAdmin } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_OUTCOMES } from "./events.js";
@@ -174,6 +174,8 @@ export interface McpDeps {
    *  Absent → `DEFAULT_AUDITOR_NAME` (the pointer always resolves —
    *  CONTEXT.md's Auditor). */
   auditorName?: string;
+  /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
+  interviewerName?: string;
   /** Whether an agent name is currently registered (ADR 0012 / issue #36),
    *  read fresh against the registry — used to reject a decompose child's
    *  unknown assignee outright (the registering agent's own mistake, same
@@ -211,13 +213,16 @@ export interface McpDeps {
  *  the separate /answer route), so an unspecified (null) assignee resolves to
  *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36) —
  *  made type-aware for `review` tasks (issue #42 / CONTEXT.md's Auditor): a
- *  review task's unset assignee attributes to the Auditor pointer instead,
- *  which is never unset (`auditorName` falls back to `DEFAULT_AUDITOR_NAME`). */
+ *  review task's unset assignee attributes to the Auditor pointer instead —
+ *  or, for an Interview root, to the Interviewer pointer (ADR 0269 決定2) —
+ *  neither of which is ever unset (each falls back to its `DEFAULT_*`). */
 function attributedWorkerId(deps: McpDeps, task: Task): string {
   return resolveTaskAgent(
+    deps.db,
     task,
     deps.defaultAgentName,
     deps.auditorName ?? DEFAULT_AUDITOR_NAME,
+    deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME,
   );
 }
 

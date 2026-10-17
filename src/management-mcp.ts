@@ -146,6 +146,7 @@ export interface ManagementMcpDeps {
   pollNow: () => void;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   agentRegistered?: (name: string) => boolean;
   resolvesToBuiltIn?: (name: string) => boolean;
   isProtectedWorkspace?: (name: string) => boolean;
@@ -344,7 +345,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         packItems(
           read,
           "tasks",
-          listBoard(deps.db, deps.defaultAgentName, deps.auditorName).map((task) =>
+          listBoard(deps.db, deps.defaultAgentName, deps.auditorName, deps.interviewerName).map((task) =>
             task.type === "question" ? { ...task, ...questionAnnotations(deps.db, task) } : task,
           ),
         ),
@@ -381,6 +382,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           skippedByEntries(deps),
           // 閉じた根に塞がれた子(ADR 0265 決定6)—— scheduler と同じ1本
           closedRootOf(deps.db, buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace)),
+          deps.interviewerName,
         );
         return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });
       }),
@@ -407,7 +409,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         if (read.args.task_id === undefined) throw new DomainError("pass task_id, or next from a previous get_task");
         const task = getTask(deps.db, read.args.task_id);
         if (!task) throw new DomainError("task not found");
-        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
+        const envelope = { ...presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName), ...(task.type === "question" && questionAnnotations(deps.db, task)) };
         return packItems(read, "events", listEvents(deps.db, task.id).reverse(), envelope, { resumeByKey: getTaskResumesByKey });
       }),
   );

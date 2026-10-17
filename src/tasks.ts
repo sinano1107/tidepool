@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
-import { DEFAULT_AUDITOR_NAME } from "./defaults.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
@@ -540,7 +540,8 @@ export function unrowedExaminees(db: Db): Array<{ task: Task; target: TargetKey 
  *  受験者を渡す(registry の無い盤面の暗黙の entry を含む)。登録の扉と出題が引き、`remedy` は呼び手が直し方を足す。 */
 export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskExecutionCandidates, agentName = "the default agent", remedy = ""): void {
   for (const { id, ...target } of targetRows(db, rootId)) {
-    if (candidates({ type: "work", assignee: null, tier: null, priority: null, review_tier: null, interview_target_id: id }).length > 0) continue;
+    // 登録前の受験者なので id は無い —— work の解決は id を読まない
+    if (candidates({ id: "", type: "work", assignee: null, tier: null, priority: null, review_tier: null, interview_target_id: id }).length > 0) continue;
     throw new DomainError(
       `target ${JSON.stringify(target)} cannot run as ${agentName}: its provider is not among ${agentName}'s providers, ` +
         `or ${agentName} has an advisor that cannot be derived for this model under the board's advisor ceiling${remedy}`,
@@ -1409,6 +1410,7 @@ export interface CancelDefaults {
   defaultWorkspaceName?: string;
   defaultAgentName?: string;
   auditorName?: string;
+  interviewerName?: string;
   quarantined?: ResourceStops;
   /** 閉じた根に塞がれた子は範囲に入る(ADR 0265 決定6)。pickup が飛ばすのと同じ1本。Absent → 広げない。 */
   closedRootOf?: ClosedRootOf;
@@ -1448,7 +1450,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
         "stands over this subtree — answer it first; that answer is the only gate",
     );
   }
-  const fallback = typeAwareDefaultAgentSql("x.type", "@defaultAgentName", "@auditorName");
+  const fallback = typeAwareDefaultAgentSql("x");
   const quarantine = db
     .prepare(
       `${subtree}
@@ -1463,6 +1465,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
       defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
       defaultAgentName: defaults.defaultAgentName ?? null,
       auditorName: defaults.auditorName ?? null,
+      interviewerName: defaults.interviewerName ?? null,
       workspaces: JSON.stringify(defaults.quarantined?.workspaces ?? []),
       assignees: JSON.stringify(defaults.quarantined?.assignees ?? []),
     });
@@ -3109,31 +3112,40 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
 }
 
 /** Resolve the execution agent for a task that can enter the slot
- * (CONTEXT.md's Assignee/Auditor). Questions are answered by a human and have
+ * (CONTEXT.md's Assignee/Auditor; an Interview root's unset assignee goes to
+ * the Interviewer pointer, ADR 0269 決定2). Questions are answered by a human and have
  * no execution agent; accepting one here would hide a broken execution path. */
 export function resolveTaskAgent(
-  task: Pick<Task, "type" | "assignee">,
+  db: Db,
+  task: Pick<Task, "id" | "type" | "assignee">,
   defaultAgentName: string,
   auditorName: string,
+  interviewerName: string,
 ): string {
   if (task.type === "question") throw new Error("question tasks have no execution agent");
-  return task.assignee ?? (task.type === "review" ? auditorName : defaultAgentName);
+  if (task.assignee !== null) return task.assignee;
+  if (task.type !== "review") return defaultAgentName;
+  return db.prepare(`SELECT ${interviewRootSql("?")}`).pluck().get(task.id) ? interviewerName : auditorName;
+}
+
+/** その task が Interview の root(対象の一覧を持つ)か。spawn の解決と SQL の fallback が同じ1本を読む(ADR 0269 決定2)。 */
+function interviewRootSql(taskIdRef: string): string {
+  return `EXISTS (SELECT 1 FROM interview_targets WHERE task_id = ${taskIdRef})`;
 }
 
 /** The type-aware execution fallback pointer the assignee gates COALESCE an
  *  unset assignee to (issue #42 / #242 / CONTEXT.md's Auditor): a question has
- *  no executor, an unset review resolves to the Auditor pointer, and an unset
- *  work task resolves to the board's default agent. Absent pointers evaluate
+ *  no executor, an unset review resolves to the Auditor pointer — an Interview
+ *  root's to the Interviewer pointer (ADR 0269 決定2) — and an unset work task
+ *  resolves to the board's default agent. The statement binds
+ *  `@defaultAgentName` / `@auditorName` / `@interviewerName`. Absent pointers evaluate
  *  to NULL, which the gates' COALESCE/`=` already treats as "no fallback,
  *  gate only an explicit assignee" — no separate null-guard needed here. */
-export function typeAwareDefaultAgentSql(
-  taskTypeRef: string,
-  defaultAgentRef: string,
-  auditorRef: string,
-): string {
-  return `CASE WHEN ${taskTypeRef} = 'question' THEN NULL
-               WHEN ${taskTypeRef} = 'review' THEN ${auditorRef}
-               ELSE ${defaultAgentRef} END`;
+export function typeAwareDefaultAgentSql(table: string): string {
+  return `CASE WHEN ${table}.type = 'question' THEN NULL
+               WHEN ${table}.type = 'review' AND ${interviewRootSql(`${table}.id`)} THEN @interviewerName
+               WHEN ${table}.type = 'review' THEN @auditorName
+               ELSE @defaultAgentName END`;
 }
 
 /** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
@@ -3311,11 +3323,12 @@ export function presentTask(
   task: Pick<Task, "id">,
   defaultAgentName?: string,
   auditorName: string = DEFAULT_AUDITOR_NAME,
+  interviewerName: string = DEFAULT_INTERVIEWER_NAME,
 ) {
   const [row] = boardRows(
     db,
     "",
-    [{ defaultAgentName: defaultAgentName ?? null, auditorName, id: task.id }],
+    [{ defaultAgentName: defaultAgentName ?? null, auditorName, interviewerName, id: task.id }],
     "tasks.id = @id",
   );
   return toBoardTask(db, row!);
@@ -3371,7 +3384,7 @@ function boardRows(
   where = `status <> 'cancelled' AND NOT ${settledTreeSql("tasks.id")}`,
   extraSelect = "",
 ): BoardRow[] {
-  const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
+  const fallback = typeAwareDefaultAgentSql("tasks");
   return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
@@ -3412,8 +3425,9 @@ export function listBoard(
   db: Db,
   defaultAgentName?: string,
   auditorName: string = DEFAULT_AUDITOR_NAME,
+  interviewerName: string = DEFAULT_INTERVIEWER_NAME,
 ): BoardTask[] {
-  return boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName }]).map((row) => toBoardTask(db, row));
+  return boardRows(db, "", [{ defaultAgentName: defaultAgentName ?? null, auditorName, interviewerName }]).map((row) => toBoardTask(db, row));
 }
 
 /** The queue view (issue #10): the board plus `skipped`, a todo-pickable task
@@ -3450,8 +3464,9 @@ export function listQueue(
   isSkipped?: (task: BoardTask) => boolean,
   /** 閉じた根に塞がれた子は skipped で、理由に閉じた根と PR を持つ(ADR 0265 決定6)。`nextSlotTask` と同じ1本を渡す。 */
   closedRootOf?: ClosedRootOf,
+  interviewerName?: string,
 ): BoardTask[] {
-  const fallback = typeAwareDefaultAgentSql("tasks.type", "@defaultAgentName", "@auditorName");
+  const fallback = typeAwareDefaultAgentSql("tasks");
   const rows = boardRows(
     db,
     `WHEN status = 'todo' AND type <> 'question' AND ${stoppedSql("tasks", fallback)} THEN 'skipped'`,
@@ -3460,6 +3475,7 @@ export function listQueue(
         defaultWorkspaceName: defaultWorkspaceName ?? null,
         defaultAgentName: defaultAgentName ?? null,
         auditorName: auditorName ?? null,
+        interviewerName: interviewerName ?? null,
         stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
         stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       },
@@ -3494,7 +3510,7 @@ export function listYourTasks(db: Db): YourTask[] {
     db,
     "",
     // 保存値が human の行だけなので既定 agent へは落ちない —— SQL が参照する名前を埋めるだけ
-    [{ defaultAgentName: null, auditorName: null }],
+    [{ defaultAgentName: null, auditorName: null, interviewerName: null }],
     `tasks.assignee = '${HUMAN_WORKER_ID}' AND ${unsettledSql("tasks.status")}`,
     `, ${blockingSql("tasks")} AS blocking`,
   ) as Array<BoardRow & { blocking: string | null }>;
@@ -3776,8 +3792,9 @@ export function nextSlotTask(
   excludedTaskIds?: string[],
   /** 閉じた根に塞がれた子を飛ばす(ADR 0265 決定6)。Absent → 飛ばさない。 */
   closedRootOf?: ClosedRootOf,
+  interviewerName?: string,
 ): Task | undefined {
-  const fallback = typeAwareDefaultAgentSql("t.type", "@defaultAgentName", "@auditorName");
+  const fallback = typeAwareDefaultAgentSql("t");
   const statement = db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}
@@ -3798,6 +3815,7 @@ export function nextSlotTask(
       defaultWorkspaceName: defaultWorkspaceName ?? null,
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
+      interviewerName: interviewerName ?? null,
       humanWorkerId: HUMAN_WORKER_ID,
       stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
       stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),

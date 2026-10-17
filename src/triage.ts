@@ -560,9 +560,10 @@ export function triagePreview(
   sessionId: number | undefined,
   defaultAgentName?: string,
   auditorName?: string,
+  interviewerName?: string,
 ): PreviewTask[] {
   const staged = sessionId === undefined ? [] : stagedFrontInserts(db, sessionId);
-  const queue = listBoard(db, defaultAgentName, auditorName).filter(
+  const queue = listBoard(db, defaultAgentName, auditorName, interviewerName).filter(
     (task) => task.status === "todo" || task.status === "blocked",
   );
   const fronts = staged

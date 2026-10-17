@@ -189,6 +189,8 @@ export interface BoardComposition {
   defaultAgentName: string;
   /** issue #15 layer 2 / CONTEXT.md の Auditor。 */
   auditorName: string;
+  /** ADR 0269 決定2 / CONTEXT.md の Interviewer。 */
+  interviewerName: string;
   /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)。 */
   boardState: BoardStatePath[];
   /** ADR 0097 決定4 / issue #445: Moonshot Platform キーの置き場(mode 600 の
@@ -287,6 +289,7 @@ export function buildWorkerOptions(
     registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
+    interviewerName: board.interviewerName,
     workspace: board.workspaceName,
     workspacesDir: board.workspacesDir,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
@@ -325,6 +328,7 @@ export function buildCodexWorkerOptions(
     registry: { dir: board.registryDir, mode: board.registryMode },
     agent: board.defaultAgentName,
     auditorName: board.auditorName,
+    interviewerName: board.interviewerName,
     workspace: board.workspaceName,
     workspacesDir: board.workspacesDir,
     mcpUrl: `http://127.0.0.1:${board.mcpPort}/mcp`,
@@ -370,7 +374,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
   if (!board.registryDir) return implicitTaskExecutionCandidates(db);
   return (task) => {
     const registry = loadBoardRegistry(board);
-    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName);
+    const name = resolveTaskAgent(db, task, board.defaultAgentName, board.auditorName, board.interviewerName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db), task.type);
     return executionSettingsFor(db, agent.definition, task);
   };
@@ -855,6 +859,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     push: board.vapid && new WebPushClient(board.vapid),
     vapidPublicKey: board.vapid?.publicKey,
     auditorName: board.auditorName,
+    interviewerName: board.interviewerName,
     // the skills picker's candidate source (issue #106): the real `claude` CLI's
     // neutral-cwd enumeration — always available on a real host, faked in tests
     hostSkills: enumerateHostSkills,

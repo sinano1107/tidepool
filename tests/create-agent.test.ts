@@ -475,7 +475,7 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
     const views = listAgentViews({ registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced } });
 
     // 組み込みも同じ1つの map から来る(ADR 0117 決定2)—— 一覧はそれを映す
-    expect(views.map((v) => v.name).sort()).toEqual(["deckhand", "fugu", "tako"]);
+    expect(views.map((v) => v.name).sort()).toEqual(["deckhand", "fugu", "suzumedai", "tako"]);
     expect(views.find((v) => v.name === "tako")).toEqual({
       name: "tako",
       version: "1",
