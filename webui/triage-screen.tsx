@@ -12,7 +12,23 @@ interface TpQuestionItem {
   detail?: string | null;
   /** memory の提案 question で移された pin の今の置き場(ADR 0162 決定6)—— detail の下に出す。 */
   movedNote?: string;
-  options: { label: string; recommended: boolean }[];
+  /** `discards`: cancel option の脇に出す、捨てられる done の work(ADR 0271 決定4)。 */
+  options: { label: string; recommended: boolean; discards?: TpDiscard[] }[];
+}
+/** cancel で成果が捨てられる done の work(盤面の `discards`、ADR 0271 決定4)。 */
+type TpDiscard = { id: string; title: string };
+
+// ADR 0271 決定4: cancel の面に捨てる done の work の題とタスクへのリンクを出す。材料であって gate ではない —— 空なら何も出さない。
+function TpDiscards({ discards }: { discards: TpDiscard[] }) {
+  if (discards.length === 0) return null;
+  return (
+    <div data-testid="discards" style={{ fontSize: 'var(--text-xs)', color: 'var(--text-secondary)', padding: '0 4px' }}>
+      discards the done work of:
+      <ul style={{ margin: '2px 0 0', paddingLeft: 18 }}>
+        {discards.map((d) => <li key={d.id}><a href={`/api/tasks/${d.id}`} target="_blank" rel="noreferrer" style={{ color: 'var(--tide-4)' }}>{d.title}</a></li>)}
+      </ul>
+    </div>
+  );
 }
 interface TpQuestion {
   id: string;
@@ -138,7 +154,8 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
           const picked = value === o.label;
           const off = disabled.includes(o.label);
           return (
-            <button key={o.label} disabled={off} onClick={() => !locked && onChange(picked ? null : o.label)}
+            <React.Fragment key={o.label}>
+            <button disabled={off} onClick={() => !locked && onChange(picked ? null : o.label)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 8, textAlign: 'left',
                 fontFamily: 'var(--font-ui)', fontSize: 'var(--text-sm)', fontWeight: picked ? 600 : 400,
@@ -154,6 +171,8 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
               <span style={{ flex: 1 }}>{o.label}</span>
               {o.recommended && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: picked ? 'var(--tide-2)' : 'var(--tide-4)' }}>recommended</span>}
             </button>
+            {o.discards && <TpDiscards discards={o.discards} />}
+            </React.Fragment>
           );
         })}
         {locked && value && !item.options.some((o) => o.label === value) && (

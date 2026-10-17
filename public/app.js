@@ -364,6 +364,10 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
 }
 
 // webui/triage-screen.tsx
+function TpDiscards({ discards }) {
+  if (discards.length === 0) return null;
+  return /* @__PURE__ */ React.createElement("div", { "data-testid": "discards", style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", padding: "0 4px" } }, "discards the done work of:", /* @__PURE__ */ React.createElement("ul", { style: { margin: "2px 0 0", paddingLeft: 18 } }, discards.map((d) => /* @__PURE__ */ React.createElement("li", { key: d.id }, /* @__PURE__ */ React.createElement("a", { href: `/api/tasks/${d.id}`, target: "_blank", rel: "noreferrer", style: { color: "var(--tide-4)" } }, d.title)))));
+}
 function TpWaterline({ progress }) {
   return /* @__PURE__ */ React.createElement("div", { style: { height: 2, background: "var(--rock-2)", position: "relative", borderRadius: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`, background: "var(--tide-4)", borderRadius: 1, transition: "width var(--duration-slow) var(--ease-tidal)" } }));
 }
@@ -377,10 +381,9 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
   return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, item.title), translated && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, translated.title), item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.detail), translated && item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--tide-5)", marginBottom: 8, whiteSpace: "pre-wrap" } }, translated.detail), item.movedNote && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.movedNote), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, item.options.map((o) => {
     const picked = value === o.label;
     const off = disabled.includes(o.label);
-    return /* @__PURE__ */ React.createElement(
+    return /* @__PURE__ */ React.createElement(React.Fragment, { key: o.label }, /* @__PURE__ */ React.createElement(
       "button",
       {
-        key: o.label,
         disabled: off,
         onClick: () => !locked && onChange(picked ? null : o.label),
         style: {
@@ -405,7 +408,7 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
       },
       /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, o.label),
       o.recommended && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: picked ? "var(--tide-2)" : "var(--tide-4)" } }, "recommended")
-    );
+    ), o.discards && /* @__PURE__ */ React.createElement(TpDiscards, { discards: o.discards }));
   }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
     onChange(TidepoolRules.normalizeText(overrideText));
     setOverride(false);
@@ -3986,7 +3989,8 @@ function toQuestionCardShape(q, icons) {
       title: item.title,
       detail: item.detail,
       ...movedNote && { movedNote },
-      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation }))
+      // cancel option の脇に、捨てられる done の work(ADR 0271 決定4)
+      options: item.options.map((o) => ({ label: o, recommended: o === item.recommendation, ...o === q.question_cancel_option && { discards: q.discards ?? [] } }))
     })),
     // 承認 question(決裁権外の子の登録)と、approve で親の risk が上がるかは
     // 盤面の `approval` 注釈が答える(issue #757)— ここは描画の形に写すだけ
@@ -4334,6 +4338,11 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [discards, setDiscards] = React.useState([]);
+  React.useEffect(() => {
+    api("GET /api/tasks/:id", { params: { id: task.id } }).then((t) => setDiscards(t.discards)).catch(() => {
+    });
+  }, [task.id]);
   const submit = async () => {
     setBusy(true);
     try {
@@ -4346,7 +4355,7 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, only the fact of the cancel is recorded" }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(TpDiscards, { discards }), /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, only the fact of the cancel is recorded" }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
 }
 const HANDOFF_FIELDS = [
   ["outcome", "outcome vs criteria"],

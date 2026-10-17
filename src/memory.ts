@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1201,7 +1201,7 @@ export function movedPins(db: Db, proposal: QuestionProposal<TierRef> | null): A
   });
 }
 
-/** question 行が読むときに運ぶ7つの注釈(issue #1179・ADR 0092 決定4・ADR 0179 決定4・issue #1309・#1304・ADR 0265 決定7)。HTTP の `GET /api/tasks`・
+/** question 行が読むときに運ぶ8つの注釈(issue #1179・ADR 0092 決定4・ADR 0179 決定4・issue #1309・#1304・ADR 0265 決定7・ADR 0271 決定4)。HTTP の `GET /api/tasks`・
  *  `GET /api/tasks/:id` と管理MCP の `list_board`・`get_task` がここを広げる。 */
 export function questionAnnotations(
   db: Db,
@@ -1215,6 +1215,7 @@ export function questionAnnotations(
     needs_comment: needsComment(task),
     free_text: !isFixedChoiceQuestion(task),
     settled_by_observation: settledByObservation(db, task),
+    discards: questionCancelDiscards(db, task),
   };
 }
 

@@ -114,6 +114,7 @@ import {
   type BoardTask,
   countUnsettledTasksReferencing,
   countUnsettledWorkAssignedTo,
+  directCancelDiscards,
   getTask,
   HANDOFF_FIELDS,
   listBoard,
@@ -2167,7 +2168,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     sendJson(res, {
       ...presented!,
-      ...(task.type === "question" ? questionAnnotations(db, task) : { landing_state: landingState(db, task) }),
+      ...(task.type === "question"
+        ? questionAnnotations(db, task)
+        : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, closedRoot) }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

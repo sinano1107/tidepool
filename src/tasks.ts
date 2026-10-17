@@ -1511,6 +1511,49 @@ export function cancelTaskDirectly(
   })();
 }
 
+/** 捨てられる done の work の1件(ADR 0271 決定4)。 */
+export interface Discard {
+  id: string;
+  title: string;
+}
+
+/** ADR 0271 決定4: cancel が cancelled にする根たちの配下で、成果が捨てられる done の work —— agent が実行したもの(Executor が
+ *  人間でない)だけを盤面の順で。範囲は cascade と同じ述語(`survivesParentCancelSql` の付帯子の下へは降りない)で、
+ *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
+ *  系譜に入らない。表示時に読み、保存しない。 */
+function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
+  const rows = db
+    .prepare(
+      `${subtreeSql("value FROM json_each(@roots)", `NOT ${survivesParentCancelSql("c")} AND c.status <> 'cancelled'`)}
+       SELECT t.id, t.title, t.github_issue_number FROM tasks t JOIN subtree s ON s.id = t.id
+       WHERE t.type = 'work' AND t.status = 'done'
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.worker_id = @human)
+       ORDER BY t.sort_key`,
+    )
+    .all({ roots: JSON.stringify(rootIds), human: HUMAN_WORKER_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
+  return rows.map((row) => ({ id: row.id, title: row.title ?? issueRefPlaceholder(row.github_issue_number!) }));
+}
+
+/** その task を直接 cancel したときに捨てられる done の work(ADR 0271 決定4・5)。直接 cancel できない task は空。 */
+export function directCancelDiscards(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): Discard[] {
+  // 直接 cancel の門と同じ1本で判定する —— 門が拒む task は cancel されないので捨てるものも無い
+  try {
+    assertDirectlyCancellableScope(db, task, closedRootOf);
+  } catch (error) {
+    if (error instanceof DomainError) return [];
+    throw error;
+  }
+  return cancelDiscards(db, [task.id]);
+}
+
+/** failure / premise-breach question の cancel option で捨てられる done の work(ADR 0271 決定4)—— 失敗 task の abandon の範囲で。
+ *  cancel option を持たない question と、答えの済んだ question は空。 */
+export function questionCancelDiscards(db: Db, question: Pick<Task, "id" | "parent_id" | "question_cancel_option">): Discard[] {
+  // 読み口(questionAnnotations)は表示用の status を持つ行を渡すので、答えの済みは保存された status で見る
+  if (question.question_cancel_option === null || getTask(db, question.id)!.status !== "todo") return [];
+  return cancelDiscards(db, abandonScopeIds(db, question.parent_id!));
+}
+
 /** root の retry(ADR 0267 決定3・4): 出題済みで未決着の Interview の root を人間の直接 cancel と同じ門と波及で cancel し、報告の
  *  question の retry と同じ登録(`retryInterview`)で新しい root を立てる。理由は人間のコメント。返り値は新しい root。 */
 export function retryInterviewRoot(
@@ -3109,7 +3152,8 @@ function blockingSql(rowRef: string): string {
 }
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
- *  (`?` か名前つきパラメータ)。着地の門と直接 cancel の question gate、triage の異議
+ *  (`?` か名前つきパラメータ)、複数の根なら `value FROM json_each(@roots)` のような SELECT の残り(cancel の discards、
+ *  ADR 0271 決定4)。着地の門と直接 cancel の question gate、triage の異議
  *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`where`(子の行 `c` の条件)に当たらない子
  *  とその下へは降りない(根自身は残す)—— 積み残しは cancelled の子を除き、abandon で捨てられた判断の内側を
  *  運ばない(ADR 0239 決定1)。 */
