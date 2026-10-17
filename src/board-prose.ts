@@ -14,7 +14,16 @@ import {
   type RosterAgent,
   registryAtCommit,
 } from "./registry.js";
-import { AUTHORITY_WILDCARD, getTask, HUMAN_ROSTER_AGENT, reviewedTaskExecutor, type Task, type TaskVerbSwap } from "./tasks.js";
+import {
+  ARTIFACT_DISCARDED_NOTICE,
+  AUTHORITY_WILDCARD,
+  getTask,
+  HUMAN_ROSTER_AGENT,
+  isArtifactDiscarded,
+  reviewedTaskExecutor,
+  type Task,
+  type TaskVerbSwap,
+} from "./tasks.js";
 
 /** doctrine の Harness の語のスロット(ADR 0157 決定3)。「委譲先の語」と「Workflow 段落の有無」の2つだけ。
  *  task ごとに変わるのは別の引数 `verbs`(task ごとの verb の差し替え —— ADR 0245 決定2 / ADR 0253 決定5)で、Harness の語ではない。 */
@@ -368,5 +377,7 @@ export function boardProse(input: {
   const review = task.type === "review";
   const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
   const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
-  return `${input.systemPrompt}${authoritySection(guidance)}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  // ADR 0271 決定2: guidance の文は変えず、その直後に盤面が1行足す
+  const discarded = isArtifactDiscarded(db, task.id) ? `\n\n${ARTIFACT_DISCARDED_NOTICE}` : "";
+  return `${input.systemPrompt}${authoritySection(guidance)}${discarded}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

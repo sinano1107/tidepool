@@ -22,6 +22,7 @@ import {
   type BoardTask,
   getTask,
   interviewTargets,
+  isArtifactDiscarded,
   listBoard,
   moveTask,
   type RegisterTaskInput,
@@ -289,8 +290,11 @@ function registerRcaReview(
 /** One repair task per objected task whose artifact remains on the board: every
  *  direction comment raised against a task's log entries this session lands in a
  *  single work task's purpose. An Interview root (its probe is fixed by retry,
- *  not repair) and a cancelled task (its artifact is thrown away) get none —
- *  attribution and the RCAs below still stand by cause (ADR 0268 決定3).
+ *  not repair) and a task whose artifact is discarded — the task itself is
+ *  cancelled (ADR 0268 決定3), or a cancelled work ancestor sits between it and
+ *  its root (ADR 0271 決定1・2 widens 0268 決定3's predicate to this) — get none:
+ *  the repair is skipped, never left to the registration floor's refusal, and
+ *  attribution and the RCAs below still stand by cause.
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
@@ -301,7 +305,7 @@ function registerRcaReview(
  *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
  *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
  *  with none of them gets the repair alone (or nothing, where no repair stands —
- *  an Interview root or a cancelled task). The second attribution round picks
+ *  an Interview root or a discarded artifact). The second attribution round picks
  *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
@@ -365,7 +369,7 @@ function bundleObjections(
         at: now,
       });
     }
-    if (interviewTargets(db, taskId) === null && objected.status !== "cancelled") {
+    if (interviewTargets(db, taskId) === null && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
       try {

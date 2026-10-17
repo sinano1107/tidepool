@@ -258,7 +258,7 @@ type SecondRoundSource = Pick<Attribution, "entry_id" | "objection_event_ids">;
 
 /** 異議群を束ねた commit が立てた最初の子(修理子、無ければ RCA)の `task_registered`(ADR 0171 決定2)。未帰責の異議群の当時の
  *  decision log の切れ目 —— 初回の帰責 event が書かれるはずだった同じ transaction の中にある。未帰責の異議群には必ず RCA が立つ
- *  (修理子は Interview の root と cancelled の task には立たない、ADR 0268 決定3)。 */
+ *  (修理子は Interview の root と cancelled の task、成果が捨てられた task には立たない、ADR 0268 決定3 / ADR 0271 決定1)。 */
 const bundleRegistered = (db: Db, objectedId: string, bundle: number) =>
   db.prepare(`SELECT MIN(e.id) ${COVERING_CHILD}`).pluck().get({ objectedId, bundle }) as number;
 
