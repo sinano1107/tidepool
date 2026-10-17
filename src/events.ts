@@ -297,7 +297,9 @@ export type EventPayload =
   | { kind: "log_entry_displayed"; entry_id: number; session_id?: number }
   // full provenance of an agent run. registry_commit is THE strict agent
   // version (ADR 0001: commit hash = agent version); definition_version is
-  // only the human-readable stamp from the definition's frontmatter. The
+  // only the human-readable stamp from the definition's frontmatter. A
+  // built-in's body is board code, not in the registry, so for it the strict
+  // version is definition_version — the content hash of its body (ADR 0270 決定1). The
   // vocabulary is registry-shaped, not vendor-shaped — no CLI names leak in.
   //
   // `advisor` (issue #33 判断6) is the advisor model the board actually pinned

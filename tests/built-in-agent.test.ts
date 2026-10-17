@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { agentNeedsHuman, resolveAgentOrQuarantine, resolveExecutionAgent } from "../src/agent.js";
 import { openDb } from "../src/db.js";
@@ -5,6 +6,7 @@ import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { buildMemoryInjection, humanEntryInput, recordBehavior } from "../src/memory.js";
 import {
   assertValidAgentName,
+  builtInBodyAt,
   InvalidAgentNameError,
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
@@ -31,10 +33,28 @@ it("agents/fugu.md の無い registry を読むと、組み込みの fugu が印
       { name: "anthropic", advisor: false },
       { name: "moonshot", advisor: false },
     ],
-    // 当時版は registry commit に無い(ADR 0020 / ADR 0117 帰結)—— spawn 記録の
-    // definition_version が運ぶのは盤面の版である
-    version: "built-in",
+    // 当時版は registry commit に無い —— spawn 記録の definition_version が運ぶのは
+    // 本文の内容 hash(ADR 0270 決定1)。空本文も空文字列の hash
+    version: createHash("sha256").update("").digest("hex").slice(0, 16),
   });
+});
+
+// 現在の本文は表の末尾から組むので「本文を変えて表に足し忘れ」は形の上で起きない —— 起きうる誤りは末尾の行の
+// 書き換えで、それを捕まえるのは下の hash の釘である
+it("各組み込みの version は現在の本文の hash で、その hash で本文履歴表から現在の本文が引ける(ADR 0270 決定2)", async () => {
+  const registry = loadRegistry(await makeRegistry(), "purely-local");
+
+  for (const name of ["fugu", DEFAULT_INTERVIEWER_NAME]) {
+    const agent = registry.agents[name]!;
+    expect(agent.version).toBe(createHash("sha256").update(agent.systemPrompt).digest("hex").slice(0, 16));
+    expect(builtInBodyAt(name, agent.version)).toBe(agent.systemPrompt);
+  }
+});
+
+it("本文履歴表の既存の版は書き換わらない —— 本文を変えるときは行を足す(ADR 0270 決定2)", () => {
+  // 本文を変えた PR は旧本文を表に残す。ここに並ぶ hash が引けなくなったら、既存の行を書き換えている
+  expect(builtInBodyAt("fugu", "e3b0c44298fc1c14")).toBe("");
+  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f")).toMatch(/^You run Interviews/);
 });
 
 it("agents/fugu.md があればそのファイルの定義が fugu であり、組み込みの印は付かない(ADR 0117 決定2 の shadowing)", async () => {

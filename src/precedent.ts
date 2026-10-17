@@ -153,7 +153,7 @@ export interface Episode {
   taskId: string;
   actions: EpisodeAction[];
   markers: EpisodeMarker[];
-  /** 版1: 当時の agent 定義(ADR 0001 の厳密な agent 版)。 */
+  /** 版1: 当時の agent 定義(ADR 0001 の厳密な agent 版)。組み込みでは `definitionVersion` が本文の内容 hash(ADR 0270)。 */
   registryCommit: string | null;
   definitionVersion: string | null;
   /** 版2: この投影器の版。派生は作り直せるので、読み方が変われば版を上げる。 */

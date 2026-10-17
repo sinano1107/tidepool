@@ -153,14 +153,32 @@ function pickedSetting(
   return executionSettingsFor(db, (agents[resolveTaskAgent(db, task, agent, auditorName, DEFAULT_INTERVIEWER_NAME)] ?? agents[agent])!, task)[0]!;
 }
 
+/** The definition_version a spawn of built-in `name` records today: its body's content hash (ADR 0270 決定1). */
+function builtInVersion(registryDir: string, name: string): string {
+  return loadRegistry(registryDir, "purely-local").agents[name]!.version;
+}
+
 /** A second registry agent for the 当時版 Roster tests (issue #1741). */
 const LOOKOUT_MD = `---\nversion: "1"\nauthority: standard\ndescription: Looks out for the board.\nprovider: anthropic\nskills: []\n---\nYou are Lookout.\n`;
 
 /** The objected task's record a self RCA anchors on (ADR 0020 part 4): `workerId`
- *  spawned from `commit`, logged one decision, and a human objected to it. */
-function objectDecisionAt(db: Db, taskId: string, workerId: string, commit: string): number {
+ *  spawned from `commit` (recording `definitionVersion`), logged one decision, and a
+ *  human objected to it. */
+function objectDecisionAt(
+  db: Db,
+  taskId: string,
+  workerId: string,
+  commit: string,
+  definitionVersion = WORKER_SPAWNED.definition_version,
+): number {
   const at = new FakeClock().now();
-  appendEvent(db, { taskId, workerId, origin: "board", payload: { ...WORKER_SPAWNED, registry_commit: commit }, at });
+  appendEvent(db, {
+    taskId,
+    workerId,
+    origin: "board",
+    payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: definitionVersion },
+    at,
+  });
   const entryId = appendEvent(db, {
     taskId,
     workerId,
@@ -3376,7 +3394,13 @@ describe("ClaudeCodeWorker", () => {
     );
     insertTask(db, makeTask("reviewed-11", null, "deckhand", "work"));
     insertTask(db, { ...makeTask("objected-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-11" });
-    objectDecisionAt(db, "objected-11", DEFAULT_AUDITOR_NAME, registryGit(registryDir)("rev-parse", "main"));
+    objectDecisionAt(
+      db,
+      "objected-11",
+      DEFAULT_AUDITOR_NAME,
+      registryGit(registryDir)("rev-parse", "main"),
+      builtInVersion(registryDir, DEFAULT_AUDITOR_NAME),
+    );
 
     const rca: Task = { ...makeTask("rca-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-11" };
     insertTask(db, rca);
@@ -3387,12 +3411,87 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
-      `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}: it had no registry definition at that commit, ` +
-        "so there is no body to show.\n\n### Authority as it stood then (the board's reviewer authority)",
+      `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}, whose definition lives in board code, ` +
+        "not the registry; its body was empty at that version.\n\n### Authority as it stood then (the board's reviewer authority)",
     );
+    expect(prompt).toContain("This is your agent definition as the board's code carried it at the version you were spawned under");
     expect(prompt).toContain(
       "### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board",
     );
+  });
+
+  it("組み込み suzumedai への異議の self RCA は、記録の内容 hash で引いた suzumedai の本文を当時版として出す(ADR 0270 決定3)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker(
+      {},
+      { enumerateSkills: recordingEnumerator([]).enumerateSkills },
+    );
+    insertTask(db, makeTask("reviewed-12", null, "deckhand", "work"));
+    insertTask(db, { ...makeTask("objected-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "reviewed-12" });
+    objectDecisionAt(
+      db,
+      "objected-12",
+      DEFAULT_INTERVIEWER_NAME,
+      registryGit(registryDir)("rev-parse", "main"),
+      builtInVersion(registryDir, DEFAULT_INTERVIEWER_NAME),
+    );
+
+    const rca: Task = { ...makeTask("rca-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "objected-12" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(
+      "repair is not a re-enactment).\n\n---\n\nYou run Interviews: one probe that every target solves, and a score for each answer.",
+    );
+    expect(prompt).not.toContain("its body was empty");
+  });
+
+  it("記録の内容 hash が本文履歴表に無い組み込みの spawn は、その entry が証拠の欠落として申告される(ADR 0270 決定3)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker(
+      {},
+      { enumerateSkills: recordingEnumerator([]).enumerateSkills },
+    );
+    const main = registryGit(registryDir)("rev-parse", "main");
+    insertTask(db, makeTask("reviewed-13", null, "deckhand", "work"));
+    insertTask(db, { ...makeTask("objected-13", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-13" });
+    const unknown = objectDecisionAt(db, "objected-13", DEFAULT_AUDITOR_NAME, main, "0123456789abcdef");
+    const known = objectDecisionAt(db, "objected-13", DEFAULT_AUDITOR_NAME, main, builtInVersion(registryDir, DEFAULT_AUDITOR_NAME));
+
+    const rca: Task = { ...makeTask("rca-13", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-13" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(`### Live for your objected entry #${known}\n`);
+    expect(prompt).toContain(
+      "recorded at the commits you were spawned from (for a board built-in, as the board's code carried it at the version you were spawned under), ",
+    );
+    expect(prompt).not.toContain(`### Live for your objected entry #${unknown}\n`);
+    expect(prompt).toContain(
+      `no definition version could be resolved for your objected entry #${unknown} ` +
+        "(missing session record, unreachable commit, or a built-in version this board does not know)",
+    );
+  });
+
+  it("同じ registry commit で definition_version が違う 2 つの spawn に跨る異議は、2 節になる(ADR 0270 決定3)", async () => {
+    const { worker, setting, calls, db, registryDir } = await makeWorker();
+    const main = registryGit(registryDir)("rev-parse", "main");
+    insertTask(db, makeTask("objected-14", null, "deckhand", "work"));
+    const first = objectDecisionAt(db, "objected-14", "deckhand", main, "1");
+    const second = objectDecisionAt(db, "objected-14", "deckhand", main, "2");
+
+    const rca: Task = { ...makeTask("rca-14", null, "deckhand", "review"), parent_id: "objected-14" };
+    insertTask(db, rca);
+    worker.start(rca, setting(rca));
+
+    const args = calls[0]!.args;
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(`### Live for your objected entry #${first}\n`);
+    expect(prompt).toContain(`### Live for your objected entry #${second}\n`);
   });
 
   it("registry チェックアウトがタスクブランチ上にあっても、記録する commit hash と版は main のもの(ADR 0020 part 3)", async () => {
