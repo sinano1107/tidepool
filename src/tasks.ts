@@ -2209,7 +2209,7 @@ const POSED_INTERVIEW_EXITS = "score every done answer with complete_interview, 
  *  型つきの欄を持つ判断ログの1件と、一覧の対象ごとに受験者を一覧の順に1つ入れ、root を blocked にする。受験者は親も分解判断も持たず、
  *  対象の行でだけ root に結ばれる。全部同じ出題の値で、assignee は未指定(既定 agent)、workspace は root から写し、登録者は root の
  *  agent。決裁権の検査は通らない —— root が受験者ごとに選ぶものが無い。 */
-export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head?: string): Task[] {
+export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head: string): Task[] {
   const targets = targetRows(db, root.id);
   if (!targets.length) throw new DomainError("only an Interview root poses a probe");
   if (interviewProbe(db, root.id) !== null) {

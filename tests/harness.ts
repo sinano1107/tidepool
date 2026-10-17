@@ -118,6 +118,9 @@ export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
 export const HUMAN_WEBUI = [HUMAN_WORKER_ID, "webui"] as const;
 
+/** domain 層の出題が記録する root の分岐元の仮の sha。checkout で引く受験者の pickup が要るテストは実の sha を渡す。 */
+export const POSED_HEAD = "0000000000000000000000000000000000000000";
+
 // 位置引数の `undefined` の列を呼び手から隠す(#1505 / #1519)。domain の signature は渡し忘れを型で止めるために
 // `T | undefined` の位置引数のまま残し(ADR 0194 決定2)、テストの呼び出しだけがここを通る。origin を確かめるテストは
 // domain を直接呼ぶ。
@@ -855,7 +858,7 @@ export function interviewPinChild(db: Db, at: Date): Task {
     at,
     ...HUMAN_WEBUI,
   );
-  return poseProbe(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker")[0]!;
+  return poseProbe(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker", POSED_HEAD)[0]!;
 }
 
 /** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。

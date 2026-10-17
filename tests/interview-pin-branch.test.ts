@@ -6,7 +6,7 @@ import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { prepareWorkspaceAtPickup, releaseWorkspace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -33,6 +33,23 @@ function answeredBranch(workspace: WorkspaceConfig, taskId: string): string {
   git(workspace.path, "checkout", "main");
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
+
+it("root の分岐元は、root のブランチに root 自身の commit があっても HEAD ではなく保護ブランチ上の merge-base(ADR 0263 追記4)", async () => {
+  const workspace = await makeWorkspace("root-fork-point");
+  const forkedFrom = git(workspace.path, "rev-parse", "main");
+  git(workspace.path, "checkout", "-b", "task/root", "main");
+  commitWork(workspace.path, "draft.txt", "the root's own commit\n");
+
+  expect(rootForkPoint(workspace)).toBe(forkedFrom);
+});
+
+it("root の HEAD が保護ブランチと共通祖先を持たなければ、root の分岐元は投げる", async () => {
+  const workspace = await makeWorkspace("root-fork-point-orphan");
+  git(workspace.path, "checkout", "--orphan", "lone");
+  git(workspace.path, "commit", "--allow-empty", "-m", "no shared history");
+
+  expect(() => rootForkPoint(workspace)).toThrow();
+});
 
 it("受験者の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
   const workspace = await makeWorkspace("pin-posed-head");

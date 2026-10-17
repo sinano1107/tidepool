@@ -9,8 +9,10 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { getTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
+import { refreshProtectedBranch, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
+  type BootOptions,
   bootTidepool,
   callAsTask,
   commitWork,
@@ -19,6 +21,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   managementMcpClient,
   mcpClient,
@@ -27,6 +30,7 @@ import {
   readFollowingNext,
   registerQuestion,
   runNow,
+  servedQuarantineQuestion,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -52,8 +56,13 @@ const pose = async (rootId: string): Promise<[string, ...string[]]> => JSON.pars
 let workspacePath: string;
 /** 既定 agent の定義。テストが entry を差し替えて、登録の後に走れなくなった盤面を作れる。 */
 let definition: { provider: Array<{ name: string; advisor: boolean }>; tier: undefined };
-async function boot({ promoted = true, watchdog }: { promoted?: boolean; watchdog?: WatchdogConfig } = {}): Promise<Tidepool> {
-  const workspace = await makeWorkspace("reef");
+async function boot({
+  promoted = true,
+  watchdog,
+  workspace,
+  resolveWorkspace,
+}: { promoted?: boolean; watchdog?: WatchdogConfig; workspace?: WorkspaceConfig; resolveWorkspace?: BootOptions["resolveWorkspace"] } = {}): Promise<Tidepool> {
+  workspace ??= await makeWorkspace("reef");
   workspacePath = workspace.path;
   definition = { provider: [{ name: "anthropic", advisor: true }], tier: undefined };
   const board: Tidepool = await bootTidepool({
@@ -61,6 +70,7 @@ async function boot({ promoted = true, watchdog }: { promoted?: boolean; watchdo
     agentAdmin: { list: () => [{ name: "fake-worker", provider: "anthropic" } as AgentView] },
     taskExecutionCandidates: (task) => executionSettingsFor(board.db, definition, task),
     watchdog,
+    resolveWorkspace,
   });
   applyExecutionSettingsChange(board.db, { setting: "advisor_ceiling", value: "fable" }, "webui", board.clock.now());
   if (promoted) applyExecutionSettingsChange(board.db, { setting: "learner_promoted", value: true }, "webui", board.clock.now());
@@ -134,13 +144,78 @@ it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の ro
   expect(await tools(childId)).toEqual(unsplit.filter((name) => name !== "record_knowledge" && name !== "define_memory_branch"));
 });
 
-it("出題の event は、出題の verb が呼ばれた checkout の保護ブランチの head を持つ(ADR 0263 決定6)", async () => {
+it("出題の event は、出題の verb が呼ばれた checkout の root の分岐元を持つ(ADR 0263 追記4)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await pose(root.id);
 
   const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
   expect(posed.payload.head).toBe(git(workspacePath, "rev-parse", "main"));
+});
+
+it("root の session の最中に着地の収束が保護ブランチの写しを進めても、出題の head は root の分岐元で、受験者はそこから分岐する(ADR 0263 追記4)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("reef-advanced");
+  t = await boot({ workspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  expect(t.worker.started.at(-1)!.id).toBe(root.id);
+  const copy = "refs/remotes/origin/main";
+  const forkedFrom = git(workspace.path, "rev-parse", copy);
+  publish("merged.txt", "another root's PR merged\n", "a merge during the root's session");
+  await refreshProtectedBranch(t.db, workspace, undefined);
+  expect(git(workspace.path, "rev-parse", copy)).not.toBe(forkedFrom);
+
+  const [childId] = await pose(root.id);
+  await completeMetaReviews(t);
+
+  const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
+  expect(posed.payload.head).toBe(forkedFrom);
+  expect(t.worker.started.at(-1)!.id).toBe(childId);
+  expect(git(workspace.path, "rev-parse", `task/${childId}`)).toBe(forkedFrom);
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeUndefined();
+});
+
+/** 出題が残したもの: 出題の event と受験者。 */
+async function posedRecord(rootId: string) {
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${rootId}/events`)).json.filter((e: any) => e.payload.interview_probe);
+  const examinees = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.interview_root_id === rootId);
+  return { events, examinees };
+}
+
+it("root の workspace が registry から消えた(registry drift)まま出題すると、head を記録できないので拒まれ escalate を指し、出題の event も受験者も残らず、session は続き、workspace の quarantine が立つ(ADR 0263 追記5)", async () => {
+  const workspace = await makeWorkspace("reef");
+  let drifted = false;
+  t = await boot({
+    workspace,
+    resolveWorkspace: (name) => {
+      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
+      return workspace;
+    },
+  });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  expect(t.worker.started.at(-1)!.id).toBe(root.id);
+  drifted = true;
+
+  const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(posed.isError).toBe(true);
+  expect(posed.content[0].text).toContain("workspace cannot be resolved");
+  expect(posed.content[0].text).toContain("escalate");
+  expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("in_progress");
+  expect((await callAsTask(t, root.id, "get_current_task", {})).isError).toBeFalsy();
+  expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
+});
+
+it("root の HEAD が保護ブランチと共通祖先を持たなければ出題は失敗し、head の無い出題も今の ref の head の出題も残らない", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  git(workspacePath, "checkout", "--orphan", "lone");
+  git(workspacePath, "commit", "--allow-empty", "-m", "no shared history");
+
+  const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(posed.isError).toBe(true);
+  expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
 });
 
 it("ログ API の root の行は Interview の印を運び、受験者の行への異議 API は 409 に写る(ADR 0268 決定1・6)", async () => {

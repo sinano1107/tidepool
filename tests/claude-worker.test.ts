@@ -53,7 +53,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -832,7 +832,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
     const root = registerTask(db, { type: "review", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
-    const [child] = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker");
+    const [child] = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
     const args = calls[0]!.args;
@@ -855,7 +855,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
     const root = registerTask(db, { type: "review", assignee: "deckhand", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
-    poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker");
+    poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;

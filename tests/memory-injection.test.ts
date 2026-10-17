@@ -16,7 +16,7 @@ import {
   recordMemoryInjection,
 } from "../src/memory.js";
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { examineeRootId, HUMAN_WEBUI, interviewPinChild } from "./harness.js";
+import { examineeRootId, HUMAN_WEBUI, interviewPinChild, POSED_HEAD } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -384,6 +384,7 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
       "auditor",
       at,
       "worker",
+      POSED_HEAD,
     );
   const [examinee, sibling] = interview([opus, { ...opus, effort: "low" }]);
   const [otherPinChild] = interview([opus]);
