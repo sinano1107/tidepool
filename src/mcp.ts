@@ -394,6 +394,9 @@ async function taskContext(deps: McpDeps, task: Task) {
   return { id: task.id, ...content };
 }
 
+/** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
+const ESCALATE_UNFIXABLE = " — this task cannot fix that: escalate so a human decides";
+
 /** 応答予算で読む読み口の続き(ADR 0195)。 */
 const next = z.string().optional().describe("The next string from a previous response of this verb; pass it alone.");
 
@@ -697,10 +700,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           attributedTaskId,
           (task) => (workerId, now) => {
             if (head === undefined) {
-              throw new DomainError("this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded — this task cannot fix that: escalate so a human decides");
+              throw new DomainError(`this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
             }
             if (deps.taskExecutionCandidates) {
-              assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, " — this task cannot fix that: escalate so a human decides");
+              assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
             }
             const examinees = poseProbe(deps.db, task, input, workerId, now, "worker", head);
             return { child_ids: examinees.map((c) => c.id), parent_status: "blocked" };
