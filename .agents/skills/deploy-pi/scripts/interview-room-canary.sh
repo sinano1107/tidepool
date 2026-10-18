@@ -50,11 +50,13 @@
 # is why that row is checked from outside first).
 #
 # EXIT CODES: 0 = every row passed for both providers.
-# 1 = something got out (the real environment was written, home was read, a
-# refusal was harness-worded, the sandbox died), or the combination does not hold:
-# (a) or (c) failed. The second is ADR 0273's rejected option 3, which is a human
-# decision.
-# 2 = nothing got out but a row could not be measured.
+# 1 = home was read (read-floor's hole), the sandbox died, or the combination does
+# not hold for a provider: the real environment was written or its write refused
+# in the harness's words (b), or (a)/(c) was refused beside a passing home control.
+# The combination not holding is ADR 0273's rejected option 3, a human decision.
+# 2 = nothing got out but a row could not be measured — including a setup step
+# that failed before any session ran, and an (a)/(c) failure beside a control that
+# did not pass (a dropped setting looks the same as the combination breaking).
 set -uo pipefail
 
 PI="masaki@100.78.52.97"
@@ -83,17 +85,18 @@ REPO="${2:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)}"
 # shellcheck source=read-floor-canary.sh
 READ_FLOOR_CANARY_SOURCE_ONLY=1 source "$REPO/.agents/skills/deploy-pi/scripts/read-floor-canary.sh" || {
   fail "$REPO has no read-floor-canary.sh — is that checkout up to date?"
-  exit 1
+  exit 2
 }
 
-# (a) and (c): what only a working read or write produces is PASS; the probe
-# having run without producing it is the combination breaking; no probe line at
-# all is not a measurement.
+# (a) and (c): what only a working read or write produces is PASS. A FAIL is only
+# a refusal (rc != 0) in a run whose `home` control passed — without that control
+# a dropped setting looks the same, and an rc=0 without the hash or token is a
+# paraphrased transcript, not a refusal. Anything else is not a measurement.
 opened_verdict() {
-  local got="$1" line="$2"
+  local got="$1" line="$2" control="$3"
   if [[ "$got" == "yes" ]]; then
     echo "PASS"
-  elif [[ -n "$line" ]]; then
+  elif [[ "$control" == "PASS" && "$line" == rc=* && "$line" != "rc=0 "* ]]; then
     echo "FAIL"
   else
     echo "VACUOUS"
@@ -155,7 +158,7 @@ prepare() {
   git init -q "$ROOM"
   TASK_TEMP=$(mktemp -d "/tmp/tidepool-$cli-$(cat /proc/sys/kernel/random/uuid)-XXXXXX")
   TASK_TEMPS+=("$TASK_TEMP")
-  cp "$REPO/$PROBE" "$ROOM/" || { fail "$REPO/$PROBE is missing — is that checkout up to date?"; exit 1; }
+  cp "$REPO/$PROBE" "$ROOM/" || { fail "$REPO/$PROBE is missing — is that checkout up to date?"; exit 2; }
   # Paths only — the tokens never leave the target files.
   cat > "$ROOM/interview-room-targets" <<EOF
 REAL_ENV='$REAL'
@@ -168,42 +171,45 @@ EOF
 
 # One provider's rows from its output.
 judge() {
-  local cli="$1" out="$2" line ok os seen harness=no
+  local cli="$1" out="$2" line ok os seen made harness=no home_line home_verdict
   line_of() { grep -m1 -oE "INTERVIEW-ROOM $1 rc=[0-9]+.*" <<< "$out" | sed "s/^INTERVIEW-ROOM $1 //"; }
   if ! grep -q "INTERVIEW-ROOM " <<< "$out"; then
     fail "$cli: the probe did not run (declined, cut off, or the sandbox did not start) — no row was measured."
   fi
 
+  # The control first: (a) and (c) can only FAIL beside it.
+  home_line=$(line_of home)
+  os_refused_in "$home_line" && os=yes || os=no
+  seen=$(read_seen "$home_line" "$HOME_TOKEN" "$out")
+  [[ "$cli" == claude ]] && harness_refused_in "$out" "$HOME_TARGET" && harness=yes
+  home_verdict=$(refused_row_verdict "$base_home" "$seen" "$os" "$harness")
+
   line=$(line_of real-env-log)
   [[ "$line" == "rc=0 $REAL_HEAD"* ]] && ok=yes || ok=no
-  record "$cli" real-env-log "$base_real" "$line" "$(opened_verdict "$ok" "$line")"
+  record "$cli" real-env-log "$base_real" "$line" "$(opened_verdict "$ok" "$line" "$home_verdict")"
   line=$(line_of real-env-cat)
   [[ "$line" == "rc=0 $REAL_TOKEN"* ]] && ok=yes || ok=no
-  record "$cli" real-env-cat "$base_real" "$line" "$(opened_verdict "$ok" "$line")"
+  record "$cli" real-env-cat "$base_real" "$line" "$(opened_verdict "$ok" "$line" "$home_verdict")"
 
   # The filesystem outranks the transcript. The one OS string measured so far (see
   # the header); a new one reads VACUOUS until it is measured and added here.
   line=$(line_of real-env-write)
   grep -qF "Read-only file system" <<< "$line" && os=yes || os=no
   [[ -e "$REAL/written-by-$cli.txt" ]] && seen=yes || seen=no
-  [[ "$cli" == claude ]] && harness_refused_in "$out" "$REAL" && harness=yes
+  harness=no
+  [[ "$cli" == claude ]] && harness_refused_in "$out" "$REAL/written-by-$cli.txt" && harness=yes
   record "$cli" real-env-write "$base_real" "$line" "$(refused_row_verdict "$base_real" "$seen" "$os" "$harness")"
 
   line=$(line_of room-git)
   [[ "$(git -C "$ROOM" log -1 --format=%s 2>/dev/null)" == "interview-room-canary" \
      && "$(git -C "$ROOM" show HEAD:interview-room.txt 2>/dev/null)" == "ok" ]] && ok=yes || ok=no
-  record "$cli" room-git "-" "$line" "$(opened_verdict "$ok" "$line")"
+  record "$cli" room-git "-" "$line" "$(opened_verdict "$ok" "$line" "$home_verdict")"
 
-  line=$(line_of home)
-  os_refused_in "$line" && os=yes || os=no
-  seen=$(read_seen "$line" "$HOME_TOKEN" "$out")
-  harness=no
-  [[ "$cli" == claude ]] && harness_refused_in "$out" "$HOME_TARGET" && harness=yes
-  record "$cli" home "$base_home" "$line" "$(refused_row_verdict "$base_home" "$seen" "$os" "$harness")"
+  record "$cli" home "$base_home" "$home_line" "$home_verdict"
 
   line=$(line_of task-temp)
-  ok=$(sed -n 's/^rc=0 //p' <<< "$line")
-  [[ "$ok" == "$TASK_TEMP"/* && -f "$ok" ]] && ok=yes || ok=no
+  made=$(sed -n 's/^rc=0 //p' <<< "$line")
+  [[ "$made" == "$TASK_TEMP"/* && -f "$made" ]] && ok=yes || ok=no
   record "$cli" task-temp "-" "$line" "$(control_verdict "$ok")"
 
   if [[ "$cli" == claude ]]; then
@@ -220,7 +226,7 @@ if CODEX=$(realpath "$(command -v codex)" 2>/dev/null); then
   if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$ROOM" \
           --task-temp "$TASK_TEMP" --codex > "$WORK/codex.config"); then
     fail "could not emit the Codex permission config from $REPO — is that a checkout with node_modules?"
-    exit 1
+    exit 2
   fi
   CODEX_ARGS=()
   while IFS= read -r entry; do
@@ -231,14 +237,14 @@ if CODEX=$(realpath "$(command -v codex)" 2>/dev/null); then
   done < "$WORK/codex.config"
   if ! printf '%s\n' "${CODEX_ARGS[@]}" | grep -qF "filesystem={\"$REAL\"=\"read\","; then
     fail "the emitted Codex config has no filesystem map to add the real environment to — $REPO predates it."
-    exit 1
+    exit 2
   fi
   log "running the probe under codex sandbox (no model turn)…"
   # The production preflight's argument shape (probePermission in
   # src/codex-worker.ts) and workerEnv's git and temp settings.
   CODEX_OUT=$(cd "$ROOM" && CODEX_HOME="${TIDEPOOL_CODEX_HOME:-$HOME/.tidepool/codex}" TMPDIR="$TASK_TEMP" \
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
-    "$CODEX" sandbox -P tidepool-work -C "$ROOM" "${CODEX_ARGS[@]}" bash interview-room-canary-probe.sh 2>&1)
+    "$CODEX" sandbox -P tidepool-work -C "$ROOM" "${CODEX_ARGS[@]}" bash interview-room-canary-probe.sh < /dev/null 2>&1)
   echo "$CODEX_OUT"
   judge codex "$CODEX_OUT"
 else
@@ -252,7 +258,7 @@ prepare claude
 if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$ROOM" \
         --task-temp "$TASK_TEMP" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
   fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
-  exit 1
+  exit 2
 fi
 # The one hand-added item (replaced by the `interview` type's emitter, #2192).
 node -e 'const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -260,7 +266,7 @@ node -e 'const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.
   "$WORK/work.json" "$REAL"
 if ! grep -qF '"denyRead":["/"]' "$WORK/work.json" || ! grep -qF "\"$REAL\"" "$WORK/work.json"; then
   fail "the emitted profile is not ADR 0257's default-deny read range with the real environment added — $REPO predates it."
-  exit 1
+  exit 2
 fi
 
 log "running one sandboxed worker session (costs a real claude session)…"
@@ -297,11 +303,15 @@ elif [[ "$status" == "2" ]]; then
   fail "  a refused row VACUOUS  = its target was missing outside the sandbox (BASELINE no), or it was not"
   fail "                           refused in the OS's words"
   fail "  a control VACUOUS      = the settings may have been dropped, so the other rows prove nothing"
+  fail "  an (a)/(c) row VACUOUS = no rc, an rc=0 without the hash or token, or a refusal beside a home"
+  fail "                           control that did not pass"
 else
   fail "THE INTERVIEW ROOM'S FLOOR DOES NOT HOLD (exit 1). Read the FAIL rows above:"
-  fail "  real-env-write or home  = something got out, or a refusal was harness-worded: treat it as a"
-  fail "                            production incident, as read-floor-canary.sh does"
-  fail "  real-env-log/-cat or room-git = the combination itself breaks for that provider: ADR 0273's"
-  fail "                            rejected option 3 is the fallback, and switching to it is a human decision"
+  fail "  home                    = a read got out of the opened set: read-floor-canary.sh's hole, treat it"
+  fail "                            as a production incident"
+  fail "  real-env-write, real-env-log/-cat or room-git = the combination itself breaks for that provider"
+  fail "                            (written, refused in the harness's words, or refused beside a passing"
+  fail "                            control): ADR 0273's rejected option 3 is the fallback, and switching to"
+  fail "                            it is a human decision"
 fi
 exit "$status"

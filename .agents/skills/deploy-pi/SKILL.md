@@ -359,7 +359,7 @@ bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh pi      # the Pi
 
 Measures that a worker's Bash cannot read outside ADR 0257's default-deny range (its workspace, its task temp, the OS locations) — issue #1953. It carries #1950's real-environment confirmation: what #1950 observed getting through — another task's task temp, another session's files under `/tmp/claude-<uid>/` (read and appended to), the Mac home on the VM — is its refused rows. It is not part of the board's containment check, because the CLI cannot run a command in its sandbox without a model turn (ADR 0257 decision 3).
 
-**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other three canaries are expected to fail closed there too (unmeasured) — run them in the Lima VM as well.
+**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other canaries are expected to fail closed there too (unmeasured) — run them in the Lima VM as well.
 
 **Seven rows in one session**, run by `scripts/read-floor-canary-probe.sh` from a throwaway workspace with the emitted work profile, the production spawn flags, and a task temp made the board's way (`/tmp/tidepool-claude-<uuid>-XXXXXX`, so the CLI's proxy socket path is as long as in production):
 
@@ -402,7 +402,7 @@ Measures that an Interview root's floor holds for both providers (issue #2197 / 
 | task-temp | `mktemp` | the file landed in the task temp |
 | allowed-domain | Claude only: `curl https://registry.npmjs.org`. Under `codex sandbox` no host was reachable, listed or not, so this row is not a control there | `code=200` |
 
-`home`, `task-temp` and `allowed-domain` are the controls: they show the settings were applied and the added entry opened no more than it names. Read the other rows only alongside them. The verdict functions are read-floor-canary.sh's, sourced. **Exit codes:** `0` means every row passed for both providers. `1` means something got out (handle it as a production incident, the same as read-floor), or the combination does not hold: `real-env-log`/`-cat` or `room-git` failed. The fallback for the second case is ADR 0273's rejected option 3, and switching to it is a human decision. `2` means a row could not be measured; this includes `codex` missing from PATH.
+`home`, `task-temp` and `allowed-domain` are the controls, but only `home` tells a dropped profile apart: it is an OS-worded refusal of a file that exists outside, which also shows the added entry opened no more than it names (`mktemp` follows `$TMPDIR`, and the allowed domain answers without any profile; `real-env-write`'s `Read-only file system` is the other OS-worded proof). An (a)/(c) row therefore reads FAIL only beside a passing `home`, and VACUOUS otherwise. The verdict functions are read-floor-canary.sh's, sourced. **Exit codes:** `0` means every row passed for both providers. `1` means `home` was read (a production incident, the same as read-floor), or the combination does not hold: `real-env-write`, `real-env-log`/`-cat` or `room-git` failed. The fallback for the second case is ADR 0273's rejected option 3, and switching to it is a human decision. `2` means a row could not be measured; this includes `codex` missing from PATH and a setup step that failed before any session.
 
 First run on the Lima VM (2026-10-18, claude 2.1.286, codex-cli 0.147.0): all 13 rows passed, exit 0.
 
