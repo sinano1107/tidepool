@@ -331,7 +331,7 @@ export function commitRoomCopy(db: Db, room: WorkspaceConfig): string {
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   const head = git(room.path, "commit-tree", tree, "-p", git(room.path, "rev-parse", protectedBranchRef(room)), "-m", "Add the project files");
   const ref = `refs/keep-around/${head}`;
-  boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head, ""));
+  boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head));
   return head;
 }
 

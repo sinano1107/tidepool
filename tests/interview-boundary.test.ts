@@ -478,6 +478,16 @@ it("監査の却下で root は findings を history に受けて起き、出題
   expect(git(room, "ls-tree", "--name-only", heads[1])).toContain("harder.txt");
   expect(git(room, "ls-tree", "--name-only", heads[0])).not.toContain("harder.txt");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json).toMatchObject({ status: "blocked", interview_waiting: "audit" });
+
+  // 受理された出し直しの受験者は、却下された写しではなく最後の写しから分岐する
+  t.worker.exit(root.id);
+  await runNow(t, second);
+  expect((await callAsTask(t, second, "complete_audit", { verdict: "accepted", findings: "now it asks for frontier work" })).isError).toBeFalsy();
+  t.worker.exit(second);
+  const [examinee] = (await posedRecord(root.id)).examinees;
+  await runNow(t, examinee.id);
+  expect(t.worker.started.at(-1)!.id).toBe(examinee.id);
+  expect(git(room, "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
 it.each(["直接 cancel", "retry"] as const)("監査が未決着の root の%sは監査 review を倒す(ADR 0273 決定3 / ADR 0271)", async (path) => {
