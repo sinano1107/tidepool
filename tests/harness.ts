@@ -861,8 +861,9 @@ export function openTestInterviewRoom(db: Db, root: Task): void {
 }
 
 /** setup のみ: このプロセスの git の commit だけを落とす(署名を求め、署名の program は無い)。他の git は通る。
- *  config は既存の `GIT_CONFIG_*`(vitest.config.ts の env)の後ろに足す。戻すのは `vi.unstubAllEnvs()`。 */
+ *  config は既存の `GIT_CONFIG_*`(vitest.config.ts の env)の後ろに足す。途中で戻すのは `vi.unstubAllEnvs()`、テストの終わりには必ず戻る。 */
 export function failGitCommits(): void {
+  onTestFinished(() => vi.unstubAllEnvs());
   const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
   vi.stubEnv("GIT_CONFIG_COUNT", String(n + 2));
   vi.stubEnv(`GIT_CONFIG_KEY_${n}`, "commit.gpgsign");

@@ -143,11 +143,8 @@ it("面接室は規約の基点の下の root の id に、盤面名義の空コ
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-room-open-");
   failGitCommits();
-  try {
-    expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("/nonexistent-gpg");
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("/nonexistent-gpg");
+  vi.unstubAllEnvs();
   const room = realpathSync(join(base, root.id));
   expect(interviewRoomPath(db, root.id)).toBe(room);
 

@@ -329,12 +329,8 @@ it.each([
 it("面接室が作れなかった pickup は面接室の quarantine に落ち、時限の後始末は面接室で走って slot を空け、人間の回答で quarantine が解けると、次の pickup が残った面接室の続きから作って root を走らせる(ADR 0273 決定1・8)", async () => {
   t = await boot({ watchdog: { timeLimits: { interview: HOUR }, grace: HOUR, reclaimTimeout: HOUR } });
   failGitCommits();
-  let root: any;
-  try {
-    root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  } finally {
-    vi.unstubAllEnvs();
-  }
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  vi.unstubAllEnvs();
   expect(t.worker.started).toEqual([]);
   expect((await servedQuarantineQuestion(t, "workspace", root.id)).purpose).toContain("/nonexistent-gpg");
 

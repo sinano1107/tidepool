@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
@@ -202,7 +202,8 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
     path = realpathSync(at);
     appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path }, at: now });
   }
-  if (!existsSync(join(path, ".git"))) git(path, "init", "--quiet", "--initial-branch=main");
+  // 既存の repo への init は何も変えない(HEAD も残る)
+  git(path, "init", "--quiet", "--initial-branch=main");
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
   if (readRef({ name: root.id, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
 }
