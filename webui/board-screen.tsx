@@ -52,10 +52,7 @@ function BoardScreen({ data, onOpenTask }: BoardScreenProps) {
                 {data.board[key].map((t) => (
                   <div key={t.id} style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <TaskCard task={{ ...t, status: key }} onClick={() => onOpenTask(t)} />
-                    {t.settledByObservation && (
-                      <span data-testid={`settled-by-observation-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.settledByObservation}</span>
-                    )}
-                    {[['landing-state', t.landingState], ['interview-place', t.interviewPlace], ['interview-waiting', t.interviewWaiting]].map(([testId, copy]) => copy && (
+                    {[['settled-by-observation', t.settledByObservation], ['landing-state', t.landingState], ['interview-place', t.interviewPlace], ['interview-waiting', t.interviewWaiting]].map(([testId, copy]) => copy && (
                       <span key={testId} data-testid={`${testId}-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{copy}</span>
                     ))}
                   </div>

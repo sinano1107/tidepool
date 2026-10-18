@@ -456,20 +456,15 @@ it("却下の後の出し直しは出題の gate が新しい写しを commit �
   expect(git(room, "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
-it("ログ API の root と監査の行は Interview のグループを運び、受験者の行は出ず、その行への異議 API は 409 に写る(ADR 0268 決定1 / ADR 0273 決定10)", async () => {
+// どの行がグループに入り受験者の行が出ないかは domain 層(tests/interview.test.ts の listLog)が言う。ここは線の上の形だけ
+it("ログ API の root の行は Interview のグループを運び、受験者の行への異議 API は 409 に写る(ADR 0268 決定1 / ADR 0273 決定10)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
-  const [audit] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id);
   const answer = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "worker", at: t.clock.now(), payload: { kind: "decision_logged", line: "use a hand-written lexer" } });
 
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  const group = { root_id: root.id, title: POSE.title, workspace: "reef" };
-  expect(log.entries.filter((e: any) => e.interview).map((e: any) => [e.task_id, e.interview])).toEqual([
-    [root.id, group],
-    [audit.id, group],
-  ]);
-  expect(log.entries.some((e: any) => e.task_id === childId)).toBe(false);
+  expect(log.entries.find((e: any) => e.task_id === root.id).interview).toEqual({ root_id: root.id, title: POSE.title, workspace: "reef" });
   expect((await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: answer, comment: "redo it" })).status).toBe(409);
 });
 

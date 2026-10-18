@@ -3353,10 +3353,14 @@ function unfinishedChildSql(parentRef: string): string {
           OR ${unsettledAuditSql(parentRef)} OR ${unsettledExamineeSql(parentRef)})`;
 }
 
+/** 監査 review か(ADR 0273 決定3・4)。印は登録の event の audited_probe だけ —— `auditedPosedEventId` の SQL 側。 */
+export function isAuditSql(taskRef: string): string {
+  return `EXISTS (SELECT 1 FROM events r WHERE r.task_id = ${taskRef} AND r.kind = 'task_registered' AND json_extract(r.payload, '$.audited_probe') IS NOT NULL)`;
+}
+
 /** 出題済みで監査が未決着の Interview の root か(ADR 0273 決定3)。監査は付帯子だが root を塞ぐ。 */
 function unsettledAuditSql(parentRef: string): string {
-  return `EXISTS (SELECT 1 FROM tasks a JOIN events r ON r.task_id = a.id AND r.kind = 'task_registered'
-            WHERE a.parent_id = ${parentRef} AND ${unsettledSql("a.status")} AND json_extract(r.payload, '$.audited_probe') IS NOT NULL)`;
+  return `EXISTS (SELECT 1 FROM tasks a WHERE a.parent_id = ${parentRef} AND ${unsettledSql("a.status")} AND ${isAuditSql("a.id")})`;
 }
 
 /** 答案が未決着の対象を持つ Interview の root か(ADR 0267 決定2)。 */

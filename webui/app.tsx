@@ -367,7 +367,7 @@ function mapData(
       landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : undefined,
       // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は面接室 —— 列の値をそのまま見せない
       interviewPlace: t.type === 'interview' ? `real environment: ${t.workspace ?? 'default workspace'}`
-        : t.interview_root_id ? `interview room (reproduces ${t.workspace})` : undefined,
+        : t.interview_root_id ? `interview room (reproduces ${t.workspace ?? 'default workspace'})` : undefined,
       interviewWaiting: t.interview_waiting && INTERVIEW_WAITING_COPY[t.interview_waiting],
     });
   }
@@ -614,6 +614,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
   // Interview の root の面接室の在り処と出題の head は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0082)
   const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
   React.useEffect(() => {
+    setInterview(null);
     if (task.type !== 'interview') return;
     api('GET /api/tasks/:id', { params: { id: task.id } })
       .then((full) => setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' }))
