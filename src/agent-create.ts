@@ -321,8 +321,8 @@ export interface DeleteAgentInput {
 export interface AgentDeletionReferences {
   /** この agent を assignee に持つ未決着タスクの件数。 */
   unsettledTaskCount: number;
-  /** そのうち work だけの件数 —— 組み込みを shadow するエントリの扉が数える(ADR 0228 決定3)。 */
-  unsettledWorkTaskCount: number;
+  /** そのうち work 側(work と memory_repair、ADR 0272 決定4)だけの件数 —— 組み込みを shadow するエントリの扉が数える(ADR 0228 決定3)。 */
+  unsettledWorkSideTaskCount: number;
   /** この agent の profile を読んで着地を待つ完了タスクの id —— agent 名の quarantine の
    *  解除が数えるのと同じ集合(ADR 0217 決定4)。 */
   awaitingLandingTaskIds: string[];
@@ -361,11 +361,11 @@ export async function deleteAgent(
   // 組み込みを shadow しているエントリだけは、Auditor ポインタの指す先でも review に
   // 参照されていても消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する
   // 唯一の例外である(ADR 0117 決定2): 消えれば名前は組み込みへ落ち、review は組み込みが
-  // 走らせ続ける。work は組み込みへ落ちられない(ADR 0228 決定1)ので、work の未決着
-  // タスクと着地を待つ完了タスクは普通の agent と同じく数える(ADR 0228 決定3)。
+  // 走らせ続ける。work と memory_repair は組み込みへ落ちられない(ADR 0228 決定1 / ADR 0272 決定4)ので、
+  // その未決着タスクと着地を待つ完了タスクは普通の agent と同じく数える(ADR 0228 決定3)。
   // `board_default` は緩めない —— 既定 agent は registry に残る(ADR 0117 決定3)。
   const shadowsBuiltIn = isBuiltInAgentName(input.name);
-  const unsettled = shadowsBuiltIn ? deps.unsettledWorkTaskCount : deps.unsettledTaskCount;
+  const unsettled = shadowsBuiltIn ? deps.unsettledWorkSideTaskCount : deps.unsettledTaskCount;
   if (unsettled > 0) reasons.push({ code: "unsettled_tasks", count: unsettled });
   const awaiting = deps.awaitingLandingTaskIds;
   if (awaiting.length > 0) reasons.push({ code: "tasks_awaiting_landing", count: awaiting.length, task_ids: awaiting });

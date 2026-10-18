@@ -4,7 +4,8 @@ import { deleteAgent } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
 import { loadRegistry, registryAtCommit } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
-import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
+import { countUnsettledTasksReferencing, countUnsettledWorkSideAssignedTo, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
@@ -21,7 +22,7 @@ async function makeMainRegistry(): Promise<string> {
 }
 
 /** 参照ゼロ・既定でもない盤面の事実 —— 拒否の門を跨がない既定の refs。 */
-const NO_REFERENCES = { unsettledTaskCount: 0, unsettledWorkTaskCount: 0, awaitingLandingTaskIds: [], auditorName: "fugu", interviewerName: "suzumedai" };
+const NO_REFERENCES = { unsettledTaskCount: 0, unsettledWorkSideTaskCount: 0, awaitingLandingTaskIds: [], auditorName: "fugu", interviewerName: "suzumedai" };
 
 describe("deleteAgent: 正常系(issue #205 / ADR 0087 決定1)", () => {
   it("agents/<name>.md を committed main から除去するコミットが着地し、loadRegistry から消える", async () => {
@@ -100,7 +101,7 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     await expect(
       deleteAgent(
         { name: "fugu", confirm: true },
-        { registry, ...NO_REFERENCES, unsettledTaskCount: 3, unsettledWorkTaskCount: 1, awaitingLandingTaskIds: ["t1", "t2"] },
+        { registry, ...NO_REFERENCES, unsettledTaskCount: 3, unsettledWorkSideTaskCount: 1, awaitingLandingTaskIds: ["t1", "t2"] },
       ),
     ).rejects.toMatchObject({
       name: "DeletionBlockedError",
@@ -254,7 +255,7 @@ describe("countUnsettledTasksReferencing: 数えるのは未決着だけ(ADR 008
   });
 });
 
-describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(ADR 0228 決定3)", () => {
+describe("countUnsettledWorkSideAssignedTo: 数えるのは未決着の work 側の task(work と memory_repair)だけ(ADR 0228 決定3 / ADR 0272 決定4)", () => {
   it("assignee に持つ work のうち未決着だけを数え、done と cancelled は数えない", () => {
     const db = openDb(":memory:");
     const at = new Date("2026-08-05T00:00:00.000Z");
@@ -266,7 +267,18 @@ describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(
     db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(ids[1]);
     db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(ids[2]);
 
-    expect(countUnsettledWorkAssignedTo(db, "deckhand")).toBe(1);
+    expect(countUnsettledWorkSideAssignedTo(db, "deckhand")).toBe(1);
+    db.close();
+  });
+
+  it("未決着の memory_repair も work と同じく数え、review は数えない —— 組み込みへ落ちると走れない(ADR 0272 決定4)", () => {
+    const db = openDb(":memory:");
+    const at = new Date("2026-08-05T00:00:00.000Z");
+    for (const type of ["memory_repair", "review"] as const) {
+      registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, BOARD_WORKER_ID, "board");
+    }
+
+    expect(countUnsettledWorkSideAssignedTo(db, "deckhand")).toBe(1);
     db.close();
   });
 });

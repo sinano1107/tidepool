@@ -2,12 +2,14 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import {
   completeTask,
+  countUnsettledAttachedChildren,
   listBoard,
   listQueue,
   nextSlotTask,
   presentTask,
   registerTask,
 } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
 
 const HANDOFF = {
@@ -168,5 +170,24 @@ it("answering a proposal question does not return its parent to the queue head(i
   expect(listQueue(db).findIndex((task) => task.id === parent.id)).toBeGreaterThan(
     listQueue(db).findIndex((task) => task.id === other.id),
   );
+  db.close();
+});
+
+it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地の門に数えられ、handoff 無しの complete_task で終わる(ADR 0272 決定5)", () => {
+  const db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
+  const memoryRepair = registerTask(
+    db,
+    { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id },
+    new Date(1),
+    BOARD_WORKER_ID,
+    "board",
+  );
+
+  expect(presentTask(db, parent).status).toBe("todo");
+  expect(countUnsettledAttachedChildren(db, parent.id)).toBe(1);
+
+  expect(completeTask(db, memoryRepair, undefined, "tako", new Date(2), "worker").status).toBe("done");
+  expect(countUnsettledAttachedChildren(db, parent.id)).toBe(0);
   db.close();
 });

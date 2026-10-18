@@ -2,6 +2,7 @@ const typeStyles = {
   work:     { color: 'var(--type-work-fg)', symbol: '●' },
   question: { color: 'var(--type-question-fg)', symbol: '?' },
   review:   { color: 'var(--type-review-fg)', symbol: '◍' },
+  memory_repair: { color: 'var(--type-work-fg)', symbol: '◐' },
 };
 
 export function TypeBadge({ type = 'work', showLabel = true, style }) {

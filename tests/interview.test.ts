@@ -819,6 +819,43 @@ it("受験者を親にした work と review の登録は扉を問わず拒ま�
   expect(registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI).parent_id).toBe(root.id);
 });
 
+// 記憶の修理子(ADR 0272)。立てるのは異議の束ね(#2175)なので、ここでは盤面名義の registerTask で立てる
+const MEMORY_REPAIR = { type: "memory_repair" as const, title: "memory repair: interview", purpose: "repair the objected memory write", completion_criteria: "every objection direction above is addressed" };
+
+it("memory_repair は Interview の root の子として登録でき、受験者の子としては扉を問わず拒まれる(ADR 0272 決定6 / ADR 0268 決定5)", () => {
+  const { db, root } = registerInterview();
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
+    expect(() => registerTask(db, { ...MEMORY_REPAIR, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
+  }
+  expect(listChildren(db, child.id)).toEqual([]);
+  expect(registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board")).toMatchObject({ type: "memory_repair", parent_id: root.id });
+});
+
+it("root の下の memory_repair は root の retry で倒れず todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0272 決定1・6)", () => {
+  const { db, root } = registerInterview();
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const memoryRepair = registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
+
+  const again = retryRoot(db, root, "the probe names the answer");
+
+  expect([root, examinee, memoryRepair].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled", "todo"]);
+  const picked: string[] = [];
+  for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "tako", new Date(2))!.id);
+  expect(picked.sort()).toEqual([again.id, memoryRepair.id].sort());
+});
+
+it("開いた memory_repair を持つ root は、最後の受験者を失敗 question の abandon で cancel しても cancel されない —— root 自身の未決着の子に数える(ADR 0272 / ADR 0268 帰結)", () => {
+  const { db, root } = registerInterview();
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
+
+  answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
+
+  expect(getTask(db, child!.id)!.status).toBe("cancelled");
+  expect(getTask(db, root.id)!.status).not.toBe("cancelled");
+});
+
 it.each(["出題", "採点"] as const)("root の%sの行への異議を commit すると root の下に RCA(self / auditor)だけが立ち、修理子は立たない —— 帰責 event は今どおり(ADR 0268 決定3)", (line) => {
   const { db, root, children } = scoringRoot();
   if (line === "採点") {

@@ -9,6 +9,7 @@ import { type Db, openDb } from "../src/db.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { completedWork, FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
@@ -141,6 +142,15 @@ describe("verifyAgentRepaired", () => {
     expect(verify).toThrow("agent fugu is not back in the registry and still has unsettled tasks assigned");
     editTask(db, work, { assignee: "tako" }, NOW, "webui");
     expect(verify).not.toThrow();
+  });
+
+  it("名前が組み込みに解決される間、その名前宛ての memory_repair が残る限り解除できない —— 組み込みは走らせられない(ADR 0272 決定4 / ADR 0228 決定4)", () => {
+    const db = openDb(":memory:");
+    registerTask(db, { type: "memory_repair", title: "pending", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, BOARD_WORKER_ID, "board");
+
+    expect(() => verifyAgentRepaired(db, "fugu", "built-in", "tako", "fugu")).toThrow(
+      "agent fugu is not back in the registry and still has unsettled tasks assigned",
+    );
   });
 
   it("registry に agent 名が復活していれば、未決着タスクや着地待ちが残っていても解除を認める", () => {

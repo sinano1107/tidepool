@@ -53,7 +53,7 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
-export type TaskType = "work" | "question" | "review";
+export type TaskType = "work" | "question" | "review" | "memory_repair";
 
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
@@ -439,7 +439,7 @@ export interface InterviewTarget {
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
-    throw new DomainError("an Interview's answer task takes no work or review children — only a question");
+    throw new DomainError("an Interview's answer task takes no children other than a question");
   }
 }
 
@@ -741,13 +741,19 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   return row.n;
 }
 
+/** 実行で work の側に立つ type —— 組み込み agent が走らせられない(ADR 0228 決定1 / ADR 0272 決定4)。削除の扉と
+ *  agent 名の quarantine の解除が同じこれで依存を数える。`rowRef` は tasks の行の SQL 別名。 */
+export function workSideTypeSql(rowRef: string): string {
+  return `${rowRef}.type IN ('work', 'memory_repair')`;
+}
+
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
- *  `assignee` に持つ未決着の work。review は組み込みへ落ちても壊れないので数えない。 */
-export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
+ *  `assignee` に持つ未決着の work 側の task(`workSideTypeSql`)。review は組み込みへ落ちても壊れないので数えない。 */
+export function countUnsettledWorkSideAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE assignee = ? AND type = 'work' AND ${unsettledSql("status")}`,
+       WHERE assignee = ? AND ${workSideTypeSql("tasks")} AND ${unsettledSql("status")}`,
     )
     .get(name) as { n: number };
   return row.n;
@@ -3121,15 +3127,16 @@ function awaitedChildSql(rowRef: string): string {
   return `(${rowRef}.based_on_decision IS NOT NULL OR (${rowRef}.type = 'question' AND ${rowRef}.question_proposal IS NULL))`;
 }
 
-/** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4): only one whose
- *  work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115). It is told
- *  by its registration record carrying the objections it bundles, never by title. A completion review and a
- *  human-registered review child fall: their repair cannot land and their fitness is to a discarded criterion.
- *  An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
+/** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4; ADR 0272 決定1): only
+ *  one whose work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115), and a
+ *  memory_repair, whose artifact lives in the memory store rather than the parent's branch. The RCA is told by its
+ *  registration record carrying the objections it bundles, never by title; a memory_repair by its type. A completion
+ *  review and a human-registered review child fall: their repair cannot land and their fitness is to a discarded
+ *  criterion. An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
-  return `(${rowRef}.type = 'review' AND NOT ${awaitedChildSql(rowRef)}
+  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type = 'memory_repair' OR (${rowRef}.type = 'review'
     AND EXISTS (SELECT 1 FROM events registered WHERE registered.task_id = ${rowRef}.id AND registered.kind = 'task_registered'
-      AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
+      AND json_array_length(registered.payload, '$.objection_event_ids') > 0))))`;
 }
 
 /** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。

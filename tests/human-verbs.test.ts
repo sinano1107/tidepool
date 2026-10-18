@@ -89,6 +89,22 @@ it("人間の登録 door は通常タスクを登録して返す", async () => {
   });
 });
 
+it("人間の登録 door は memory_repair を root としても子としても type で拒み、何も登録しない —— 立てるのは異議の束ねだけ(ADR 0272 決定2)", async () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+
+  for (const parent_id of [undefined, parent.id]) {
+    const result = await registerThroughHumanDoor(
+      { db, pollNow: () => {} },
+      { type: "memory_repair", title: "repair memory", purpose: "p", completion_criteria: "c", parent_id, decompose_reason: "split" },
+      () => NOW,
+      "webui",
+    );
+    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: "a human can register only work or review tasks" } });
+  }
+  expect(listBoard(db).map((task) => task.id)).toEqual([parent.id]);
+});
+
 it("人間の登録 door は未知の assignee を GateFailure として返す", async () => {
   db = openDb(":memory:");
 
