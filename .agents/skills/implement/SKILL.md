@@ -75,13 +75,11 @@ Then add the section this flow depends on:
 
 List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
 
-Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
-
 A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
 ## Waiting for CI
 
-Once the PR is open, `gh pr checks --watch` until every check finishes — the `test` jobs on ubuntu and macOS, and `e2e`. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once all pass.
+Once the PR is open, watch with `gh pr checks --watch` until `gh pr checks` lists every check — the `test` jobs on ubuntu and macOS, and `e2e` — as pass; a watch started right after the push can return while they are still pending. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once all pass.
 
 ## Where this stops
 
