@@ -824,7 +824,7 @@ const MEMORY_REPAIR = { type: "memory_repair" as const, title: "memory repair: i
 
 it("memory_repair は Interview の root の子として登録でき、受験者の子としては扉を問わず拒まれる(ADR 0272 決定6 / ADR 0268 決定5)", () => {
   const { db, root } = registerInterview();
-  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
     expect(() => registerTask(db, { ...MEMORY_REPAIR, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
   }
@@ -834,7 +834,7 @@ it("memory_repair は Interview の root の子として登録でき、受験者
 
 it("root の下の memory_repair は root の retry で倒れず todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0272 決定1・6)", () => {
   const { db, root } = registerInterview();
-  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   const memoryRepair = registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
 
   const again = retryRoot(db, root, "the probe names the answer");
@@ -847,7 +847,7 @@ it("root の下の memory_repair は root の retry で倒れず todo のまま 
 
 it("開いた memory_repair を持つ root は、最後の受験者を失敗 question の abandon で cancel しても cancel されない —— root 自身の未決着の子に数える(ADR 0272 / ADR 0268 帰結)", () => {
   const { db, root } = registerInterview();
-  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
 
   answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
