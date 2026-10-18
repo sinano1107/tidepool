@@ -1,4 +1,4 @@
-import { lstatSync, realpathSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
@@ -27,7 +27,10 @@ import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
   getTask,
+  interviewRoomPath,
+  interviewRootIdOf,
   issueRefPlaceholder,
+  readableInterviewRooms,
   type Task,
 } from "./tasks.js";
 import { writeAnswerCopy } from "./transcript-store.js";
@@ -61,6 +64,11 @@ export interface WorkspaceConfig {
   /** Workspace-scoped sandbox egress domains (ADR 0072). Absent opens none. */
   allowed_domains?: string[];
 }
+
+/** Where a task runs (`taskRunPlace`): its workspace, or the interview room for an Interview root and its examinees.
+ *  `read_paths` are the checkouts outside it opened for reading only, in their real spelling — an Interview root's
+ *  real environment and the rooms it may open. Empty for every other task. */
+export type RunPlace = WorkspaceConfig & { read_paths: string[] };
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
@@ -180,6 +188,42 @@ export function resolveExecutionWorkspace(
     review_allowed_commands: entry.review_allowed_commands,
     allowed_domains: entry.allowed_domains,
   };
+}
+
+/** ADR 0273 決定1: 面接室を root の pickup で開く —— 盤面の規約の基点の下に root の id の名前で作り、在り処を root の event に残してから
+ *  `git init` と盤面名義の空コミットを置く。在り処が git の手順より先に残るので、途中で落ちた面接室も quarantine の回答と後始末が
+ *  この名前で引け、次の pickup は残った repo の続きから作る。registry には載せない。消さない(消す扉も無い)。 */
+export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
+  let path = interviewRoomPath(db, root.id);
+  if (path === undefined) {
+    const at = conventionCheckoutPath(root.id, workspacesBaseDir);
+    mkdirSync(at, { recursive: true });
+    // 実体の綴りで残す —— cwd・sandbox の読み・root に渡す在り処が同じ綴りになる(issue #1954)
+    path = realpathSync(at);
+    appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path }, at: now });
+  }
+  // 既存の repo への init は何も変えない(HEAD も残る)
+  git(path, "init", "--quiet", "--initial-branch=main");
+  // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
+  if (readRef({ name: root.id, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+}
+
+/** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。
+ *  registry に無いこの名前の quarantine の回答も、ここで引く。 */
+export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefined {
+  const path = interviewRoomPath(db, rootId);
+  return path === undefined ? undefined : { name: rootId, path, read_paths: [] };
+}
+
+/** task が走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室、他は task の workspace。許可ドメインと層は呼び手が
+ *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。 */
+export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">, workspace: WorkspaceConfig): RunPlace {
+  const rootId = interviewRootIdOf(db, task);
+  if (rootId === undefined) return { ...workspace, read_paths: [] };
+  const room = recordedInterviewRoom(db, rootId);
+  if (!room) throw new Error(`the interview room of ${rootId} is not open`);
+  if (task.type !== "interview") return room;
+  return { ...room, read_paths: [workspace.path, ...readableInterviewRooms(db, rootId)].map(safeRealpath) };
 }
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the

@@ -836,6 +836,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     worker: buildWorkerFactory(board),
     workspace,
     resolveWorkspace: workspaceResolver(board),
+    workspacesDir: board.workspacesDir,
     github,
     workspaceAdmin: workspaceAdmin(board, github, db, writableRegistry),
     agentAdmin: agentAdmin(board, db, writableRegistry),

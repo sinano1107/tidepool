@@ -253,6 +253,29 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
   });
 });
 
+describe("buildSandboxSettings の interview の root の床(ADR 0273 決定2)", () => {
+  const ROOM = "/home/pi/tidepool-workspaces/0b7c-root";
+  const REAL_ENV = "/home/pi/work/tidepool";
+  const OLD_ROOM = "/home/pi/tidepool-workspaces/9a1e-old-root";
+  const settingsOf = (taskType: "work" | "interview", readPaths?: string[]) =>
+    buildSandboxSettings({ taskType, workspacePath: ROOM, permittedSkills: "all", ...(readPaths && { readPaths }), ...HOST });
+
+  it("cwd の面接室には work と同じく書けて Bash は自動承認のまま、実環境と開ける面接室は読みだけ開き、Read tool の許可を同じパスに足す —— additionalDirectories は持たない", () => {
+    const settings = settingsOf("interview", [REAL_ENV, OLD_ROOM]);
+    expect(settings.sandbox.autoAllowBashIfSandboxed).toBeUndefined();
+    expect(settings.sandbox.filesystem.allowWrite).toEqual([ROOM, TASK_TEMP]);
+    expect(settings.sandbox.filesystem.allowRead).toEqual(expect.arrayContaining([ROOM, REAL_ENV, OLD_ROOM]));
+    expect(settings.permissions).toEqual({
+      deny: settingsOf("work").permissions.deny,
+      allow: ["Read(//home/pi/work/tidepool/**)", "Read(//home/pi/tidepool-workspaces/9a1e-old-root/**)"],
+    });
+  });
+
+  it("読みだけ開くパスが無ければ work と同じ形", () => {
+    expect(settingsOf("interview", [])).toEqual(settingsOf("work"));
+  });
+});
+
 /** issue #378(ADR 0010 追記 / ADR 0037 改訂): subagent は親の MCP tool を
  *  継承するので、盤面 verb(`mcp__tidepool__*`)を subagent からも呼べてしまう —
  *  decision log は説明責任の面そのもので、親が読まない subagent が書けるのは

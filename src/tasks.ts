@@ -60,11 +60,6 @@ export type TaskType = "work" | "question" | "review" | "memory_repair" | "inter
  *  (harness deny・spawn の面・sandbox・permission mode・Codex の profile)と lineage の透明さが同じここを引く。 */
 export const carriesReadOnly = (type: TaskType): boolean => type === "review" || type === "memory_repair";
 
-/** repo への書き込みの床(読むだけ + task temp)で走る type: read-only 保証を運ぶ type と、interview の root。interview は read-only を
- *  運ばない(書けるのは面接室、ADR 0273 決定2)ので carriesReadOnly には入れない。
- *  ponytail: interview の root は面接室の床(#2192)が立つまで review の床で走る —— そこで interview 自身の床に分け、この述語は消える。 */
-export const runsOnReviewFloor = (type: TaskType): boolean => carriesReadOnly(type) || type === "interview";
-
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
 declare const storedRow: unique symbol;
@@ -512,6 +507,25 @@ export function interviewFields(db: Db, taskId: string): InterviewFields | null 
     | undefined;
   if (!row) return null;
   return { hypothesis: row.hypothesis, ...(row.measured_work !== null && { measured_work: row.measured_work }), evidence_task_ids: JSON.parse(row.evidence_task_ids) };
+}
+
+/** その task が走る面接室の root(ADR 0273 決定1・8): interview の root は自分、受験者は対象 → root。他は undefined。 */
+export function interviewRootIdOf(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): string | undefined {
+  if (task.type === "interview") return task.id;
+  if (task.interview_target_id === null) return undefined;
+  return db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(task.interview_target_id) as string;
+}
+
+/** 面接室の在り処(ADR 0273 決定1): root の最初の pickup が残した event から引く。まだ開いていなければ undefined。 */
+export function interviewRoomPath(db: Db, rootId: string): string | undefined {
+  return latestEventOfTask(db, rootId, "interview_room_opened")?.payload.path;
+}
+
+/** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。 */
+export function readableInterviewRooms(db: Db, rootId: string): string[] {
+  const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => interviewRoomPath(db, id));
+  rooms.push(latestEventOfTask(db, rootId, "interview_retried")?.payload.interview_room);
+  return rooms.filter((path) => path !== undefined);
 }
 
 export interface TaskVerbSwap {
@@ -1900,7 +1914,7 @@ export function answerQuestion(
         }
         // 受験者の abandon が倒すのは受験者だけ。採点できる答案も未決着の答案も残らない Interview は、この答えで終える(ADR 0247 決定1 / ADR 0267 決定3)
         if (failed.interview_target_id !== null) {
-          const rootId = db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(failed.interview_target_id) as string;
+          const rootId = interviewRootIdOf(db, failed)!;
           if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
         }
         break;
@@ -2007,6 +2021,7 @@ function retryInterview(
     origin,
   );
   if (runnable) assertTargetsRunnable(db, root.id, runnable.candidates, runnable.agentName, remedy);
+  const room = interviewRoomPath(db, previousRoot.id);
   appendEvent(db, {
     taskId: root.id,
     workerId: BOARD_WORKER_ID,
@@ -2016,6 +2031,7 @@ function retryInterview(
       previous_root_id: previousRoot.id,
       probe,
       rubric,
+      ...(room !== undefined && { interview_room: room }),
       ...(reason !== undefined && { reason }),
       ...(comment !== undefined && { comment }),
     },
@@ -3357,10 +3373,15 @@ export function typeAwareDefaultAgentSql(table: string): string {
  *  `nextSlotTask` の pickup 述語と `listQueue` の skipped 表示が共有し、乖離させない。
  *  workspace は `task.workspace ?? 既定`(既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
- *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
+ *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。
+ *  workspace の側は走る場所の単位(ADR 0273 決定8、TS の対は scheduler の `withoutStopped`): 受験者は面接室(root の id)だけ、interview の root は
+ *  実環境と面接室の両方。 */
 function stoppedSql(taskRef: string, fallback: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
-             WHERE value = COALESCE(${taskRef}.workspace, @defaultWorkspaceName)))
+             WHERE value IN (
+               CASE WHEN ${taskRef}.interview_target_id IS NULL THEN COALESCE(${taskRef}.workspace, @defaultWorkspaceName) END,
+               CASE WHEN ${taskRef}.type = 'interview' THEN ${taskRef}.id END,
+               (SELECT it.task_id FROM interview_targets it WHERE it.id = ${taskRef}.interview_target_id))))
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
              WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
 }

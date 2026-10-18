@@ -96,6 +96,7 @@ import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
+  recordedInterviewRoom,
   redoMergeBacks,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
@@ -544,18 +545,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // resolve the named workspace fresh, then verify both its Git tree and its
     // separation from the board's own state
     workspace: async (value) => {
-      const quarantineWorkspaceName = value!;
-      const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-      let target: WorkspaceConfig;
-      try {
-        if (!resolve) throw new UnknownWorkspaceError(quarantineWorkspaceName);
-        target = resolve(quarantineWorkspaceName);
-      } catch (err) {
-        if (!(err instanceof UnknownWorkspaceError)) throw err;
-        throw new DomainError(
-          `no workspace configured for "${quarantineWorkspaceName}" — cannot verify repair`,
-        );
-      }
+      const target = resolveWorkspaceForAnswer(deps, value!, "cannot verify repair");
       // workspace の検査の失敗は、どれも理由をそのまま人間へ返す回答の拒否である
       const refuseOnError = async (check: () => void | Promise<void>) => {
         try {
@@ -707,11 +697,15 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
 }
 
 function resolveWorkspaceForAnswer(
-  deps: Pick<SubmitAnswerDeps, "workspace" | "resolveWorkspace">,
+  deps: Pick<SubmitAnswerDeps, "db" | "workspace" | "resolveWorkspace">,
   taskWorkspace: string | null,
   action: string,
   missingResource = "workspace",
 ): WorkspaceConfig {
+  // 面接室は registry に無く、root の id の名前で止まる(ADR 0273 決定8)。resolver より先に引く —— registry の無い盤面の resolver は
+  // どの名前にも既定の workspace を返す
+  const room = taskWorkspace === null ? undefined : recordedInterviewRoom(deps.db, taskWorkspace);
+  if (room) return room;
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) throw new DomainError(`no ${missingResource} configured — ${action}`);
   try {

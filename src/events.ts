@@ -181,7 +181,10 @@ export type EventPayload =
   | { kind: "premise_breach_resolved"; outcome: "continue" | "redecompose" | "question" }
   // ADR 0248 決定3 / ADR 0267 決定4: probe の破綻の報告への retry と root の retry が登録した新しい Interview の root に、盤面が積む
   // 旧い root の id・出題の probe と rubric・報告の理由(報告への retry だけ)・人間のコメント。root の history にだけ並ぶ(人間向け kind ではない)
-  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string }
+  // interview_room は旧い root の面接室の在り処(ADR 0273 決定9: retry の新しい root は旧い面接室も読める)
+  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string; interview_room?: string }
+  // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
+  | { kind: "interview_room_opened"; path: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である

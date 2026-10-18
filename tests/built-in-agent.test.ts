@@ -55,6 +55,7 @@ it("本文履歴表の既存の版は書き換わらない —— 本文を変�
   // 本文を変えた PR は旧本文を表に残す。ここに並ぶ hash が引けなくなったら、既存の行を書き換えている
   expect(builtInBodyAt("fugu", "e3b0c44298fc1c14")).toBe("");
   expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f")).toMatch(/^You run Interviews/);
+  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "1cf9caffd86b5578")).toContain("Composing the environment:");
 });
 
 it("agents/fugu.md があればそのファイルの定義が fugu であり、組み込みの印は付かない(ADR 0117 決定2 の shadowing)", async () => {
