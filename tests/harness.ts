@@ -1132,11 +1132,11 @@ export const QUIET_EXIT: WorkerExit = {
 };
 
 /** agent 名と workspace 名の集合を registry として注入する boot の欄(集合を後から減らすと削除を模せる)。null の workspace は盤面の既定。 */
-export function registryOf(agents: Set<string>, workspaces: Set<string>): Pick<BootOptions, "agentRegistered" | "resolveWorkspace"> {
+export function registryOf(agents: Set<string>, workspaces: Set<string>, path = "/workspaces/known"): Pick<BootOptions, "agentRegistered" | "resolveWorkspace"> {
   return {
     agentRegistered: (name) => agents.has(name),
     resolveWorkspace: (name) => {
-      if (name === null || workspaces.has(name)) return { name: name ?? "tidepool", path: "/workspaces/known" };
+      if (name === null || workspaces.has(name)) return { name: name ?? "tidepool", path };
       throw new UnknownWorkspaceError(name);
     },
   };

@@ -7,7 +7,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { abandonConsequence, escalateTask, getTask, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
+import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
   markTeardown,
   resumeUnfinishedTeardown,
@@ -19,7 +19,7 @@ import {
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
-import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
 
@@ -214,24 +214,49 @@ export function rowRefusalHandler(
   };
 }
 
-/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)の盤面側の一撃。入口は pickup の準備の答案の写しと transcript の open で、
- *  観測点は scheduler の catch と adapter の launch の catch。process は1つも起きていないので失敗にせず、停止・
- *  `record_container_unwritable`・`todo` 先頭への復帰を1 transaction で決着させてから slot を解放する(先例は行の拒否の先頭復帰、
- *  ADR 0184 決定4)。後始末は通さない —— checkout は準備が切った task のブランチの上にあり、worker はまだ何も書いていない。
- *  踏んだ task は解放後の pickup でそのブランチのまま続ける(#2094 の再 pickup と同じ)。盤面が止まったので pickup の契機も撃たない。 */
-export function recordContainerHaltHandler(
-  deps: Pick<TeardownDeps, "db" | "clock" | "slot">,
-): (taskId: string, err: RecordContainerError) => void {
-  return (taskId, err) => {
+/** process を1つも持たないまま失敗にせず先頭へ戻す pickup の盤面側の一撃(ADR 0274 決定3・4)。入口は資源の停止で worker が
+ *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
+ *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
+ *  形は行の拒否(ADR 0184 決定4)と同じ: 先頭復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
+ *  経路は解放の step に読まれる(ADR 0113 決定3)。process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。
+ *  registry drift で解決できない workspace は `null` で渡す —— 止めた quarantine を後始末がもう一度撃たない。 */
+export function queueReturnHandler(
+  deps: TeardownDeps,
+  containers: ProcessContainers,
+): (taskId: string, payload: QueueReturnPayload) => void {
+  return (taskId, payload) => {
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
+    let workspace: WorkspaceConfig | null | undefined;
+    try {
+      workspace = deps.resolve?.(task.workspace);
+    } catch (err) {
+      // drift 以外の失敗は後始末自身の解決に任せる(落ちれば落ちた後始末の停止)
+      if (err instanceof UnknownWorkspaceError) workspace = null;
+    }
     const now = deps.clock.now();
     deps.db.transaction(() => {
-      registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue head, not failed`, now);
-      returnToQueueHead(deps.db, task, { kind: "record_container_unwritable", path: err.path, reason: err.reason }, now);
+      returnToQueueHead(deps.db, task, payload, now);
+      markTeardown(deps.db, taskId, now);
     })();
-    deps.slot.release();
+    deps.slot.enterTeardown();
+    containers.forceReclaim(taskId);
+    void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, { ...teardownStep(deps.db, taskId), workspace }));
+  };
+}
+
+/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は pickup の準備の答案の写しと transcript の open で、観測点は
+ *  scheduler の catch と adapter の launch の catch。盤面全体の停止を登録してから `queueReturnHandler` で先頭へ戻す —— 盤面が
+ *  止まっているので、後始末の pickup の契機は `boardHalts` が止める。踏んだ task は解放後の pickup で自分のブランチへ戻って続ける。 */
+export function recordContainerHaltHandler(
+  deps: TeardownDeps,
+  containers: ProcessContainers,
+): (taskId: string, err: RecordContainerError) => void {
+  const returnToHead = queueReturnHandler(deps, containers);
+  return (taskId, err) => {
+    registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue head, not failed`, deps.clock.now());
+    returnToHead(taskId, { kind: "record_container_unwritable", path: err.path, reason: err.reason });
   };
 }
 

@@ -7,7 +7,7 @@
  *  module であり、逆は張らない。 */
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
-import { appendEvent, type ListedRefusal, type RowRefusalCause } from "./events.js";
+import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
@@ -487,8 +487,10 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
  *  Quarantine). Lives here rather than in agent.ts because landing.ts calls it
  *  and agent.ts value-imports landing.ts — a cycle ADR 0204 決定1 forbids
  *  (issue #1709). */
-export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): void {
-  registerQuarantine(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
+export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): ResourceStop {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  registerQuarantine(db, "agent", agentName, reason, now);
+  return { quarantine: "agent", value: agentName, reason };
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する

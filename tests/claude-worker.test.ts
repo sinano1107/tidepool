@@ -281,6 +281,8 @@ async function makeWorker(
   // 多くの test が exit を撃たないまま終わる —— task temp の後始末は exit / spawn-error 経路止まりなので、
   // 本番と同じ exit 経路で消す(ADR 0257。Codex 側の issue #1001 と同じ形)。上の待ちより先に走る
   onTestFinished(() => recorder.emitExit(0, null));
+  // 資源の停止で spawn まで届かなかった pickup の盤面側の一撃(ADR 0274)の呼び出し
+  const stops: Array<[string, unknown]> = [];
   const worker = new ClaudeCodeWorker({
     db,
     clock,
@@ -292,6 +294,7 @@ async function makeWorker(
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
     onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => {} }),
+    onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
@@ -319,7 +322,7 @@ async function makeWorker(
       extraOptions.agent,
       extraOptions.auditorName,
     );
-  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, ...recorder };
+  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -511,11 +514,12 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.cwd).toBe(FIXTURE_WORKSPACE);
   });
 
-  it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn しない(issue #26 / ADR 0009)", async () => {
-    const { start, calls, db } = await makeWorker();
-    start("task-drifted", "ghost");
+  it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn せず、盤面の一撃で先頭へ戻す(issue #26 / ADR 0009 / ADR 0274)", async () => {
+    const { start, calls, db, stops } = await makeWorker();
+    const task = start("task-drifted", "ghost");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "ghost")).toBe(true);
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }]]);
   });
 
   const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
@@ -539,11 +543,12 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("You are Deckhand");
   });
 
-  it("task.assignee が registry に存在しない agent 名(registry drift)なら、投げずに agent を quarantine して spawn しない(ADR 0012 / issue #36)", async () => {
-    const { start, calls, db } = await makeWorker();
-    start("task-drifted-agent", null, "ghost");
+  it("task.assignee が registry に存在しない agent 名(registry drift)なら、投げずに agent を quarantine して spawn せず、盤面の一撃で先頭へ戻す(ADR 0012 / issue #36 / ADR 0274)", async () => {
+    const { start, calls, db, stops } = await makeWorker();
+    const task = start("task-drifted-agent", null, "ghost");
     expect(calls).toEqual([]);
     expect(agentNeedsHuman(db, "ghost")).toBe(true);
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: expect.stringContaining("ghost") }]]);
   });
 
   it("system prompt に roster を push する: assignable_to(既定は \"*\")を解決した registry 全体が「名前 — description」で並ぶ(issue #43 / ADR 0014)", async () => {
@@ -1478,29 +1483,33 @@ describe("ClaudeCodeWorker", () => {
     await mkdir(join(wsDir, ".claude"), { recursive: true });
     if (body === null) await mkdir(join(wsDir, ".claude", name));
     else await writeFile(join(wsDir, ".claude", name), body);
-    const { start, calls, db } = await makeWorker({
+    const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
-    start("task-sbx-override");
+    const task = start("task-sbx-override");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     const question = quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool");
     expect(question?.purpose).toContain(`.claude/${name}`);
+    // spawn_failed にはせず、組の停止として盤面の一撃に1回渡す —— 一撃が先頭へ戻して枠を空ける(ADR 0274)
+    expect(listEvents(db, task.id).map((e) => e.kind)).not.toContain("spawn_failed");
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "claude-code/tidepool", reason: expect.stringContaining(`.claude/${name}`) }]]);
   });
 
   it("workspace が盤面の状態パスと重なっていたら spawn せず workspace を quarantine する(issue #149 / ADR 0040)", async () => {
     // 盤面の DB が workspace の checkout の中にある形 — worker の書き込み半径
     // (allowWrite: [workspace.path])に盤面の状態が入る、issue #149 の本体。
     const wsDir = await tempDir("tidepool-ws-");
-    const { start, calls, db } = await makeWorker(
+    const { start, calls, db, stops } = await makeWorker(
       { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n` },
       { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(wsDir, "board.sqlite") }] },
     );
-    start("task-overlap");
+    const task = start("task-overlap");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
     const question = quarantineQuestion(db, "workspace", "tidepool");
     expect(question?.purpose).toContain("board database (TIDEPOOL_DB)");
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }]]);
   });
 
   it("盤面の状態パスと交差しない workspace は spawn を止めない", async () => {
@@ -1570,13 +1579,33 @@ describe("ClaudeCodeWorker", () => {
     git(ws.path, "commit", "-m", "share project hooks");
     // 変更中の tracked ファイルは sparse-checkout が作業ツリーから消さない
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
-    const { start, calls, db } = await makeWorker({
+    const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
-    start("task-sbx-unhidable-settings");
+    const task = start("task-sbx-unhidable-settings");
     expect(calls).toEqual([]);
     expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("could not exclude");
     expect(quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool")).toBeUndefined();
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("could not exclude") }]]);
+  });
+
+  it("隠れたままの tracked settings.json を戻せなければ workspace を quarantine して spawn せず、盤面の一撃で先頭へ戻す(ADR 0158 / ADR 0274)", async () => {
+    const ws = await makeWorkspace("tracked-settings-unrestorable");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    // 床キーも hooks も持たない settings は隠さずに走る —— 隠れたままなら戻すだけの枝に入る
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({}));
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    // 前の session が隠したまま —— sparse-checkout の書き換えを lock で塞ぐと戻せない
+    git(ws.path, "sparse-checkout", "set", "--no-cone", "/*", "!.claude/settings.json");
+    await writeFile(join(ws.path, ".git", "info", "sparse-checkout.lock"), "");
+    const { start, calls, db, stops } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    const task = start("task-sbx-unrestorable-settings");
+    expect(calls).toEqual([]);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
+    expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("sparse-checkout") }]]);
   });
 
   it("sparse 後に branch の settings.json が床キーへ変わっても quarantine せず、次の task も spawn する(ADR 0158)", async () => {

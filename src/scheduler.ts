@@ -9,7 +9,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, latestEventOfTask, type ResourceStop } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -31,6 +31,7 @@ import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
+  openQuarantineQuestion,
   openQuarantineValues,
   parseWorkspaceContainmentValue,
   quarantineAgent,
@@ -99,7 +100,10 @@ export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => Execut
  *  行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
  *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。
  *  断られた行でない Interview の対象(ADR 0199 決定4)の question か、対象に当たる行の Quarantine(ADR 0184 決定2)が
- *  開いていれば、その対象を pin した子の候補は空になる。 */
+ *  開いていれば、その対象を pin した子の候補は空になる。
+ *  workspace / agent の Quarantine が worker の起動前に止めた task(ADR 0274 決定1)も、その question が開いている間は候補が
+ *  空になる —— 外す鍵を止めた記録から取るので、空の workspace 欄が resolver の既定に解決される盤面でも、戻った task を同じ
+ *  停止が拾い直す輪にならない。 */
 function withoutStopped(
   db: Db,
   candidates: TaskExecutionCandidates,
@@ -109,6 +113,8 @@ function withoutStopped(
   return (task) => {
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
+    const stop = latestEventOfTask(db, task.id, "pickup_stopped")?.payload;
+    if (stop && stop.quarantine !== "workspaceContainment" && openQuarantineQuestion(db, stop.quarantine, stop.value)) return [];
     const workspace = task.workspace ?? defaultWorkspaceName;
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
@@ -269,6 +275,9 @@ export function startScheduler(deps: {
   /** ADR 0266 決定3・4: 記録の器が書けない pickup(準備の答案の写し・`start` の中の transcript の open)の一撃
    *  (`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
+  /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— 先頭へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
+   *  adapter の中の停止は adapter が同じ一撃を呼ぶ。 */
+  onPickupStopped: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the
@@ -341,6 +350,7 @@ export function startScheduler(deps: {
     containers,
     onSpawnFailed,
     onRecordContainerFailed,
+    onPickupStopped,
     workspace,
     resolveWorkspace,
     auditorName = DEFAULT_AUDITOR_NAME,
@@ -381,7 +391,10 @@ export function startScheduler(deps: {
     if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return true;
     // the gate is keyed on each candidate's own execution workspace (issue
     // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
-    // workspace or agent halts only its own tasks, never the whole board.
+    // workspace or agent keeps its own tasks out of the candidates, never the
+    // whole board. The slot is one (ADR 0001), so this holds only because a
+    // pickup such a quarantine stopped before its worker ran returns to the
+    // queue head through teardown and frees the slot (ADR 0274).
     // No resolvers here: provider / Harness names are taken out by the poll below.
     return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName);
   }
@@ -399,7 +412,7 @@ export function startScheduler(deps: {
   async function quarantineWithRepoAccessGuidance(
     workspace: WorkspaceConfig,
     err: unknown,
-  ): Promise<void> {
+  ): Promise<ResourceStop> {
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
     const ref = parseGitHubRepo(workspace.repo);
@@ -411,16 +424,16 @@ export function startScheduler(deps: {
     const cause = guidance
       ? new Error(`${err instanceof Error ? err.message : String(err)}\n\n${guidance}`)
       : err;
-    quarantineWorkspace(db, workspace.name, cause, clock.now());
+    return quarantineWorkspace(db, workspace.name, cause, clock.now());
   }
 
   /** `setting` は selector が pickup の瞬間に選んだ実行設定(ADR 0110 決定3)。
    *  adapter へそのまま運ぶ —— spawn 側で解決し直すと、除外の文脈を持たない再解決が
    *  scheduler と違う entry を選びうる(温存中の Provider で走る)。
    *
-   *  戻り値は `start` が同期で投げたときの後始末の一撃で、呼び手が poll の外で撃つ。
-   *  pickup の中で slot を解放してはならない —— 解放が撃つ pickup の契機は `inFlight` の間
-   *  捨てられる(ADR 0119 決定5)。例外は記録の器が書けない pickup で、盤面が止まるので捨てられる契機が無い(ADR 0266 決定3)。 */
+   *  戻り値は worker が1度も走らなかった pickup の後始末の一撃で、呼び手が poll の外で撃つ —— 資源の Quarantine の停止
+   *  (registry drift・準備の失敗、ADR 0274)、記録の器が書けない pickup(ADR 0266 決定3)、`start` の同期 throw(ADR 0118)。
+   *  pickup の中で slot を解放してはならない —— 解放が撃つ pickup の契機は `inFlight` の間捨てられる(ADR 0119 決定5)。 */
   async function pickup(
     task: Task,
     setting: ExecutionSetting,
@@ -449,19 +462,22 @@ export function startScheduler(deps: {
     // branch discipline is the board's own, not the worker's: by the time
     // the worker starts, the workspace already sits on the task branch
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、先頭へ戻して後始末を通す
+    const stopped = (stop: ResourceStop) => () => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop });
     if (resolve) {
-      const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now());
+      let drift: (() => void) | undefined;
+      const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
       // an unknown workspace name (registry drift) quarantines in place of a
-      // thrown error — the task stays wedged in the slot until the watchdog or
-      // a human acts
-      if (!resolved) return;
+      // thrown error, and the picked task — not itself the failure — returns
+      // to the queue head through teardown, freeing the slot (ADR 0274)
+      if (!resolved) return drift;
       // a branch discipline gap (issue #27: the workspace's configured
       // branch doesn't exist in this checkout) is a resource problem, same
-      // as registry drift above — this task still stays wedged in the slot
-      // for the watchdog (the picked task itself isn't the failure), but the
-      // *workspace* is quarantined immediately rather than surfacing only as
-      // a console.error, so a human sees an actionable repair question and
-      // no other task aimed at this workspace gets picked up meanwhile.
+      // as registry drift above — the *workspace* is quarantined immediately
+      // rather than surfacing only as a console.error, so a human sees an
+      // actionable repair question and no other task aimed at this workspace
+      // gets picked up meanwhile; the picked task returns to the queue head
+      // the same way (ADR 0274).
       // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
@@ -470,9 +486,8 @@ export function startScheduler(deps: {
         await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
         // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
-        if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
-        await quarantineWithRepoAccessGuidance(resolved, err);
-        return;
+        if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
+        return stopped(await quarantineWithRepoAccessGuidance(resolved, err));
       }
     }
     const started = { ...picked, ...content };
@@ -481,7 +496,7 @@ export function startScheduler(deps: {
       worker.start(started, setting, query);
     } catch (err) {
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
-      if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
+      if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
       // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };

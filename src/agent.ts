@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { ResourceStop } from "./events.js";
 import { taskIdsAwaitingLanding } from "./landing.js";
 import { openQuarantineQuestion, quarantineAgent } from "./quarantine.js";
 import {
@@ -91,18 +92,20 @@ export function agentNeedsHuman(db: Db, name: string): boolean {
  *  or `InvalidAgentDefinitionError` (a definition that no longer stands, ADR
  *  0097 決定1/3) never escapes to the caller — it quarantines the name in its
  *  place and the caller treats agent resolution as failed for this cycle.
- *  Both ride the one existing agent-name quarantine; no new quarantine kind. */
+ *  Both ride the one existing agent-name quarantine; no new quarantine kind. `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。 */
 export function resolveAgentOrQuarantine(
   db: Db,
   resolve: (taskAssignee: string | null) => ResolvedAgent,
   taskAssignee: string | null,
   now: Date,
+  onStop?: (stop: ResourceStop) => void,
 ): ResolvedAgent | undefined {
   try {
     return resolve(taskAssignee);
   } catch (err) {
     if (!isUnresolvableAgentError(err)) throw err;
-    quarantineAgent(db, err.agentName, err, now);
+    const stop = quarantineAgent(db, err.agentName, err, now);
+    onStop?.(stop);
     return undefined;
   }
 }

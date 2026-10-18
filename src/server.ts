@@ -26,7 +26,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
-import type { RowRefusal } from "./events.js";
+import type { ResourceStop, RowRefusal } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -64,6 +64,7 @@ import { closeStaleTriage } from "./triage.js";
 import {
   capInterruptionHandler,
   type PendingReclaim,
+  queueReturnHandler,
   RECLAIM_TIMEOUT,
   recordContainerHaltHandler,
   registerFailureAndMarkTeardown,
@@ -107,6 +108,8 @@ export type WorkerFactory = (deps: {
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
+  /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
+  onPickupStopped: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
@@ -465,8 +468,10 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
-  const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown);
+  // ADR 0274: process を持たないまま先頭へ戻す pickup の一撃。資源の停止は scheduler と adapter の両方の観測点が呼ぶ
+  const onPickupStopped = queueReturnHandler(sessionTeardown, containers);
+  // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。停止を登録してから上と同じ一撃を通る
+  const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown, containers);
   // ADR 0149: 走ってから transcript が書けなくなった session の一撃
   options.transcripts.onFailed = transcriptFailureHandler(sessionTeardown, containers);
   const worker = options.worker({
@@ -480,6 +485,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onRowRefused,
     onSpawnFailed,
     onRecordContainerFailed,
+    onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
     transcripts: options.transcripts,
@@ -590,6 +596,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     containers,
     onSpawnFailed,
     onRecordContainerFailed,
+    onPickupStopped,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
     auditorName,

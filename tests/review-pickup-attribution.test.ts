@@ -133,6 +133,7 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
     containers: fakeContainers(),
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
   });
   const review = registerTask(

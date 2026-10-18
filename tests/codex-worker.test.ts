@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { boardDoctrine } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
-import { CODEX_FEATURE_SNAPSHOT, CodexWorker, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
+import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -169,12 +169,16 @@ async function fixture(
     appServer = honestSkillsList,
     usageProbe,
     onCapInterrupted,
+    onPickupStopped,
+    boardState,
   }: {
     registryFiles?: Record<string, string>;
     linkWorkspace?: boolean;
     appServer?: Parameters<typeof fakeAppServerCall>[0];
     usageProbe?: CodexAppServerProbe;
     onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
+    onPickupStopped?: CodexWorkerOptions["onPickupStopped"];
+    boardState?: (workspace: string) => CodexWorkerOptions["boardState"];
   } = {},
 ) {
   // 実体のパスで持つ —— spawn は登録 path を realpath する(issue #864)ので、macOS の tmpdir の /var でも assert がそのまま読める
@@ -224,6 +228,8 @@ You are the Codex worker.`,
     onWorkerExited,
     usageProbe,
     onCapInterrupted,
+    onPickupStopped,
+    boardState: boardState?.(workspace),
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
@@ -414,8 +420,10 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("閉じた設定の下で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {
     const onSpawnFailed = vi.fn();
+    const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
       appServer: answerSkillsList("one-enabled"),
+      onPickupStopped,
     });
     const value = task(f.db);
     await f.start(value);
@@ -427,7 +435,31 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     expect(listEvents(f.db, value.id).map((event) => event.kind)).not.toEqual(expect.arrayContaining(["worker_spawned", "spawn_failed"]));
     expect(onSpawnFailed).not.toHaveBeenCalled();
+    // 組の停止として盤面の一撃に1回渡す —— 一撃が先頭へ戻して枠を空ける(ADR 0274)
+    expect(onPickupStopped.mock.calls).toEqual([
+      [value.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "codex/work", reason: expect.stringContaining("Codex still reports these skills enabled: flat") }],
+    ]);
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
+  });
+
+  it.each([
+    ["registry に無い workspace 名(registry drift)", { workspace: "ghost" }, false, { quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }],
+    ["registry に無い agent 名(registry drift)", { assignee: "ghost" }, false, { quarantine: "agent", value: "ghost", reason: expect.stringContaining("ghost") }],
+    ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }],
+  ])("%s は spawn も skill の列挙もせずに quarantine し、spawn_failed ではなく盤面の一撃で先頭へ戻す(ADR 0274)", async (_case, fields, overlap, stop) => {
+    const onSpawnFailed = vi.fn();
+    const onPickupStopped = vi.fn();
+    const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {
+      onPickupStopped,
+      boardState: overlap ? (workspace) => [{ label: "board database (TIDEPOOL_DB)", path: join(workspace, "board.sqlite") }] : undefined,
+    });
+    const value = registerTask(f.db, { type: "work", assignee: "codex-agent", workspace: "work", title: "stopped", purpose: "p", completion_criteria: "c", ...fields }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+    expect(f.start(value)).toBeUndefined();
+
+    expect(f.process.calls).toEqual([]);
+    expect(f.appServer).toEqual([]);
+    expect(onSpawnFailed).not.toHaveBeenCalled();
+    expect(onPickupStopped.mock.calls).toEqual([[value.id, { kind: "pickup_stopped", ...stop }]]);
   });
 
   it.each([
