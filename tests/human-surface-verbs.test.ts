@@ -207,6 +207,7 @@ it("cancel は WebUI と管理MCPで同じ検証・親queue・祖先の着地を
 async function exerciseEdit(surface: HumanSurface) {
   const pool = await bootTidepool({
     agentRegistered: (name) => name === "known-agent",
+    workspace: { name: "known-workspace", path: "/workspaces/known" },
     resolveWorkspace: defaultingTo({ name: "known-workspace", path: "/workspaces/known" }),
   });
   pools.push(pool);
@@ -257,6 +258,7 @@ it("complete は WebUI と管理MCPで同じ human gate・親queue・祖先の�
 async function exerciseDecompose(surface: HumanSurface) {
   const pool = await bootTidepool({
     agentRegistered: (name) => name === "known-agent",
+    workspace: { name: "known-workspace", path: "/workspaces/known" },
     resolveWorkspace: defaultingTo({ name: "known-workspace", path: "/workspaces/known" }),
   });
   pools.push(pool);

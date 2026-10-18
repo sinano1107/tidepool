@@ -46,7 +46,7 @@ import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 
 
-import { resolveTaskAgent, runsOnReviewFloor, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { type PickupStopped, resolveTaskAgent, runsOnReviewFloor, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
@@ -307,7 +307,7 @@ export interface CodexWorkerOptions {
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が先頭へ戻す。 */
-  onPickupStopped?: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
+  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。

@@ -9,7 +9,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, latestEventOfTask, type ResourceStop } from "./events.js";
+import { appendEvent, type ResourceStop } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -31,7 +31,6 @@ import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
-  openQuarantineQuestion,
   openQuarantineValues,
   parseWorkspaceContainmentValue,
   quarantineAgent,
@@ -62,6 +61,7 @@ import {
   getTask,
   isWorkSide,
   nextSlotTask,
+  type PickupStopped,
   pickupTask,
   resolveTaskAgent,
   type Task,
@@ -100,10 +100,7 @@ export type TaskExecutionCandidates = (task: ExecutionCandidateTarget) => Execut
  *  行の正準 Harness がどちらも止まった組と一致する行だけ —— poll 全体の除外(`pickupExclusions`)にも `ResourceStops` にも
  *  入れないので、同じ head の別の Harness の行も、他の head も残る。scheduler の poll も queue の skipped 表示もこの1本を通る。
  *  断られた行でない Interview の対象(ADR 0199 決定4)の question か、対象に当たる行の Quarantine(ADR 0184 決定2)が
- *  開いていれば、その対象を pin した子の候補は空になる。
- *  workspace / agent の Quarantine が worker の起動前に止めた task(ADR 0274 決定1)も、その question が開いている間は候補が
- *  空になる —— 外す鍵を止めた記録から取るので、空の workspace 欄が resolver の既定に解決される盤面でも、戻った task を同じ
- *  停止が拾い直す輪にならない。 */
+ *  開いていれば、その対象を pin した子の候補は空になる。 */
 function withoutStopped(
   db: Db,
   candidates: TaskExecutionCandidates,
@@ -113,8 +110,6 @@ function withoutStopped(
   return (task) => {
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
-    const stop = latestEventOfTask(db, task.id, "pickup_stopped")?.payload;
-    if (stop && stop.quarantine !== "workspaceContainment" && openQuarantineQuestion(db, stop.quarantine, stop.value)) return [];
     const workspace = task.workspace ?? defaultWorkspaceName;
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
@@ -277,7 +272,7 @@ export function startScheduler(deps: {
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— 先頭へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
    *  adapter の中の停止は adapter が同じ一撃を呼ぶ。 */
-  onPickupStopped: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
+  onPickupStopped: (taskId: string, payload: PickupStopped) => void;
   workspace?: WorkspaceConfig;
   /** Resolves a task's execution workspace against the registry (issue #26 /
    *  ADR 0009), read fresh every call. Absent → every task runs in the

@@ -14,7 +14,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** 資源の停止を本物の一撃(`queueReturnHandler`)で受ける盤面。後始末の pickup の契機は scheduler へ遅延束縛する(server.ts と同じ)。
  *  収束は macrotask を1つ挟む —— 戻った task を同じ停止が拾い直す輪があれば、worker を固めずに時間切れで赤くなる。 */
-function stoppingBoard(workspace: WorkspaceConfig | undefined, resolveWorkspace: (name: string | null) => WorkspaceConfig) {
+function stoppingBoard(workspace: WorkspaceConfig, resolveWorkspace: (name: string | null) => WorkspaceConfig) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
@@ -50,18 +50,22 @@ function expectReturnedToHead(db: Db, taskId: string, stop: Record<string, unkno
 }
 
 describe("scheduler の pickup が task.workspace を解決する", () => {
-  it("既定の workspace 名を持たない盤面で準備が落ちても、戻った task は修復まで同じ停止に拾い直されない(ADR 0274 決定1)", async () => {
-    // 空の workspace 欄は resolver の既定に解決されるが、候補の除外の鍵は空のまま —— 鍵が揃わなくても止めた記録で外す
-    const { db, clock, worker, slot, scheduler } = stoppingBoard(undefined, () => ({ name: "known-workspace", path: "/nonexistent/known" }));
+  it("既定の workspace の準備が落ちて先頭へ戻った task は、修復まで workspace の quarantine に外され、同じ停止に拾い直されずに次の task が拾われる(ADR 0274 決定1)", async () => {
+    // pickup が空の欄に既定の名前を書くので、止めた quarantine の名前と候補の除外の鍵が一致する
+    const unpreparable = { name: "known-workspace", path: "/nonexistent/known" };
+    const sandbox = await makeWorkspace("sandbox");
+    const { db, clock, worker, slot, scheduler } = stoppingBoard(unpreparable, defaultingTo(unpreparable, sandbox));
     const task = registerTask(db, { type: "work", title: "unpreparable", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+    const next = registerTask(db, { type: "work", title: "next in line", purpose: "p", completion_criteria: "c", workspace: "sandbox" }, clock.now(), ...HUMAN_WEBUI);
 
     await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(worker.started.map((t) => t.id)).toEqual([next.id]));
     await new Promise((resolve) => setTimeout(resolve, 200));
 
-    expect(worker.started).toEqual([]);
-    expect(listEvents(db, task.id).filter((e) => e.kind === "pickup_stopped")).toHaveLength(1);
-    expect(getTask(db, task.id)?.status).toBe("todo");
-    expect(slot.currentTaskId).toBeNull();
+    expect(workspaceNeedsHuman(db, "known-workspace")).toBe(true);
+    expectReturnedToHead(db, task.id, { quarantine: "workspace", value: "known-workspace", reason: expect.any(String) });
+    expect(worker.started.map((t) => t.id)).toEqual([next.id]);
+    expect(slot.currentTaskId).toBe(next.id);
     scheduler.stop();
   });
 

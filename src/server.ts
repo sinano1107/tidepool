@@ -26,7 +26,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import type { DraftClient } from "./draft.js";
-import type { ResourceStop, RowRefusal } from "./events.js";
+import type { RowRefusal } from "./events.js";
 import { quarantineRowsOffClaudeEffortRules } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -56,7 +56,7 @@ import {
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { Slot } from "./slot.js";
-import { getTask, type TaskType } from "./tasks.js";
+import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -109,7 +109,7 @@ export type WorkerFactory = (deps: {
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
-  onPickupStopped: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
+  onPickupStopped: (taskId: string, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */

@@ -45,6 +45,7 @@ import {
   readRootRefusal,
 } from "./stream-json.js";
 import {
+  type PickupStopped,
   resolveTaskAgent,
   runsOnReviewFloor,
   type Task,
@@ -1120,7 +1121,7 @@ export interface ClaudeWorkerOptions {
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
    *  `onCapInterrupted` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
-  onPickupStopped?: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
+  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;

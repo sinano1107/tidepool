@@ -54,7 +54,7 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import type { DraftClient } from "./draft.js";
-import type { ResourceStop, RowRefusal } from "./events.js";
+import type { RowRefusal } from "./events.js";
 import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -88,7 +88,7 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
-import { resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
+import { type PickupStopped, resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -269,7 +269,7 @@ export function buildWorkerOptions(
     onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
-    onPickupStopped: (taskId: string, payload: { kind: "pickup_stopped" } & ResourceStop) => void;
+    onPickupStopped: (taskId: string, payload: PickupStopped) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit) => void;
     transcripts: TranscriptStore;
   },
