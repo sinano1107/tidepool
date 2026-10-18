@@ -255,22 +255,21 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...reviewTierField,
           ...reviewByField,
         }
-      : interview
-        ? {
-            type, title: TidepoolRules.normalizeText(title), hypothesis: TidepoolRules.normalizeText(hypothesis), tier,
-            interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })),
-            ...(TidepoolRules.whyBlank(measuredWork) ? {} : { measured_work: TidepoolRules.normalizeText(measuredWork) }),
-            ...(evidenceIds.length ? { evidence_task_ids: evidenceIds } : {}),
-            ...(reviewTier ? { review_tier: reviewTier } : {}),
-            ...(assignee ? { assignee } : {}),
-            ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
-            risk_flag: risk,
-          }
       : {
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
           // childMode below, so `type` state never leaves its 'work' default
-          type, title: TidepoolRules.normalizeText(title), purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria),
+          type, title: TidepoolRules.normalizeText(title),
+          // an Interview's purpose and criteria are the board's to compose (ADR 0273 決定9)
+          ...(interview
+            ? {
+                hypothesis: TidepoolRules.normalizeText(hypothesis),
+                interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })),
+                ...(TidepoolRules.whyBlank(measuredWork) ? {} : { measured_work: TidepoolRules.normalizeText(measuredWork) }),
+                ...(evidenceIds.length ? { evidence_task_ids: evidenceIds } : {}),
+                ...(reviewTier ? { review_tier: reviewTier } : {}),
+              }
+            : { purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria) }),
           risk_flag: risk, ...(showReviewFlag ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
           // execution time (CONTEXT.md) — omit rather than send '' so an

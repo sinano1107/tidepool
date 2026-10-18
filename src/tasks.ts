@@ -15,7 +15,7 @@ import type { MergeDial, RosterAgent } from "./registry.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
-import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId } from "./tier.js";
+import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId, tierNames } from "./tier.js";
 import {
   completionReviewFires,
   type ReviewSubject,
@@ -465,7 +465,7 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
   if (!input.interview_targets?.length) throw new DomainError("an Interview names at least one target");
   if (whyBlank(input.hypothesis ?? "")) throw new DomainError("an Interview requires a hypothesis");
   if (input.tier === undefined) throw new DomainError("an Interview requires the tier it measures");
-  if (input.review_tier !== undefined && tierPosition(db, input.review_tier) < tierPosition(db, input.tier)) {
+  if (input.review_tier !== undefined && tierNames(db).indexOf(input.review_tier) < tierNames(db).indexOf(input.tier)) {
     throw new DomainError(`review_tier "${input.review_tier}" is below the measured tier "${input.tier}": an Interview's root runs at or above the tier it measures`);
   }
   for (const id of input.evidence_task_ids ?? []) if (!getTask(db, id)) throw new DomainError(`unknown evidence task: ${id}`);
@@ -482,9 +482,6 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
     if (effortProblem) throw new DomainError(effortProblem);
   }
 }
-
-/** 生きている段の位置(下が小さい)。名前は検査済み。 */
-const tierPosition = (db: Db, name: Tier) => db.prepare("SELECT position FROM tiers WHERE name = ? AND position IS NOT NULL").pluck().get(name) as number;
 
 /** Interview の root の purpose と完了基準(ADR 0273 決定9): 人間は書かず、汎用の読み手のために盤面が3欄から組む。 */
 function interviewContent(input: Pick<RegisterTaskInput, "hypothesis" | "measured_work" | "evidence_task_ids">) {
