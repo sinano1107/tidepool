@@ -1077,6 +1077,9 @@ it.each([
   ]);
 });
 
+const squash = (db: Db, at: Date, writer: string) =>
+  recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writer);
+
 /** 異議の束ねの表の行の種類の軸(ADR 0272 決定1・2): 異議された task の判断の行と記憶の書き込みの行。 */
 function objectedRows(db: Db, parent: "生きた系譜" | "cancelled" | "cancelled の祖先" | "Interview の root", at: Date) {
   const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c", workspace: "charts" };
@@ -1090,13 +1093,7 @@ function objectedRows(db: Db, parent: "生きた系譜" | "cancelled" | "cancell
   // 走行中の task は直接 cancel できないので、cancelled の回は pickup しない
   if (objected.type === "work" && parent !== "cancelled") objected = pickupTask(db, objected, "deckhand", at)!;
   const judgment = logDecision(db, objected, "deckhand's call", "deckhand", at, "worker");
-  const memory = recordKnowledge(
-    db,
-    { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
-    "worker",
-    at,
-    objected.id,
-  ).event_id;
+  const memory = squash(db, at, objected.id).event_id;
   if (parent === "cancelled") cancelTaskDirectly(db, objected, null, at, {}, "webui");
   if (ancestor) {
     completeTask(db, objected, FULL_HANDOFF, "deckhand", at, "worker");
@@ -1146,8 +1143,6 @@ it.each([
   );
 });
 
-const squash = (db: Db, at: Date, writer: string) =>
-  recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writer);
 const interviewRoot = (db: Db, at: Date, assignee?: string) =>
   registerTask(
     db,

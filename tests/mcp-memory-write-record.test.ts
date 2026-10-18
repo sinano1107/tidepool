@@ -106,7 +106,6 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
     return { objection, repair: (await children(t, objected.id)).filter((c: any) => c.type === type).at(-1) };
   };
   const write = await repairOf(wrote.event_id, "memory_repair");
-  const writeRepair = write.repair;
   // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)
   const writeWorkRepair = registerTask(
     t.db,
@@ -124,14 +123,14 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
     }
   };
 
-  expect(await names(writeRepair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
+  expect(await names(write.repair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
   for (const taskId of [writeWorkRepair.id, decisionRepair.id, objected.id]) {
     expect((await names(taskId)).filter((name) => (MEMORY_REPAIR_VERBS as readonly string[]).includes(name))).toEqual([]);
   }
 
-  await runNow(t, writeRepair.id);
-  const dropped = body(await callAsTask(t, writeRepair.id, "invalidate_memory", { entry_id: wrote.entry_id, reason: "capability" }));
-  expect(await writeRecords(writeRepair.id)).toEqual([dropped.event_id]);
+  await runNow(t, write.repair.id);
+  const dropped = body(await callAsTask(t, write.repair.id, "invalidate_memory", { entry_id: wrote.entry_id, reason: "capability" }));
+  expect(await writeRecords(write.repair.id)).toEqual([dropped.event_id]);
 });
 
 it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {

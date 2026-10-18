@@ -300,10 +300,6 @@ function registerRcaReview(
  *  never left to the registration floor's refusal. A memory write's artifact stays
  *  in the memory store, so its `memory_repair` stands whatever the parent's state.
  *  Attribution and the RCAs below stand by cause either way, never split by group.
- *  Both repairs take the same assignee: the objected task's column when it holds a
- *  name, else (a review / Interview's empty reference) the agent its last
- *  `worker_spawned` names (ADR 0275 決定2), passed through the assignee gate for
- *  the child's own type (ADR 0237 決定2).
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
