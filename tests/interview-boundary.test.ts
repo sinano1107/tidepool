@@ -456,15 +456,33 @@ it("却下の後の出し直しは出題の gate が新しい写しを commit �
   expect(git(room, "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
-it("ログ API の root の行は Interview の印を運び、受験者の行への異議 API は 409 に写る(ADR 0268 決定1・6)", async () => {
+it("ログ API の root と監査の行は Interview のグループを運び、受験者の行は出ず、その行への異議 API は 409 に写る(ADR 0268 決定1 / ADR 0273 決定10)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
+  const [audit] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id);
   const answer = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "worker", at: t.clock.now(), payload: { kind: "decision_logged", line: "use a hand-written lexer" } });
 
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  expect(log.entries.find((e: any) => e.task_id === root.id).interview).toEqual({ role: "root", root_id: root.id });
+  const group = { root_id: root.id, title: POSE.title, workspace: "reef" };
+  expect(log.entries.filter((e: any) => e.interview).map((e: any) => [e.task_id, e.interview])).toEqual([
+    [root.id, group],
+    [audit.id, group],
+  ]);
+  expect(log.entries.some((e: any) => e.task_id === childId)).toBe(false);
   expect((await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: answer, comment: "redo it" })).status).toBe(409);
+});
+
+it("盤面の行は root と受験者の実環境の名前(workspace)と root の待ちを運び、root の詳細は面接室の在り処と出題の head を運ぶ(ADR 0273 決定3・8 / ADR 0082)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = await pose(root.id);
+
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.find((task: any) => task.id === root.id)).toMatchObject({ workspace: "reef", status: "blocked", interview_waiting: "examinees" });
+  expect(board.find((task: any) => task.id === childId)).toMatchObject({ workspace: "reef", interview_root_id: root.id });
+  const { head } = (await posedRecord(root.id)).events[0].payload;
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json).toMatchObject({ interview_room: roomOf(root.id), posed_head: head });
 });
 
 it("出題で立った受験者は対象で spawn され、PR も完了時レビューも生まれず、統合復帰した root が伏せた handoff を採点完了で採点して完了する", async () => {

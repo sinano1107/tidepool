@@ -19,6 +19,10 @@ type BoardScreenTask = NonNullable<import('../design-system/components/board/Tas
   settledByObservation?: string;
   /** done の work の行の着地の状態の札の文言(ADR 0265 決定7)。 */
   landingState?: string;
+  /** Interview の root の実環境 / 受験者の面接室の札の文言(ADR 0273 決定8)。 */
+  interviewPlace?: string;
+  /** 出題済みの root が監査待ちか受験者待ちかの札の文言(ADR 0273 決定3)。 */
+  interviewWaiting?: string;
 };
 type BoardScreenColumn = 'todo' | 'in_progress' | 'blocked' | 'done';
 interface BoardScreenProps {
@@ -51,9 +55,9 @@ function BoardScreen({ data, onOpenTask }: BoardScreenProps) {
                     {t.settledByObservation && (
                       <span data-testid={`settled-by-observation-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.settledByObservation}</span>
                     )}
-                    {t.landingState && (
-                      <span data-testid={`landing-state-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{t.landingState}</span>
-                    )}
+                    {[['landing-state', t.landingState], ['interview-place', t.interviewPlace], ['interview-waiting', t.interviewWaiting]].map(([testId, copy]) => copy && (
+                      <span key={testId} data-testid={`${testId}-${t.id}`} style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', padding: '0 4px' }}>{copy}</span>
+                    ))}
                   </div>
                 ))}
               </FadeScroll>

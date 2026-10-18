@@ -117,6 +117,8 @@ import {
   directCancelDiscards,
   getTask,
   HANDOFF_FIELDS,
+  interviewRoomPath,
+  latestPosedProbe,
   listBoard,
   listChildren,
   listQueue,
@@ -2174,6 +2176,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...(task.type === "question"
         ? questionAnnotations(db, task)
         : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, closedRoot) }),
+      // 見えないことだけが穴(ADR 0082 の線): Interview の root の面接室のホスト上の在り処と、受験者が分岐する出題の head(ADR 0273 決定1・3)
+      ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

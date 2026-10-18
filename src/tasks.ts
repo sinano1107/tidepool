@@ -1717,7 +1717,7 @@ export function retryInterviewRoot(
   runnable?: { candidates: TaskExecutionCandidates; agentName?: string },
 ): Task {
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root is retried");
-  if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview's probe is not posed yet, so there is nothing to retry: cancel it to end it");
+  if (latestPosedProbe(db, root.id) === null) throw new DomainError("this Interview's probe is not posed yet, so there is nothing to retry: cancel it to end it");
   let again: Task;
   cancelTaskDirectly(db, root, comment ?? null, now, defaults, origin, () => {
     again = retryInterview(db, root, { comment }, now, origin, runnable, " — fix the default agent's entry and retry again, or cancel the Interview and register it again");
@@ -2044,7 +2044,7 @@ function retryInterview(
   runnable: { candidates: TaskExecutionCandidates; agentName?: string } | undefined,
   remedy: string,
 ): Task {
-  const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
+  const { probe, rubric } = latestPosedProbe(db, previousRoot.id)!.probe;
   const root = registerTask(
     db,
     {
@@ -2505,10 +2505,10 @@ function probeAccepted(db: Db, rootId: string): boolean {
   return listExaminees(db, rootId).length > 0;
 }
 
-/** Interview の root の最新の出題の型つきの欄(ADR 0253 決定1)。却下で出題し直した root は最後の出題。出題前・Interview でない task は null。 */
-function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
+/** Interview の root の最新の出題の型つきの欄と head(ADR 0253 決定1 / ADR 0273 決定3)。却下で出題し直した root は最後の出題。出題前・Interview でない task は null。 */
+export function latestPosedProbe(db: Db, rootId: string): { probe: InterviewProbe; head: string } | null {
   for (const { payload } of taskDecisionLog(db, rootId).reverse()) {
-    if (payload.kind === "decision_logged" && payload.interview_probe) return payload.interview_probe;
+    if (payload.kind === "decision_logged" && payload.interview_probe) return { probe: payload.interview_probe, head: payload.head };
   }
   return null;
 }
@@ -2558,7 +2558,7 @@ export function reportBrokenProbe(
   origin: EventOrigin,
 ): Task {
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root reports a broken probe");
-  const posed = interviewProbe(db, root.id);
+  const posed = latestPosedProbe(db, root.id)?.probe ?? null;
   if (posed === null || !probeAccepted(db, root.id)) throw new DomainError("this Interview has no answers yet: pose its probe with pose_probe first");
   if (brokenProbeReported(db, root.id)) {
     throw new DomainError(

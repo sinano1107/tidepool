@@ -43,9 +43,11 @@ interface TpQuestion {
   note?: string;
   /** 修正値を添えられる提案 question(ADR 0150 決定2・ADR 0152 決定2): 表の行の提案は tier / effort、agent の tier の提案は下げ先 `to`、
    *  段の説明の提案は文面、段を足す提案は名前・説明・位置、memory の approve / consolidate は `candidateId` の文言と宛先(Exemplar なら title・宛先と注釈 list)。 */
-  amendable?: 'row' | 'agent_tier' | 'tier_description' | 'add_tier' | 'memory';
+  amendable?: 'row' | 'agent_tier' | 'tier_description' | 'add_tier' | 'memory' | 'interview';
   /** 段を足す提案の段 —— 修正値の欄の初期値(issue #1439)。 */
   proposedTier?: { name: string; description: string; position: number };
+  /** Interview の提案の欄 —— 修正値の欄の初期値(ADR 0258 決定2・4)。 */
+  proposedInterview?: TpProposedInterview;
   /** agent の tier の提案の pin の tier —— 下げ先の選択肢はこれより下の段(ADR 0150 決定2)。 */
   amendBelow?: string;
   candidateId?: number;
@@ -61,7 +63,9 @@ type TpAmendment = {
   tier?: string; effort?: string; to?: string; description?: string; name?: string; position?: number;
   title?: string; text?: string; addressee?: string | null; original_title?: string; original_text?: string;
   annotations?: ReturnType<typeof annotationsToSend>;
+  hypothesis?: string; measured_work?: string; workspace?: string; targets?: TpProposedInterview['targets'];
 };
+type TpProposedInterview = { hypothesis: string; measured_work: string; workspace: string; targets: Array<{ provider: string; model: string; effort: string | null }> };
 /** トリアージが受け取る question —— 着地 question だけが `landing` を持つ
  *  (ADR 0092 決定4)。判定は盤面側で、ここは描画だけ。 */
 interface TpTriageQuestion extends TpQuestion {
@@ -296,6 +300,38 @@ function TpAddTierAmendment({ proposed, onChange }: {
   );
 }
 
+// Interview の提案の修正値(ADR 0258 決定2・4 / ADR 0273 決定9): 仮説・測る仕事・実環境と、対象の effort だけ。対象は提案の一覧を
+// 同じ順で送る(src/execution-setting.ts の parseInterviewAmendment)。提案から変えた欄だけを上げる —— 何も変えなければ素の approve。
+// 実環境の選択肢は registry の workspace に提案の名前を足す: registry から消えた提案は、その名前のままでは approve が拒まれる(ADR 0258 決定4)。
+function TpInterviewAmendment({ proposed, onChange }: { proposed: TpProposedInterview; onChange: (amendment: TpAmendment) => void }) {
+  const { Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const [workspaces, setWorkspaces] = React.useState<string[]>([]);
+  const [draft, setDraft] = React.useState(proposed);
+  React.useEffect(() => {
+    api('GET /api/registry/candidates').then(({ workspaces }) => setWorkspaces(workspaces)).catch(() => {});
+  }, []);
+  React.useEffect(() => {
+    const changed: TpAmendment = {};
+    for (const field of ['hypothesis', 'measured_work', 'workspace'] as const) {
+      if (TidepoolRules.normalizeText(draft[field]) !== proposed[field]) changed[field] = TidepoolRules.normalizeText(draft[field]);
+    }
+    if (draft.targets.some((t, i) => t.effort !== proposed.targets[i]!.effort)) changed.targets = draft.targets;
+    onChange(changed);
+  }, [draft]);
+  const options = [...new Set([proposed.workspace, ...workspaces])].map((w) => ({ value: w, label: workspaces.includes(w) ? w : `${w} (not in the registry)` }));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
+      <Input label="Hypothesis" multiline rows={2} value={draft.hypothesis} onChange={(e) => setDraft({ ...draft, hypothesis: e.target.value })} />
+      <Input label="Measured work (optional)" multiline rows={2} value={draft.measured_work} onChange={(e) => setDraft({ ...draft, measured_work: e.target.value })} />
+      <Select label="Real environment" options={options} value={draft.workspace} onChange={(e) => setDraft({ ...draft, workspace: e.target.value })} />
+      {draft.targets.map((t, i) => (
+        <Input key={`${t.provider}/${t.model}`} label={`Effort — ${t.provider} / ${t.model}`} mono value={t.effort ?? ''} placeholder="none"
+          onChange={(e) => setDraft({ ...draft, targets: draft.targets.map((u, j) => (j === i ? { ...u, effort: e.target.value.trim() || null } : u)) })} />
+      ))}
+    </div>
+  );
+}
+
 // memory の提案の修正値(ADR 0152 決定2・5): candidate の文言を初期値に、settings と同じ英語 + 原文の2欄と逆翻訳。
 // Exemplar の candidate(#950)は settings の Exemplar の扉と同じ注釈の form で、case は candidate の出所に固定。
 // candidate から変えた欄(と原文)だけを修正値として上に渡す —— 何も変えなければ素の approve になる。
@@ -455,7 +491,7 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
   const submit = () => {
     setSubmitting(true);
     // memory と段の追加は提案から変えた欄だけを上げてくる(位置 0 が偽値で落ちないよう、ここで間引かない)
-    const filled = q.amendable === 'memory' || q.amendable === 'add_tier' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
+    const filled = q.amendable === 'memory' || q.amendable === 'add_tier' || q.amendable === 'interview' ? amendment : Object.fromEntries(Object.entries(amendment).filter(([, v]) => v)) as TpAmendment;
     onAnswer(draft as string[], q.amendable && draft[0] === 'approve' && Object.keys(filled).length > 0 ? filled : undefined, comment.trim() ? comment : undefined)
       .finally(() => setSubmitting(false));
   };
@@ -515,6 +551,9 @@ function TpQuestionCard({ q, answer, onAnswer, locked = false, onTranslate, onOp
       )}
       {q.amendable === 'add_tier' && !locked && (
         <TpAddTierAmendment proposed={q.proposedTier!} onChange={setAmendment} />
+      )}
+      {q.amendable === 'interview' && !locked && (
+        <TpInterviewAmendment proposed={q.proposedInterview!} onChange={setAmendment} />
       )}
       {q.amendable === 'memory' && !locked && (
         <TpMemoryAmendment candidateId={q.candidateId!} onTranslate={onTranslate} onChange={setAmendment} onDeadAddressee={setDeadAddressee} />
@@ -634,7 +673,7 @@ const TP_LANDING_BLOCKED: Record<string, string> = {
 const LOG_READ_BATCH = 8;
 const NO_WORKSPACE_LABEL = 'no workspace';
 
-// Groups `data.log` by workspace, sorted groups-with-unread-first (most
+// Groups `data.log` by workspace — an Interview's root and audit rows by that Interview instead (ADR 0273 決定10), sorted groups-with-unread-first (most
 // recent unread first), then fully-read groups (most recent entry first).
 // Within a group, read and unread entries are each chronological. Human-authored
 // entries are read regardless of their id, so the two sets are partitioned by
@@ -642,19 +681,21 @@ const NO_WORKSPACE_LABEL = 'no workspace';
 //
 // Ordering inside a group is the entry's own id, which ascends with time.
 function groupLogEntries(entries: TpLogEntry[]) {
-  const byWorkspace = new Map<string, TpLogEntry[]>();
+  const byGroup = new Map<string, TpLogEntry[]>();
   entries.forEach((l) => {
-    const key = l.workspace || '';
-    if (!byWorkspace.has(key)) byWorkspace.set(key, []);
-    byWorkspace.get(key)!.push(l);
+    const key = l.interview ? `interview:${l.interview.root_id}` : l.workspace || '';
+    if (!byGroup.has(key)) byGroup.set(key, []);
+    byGroup.get(key)!.push(l);
   });
-  const groups = [...byWorkspace.entries()].map(([key, groupEntries]) => {
+  const groups = [...byGroup.entries()].map(([key, groupEntries]) => {
     const sorted = groupEntries.slice().sort((a, b) => a.id - b.id);
     const unreadEntries = sorted.filter((l) => l.unread);
     const readEntries = sorted.filter((l) => !l.unread);
+    // ADR 0268 決定6 の印は見出しに: probe の題と実環境の名前
+    const interview = groupEntries[0]!.interview;
     return {
       key,
-      label: key || NO_WORKSPACE_LABEL,
+      label: interview ? `interview · ${interview.title} · ${interview.workspace || NO_WORKSPACE_LABEL}` : key || NO_WORKSPACE_LABEL,
       readEntries,
       unreadEntries,
       unreadCount: unreadEntries.length,
@@ -1009,10 +1050,6 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           const hasHandoff = l.kind === 'completion' && l.handoffPresent;
           return (
             <div key={k} data-entry-id={l.unread ? l.id : undefined}>
-              {/* ADR 0268 決定6: root の行の題は probe の題なので、Interview の行だと印で言う */}
-              {l.interview?.role === 'root' && (
-                <div style={{ padding: '6px 12px 0', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>interview</div>
-              )}
               <LogEntry
                 entry={{
                   ...l,
@@ -1055,7 +1092,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                   )}
                 </div>
               )}
-              {objecting === k && l.interview?.role === 'root' && !l.memoryEntries && (
+              {objecting === k && l.interview && !l.memoryEntries && (
                 <div style={{ padding: '10px 12px 0', background: 'var(--coral-1)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                   An Interview entry: objecting raises no repair task — only attribution and an RCA.
                 </div>

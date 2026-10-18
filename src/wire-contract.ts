@@ -76,6 +76,10 @@ export interface BoardTask extends QueueTask {
   parent_id: string | null;
   /** 受験者だけ: その Interview の root の id(ADR 0267 決定6)。 */
   interview_root_id: string | null;
+  /** 出題済みの Interview の root が blocked で待つもの(ADR 0273 決定3): 監査か受験者か。他の行には欄が無い。 */
+  interview_waiting?: "audit" | "examinees";
+  /** 解決前の workspace の名前。Interview の root と受験者では実環境の名前で、受験者の走る場所は面接室(ADR 0273 決定8)。 */
+  workspace: string | null;
   review_flag: number;
   review_by: string[] | null;
   raw_assignee?: string | null;
@@ -93,6 +97,11 @@ export interface BoardTask extends QueueTask {
     /** op tier_description は段の名前、op add_tier は足す段(名前・説明・位置)—— 後者は修正値の欄の初期値(issue #1439)。 */
     tier?: string | { name: string; description: string; position: number };
     pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } } | { rows: Array<{ tier: string }> };
+    /** op interview の欄 —— 修正値の欄の初期値。修正できる対象は effort だけで、一覧の順のまま送る(src/execution-setting.ts の parseInterviewAmendment)。 */
+    hypothesis?: string;
+    measured_work?: string;
+    targets?: Array<{ provider: string; model: string; effort: string | null }>;
+    workspace?: string;
   } | null;
   /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
    *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */
@@ -210,10 +219,12 @@ export interface WireContract {
     /** question 行は cancel option の、それ以外はその task の直接 cancel の、捨てられる done の work(ADR 0271 決定4)。 */
     discards: Discard[];
     completion_criteria: string;
-    workspace: string | null;
     review_flag: number;
     review_by: string[] | null;
     handoff_doc: string | null;
+    /** Interview の root だけ: 面接室のホスト上の在り処(まだ開いていなければ null)と最新の出題の head(出題前は null)(ADR 0273 決定1・3)。 */
+    interview_room?: string | null;
+    posed_head?: string | null;
   };
   "GET /api/your-tasks": Array<Pick<QueueTask, "id" | "title" | "issue_live_state"> & { blocking: string | null }>;
   "GET /api/pause": {
@@ -246,8 +257,8 @@ export interface WireContract {
       objections: Array<{ comment: string; session_id: number }>;
       /** エントリを含む worker session の worker_spawned の id(src/triage.ts の LogEntry)。窓の外なら null。 */
       session_event_id: number | null;
-      /** Interview の印(src/triage.ts の LogEntry)。受験者の行は一覧に出ないので、印が付くのは root の行だけ。 */
-      interview: { role: "examinee" | "root"; root_id: string } | null;
+      /** Interview のグループ(src/triage.ts の LogEntry、ADR 0273 決定10): root と監査の行だけ。鍵は root_id、見出しは title と workspace。 */
+      interview: { root_id: string; title: string; workspace: string | null } | null;
     }>;
     cursor: number;
   };
