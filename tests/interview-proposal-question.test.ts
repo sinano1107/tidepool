@@ -6,7 +6,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { api, bootTidepool, callAsTask, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace, managementMcpClient, runNow, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, callAsTask, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, interviewExaminee, makeWorkspace, managementMcpClient, runNow, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の Interview の提案 question(#921 / ADR 0199 決定5 / ADR 0258 / ADR 0273 決定9)のサーバ境界: 提案 verb の op
  *  interview、approve が人間の扉で登録する interview root と修正値、pin の陳腐化、registry から消えた実環境、shadow 行の workspace 欄、
@@ -252,4 +252,34 @@ it("verb は根拠を欠く提案・表に無い model の対象・表の行と�
     expect(await call(reviewId, "propose_routing_change", proposal([eventId], fields))).toEqual({ error: expect.stringContaining(refusal) });
   }
   expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((q) => q.parent_id === reviewId)).toEqual([]);
+});
+
+it("受験者の session は根拠にならず、verb は本番の session だけを根拠に受ける", async () => {
+  const reviewId = await boardWithRoutingReview();
+  // 別の Interview の受験者: 対象は standard の行と3欄で一致する
+  const examinee = interviewExaminee(t.db, t.clock.now());
+  const eventId = appendEvent(t.db, {
+    taskId: examinee.id,
+    workerId: "fake-worker",
+    origin: "board",
+    at: t.clock.now(),
+    payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null, tier_id: tierIdOf(t.db, "standard") },
+  });
+  expect(await call(reviewId, "propose_routing_change", proposal([eventId], { workspace: "reef" }))).toEqual({
+    error: expect.stringContaining(`evidence ${eventId} is not a worker_spawned event of a production work session`),
+  });
+});
+
+it("approve で登録される root の題は修正後の対象で組まれ、空の測る仕事の修正値は測る仕事を外す", async () => {
+  const reviewId = await boardWithRoutingReview();
+  const { eventId } = session("reef");
+  const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId], { targets: [OPUS_MAX] }));
+  expect((await task(question_id)).title).toContain("effort max");
+
+  expect((await answer(question_id, { answers: ["approve"], amendment: { targets: [{ ...OPUS, effort: "medium" }], measured_work: "" } })).status).toBe(200);
+  const [root] = await interviews();
+  expect(root.title).toContain("anthropic / claude-opus-5-5 at effort medium");
+  await runNow(t, root.id);
+  const current = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
+  expect(current.interview).not.toHaveProperty("measured_work");
 });

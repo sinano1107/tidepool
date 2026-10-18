@@ -53,6 +53,7 @@ import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-wr
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
+import { interviewTitle } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
@@ -342,16 +343,17 @@ function registerAsHuman(
 /** Interview の提案の approve(#921 / ADR 0258 決定2・4): 修正値を重ねた欄で、人間の扉と同じ検査を通して人間名義の interview root を
  *  登録する(assignee は空で Interviewer、root の段は selector が判断の段と測る段から引く)。実環境は明示の名前(null だと pickup の
  *  既定が入る、ADR 0233)で、registry に無ければ直す手段を添えて断る —— 回答の transaction の中なので question は開いたまま。 */
-function registerProposedInterview(deps: SubmitAnswerDeps, question: Task, proposal: InterviewProposal<Tier>, amendment: InterviewAmendment | undefined, now: Date, origin: EventOrigin): void {
+function registerProposedInterview(deps: SubmitAnswerDeps, proposal: InterviewProposal<Tier>, amendment: InterviewAmendment | undefined, now: Date, origin: EventOrigin): void {
   const { hypothesis, measured_work, targets, workspace } = { ...proposal, ...amendment };
   if (!workspaceKnown(workspace, deps.resolveWorkspace, deps.workspace)) {
     throw new DomainError(`workspace ${workspace} is not in the registry: approve again with an amendment naming a registered workspace, or reject`);
   }
   const input: HumanRegisterInput = {
     type: "interview",
-    title: question.title,
+    title: interviewTitle(targets, proposal.tier),
     hypothesis,
-    ...(measured_work !== undefined && { measured_work }),
+    // 空の修正値は「測る仕事を外す」—— 空文字で残さない
+    ...(measured_work !== undefined && !whyBlank(measured_work) && { measured_work }),
     // 根拠の event は episode の spawn(提案 verb が確かめた)で、その task が root の根拠の task
     evidence_task_ids: [...new Set(proposal.evidence.map((id) => getEvent(deps.db, id)!.task_id!))],
     tier: proposal.tier,
@@ -1220,7 +1222,7 @@ export async function submitAnswer(
         else if (answers[0] === "reject") rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
       } else if (proposal?.kind === "routing" && answers[0] === "approve") {
         if (proposal.op === "interview") {
-          registerProposedInterview(deps, task, proposal, amended as InterviewAmendment | undefined, now(), origin);
+          registerProposedInterview(deps, proposal, amended as InterviewAmendment | undefined, now(), origin);
         } else if (proposal.op === "add_tier") {
           // 段の挿入と行の移動を1つの transaction で(ADR 0200 決定8)。修正後の値の検査は挿入の扉がやり直し、拒めば回答ごと巻き戻る
           const tier = { ...proposal.tier, ...(amended as AddTierAmendment | undefined) };

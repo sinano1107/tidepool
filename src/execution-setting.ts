@@ -647,6 +647,7 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
  *  `to` が pin の段のいまの1段下でなくなれば(挿入・並べ替え・削除)`tier_order`(ADR 0200 決定4 / issue #1438)。
  *  段を足す提案は移す行を行の提案と同じに比べ、隣の段が入れ替わっていれば `neighbours`(issue #1424)。
  *  段の説明の提案は id で引いた生きている段の説明を比べ、段が消えていれば null(ADR 0200 決定7)。
+ *  Interview の提案は根拠の行を全欄で比べ(崩れれば `rows`)、対象と一致する行が測る段に足されれば `target_row`、測る段が消えれば null。
  *  段は id で比べる(issue #1436)—— 改名はどの pin も崩さない。消した段の id は生きている段に引けないので崩れる。 */
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
@@ -724,11 +725,11 @@ const interviewAmendmentSchema = z
   .object({
     hypothesis: requiredTextSchema.optional(),
     measured_work: z.string().optional(),
-    targets: z.array(z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }).strict()).optional(),
+    targets: z.array(rowKeySchema.strict()).optional(),
     workspace: requiredTextSchema.optional(),
   })
   .strict()
-  .refine((amendment) => Object.keys(amendment).length > 0, { message: "give at least one of hypothesis / measured_work / targets / workspace" });
+  .refine((amendment) => Object.keys(amendment).length > 0);
 export type InterviewAmendment = z.infer<typeof interviewAmendmentSchema>;
 
 export function parseInterviewAmendment(proposal: InterviewProposal<Tier>, amendment: unknown): InterviewAmendment {

@@ -360,6 +360,11 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   return { kind: "routing", op: "tier_description", tier: current.id, description, evidence, pin: { description: current.description } };
 }
 
+/** 提案 question と approve で登録する root の題(修正後の対象で組み直す)。 */
+export function interviewTitle(targets: readonly InterviewTarget[], tier: Tier): string {
+  return `Interview ${targets.length === 1 ? rowName(targets[0]!) : `${targets.length} targets`} in tier ${tier}`;
+}
+
 /** Interview の提案の門と pin(#921 / ADR 0199 決定5 / ADR 0258 決定1 / ADR 0273 決定6・9): 欄は人間の登録の扉と同じ検査を通し、
  *  対象は表にある model の、測る段で行でないものだけ。根拠は本番の episode の worker_spawned で、その task が root の根拠の task に
  *  なる。実環境は登録済みで、根拠の episode のどれかの workspace(学習器が数える層と同じ値)。pin は根拠の行の全欄。 */
@@ -380,7 +385,8 @@ function interviewProposal(
   const evidenceWorkspaces = new Set<string | null>();
   for (const id of evidence) {
     const episode = episodes.get(id);
-    if (!episode) throw new DomainError(`evidence ${id} is not a worker_spawned event of a work session`);
+    // 受験者の session は本番の観測ではない(学習器も数えない)—— 根拠にすると root が受験者の history を読める
+    if (!episode || episode.interview) throw new DomainError(`evidence ${id} is not a worker_spawned event of a production work session`);
     const row = table.find((r) => matchesRowKey(r, episode.cell));
     if (!row) throw new DomainError(`evidence ${id} ran on ${rowName(episode.cell)}, which is no longer in the execution-setting table`);
     rows.set(rowName(row), { ...row, tier: tierIdOf(db, row.tier) });
@@ -411,11 +417,12 @@ function interviewProposal(
 }
 
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
- *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、または段の追加と
- *  行の移動(op add_tier)を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
- *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段。
+ *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、段の追加と
+ *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
+ *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段、interview なら根拠の行の全欄。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
- *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。 */
+ *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。`assertWorkspaceKnown` は interview の実環境が
+ *  registry にあるかの検査(approve の時点でも確かめ直す、ADR 0258 決定4)。 */
 export function proposeRoutingChange(
   db: Db,
   metaReviewId: string,
@@ -445,9 +452,9 @@ export function proposeRoutingChange(
   for (const field of ["agent", "to", "tier", "description", "hypothesis", "measured_work", "workspace"] as const) {
     if (input[field] !== undefined) input[field] = normalizeText(input[field]);
   }
-  const key = (k: InterviewTarget) => ({ provider: normalizeText(k.provider), model: normalizeText(k.model), effort: k.effort && normalizeText(k.effort) });
-  if (input.row) input.row = key(input.row);
-  if (input.targets) input.targets = input.targets.map(key);
+  const normalizeKey = (k: InterviewTarget) => ({ provider: normalizeText(k.provider), model: normalizeText(k.model), effort: k.effort && normalizeText(k.effort) });
+  if (input.row) input.row = normalizeKey(input.row);
+  if (input.targets) input.targets = input.targets.map(normalizeKey);
   if (input.op !== "interview" && [input.hypothesis, input.measured_work, input.targets, input.workspace].some((field) => field !== undefined)) {
     throw new DomainError(`op ${input.op} takes no hypothesis, measured_work, targets or workspace`);
   }
@@ -466,7 +473,7 @@ export function proposeRoutingChange(
     if (input.row !== undefined || input.change !== undefined || input.description !== undefined) throw new DomainError("op interview takes no row, change or description");
     proposal = interviewProposal(db, input, assertWorkspaceKnown);
     const { tier, targets, workspace, hypothesis, measured_work, pin } = proposalTierNames(db, proposal) as InterviewProposal<Tier>;
-    title = `Interview ${targets.length === 1 ? rowName(targets[0]!) : `${targets.length} targets`} in tier ${tier}`;
+    title = interviewTitle(targets, tier);
     diff = [
       `Hypothesis: ${hypothesis}`,
       ...(measured_work ? [`Work to measure: ${measured_work}`] : []),
