@@ -5,7 +5,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
 import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
+import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -240,11 +240,27 @@ export interface TierDescriptionProposal<T extends TierRef = TierId> {
   pin: { description: string };
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
+/** Interview の提案(#921 / ADR 0199 決定5 / ADR 0258 / ADR 0273 決定9)。approve は人間名義の interview root を登録する。pin = 根拠
+ *  (`worker_spawned` の event id)の episode が走った表の行の全欄と、測る段が生きていること。対象と一致する行が表に無いことは
+ *  対象と段からいまの表で照合する。workspace は root が読む実環境で、pin の外(ADR 0258 決定4)。 */
+export interface InterviewProposal<T extends TierRef = TierId> {
+  kind: "routing";
+  op: "interview";
+  hypothesis: string;
+  measured_work?: string;
+  evidence: number[];
+  tier: T;
+  targets: InterviewTarget[];
+  workspace: string;
+  pin: { rows: RowAt<T>[] };
+}
+
+/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
 export type RoutingProposal<T extends TierRef = TierId> =
   | RoutingRowProposal<T>
   | RoutingAddTierProposal<T>
   | TierDescriptionProposal<T>
+  | InterviewProposal<T>
   | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
@@ -258,8 +274,8 @@ export interface RegistryProposal<T extends TierRef = TierId> {
   evidence: number[];
 }
 
-/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、memory は文言と宛先。 */
-export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | MemoryAmendment;
+/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、Interview は仮説・測る仕事・対象の effort・実環境、memory は文言と宛先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | InterviewAmendment | MemoryAmendment;
 
 export interface PendingChildSpec extends TaskContent {
   review_by?: string[];

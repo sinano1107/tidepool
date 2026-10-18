@@ -102,9 +102,9 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
   const cell = (s: ExecutionSetting) => ({ provider: s.provider, model: s.model, effort: s.effort, advisor: null });
   expect(listRoutingShadow(db, reader, {})).toEqual({
     shadow: [
-      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: null, agent: null, outcome: null, cost_usd: null, duration_ms: null },
-      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, agent: "reef-crab", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
-      { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), agent: "deckhand", outcome: "excluded", cost_usd: null, duration_ms: null },
+      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: null, workspace: null, agent: null, outcome: null, cost_usd: null, duration_ms: null },
+      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, workspace: null, agent: "reef-crab", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
+      { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), workspace: null, agent: "deckhand", outcome: "excluded", cost_usd: null, duration_ms: null },
     ],
   });
   expect(listRoutingShadow(db, reader, { diverged_only: true }).shadow.map((r) => r.worker_spawned_event_id)).toEqual([null, second]);

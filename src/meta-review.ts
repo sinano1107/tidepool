@@ -118,6 +118,8 @@ export const META_REVIEW_SUBJECTS = {
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
         "When rows in the same tier split in their results and no existing tier fits the split, propose adding a tier and moving one " +
         "row into it (op add_tier); write the new tier's description as the work that the tier below is not enough for and this tier is. " +
+        "When the evidence raises a doubt that another effort or tier of a model in the table would do, propose measuring it before any row changes " +
+        "(op interview), naming the evidence sessions and, from their shadow rows, the workspace the Interview reads. " +
         "The learner leaves the table's first choice only when both that choice and the cell it moves to have observations, and " +
         "each diverged row carries the track records of the recommended and the actual cell as of that pickup (accepted and rejected, " +
         "board and workspace stage) and how many candidates the pickup had. While the learner is not promoted, a diverged row's outcome " +

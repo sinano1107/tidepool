@@ -1172,6 +1172,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Answer every item of a question task as the human. amendment is accepted only with approve: on a routing row proposal, " +
         "tier and/or effort to apply instead of the proposed values; on an agent tier proposal, to — any tier below the agent's current one; " +
+        "on an Interview proposal, hypothesis, measured_work, workspace (any registered workspace) and/or targets — the proposal's targets in the same order with only effort changed; " +
         "on a memory approve or consolidate proposal, title, text and/or addressee (null = every agent) to approve instead of the candidate's, " +
         "with original_title + original_text + original_language together when the English was made from the human's own wording, translated " +
         `or cleaned up (original_language is the language the human wrote it in: ${ORIGINAL_LANGUAGES}); an exemplar candidate takes title, ` +

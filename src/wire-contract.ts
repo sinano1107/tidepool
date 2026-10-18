@@ -84,7 +84,7 @@ export interface BoardTask extends QueueTask {
   purpose: string;
   question_items: Array<{ title: string; detail?: string; options: string[]; recommendation: string }> | null;
   /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と段の追加(op add_tier)、registry の tier の提案、
-   *  段の説明の提案(op tier_description)、memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list ——
+   *  段の説明の提案(op tier_description)、Interview の提案(op interview、仮説・測る仕事・対象の effort・実環境)、memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list ——
    *  種別は画面が candidate から引く)は approve に修正値を添えられる。registry の tier の提案の `pin.tier` は下げ先の選択肢の上端(ADR 0200 決定4)。 */
   question_proposal: {
     kind: "memory" | "routing" | "registry";
@@ -92,7 +92,7 @@ export interface BoardTask extends QueueTask {
     candidate_id?: number;
     /** op tier_description は段の名前、op add_tier は足す段(名前・説明・位置)—— 後者は修正値の欄の初期値(issue #1439)。 */
     tier?: string | { name: string; description: string; position: number };
-    pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } };
+    pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } } | { rows: Array<{ tier: string }> };
   } | null;
   /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
    *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */
