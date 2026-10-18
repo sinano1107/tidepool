@@ -1033,7 +1033,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
         onClick: () => setShowFullyReadWorkspaces((v) => !v),
         style: { display: "block", width: "100%", textAlign: "left", background: "none", border: "none", cursor: "pointer", padding: "0 2px 10px", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--tide-4)", textTransform: "uppercase", letterSpacing: "0.08em" }
       },
-      showFullyReadWorkspaces ? "hide fully-read workspaces" : `show ${fullyReadGroups.length} fully-read workspace${fullyReadGroups.length > 1 ? "s" : ""} too`
+      showFullyReadWorkspaces ? "hide fully-read groups" : `show ${fullyReadGroups.length} fully-read group${fullyReadGroups.length > 1 ? "s" : ""} too`
     ), /* @__PURE__ */ React.createElement("div", { ref: logListRef, style: { display: "flex", flexDirection: "column", gap: 10 } }, logGroups.map((g) => {
       const revealed = Math.min(revealedRead[g.key] || 0, g.readCount);
       const hiddenCount = g.readCount - revealed;
