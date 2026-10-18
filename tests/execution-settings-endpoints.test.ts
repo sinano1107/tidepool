@@ -5,7 +5,7 @@ import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETT
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { SEED_TIERS } from "../src/tier.js";
+import { SEED_TIERS, tierIdOf } from "../src/tier.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   api,
@@ -88,6 +88,50 @@ it("表の行は (provider, model, effort) を鍵に追加・編集(key つき)�
     { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10, quarantine_question_id: null },
   ]);
   expect(table.find((row: any) => row.model === "gpt-6-astra")).toBeUndefined();
+});
+
+it("行を足す扉(settings タブ / 管理MCP)で「観測ありとして始める」を選ぶと、根拠と足した行の段の id が execution_settings_changed に種として残る —— 旗の無い行は今どおり種を持たない(ADR 0273 決定7)", async () => {
+  t = await bootTidepool();
+  const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 };
+  const sol = { provider: "openai", tier: "standard", model: "gpt-5.7-sol", effort: "high", price_in: 2, price_out: 8 };
+  const plain = { ...haiku, model: "claude-haiku-5-6" };
+  const rationale = "scored accepted by the standard Interview of the parser probe";
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: haiku, seed: { comment: rationale } })).status).toBe(200);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const viaMcp = (await client.callTool({ name: "change_execution_settings", arguments: { change: { setting: "row", row: sol, seed: { comment: "measured elsewhere" } } } })) as any;
+    expect(viaMcp.isError).not.toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: plain })).status).toBe(200);
+
+  // 学習器はこの event を種として読む(loadSeeds —— 読みの規則は learner のテストが言う)。段は改名に備えて id で焼かれる
+  const events = listEventsOfKinds(t.db, ["execution_settings_changed"]);
+  expect(events.map(({ origin, payload }) => ({ origin, ...(payload.setting === "row" && { seed: payload.seed, tier_id: payload.tier_id }) }))).toEqual([
+    { origin: "webui", seed: { comment: rationale }, tier_id: tierIdOf(t.db, "economy") },
+    { origin: "mcp", seed: { comment: "measured elsewhere" }, tier_id: tierIdOf(t.db, "standard") },
+    { origin: "webui", seed: undefined, tier_id: undefined },
+  ]);
+});
+
+it("「観測ありとして始める」は行の追加だけが受け、編集(key つき)と空の根拠は両方の扉で断られて表は変わらない", async () => {
+  t = await bootTidepool();
+  const before = await state();
+  const opusKey = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+  const edit = { setting: "row", key: opusKey, row: { ...opusKey, tier: "standard", price_in: 5, price_out: 25 }, seed: { comment: "moved after an Interview" } };
+  const blank = { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 }, seed: { comment: "  " } };
+  const refusedEdit = await api(t.baseUrl, "POST", "/api/settings/execution", edit);
+  expect(refusedEdit.status).toBe(400);
+  expect(refusedEdit.json.error).toContain("only when adding a row");
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", blank)).status).toBe(400);
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    for (const change of [edit, blank]) expect(((await client.callTool({ name: "change_execution_settings", arguments: { change } })) as any).isError).toBe(true);
+  } finally {
+    await client.close();
+  }
+  expect(await state()).toEqual(before);
 });
 
 it("ある provider × tier の行を全部消すことは許される —— その Provider はそのティアの task で除外されるだけ(ADR 0114 決定3)", async () => {

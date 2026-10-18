@@ -16,12 +16,12 @@ import {
   readExecutionSettings,
   rowName,
 } from "./execution-setting.js";
-import { type Cell, cellJson, loadEpisodes, type RoutingEpisode, type TrackRecord } from "./learner.js";
+import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
-import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
+import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNameOf, tierNames } from "./tier.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -158,7 +158,9 @@ export function readRoutingSettings(db: Db, input: { next?: string }) {
   >;
 }
 
-/** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。 */
+/** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。セルはその
+ *  provider / model / effort の種(段ごと)を運ぶ(ADR 0273 決定7)。まだ走っていないセルの種は載せない —— Interview の種のセルは
+ *  受験者の session で観測済みで、人間の種は行の編集の記録が根拠つきで運ぶ。 */
 function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
   for (const e of loadEpisodes(db)) {
@@ -168,9 +170,15 @@ function cellRows(db: Db, window: MetaReviewWindow) {
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
   }
   const rows = listEventsOfKinds(db, ["execution_settings_changed"], window).flatMap(({ id, origin, created_at, payload: p }) =>
-    p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, ...(p.key && { key: p.key }), row: p.row }] : [],
+    p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, ...(p.key && { key: p.key }), row: p.row, ...(p.seed && { seed: p.seed }) }] : [],
   );
-  const cells = [...firstSeen.values()].filter((c) => inWindow(c.first_observed_event_id, window));
+  const seeds = loadSeeds(db);
+  const cells = [...firstSeen.values()]
+    .filter((c) => inWindow(c.first_observed_event_id, window))
+    .map((c) => ({
+      ...c,
+      seeds: seeds.filter((s) => matchesRowKey(c.cell, s.cell)).map((s) => ({ tier: tierNameOf(db, s.tier_id), kind: s.kind, event_id: s.event_id })),
+    }));
   return { cells, rows };
 }
 
@@ -233,7 +241,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
       "Diverged shadow rows",
       `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
         `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
-        "and a row with one candidate always matches. Each track record's interview is the part of it that Interview children scored, counted only once their Interview's root is done. Read the matched rows, and rows before this window, with list_routing_shadow.",
+        "and a row with one candidate always matches. Track records count production sessions only. A record's seed, when not null, is an accepted score of a done Interview or a row a human added as observed: it makes the cell observed in that tier and weighs one accepted session in place of the table's prior. Read the matched rows, and rows before this window, with list_routing_shadow.",
       parts.shadow.map(({ id: _, ...row }) => row),
       "no diverged shadow rows",
     ],

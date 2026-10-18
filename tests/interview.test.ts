@@ -6,7 +6,7 @@ import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
 import { registerThroughHumanDoor } from "../src/human-verbs.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
+import { loadEpisodes, observedInTier } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
@@ -635,41 +635,17 @@ function ranChildren(db: Db, root: Task) {
   });
 }
 
-it("学習器は採点完了で入った Interview の子の採点を、同じセル・同じ段の観測として本番の episode と並べて数え、種別は episode に残る(ADR 0181 決定4 / ADR 0210 決定4)", () => {
-  // 同じ対象は1つの一覧に2つ置けない(ADR 0249 決定2)ので、同じセルの答案3つは Interview 3件から取る
+it("受験者の episode は種別 interview を持ち、採点されても推薦の観測に数えられない —— 採点は事前分布の種(ADR 0273 決定7)", () => {
+  // 同じ対象は1つの一覧に2つ置けない(ADR 0249 決定2)ので、同じセルの答案は Interview 2件から取る
   const db = openDb(":memory:");
-  const roots = [1, 2, 3].map(() => registerInterview(db).root);
-  const [accepted, rejected, unscored] = roots.map((root) => ranChildren(db, root)[0]) as [Task, Task, Task];
-  for (const [root, child, outcome] of [[roots[0]!, accepted, "accepted"], [roots[1]!, rejected, "rejected"]] as const) {
-    completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child.id, outcome }], handoff: FINDINGS }, "auditor", new Date(1), "worker");
+  const roots = [1, 2].map(() => registerInterview(db).root);
+  const children = roots.map((root) => ranChildren(db, root)[0]!);
+  for (const [i, outcome] of (["accepted", "rejected"] as const).entries()) {
+    completeInterview(db, getTask(db, roots[i]!.id)!, { scores: [{ child_id: children[i]!.id, outcome }], handoff: FINDINGS }, "auditor", new Date(1), "worker");
   }
   const episodes = loadEpisodes(db);
-  expect(episodes.map(({ task_id, outcome, interview }) => ({ task_id, outcome, interview }))).toEqual([
-    { task_id: accepted.id, outcome: "accepted", interview: true },
-    { task_id: rejected.id, outcome: "rejected", interview: true },
-    { task_id: unscored.id, outcome: "excluded", interview: true },
-  ]);
-  const cell = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", advisor: null };
-  expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([{ cell, accepted: 1, rejected: 1, interview: { accepted: 1, rejected: 1 } }]);
-  expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([]);
-});
-
-it("root が cancelled や未決着の Interview の子の採点は、採点の無い子と同じく excluded で学習器に数えられない —— 採点は root の完了で確定する(ADR 0251 決定4)", () => {
-  const db = openDb(":memory:");
-  const scored = [true, false].map((cancelled) => {
-    const { root } = registerInterview(db, [opusHigh, haikuNull]);
-    const children = ranChildren(db, root) as [Task, Task];
-    // 採点完了は採点と完了を一度に入れるので、この状態は verb では作れない —— 学習器の読みの規則だけを event で釘付けする
-    for (const [child, outcome] of [[children[0], "accepted"], [children[1], "rejected"]] as const) {
-      appendEvent(db, { taskId: child.id, workerId: "auditor", origin: "worker", at: new Date(1), payload: { kind: "interview_scored", outcome } });
-    }
-    if (cancelled) cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui");
-    return children;
-  });
-  const episodes = loadEpisodes(db);
-  expect(episodes.map(({ task_id, outcome }) => ({ task_id, outcome }))).toEqual(scored.flat().map(({ id }) => ({ task_id: id, outcome: "excluded" })));
-  expect(observedInTier(episodes, tierIdOf(db, "standard"), null).board).toEqual([]);
-  expect(observedInTier(episodes, tierIdOf(db, "economy"), null).board).toEqual([]);
+  expect(episodes.map(({ task_id, interview }) => ({ task_id, interview }))).toEqual(children.map(({ id }) => ({ task_id: id, interview: true })));
+  expect(observedInTier(episodes, [], tierIdOf(db, "standard"), null)).toMatchObject({ board: [], workspace: [] });
 });
 
 const FINDINGS = { outcome: "the parser probe separates the targets" };
@@ -730,16 +706,6 @@ it("completeTask は Interview の root を出題の前も後も拒み、出題�
   ranChildren(db, root);
   expect(complete).toThrow(DomainError);
   expect(getTask(db, root.id)!.status).not.toBe("done");
-});
-
-it("shadow 行の両セルの実績は、本番と Interview の内訳を運ぶ(ADR 0181 決定5)", () => {
-  const cell = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high", advisor: null };
-  const episode = (interview: boolean, outcome: "accepted" | "rejected") => ({ cell, interview, outcome, tier_id: 1, workspace: "reef", cost_usd: null, duration_ms: null });
-  const episodes = [episode(false, "accepted"), episode(true, "accepted"), episode(true, "rejected")];
-  const opus = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high", advisor: undefined, tier_id: 1, source: { tier: "board" as const, provider: "only" as const } };
-  const { shadow } = selectorBranch({ promoted: false, candidates: [opus], ...observedInTier(episodes, 1, "reef") });
-  const record = { accepted: 2, rejected: 1, interview: { accepted: 1, rejected: 1 } };
-  expect(shadow.actual_record).toEqual({ board: record, workspace: record });
 });
 
 it("着地しない受験者は、workspace の削除の扉が数える「着地し直す祖先」にならない(ADR 0234 決定1)", () => {

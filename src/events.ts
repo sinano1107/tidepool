@@ -165,7 +165,7 @@ export type EventPayload =
   | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
-  // 採点された受験者、worker は root の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
+  // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
@@ -552,7 +552,8 @@ export type EventPayload =
   // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
-  | ({ kind: "execution_settings_changed"; question_id?: string } & ExecutionSettingsChange)
+  // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。
+  | ({ kind: "execution_settings_changed"; question_id?: string; tier_id?: TierId } & ExecutionSettingsChange)
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。決定 log には現れない。

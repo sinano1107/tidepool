@@ -1192,7 +1192,7 @@ function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewR
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
         "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
-        "workspace stage, each with the part of them that Interview children scored under interview, counted only once their Interview's root is done), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
+        "workspace stage, production sessions only — Interview examinees are not counted — and seed: null, or the kind (interview: an accepted score of a done Interview; human: a row added as observed) and event_id of the seed that stands in for the table's prior for that cell and tier), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
         "learner was promoted and chose what ran, and recommended is what the table would have chosen instead. Rows come oldest first. " +
         nextDescription("list_routing_shadow", "rows"),
@@ -1225,7 +1225,8 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     {
       description:
         "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
-        "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced). " +
+        "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced; a row added as observed carries seed with the human's rationale). " +
+        "Each cell carries seeds: the tiers where a seed stands in for the table's prior for its provider, model and effort, with the seed's kind (interview / human) and event_id. " +
         nextDescription("list_routing_cells", "cells", "The rows come in full"),
       inputSchema: { since_watermark, next },
     },

@@ -339,7 +339,7 @@ it("出題で立った受験者は対象で spawn され、PR も完了時レビ
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "task_completed")).toMatchObject({ payload: { result: FINDINGS.outcome } });
 });
 
-it("採点した対象の段に行を足すと、その行の本番の pickup の shadow 行が Interview の内訳を運び、list_routing_shadow に出る", async () => {
+it("採点した対象の段に行を足すと、その行の本番の pickup の shadow 行が Interview の種を運び、受験者の受理は実績に数えない —— list_routing_shadow に出る(ADR 0273 決定7)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
@@ -350,6 +350,7 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
+  const scored = (await api(t.baseUrl, "GET", `/api/tasks/${childId}/events`)).json.find((e: any) => e.kind === "interview_scored");
   const row = { setting: "row", row: { ...opus46, tier: "frontier", price_in: 1, price_out: 5 } };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", row)).status).toBe(200);
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, tier: "frontier" })).json;
@@ -360,7 +361,10 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
   await runNow(t, review.id);
   const { shadow } = JSON.parse((await callAsTask(t, review.id, "list_routing_shadow", { since_watermark: 0 })).content[0].text);
-  expect(shadow.find((r: any) => r.task_id === work.id)).toMatchObject({ actual: { model: "claude-opus-4-6" }, actual_record: { board: { interview: { accepted: 1 } } } });
+  expect(shadow.find((r: any) => r.task_id === work.id)).toMatchObject({
+    actual: { model: "claude-opus-4-6" },
+    actual_record: { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: { kind: "interview", event_id: scored.id } },
+  });
 });
 
 it("受験者の pickup は、学習器が昇格していない盤面でも shadow 行を残さない(選ぶ余地が無い)", async () => {

@@ -56,7 +56,7 @@ it("材料の節は両端の watermark と5つの部分の見出しを持ち、�
 
 const opus = executionSetting("anthropic", "opus", { source: { tier: "agent", provider: "rank" } });
 const sol = executionSetting("openai", "gpt-5.6-sol", { source: { tier: "agent", provider: "rank" } });
-const none = { board: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } } };
+const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 /** recordShadow へ渡す組(setup のみ): 実績は空。 */
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, candidates = 2) => ({
   recommended,
@@ -181,7 +181,7 @@ it("新しいセルは初観測が窓の中のものだけ、人間が変えた�
 
   const { parts, section } = routingMaterialOf(db, review);
 
-  expect(parts.cells).toEqual([{ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, first_observed_event_id: seen }]);
+  expect(parts.cells).toEqual([{ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, first_observed_event_id: seen, seeds: [] }]);
   expect(parts.rows.map((r) => r.event_id)).toEqual([edited]);
   const verb = listRoutingCells(db, review, {});
   for (const shown of [verb.cells[0], verb.rows![0]]) expect(section).toContain(JSON.stringify(shown));
