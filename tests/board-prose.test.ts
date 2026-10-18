@@ -3,7 +3,6 @@ import { boardDoctrine, boardProse } from "../src/board-prose.js";
 import { openDb } from "../src/db.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, isArtifactDiscarded, registerTask, taskVerbSwap } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
@@ -56,7 +55,7 @@ it("memory_repair の spawn の文面は assignee の Authority の直後に記�
   const at = new Date("2026-10-18T00:00:00.000Z");
   const parent = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   cancelTaskDirectly(db, parent, null, at, {}, "webui");
-  const task = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+  const task = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
   expect(isArtifactDiscarded(db, task.id)).toBe(true);
   const verbs = taskVerbSwap(db, task.id);
 

@@ -464,6 +464,13 @@ export interface InterviewTarget {
 }
 
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
+/** 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)。 */
+function assertMemoryRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
+  if (input.type === "memory_repair" && input.parent_id === undefined) {
+    throw new DomainError("a memory repair stands only as a child of the task whose memory write was objected");
+  }
+}
+
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
     throw new DomainError("an Interview's answer task takes no children other than a question");
@@ -1022,6 +1029,7 @@ export function registerTask(
   assertInterviewFields(db, input);
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
+  assertMemoryRepairHasParent(input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);

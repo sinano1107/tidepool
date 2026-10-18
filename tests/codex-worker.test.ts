@@ -22,7 +22,6 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
@@ -103,16 +102,10 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   const objected = task(db, "wrote a note");
   const author = { activity: "worker_verb" as const, name: "codex-agent" };
   const { event_id } = recordKnowledge(db, { scope: "work", path: "build", title: "t", text: "x.", source: { commit: "0a46a46" }, author }, "worker", at, objected.id);
-  const objection = raiseObjection(db, event_id, "undo it", at);
+  raiseObjection(db, event_id, "undo it", at);
   commitTriage(db, at);
-  // 束ねが memory_repair を立てるのは #2175 から —— それまでは盤面の名義で直接立てる
-  return registerTask(
-    db,
-    { type: "memory_repair", assignee: "codex-agent", title: "memory repair: wrote a note", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] },
-    at,
-    BOARD_WORKER_ID,
-    "board",
-  );
+  // 束ねが立てた memory_repair(assignee は異議された task の列 codex-agent を写す)
+  return listChildren(db, objected.id).find((child) => child.type === "memory_repair")!;
 }
 
 /** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
