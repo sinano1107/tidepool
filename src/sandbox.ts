@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+
 import { runsOnReviewFloor, type Task } from "./tasks.js";
+
 
 /** The CLI's own settings shape for a worker session (vendor shape, hence
  *  confined to this adapter-side module — ADR 0005). Key names and their

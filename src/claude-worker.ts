@@ -154,8 +154,8 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** review タスクの harness deny(ADR 0013 追記 / issue #59): read-only は
- *  review という task type の性質であって実行エージェントの性質ではない
+/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`。#2192 までは interview の root も —— `runsOnReviewFloor`)の harness deny(ADR 0013 追記 / issue #59 /
+ *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
@@ -238,8 +238,9 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  review 以外はすべて work と同じ面である — read-only は review という task
- *  type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  read-only 保証を運ぶ type(review / memory_repair)と #2192 までの interview の root(`runsOnReviewFloor`)以外はすべて
+ *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
+ *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
  *  で、CLI はそのフラグで面から `Skill` を外すので宣言からも外す(ADR 0185)。spawn の
  *  `--tools` と init 行の照合は、フラグを決めた同じ値でここを呼ぶ。 */
@@ -387,8 +388,9 @@ const MCP_SERVER_NAME = "tidepool";
  *     skill allowlist と同じ線)。
  *
  *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
- *  は review という task type の性質であって実行エージェントの性質ではない
- *  (ADR 0013)。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
+ *  は task type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  memory_repair も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
+ *  コマンドを要らないので開けない。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
  *  確認)ので、registry が `git commit` や `rm` を開くことはできない —— ただし
  *  天井が覆うのは `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこの
  *  コメント参照)。雑な allow に対する一般の防壁は機械ではなく registry の人間
@@ -400,7 +402,7 @@ export function spawnAllowedTools(
   // 1つ目は task type に依らない — 綴られるのは一度だけで、それが「MCP は両
   // プロファイルに乗る」という決定そのものである。
   const allowed = [`mcp__${MCP_SERVER_NAME}`];
-  if (!runsOnReviewFloor(taskType)) return allowed;
+  if (taskType !== "review" && taskType !== "interview") return allowed;
   return [...allowed, ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`)];
 }
 
@@ -1992,6 +1994,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
       // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
       const material = buildMetaReviewMaterial(this.options.db, task.id);
+      const verbs = taskVerbSwap(this.options.db, task.id);
       // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
       // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
       // transcript / stderr のファイル名をセッションごとに一意にする。イベント
@@ -2178,7 +2181,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             systemPrompt: definition.systemPrompt,
             profile,
             // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
-            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, taskVerbSwap(this.options.db, task.id)),
+            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
+            verbs,
             allowedDomains: workspace.allowed_domains,
             memorySection: memory.section ?? material?.section ?? null,
           }),
