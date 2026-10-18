@@ -736,9 +736,9 @@ type Repairer = { taskId: string; agent: string };
 type WriteTouch = { created: number[]; moved: number[]; dropped: number[] };
 
 /** 修理 task の束が異議した記憶の書き込み(task_registered の objection_event_ids → 異議の entry_id → memory_written)。
- *  修理 task(work)でなければ空 —— RCA の review 子も同じ欄を持つ。 */
+ *  memory_repair の修理子でなければ空(ADR 0272 決定3)—— work の修理子と RCA の review 子も同じ欄を持つ。 */
 function objectedWrites(db: Db, taskId: string): WriteTouch[] {
-  if (getTask(db, taskId)?.type !== "work") return [];
+  if (getTask(db, taskId)?.type !== "memory_repair") return [];
   return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
     const objection = getEvent(db, id)?.payload;
     const row = objection?.kind === "objection_raised" ? getEvent(db, objection.entry_id)?.payload : undefined;
@@ -752,12 +752,6 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
 
 /** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */
 const withMovedCopies = (db: Db, ids: number[]) => ids.flatMap((id) => sameBodyChain(db, requireEntry(db, id)).map((row) => row.id));
-
-/** 修理 verb が受けるエントリ(ADR 0252 決定4): 異議された書き込みが作った・移したエントリ(と、その後に移された複製)と落としたエントリ。
- *  空なら修理 verb を登録しない。 */
-export function repairableEntries(db: Db, taskId: string): Set<number> {
-  return new Set(objectedWrites(db, taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]));
-}
 
 /** 修理の書き込み1回: 書き込みの記録で包み、異議された書き込みが無ければ拒む。 */
 function repairWrite<T extends object>(db: Db, repairer: Repairer, at: Date, write: (writes: WriteTouch[]) => T): T & { event_id: number } {
@@ -774,9 +768,10 @@ function requireReach(db: Db, entryId: number, reach: number[], refusal: string)
   return requireEntry(db, entryId);
 }
 
-/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて。 */
+/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて(ADR 0252 決定4): 作った・移したエントリ(と、その後に
+ *  移された複製)と落としたエントリ。 */
 const requireTouched = (db: Db, repairer: Repairer, entryId: number) =>
-  requireReach(db, entryId, [...repairableEntries(db, repairer.taskId)], "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
+  requireReach(db, entryId, objectedWrites(db, repairer.taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]), "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
 
 const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", name: repairer.agent });
 

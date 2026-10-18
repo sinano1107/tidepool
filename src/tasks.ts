@@ -55,6 +55,10 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
 export type TaskType = "work" | "question" | "review" | "memory_repair";
 
+/** read-only 保証を運ぶ type(CONTEXT.md の type): review と memory_repair(ADR 0272 決定3)。repo への書き込みの床
+ *  (harness deny・spawn の面・sandbox・permission mode・Codex の profile)と lineage の透明さが同じここを引く。 */
+export const carriesReadOnly = (type: TaskType): boolean => type === "review" || type === "memory_repair";
+
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
 declare const storedRow: unique symbol;
@@ -466,7 +470,15 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
 }
 
 export interface TaskVerbSwap {
-  withheld: readonly ("decompose" | "redecompose" | "complete_task" | "record_knowledge" | "define_memory_branch")[];
+  withheld: readonly (
+    | "decompose"
+    | "redecompose"
+    | "continue_decomposition"
+    | "declare_premise_breach"
+    | "complete_task"
+    | "record_knowledge"
+    | "define_memory_branch"
+  )[];
   added: readonly ("pose_probe" | "complete_interview" | "report_broken_probe")[];
 }
 
@@ -474,9 +486,12 @@ export interface TaskVerbSwap {
  *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、受験者は記憶を書く verb も伏せ(ADR 0268 決定2)、
  *  root は complete_task も伏せて、出題前は出題の verb を、
  *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。
- *  成果が捨てられた task(そこで走るのは今は RCA だけ)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。 */
+ *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
+ *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
-  if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
+  const task = getTask(db, taskId);
+  if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
+  if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   if (interviewTargets(db, taskId) !== null) {
     const withheld = ["decompose", "redecompose", "complete_task"] as const;
     if (interviewProbe(db, taskId) === null) return { withheld, added: ["pose_probe"] };
@@ -3157,6 +3172,11 @@ export function isArtifactDiscarded(db: Db, taskId: string): boolean {
  *  文面が同じこれを運ぶ —— 分解の verb を伏せるだけでは reviewer の guidance「findings become repair tasks」が宙に浮く。 */
 export const ARTIFACT_DISCARDED_NOTICE =
   "The artifact under review was discarded by a cancel in this task's lineage: no repair task can stand here, so write findings only.";
+
+/** memory_repair に盤面が注入する1行(ADR 0272 決定3): 伏せた verb の理由。`get_current_task` の envelope と spawn の文面が同じこれを
+ *  運ぶ。reviewer の authority guidance は使わない。 */
+export const MEMORY_REPAIR_NOTICE =
+  "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.";
 
 /** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
 function discardingAncestor(db: Db, taskId: string): Task | undefined {

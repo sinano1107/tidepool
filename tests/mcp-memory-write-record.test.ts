@@ -1,6 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { recordKnowledge } from "../src/memory.js";
 import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
+import { cancelTaskDirectly, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -11,6 +13,7 @@ import {
   defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
+  HUMAN_WEBUI,
   loggedEntry,
   makeWorkspace,
   managementMcpClient,
@@ -85,7 +88,7 @@ it("meta-review の define_memory / fold_memory / move_memory / move_memory_bran
   }
 });
 
-it("記憶の修理 verb は書き込みの行への異議を束に持つ修理 task にだけ登録され、その tool 結果の event_id は修理 task の書き込みの記録", async () => {
+it("記憶の修理 verb は memory_repair の修理 task にだけ登録され、その tool 結果の event_id は修理 task の書き込みの記録", async () => {
   t = await bootTidepool();
   const objected = await registerWork(t, "index the tide charts", "charts");
   await t.clock.advance(HOUR);
@@ -95,14 +98,23 @@ it("記憶の修理 verb は書き込みの行への異議を束に持つ修理 
   const decision = await loggedEntry(t, objected.id, "squashed the branch");
   await completeViaMcp(t, objected.id);
   await completeIntegrationReviews(t, objected.id);
+  /** 異議を打って triage を閉じ、束ねが立てた work の修理子と異議の id を返す。 */
   const repairOf = async (entryId: number) => {
     await api(t.baseUrl, "POST", "/api/triage/start");
-    await object(t, entryId, "undo it");
+    const objection = await object(t, entryId, "undo it");
     await api(t.baseUrl, "POST", "/api/triage/close");
-    return (await children(t, objected.id)).filter((c: any) => c.type === "work").at(-1);
+    return { objection, work: (await children(t, objected.id)).filter((c: any) => c.type === "work").at(-1) };
   };
-  const writeRepair = await repairOf(wrote.event_id);
-  const decisionRepair = await repairOf(decision.id);
+  const write = await repairOf(wrote.event_id);
+  // 束ねが memory_repair を立てるのは #2175 から —— それまでは同じ異議を材料に盤面の名義で直接立てる
+  const writeRepair = registerTask(
+    t.db,
+    { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
+    t.clock.now(),
+    BOARD_WORKER_ID,
+    "board",
+  );
+  const decisionRepair = (await repairOf(decision.id)).work;
   const names = async (taskId: string) => {
     const client = await mcpClient(t.mcpBaseUrl, taskId);
     try {
@@ -113,11 +125,39 @@ it("記憶の修理 verb は書き込みの行への異議を束に持つ修理 
   };
 
   expect(await names(writeRepair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
-  for (const taskId of [decisionRepair.id, objected.id]) {
+  for (const taskId of [write.work.id, decisionRepair.id, objected.id]) {
     expect((await names(taskId)).filter((name) => (MEMORY_REPAIR_VERBS as readonly string[]).includes(name))).toEqual([]);
   }
 
   await runNow(t, writeRepair.id);
   const dropped = body(await callAsTask(t, writeRepair.id, "invalidate_memory", { entry_id: wrote.entry_id, reason: "capability" }));
   expect(await writeRecords(writeRepair.id)).toEqual([dropped.event_id]);
+});
+
+it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
+  t = await bootTidepool();
+  const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  cancelTaskDirectly(t.db, objected, null, t.clock.now(), {}, "webui");
+  const repair = registerTask(
+    t.db,
+    { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id },
+    t.clock.now(),
+    BOARD_WORKER_ID,
+    "board",
+  );
+  await runNow(t, repair.id);
+  const client = await mcpClient(t.mcpBaseUrl, repair.id);
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
+    const withheld = ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"];
+    expect(names.filter((name) => withheld.includes(name))).toEqual([]);
+    const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
+    expect(envelope.memory_repair).toBe(
+      "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.",
+    );
+    expect(envelope.artifact_discarded).toBeUndefined();
+  } finally {
+    await client.close();
+  }
 });

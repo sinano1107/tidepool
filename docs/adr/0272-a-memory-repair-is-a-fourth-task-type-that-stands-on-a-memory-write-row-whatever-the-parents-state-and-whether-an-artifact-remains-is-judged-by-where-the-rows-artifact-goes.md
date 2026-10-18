@@ -16,7 +16,7 @@ root も書く。その行への異議は帰責と RCA だけ立ち、記憶の�
    review type に乗せなかったのは、要る性質(repo に書けない・lineage に透明・cascade で残る・root と cancelled の床の下に通る)は
    一致しても目的が違い、今日の時点で4つ食い違うから —— RCA の見分け(review 型 + 異議群を覆う子)に誤認される、未設定 assignee の
    解決先(review は Auditor、修理子は既定 agent)、組み込み agent は review だけ走らせる(ADR 0228)、review は `review_tier` で走る。
-   CONTEXT.md が type を権限モデルと定義する以上、別の権限面は別の type である。共有できる性質は関数の共有(composition)で写さない。
+   CONTEXT.md が type を権限モデルと定義する以上、別の権限面は別の type である。共有できる性質は型を共有せず、関数の共有(composition)で写す。
 3. **権限面。** 道具は review と同じ deny(Edit / Write / NotebookEdit と Bash の書き込み系)。verb は work の面から分解系
    (`decompose` / `redecompose` / `continue_decomposition` / `declare_premise_breach`)と新規書き込み(`record_knowledge` /
    `define_memory_branch`)を外し、記憶の修理 verb 5本(ADR 0252 決定4)を **type で**持つ(今の「修理できるエントリの有無」ではなく)。

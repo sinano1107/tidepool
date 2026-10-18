@@ -20,6 +20,7 @@ import {
   getTask,
   HUMAN_ROSTER_AGENT,
   isArtifactDiscarded,
+  MEMORY_REPAIR_NOTICE,
   reviewedTaskExecutor,
   type Task,
   type TaskVerbSwap,
@@ -75,10 +76,13 @@ denial, make the call yourself from the main thread.`;
 // (src/sandbox.ts) — its "main-thread only" wording, this paragraph, and the
 // canary's BOARD_HOOK_WORDING move together.
 
-/** 前提の破綻と自タスク外の発見の2文(ADR 0121)。 */
-const PREMISE_BREACH_PROTOCOL =
+/** 前提の破綻の宣言の1文 —— その verb を伏せた task(memory_repair、ADR 0272 決定3)の文面からは落とす。 */
+const PREMISE_BREACH_SENTENCE =
   "When the premise of the decomposition decision your task rests on turns out to be false, " +
-  "declare a premise breach rather than working around it or escalating it. " +
+  "declare a premise breach rather than working around it or escalating it. ";
+
+/** 自タスク外の発見の1文(ADR 0121)。前提の破綻の1文と並べて置く。 */
+const OUTSIDE_SCOPE_SENTENCE =
   "A finding outside your task's scope is not your task: record the decision not to act on it " +
   "with `log_decision`, and never decompose it into a child.";
 
@@ -94,7 +98,7 @@ const PREMISE_BREACH_PROTOCOL =
 // canonical default agent is therefore an empty-body definition (tako) — it
 // carries no specialty prose, and this section supplies the protocol every
 // worker shares.
-const WORKER_PROTOCOL = `## Rules of the road
+const workerProtocolText = (premiseBreach: boolean) => `## Rules of the road
 
 Do the work in the current working directory. It is the task's workspace.
 
@@ -107,15 +111,16 @@ Commit your work before completing: \`complete_task\` refuses a dirty tree, and 
 Escalating is never wrong; guessing outside your authority is. When a decision
 is outside your authority or you hit a dead end, escalate rather than guess.
 
-${PREMISE_BREACH_PROTOCOL}
+${premiseBreach ? PREMISE_BREACH_SENTENCE : ""}${OUTSIDE_SCOPE_SENTENCE}
 
 This may be a resumed task session: if the task history shows prior-session traces, inspect the task branch with \`git log\` before starting work.`;
 
-function workerProtocol(allowedDomains: string[] | undefined): string {
+function workerProtocol(allowedDomains: string[] | undefined, verbs: TaskVerbSwap): string {
+  const protocol = workerProtocolText(!verbs.withheld.includes("declare_premise_breach"));
   const network = allowedDomains?.length
     ? `Network egress is deny-by-default. This session may reach only: ${allowedDomains.join(", ")}. Do not retry downloads from any other domain.`
     : "Network egress is deny-by-default. This session cannot fetch from any external domain. Do not retry external downloads.";
-  return `${WORKER_PROTOCOL}\n\n${network}`;
+  return `${protocol}\n\n${network}`;
 }
 
 /** One roster line's text (issue #43 / ADR 0014): "name — description",
@@ -371,13 +376,16 @@ export function boardProse(input: {
   profile: AuthorityProfile;
   doctrine: string;
   allowedDomains: string[] | undefined;
+  /** task ごとの verb の差し替え(adapter が doctrine を組んだのと同じ値)。 */
+  verbs: TaskVerbSwap;
   memorySection: string | null;
 }): string {
   const { db, task } = input;
   const review = task.type === "review";
   const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
   const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
-  // ADR 0271 決定2: guidance の文は変えず、その直後に盤面が1行足す
-  const discarded = isArtifactDiscarded(db, task.id) ? `\n\n${ARTIFACT_DISCARDED_NOTICE}` : "";
-  return `${input.systemPrompt}${authoritySection(guidance)}${discarded}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  // ADR 0272 決定3 / ADR 0271 決定2: guidance の文は変えず、その直後に盤面が1行足す。memory_repair は祖先の cancel の下でも修理の1行
+  const notice = task.type === "memory_repair" ? MEMORY_REPAIR_NOTICE : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+  const injected = notice ? `\n\n${notice}` : "";
+  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

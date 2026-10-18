@@ -25,6 +25,7 @@ import {
 import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js";
 import { isSettled } from "./task-status.js";
 import {
+  carriesReadOnly,
   getTask,
   issueRefPlaceholder,
   type Task,
@@ -290,7 +291,7 @@ export function resolveTaskBranchLineage(
   task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   // memory_repair は review と同じく lineage に透明(ADR 0272 決定6)
-  if (task.type === "review" || task.type === "memory_repair") {
+  if (carriesReadOnly(task.type)) {
     return {
       branch:
         task.parent_id && taskBranchExists(workspace, task.parent_id)

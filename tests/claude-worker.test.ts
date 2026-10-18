@@ -980,6 +980,12 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 
+  it("memory_repair タスクの spawn も --permission-mode manual で走る —— read-only 保証を運ぶ type(ADR 0272 決定3)", async () => {
+    const { start, calls } = await makeWorker();
+    start("task-memory-repair-manual", null, "deckhand", "memory_repair");
+    expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
+  });
+
   // ADR 0038(issue #151 / #162): 床とは残余の既定である。`auto` の残余は分類器の
   // 自己承認(既定「はい」)で、ツール層(Read / Write / Edit …)にはサンドボックス
   // が届かない ——「ホスト上の読める物すべてを読め、書ける場所すべてに書ける」の

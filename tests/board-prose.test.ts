@@ -1,5 +1,10 @@
 import { expect, it } from "vitest";
-import { boardDoctrine } from "../src/board-prose.js";
+import { boardDoctrine, boardProse } from "../src/board-prose.js";
+import { openDb } from "../src/db.js";
+import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, isArtifactDiscarded, registerTask, taskVerbSwap } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
 
@@ -44,4 +49,32 @@ it("出題前の Interview の root の doctrine は出題の verb を指し、d
 
 it("出題済みの Interview の root の doctrine は、採点完了の verb を足しても分けない task の doctrine のまま(ADR 0253 決定4 / ADR 0247 決定3)", () => {
   for (const vocabulary of [CLAUDE, CODEX]) expect(boardDoctrine(vocabulary, POSED)).toBe(boardDoctrine(vocabulary, NOT_SPLIT_SWAP));
+});
+
+it("memory_repair の spawn の文面は assignee の Authority の直後に記憶の修理の1行を置き、祖先の cancel の下でも成果が捨てられた旨を置かず、reviewer の guidance も前提の破綻の宣言も言わない(ADR 0272 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const parent = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, parent, null, at, {}, "webui");
+  const task = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+  expect(isArtifactDiscarded(db, task.id)).toBe(true);
+  const verbs = taskVerbSwap(db, task.id);
+
+  const prose = boardProse({
+    db,
+    registryDir: "",
+    registry: { commit: "c", agents: {}, authority: {}, workspaces: {} },
+    task,
+    systemPrompt: "",
+    profile: { name: "default", guidance: "Prefer reversible actions." },
+    doctrine: boardDoctrine(CLAUDE, verbs),
+    verbs,
+    allowedDomains: undefined,
+    memorySection: null,
+  });
+
+  expect(prose).toContain(`## Authority\n\nPrefer reversible actions.\n\nThis task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.\n\n`);
+  expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
+  expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
+  expect(prose).not.toContain("premise breach");
 });
