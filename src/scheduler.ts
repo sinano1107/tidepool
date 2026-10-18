@@ -715,7 +715,7 @@ export function startScheduler(deps: {
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work 側の task(`isWorkSide`)は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 →
-       *  引き直しを通るので、昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。判定者(review)は分岐しない
+       *  引き直しを通るので、昇格しても Throttle / Spend-down / Provider 認証の除外は同じく効く。判定者(review / interview)は分岐しない
        *  (ADR 0111 決定3 / ADR 0272 決定4 の追記) */
       const pick = (task: Task): ExecutionSetting | null => {
         const pool = selectable(candidates, entryExcluded);
@@ -829,7 +829,7 @@ export function startScheduler(deps: {
       const content = await issuePickupGate(head);
       if (!content) return;
       // 学習器の shadow 行(ADR 0110 決定4 と Status 追記): work 側の task の pickup ごとに、走る設定の反対側(昇格前は学習器の
-      // 推薦、昇格後は表の先頭)を並べて1行残す。判定者(review)は学習器を参照しない(ADR 0111 決定3 / ADR 0272 決定4 の追記)。
+      // 推薦、昇格後は表の先頭)を並べて1行残す。判定者(review / interview)は学習器を参照しない(ADR 0111 決定3 / ADR 0272 決定4 の追記)。
       // 昇格前の記録は選択に介入しない —— 学習器が倒れても pickup は進む
       // 昇格中に学習器が倒れた pickup は shadow の組が無いので残さない
       // 行は pickup が成立してから書く —— await の窓で取りやめた pickup(issue #972)に shadow を残さない。

@@ -287,7 +287,7 @@ export function selectorBranch(input: Parameters<typeof recommend>[0] & { promot
   };
 }
 
-/** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
+/** shadow 行の書き手(盤面境界、spec #541): work 側の task(`isWorkSide`)の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
 export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date): number {
   const { lastInsertRowid } = db.prepare(
     `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)
