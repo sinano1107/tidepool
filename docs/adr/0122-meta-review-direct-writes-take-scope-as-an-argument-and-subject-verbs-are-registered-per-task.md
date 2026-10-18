@@ -1,5 +1,7 @@
 # meta-review の直接適用は scope を引数で持ち、専用 verb は盤面が task を見て登録し、記憶の書き込みは書き手の task の記録に属す
 
+**Status 追記: 決定2 の task ごとの verb の差し替えのうち Interview の root の分は、ADR 0273 決定2 で type `interview` の verb 一覧になった** —— 受験者の差し替えはそのまま(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-09-15 の grilling(issue #619 の実装着手時に見つかった前提の穴)で決定。周期の meta-review task は workspace null で
 登録され(ADR 0120 決定2)、既存の `record_knowledge` / `define_memory_branch` は scope を task の workspace → 盤面の既定
 workspace の順で解決する(issue #623)。#619 は「meta-review から呼ばれたら author を `meta_review` にする」とだけ書いていて、

@@ -1,5 +1,7 @@
 # 採点の段階で probe が壊れていたと気づいた Interview の root は報告し、人間の答え1つで終えるか測り直す
 
+**Status 追記: 決定4 の「学習器が数える採点」は ADR 0273 決定7 の「種にする採点」と読む** —— root が done になった Interview のものだけ、という条件はそのまま(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-10-14 の triage / grilling(issue #1902)で決定。分解済みの Interview の root が採点の段階(pin の子が全部決着した
 あとの統合復帰)で probe が壊れていたと気づいても、手は「全部 rejected で採点して完了」と escalate しかなかった。前者は
 壊れた probe の答案を対象の実績として学習器に入れ、後者は答えても何も cancel しないので、人間は答えたうえで root を直接

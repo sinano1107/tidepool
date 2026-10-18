@@ -90,3 +90,7 @@ question で止まり、前提の破綻の retry(ADR 0248 決定2)で写った�
 - **新しい event の種類を足す / question を cancelled にする** —— 回答で受理された解除との区別は `observed_event_id` が持ち、
   それ以上を読む読み手は居ない。question は subtree の外にあって Interview をまたぐので、どの cancel に巻き込まれたかの線も
   引けない。
+
+## 追記(2026-10-18 の grilling、issue #2184 / ADR 0273)
+
+決定2 の対象の綴り (provider, model, effort, tier) は (provider, model, effort) の3欄になり、段は Interview 1件の属性(root の `tier`)になった(ADR 0273 決定6)。「対象が表にある」の判定は3欄 + Interview の段で変わらない。決定5 の提案は対象の段でなく Interview の段を名指し、purpose の代わりに仮説・測る仕事・根拠の task を運ぶ(ADR 0273 決定9)。決定1・3・4・6 はそのまま。

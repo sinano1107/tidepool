@@ -1,5 +1,7 @@
 # 組み込み agent は review 専用であり、work は組み込みへ落ちない
 
+**Status 追記: 「組み込みは review 専用」は ADR 0273 決定2 で「review と interview」に広がった** —— どちらも work を実行する授権を持たず、interview が書けるのは面接室だけ(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-10-10 の grilling(issue #1623)で決定。組み込みの `fugu` を assignee にした work タスクは、ADR 0013 の reviewer 定数を
 自分の profile として走っていた。merge ダイヤルを持たないので PR は盤面に問われず `external` と同じ面に着地し(#1623)、
 Authority 節には「read-only。直すな」が入る(#1736)。ADR 0117 決定1 は組み込みの profile を reviewer 定数のままにしたが、

@@ -35,3 +35,7 @@ CI を読んで merge しうる。ダイヤルも新しい既定 agent の profi
 
 決定3 の「review の空の assignee は Auditor ポインタへの参照」に例外が1つ —— Interview の root の空の assignee は Interviewer ポインタ
 `TIDEPOOL_INTERVIEWER`(既定 `suzumedai`)への参照(ADR 0269 決定2)。列を書かない線は同じ。
+
+## 追記2(2026-10-18 の grilling、issue #2184 / ADR 0273)
+
+追記1 の「Interview の root の空の assignee は Interviewer」は、root が type `interview` になったので type で引ける。受験者の `workspace` 列は root の workspace(実環境)の名前で、層と許可ドメインの出所であって走る場所(面接室)ではない(ADR 0273 決定8)—— 決定2 の「列は走った先」の唯一の例外。

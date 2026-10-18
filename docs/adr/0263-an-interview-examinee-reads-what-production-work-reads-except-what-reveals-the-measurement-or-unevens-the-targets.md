@@ -84,3 +84,7 @@ root の workspace が解決できない(registry drift —— ADR 0009 が設�
 pickup は head を引けず workspace の quarantine に落ち続け、直す道が Interview の retry しか無かった。出題は head を記録できないときに
 **拒む**: workspace を解決できなければ verb は domain error で止まり(session は続く)、root は escalate で人間に渡す。退けた形:
 head の無い出題を通し retry で直す —— 受験者が立ってから pickup のたびに同じ quarantine に戻るのは、root が出題の時点で知れた不備である。
+
+## 追記6(2026-10-18 の grilling、issue #2184 / ADR 0273)
+
+決定2 の許容の前提「checkout が盤面自身を説明しない」は、受験者が面接室(root が実環境を読んで匿名化して組んだ環境)で解くことと Interviewer の規律に置き換わった(#2011 の決着)。決定6 と追記4 の head は、出題が面接室の写しを commit した sha になり、merge-base の読み方は要らない(#2182 も消える)。決定1・5・7・9・10 と追記1〜3・5 はそのまま。

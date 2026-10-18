@@ -1,5 +1,7 @@
 # Interview の木で走る work は pin した対象だけで、その下は分けない
 
+**Status 追記: 決定3 の「root は作り直さない」は、ADR 0273 決定3 で「受験者が1人も立っていないあいだは出題をやり直せる」に狭まった** —— 監査の却下を受けた root は出題し直す。受験者が立った後は1回のまま(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-10-13 の grilling(issue #1883)で決定。#550 の review で、Interview の対象を pin した子が decompose できることが
 見つかった。孫は pin を持たないので表の行で走り、成果は pin の子のブランチへ merge back されて、採点される handoff に
 別の model の仕事が混ざる。pin の子が done のあとブランチが保護ブランチに収束していれば、孫は着地の根になって PR を

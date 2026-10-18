@@ -1,5 +1,7 @@
 # routing の提案は前提を pin して人間の編集に道を譲り、学習器の降格は人間が直接、昇格は question だけで行う
 
+**Status 追記: 決定6 / 追記2 の approve が登録するのは type `interview` の root で、修正値の purpose は仮説と測る仕事の2欄になった(ADR 0273 決定2・9)**(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 **Status 追記: 決定7 の `review_tier = frontier` は ADR 0200 決定4 で置き換え** —— 周期 meta-review は振り返り Board call と同じ盤面設定が指す段で登録する。routing の提案には「段の説明の書き換え」と「段を足して行を移す」が加わる(ADR 0200 決定7・8)。
 
 **Status 追記: 決定1 の agent の tier の提案の pin には、下げ先が pin の段のいまの1段下にいること(ADR 0200 決定4)が加わる** —— 段の挿入・並べ替え・削除で崩れれば observed で決着する(issue #1438)。

@@ -1,5 +1,7 @@
 # 提案から立つ Interview の root の workspace は、meta-review が根拠の episode から名指し、人間は approve で差し替えられる
 
+**Status 追記: 決定1〜4 はそのまま。冒頭の「probe はその checkout の上で解かれ」だけが ADR 0273 決定1 で面接室に移った** —— root の workspace は root が読む実環境で、受験者はそこで解かない。結果は観測でなく種としてその workspace の層に入る(ADR 0273 決定7)(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-10-14 の triage / grilling(issue #921)で決定。meta-review の提案 question(種別 Interview)を approve すると盤面が人間名義の
 root review を登録する(ADR 0150 決定6)が、その root の workspace を誰が決めるかはどの ADR にも無かった。workspace は飾りでは
 ない —— pin の子は root の workspace を継ぎ(ADR 0253 決定1)、probe はその checkout の上で解かれ、結果は学習器でその workspace

@@ -1,5 +1,7 @@
 # 異議が修理子を生むのは直す成果が残る task だけで、cancel は review の付帯子を倒さず、受験者は採点以外を盤面に残さない
 
+**Status 追記: 決定6 の「流し読みの root の行に Interview の印を出す」は ADR 0273 決定10 で、Interview ごとのグループの見出しに昇格した** —— root と監査 review の行は workspace のグループでなく Interview のグループに出る。決定1(受験者の行は出さない)はそのまま(2026-10-18 の grilling、issue #2184 / ADR 0273)。
+
 2026-10-16 の grilling(issue #2109)で決定。`src/triage.ts` と `src/retrospective.ts` は Interview を知らず、受験者と root への異議から
 本番どおり修理子と RCA が生えていた —— 修理子は pin を持たず表の行で走り、着地しないはずの Interview から PR を開きうる(#1886 / #2108)、
 受験者の下の RCA が書く Knowledge は他の受験者に届く(#2085)、受験者の帰責は root の状態を見ずに学習器へ入る(#1913)。洗い直しで、
