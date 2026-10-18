@@ -10,12 +10,16 @@
  *          --task-temp dir [skill...] [--allowed-domain domain]
  *
  *  `--task-temp` は必須(ADR 0257 決定2)。吐いた settings で走らせる `claude -p` には、同じ dir を
- *  `TMPDIR` と `CLAUDE_CODE_TMPDIR` に載せて渡す —— 載せないと許可ドメインに届かない。 */
+ *  `TMPDIR` と `CLAUDE_CODE_TMPDIR` に載せて渡す —— 載せないと許可ドメインに届かない。
+ *
+ *  `--codex` を付けると、Codex の worker が spawn で渡す permission の `-c` 値(`permissionConfig()`)を1行1つで
+ *  吐く(issue #2197 の面接室 canary)。executable は盤面と同じく PATH 上の `codex` の実体。skill は取らない。 */
 import { existsSync } from "node:fs";
+import { permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js";
 import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE =
-  "usage: emit-sandbox-settings.ts <work|review> <workspacePath> --task-temp dir [skill...] [--allowed-domain domain]";
+  "usage: emit-sandbox-settings.ts <work|review> <workspacePath> --task-temp dir [skill...] [--allowed-domain domain] [--codex]";
 const [taskType, workspacePath, ...rest] = process.argv.slice(2);
 
 if ((taskType !== "work" && taskType !== "review") || !workspacePath) {
@@ -26,6 +30,7 @@ if ((taskType !== "work" && taskType !== "review") || !workspacePath) {
 const permittedSkills: string[] = [];
 const allowedDomains: string[] = [];
 let taskTemp: string | undefined;
+let codex = false;
 for (let i = 0; i < rest.length; i += 1) {
   if (rest[i] === "--task-temp") {
     // a missing value falls through to the required check below
@@ -37,6 +42,8 @@ for (let i = 0; i < rest.length; i += 1) {
       process.exit(2);
     }
     allowedDomains.push(domain);
+  } else if (rest[i] === "--codex") {
+    codex = true;
   } else {
     permittedSkills.push(rest[i]!);
   }
@@ -45,6 +52,12 @@ for (let i = 0; i < rest.length; i += 1) {
 if (!taskTemp) {
   console.error(USAGE);
   process.exit(2);
+}
+
+if (codex) {
+  const { executable } = resolveCodexExecutable();
+  console.log(permissionConfig(taskType, workspacePath, taskTemp, executable, allowedDomains).join("\n"));
+  process.exit(0);
 }
 
 const input: WorkerSessionSettingsInput = {
