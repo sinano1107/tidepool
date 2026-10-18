@@ -490,9 +490,7 @@ export interface TaskVerbSwap {
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
-  if (task?.type === "memory_repair") {
-    return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
-  }
+  if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   if (interviewTargets(db, taskId) !== null) {
     const withheld = ["decompose", "redecompose", "complete_task"] as const;

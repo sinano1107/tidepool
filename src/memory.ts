@@ -753,11 +753,6 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
 /** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */
 const withMovedCopies = (db: Db, ids: number[]) => ids.flatMap((id) => sameBodyChain(db, requireEntry(db, id)).map((row) => row.id));
 
-/** 修理 verb が受けるエントリ(ADR 0252 決定4): 異議された書き込みが作った・移したエントリ(と、その後に移された複製)と落としたエントリ。 */
-function repairableEntries(db: Db, taskId: string): Set<number> {
-  return new Set(objectedWrites(db, taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]));
-}
-
 /** 修理の書き込み1回: 書き込みの記録で包み、異議された書き込みが無ければ拒む。 */
 function repairWrite<T extends object>(db: Db, repairer: Repairer, at: Date, write: (writes: WriteTouch[]) => T): T & { event_id: number } {
   return withWriteRecord(db, repairer, at, () => {
@@ -773,9 +768,10 @@ function requireReach(db: Db, entryId: number, reach: number[], refusal: string)
   return requireEntry(db, entryId);
 }
 
-/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて。 */
+/** 移動と置き換えが受けるのは、異議された書き込みが触ったエントリすべて(ADR 0252 決定4): 作った・移したエントリ(と、その後に
+ *  移された複製)と落としたエントリ。 */
 const requireTouched = (db: Db, repairer: Repairer, entryId: number) =>
-  requireReach(db, entryId, [...repairableEntries(db, repairer.taskId)], "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
+  requireReach(db, entryId, objectedWrites(db, repairer.taskId).flatMap((w) => [...withMovedCopies(db, w.created), ...withMovedCopies(db, w.moved), ...w.dropped]), "was not touched by the objected memory write: a repair changes only the entries that write created, invalidated or moved");
 
 const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", name: repairer.agent });
 
