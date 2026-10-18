@@ -407,7 +407,8 @@ function interviewProposal(
     kind: "routing",
     op: "interview",
     hypothesis,
-    ...(measured_work !== undefined && { measured_work }),
+    // 空の測る仕事は「無し」—— 写しに空文字を残さない(normalizeText 済み)
+    ...(measured_work && { measured_work }),
     evidence,
     tier: tierIdOf(db, tier),
     targets,

@@ -204,6 +204,20 @@ it("root の get_current_task は仮説・測る仕事・根拠の id・測る�
   });
 });
 
+it("管理 MCP の register_task に空の測る仕事を渡すと、root の get_current_task の interview に測る仕事が載らない(ADR 0273 決定9)", async () => {
+  t = await boot();
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    expect((await client.callTool({ name: "register_task", arguments: { ...INTERVIEW, measured_work: "", interview_targets: [opus46] } })).isError).toBeFalsy();
+  } finally {
+    await client.close();
+  }
+  const [root] = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  await runNow(t, root.id);
+  const { interview } = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
+  expect(interview).not.toHaveProperty("measured_work");
+});
+
 it("根拠の history の読み口は根拠の task の判断・完了の handoff・配分評価を history の行で返し、根拠でない task は拒む(ADR 0273 決定9)", async () => {
   t = await boot();
   const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;

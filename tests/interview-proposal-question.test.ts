@@ -255,6 +255,19 @@ it("受験者の session は根拠にならず、verb は本番の session だ�
   });
 });
 
+it("空の測る仕事の提案は proposal の写しに測る仕事を持たず、修正値なしの approve で登録される root にも測る仕事が無い(ADR 0273 決定9)", async () => {
+  const reviewId = await boardWithRoutingReview();
+  const { eventId } = session("reef");
+  const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId], { measured_work: "" }));
+  expect((await task(question_id)).question_proposal).not.toHaveProperty("measured_work");
+
+  expect((await answer(question_id, { answers: ["approve"] })).status).toBe(200);
+  const [root] = await interviews();
+  await runNow(t, root.id);
+  const current = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
+  expect(current.interview).not.toHaveProperty("measured_work");
+});
+
 it("approve で登録される root の題は修正後の対象で組まれ、空の測る仕事の修正値は測る仕事を外す", async () => {
   const reviewId = await boardWithRoutingReview();
   const { eventId } = session("reef");

@@ -352,8 +352,7 @@ function registerProposedInterview(deps: SubmitAnswerDeps, proposal: InterviewPr
     type: "interview",
     title: interviewTitle(targets, proposal.tier),
     hypothesis,
-    // 空の修正値は「測る仕事を外す」—— 空文字で残さない
-    ...(measured_work !== undefined && !whyBlank(measured_work) && { measured_work }),
+    measured_work,
     // 根拠の event は episode の spawn(提案 verb が確かめた)で、その task が root の根拠の task
     evidence_task_ids: [...new Set(proposal.evidence.map((id) => getEvent(deps.db, id)!.task_id!))],
     tier: proposal.tier,
