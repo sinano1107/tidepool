@@ -381,6 +381,31 @@ The OS string is the sandbox e2e smoke's: `No such file or directory` under bwra
 
 `refused_row_verdict()`, `read_seen()`, `harness_refused_in()`, `control_verdict()`, `run_status()` and `os_refused_in()` are where "not measured" could quietly become "measured and fine"; `scripts/read-floor-canary.test.sh` pins every branch (`bash scripts/read-floor-canary.test.sh`, no Linux host and no session needed). The probe also prints, unjudged, whether `npm` works for a worker whose home is masked (`READ-FLOOR-DIAG npm-view`) and where its `~/.npm` stands.
 
+### Interview-room canary (ADR 0273 — re-run after every deploy and every `claude` / `codex` CLI update)
+
+```bash
+bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh local   # a Linux host (the Lima VM)
+bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh pi      # the Pi
+```
+
+Measures that an Interview root's floor holds for both providers (issue #2197 / ADR 0273 decision 2): cwd is a fresh git repository (the interview room), the work floor is emitted from the checkout's code, and the real environment is opened for reading on top. Claude runs one session with read-floor's spawn shape and the real environment added to `sandbox.filesystem.allowRead`. Codex runs `codex sandbox -P tidepool-work -C <room>` with the work `permissionConfig()` (`emit-sandbox-settings.ts --codex`) and the real environment added to the filesystem map as `read`, with no model turn. That one added entry per provider is the only hand-made part; #2192's `interview` type replaces it.
+
+`scripts/interview-room-canary-probe.sh` runs the same rows for each provider:
+
+| row | what | pass |
+|---|---|---|
+| real-env-log | `git log -1` in the real environment | its HEAD hash came back |
+| real-env-cat | `cat` of a token file in it | the token came back |
+| real-env-write | a write into it | refused **with the OS string** (`Read-only file system`), and no file appeared |
+| room-git | write, `git add` and `git commit` in the room | the commit is the room's HEAD on disk |
+| home | a token file under `~`, outside what is opened | refused **with the OS string** (`No such file or directory`, checked from outside first) |
+| task-temp | `mktemp` | the file landed in the task temp |
+| allowed-domain | Claude only: `curl https://registry.npmjs.org` | `code=200` |
+
+`home`, `task-temp` and `allowed-domain` are the controls: they show the settings were applied and the added entry opened no more than it names. Read the other rows only alongside them. The verdict functions are read-floor-canary.sh's, sourced. **Exit codes:** `0` means every row passed for both providers. `1` means something got out (handle it as a production incident, the same as read-floor), or the combination does not hold: `real-env-log`/`-cat` or `room-git` failed. The fallback for the second case is ADR 0273's rejected option 3, and switching to it is a human decision. `2` means a row could not be measured; this includes `codex` missing from PATH.
+
+First run on the Lima VM (2026-10-18, claude 2.1.286, codex-cli 0.147.0): all 13 rows passed, exit 0.
+
 ### After a token rotation
 
 `npm run token` invalidates every live cookie **and** the management MCP's saved bearer header. The procedure lives in [docs/human-surface-credential.md](../../../docs/human-surface-credential.md) § ローテーション — it is a credential-lifecycle step, not a deploy step, so it is deliberately not duplicated here (rotation happens independently of deploys, and two copies would drift).
