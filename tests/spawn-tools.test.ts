@@ -105,7 +105,7 @@ describe("spawnTools", () => {
     }
   });
 
-  it("review 以外は work と同じ面 — read-only は review という task type の性質(ADR 0013)", () => {
+  it("read-only を運ばない type は work と同じ面 — read-only は task type の性質(ADR 0013)", () => {
     expect(spawnTools("question", false)).toEqual(spawnTools("work", false));
   });
 

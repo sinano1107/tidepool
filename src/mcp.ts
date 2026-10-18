@@ -1078,7 +1078,7 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
     {
       description:
         "Repair only: replace a Knowledge entry or a Definition the objected memory write touched with a new body at the same scope and path; the old one is superseded. " +
-        "A Knowledge entry takes title, text and source, exactly one of {event_id} or {commit} as with record_knowledge; a Definition takes text only, one line. " +
+        "A Knowledge entry takes title, text and source, exactly one of {event_id} (a board event id, such as one log_decision returned) or {commit}; a Definition takes text only, one line. " +
         "Behaviors and Exemplars are not replaced here. " +
         scope +
         BOARD_WRITE_LANGUAGE_RULE,

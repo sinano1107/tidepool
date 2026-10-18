@@ -93,7 +93,7 @@ function pinnedChild(db: ReturnType<typeof openDb>) {
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 
-/** 記憶の書き込みの行への異議の修理 task —— 記憶の修理 verb はこれにだけ足される(ADR 0252 決定4)。 */
+/** 記憶の書き込みの行への異議の修理 task(memory_repair)—— 記憶の修理 verb はこの type にだけ足される(ADR 0252 決定4 / ADR 0272 決定3)。 */
 function writeRepairTask(db: ReturnType<typeof openDb>) {
   const at = new Date("2026-08-24T00:00:00.000Z");
   const objected = task(db, "wrote a note");

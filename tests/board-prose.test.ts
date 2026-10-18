@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { boardDoctrine, boardProse } from "../src/board-prose.js";
 import { openDb } from "../src/db.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, isArtifactDiscarded, MEMORY_REPAIR_NOTICE, registerTask, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, isArtifactDiscarded, registerTask, taskVerbSwap } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
@@ -73,7 +73,7 @@ it("memory_repair の spawn の文面は assignee の Authority の直後に記�
     memorySection: null,
   });
 
-  expect(prose).toContain(`## Authority\n\nPrefer reversible actions.\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
+  expect(prose).toContain(`## Authority\n\nPrefer reversible actions.\n\nThis task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.\n\n`);
   expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
   expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
   expect(prose).not.toContain("premise breach");

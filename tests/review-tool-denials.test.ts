@@ -46,7 +46,7 @@ describe("reviewToolDenials", () => {
     expect(reviewToolDenials("work")).toEqual([]);
   });
 
-  it("question タスクも何も deny しない(review 以外は一律無関係)", () => {
+  it("question タスクも何も deny しない(read-only を運ばない type は一律無関係)", () => {
     expect(reviewToolDenials("question")).toEqual([]);
   });
 });

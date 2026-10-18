@@ -154,8 +154,8 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** review タスクの harness deny(ADR 0013 追記 / issue #59): read-only は
- *  review という task type の性質であって実行エージェントの性質ではない
+/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
+ *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
@@ -388,8 +388,9 @@ const MCP_SERVER_NAME = "tidepool";
  *     skill allowlist と同じ線)。
  *
  *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
- *  は review という task type の性質であって実行エージェントの性質ではない
- *  (ADR 0013)。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
+ *  は task type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  memory_repair も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
+ *  コマンドを要らないので開けない。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
  *  確認)ので、registry が `git commit` や `rm` を開くことはできない —— ただし
  *  天井が覆うのは `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこの
  *  コメント参照)。雑な allow に対する一般の防壁は機械ではなく registry の人間

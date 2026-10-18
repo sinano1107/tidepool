@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { recordKnowledge } from "../src/memory.js";
 import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
-import { cancelTaskDirectly, MEMORY_REPAIR_NOTICE, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
@@ -153,7 +153,9 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を�
     const withheld = ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"];
     expect(names.filter((name) => withheld.includes(name))).toEqual([]);
     const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
-    expect(envelope.memory_repair).toBe(MEMORY_REPAIR_NOTICE);
+    expect(envelope.memory_repair).toBe(
+      "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.",
+    );
     expect(envelope.artifact_discarded).toBeUndefined();
   } finally {
     await client.close();
