@@ -404,7 +404,6 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
     ...interviewFields(deps.db, task.id),
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
     allowed_domains: workspace?.allowed_domains ?? [],
-    allowed_commands: workspace?.review_allowed_commands ?? [],
   };
 }
 
