@@ -916,14 +916,15 @@ it.each([
 it.each([
   ["work", "human", "human"],
   ["review", undefined, null],
-] as const)("%s の assignee %s から修理子への宛先は %s(ADR 0237)", (type, assignee, expected) => {
+  ["review", "reviewer", "reviewer"],
+] as const)("%s の assignee %s から修理子への宛先は %s(ADR 0237 / ADR 0275 決定2)", (type, assignee, expected) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type, assignee, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
-  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: () => false });
 
   const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
   expect(repair.assignee).toBe(expected);
