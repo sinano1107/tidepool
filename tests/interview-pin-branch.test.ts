@@ -4,10 +4,10 @@ import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, getTask, interviewRoomPath, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, getTask, interviewRoomPath, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom } from "./harness.js";
+import { commitRoomCopy, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 受験者の checkout(ADR 0263 決定5・6 / ADR 0111 追記12)。分岐の土台と、決着した受験者のブランチを外すこと。
@@ -23,7 +23,7 @@ const POSE = { title: "add a parser", probe: "write a parser for the config form
 /** Interview を登録して出題し、受験者を返す。head は既定で今の main。 */
 function posed(db: Db, workspace: WorkspaceConfig, targets: object[] = [opusHigh], head = git(workspace.path, "rev-parse", "main")): Task[] {
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
-  return poseProbe(db, root, POSE, "auditor", NOW, "worker", head);
+  return poseAccepted(db, root, POSE, "auditor", NOW, "worker", head);
 }
 
 /** 先に走った task の答案が載ったブランチ(その task の pickup と commit の跡)。 */
@@ -34,21 +34,50 @@ function answeredBranch(workspace: WorkspaceConfig, taskId: string): string {
   return git(workspace.path, "rev-parse", `task/${taskId}`);
 }
 
-it("root の分岐元は、root のブランチに root 自身の commit があっても HEAD ではなく保護ブランチ上の merge-base(ADR 0263 追記4)", async () => {
-  const workspace = await makeWorkspace("root-fork-point");
-  const forkedFrom = git(workspace.path, "rev-parse", "main");
-  git(workspace.path, "checkout", "-b", "task/root", "main");
-  commitWork(workspace.path, "draft.txt", "the root's own commit\n");
+/** 面接室を開いて root の pickup の姿(root のタスクブランチを checkout)にし、走る場所を返す。 */
+async function pickedRoom(db: Db) {
+  const workspace = await makeWorkspace("room-copy-real");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  const room = taskRunPlace(db, root, workspace);
+  git(room.path, "checkout", "-b", `task/${root.id}`, "main");
+  return room;
+}
 
-  expect(rootForkPoint(workspace)).toBe(forkedFrom);
+/** root の session が見る git の状態: HEAD、作業ツリーと本物の index(status)、index の中身。 */
+const sessionState = (room: WorkspaceConfig) => [git(room.path, "rev-parse", "HEAD"), git(room.path, "status", "--porcelain", "--untracked-files=all"), git(room.path, "ls-files", "--stage")];
+
+it("出題の写しは、面接室の作業ツリー(commit 済み・stage 済み・未 stage・untracked の全部)を、保護ブランチの head を親にした盤面名義の commit にして ref を1本置く —— root の HEAD・作業ツリー・index は動かない(ADR 0273 決定3 / ADR 0064)", async () => {
+  const db = openDb(":memory:");
+  const room = await pickedRoom(db);
+  const main = git(room.path, "rev-parse", "main");
+  commitWork(room.path, "committed.txt", "on the root's branch\n");
+  writeFileSync(join(room.path, "staged.txt"), "staged\n");
+  git(room.path, "add", "staged.txt");
+  writeFileSync(join(room.path, "committed.txt"), "edited, not staged\n");
+  mkdirSync(join(room.path, "src"));
+  writeFileSync(join(room.path, "src", "untracked.txt"), "untracked\n");
+  const before = sessionState(room);
+
+  const head = commitRoomCopy(db, room);
+
+  expect(sessionState(room)).toEqual(before);
+  expect(git(room.path, "log", "--format=%an %P", "-1", head)).toBe(`tidepool ${main}`);
+  expect(git(room.path, "ls-tree", "-r", "--name-only", head).split("\n")).toEqual(["committed.txt", "src/untracked.txt", "staged.txt"]);
+  expect(git(room.path, "show", `${head}:committed.txt`)).toBe("edited, not staged");
+  expect(git(room.path, "for-each-ref", "--points-at", head, "--format=%(refname)").split("\n")).toHaveLength(1);
+  db.close();
 });
 
-it("root の HEAD が保護ブランチと共通祖先を持たなければ、root の分岐元は投げる", async () => {
-  const workspace = await makeWorkspace("root-fork-point-orphan");
-  git(workspace.path, "checkout", "--orphan", "lone");
-  git(workspace.path, "commit", "--allow-empty", "-m", "no shared history");
+it("空の作業ツリーの写しも、空の tree の commit になる", async () => {
+  const db = openDb(":memory:");
+  const room = await pickedRoom(db);
 
-  expect(() => rootForkPoint(workspace)).toThrow();
+  const head = commitRoomCopy(db, room);
+
+  expect(git(room.path, "ls-tree", "-r", head)).toBe("");
+  expect(git(room.path, "rev-parse", `${head}^`)).toBe(git(room.path, "rev-parse", "main"));
+  db.close();
 });
 
 it("受験者の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
@@ -163,7 +192,7 @@ it("受験者の走る場所は root の面接室で、決着した兄弟の答�
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, NOW, ...HUMAN_WEBUI);
   openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
-  const [done, picked] = poseProbe(db, root, POSE, "auditor", NOW, "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
+  const [done, picked] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
   const head = answeredBranch(room, done.id);
   completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
   const realEnv = () => [git(workspace.path, "for-each-ref"), git(workspace.path, "reflog", "show", "--no-abbrev", "HEAD"), git(workspace.path, "count-objects", "-v")];

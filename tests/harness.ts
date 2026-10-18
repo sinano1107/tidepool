@@ -43,12 +43,14 @@ import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   answerQuestion,
+  completeAudit,
   completeTask,
   decomposeTask,
   getTask,
   humanDecomposeTask,
   listBoard,
   listChildren,
+  listExaminees,
   logDecision,
   poseProbe,
   presentTask,
@@ -882,7 +884,15 @@ export function interviewExaminee(db: Db, at: Date): Task {
     at,
     ...HUMAN_WEBUI,
   );
-  return poseProbe(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker", POSED_HEAD)[0]!;
+  return poseAccepted(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker", POSED_HEAD)[0]!;
+}
+
+/** setup のみ: root が出題し、その監査 review が受理して立った受験者を返す(ADR 0273 決定3)。受理は Auditor 名義。 */
+export function poseAccepted(...args: Parameters<typeof poseProbe>): Task[] {
+  const [db, root, , , now] = args;
+  const audit = poseProbe(...args);
+  completeAudit(db, audit, { verdict: "accepted", findings: "the probe asks for the measured tier's work" }, "auditor", now, "worker");
+  return listExaminees(db, root.id);
 }
 
 /** `entryId` に異議を打ってセッションを閉じ(束ね済みにし)、その異議群に `entries` を名指す memory の帰責を足す。
@@ -1250,6 +1260,26 @@ export async function runNow(t: Tidepool, taskId: string) {
   const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
   if (moved.status !== 200) throw new Error(`run now failed: ${JSON.stringify(moved.json)}`);
   await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
+}
+
+/** setup のみ: root が worker MCP で出題し、拾われた監査 review が complete_audit で受理する。立った受験者の id を対象の順に返す
+ *  (ADR 0273 決定3)。`release` は解放系 verb の後にその session を終えて枠を空ける —— 既定は偽の worker の exit、実 adapter の盤面は
+ *  process の exit を渡す。 */
+export async function poseThroughAudit(
+  t: Tidepool,
+  rootId: string,
+  probe: Record<string, string>,
+  release: (taskId: string) => Promise<void> = async (taskId) => t.worker.exit(taskId),
+): Promise<string[]> {
+  const posed = await callAsTask(t, rootId, "pose_probe", probe);
+  if (posed.isError) throw new Error(`pose_probe failed: ${posed.content[0].text}`);
+  await release(rootId);
+  const { audit_id } = JSON.parse(posed.content[0].text);
+  await runNow(t, audit_id);
+  const accepted = await callAsTask(t, audit_id, "complete_audit", { verdict: "accepted", findings: "the probe asks for the measured tier's work" });
+  if (accepted.isError) throw new Error(`complete_audit failed: ${accepted.content[0].text}`);
+  await release(audit_id);
+  return listExaminees(t.db, rootId).map(({ id }) => id);
 }
 
 /** RCA 子を worker の完了で決着させる(所見なし)。RCA review は盤面の名義なので人間の直接 cancel は届かない

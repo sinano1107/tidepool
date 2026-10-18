@@ -38,7 +38,8 @@ larger than one session can finish, finish what you can and state in the
 handoff what remains.`;
 
 const POSE_PROBE = `This task is not split by you: pose its probe with the tidepool
-MCP's pose_probe instead, and the board registers one child per target.`;
+MCP's pose_probe instead, and once its audit accepts the probe the board
+registers one child per target.`;
 
 // injected into every spawned session's system prompt (issue #31 / ADR
 // 0010), regardless of agent or profile — a board-wide doctrine copied into

@@ -41,6 +41,7 @@ import {
   mcpClient,
   openTestInterviewRoom,
   POSED_HEAD,
+  poseAccepted,
   quarantineQuestion,
   type Tidepool,
   WORKER_SPAWNED,
@@ -93,7 +94,7 @@ function interviewRoot(db: ReturnType<typeof openDb>) {
 }
 function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
-  return poseProbe(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
+  return poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 
@@ -173,7 +174,9 @@ async function fixture(
     appServer = honestSkillsList,
     usageProbe,
     onCapInterrupted,
+    auditorName,
   }: {
+    auditorName?: string;
     registryFiles?: Record<string, string>;
     linkWorkspace?: boolean;
     appServer?: Parameters<typeof fakeAppServerCall>[0];
@@ -228,6 +231,7 @@ You are the Codex worker.`,
     onWorkerExited,
     usageProbe,
     onCapInterrupted,
+    auditorName,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
@@ -399,6 +403,21 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(f.workspace)}="read"`,
       `${JSON.stringify(roomOf(evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
+  });
+
+  it("Interview の監査 review は実環境を cwd に review の profile で走り、親の root の面接室を read で載せる(ADR 0273 決定4)", async () => {
+    const f = await fixture(undefined, undefined, undefined, undefined, { auditorName: "codex-agent" });
+    const root = interviewRoot(f.db);
+    const audit = poseProbe(f.db, root, { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" }, "codex-agent", new Date(0), "worker", POSED_HEAD);
+
+    await f.start(audit);
+
+    const args = f.process.calls[0]!.args;
+    expect(f.process.calls[0]!.cwd).toBe(f.workspace);
+    expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
+    const rows = filesystem(args, "tidepool-review");
+    expect(rows).toContain(`${JSON.stringify(f.workspace)}="read"`);
+    expect(rows).toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, root.id)!))}="read"`);
   });
 
   it("retry の新しい root は、retry が残した旧い root の面接室を read で載せる(ADR 0273 決定9)", async () => {

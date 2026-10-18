@@ -8,7 +8,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
-import { INTERVIEW_OUTCOMES } from "./events.js";
+import { getEvent, INTERVIEW_OUTCOMES } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -60,8 +60,11 @@ import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
   ARTIFACT_DISCARDED_NOTICE,
+  assertPosable,
   assertTargetsRunnable,
   assigneeNeedsApproval,
+  auditedProbe,
+  completeAudit,
   completeInterview,
   completeTask,
   contentSourceFor,
@@ -97,9 +100,9 @@ import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./te
 import { readTiers } from "./tier.js";
 import {
   buildWorkspaceResolver,
+  commitRoomCopy,
   completionTreeGateApplies,
   resolveOrQuarantine,
-  rootForkPoint,
   safeRealpath,
   taskRunPlace,
   treeIsDirty,
@@ -338,7 +341,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
  *  workspace の解放と slot の解放**だけ**が回収済み観測の後ろへ移る。worker exit と
  *  回収済み観測を待つ循環待ちは作らない(待つのは `void` の先である)。
  *
- *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、root の分岐元の読み —— ADR 0263 決定6・追記4)。workspace が解決できなければ
+ *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の面接室の写し —— ADR 0273 決定3)。workspace が解決できなければ
  *  門は飛ばす —— 出題の verb だけは head を記録できないので verb の側で拒む(追記5)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
  *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
@@ -412,6 +415,14 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
     ...(workspace && { real_environment: safeRealpath(workspace.path) }),
     allowed_domains: workspace?.allowed_domains ?? [],
   };
+}
+
+/** 監査 review の envelope(ADR 0273 決定3・4): 監査する出題の head と面接室の在り処、root の envelope の構造欄。 */
+function auditedProbeEnvelope(deps: McpDeps, task: Task, root: Task) {
+  const posed = auditedProbe(deps.db, task.id);
+  if (posed === undefined) return undefined;
+  const { head } = getEvent(deps.db, posed)!.payload as { head: string };
+  return { interview_audit: { head, interview_room: interviewRoomPath(deps.db, root.id), ...interviewEnvelope(deps, root) } };
 }
 
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
@@ -565,6 +576,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             type: task.type,
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
+            ...(parent && auditedProbeEnvelope(deps, task, parent)),
             // ADR 0272 決定3 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。memory_repair は祖先の cancel の下でも修理の1行
             ...(task.type === "memory_repair"
               ? { memory_repair: MEMORY_REPAIR_NOTICE }
@@ -703,12 +715,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       "pose_probe",
       {
         description:
-          "Pose this Interview's probe, once: the title, the probe (the problem statement every target solves), the completion " +
+          "Pose this Interview's probe: the title, the probe (the problem statement every target solves), the completion " +
           "criteria and the rubric you will score the answers against. Before posing, compose the environment the probe needs in your " +
-          "working directory, the interview room. The board logs all four as one decision, registers one " +
-          "answer task per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
-          "completion criteria, blocks this task until every answer settles, and frees the slot. The answer tasks never read the " +
-          "rubric. Once every answer settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
+          "working directory, the interview room: the board commits a copy of its working tree, as it stands, as the head every answer " +
+          "starts from, without touching your checkout. The board logs all four as one decision, registers a review that audits the " +
+          "probe, blocks this task and frees the slot. If the audit accepts it, the board registers one answer task per target in " +
+          "get_current_task's interview_targets with the same title, the probe as its purpose and the same completion criteria, and " +
+          "this task stays blocked until every answer settles; once they settle you resume and finish with complete_interview. If the " +
+          "audit rejects it, you resume with its findings in your history and pose again. Once answer tasks are registered the probe " +
+          "is not posed again. The answer tasks never read the rubric. A target the default agent cannot run is refused by name; you " +
+          "cannot fix that, so escalate. " +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
           title: requiredTextSchema,
@@ -718,8 +734,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         },
       },
       async (input) => {
-        // ADR 0263 決定6・追記4: root の分岐元を、この verb が呼ばれた checkout で読む(fetch しない)。
-        // 門が走らない(workspace が解決できない)出題は head を記録できないので拒む(追記5)
+        // ADR 0273 決定3: 出題の head は面接室の写しの commit。拒まれる出題は写さない —— 検査を写しの前に置く。
+        // 門が走らない(workspace が解決できない)出題は head を記録できないので拒む(ADR 0263 追記5)
         let head: string | undefined;
         return runReleasingVerb(
           deps,
@@ -728,17 +744,38 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             if (head === undefined) {
               throw new DomainError(`this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
             }
+            const audit = poseProbe(deps.db, task, input, workerId, now, "worker", head);
+            return { audit_id: audit.id, parent_status: "blocked" };
+          },
+          (task, room) => {
+            assertPosable(deps.db, task);
             if (deps.taskExecutionCandidates) {
               assertTargetsRunnable(deps.db, task.id, deps.taskExecutionCandidates, deps.defaultAgentName, ESCALATE_UNFIXABLE);
             }
-            const examinees = poseProbe(deps.db, task, input, workerId, now, "worker", head);
-            return { child_ids: examinees.map((c) => c.id), parent_status: "blocked" };
-          },
-          (_task, workspace) => {
-            head = rootForkPoint(workspace);
+            head = commitRoomCopy(deps.db, room);
           },
         );
       },
+    );
+  }
+
+  if (added.includes("complete_audit")) {
+    server.registerTool(
+      "complete_audit",
+      {
+        description:
+          "Complete this audit of an Interview's probe, in one call: verdict is accepted when the environment, the probe and the " +
+          "rubric ask for the work the measured tier's description names in a way the tier below it would not satisfy, rejected " +
+          "otherwise, and findings says why. On accepted the board registers one answer task per target; on rejected the " +
+          "Interview's root resumes with your findings and poses again. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { verdict: z.enum(INTERVIEW_OUTCOMES), findings: requiredTextSchema },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const done = completeAudit(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }),
     );
   }
 

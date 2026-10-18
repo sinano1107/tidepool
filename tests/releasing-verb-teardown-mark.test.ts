@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, poseThroughAudit, registerWork, type Tidepool } from "./harness.js";
 
 // issue #2025: 最終 verb の記録と後始末の印は同じ transaction —— 印が落ちれば記録も巻き戻り、印の無い決着済み session は残らない。
 
@@ -56,7 +56,7 @@ const interview: Arrange = async () => {
 /** 出題し、受験者 C が完了して統合復帰した root。引数は C の採点。 */
 const answered: Arrange = async () => {
   const { id: root } = await interview();
-  const [c] = JSON.parse((await callAsTask(t, root, "pose_probe", POSE)).content[0].text).child_ids;
+  const [c] = (await poseThroughAudit(t, root, POSE)) as [string];
   await t.clock.advance(HOUR);
   await callAsTask(t, c, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);

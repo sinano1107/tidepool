@@ -159,14 +159,17 @@ export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
   // child rests on — stamped at registration so provenance never needs a join.
   // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
-  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string } }
+  // audited_probe: Interview の監査 review(ADR 0273 決定3・4)が監査する出題の event —— 監査の印はこれだけ
+  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string }; audited_probe?: number }
   // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
-  // head は root の分岐元 —— pin の子は全部ここから分岐する(ADR 0263 決定6・追記4)。head の無い出題は無い(追記5)
+  // head は面接室の写しの commit —— 受験者は全部ここから分岐する(ADR 0263 決定6 / ADR 0273 決定3)。head の無い出題は無い(追記5)
   | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
+  // Interview の監査(ADR 0273 決定3・4): 監査 review が出題を受理したか却下したかと findings。task_id は監査 review
+  | { kind: "interview_audited"; verdict: InterviewOutcome; findings: string }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
   | { kind: "task_moved"; after: string | null }

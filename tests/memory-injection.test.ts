@@ -15,8 +15,8 @@ import {
   recordKnowledge,
   recordMemoryInjection,
 } from "../src/memory.js";
-import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { examineeRootId, HUMAN_WEBUI, interviewExaminee, POSED_HEAD } from "./harness.js";
+import { getTask, logDecision, registerTask } from "../src/tasks.js";
+import { examineeRootId, HUMAN_WEBUI, interviewExaminee, POSED_HEAD, poseAccepted } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -377,7 +377,7 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
   const { db, task } = board(probe);
   const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
   const interview = (targets: object[]) =>
-    poseProbe(
+    poseAccepted(
       db,
       registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: targets as never }, at, ...HUMAN_WEBUI),
       { ...probe, probe: probe.purpose, rubric: "tests pass" },

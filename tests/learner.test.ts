@@ -10,12 +10,12 @@ import { listRoutingShadow } from "../src/routing-review.js";
 import { startScheduler, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -718,7 +718,7 @@ const opusTarget = { provider: "anthropic", model: "claude-opus-5-5", effort: "h
 function posedInterview(b: Board, tier: Tier = "standard") {
   const root = registerTask(b.db, { type: "interview", title: "interview", hypothesis: "opus writes the parser", tier, interview_targets: [opusTarget] }, b.clock.now(), ...HUMAN_WEBUI);
   const probe = { title: "add a parser", probe: "write a parser", completion_criteria: "every sample parses", rubric: "tests pass" };
-  const [examinee] = poseProbe(b.db, root, probe, "auditor", b.clock.now(), "worker", POSED_HEAD);
+  const [examinee] = poseAccepted(b.db, root, probe, "auditor", b.clock.now(), "worker", POSED_HEAD);
   completeTask(b.db, examinee!, FULL_HANDOFF, WORKER, b.clock.now(), "worker");
   return { root, examinee: examinee! };
 }

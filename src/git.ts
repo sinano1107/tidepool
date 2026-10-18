@@ -37,15 +37,20 @@ export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
 }
 
+/** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */
+export function gitWithEnv(env: NodeJS.ProcessEnv, cwd: string, ...args: string[]): string {
+  return run(cwd, args, undefined, env).toString().trim();
+}
+
 /** `git` の生の stdout(`bundle create -` のような binary の出力用)。大きさは答案次第なので上限を外す。 */
 export function gitBytes(cwd: string, ...args: string[]): Buffer {
   return run(cwd, args, Infinity);
 }
 
-function run(cwd: string, args: string[], maxBuffer?: number): Buffer {
+function run(cwd: string, args: string[], maxBuffer?: number, env?: NodeJS.ProcessEnv): Buffer {
   return execFileSync("git", args, {
     cwd,
-    env: withoutAutoGc({ ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV }),
+    env: withoutAutoGc({ ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env }),
     stdio: ["ignore", "pipe", "pipe"],
     ...(maxBuffer !== undefined && { maxBuffer }),
   });

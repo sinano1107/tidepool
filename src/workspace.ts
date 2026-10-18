@@ -1,9 +1,9 @@
-import { lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { appendEvent } from "./events.js";
-import { git, gitBytes } from "./git.js";
+import { git, gitBytes, gitWithEnv } from "./git.js";
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -216,10 +216,15 @@ export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefi
 }
 
 /** task が走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室、他は task の workspace。許可ドメインと層は呼び手が
- *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。 */
-export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">, workspace: WorkspaceConfig): RunPlace {
+ *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。root の付帯子の review(監査・RCA・人間登録の review 子)は
+ *  親の読みの面を継いで、実環境で走り root の面接室と開ける面接室を読みだけ開く(ADR 0273 決定4)。 */
+export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
-  if (rootId === undefined) return { ...workspace, read_paths: [] };
+  if (rootId === undefined) {
+    const parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
+    if (parent?.type !== "interview") return { ...workspace, read_paths: [] };
+    return { ...workspace, read_paths: [interviewRoomPath(db, parent.id), ...readableInterviewRooms(db, parent.id)].filter((path) => path !== undefined).map(safeRealpath) };
+  }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
   if (task.type !== "interview") return room;
@@ -310,10 +315,24 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
   return git(workspace.path, "rev-parse", `refs/heads/${taskBranch(taskId)}`);
 }
 
-/** root の分岐元(ADR 0263 追記4): root の checkout の保護ブランチの ref と HEAD の merge-base。今の ref は着地の収束が
- *  session の最中にも進めるので読まない。共通祖先が無ければ投げる(ADR 0242 決定3)。 */
-export function rootForkPoint(workspace: WorkspaceConfig): string {
-  return git(workspace.path, "merge-base", protectedBranchRef(workspace), "HEAD");
+/** 出題の写し(ADR 0273 決定3): 面接室の作業ツリーを一時 index で tree にし、保護ブランチの head を親にした盤面名義の commit にして
+ *  ref を1本置き、その sha を返す。root の session の HEAD・作業ツリー・本物の index には触れない(ADR 0064)。ignore されたファイルは
+ *  写らない(新しい clone と同じ)。ref は受験者のブランチの土台と、却下された出題の写しを決着後の prune から守る。 */
+export function commitRoomCopy(db: Db, room: WorkspaceConfig): string {
+  const dir = mkdtempSync(join(tmpdir(), "tidepool-room-index-"));
+  let tree: string;
+  try {
+    const env = { GIT_INDEX_FILE: join(dir, "index") };
+    gitWithEnv(env, room.path, "add", "--all");
+    tree = gitWithEnv(env, room.path, "write-tree");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+  // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
+  const head = git(room.path, "commit-tree", tree, "-p", git(room.path, "rev-parse", protectedBranchRef(room)), "-m", "Add the project files");
+  const ref = `refs/keep-around/${head}`;
+  boardRefWriter(db, room)(ref, head, () => git(room.path, "update-ref", ref, head, ""));
+  return head;
 }
 
 /** 「無い」は `rev-parse --verify --quiet` の exit 1 だけ —— 他の失敗は投げる(ADR 0242 決定3)。 */
@@ -380,8 +399,8 @@ export function lineageTaskBranch(
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
- *  A fresh task forks from its live lineage — an examinee from the root's fork
- *  point its probe recorded (ADR 0263 決定6・追記4); a resumed task only checks its existing
+ *  A fresh task forks from its live lineage — an examinee from the interview room's copy
+ *  its probe recorded (ADR 0263 決定6 / ADR 0273 決定3); a resumed task only checks its existing
  *  branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
@@ -400,11 +419,12 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
 
 /** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
 function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)
+  // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)。出題し直した root は最後の出題(ADR 0273 決定3)
   const head = db
     .prepare(
       `SELECT json_extract(e.payload, '$.head') FROM events e JOIN interview_targets it ON it.task_id = e.task_id
-       WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL`,
+       WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL
+       ORDER BY e.id DESC LIMIT 1`,
     )
     .pluck()
     .get(task.interview_target_id) as string;

@@ -19,6 +19,7 @@ import {
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
+  auditedProbe,
   type BoardTask,
   getTask,
   interviewTargets,
@@ -369,7 +370,8 @@ function bundleObjections(
         at: now,
       });
     }
-    if (interviewTargets(db, taskId) === null && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+    // Interview の監査も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
+    if (interviewTargets(db, taskId) === null && auditedProbe(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
       try {
