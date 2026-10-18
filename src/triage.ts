@@ -287,19 +287,17 @@ function registerRcaReview(
   );
 }
 
-/** Repair tasks per objected task, split by row kind — whether a row's artifact
- *  remains is judged by where that row's artifact goes (ADR 0272 決定1・2, reading
+/** Repair tasks per objected task, split by row kind (ADR 0272 決定1・2, reading
  *  ADR 0268 決定3 as 「行の成果の帰り先」). Every direction comment raised against
  *  the task's decision rows this session lands in one work repair's purpose, and
  *  every one against its memory-write rows in one `memory_repair`'s purpose: a task
  *  objected on both kinds gets two children, each carrying only its own group's
- *  objection ids. A decision row's artifact returns to the branch, so an Interview
- *  root (its probe is fixed by retry, not repair) and a task whose artifact is
- *  discarded — the task itself is cancelled, or a cancelled work ancestor sits
- *  between it and its root (ADR 0271 決定1・2) — get no work repair: it is skipped,
- *  never left to the registration floor's refusal. A memory write's artifact stays
- *  in the memory store, so its `memory_repair` stands whatever the parent's state.
- *  Attribution and the RCAs below stand by cause either way, never split by group.
+ *  objections. An Interview root (its probe is fixed by retry, not repair) and a
+ *  task whose artifact is discarded — the task itself is cancelled, or a cancelled
+ *  work ancestor sits between it and its root (ADR 0271 決定1・2) — get no work
+ *  repair: it is skipped, never left to the registration floor's refusal. The
+ *  `memory_repair` stands whatever the parent's state. Attribution and the RCAs
+ *  below stand by cause either way, never split by group.
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
@@ -309,9 +307,7 @@ function registerRcaReview(
  *  decides what stands beside the repair (0115 決定3): only the entries whose
  *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
  *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
- *  with none of them gets the repairs alone — or only its `memory_repair` where no
- *  work repair stands, and nothing at all where neither does (decision rows only,
- *  on an Interview root or a discarded artifact). The second attribution round picks
+ *  with none of them gets only the repairs that stand above. The second attribution round picks
  *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
@@ -375,7 +371,7 @@ function bundleObjections(
         at: now,
       });
     }
-    const registerRepair = (type: "work" | "memory_repair", group: ObjectionPair[]): void => {
+    const registerRepair = (type: "work" | "memory_repair", titlePrefix: string, rows: string, group: ObjectionPair[]): void => {
       // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)
       let assignee = objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id;
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
@@ -390,9 +386,9 @@ function bundleObjections(
         db,
         {
           type,
-          title: `${type === "work" ? "repair" : "memory repair"}: ${objected.title}`,
+          title: `${titlePrefix}: ${objected.title}`,
           purpose: renderObjectionPairs(
-            `objections raised against decisions of "${objected.title}"`,
+            `objections raised against ${rows} of "${objected.title}"`,
             group,
             judgments,
           ),
@@ -410,11 +406,11 @@ function bundleObjections(
     };
     // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written");
-    const judgmentRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
-    if (judgmentRows.length > 0 && objected.type !== "interview" && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
-      registerRepair("work", judgmentRows);
+    const decisionRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
+    if (decisionRows.length > 0 && objected.type !== "interview" && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+      registerRepair("work", "repair", "decisions", decisionRows);
     }
-    if (memoryRows.length > 0) registerRepair("memory_repair", memoryRows);
+    if (memoryRows.length > 0) registerRepair("memory_repair", "memory repair", "memory writes", memoryRows);
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {

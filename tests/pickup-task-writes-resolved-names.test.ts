@@ -5,7 +5,6 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { editTask, getTask, pickupTask, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { defaultingTo, GIT_FIXTURE_TEST_TIMEOUT, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
@@ -140,7 +139,9 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
       resolveWorkspace: defaultingTo(workspace),
       auditorName: "fugu",
     });
-    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c" }, clock.now(), BOARD_WORKER_ID, "board");
+    // 親は人間の task —— pickup の候補に入らないので、slot は memory_repair を取る
+    const parent = registerTask(db, { type: "work", assignee: "human", title: "parent", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, clock.now(), ...HUMAN_WEBUI);
 
     await clock.advance(HOURLY);
 

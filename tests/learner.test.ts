@@ -12,7 +12,6 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
@@ -342,7 +341,7 @@ function accept(b: Board, taskId: string) {
 function queueMemoryRepair(b: Board) {
   const parent = pickupTask(b.db, queueWork(b, "parent"), WORKER, b.clock.now())!;
   accept(b, parent.id);
-  return registerTask(b.db, { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), BOARD_WORKER_ID, "board");
+  return registerTask(b.db, { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), ...HUMAN_WEBUI);
 }
 
 /** scheduler が pickup した work を受理させ、slot を空ける。poll が登録した meta-review は slot を取るので、後続の pickup を

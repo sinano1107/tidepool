@@ -1634,7 +1634,7 @@ it("判断の行と記憶の行が混在した task の未帰責の異議群は�
   }
 });
 
-/** 同じ task に2つの異議群を並べる:session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
+/** 同じ task に2つの異議群を並べる: session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
  *  `same` なら同じ X を、でなければ entry Y を異議して commit する。どちらも初回は未帰責(第2回を待つ)。
  *  各 RCA 子には異議群ごとに見分けのつく decision を書く。子は題でなく登録の異議 id 列で見分ける。 */
 function twoBundles(same: boolean) {

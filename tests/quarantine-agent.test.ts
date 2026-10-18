@@ -9,7 +9,6 @@ import { type Db, openDb } from "../src/db.js";
 import { quarantineAgent } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import { cancelTaskDirectly, completeTask, editTask, listBoard, pickupTask, registerTask, type TaskType } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { completedWork, FULL_HANDOFF, HUMAN_WEBUI, quarantineQuestion, queuedForAutoMerge } from "./harness.js";
 
 describe("quarantineAgent(ADR 0012 / issue #36: workspace 版の agent 名一般化)", () => {
@@ -146,7 +145,8 @@ describe("verifyAgentRepaired", () => {
 
   it("名前が組み込みに解決される間、その名前宛ての memory_repair は解除を止めない —— 組み込みが走らせられる(ADR 0275 決定1 / ADR 0228 決定4)", () => {
     const db = openDb(":memory:");
-    registerTask(db, { type: "memory_repair", title: "pending", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, BOARD_WORKER_ID, "board");
+    const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", assignee: "tako" }, NOW, ...HUMAN_WEBUI);
+    registerTask(db, { type: "memory_repair", title: "pending", purpose: "p", completion_criteria: "c", assignee: "fugu", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
 
     expect(() => verifyAgentRepaired(db, "fugu", "built-in", "tako", "fugu")).not.toThrow();
   });

@@ -1809,8 +1809,8 @@ function rankedEntries(db: Db, match: string, sight: ReaderSight): EntryRow[] {
 }
 
 /** 読み手(task)に無いエントリ。視界の1段目(readerSight)の条件なので、落とした理由にも omitted にも dropped にも出ない。
- *  受験者(pin の子)は記憶を書かない(ADR 0268 決定2)ので、無い集合を持つのは受験者だけ —— どの Interview でも、root が
- *  書いたものと、書き手を問わず出所の event の task が木の task であるもの(帰責 `objection_attributed` はその
+ *  受験者(pin の子)は記憶を書かない(ADR 0268 決定2)ので、無い集合を持つのは受験者だけ —— どの Interview でも、root と
+ *  root の下の memory_repair(再異議の鎖も、ADR 0272 帰結)が書いたものと、書き手を問わず出所の event の task が木の task であるもの(帰責 `objection_attributed` はその
  *  entry_id が指す判断ログの行の task で見る。出所が commit のものは当たらない)、どれも本文が同じ後継(移動の複製・復元の複製)を
  *  含む(ADR 0264 決定3)。書いた task は作った書き込みの記録(ADR 0252)の task で引く。meta-review が畳んだ後継は出所が
  *  meta-review の decision なので当たらない。他の読み手には空。 */

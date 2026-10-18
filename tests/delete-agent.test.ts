@@ -5,7 +5,6 @@ import { openDb } from "../src/db.js";
 import { loadRegistry, registryAtCommit } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
@@ -274,8 +273,9 @@ describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(
   it("未決着の memory_repair と review は数えない —— どちらも組み込みへ落ちても走る(ADR 0275 決定1)", () => {
     const db = openDb(":memory:");
     const at = new Date("2026-08-05T00:00:00.000Z");
+    const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
     for (const type of ["memory_repair", "review"] as const) {
-      registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, BOARD_WORKER_ID, "board");
+      registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand", parent_id: parent.id }, at, ...HUMAN_WEBUI);
     }
 
     expect(countUnsettledWorkAssignedTo(db, "deckhand")).toBe(0);

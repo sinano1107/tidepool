@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { recordKnowledge } from "../src/memory.js";
 import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
 import { cancelTaskDirectly, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -141,8 +140,7 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を�
     t.db,
     { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id },
     t.clock.now(),
-    BOARD_WORKER_ID,
-    "board",
+    ...HUMAN_WEBUI,
   );
   await runNow(t, repair.id);
   const client = await mcpClient(t.mcpBaseUrl, repair.id);
