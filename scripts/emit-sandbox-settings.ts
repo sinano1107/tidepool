@@ -6,8 +6,11 @@
  *  いたが、Pi では root 所有のツリーに一時ファイルを作る手順になっていて、失敗すると
  *  中途半端に残る。デプロイに載る恒久的なスクリプトにしておく方が安い。
  *
- *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review> <workspacePath>
- *          --task-temp dir [skill...] [--allowed-domain domain]
+ *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review|interview> <workspacePath>
+ *          --task-temp dir [skill...] [--allowed-domain domain] [--read path]
+ *
+ *  `interview` は Interview の root の床(ADR 0273 決定2): workspacePath は cwd の面接室、`--read` は読みだけ開く実環境
+ *  (と開ける面接室)。面接室 canary が手で足していた1行の代わり。
  *
  *  `--task-temp` は必須(ADR 0257 決定2)。吐いた settings で走らせる `claude -p` には、同じ dir を
  *  `TMPDIR` と `CLAUDE_CODE_TMPDIR` に載せて渡す —— 載せないと許可ドメインに届かない。
@@ -19,16 +22,17 @@ import { permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js
 import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE =
-  "usage: emit-sandbox-settings.ts <work|review> <workspacePath> --task-temp dir [skill...] [--allowed-domain domain] [--codex]";
+  "usage: emit-sandbox-settings.ts <work|review|interview> <workspacePath> --task-temp dir [skill...] [--allowed-domain domain] [--read path] [--codex]";
 const [taskType, workspacePath, ...rest] = process.argv.slice(2);
 
-if ((taskType !== "work" && taskType !== "review") || !workspacePath) {
+if ((taskType !== "work" && taskType !== "review" && taskType !== "interview") || !workspacePath) {
   console.error(USAGE);
   process.exit(2);
 }
 
 const permittedSkills: string[] = [];
 const allowedDomains: string[] = [];
+const readPaths: string[] = [];
 let taskTemp: string | undefined;
 let codex = false;
 for (let i = 0; i < rest.length; i += 1) {
@@ -42,6 +46,13 @@ for (let i = 0; i < rest.length; i += 1) {
       process.exit(2);
     }
     allowedDomains.push(domain);
+  } else if (rest[i] === "--read") {
+    const path = rest[++i];
+    if (!path) {
+      console.error(USAGE);
+      process.exit(2);
+    }
+    readPaths.push(path);
   } else if (rest[i] === "--codex") {
     codex = true;
   } else {
@@ -56,7 +67,7 @@ if (!taskTemp) {
 
 if (codex) {
   const { executable } = resolveCodexExecutable();
-  console.log(permissionConfig(taskType, workspacePath, taskTemp, executable, allowedDomains).join("\n"));
+  console.log(permissionConfig(taskType, workspacePath, taskTemp, executable, allowedDomains, readPaths).join("\n"));
   process.exit(0);
 }
 
@@ -67,5 +78,6 @@ const input: WorkerSessionSettingsInput = {
   ...(allowedDomains.length > 0 && { allowedDomains }),
   taskTemp,
   lib64: existsSync("/lib64"),
+  ...(readPaths.length > 0 && { readPaths }),
 };
 console.log(JSON.stringify(buildSandboxSettings(input)));

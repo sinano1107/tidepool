@@ -10,16 +10,13 @@
 # `pi` re-executes this same file on the Pi in `local` mode over ssh, as
 # read-floor-canary.sh does, whose verdict functions this script sources.
 #
-# THE COMBINATION, emitted from the checkout's code, never hand-written:
-#   Claude — the work profile (scripts/emit-sandbox-settings.ts) and the work spawn
-#            shape (`acceptEdits`, `autoAllowBashIfSandboxed` at its default), cwd =
-#            the room, with the real environment added to
-#            `sandbox.filesystem.allowRead`.
-#   Codex  — `codex sandbox -P tidepool-work -C <room>` with the work
-#            `permissionConfig()` (emit-sandbox-settings.ts --codex), with the real
-#            environment added to the filesystem map as "read". No model turn.
-# That one added entry per provider is the only hand-made part. Once #2192 lands
-# the `interview` task type, its emitter replaces both.
+# THE COMBINATION, emitted from the checkout's code, never hand-written: the
+# `interview` type's floor (`emit-sandbox-settings.ts interview <room> --read <real env>`).
+#   Claude — its profile and the work spawn shape (`acceptEdits`,
+#            `autoAllowBashIfSandboxed` at its default), cwd = the room, the real
+#            environment in `sandbox.filesystem.allowRead` and as a `Read` allow.
+#   Codex  — `codex sandbox -P tidepool-work -C <room>` with its `permissionConfig()`
+#            (`--codex`), the real environment "read" in the filesystem map. No model turn.
 #
 # ROWS, per provider (one session for Claude), run by
 # scripts/interview-room-canary-probe.sh from the room:
@@ -223,20 +220,15 @@ judge() {
 if CODEX=$(realpath "$(command -v codex)" 2>/dev/null); then
   log "codex: $("$CODEX" --version 2>&1)"
   prepare codex
-  if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$ROOM" \
-          --task-temp "$TASK_TEMP" --codex > "$WORK/codex.config"); then
-    fail "could not emit the Codex permission config from $REPO — is that a checkout with node_modules?"
+  if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts interview "$ROOM" \
+          --task-temp "$TASK_TEMP" --read "$REAL" --codex > "$WORK/codex.config"); then
+    fail "could not emit the Codex permission config from $REPO — is that a checkout with node_modules and the interview type (#2192)?"
     exit 2
   fi
   CODEX_ARGS=()
-  while IFS= read -r entry; do
-    # The one hand-added item (replaced by the `interview` type's emitter, #2192).
-    [[ "$entry" == permissions.tidepool-work.filesystem=\{* ]] \
-      && entry="${entry/filesystem=\{/filesystem=\{\"$REAL\"=\"read\",}"
-    CODEX_ARGS+=(-c "$entry")
-  done < "$WORK/codex.config"
-  if ! printf '%s\n' "${CODEX_ARGS[@]}" | grep -qF "filesystem={\"$REAL\"=\"read\","; then
-    fail "the emitted Codex config has no filesystem map to add the real environment to — $REPO predates it."
+  while IFS= read -r entry; do CODEX_ARGS+=(-c "$entry"); done < "$WORK/codex.config"
+  if ! grep -qF "\"$REAL\"=\"read\"" "$WORK/codex.config"; then
+    fail "the emitted Codex config does not open the real environment for reading — $REPO predates it."
     exit 2
   fi
   log "running the probe under codex sandbox (no model turn)…"
@@ -255,15 +247,11 @@ fi
 # ═══════════════════════════════════ Claude ═════════════════════════════════
 log "claude: $(claude --version 2>&1)"
 prepare claude
-if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts work "$ROOM" \
-        --task-temp "$TASK_TEMP" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
-  fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules?"
+if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts interview "$ROOM" \
+        --task-temp "$TASK_TEMP" --read "$REAL" --allowed-domain registry.npmjs.org > "$WORK/work.json"); then
+  fail "could not emit the sandbox profile from $REPO — is that a tidepool checkout with node_modules and the interview type (#2192)?"
   exit 2
 fi
-# The one hand-added item (replaced by the `interview` type's emitter, #2192).
-node -e 'const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  p.sandbox.filesystem.allowRead.push(process.argv[2]); fs.writeFileSync(process.argv[1], JSON.stringify(p));' \
-  "$WORK/work.json" "$REAL"
 if ! grep -qF '"denyRead":["/"]' "$WORK/work.json" || ! grep -qF "\"$REAL\"" "$WORK/work.json"; then
   fail "the emitted profile is not ADR 0257's default-deny read range with the real environment added — $REPO predates it."
   exit 2

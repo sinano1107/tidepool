@@ -12,6 +12,7 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getRegistrant, getTask, listBoard, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { recordContainerHaltHandler } from "../src/watchdog.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { openInterviewRoom, taskRunPlace } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -30,10 +31,13 @@ async function brokenContainer(name: string) {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, clock.now(), ...HUMAN_WEBUI);
-  const [done, picked] = poseProbe(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(workspace.path, "rev-parse", "main")) as [Task, Task];
-  git(workspace.path, "checkout", "-b", `task/${done.id}`, "main");
-  commitWork(workspace.path, "answer.txt", "an answer\n");
-  git(workspace.path, "checkout", "main");
+  // 受験者は root の面接室で走る(ADR 0273 決定1)—— root の pickup が作る面接室を先に開く
+  openInterviewRoom(db, root, await tempDir(`tidepool-${name}-rooms-`), clock.now());
+  const room = taskRunPlace(db, root, workspace);
+  const [done, picked] = poseProbe(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
+  git(room.path, "checkout", "-b", `task/${done.id}`, "main");
+  commitWork(room.path, "answer.txt", "an answer\n");
+  git(room.path, "checkout", "main");
   completeTask(db, done, FULL_HANDOFF, "tako", clock.now(), "worker");
   const worker = new ScriptedWorker(clock);
   const slot = new Slot();
@@ -51,7 +55,7 @@ async function brokenContainer(name: string) {
     workspace,
     recordDir,
   });
-  return { workspace, recordDir, db, clock, worker, slot, scheduler, done, picked };
+  return { workspace, room, recordDir, db, clock, worker, slot, scheduler, done, picked };
 }
 
 it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepool 名義の question 1枚で止まり、踏んだ受験者は失敗にならず todo の先頭へ戻って slot が空く", async () => {
@@ -86,9 +90,9 @@ it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepoo
 });
 
 it("器がまだ書けなければ回答は拒まれて停止が残り、書けるようになれば受理されて、受験者は既に切られた自分のブランチのまま走る", async () => {
-  const { workspace, recordDir, db, clock, worker, scheduler, done, picked } = await brokenContainer("record-container-release");
+  const { room, recordDir, db, clock, worker, scheduler, done, picked } = await brokenContainer("record-container-release");
   await clock.advance(HOURLY);
-  const branch = git(workspace.path, "rev-parse", `task/${picked.id}`);
+  const branch = git(room.path, "rev-parse", `task/${picked.id}`);
   const question = getTask(db, openQuarantineQuestion(db, "recordContainer", null)!.id)!;
   const answer = () =>
     submitAnswer(
@@ -110,7 +114,7 @@ it("器がまだ書けなければ回答は拒まれて停止が残り、書け�
 
   expect(boardHalts(db)).toEqual([]);
   expect(readdirSync(recordDir)).toEqual([`${done.id}.bundle`]);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${picked.id}`);
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(branch);
+  expect(git(room.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${picked.id}`);
+  expect(git(room.path, "rev-parse", "HEAD")).toBe(branch);
   scheduler.stop();
 });

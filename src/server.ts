@@ -140,6 +140,8 @@ export interface ServerOptions {
    *  ADR 0009), read fresh every call. Absent → every task runs against the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** ADR 0018 の規約の基点。盤面が面接室を作る場所(ADR 0273 決定1)。Absent の解決は scheduler が持つ。 */
+  workspacesDir?: string;
   /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
   watchdog?: WatchdogConfig;
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
@@ -592,6 +594,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onRecordContainerFailed,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
+    workspacesDir: options.workspacesDir,
     auditorName,
     interviewerName,
     github: options.github,

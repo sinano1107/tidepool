@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 
-import { runsOnReviewFloor, type Task } from "./tasks.js";
+import { carriesReadOnly, type Task } from "./tasks.js";
 
 
 /** The CLI's own settings shape for a worker session (vendor shape, hence
@@ -50,7 +50,7 @@ export interface WorkerSessionSettings {
    *  sandbox confines Bash alone, so the Write/Edit tools reach
    *  `.claude/settings.json` straight through `filesystem.denyWrite`
    *  (measured — it was written). See `SETTINGS_TOOL_DENY`. */
-  permissions: { deny: string[] };
+  permissions: { deny: string[]; allow?: string[] };
   /** ADR 0156: see `AUTO_MEMORY_CLOSED`. */
   autoMemoryEnabled: false;
   autoMemoryDirectory: string;
@@ -388,6 +388,9 @@ export interface WorkerSessionSettingsInput {
   taskTemp: string;
   /** Whether `/lib64` exists on this host — checked by the caller so this stays pure. */
   lib64: boolean;
+  /** ADR 0273 決定2: checkouts outside the cwd opened for reading only — an
+   *  Interview root's real environment and the rooms it opens. Absent opens none. */
+  readPaths?: string[];
 }
 
 /** ADR 0033's two profiles as one code constant (ADR 0013: the floor lives in
@@ -450,8 +453,8 @@ export interface WorkerSessionSettingsInput {
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
-  const { taskType, workspacePath, permittedSkills, allowedDomains, taskTemp, lib64 } = input;
-  const readOnly = runsOnReviewFloor(taskType);
+  const { taskType, workspacePath, permittedSkills, allowedDomains, taskTemp, lib64, readPaths = [] } = input;
+  const readOnly = carriesReadOnly(taskType);
   return {
     // issue #378: not keyed on the profile — a subagent can smuggle a board
     // verb from either kind of worker, and the floor never depends on data
@@ -459,7 +462,12 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
     hooks: { PreToolUse: [SUBAGENT_BOARD_VERB_DENY] },
     // ADR 0037: the tool-layer half of the same ban, likewise on both profiles.
     // ADR 0156: auto-memory is closed on both profiles too.
-    permissions: { deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY] },
+    // ADR 0273 決定2: `acceptEdits` closes the in-process tools outside cwd, so the read-only paths also get a `Read` allow
+    // (`//` = absolute). Never `additionalDirectories`: under `acceptEdits` it would let Edit / Write in as well
+    permissions: {
+      deny: [...SETTINGS_TOOL_DENY, AUTO_MEMORY_TOOL_DENY],
+      ...(readPaths.length > 0 && { allow: readPaths.map((path) => `Read(/${path}/**)`) }),
+    },
     ...AUTO_MEMORY_CLOSED,
     sandbox: {
       enabled: true,
@@ -477,6 +485,7 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
           ...skillReadPaths(permittedSkills, workspacePath),
           ...OS_READ,
           ...(lib64 ? ["/lib64"] : []),
+          ...readPaths,
         ],
         allowWrite: readOnly ? [taskTemp] : [workspacePath, taskTemp],
         // ADR 0037: on both profiles, and file-level for a reason — see

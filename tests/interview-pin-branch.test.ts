@@ -6,7 +6,7 @@ import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -135,6 +135,30 @@ it("決着した受験者の答案は、外す前に盤面の記録の器へ bun
   const path = join(recordDir, `${done.id}.bundle`);
   expect(git(workspace.path, "bundle", "list-heads", path)).toBe(`${head} refs/heads/task/${done.id}`);
   expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head, path }]);
+  db.close();
+});
+
+it("受験者の走る場所は root の面接室で、決着した兄弟の答案の除去・reflog・repack は面接室の中で起き、実環境の checkout の ref・reflog・object には触れない(ADR 0273 決定8 / ADR 0266)", async () => {
+  const workspace = await makeWorkspace("pin-room-cleanup");
+  const recordDir = await tempDir("tidepool-pin-room-cleanup-records-");
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, NOW, ...HUMAN_WEBUI);
+  openInterviewRoom(db, root, await tempDir("tidepool-pin-room-cleanup-rooms-"), NOW);
+  const room = taskRunPlace(db, root, workspace);
+  const [done, picked] = poseProbe(db, root, POSE, "auditor", NOW, "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
+  const head = answeredBranch(room, done.id);
+  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
+  const realEnv = () => [git(workspace.path, "for-each-ref"), git(workspace.path, "reflog", "show", "--no-abbrev", "HEAD"), git(workspace.path, "count-objects", "-v")];
+  const before = realEnv();
+
+  const place = taskRunPlace(db, picked, workspace);
+  await prepareWorkspaceAtPickup(db, place, picked, { recordDir, now: new Date(0) });
+
+  expect(place).toMatchObject({ name: root.id, path: room.path });
+  expect(git(room.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${picked.id}`);
+  expect(git(room.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  expect(() => git(room.path, "cat-file", "-e", head)).toThrow();
+  expect(realEnv()).toEqual(before);
   db.close();
 });
 

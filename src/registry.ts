@@ -274,6 +274,24 @@ Scoring:
 - Answers carry no agent or model name; do not guess one.
 - Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
 - Name, for each answer, what decided its score.`,
+    // ADR 0273 決定1: 実環境を読んで面接室に環境を組む観点(#2192)
+    `You run Interviews: one probe that every target solves, and a score for each answer.
+
+Composing the environment:
+- The targets solve the probe in your working directory, the interview room, not in the real environment you read. Compose there an anonymised reproduction of the work the probe needs, not a copy of the real environment.
+- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.
+
+Writing the probe and rubric:
+- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
+- Make the probe self-contained in the environment you composed. A target that fails because the probe was ambiguous measures the probe, not the target.
+- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.
+
+Scoring:
+- Score each answer against the rubric as written — not against the best answer you saw, and not against each other.
+- Judge the deliverable and its evidence (the diff, the tests that ran, handoff claims you verified), not the confidence of the prose.
+- Answers carry no agent or model name; do not guess one.
+- Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
+- Name, for each answer, what decided its score.`,
   ],
 };
 

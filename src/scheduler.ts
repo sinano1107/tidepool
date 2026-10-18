@@ -59,10 +59,12 @@ import {
   contentSourceFor,
   escalateTask,
   getTask,
+  interviewRoomRoot,
   isWorkSide,
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
+  runPlaceNames,
   type Task,
   type TaskContent,
   unrowedExaminees,
@@ -82,9 +84,12 @@ import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
+  resolveWorkspacesBaseDir,
+  taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -109,9 +114,10 @@ function withoutStopped(
   return (task) => {
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
-    const workspace = task.workspace ?? defaultWorkspaceName;
+    // 組は走る場所の単位(ADR 0273 決定8)
+    const places = runPlaceNames(db, task, defaultWorkspaceName);
     return candidates(task).filter(
-      (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
+      (setting) => !pairs.some((pair) => places.includes(pair.workspace) && pair.harness === canonicalHarness(setting.provider)),
     );
   };
 }
@@ -274,6 +280,9 @@ export function startScheduler(deps: {
    *  ADR 0009), read fresh every call. Absent → every task runs in the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** 規約の基点(ADR 0018): interview の root の最初の pickup が面接室を作る場所(ADR 0273 決定1)。
+   *  Absent → `resolveWorkspacesBaseDir` 自身の既定(adapter の `workspacesDir` と同じ)。 */
+  workspacesDir?: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), the
    *  fallback a `review` task's unset assignee resolves to instead of
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
@@ -343,6 +352,7 @@ export function startScheduler(deps: {
     onRecordContainerFailed,
     workspace,
     resolveWorkspace,
+    workspacesDir,
     auditorName = DEFAULT_AUDITOR_NAME,
     interviewerName = DEFAULT_INTERVIEWER_NAME,
     github,
@@ -466,12 +476,21 @@ export function startScheduler(deps: {
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
+      // ADR 0273 決定1・8: interview の root と受験者は面接室で走る。作れない面接室は、その面接室の quarantine に落ちる
+      let place: WorkspaceConfig;
       try {
-        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
+        if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+        place = taskRunPlace(db, picked, resolved);
+      } catch (err) {
+        quarantineWorkspace(db, interviewRoomRoot(db, picked)!, err, clock.now());
+        return;
+      }
+      try {
+        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
         // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
         if (err instanceof RecordContainerError) return onRecordContainerFailed(picked.id, err);
-        await quarantineWithRepoAccessGuidance(resolved, err);
+        await quarantineWithRepoAccessGuidance(place, err);
         return;
       }
     }
