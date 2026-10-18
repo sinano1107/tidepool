@@ -25,7 +25,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
-import { loadEpisodes, observedInTier, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
+import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -724,14 +724,16 @@ export function startScheduler(deps: {
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
-      // フラグは poll ごとに1度読み(判定者の task は分岐しない)、episode は分岐が要るときに1度だけ読む。集計は候補の段ごとに
+      // フラグは poll ごとに1度読み(判定者の task は分岐しない)、episode と種は分岐が要るときに1度だけ読む。集計は候補の段ごとに
       // 違うので pickup ごとに作る(ADR 0210 決定2)
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
+      let seeds: Seed[] | undefined;
       const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
+        seeds ??= loadSeeds(db);
         // 完了タスクは pickup で既定の名前に焼き込まれる(ADR 0233)ので、未着手の空のタスクも同じ名前で照合する
-        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work 側の task(`isWorkSide`)は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 →

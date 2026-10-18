@@ -177,8 +177,8 @@ export interface ServerOptions {
   agentRegistered?: (name: string) => boolean;
   /** Whether a name resolves to the built-in agent right now (no registry entry
    *  shadows it), read fresh against the registry — the assignee gates refuse it
-   *  for anything but review, and agent quarantine clearance does not count it as
-   *  back (ADR 0228). Absent → no registry configured. */
+   *  for work and question, and agent quarantine clearance does not count it as
+   *  back (ADR 0228 / ADR 0275 決定1). Absent → no registry configured. */
   resolvesToBuiltIn?: (name: string) => boolean;
   /** Why a registered name fails pickup's resolution, or undefined when it
    *  resolves — agent quarantine clearance counts only a resolving name as back

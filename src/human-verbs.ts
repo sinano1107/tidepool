@@ -575,7 +575,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       const quarantineAgentName = value!;
       await deps.landing?.observeAutoMergeOutcomes(quarantineAgentName);
       try {
-        // 組み込みの判定が先: 組み込みを work として解決すると定義の不成立になり、review まで数えてしまう(ADR 0228 決定4)
+        // 組み込みの判定が先: 組み込みを work として解決すると定義の不成立になり、組み込みが走らせられる review / interview / memory_repair まで数えてしまう(ADR 0228 決定4 / ADR 0275 決定1)
         const builtIn = deps.resolvesToBuiltIn?.(quarantineAgentName);
         const registered = !builtIn && deps.agentRegistered?.(quarantineAgentName);
         const definitionFailure = registered ? deps.agentDefinitionFailure?.(quarantineAgentName) : undefined;

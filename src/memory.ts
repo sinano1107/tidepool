@@ -2565,7 +2565,8 @@ export function recordMetaReviewMaterial(
             shadow_rows: material.parts.shadow_rows,
             shadow_rows_multi_candidate: material.parts.shadow_rows_multi_candidate,
             allocations: material.parts.allocations.counted,
-            cells: material.parts.cells.map((c) => c.first_observed_event_id),
+            // 本番の session の無い種のセルは種の event で名指す
+            cells: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
             rows: material.parts.rows.map((r) => r.event_id),
             proposals: material.parts.proposals.map((p) => p.question_id),
           }

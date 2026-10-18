@@ -8,8 +8,8 @@ export interface AssigneeDeps {
   resolvesToBuiltIn?: (name: string) => boolean;
 }
 
-/** 人間の登録・Edit、worker の decompose、triage の修理子が共有する assignee の門。組み込みは review 専用で、
- *  判定は名前ではなく解決の結果を見る —— shadow している間は通る(ADR 0228 決定1)。 */
+/** 人間の登録・Edit、worker の decompose、triage の修理子が共有する assignee の門。組み込みが取れるのは reviewer 定数の授権で
+ *  走れる type だけで、判定は名前ではなく解決の結果を見る —— shadow している間は通る(ADR 0275 決定1 / ADR 0228 決定1)。 */
 export function assertAssigneeCanTake(
   deps: AssigneeDeps,
   assignee: string | undefined,

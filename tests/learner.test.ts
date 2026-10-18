@@ -3,19 +3,19 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { appendEvent, type EventPayload } from "../src/events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
-import { episodeOutcome, type LearnerEpisode, loadEpisodes, observedInTier, recommend, selectorBranch } from "../src/learner.js";
+import { episodeOutcome, type LearnerEpisode, loadEpisodes, loadSeeds, observedInTier, recommend, type Seed, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
 import { startScheduler, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -37,15 +37,24 @@ function episode(overrides: Partial<LearnerEpisode> = {}): LearnerEpisode {
 /** sol の行に当たる受理された episode(2番目の候補に観測を持たせる)。 */
 const solAccepted = episode({ cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null } });
 
-/** 盤面全体の episode 列から、この workspace 向けの selector の分岐を1回引く。 */
-function branchFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], promoted: boolean, workspace = "tidepool") {
-  return selectorBranch({ promoted, candidates, ...observedInTier(episodes, candidates[0]!.tier_id, workspace) });
+/** 盤面全体の episode 列と種から、この workspace 向けの selector の分岐を1回引く。 */
+function branchFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], promoted: boolean, workspace = "tidepool", seeds: Seed[] = []) {
+  return selectorBranch({ promoted, candidates, ...observedInTier(episodes, seeds, candidates[0]!.tier_id, workspace) });
 }
 
-/** 盤面全体の episode 列から、この workspace 向けの推薦を1回引く。 */
-function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool") {
-  return recommend({ candidates, ...observedInTier(episodes, candidates[0]!.tier_id, workspace) });
+/** 盤面全体の episode 列と種から、この workspace 向けの推薦を1回引く。 */
+function recommendFor(episodes: LearnerEpisode[], candidates: ExecutionSetting[], workspace = "tidepool", seeds: Seed[] = []) {
+  return recommend({ candidates, ...observedInTier(episodes, seeds, candidates[0]!.tier_id, workspace) });
 }
+
+/** 候補の行に当たる種(段は候補の段 id 1)。 */
+const seedOf = (s: ExecutionSetting, overrides: Partial<Seed> = {}): Seed => ({
+  cell: { provider: s.provider, model: s.model, effort: s.effort },
+  tier_id: 1,
+  kind: "interview",
+  event_id: 1,
+  ...overrides,
+});
 
 it("データの無いセルでは推薦が表(selector の先頭)と一致し、basis は prior(AC1)", () => {
   expect(recommendFor([], [opus, sol])).toEqual({ recommended: opus, basis: "prior" });
@@ -135,6 +144,49 @@ it("盤面全体の事後分布が workspace の事前分布 —— 自分の wo
   expect(recommendFor(episodes, [opus, sol], "fresh").recommended).toEqual(sol);
 });
 
+it("受験者の episode は推薦の受理・却下の数に入らない —— 先頭の受験者の却下で先頭は観測ありにならず、集計にも載らない(ADR 0273 決定7)", () => {
+  const examineeRejected = episode({ interview: true, outcome: "rejected" });
+  expect(recommendFor([examineeRejected, examineeRejected, solAccepted], [opus, sol])).toEqual({ recommended: opus, basis: "data" });
+  expect(observedInTier([examineeRejected, episode({ interview: true })], [], 1, "tidepool")).toMatchObject({ board: [], workspace: [] });
+});
+
+it("種は表の事前分布を置き換えてセルを観測ありにする —— 先頭が 0 受理 / 2 却下なら本番の観測の無い種つきの候補へ移り、種が無ければ移らない(ADR 0273 決定7)", () => {
+  const headRejected = [episode({ outcome: "rejected" }), episode({ outcome: "rejected" })];
+  expect(recommendFor(headRejected, [opus, sol])).toEqual({ recommended: opus, basis: "data" });
+  expect(recommendFor(headRejected, [opus, sol], "tidepool", [seedOf(sol)])).toEqual({ recommended: sol, basis: "data" });
+  // どの候補にも本番の観測が無くても、種があれば推薦は data —— 未観測の先頭はそのまま走る
+  expect(recommendFor([], [opus, sol], "tidepool", [seedOf(sol)])).toEqual({ recommended: opus, basis: "data" });
+});
+
+it("種のある候補に本番の観測が付けば合算され、種は受理1件分のまま —— 6 受理 / 3 却下の先頭は、種 + 1 受理 / 1 却下の相手へ移らない(種を事前分布に足すと移る)", () => {
+  const elsewhere = (overrides: Partial<LearnerEpisode>) => episode({ workspace: "elsewhere", ...overrides });
+  const solCell = solAccepted.cell;
+  const episodes = [
+    ...Array.from({ length: 6 }, () => elsewhere({})),
+    ...Array.from({ length: 3 }, () => elsewhere({ outcome: "rejected" })),
+    elsewhere({ cell: solCell }),
+    elsewhere({ cell: solCell, outcome: "rejected" }),
+  ];
+  // 先頭 7/10、相手 2/3(種を足せば 3/4)
+  expect(recommendFor(episodes, [opus, sol], "tidepool", [seedOf(sol)]).recommended).toEqual(opus);
+  // shadow 行の実績は本番の観測だけを数え、種は別の欄で運ぶ
+  const { shadow } = branchFor(episodes, [opus, sol], false, "tidepool", [seedOf(sol, { kind: "human", event_id: 7 })]);
+  expect(shadow.actual_record).toEqual({ board: { accepted: 6, rejected: 3 }, workspace: { accepted: 0, rejected: 0 }, seed: null });
+  expect(branchFor(episodes, [sol, opus], false, "tidepool", [seedOf(sol, { kind: "human", event_id: 7 })]).shadow.actual_record).toEqual({
+    board: { accepted: 1, rejected: 1 },
+    workspace: { accepted: 0, rejected: 0 },
+    seed: { kind: "human", event_id: 7 },
+  });
+});
+
+it("種は盤面全体の層に効くので、どの workspace の pickup にも効く —— 種の段と違う段の候補には効かない(ADR 0273 決定7 / ADR 0210 決定4)", () => {
+  const headRejected = [episode({ outcome: "rejected" }), episode({ outcome: "rejected" })];
+  for (const workspace of ["tidepool", "elsewhere"]) {
+    expect(recommendFor(headRejected, [opus, sol], workspace, [seedOf(sol)]).recommended, workspace).toEqual(sol);
+  }
+  expect(recommendFor(headRejected, [opus, sol], "tidepool", [seedOf(sol, { tier_id: 2 })]).recommended).toEqual(opus);
+});
+
 /** 費用を報告する claude-code harness の2行(codex は報告しない)—— 両方に費用の観測が付く、本番で同点の起きうる組(#1250)。kimi が安い。 */
 const kimi = executionSetting("moonshot", "kimi-k3");
 const cheapKimi = episode({ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, cost_usd: 0.5 });
@@ -175,7 +227,7 @@ it("shadow の組は推薦したセルと走ったセルの実績(盤面の段�
 });
 
 it("昇格後もどの候補にも観測が無ければ学習器の選択は表の先頭と一致する —— basis は prior で、出所の provider だけが learner", () => {
-  const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [] });
+  const { chosen, shadow } = selectorBranch({ promoted: true, candidates: [opus, sol], board: [], workspace: [], seeds: [] });
   expect(chosen).toEqual({ ...opus, source: { ...opus.source, provider: "learner" } });
   expect(shadow).toMatchObject({ recommended: opus, actual: chosen, basis: "prior" });
 });
@@ -380,7 +432,7 @@ it("workspace 未指定の未着手タスクの実績は、既定 workspace の�
   await b.clock.advance(HOUR);
 
   const row = listRoutingShadow(b.db, "", { since_watermark: 0 }).shadow.find((r) => r.task_id === later.id);
-  expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 1, rejected: 0, interview: { accepted: 0, rejected: 0 } } });
+  expect(row?.actual_record).toEqual({ board: { accepted: 1, rejected: 0 }, workspace: { accepted: 1, rejected: 0 }, seed: null });
 }, GIT_FIXTURE_TEST_TIMEOUT);
 
 it("同じ entry の前の異議群が capability、後の異議群が preference と帰責された session も負として数える —— 学習器は opus の行を下げる(ADR 0170 決定3)", async () => {
@@ -468,7 +520,7 @@ it("effort「無い」の episode は1つのセルに集まり、表の行との
   const model = "claude-haiku-4-5-20251001";
   const noEffort = { provider: "anthropic", model, effort: null, advisor: null } as const;
   const episodes = [episode({ cell: noEffort, outcome: "rejected" }), episode({ cell: noEffort, outcome: "rejected" }), solAccepted];
-  expect(observedInTier(episodes, 1, "tidepool").board).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2, interview: { accepted: 0, rejected: 0 } });
+  expect(observedInTier(episodes, [], 1, "tidepool").board).toContainEqual({ cell: noEffort, accepted: 0, rejected: 2 });
   expect(recommendFor(episodes, [executionSetting("anthropic", model, { effort: null }), sol])).toEqual({ recommended: sol, basis: "data" });
   const high = executionSetting("anthropic", model);
   expect(recommendFor(episodes, [high, sol])).toEqual({ recommended: high, basis: "data" });
@@ -656,4 +708,61 @@ it.each([
 
   const episodes = loadEpisodes(b.db);
   expect(episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome).toBe(outcome);
+});
+
+// ── 種(issue #2194 / ADR 0273 決定7)──────────────────────────────────
+
+const opusTarget = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } as const;
+
+/** 1対象の Interview を出題し、受験者を完了させる。root と受験者を返す(採点は呼び手)。 */
+function posedInterview(b: Board, tier: Tier = "standard") {
+  const root = registerTask(b.db, { type: "interview", title: "interview", hypothesis: "opus writes the parser", tier, interview_targets: [opusTarget] }, b.clock.now(), ...HUMAN_WEBUI);
+  const probe = { title: "add a parser", probe: "write a parser", completion_criteria: "every sample parses", rubric: "tests pass" };
+  const [examinee] = poseProbe(b.db, root, probe, "auditor", b.clock.now(), "worker", POSED_HEAD);
+  completeTask(b.db, examinee!, FULL_HANDOFF, WORKER, b.clock.now(), "worker");
+  return { root, examinee: examinee! };
+}
+
+/** 採点完了で root を done にし、採点の event id を返す。 */
+function scoredInterview(b: Board, outcome: "accepted" | "rejected", tier?: Tier) {
+  const { root, examinee } = posedInterview(b, tier);
+  completeInterview(b.db, getTask(b.db, root.id)!, { scores: [{ child_id: examinee.id, outcome }], handoff: { outcome: "findings" } }, "auditor", b.clock.now(), "worker");
+  return listEventsOfKinds(b.db, ["interview_scored"]).find((e) => e.task_id === examinee.id)!.id;
+}
+
+it("done の root の受理の採点が (セル, 段) の種になり、同じセルの最新の受理が勝つ —— 却下の採点と cancelled・未決着の Interview は種を置かず、段ごとに別の種(loadSeeds)", () => {
+  const b = bareBoard();
+  const first = scoredInterview(b, "accepted");
+  const latest = scoredInterview(b, "accepted");
+  scoredInterview(b, "rejected");
+  // cancelled と未決着の root の受理: 採点完了は採点と完了を一度に入れるのでこの状態は verb では作れない —— 読みの規則だけを
+  // event で釘付けする。採点は root の完了で確定する(ADR 0251 決定4)
+  for (const cancel of [true, false]) {
+    const { root, examinee } = posedInterview(b);
+    appendEvent(b.db, { taskId: examinee.id, workerId: "auditor", origin: "worker", at: b.clock.now(), payload: { kind: "interview_scored", outcome: "accepted" } });
+    if (cancel) cancelTaskDirectly(b.db, getTask(b.db, root.id)!, null, b.clock.now(), {}, "webui");
+  }
+  const frontier = scoredInterview(b, "accepted", "frontier");
+
+  expect(first).toBeLessThan(latest);
+  expect(loadSeeds(b.db)).toEqual([
+    { cell: opusTarget, tier_id: tierIdOf(b.db, "standard"), kind: "interview", event_id: latest },
+    { cell: opusTarget, tier_id: tierIdOf(b.db, "frontier"), kind: "interview", event_id: frontier },
+  ]);
+});
+
+it("同じ (セル, 段) の種は出所を問わず最新が勝つ —— 人間の種の後の Interview の受理、その後の人間の種(loadSeeds)", () => {
+  const b = bareBoard();
+  const reAddSeeded = () => {
+    // 表の種には opus の standard の行があるので、消してから人間の種つきで足し直す
+    applyExecutionSettingsChange(b.db, { setting: "delete_row", ...opusTarget }, "webui", b.clock.now());
+    const row = { ...opusTarget, tier: "standard", price_in: 5, price_out: 25 };
+    return applyExecutionSettingsChange(b.db, { setting: "row", row, seed: { comment: "measured" } }, "webui", b.clock.now())!;
+  };
+  reAddSeeded();
+  const scored = scoredInterview(b, "accepted");
+  const standard = tierIdOf(b.db, "standard");
+  expect(loadSeeds(b.db)).toEqual([{ cell: opusTarget, tier_id: standard, kind: "interview", event_id: scored }]);
+  const human = reAddSeeded();
+  expect(loadSeeds(b.db)).toEqual([{ cell: opusTarget, tier_id: standard, kind: "human", event_id: human }]);
 });

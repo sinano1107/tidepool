@@ -1023,6 +1023,14 @@ it("行を書く扉は、model が high に下げる effort を走る値を名�
   expect(opus45Rows(db)).toEqual([opus45]);
 });
 
+it("「観測ありとして始める」(seed)は行の追加だけが受け、編集に付けると DomainError で表は変わらない(ADR 0273 決定7)", () => {
+  const db = boardWithOpus45();
+  const edit = { setting: "row", key: opus45Key, row: { ...opus45, price_out: 30 }, seed: { comment: "re-measured" } } as const;
+  expect(() => applyExecutionSettingsChange(db, edit, "webui", new Date())).toThrow(DomainError);
+  expect(() => applyExecutionSettingsChange(db, edit, "webui", new Date())).toThrow(/only when adding a row/);
+  expect(opus45Rows(db)).toEqual([opus45]);
+});
+
 it("model が high に下げる effort への行の提案は作る時点で拒まれ、question は立たない(ADR 0218 決定4)", () => {
   const db = boardWithOpus45();
   registerMetaReview(db, "routing", new Date());

@@ -1,8 +1,8 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, type InterviewOutcome, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
-import type { ExecutionSetting } from "./execution-setting.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
+import { type ExecutionSetting, matchesRowKey } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
 import type { TierId } from "./tier.js";
@@ -24,13 +24,13 @@ export interface Cell {
  *  単位だが、transcript を持たず outcome だけを持つ)。文脈のうち持つのは workspace
  *  (プーリングの段)と走った段(`tier_id`、ADR 0210 決定3 —— 行は段を移るので、候補集合だけでは段が決まらない)。
  *  優先順位は selector の並びに入っている。agent / interview 種別はセルを割らない —— interview 種別は episode が
- *  持ち(ADR 0181 決定4)、集計が本番と分けて数える。費用と時間は session ごとの観測で、推薦の鍵にはならない
+ *  持ち、集計は受験者の episode を数えない(採点は種、ADR 0273 決定7)。費用と時間は session ごとの観測で、推薦の鍵にはならない
  *  (routing meta-review の shadow 行の読み口が読む、ADR 0183)。
  *  `outcome` の `excluded` は「まだ判定が無い」「帰責が worker の落ち度でない」(ADR 0115 決定5)
  *  「pin の行が仕事をしていない」(main の差し替え、ADR 0215 決定4)の3つで、受理率の分母に入らない。 */
 export interface LearnerEpisode {
   cell: Cell;
-  /** Interview の子の episode か(ADR 0181 決定4): outcome は採点の注釈で、読み手が本番と分けて読む。 */
+  /** 受験者の episode か: 種別は episode に残るが、推薦の観測には数えない(ADR 0273 決定7)。 */
   interview: boolean;
   tier_id: TierId;
   workspace: string | null;
@@ -50,18 +50,12 @@ export interface LearnerEpisode {
  *  仕事をしたのは表に無い model で、どちらでも pin の行の実績にすると比較が歪む(ADR 0215 決定4)。 */
 export function episodeOutcome(facts: {
   accepted: boolean;
-  /** Interview の採点が却下(ADR 0181 決定4)。受理は `accepted` に入る。 */
-  scoredRejected?: boolean;
   causes: readonly Cause[];
   allocations: readonly { allocation: Allocation; cause: Cause }[];
   swapped: boolean;
 }): LearnerEpisode["outcome"] {
   if (facts.swapped) return "excluded";
-  if (
-    facts.scoredRejected ||
-    facts.causes.includes("capability") ||
-    facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")
-  ) {
+  if (facts.causes.includes("capability") || facts.allocations.some((a) => a.allocation === "underpowered" && a.cause === "capability")) {
     return "rejected";
   }
   return facts.accepted ? "accepted" : "excluded";
@@ -70,10 +64,9 @@ export function episodeOutcome(facts: {
 /** 受理数と却下数。 */
 type Counts = { accepted: number; rejected: number };
 
-/** セルごとの集計: 受理数と却下数と、そのうち Interview の子の分(ADR 0181 決定4・5)。 */
+/** セルごとの集計: 本番の受理数と却下数。 */
 export interface CellStats extends Counts {
   cell: Cell;
-  interview: Counts;
 }
 
 export interface Recommendation {
@@ -99,19 +92,39 @@ function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
   for (const e of episodes) {
     if (e.outcome === "excluded") continue;
     const key = cellJson(e.cell);
-    const stats = byKey.get(key) ?? { cell: e.cell, accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } };
+    const stats = byKey.get(key) ?? { cell: e.cell, accepted: 0, rejected: 0 };
     stats[e.outcome]++;
-    if (e.interview) stats.interview[e.outcome]++;
     byKey.set(key, stats);
   }
   return [...byKey.values()];
 }
 
-/** 推薦が数える観測(純関数、ADR 0210 決定2): 候補の段で走った episode だけを、盤面の段と workspace の段に集計する。
- *  行を段の間で移すと移った先では未観測になり、戻せば元の観測がまた数えられる。 */
-export function observedInTier(episodes: readonly LearnerEpisode[], tier: TierId, workspace: string | null): { board: CellStats[]; workspace: CellStats[] } {
-  const inTier = episodes.filter((e) => e.tier_id === tier);
-  return { board: aggregateCells(inTier), workspace: aggregateCells(inTier.filter((e) => e.workspace === workspace)) };
+/** 学習器の種(ADR 0273 決定7): (セル, 段) の表の事前分布(受理1件分)を同じ重みのまま置き換え、そのセルを観測ありにする。
+ *  出所は done の Interview の受理の採点(`interview`)か、行を足す扉の明示(`human`)。どちらの出所も advisor を持たない3欄なので、
+ *  候補との照合は provider / model / effort の完全一致(ADR 0182 決定3)で advisor を見ない。 */
+export interface Seed {
+  cell: Omit<Cell, "advisor">;
+  tier_id: TierId;
+  kind: "interview" | "human";
+  event_id: number;
+}
+
+/** 推薦が数える観測(純関数、ADR 0210 決定2): 候補の段で走った本番の episode だけを、盤面の段と workspace の段に集計する。
+ *  行を段の間で移すと移った先では未観測になり、戻せば元の観測がまた数えられる。受験者の episode は観測ではない —— 採点は
+ *  事前分布の種になる(ADR 0273 決定7)。種も段をまたがない。種は盤面全体の層に必ず効き重みは1件分なので、workspace の層で
+ *  もう1度数えることはない —— どの workspace の pickup にも同じ種が1つ効く。 */
+export function observedInTier(
+  episodes: readonly LearnerEpisode[],
+  seeds: readonly Seed[],
+  tier: TierId,
+  workspace: string | null,
+): { board: CellStats[]; workspace: CellStats[]; seeds: Seed[] } {
+  const inTier = episodes.filter((e) => e.tier_id === tier && !e.interview);
+  return {
+    board: aggregateCells(inTier),
+    workspace: aggregateCells(inTier.filter((e) => e.workspace === workspace)),
+    seeds: seeds.filter((s) => s.tier_id === tier),
+  };
 }
 
 /** セルが表の候補行に当たるか: model も advisor も完全一致(ADR 0182 決定3)—— 部分一致だと `claude-opus-5` の行が
@@ -125,28 +138,28 @@ function cellMatches(candidate: ExecutionSetting, cell: Cell): boolean {
   );
 }
 
-/** 候補行1つの1段の実績: その段の集計のうち行に当たるセルの受理数と却下数(疑似観測を含まない)と、そのうち Interview の子の分
- *  —— shadow 行が本番 / Interview の内訳を運ぶ(ADR 0181 決定5)。 */
-type Tally = Counts & { interview: Counts };
-const tally = (candidate: ExecutionSetting, stats: readonly CellStats[]): Tally => {
+/** 候補行1つの1段の実績: その段の集計のうち行に当たるセルの受理数と却下数(疑似観測も種も含まない)。 */
+const tally = (candidate: ExecutionSetting, stats: readonly CellStats[]): Counts => {
   const matched = stats.filter((s) => cellMatches(candidate, s.cell));
-  const sum = (count: (s: CellStats) => number) => matched.reduce((n, s) => n + count(s), 0);
-  return {
-    accepted: sum((s) => s.accepted),
-    rejected: sum((s) => s.rejected),
-    interview: { accepted: sum((s) => s.interview.accepted), rejected: sum((s) => s.interview.rejected) },
-  };
+  return { accepted: matched.reduce((n, s) => n + s.accepted, 0), rejected: matched.reduce((n, s) => n + s.rejected, 0) };
 };
 
-/** 候補行1つの、推薦が数えた実績(盤面の段と workspace の段を分けたまま)。shadow 行が両セルについて運ぶ(ADR 0181 決定5)。 */
+/** 候補行1つの、推薦が数えた実績(盤面の段と workspace の段を分けたまま)と種の有無・種別・出所。shadow 行が両セルについて運ぶ
+ *  (ADR 0181 決定5 / ADR 0273 決定7)。 */
 export interface TrackRecord {
-  board: Tally;
-  workspace: Tally;
+  board: Counts;
+  workspace: Counts;
+  seed: Pick<Seed, "kind" | "event_id"> | null;
 }
-const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], workspace: readonly CellStats[]): TrackRecord => ({
-  board: tally(candidate, board),
-  workspace: tally(candidate, workspace),
-});
+type Observed = ReturnType<typeof observedInTier>;
+const trackRecord = (candidate: ExecutionSetting, observed: Observed): TrackRecord => {
+  const seed = observed.seeds.find((s) => matchesRowKey(candidate, s.cell));
+  return {
+    board: tally(candidate, observed.board),
+    workspace: tally(candidate, observed.workspace),
+    seed: seed ? { kind: seed.kind, event_id: seed.event_id } : null,
+  };
+};
 
 /** 推薦(純関数): 候補行ごとの事後分布(Beta-Bernoulli)を並べる。事前分布は表の行 = 受理1件分の疑似観測(固定慣習、
  *  設定に出さない)。盤面全体の事後分布が workspace の事前分布なので、この workspace の episode は盤面の段と workspace の段で
@@ -156,18 +169,16 @@ const trackRecord = (candidate: ExecutionSetting, board: readonly CellStats[], w
  *  勝つ —— 先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)、それ以外は事後平均の並べ方で先頭より前に来るとき。
  *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → selector の並び —— 観測された session 費用は
  *  鍵にしない(ADR 0183。cost の鍵は表の価格で、selector の並びに既に入っている)。
- *  乱数は持たない(Thompson sampling をしないので seed も無い)。 */
-export function recommend(input: {
-  candidates: readonly ExecutionSetting[];
-  board: readonly CellStats[];
-  workspace: readonly CellStats[];
-}): Recommendation {
+ *  乱数は持たない(Thompson sampling をしないので乱数の seed も無い —— 学習器の種 `Seed` とは別物)。 */
+export function recommend(input: Observed & { candidates: readonly ExecutionSetting[] }): Recommendation {
   const scored = input.candidates.map((candidate, order) => {
-    const { board, workspace } = trackRecord(candidate, input.board, input.workspace);
+    const { board, workspace, seed } = trackRecord(candidate, input);
     const accepted = board.accepted + workspace.accepted;
     const rejected = board.rejected + workspace.rejected;
     const observed = accepted + rejected;
-    return { candidate, order, observed, rejected, accepted: 1 + accepted, total: 1 + observed };
+    // 種は事前分布を同じ重み(受理1件分)で置き換えるので事後分布は変わらず、観測ありの判定と観測数の比較にだけ受理1件として
+    // 数える(ADR 0273 決定7)—— 事後分布に足すと本番の episode と同じ重みになる
+    return { candidate, order, observed: observed + (seed ? 1 : 0), rejected, accepted: 1 + accepted, total: 1 + observed };
   });
   type Scored = (typeof scored)[number];
   // 事後平均の比較は整数の交差乗算 —— 浮動小数の「同点」で決定論が崩れない
@@ -203,13 +214,11 @@ export interface RoutingEpisode extends LearnerEpisode {
 export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(
-      `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted, interview_target_id IS NOT NULL AS interview,
-         (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored'
-            AND (SELECT root.status FROM interview_targets it JOIN tasks root ON root.id = it.task_id WHERE it.id = tasks.interview_target_id) = 'done') AS score
+      `SELECT id, workspace, ${acceptedSql("tasks.id")} AS accepted, interview_target_id IS NOT NULL AS interview
        FROM tasks
         WHERE ${workSideTypeSql("tasks")} AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
-    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number; score: InterviewOutcome | null }>;
+    .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number }>;
   // work 側の task だけに絞る(spawn を持つ work 側の task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
   const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
@@ -246,10 +255,9 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       interview: task.interview === 1,
       tier_id: spawned.payload.tier_id,
       workspace: task.workspace,
-      // Interview の子の受理は統合点レビューではなく root の採点(ADR 0181 決定4)で、root の完了で確定する(ADR 0251 決定4)。受理と同じく task の最後の session にだけ付く
+      // 受験者には完了時レビューが無いので受理されない —— 採点は観測ではなく種(loadSeeds、ADR 0273 決定7)
       outcome: episodeOutcome({
-        accepted: (task.interview ? task.score === "accepted" : task.accepted === 1) && !hasNextSpawn,
-        scoredRejected: task.score === "rejected" && !hasNextSpawn,
+        accepted: task.accepted === 1 && !hasNextSpawn,
         causes,
         allocations,
         swapped: usage?.model_swaps.some(swapsMain) ?? false,
@@ -258,6 +266,33 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       duration_ms: exited ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,
     };
   });
+}
+
+/** 盤面境界の読み口: 学習器の種を (セル, 段) ごとに1つ —— 同じ (セル, 段) は出所を問わず event id の最新が勝つ(ADR 0273 決定7)。
+ *  Interview の種は受験者の受理の採点で、セルは対象、段は root の段(測る段)。採点が確定するのは root の完了なので、root が
+ *  done のものだけ(cancelled は種にしない —— ADR 0251 決定4)。却下の採点は種を置かず、前の受理を消しもしない。人間の種は
+ *  行を足す扉の「観測ありとして始める」で、セルは足した行、段はそのとき焼いた段の id。 */
+export function loadSeeds(db: Db): Seed[] {
+  const rows = db
+    .prepare(
+      `SELECT e.id AS event_id, it.provider, it.model, it.effort, root.tier_id, 'interview' AS kind
+       FROM events e
+       JOIN tasks examinee ON examinee.id = e.task_id
+       JOIN interview_targets it ON it.id = examinee.interview_target_id
+       JOIN tasks root ON root.id = it.task_id
+       WHERE e.kind = 'interview_scored' AND json_extract(e.payload, '$.outcome') = 'accepted' AND root.status = 'done'
+       UNION ALL
+       SELECT id, json_extract(payload, '$.row.provider'), json_extract(payload, '$.row.model'), json_extract(payload, '$.row.effort'),
+         json_extract(payload, '$.tier_id'), 'human'
+       FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.seed') IS NOT NULL
+       ORDER BY event_id`,
+    )
+    .all() as Array<Seed["cell"] & Omit<Seed, "cell">>;
+  const seeds = new Map<string, Seed>();
+  for (const { event_id, tier_id, kind, ...cell } of rows) {
+    seeds.set(JSON.stringify([cell.provider, cell.model, cell.effort, tier_id]), { cell, tier_id, kind, event_id });
+  }
+  return [...seeds.values()];
 }
 
 /** selector の分岐(純関数、ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補(selector の並び)から、実際に走る設定と
@@ -280,7 +315,7 @@ export function selectorBranch(input: Parameters<typeof recommend>[0] & { promot
   const { recommended, basis } = recommend(input);
   const chosen = input.promoted ? { ...recommended, source: { ...recommended.source, provider: "learner" as const } } : table;
   const other = input.promoted ? table : recommended;
-  const record = (s: ExecutionSetting) => trackRecord(s, input.board, input.workspace);
+  const record = (s: ExecutionSetting) => trackRecord(s, input);
   return {
     chosen,
     shadow: { recommended: other, actual: chosen, basis, recommended_record: record(other), actual_record: record(chosen), candidates: input.candidates.length },

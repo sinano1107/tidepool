@@ -113,7 +113,7 @@ import { clearSpendDown, getSpendDown, isKnownSpendDownTarget, setSpendDown } fr
 import {
   type BoardTask,
   countUnsettledTasksReferencing,
-  countUnsettledWorkSideAssignedTo,
+  countUnsettledWorkAssignedTo,
   directCancelDiscards,
   getTask,
   HANDOFF_FIELDS,
@@ -1100,7 +1100,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         { name: req.params.name, ...parsed.data },
         {
           unsettledTaskCount: countUnsettledTasksReferencing(db, "assignee", req.params.name),
-          unsettledWorkSideTaskCount: countUnsettledWorkSideAssignedTo(db, req.params.name),
+          unsettledWorkTaskCount: countUnsettledWorkAssignedTo(db, req.params.name),
           awaitingLandingTaskIds: taskIdsAwaitingLanding(
             db,
             buildWorkspaceResolver(resolveWorkspace, workspace),

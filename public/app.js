@@ -175,7 +175,7 @@ var TidepoolRules = (() => {
     return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : void 0;
   }
   function whyAssigneeCannotTake(name, type, resolvesToBuiltIn) {
-    return type !== "review" && type !== "interview" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs only reviews and Interviews` : void 0;
+    return type !== "review" && type !== "interview" && type !== "memory_repair" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs only reviews, Interviews and memory repairs` : void 0;
   }
   var completionReviewFires = (t) => whyNoCompletionReview(t) === void 0;
   var reviewFlagCarriesMeaning = (t) => whyReviewFlagIsInert(t) === void 0;
@@ -3087,7 +3087,7 @@ function TiersCard({ settings, say, onSaved, edit }) {
   ), !isNew && /* @__PURE__ */ React.createElement(Button, { variant: "danger", size: "sm", disabled: busy, onClick: () => send([{ setting: "delete_tier", name: target }], "tier deleted") }, "Delete tier"))));
 }
 function ExecutionTableCard({ settings, say, onSaved, edit }) {
-  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:execution-table";
   const open = edit.isOpen(id);
   const rowKey = (row) => `${row.provider}:${row.model}:${row.effort}`;
@@ -3099,12 +3099,13 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
   const same = (a, b) => a && rowKey(a) === rowKey(b) && a.tier === b.tier && a.price_in === b.price_in && a.price_out === b.price_out;
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d))).map((d) => {
     const original = current.get(d.key);
-    return original ? { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) } : { row: toRow(d) };
+    if (original) return { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) };
+    return { row: toRow(d), ...d.seed !== void 0 && { seed: { comment: d.seed } } };
   });
   const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
   const dirty = writes.length > 0 || deletes.length > 0;
   const unique = (of) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)) && (d.seed === void 0 || !TidepoolRules.whyBlank(d.seed))) && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
   const save = async () => {
     setBusy(true);
@@ -3155,7 +3156,24 @@ function ExecutionTableCard({ settings, say, onSaved, edit }) {
     ),
     /* @__PURE__ */ React.createElement(Input, { label: "Price in", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)), mono: true, value: d.price_in, onChange: (e) => update(i, { price_in: e.target.value }), placeholder: "USD / MTok" }),
     /* @__PURE__ */ React.createElement(Input, { label: "Price out", error: TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)), mono: true, value: d.price_out, onChange: (e) => update(i, { price_out: e.target.value }), placeholder: "USD / MTok" }),
-    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove")
+    /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => setDraft(draft.filter((_, j) => j !== i)), "aria-label": `remove ${d.provider} ${d.tier} ${d.model}`.trim() }, "Remove"),
+    d.key === "new" && /* @__PURE__ */ React.createElement("div", { style: { gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8 } }, /* @__PURE__ */ React.createElement(
+      Checkbox,
+      {
+        label: "Start as observed \u2014 the learner may move to this row before it has run here",
+        checked: d.seed !== void 0,
+        onChange: () => update(i, { seed: d.seed === void 0 ? "" : void 0 })
+      }
+    ), d.seed !== void 0 && /* @__PURE__ */ React.createElement(
+      Input,
+      {
+        label: "Why (recorded with the change)",
+        value: d.seed,
+        error: TidepoolRules.whyBlank(d.seed),
+        onChange: (e) => update(i, { seed: e.target.value }),
+        placeholder: "e.g. accepted by the standard Interview of the parser probe"
+      }
+    ))
   )), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: addRow, disabled: draft.some((d) => d.key === "new") }, "Add row"), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, `a row says "this model meets this tier's quality on this provider" \u2014 classify by measured capability, not price. prices are USD per MTok. removing every row of a provider \xD7 tier just excludes that provider for tasks of that tier.`), /* @__PURE__ */ React.createElement(
     EditActions,
     {

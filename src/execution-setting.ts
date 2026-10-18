@@ -540,7 +540,7 @@ type RowKey = z.infer<typeof rowKeySchema>;
 type RowKeyFields = { provider: string; model: string; effort: string | null };
 
 /** この行が鍵の行か。 */
-export const matchesRowKey = (row: ExecutionSettingRow, key: RowKeyFields) =>
+export const matchesRowKey = (row: RowKeyFields, key: RowKeyFields) =>
   row.provider === key.provider && row.model === key.model && row.effort === key.effort;
 
 /** 行を文面で名指す綴り(エラー・question の diff)。 */
@@ -585,6 +585,8 @@ export const executionSettingsChangeSchema = z.discriminatedUnion("setting", [
         if (reason) ctx.addIssue({ code: "custom", message: reason });
       }),
     }),
+    // 「観測ありとして始める」: 足す行の (セル, 段) に人間の種を置く。根拠の文は必須で、この event に残る(ADR 0273 決定7)
+    seed: z.object({ comment: requiredTextSchema }).optional(),
   }),
   z.object({ setting: z.literal("delete_row"), ...rowKeySchema.shape }),
   z.object({ setting: z.literal("advisor_ceiling"), value: z.enum(ADVISOR_CEILINGS) }),
@@ -759,6 +761,7 @@ export function applyExecutionSettingsChange(
         }
         assertKnownTier(db, "tier", tier);
         const { key } = change;
+        if (key && change.seed) throw new DomainError("start as observed (seed) applies only when adding a row, not when editing one");
         const table = loadExecutionSettingTable(db);
         if (key && !table.some((row) => matchesRowKey(row, key))) {
           throw new DomainError(`the execution-setting table has no row ${rowName(key)} to edit`);
@@ -803,7 +806,13 @@ export function applyExecutionSettingsChange(
       taskId: null,
       workerId: HUMAN_WORKER_ID,
       origin,
-      payload: { kind: "execution_settings_changed", ...change, ...(questionId && { question_id: questionId }) },
+      payload: {
+        kind: "execution_settings_changed",
+        ...change,
+        ...(questionId && { question_id: questionId }),
+        // 種の段は id で焼く —— 段は改名されうる(issue #1436)
+        ...(change.setting === "row" && change.seed && { tier_id: tierIdOf(db, change.row.tier) }),
+      },
       at,
     });
     // 回答中の question は answerQuestion が先に done にしているので、承認した提案が自分自身を決着させることは無い
