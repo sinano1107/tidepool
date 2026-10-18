@@ -141,19 +141,13 @@ it("approve の修正値は仮説・測る仕事・対象の effort・実環境�
   expect(current.interview).toMatchObject({ hypothesis: amendment.hypothesis, measured_work: amendment.measured_work, real_environment: expect.stringContaining("tidepool-lagoon-") });
 });
 
-it("修正値の対象は effort だけを動かせ、effort の述語に外れる修正値は回答ごと断られて何も登録されない", async () => {
+it("effort の述語に外れる修正値は登録の扉で回答ごと断られ、何も登録されない(修正値の形は tests/execution-setting.test.ts)", async () => {
   const reviewId = await boardWithRoutingReview();
   const { eventId } = session("reef");
   const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId]));
-  for (const [targets, refusal] of [
-    [[{ ...OPUS_MAX, model: "claude-fable-5-1" }, OPUS_LOW], "with only effort changed"],
-    [[OPUS_MAX], "with only effort changed"],
-    [[OPUS_MAX, { ...OPUS, effort: "ultra" }], "effort must be one of"],
-  ] as const) {
-    const refused = await answer(question_id, { answers: ["approve"], amendment: { targets } });
-    expect(refused.status).toBe(409);
-    expect(refused.json.error).toContain(refusal);
-  }
+  const refused = await answer(question_id, { answers: ["approve"], amendment: { targets: [OPUS_MAX, { ...OPUS, effort: "ultra" }] } });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("effort must be one of");
   expect(await task(question_id)).toMatchObject({ status: "todo", question_answer: null });
   expect(await interviews()).toEqual([]);
 });
@@ -171,41 +165,20 @@ it("approve は人間の扉と同じく既定 agent が走らせられない対�
   expect(await interviews()).toEqual([]);
 });
 
-it("reject では何も登録されず、根拠の行が書き換わるか対象と一致する行が足されると question は observed で決着する", async () => {
+it("reject では何も登録されず、表の書き口の陳腐化の hook は Interview の提案を observed で決着させる(崩れる欄の区別は tests/execution-setting.test.ts)", async () => {
   const reviewId = await boardWithRoutingReview();
   const { eventId } = session("reef");
-  const [rejected, priced, rowed] = [
-    (await call(reviewId, "propose_routing_change", proposal([eventId]))).question_id,
-    (await call(reviewId, "propose_routing_change", proposal([eventId], { targets: [OPUS_LOW] }))).question_id,
-    (await call(reviewId, "propose_routing_change", proposal([eventId], { targets: [SONNET_MAX] }))).question_id,
-  ];
+  const rejected = (await call(reviewId, "propose_routing_change", proposal([eventId]))).question_id;
+  const rowed = (await call(reviewId, "propose_routing_change", proposal([eventId], { targets: [SONNET_MAX] }))).question_id;
   expect((await answer(rejected, { answers: ["reject"], comment: "not now" })).status).toBe(200);
   expect(await interviews()).toEqual([]);
 
-  // 対象と一致する行(standard の sonnet at max)を足すと、その対象を運ぶ提案だけが決着する —— 別の段の行は一致しない
-  const settings = (change: Record<string, unknown>) => api(t.baseUrl, "POST", "/api/settings/execution", change);
-  expect((await settings({ setting: "row", row: { ...SONNET_MAX, tier: "frontier", price_in: 2, price_out: 10 } })).status).toBe(200);
-  expect(await task(rowed)).toMatchObject({ status: "todo" });
-  expect((await settings({ setting: "row", key: SONNET_MAX, row: { ...SONNET_MAX, tier: "standard", price_in: 2, price_out: 10 } })).status).toBe(200);
+  // 対象と一致する行(standard の sonnet at max)を足す
+  const row = { ...SONNET_MAX, tier: "standard", price_in: 2, price_out: 10 };
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row })).status).toBe(200);
   expect(await task(rowed)).toMatchObject({ status: "done" });
-  expect(await task(priced)).toMatchObject({ status: "todo" });
-  // 根拠の行の値段が変わると、残りの提案も決着する
-  expect((await settings({ setting: "row", key: OPUS, row: { ...OPUS, tier: "standard", price_in: 6, price_out: 25 } })).status).toBe(200);
-  expect(await task(priced)).toMatchObject({ status: "done" });
-  const changed = async (id: string) => ((await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[]).find((e) => e.kind === "routing_proposal_stale")?.payload.changed;
-  expect([await changed(rowed), await changed(priced)]).toEqual([["target_row"], ["rows"]]);
-  expect(await interviews()).toEqual([]);
-});
-
-it("測る段が消えると、その段の Interview の提案は observed で決着する", async () => {
-  const reviewId = await boardWithRoutingReview();
-  const { eventId } = session("reef");
-  const settings = (change: Record<string, unknown>) => api(t.baseUrl, "POST", "/api/settings/execution", change);
-  expect((await settings({ setting: "insert_tier", name: "mid", description: "between", position: 2 })).status).toBe(200);
-  const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId], { tier: "mid", targets: [OPUS_MAX] }));
-
-  expect((await settings({ setting: "delete_tier", name: "mid" })).status).toBe(200);
-  expect(await task(question_id)).toMatchObject({ status: "done" });
+  const stale = ((await api(t.baseUrl, "GET", `/api/tasks/${rowed}/events`)).json as any[]).find((e) => e.kind === "routing_proposal_stale");
+  expect(stale.payload.changed).toEqual(["target_row"]);
   expect(await interviews()).toEqual([]);
 });
 
