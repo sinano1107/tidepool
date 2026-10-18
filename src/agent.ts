@@ -15,6 +15,7 @@ import {
 import { unsettledSql } from "./task-status.js";
 import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
+import { whyAssigneeCannotTake } from "./webui-rules.js";
 import type { WorkspaceResolver } from "./workspace.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -58,10 +59,10 @@ export function resolveExecutionAgent(
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
   assertValidAgentDefinition(name, definition, tiers);
-  // 組み込みが走らせるのは reviewer 定数の授権で走れる type だけ(ADR 0275 決定1 / ADR 0228 決定4): 名前ではなく
+  // 組み込みが走らせる type は assignee の門と同じ線(ADR 0275 決定1 / ADR 0228 決定4): 名前ではなく
   // 解決の結果を見るので、shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
   // 解決の失敗として agent 名の quarantine に乗せる。
-  if (definition.builtin && taskType !== "review" && taskType !== "interview" && taskType !== "memory_repair") {
+  if (definition.builtin && whyAssigneeCannotTake(name, taskType, true) !== undefined) {
     throw new InvalidAgentDefinitionError(
       name,
       `the built-in agent runs only reviews, Interviews and memory repairs, but a ${taskType} task resolved to it; ` +

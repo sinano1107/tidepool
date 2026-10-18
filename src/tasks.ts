@@ -833,7 +833,7 @@ export function workSideTypeSql(rowRef: string): string {
 export const isWorkSide = (type: TaskType): boolean => type === "work" || type === "memory_repair";
 
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
- *  `assignee` に持つ未決着の work。review / memory_repair は組み込みへ落ちても走るので数えない(ADR 0275 決定1)。 */
+ *  `assignee` に持つ未決着の work。review / interview / memory_repair は組み込みへ落ちても走るので数えない(ADR 0275 決定1)。 */
 export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
