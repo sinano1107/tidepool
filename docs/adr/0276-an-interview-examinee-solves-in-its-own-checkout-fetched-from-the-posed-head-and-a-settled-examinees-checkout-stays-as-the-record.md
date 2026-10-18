@@ -21,7 +21,8 @@ root のブランチの tree rule の WIP commit の件名が root の title(Int
 3. **走る場所の名前は root id のまま。** 受験者の fetch 元は面接室で、準備の失敗は面接室の性質なので、quarantine と封じ込めの組は
    ADR 0273 決定8 のとおり root id で立つ。ADR 0064 の ref snapshot の鍵だけは checkout(受験者 id)にする —— name を共有すると
    中断中の受験者の行を次の受験者が上書きし、再開で盤面自身の違反として立つ。
-4. **決着した受験者の checkout は残す。** 面接室と同じ線 —— 監査・異議・retry の新しい root と人間が答案を読む記録で、消すのは人間の行為。
+4. **決着した受験者の checkout は残す。** 面接室と同じ線 —— 人間が答案を読む記録で(bundle を fetch していた場所に checkout がある)、消すのは人間の行為。
+   監査・異議・retry の新しい root が読みに開くのは今までどおり面接室(環境)で、`read_paths` は変えない。root の採点の入力は伏せた handoff のまま(ADR 0253 決定4)。
    ADR 0263 決定5 の ref 外し、ADR 0266 決定1(reflog expire / repack / prune)・決定2(bundle への写し)、`task_branch_removed` は
    要らなくなる。在り処は開いた時点の event で引く(面接室の `interview_room_opened` と同じ形)。ADR 0064 決定2 の例外は消え、
    タスクブランチは決着後も削除されない、に戻る。
