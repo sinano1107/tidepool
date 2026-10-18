@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, type InterviewOutcome, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
-import { acceptedSql, type Task } from "./tasks.js";
+import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
 import type { TierId } from "./tier.js";
 
 /** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
@@ -194,12 +194,12 @@ export interface RoutingEpisode extends LearnerEpisode {
   source: Spawned["payload"]["source"];
 }
 
-/** 盤面境界の読み口: work task の worker session を1つ1 episode に(codex の
+/** 盤面境界の読み口: work 側の task(`workSideTypeSql`、判定者は外 —— ADR 0272 決定4 の追記)の worker session を1つ1 episode に(codex の
  *  session も含む —— Precedent の投影表は transcript を持つ session しか持たない
  *  ので、events を直に読む)。受理は task の派生なので task の**最後の** session に
  *  だけ付け、前の session は自分の窓の中の負の信号でしか数えない。異議の窓は
  *  Precedent と同じ規則(spawn より後、exit または次の spawn より前)。 */
-// ponytail: pickup ごとに work task の全 session を読み直す。表が大きくなったら集計を増分で持つ
+// ponytail: pickup ごとに work 側の task の全 session を読み直す。表が大きくなったら集計を増分で持つ
 export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(
@@ -207,10 +207,10 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
          (SELECT json_extract(payload, '$.outcome') FROM events WHERE task_id = tasks.id AND kind = 'interview_scored'
             AND (SELECT root.status FROM interview_targets it JOIN tasks root ON root.id = it.task_id WHERE it.id = tasks.interview_target_id) = 'done') AS score
        FROM tasks
-        WHERE type = 'work' AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
+        WHERE ${workSideTypeSql("tasks")} AND EXISTS (SELECT 1 FROM events WHERE task_id = tasks.id AND kind = 'worker_spawned')`,
     )
     .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number; score: InterviewOutcome | null }>;
-  // work task だけに絞る(spawn を持つ work task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
+  // work 側の task だけに絞る(spawn を持つ work 側の task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
   const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
   // 異議群ごとの有効な判定(同じ異議群では後の event が有効)をすべて —— 前の異議群の capability を後の異議群の
@@ -287,7 +287,7 @@ export function selectorBranch(input: Parameters<typeof recommend>[0] & { promot
   };
 }
 
-/** shadow 行の書き手(盤面境界、spec #541): work task の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
+/** shadow 行の書き手(盤面境界、spec #541): work 側の task(`isWorkSide`)の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
 export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date): number {
   const { lastInsertRowid } = db.prepare(
     `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)

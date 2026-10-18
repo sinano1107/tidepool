@@ -829,6 +829,10 @@ export function workSideTypeSql(rowRef: string): string {
   return `${rowRef}.type IN ('work', 'memory_repair')`;
 }
 
+/** `workSideTypeSql` の TS の対。学習器が選び・shadow 行を残し・episode に数えるのもこの側で、判定者(review / interview)は外
+ *  (ADR 0272 決定4 の追記 / ADR 0110 決定4 の Status 追記)。 */
+export const isWorkSide = (type: TaskType): boolean => type === "work" || type === "memory_repair";
+
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
  *  `assignee` に持つ未決着の work 側の task(`workSideTypeSql`)。review は組み込みへ落ちても壊れないので数えない。 */
 export function countUnsettledWorkSideAssignedTo(db: Db, name: string): number {
