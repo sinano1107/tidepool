@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
@@ -192,12 +192,9 @@ export function resolveExecutionWorkspace(
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
   if (interviewRoomPath(db, root.id) !== undefined) return;
   const path = conventionCheckoutPath(root.id, workspacesBaseDir);
-  // event の前に落ちた作成の跡は作り直さない —— 2度目の空コミットを重ねない
-  if (!existsSync(join(path, ".git"))) {
-    mkdirSync(path, { recursive: true });
-    git(path, "init", "--quiet", "--initial-branch=main");
-    git(path, "commit", "--quiet", "--allow-empty", "-m", "interview room");
-  }
+  mkdirSync(path, { recursive: true });
+  git(path, "init", "--quiet", "--initial-branch=main");
+  git(path, "commit", "--quiet", "--allow-empty", "-m", "interview room");
   // 実体の綴りで残す —— cwd・sandbox の読み・root に渡す在り処が同じ綴りになる(issue #1954)
   appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path: realpathSync(path) }, at: now });
 }

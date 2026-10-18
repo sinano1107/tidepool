@@ -78,6 +78,6 @@ const input: WorkerSessionSettingsInput = {
   ...(allowedDomains.length > 0 && { allowedDomains }),
   taskTemp,
   lib64: existsSync("/lib64"),
-  ...(readPaths.length > 0 && { readPaths }),
+  readPaths,
 };
 console.log(JSON.stringify(buildSandboxSettings(input)));

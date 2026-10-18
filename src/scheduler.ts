@@ -64,7 +64,6 @@ import {
   nextSlotTask,
   pickupTask,
   resolveTaskAgent,
-  runPlaceNames,
   type Task,
   type TaskContent,
   unrowedExaminees,
@@ -114,8 +113,9 @@ function withoutStopped(
   return (task) => {
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
-    // 組は走る場所の単位(ADR 0273 決定8)
-    const places = runPlaceNames(db, task, defaultWorkspaceName);
+    // 組は走る場所の単位(ADR 0273 決定8、SQL の対は tasks.ts の `stoppedSql`): 受験者は面接室(root の id)だけ、root は実環境と面接室
+    const room = interviewRoomRoot(db, task);
+    const places = task.interview_target_id !== null ? [room] : [task.workspace ?? defaultWorkspaceName, room];
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => places.includes(pair.workspace) && pair.harness === canonicalHarness(setting.provider)),
     );

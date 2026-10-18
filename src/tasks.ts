@@ -516,13 +516,6 @@ export function interviewRoomRoot(db: Db, task: Pick<Task, "id" | "type" | "inte
   return db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(task.interview_target_id) as string;
 }
 
-/** 資源の停止(quarantine・封じ込めの組)を見る走る場所の名前(ADR 0273 決定8): 受験者は面接室だけ、interview の root は実環境と
- *  面接室、他は workspace(無ければ既定)。面接室の名前は root の id。SQL の対は `stoppedSql`。 */
-export function runPlaceNames(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "workspace">, defaultWorkspaceName: string | undefined): Array<string | undefined> {
-  const room = interviewRoomRoot(db, task);
-  return task.interview_target_id !== null ? [room] : [task.workspace ?? defaultWorkspaceName, room];
-}
-
 /** 面接室の在り処(ADR 0273 決定1): root の最初の pickup が残した event から引く。まだ開いていなければ undefined。 */
 export function interviewRoomPath(db: Db, rootId: string): string | undefined {
   return latestEventOfTask(db, rootId, "interview_room_opened")?.payload.path;
@@ -3377,7 +3370,7 @@ export function typeAwareDefaultAgentSql(table: string): string {
  *  workspace は `task.workspace ?? 既定`(既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
  *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。
- *  workspace の側は走る場所の単位(ADR 0273 決定8、TS の対は `runPlaceNames`): 受験者は面接室(root の id)だけ、interview の root は
+ *  workspace の側は走る場所の単位(ADR 0273 決定8、TS の対は scheduler の `withoutStopped`): 受験者は面接室(root の id)だけ、interview の root は
  *  実環境と面接室の両方。 */
 function stoppedSql(taskRef: string, fallback: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
