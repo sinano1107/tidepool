@@ -80,6 +80,20 @@ it("空の作業ツリーの写しも、空の tree の commit になる", async
   db.close();
 });
 
+it("写しは session の最中のサンドボックスの shadow 残骸(ADR 0069 の既知パス・untracked・0 バイト)を含まず、同じパスでも中身のあるファイルは含む", async () => {
+  const db = openDb(":memory:");
+  const room = await pickedRoom(db);
+  writeFileSync(join(room.path, ".bashrc"), "");
+  mkdirSync(join(room.path, ".claude"));
+  writeFileSync(join(room.path, ".claude", "agents"), "");
+  writeFileSync(join(room.path, ".mcp.json"), "{}\n");
+
+  const head = commitRoomCopy(db, room);
+
+  expect(git(room.path, "ls-tree", "-r", "--name-only", head).split("\n")).toEqual([".mcp.json"]);
+  db.close();
+});
+
 it("受験者の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
   const workspace = await makeWorkspace("pin-posed-head");
   const db = openDb(":memory:");

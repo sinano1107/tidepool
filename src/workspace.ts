@@ -316,14 +316,15 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
 }
 
 /** 出題の写し(ADR 0273 決定3): 面接室の作業ツリーを一時 index で tree にし、保護ブランチの head を親にした盤面名義の commit にして
- *  ref を1本置き、その sha を返す。root の session の HEAD・作業ツリー・本物の index には触れない(ADR 0064)。ignore されたファイルは
- *  写らない(新しい clone と同じ)。ref は受験者のブランチの土台と、却下された出題の写しを決着後の prune から守る。 */
+ *  ref を1本置き、その sha を返す。root の session の HEAD・作業ツリー・本物の index には触れない(ADR 0064)。ignore されたファイルと
+ *  shadow 残骸は写らない(新しい clone と同じ)。ref は受験者のブランチの土台と、却下された出題の写しを決着後の prune から守る。 */
 export function commitRoomCopy(db: Db, room: WorkspaceConfig): string {
   const dir = mkdtempSync(join(tmpdir(), "tidepool-room-index-"));
   let tree: string;
   try {
     const env = { GIT_INDEX_FILE: join(dir, "index") };
-    gitWithEnv(env, room.path, "add", "--all");
+    // session の最中なのでサンドボックスの shadow 残骸がまだある —— tree rule と dirty 判定と同じ集合を外す(ADR 0069)
+    gitWithEnv(env, room.path, "add", "--all", "--", ".", ...shadowRemnants(room).map((path) => `:(exclude,literal)${path}`));
     tree = gitWithEnv(env, room.path, "write-tree");
   } finally {
     rmSync(dir, { recursive: true, force: true });
