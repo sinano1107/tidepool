@@ -1,5 +1,19 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { describe, expect, it } from "vitest";
-import { isLightRun } from "../scripts/test-lock.js";
+import { isLightRun, killChildren } from "../scripts/test-lock.js";
+
+// 壁時計の上限が切れた run は、イベントループに戻らない worker も落とせなければ lock を手放したことにならない
+it("killChildren は親の直下の子を SIGKILL で落とす —— 子を wait している親はそれで終われる", async () => {
+  const parent = spawn("sh", ["-c", "sleep 60 & sleep 60 & wait"], { stdio: "ignore" });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  const exited = once(parent, "exit");
+
+  killChildren(parent.pid!);
+
+  await exited;
+  expect(parent.exitCode ?? parent.signalCode).not.toBeNull();
+});
 
 // 引数は `vitest` より後ろの argv(`process.argv.slice(2)` 相当)
 describe("isLightRun: 既存テストファイルちょうど1つの指定だけが lock を取らない", () => {

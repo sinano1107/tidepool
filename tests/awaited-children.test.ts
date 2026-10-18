@@ -9,7 +9,6 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
 
 const HANDOFF = {
@@ -180,8 +179,7 @@ it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地
     db,
     { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id },
     new Date(1),
-    BOARD_WORKER_ID,
-    "board",
+    ...HUMAN_WEBUI,
   );
 
   expect(presentTask(db, parent).status).toBe("todo");

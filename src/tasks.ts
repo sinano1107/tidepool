@@ -4,8 +4,10 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
+
 import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
-import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
+import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
+
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -240,11 +242,27 @@ export interface TierDescriptionProposal<T extends TierRef = TierId> {
   pin: { description: string };
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
+/** Interview の提案(#921 / ADR 0199 決定5 / ADR 0258 / ADR 0273 決定9)。approve は人間名義の interview root を登録する。pin = 根拠
+ *  (`worker_spawned` の event id)の episode が走った表の行の全欄と、測る段が生きていること。対象と一致する行が表に無いことは
+ *  対象と段からいまの表で照合する。workspace は root が読む実環境で、pin の外(ADR 0258 決定4)。 */
+export interface InterviewProposal<T extends TierRef = TierId> {
+  kind: "routing";
+  op: "interview";
+  hypothesis: string;
+  measured_work?: string;
+  evidence: number[];
+  tier: T;
+  targets: InterviewTarget[];
+  workspace: string;
+  pin: { rows: RowAt<T>[] };
+}
+
+/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
 export type RoutingProposal<T extends TierRef = TierId> =
   | RoutingRowProposal<T>
   | RoutingAddTierProposal<T>
   | TierDescriptionProposal<T>
+  | InterviewProposal<T>
   | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
@@ -258,8 +276,8 @@ export interface RegistryProposal<T extends TierRef = TierId> {
   evidence: number[];
 }
 
-/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、memory は文言と宛先。 */
-export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | MemoryAmendment;
+/** 提案の approve に添える修正値(ADR 0150 決定2・ADR 0152 決定2): 行の提案は tier / effort、tier の提案は下げ先、段の追加は名前・説明・位置、段の説明の提案は文面、Interview は仮説・測る仕事・対象の effort・実環境、memory は文言と宛先。 */
+export type ProposalAmendment = RoutingRowChange | { to: Tier } | AddTierAmendment | { description: string } | InterviewAmendment | MemoryAmendment;
 
 export interface PendingChildSpec extends TaskContent {
   review_by?: string[];
@@ -450,6 +468,13 @@ export interface InterviewTarget {
 }
 
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
+/** 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)。 */
+function assertMemoryRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
+  if (input.type === "memory_repair" && input.parent_id === undefined) {
+    throw new DomainError("a memory repair stands only as a child of the task whose memory write was objected");
+  }
+}
+
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
     throw new DomainError("an Interview's answer task takes no children other than a question");
@@ -1016,6 +1041,7 @@ export function registerTask(
   assertInterviewFields(db, input);
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
+  assertMemoryRepairHasParent(input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -1347,13 +1373,17 @@ export function moveTask(
 }
 
 /** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
-type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" }>;
+export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" | "pickup_stopped" }>;
+
+/** 資源の Quarantine が worker の起動前に pickup を止めた先頭復帰(ADR 0274)。 */
+export type PickupStopped = Extract<QueueReturnPayload, { kind: "pickup_stopped" }>;
 
 /** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
  *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
  *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
- *  行の拒否(ADR 0184 決定4)と盤面の記録の器が書けない pickup(ADR 0266 決定3)も同じ一撃で、刻む event だけが違う。 */
+ *  行の拒否(ADR 0184 決定4)・盤面の記録の器が書けない pickup(ADR 0266 決定3)・資源の停止で worker が1度も走らなかった
+ *  pickup(ADR 0274)も同じ一撃で、刻む event だけが違う。 */
 export function returnToQueueHead(
   db: Db,
   task: Task,

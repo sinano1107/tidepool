@@ -31,8 +31,39 @@ function isAlive(pid: number): boolean {
   }
 }
 
+// 1本の run の壁時計の上限。テストの時間制限は worker のタイマーで動くので、解決済みの Promise だけで回る無限ループ
+// (#2002 の実装中に full suite が3時間止まり、その間 lock を握り続けた)では発火しない。main process はループに
+// 巻き込まれないのでここで測り、超えたら worker ごと落として exit する —— lock は exit の経路で手放される。
+// CI の full suite は約5分(ADR 0155)。時計は lock を取ってから回すので、前の run を待つ間は数えない。
+const RUN_LIMIT_MS = 20 * 60_000;
+
+function armRunLimit(): void {
+  setTimeout(() => {
+    console.error(
+      `The test run exceeded ${RUN_LIMIT_MS / 60_000} minutes and was stopped. A test is likely stuck in a loop that never yields to the event loop; run the files one at a time to find it.`,
+    );
+    killChildren(process.pid);
+    process.exit(1);
+  }, RUN_LIMIT_MS).unref();
+}
+
+/** 直下の子(vitest の fork worker)を SIGKILL で落とす。ループ中の worker は IPC の切断を処理できず、親の exit では死なない。 */
+export function killChildren(pid: number): void {
+  try {
+    execFileSync("pkill", ["-KILL", "-P", String(pid)], { stdio: "ignore" });
+  } catch {
+    // 子が居なければ pkill は 1 で返る
+  }
+}
+
 export default async function setup(project: TestProject): Promise<void> {
-  if (project.config.watch || isLightRun(process.argv.slice(2))) return;
+  if (project.config.watch) return;
+  await takeLock();
+  armRunLimit();
+}
+
+async function takeLock(): Promise<void> {
+  if (isLightRun(process.argv.slice(2))) return;
 
   let commonDir: string;
   try {

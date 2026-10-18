@@ -99,6 +99,7 @@ it("a failed Codex Harness preflight skips that route and starts a Claude-route 
     containers: passthroughContainers(),
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
     taskExecutionCandidates: (task) =>
       executionSettingsFor(db, { provider: [{ name: providers.get(task.assignee!)!, advisor: false }], tier: undefined }, task),
     harnessContainment: async (harness) =>

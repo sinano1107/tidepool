@@ -2,25 +2,29 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
+import { moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
   decomposeTaskViaWorker,
+  examineeRootId,
   FIXTURE_SPAWNED_EVENT_ID,
   FIXTURE_TASK,
   FULL_HANDOFF,
   HOUR,
   HUMAN_WEBUI,
+  interviewExaminee,
   loggedEntry,
   mcpClient,
   queueWork,
   registerWork,
   seedFixtureBoard,
   type Tidepool,
+  WORKER_SPAWNED,
 } from "./harness.js";
 
 let t: Tidepool;
@@ -912,15 +916,15 @@ it.each([
 it.each([
   ["work", "human", "human"],
   ["review", undefined, null],
-  ["review", "reviewer", null],
-] as const)("%s の assignee %s から修理子への宛先は %s(ADR 0237)", (type, assignee, expected) => {
+  ["review", "reviewer", "reviewer"],
+] as const)("%s の assignee %s から修理子への宛先は %s(ADR 0237 / ADR 0275 決定2)", (type, assignee, expected) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type, assignee, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
-  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: () => false });
 
   const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
   expect(repair.assignee).toBe(expected);
@@ -1043,33 +1047,180 @@ it.each([
   expect(listEvents(db, staged.id).find((e) => e.kind === "task_moved")).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin });
 });
 
+/** 記憶の書き込みの行(Knowledge の note)を `writerTaskId` の task の書き込みとして残す。 */
+const recordNote = (db: Db, at: Date, writerTaskId: string) =>
+  recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, writerTaskId);
+const registration = (db: Db, child: Task) => listEvents(db, child.id).find((event) => event.kind === "task_registered")!;
+
 it.each([
-  ["cancelled", "", ["rca (self): t", "rca (auditor): t"]],
-  ["done", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
-  ["in_progress", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
-  ["done", "・cancelled の祖先あり", ["rca (self): t", "rca (auditor): t"]],
-] as const)("%s%s の本番 work への異議の commit が立てる子は %j —— 修理子は捨てた成果には立たず、帰責 event は状態に依らない(ADR 0268 決定3 / ADR 0271 決定1・2)", (status, ancestor, titles) => {
+  ["判断", "cancelled", "", ["rca (self): t", "rca (auditor): t"]],
+  ["判断", "done", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["判断", "in_progress", "", ["repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["判断", "done", "・cancelled の祖先あり", ["rca (self): t", "rca (auditor): t"]],
+  ["判断", "Interview の root", "", ["rca (self): interview", "rca (auditor): interview"]],
+  ["記憶", "cancelled", "", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["記憶", "done", "", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["記憶", "in_progress", "", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["記憶", "done", "・cancelled の祖先あり", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["記憶", "Interview の root", "", ["memory repair: interview", "rca (self): interview", "rca (auditor): interview"]],
+  ["混在", "cancelled", "", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["混在", "done", "", ["repair: t", "memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["混在", "in_progress", "", ["repair: t", "memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["混在", "done", "・cancelled の祖先あり", ["memory repair: t", "rca (self): t", "rca (auditor): t"]],
+  ["混在", "Interview の root", "", ["memory repair: interview", "rca (self): interview", "rca (auditor): interview"]],
+] as const)("%sの行への、%s%s の task の異議の commit が立てる子は %j —— 記憶の行は親を問わず memory_repair、判断の行は捨てた成果には work の修理子を立てず、どちらの修理子も自分の群の異議だけを運び、帰責 event と RCA は群を分けず状態に依らない(ADR 0268 決定3 / ADR 0271 決定1・2 / ADR 0272 決定1・2)", (rows, status, ancestor, titles) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-16T00:00:00.000Z");
-  const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" };
+  const spec = { assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c", workspace: "charts" };
   const root = ancestor ? registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI) : undefined;
-  const registered = root ? decomposeTaskViaWorker(db, root, { reason: "split", children: [spec] }, "deckhand", at)[0]! : registerTask(db, { type: "work", ...spec }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, registered, "deckhand's call", "deckhand", at, "worker");
+  const registered =
+    status === "Interview の root"
+      ? getTask(db, examineeRootId(db, interviewExaminee(db, at).id))!
+      : root
+        ? decomposeTaskViaWorker(db, root, { reason: "split", children: [spec] }, "deckhand", at)[0]!
+        : registerTask(db, { type: "work", ...spec }, at, ...HUMAN_WEBUI);
+  const decision = logDecision(db, registered, "deckhand's call", "deckhand", at, "worker");
+  const memory = recordNote(db, at, registered.id).event_id;
   if (status === "cancelled") cancelTaskDirectly(db, registered, null, at, {}, "webui");
-  else {
+  else if (status !== "Interview の root") {
     const running = pickupTask(db, registered, "deckhand", at)!;
     if (status === "done") completeTask(db, running, FULL_HANDOFF, "deckhand", at, "worker");
   }
   if (root) cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
-  expect(getTask(db, registered.id)!.status).toBe(status);
+  if (status !== "Interview の root") expect(getTask(db, registered.id)!.status).toBe(status);
   startTriage(db, at);
-  raiseObjection(db, entry, "redo it", at);
+  const objections = {
+    decision: rows === "記憶" ? [] : [raiseObjection(db, decision, "redo it", at)],
+    memory: rows === "判断" ? [] : [raiseObjection(db, memory, "drop the note", at)],
+  };
+  const entries = [...(rows === "記憶" ? [] : [decision]), ...(rows === "判断" ? [] : [memory])];
 
-  commitTriage(db, at, [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, at, [], new Map(entries.map((entry) => [entry, { cause: "capability", evidence: "e", entries: null }])));
 
   // done の work には完了時レビューも付くので、異議の束ねが立てた子だけを見る
-  expect(listChildren(db, registered.id).filter((child) => child.type !== "review" || child.title.startsWith("rca")).map((child) => child.title)).toEqual(titles);
-  expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual([
-    expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" }),
-  ]);
+  const bundled = listChildren(db, registered.id).filter((child) => child.type !== "review" || child.title.startsWith("rca"));
+  expect(bundled.map((child) => child.title)).toEqual(titles);
+  const groups = {
+    work: { ids: objections.decision, intro: `objections raised against decisions of "${registered.title}"`, own: "redo it", other: "drop the note" },
+    memory_repair: { ids: objections.memory, intro: `objections raised against memory writes of "${registered.title}"`, own: "drop the note", other: "redo it" },
+  };
+  for (const child of bundled) {
+    if (child.type === "review") {
+      expect(registration(db, child).payload).toMatchObject({ objection_event_ids: [...objections.decision, ...objections.memory] });
+      continue;
+    }
+    const group = groups[child.type as keyof typeof groups];
+    expect(registration(db, child).payload).toMatchObject({ objection_event_ids: group.ids });
+    expect(child.purpose).toContain(group.intro);
+    expect(child.purpose).toContain(group.own);
+    expect(child.purpose).not.toContain(group.other);
+  }
+  const memoryRepair = bundled.find((child) => child.type === "memory_repair");
+  if (memoryRepair) {
+    expect(memoryRepair).toMatchObject({ workspace: getTask(db, registered.id)!.workspace, assignee: registered.assignee });
+    expect(registration(db, memoryRepair)).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin: "webui" });
+  }
+  expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual(
+    entries.map((entry) => expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" })),
+  );
+});
+
+const interviewRoot = (db: Db, at: Date, assignee?: string) =>
+  registerTask(
+    db,
+    { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }], assignee },
+    at,
+    ...HUMAN_WEBUI,
+  );
+const spawnedAs = (db: Db, task: Task, name: string, at: Date) => appendEvent(db, { taskId: task.id, workerId: name, origin: "board", payload: WORKER_SPAWNED, at });
+
+it.each([
+  ["Interview の root(列は空の参照)", (db: Db, at: Date) => {
+    const root = interviewRoot(db, at);
+    spawnedAs(db, root, "suzumedai", at);
+    return { objected: root, row: recordNote(db, at, root.id).event_id };
+  }, "suzumedai"],
+  ["meta-review の root(列は Auditor 参照)", (db: Db, at: Date) => {
+    const reviewed = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+    spawnedAs(db, reviewed, "fugu", at);
+    const moved = moveMemoryByMetaReview(db, { entry_id: recordNote(db, at, reviewed.id).entry_id, scope: "charts", path: "build/squash", mover: { activity: "meta_review", name: "fugu" } }, "worker", at, reviewed.id);
+    return { objected: reviewed, row: moved.event_id };
+  }, "fugu"],
+  ["人間が registry の agent を名指した Interview の root(最後の worker_spawned が別の名前でも列が勝つ)", (db: Db, at: Date) => {
+    const root = interviewRoot(db, at, "examiner");
+    spawnedAs(db, root, "suzumedai", at);
+    return { objected: root, row: recordNote(db, at, root.id).event_id };
+  }, "examiner"],
+  ["memory_repair(列は pickup が焼いた名前)", (db: Db, at: Date) => {
+    const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const wrote = recordNote(db, at, task.id);
+    raiseObjection(db, wrote.event_id, "drop the note", at);
+    commitTriage(db, at);
+    const first = listChildren(db, task.id).find((child) => child.type === "memory_repair")!;
+    expect(first.assignee).toBeNull();
+    pickupTask(db, first, "deckhand", at, { assignee: "deckhand" });
+    const replaced = repairReplace(db, { taskId: first.id, agent: "deckhand" }, { entry_id: wrote.entry_id, title: "Rebase", text: "Always rebase.", source: { commit: "1b57b57" } }, at);
+    return { objected: getTask(db, first.id)!, row: replaced.event_id };
+  }, "deckhand"],
+] as const)("%sの記憶の行への異議の memory_repair は異議された task を走らせた名前を焼く —— 列が名前なら列、参照なら最後の worker_spawned の名前(ADR 0275 決定2)", (_, setup, expected) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const { objected, row } = setup(db, at);
+  raiseObjection(db, row, "drop the note", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: (name) => name === "suzumedai" || name === "fugu" });
+
+  const repair = listChildren(db, objected.id).find((child) => child.type === "memory_repair")!;
+  expect(repair.assignee).toBe(expected);
+  expect(registration(db, repair).payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it.each([
+  ["reviewer", "reviewer", undefined],
+  ["fugu", null, { name: "fugu", reason: "agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs" }],
+] as const)("列が空の review の判断の行への異議の work の修理子は最後の worker_spawned の名前 %s を門に通し、宛先は %s(ADR 0275 決定2 / ADR 0237 決定2)", (spawned, expected, notCopied) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  spawnedAs(db, review, spawned, at);
+  raiseObjection(db, logDecision(db, review, "reviewer's call", spawned, at, "worker"), "redo it", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: (name) => name === "fugu" });
+
+  const repair = listChildren(db, review.id).find((child) => child.type === "work")!;
+  expect(repair.assignee).toBe(expected);
+  if (notCopied) expect(registration(db, repair).payload).toMatchObject({ assignee_not_copied: notCopied });
+  else expect(registration(db, repair).payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it("registry から消えた agent を名指した root の記憶の行への異議の memory_repair は空に落ち、名前と門の拒否文が登録 event に残る(ADR 0275 決定2 / ADR 0237 決定2)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const root = interviewRoot(db, at, "examiner");
+  raiseObjection(db, recordNote(db, at, root.id).event_id, "drop the note", at);
+
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => false });
+
+  const repair = listChildren(db, root.id).find((child) => child.type === "memory_repair")!;
+  expect(repair.assignee).toBeNull();
+  expect(registration(db, repair).payload).toMatchObject({
+    assignee_not_copied: { name: "examiner", reason: "unknown agent: examiner" },
+  });
+});
+
+it("cancelled の task の記憶の行への異議の memory_repair は、その後の祖先の cancel の cascade で倒れず todo のまま残る(ADR 0272 決定1・6)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const ancestor = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTask(db, ancestor, { reason: "split", children: [{ title: "t", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  const row = recordNote(db, at, child!.id).event_id;
+  cancelTaskDirectly(db, child!, null, at, {}, "webui");
+  raiseObjection(db, row, "drop the note", at);
+  commitTriage(db, at);
+  const repair = listChildren(db, child!.id).find((c) => c.type === "memory_repair")!;
+
+  cancelTaskDirectly(db, getTask(db, ancestor.id)!, null, at, {}, "webui");
+
+  expect(getTask(db, ancestor.id)!.status).toBe("cancelled");
+  expect(getTask(db, repair.id)!.status).toBe("todo");
 });

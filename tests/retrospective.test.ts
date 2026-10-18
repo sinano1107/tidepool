@@ -1601,6 +1601,39 @@ it("修理子の無い未帰責の異議群(cancelled の task への異議)も�
   }
 });
 
+it("判断の行と記憶の行が混在した task の未帰責の異議群は、commit が修理子を2本(work / memory_repair)立てても、どちらの第2回も当時の decision log を commit の登録で切る(ADR 0272 決定2 / #1572)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const registered = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", at)!;
+    const decision = logDecision(db, task, "skipped the fixtures", "deckhand", at, "worker");
+    const wrote = recordKnowledge(
+      db,
+      { scope: "charts", path: "build", title: "Skip fixtures", text: "Fixtures are optional.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } },
+      "worker",
+      at,
+      task.id,
+    ).event_id;
+    startTriage(db, at);
+    raiseObjection(db, decision, "keep the fixtures", at);
+    raiseObjection(db, wrote, "drop the note", at);
+    commitTriage(db, at, [], new Map());
+    expect(listChildren(db, task.id).map((c) => c.type)).toEqual(["work", "memory_repair", "review", "review"]);
+    logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) completeTask(db, rca, undefined, "auditor", at, "worker");
+    const client = new FakeAttributionClient();
+    for (const entry of [decision, wrote]) client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
+
+    refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const atCommit = ["skipped the fixtures", expect.stringContaining('"Skip fixtures"')];
+    expect(client.calls.map((c) => c.input.decision_log)).toEqual([atCommit, atCommit]);
+  } finally {
+    db.close();
+  }
+});
+
 /** 同じ task に2つの異議群を並べる: session A が entry X を異議して commit し、A の RCA が未決着のうちに session B が
  *  `same` なら同じ X を、でなければ entry Y を異議して commit する。どちらも初回は未帰責(第2回を待つ)。
  *  各 RCA 子には異議群ごとに見分けのつく decision を書く。子は題でなく登録の異議 id 列で見分ける。 */

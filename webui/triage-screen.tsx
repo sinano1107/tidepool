@@ -1055,7 +1055,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                   )}
                 </div>
               )}
-              {objecting === k && l.interview?.role === 'root' && (
+              {objecting === k && l.interview?.role === 'root' && !l.memoryEntries && (
                 <div style={{ padding: '10px 12px 0', background: 'var(--coral-1)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
                   An Interview entry: objecting raises no repair task — only attribution and an RCA.
                 </div>
@@ -1165,7 +1165,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           <div>
             {nObjections > 0 && (
               <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: 0 }}>
-                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle at commit — one repair task per objected task at the queue tail, none for an Interview root or a cancelled task
+                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle at commit — one repair task per objected task at the queue tail for its decision entries (none for an Interview root or a cancelled task) and one memory repair for its memory writes, whatever its state
               </p>
             )}
             {scratch.length > 0 && (

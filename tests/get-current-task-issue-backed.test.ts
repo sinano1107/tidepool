@@ -1,12 +1,13 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, readFollowingNext, type Tidepool } from "./harness.js";
+import { bootTidepool, HOUR, HUMAN_WEBUI, makeWorkspace, mcpClient, readFollowingNext, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("get_current_task はissue参照タスクの場合、GitHubのissueから解決した内容を返す(issue #49, ADR 0016: spawn時のlive展開)", async () => {
-  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
+  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば先頭へ戻る、ADR 0274)
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
   const task = registerTask(
     t.db,
@@ -37,7 +38,8 @@ it("get_current_task はissue参照タスクの場合、GitHubのissueから解�
 });
 
 it("issue の本文で purpose が予算を超えると、get_current_task は task の欄を history より先に partial の切れで返し、next を追うと purpose が逐語で戻り、その後に history が届く(ADR 0195 追記 #1393)", async () => {
-  t = await bootTidepool({ workspace: { name: "tidepool", path: "/fake/path" } });
+  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば先頭へ戻る、ADR 0274)
+  t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   const task = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 1393 }, t.clock.now(), ...HUMAN_WEBUI);
   const body = '潮だまり"\n'.repeat(3_500); // 49,000 バイト
   t.github.scriptIssue(1393, { title: "長い issue", body, comments: ["追加情報です"] });

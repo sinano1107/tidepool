@@ -47,7 +47,7 @@ Back in this thread, run `/code-review` on both axes (Standards + Spec) against 
 
 Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
-Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. Every other call is yours, and it is accountable because it goes in the pull request.
+Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A seam agreed before dispatch is not one: when a finding shows a behaviour stated above its lowest seam, take it back to the user instead of citing the agreement. Every other call is yours, and it is accountable because it goes in the pull request.
 
 ## Filing what the run found
 
@@ -75,13 +75,11 @@ Then add the section this flow depends on:
 
 List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
 
-Completeness is the whole point of the section. A list that quietly drops the findings you chose not to act on is worse than no list, because it reads as though review found nothing there.
-
 A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
 ## Waiting for CI
 
-Once the PR is open, `gh pr checks --watch` until every check finishes — the `test` jobs on ubuntu and macOS, and `e2e`. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once all pass.
+Once the PR is open, watch with `gh pr checks --watch` until `gh pr checks` lists every check — the `test` jobs on ubuntu and macOS, and `e2e` — as pass; a watch started right after the push can return while they are still pending. When one fails, fix it on the branch, commit, push, and watch again. The PR goes to the human only once all pass.
 
 ## Where this stops
 

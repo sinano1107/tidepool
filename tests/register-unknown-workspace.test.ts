@@ -5,7 +5,7 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("registry に存在しない workspace 名での登録は 400 で拒否される", async () => {
-  t = await bootTidepool({ resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }) });
+  t = await bootTidepool({ workspace: { name: "sandbox", path: "/fake/sandbox" }, resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }) });
 
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",
@@ -21,7 +21,8 @@ it("registry に存在しない workspace 名での登録は 400 で拒否され
 });
 
 it("registry に存在する workspace 名での登録は通常どおり成功する", async () => {
-  t = await bootTidepool({ resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }, { name: "prod", path: "/fake/prod" }) });
+  // 既定の workspace は resolver と同じ出所から渡す(本番の合成と同じ形)
+  t = await bootTidepool({ workspace: { name: "sandbox", path: "/fake/sandbox" }, resolveWorkspace: defaultingTo({ name: "sandbox", path: "/fake/sandbox" }, { name: "prod", path: "/fake/prod" }) });
 
   const res = await api(t.baseUrl, "POST", "/api/tasks", {
     type: "work",

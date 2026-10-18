@@ -17,6 +17,7 @@ import {
   executionSettingsFor,
   parseAddTierAmendment,
   parseAgentTierAmendment,
+  parseInterviewAmendment,
   parseRoutingRowChange,
   readExecutionSettings,
   registryPinChanges,
@@ -34,7 +35,7 @@ import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/q
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, listBoard, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";
@@ -789,6 +790,51 @@ it("段を足す提案の修正値は名前・説明・位置の少なくとも1
   expect(parseAddTierAmendment({ name: "routine", position: 0 })).toEqual({ name: "routine", position: 0 });
   for (const bad of [{}, { name: "x", tier: "economy" }, { position: -1 }, { position: 1.5 }, "routine", null]) {
     expect(() => parseAddTierAmendment(bad)).toThrow(DomainError);
+  }
+});
+
+/** Interview の提案(#921 / ADR 0199 決定5): pin は根拠の行の全欄、対象は3欄 + 測る段で表の行と照合する。 */
+const OPUS_MAX = { provider: "anthropic", model: "claude-opus-5-5", effort: "max" } as const;
+const SONNET_MAX = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "max" } as const;
+const interviewProposal: InterviewProposal = {
+  kind: "routing",
+  op: "interview",
+  hypothesis: "opus at a higher effort writes the migrations",
+  evidence: [7],
+  tier: tierId("standard"),
+  targets: [OPUS_MAX, SONNET_MAX],
+  workspace: "reef",
+  pin: { rows: [{ ...opusRow, tier: tierId("standard") }] },
+};
+
+it("Interview の提案の pin: 根拠の行が崩れれば rows、対象と一致する行が測る段に足されれば target_row、測る段が消えれば null —— 別の段の一致する行と段の改名では崩れない", () => {
+  const settings = (t: ExecutionSettingTable, tierList = TIERS) => ({ table: t, learnerPromoted: false, tiers: tierList });
+  const sonnetMaxAt = (tier: Tier) => [...SEED_EXECUTION_SETTINGS, { ...SONNET_MAX, tier, price_in: 2, price_out: 10 }];
+  const repriced = SEED_EXECUTION_SETTINGS.map((row) => (row.model === "claude-opus-5-5" ? { ...row, price_in: 6 } : row));
+  expect(routingPinChanges(interviewProposal, settings(SEED_EXECUTION_SETTINGS))).toEqual([]);
+  expect(routingPinChanges(interviewProposal, settings(repriced))).toEqual(["rows"]);
+  expect(routingPinChanges(interviewProposal, settings(SEED_EXECUTION_SETTINGS.filter((row) => row.model !== "claude-opus-5-5")))).toEqual(["rows"]);
+  expect(routingPinChanges(interviewProposal, settings(sonnetMaxAt("standard")))).toEqual(["target_row"]);
+  expect(routingPinChanges(interviewProposal, settings(sonnetMaxAt("frontier")))).toEqual([]);
+  expect(routingPinChanges(interviewProposal, settings(repriced.concat(sonnetMaxAt("standard").slice(-1))))).toEqual(["rows", "target_row"]);
+  expect(routingPinChanges(interviewProposal, settings(SEED_EXECUTION_SETTINGS, TIERS.filter((tier) => tier.name !== "standard")))).toBeNull();
+  expect(routingPinChanges(interviewProposal, settings(renameRows("standard", "mid"), renamed("standard", "mid")))).toEqual([]);
+});
+
+it("Interview の提案の修正値は仮説・測る仕事・対象・実環境の少なくとも1つで、対象は提案の一覧を同じ順で effort だけ動かしたもの —— それ以外は DomainError", () => {
+  const named: InterviewProposal<Tier> = { ...interviewProposal, tier: "standard", pin: { rows: [opusRow] } };
+  const lowered = [{ ...OPUS_MAX, effort: "medium" }, SONNET_MAX];
+  expect(parseInterviewAmendment(named, { targets: lowered, workspace: "lagoon" })).toEqual({ targets: lowered, workspace: "lagoon" });
+  for (const bad of [
+    {},
+    { targets: [SONNET_MAX, OPUS_MAX] },
+    { targets: [OPUS_MAX] },
+    { targets: [{ ...OPUS_MAX, model: "claude-fable-5-1" }, SONNET_MAX] },
+    { hypothesis: "" },
+    { tier: "frontier" },
+    null,
+  ]) {
+    expect(() => parseInterviewAmendment(named, bad)).toThrow(DomainError);
   }
 });
 

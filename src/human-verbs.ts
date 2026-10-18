@@ -9,15 +9,17 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent, type EventOrigin } from "./events.js";
+import { appendEvent, type EventOrigin, getEvent } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
   assertTierRunnableFor,
   composeRoutingRow,
   type ExecutionSettingsChange,
+  type InterviewAmendment,
   parseAddTierAmendment,
   parseAgentTierAmendment,
+  parseInterviewAmendment,
   parseRoutingRowChange,
   parseTierDescriptionAmendment,
   type RoutingRowChange,
@@ -51,6 +53,7 @@ import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-wr
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
+import { interviewTitle } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
@@ -70,6 +73,7 @@ import {
   getTask,
   type HandoffDoc,
   humanDecomposeTask,
+  type InterviewProposal,
   latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
@@ -321,6 +325,44 @@ export function listMemoryEntriesForHuman(
   });
 }
 
+/** 人間名義の登録と対象の検査を1 transaction で(ADR 0253 決定3: 対象は行の id を得てから判定するので、拒否は登録ごと巻き戻す)。
+ *  同期なので、提案 question の approve は回答の transaction の中でこれを呼び、拒否は回答ごと巻き戻る(3つ目の扉、#921)。 */
+function registerAsHuman(
+  deps: Pick<RegisterThroughHumanDoorDeps, "db" | "taskExecutionCandidates" | "defaultAgentName">,
+  input: HumanRegisterInput,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  return deps.db.transaction(() => {
+    const registered = registerTask(deps.db, input, now, HUMAN_WORKER_ID, origin);
+    if (deps.taskExecutionCandidates) assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
+    return registered;
+  })();
+}
+
+/** Interview の提案の approve(#921 / ADR 0258 決定2・4): 修正値を重ねた欄で、人間の扉と同じ検査を通して人間名義の interview root を
+ *  登録する(assignee は空で Interviewer、root の段は selector が判断の段と測る段から引く)。実環境は明示の名前(null だと pickup の
+ *  既定が入る、ADR 0233)で、registry に無ければ直す手段を添えて断る —— 回答の transaction の中なので question は開いたまま。 */
+function registerProposedInterview(deps: SubmitAnswerDeps, proposal: InterviewProposal<Tier>, amendment: InterviewAmendment | undefined, now: Date, origin: EventOrigin): void {
+  const { hypothesis, measured_work, targets, workspace } = { ...proposal, ...amendment };
+  if (!workspaceKnown(workspace, deps.resolveWorkspace, deps.workspace)) {
+    throw new DomainError(`workspace ${workspace} is not in the registry: approve again with an amendment naming a registered workspace, or reject`);
+  }
+  const input: HumanRegisterInput = {
+    type: "interview",
+    title: interviewTitle(targets, proposal.tier),
+    hypothesis,
+    // 空の修正値は「測る仕事を外す」—— 空文字で残さない
+    ...(measured_work !== undefined && !whyBlank(measured_work) && { measured_work }),
+    // 根拠の event は episode の spawn(提案 verb が確かめた)で、その task が root の根拠の task
+    evidence_task_ids: [...new Set(proposal.evidence.map((id) => getEvent(deps.db, id)!.task_id!))],
+    tier: proposal.tier,
+    interview_targets: targets,
+    workspace,
+  };
+  registerAsHuman(deps, input, now, origin);
+}
+
 /**
  * 人間名義の task 登録を実行する正準の application seam。
  * WebUI と管理 MCP は transport の違いだけを持ち、この門を共有する。
@@ -435,12 +477,7 @@ export async function registerThroughHumanDoor(
         }
       }
     }
-    const task = deps.db.transaction(() => {
-      const registered = registerTask(deps.db, input, now(), HUMAN_WORKER_ID, origin);
-      // ADR 0253 決定3: 対象は行の id を得てから判定するので、拒否は登録ごと巻き戻す
-      if (deps.taskExecutionCandidates) assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
-      return registered;
-    })();
+    const task = registerAsHuman(deps, input, now(), origin);
     deps.pollNow();
     return { ok: true, task: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
@@ -990,9 +1027,10 @@ export async function submitAnswer(
     if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "row") amended = parseRoutingRowChange(tierNames(deps.db), amendment);
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "add_tier") amended = parseAddTierAmendment(amendment);
     else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "tier_description") amended = { description: parseTierDescriptionAmendment(amendment) };
+    else if (answers[0] === "approve" && proposal?.kind === "routing" && proposal.op === "interview") amended = parseInterviewAmendment(proposal, amendment);
     else if (answers[0] === "approve" && proposal?.kind === "registry") amended = { to: parseAgentTierAmendment(tierNames(deps.db), proposal, amendment) };
     else if (answers[0] === "approve" && proposal?.kind === "memory" && "candidate_id" in proposal) amended = parseMemoryAmendment(amendment);
-    else throw new DomainError("only an approve answer to a routing row, add-tier, tier description, agent tier, or memory proposal with a candidate takes an amendment");
+    else throw new DomainError("only an approve answer to a routing row, add-tier, tier description, Interview, agent tier, or memory proposal with a candidate takes an amendment");
   }
   // approve は「これを注入する」宣言 —— candidate の宛先(修正値があればそれ)と scope が解決できなければ、付け替えるか reject する(ADR 0173 決定2)。
   // 移された candidate は複製の scope で見る(ADR 0162 決定6)
@@ -1183,7 +1221,9 @@ export async function submitAnswer(
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);
         else if (answers[0] === "reject") rejectMemoryProposal(deps.db, proposal, task.id, origin, now());
       } else if (proposal?.kind === "routing" && answers[0] === "approve") {
-        if (proposal.op === "add_tier") {
+        if (proposal.op === "interview") {
+          registerProposedInterview(deps, proposal, amended as InterviewAmendment | undefined, now(), origin);
+        } else if (proposal.op === "add_tier") {
           // 段の挿入と行の移動を1つの transaction で(ADR 0200 決定8)。修正後の値の検査は挿入の扉がやり直し、拒めば回答ごと巻き戻る
           const tier = { ...proposal.tier, ...(amended as AddTierAmendment | undefined) };
           applyExecutionSettingsChange(deps.db, { setting: "insert_tier", ...tier }, origin, now(), task.id);

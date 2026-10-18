@@ -19,7 +19,6 @@ import {
 } from "../src/memory.js";
 import { listChildren, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 /** 書き込みの行への異議の修理 task の記憶の修理 verb(issue #632 / ADR 0252 決定4)のドメイン層。tool の登録と写像はサーバ境界
@@ -35,19 +34,16 @@ function board() {
   const reviewed = task("memory meta-review", { type: "review", meta_review_subject: "memory" });
   const knowledge = (title: string, scope: string | null = "charts", path = "build") =>
     recordKnowledge(db, { scope, path, title, text: `${title}.`, source: { commit: "0a46a46" }, author: worker }, "worker", at).entry_id;
-  /** 異議を材料にした memory_repair の修理子 —— 束ねが立てるのは #2175 から、それまでは盤面の名義で直接立てる。 */
-  const memoryRepair = (objected: string, objection_event_ids: number[]): Task =>
-    registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: objected, objection_event_ids }, at, BOARD_WORKER_ID, "board");
+  /** 束ねが立てた `type` の修理子(最後の1本)—— 記憶の書き込みの行への異議なら memory_repair、判断の行なら work。 */
+  const repairChild = (objected: string, type: "work" | "memory_repair" = "memory_repair"): Task => listChildren(db, objected).filter((c) => c.type === type).at(-1)!;
   /** 決定ログの行に異議を打って triage を閉じ、その異議を材料にした修理 task を返す。 */
   const repairOf = (rowId: number, objected: string): Task => {
-    const objection = raiseObjection(db, rowId, "undo it", at);
+    raiseObjection(db, rowId, "undo it", at);
     commitTriage(db, at);
-    return memoryRepair(objected, [objection]);
+    return repairChild(objected);
   };
-  /** 束ねが立てた work の修理子(最後の1本)。 */
-  const workRepairOf = (objected: string): Task => listChildren(db, objected).filter((c) => c.type === "work").at(-1)!;
   const entry = (id: number) => listMemoryEntries(db, {}).find((e) => e.id === id)!;
-  return { db, task, reviewed, knowledge, memoryRepair, repairOf, workRepairOf, entry };
+  return { db, task, reviewed, knowledge, repairChild, repairOf, entry };
 }
 
 it("逆操作: 異議された畳みの後継を無効化し、畳まれたエントリを復元できる —— 修理の書き込みもそれぞれ修理 task の書き込みの記録(worker_verb)になる", () => {
@@ -74,17 +70,19 @@ it("逆操作: 異議された畳みの後継を無効化し、畳まれたエ�
 });
 
 it("修理 verb は異議された書き込みが触ったエントリ(path_moved の鎖の先も)だけを受け、他のエントリ・書き込みの行への異議の無い task・memory_repair でない修理子からの呼び出しは DomainError", () => {
-  const { db, task, reviewed, knowledge, repairOf, workRepairOf } = board();
+  const { db, task, reviewed, knowledge, repairChild } = board();
   const objected = task("index the tide charts");
   const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, objected.id);
   const untouched = knowledge("Untouched");
-  const repair = repairOf(wrote.event_id, objected.id);
-  // 同じ書き込みの行への異議を束ねが材料にした work の修理子 —— 対象は memory_repair の修理子にだけ立つ(ADR 0272 決定3)
-  const workWriteRepair = workRepairOf(objected.id);
+  const objection = raiseObjection(db, wrote.event_id, "undo it", at);
+  commitTriage(db, at);
+  const repair = repairChild(objected.id);
+  // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)—— 対象は memory_repair の修理子にだけ立つ(ADR 0272 決定3)
+  const workWriteRepair = registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
   const later = moveMemoryByMetaReview(db, { entry_id: wrote.entry_id, scope: "charts", path: "build/squash", mover: metaReview }, "worker", at, reviewed.id).entry_id;
   raiseObjection(db, logDecision(db, objected, "squashed", "deckhand", at, "worker"), "undo it", at);
   commitTriage(db, at);
-  const decisionRepair = workRepairOf(objected.id);
+  const decisionRepair = repairChild(objected.id, "work");
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [] }, at, ...HUMAN_WEBUI);
 
   for (const taskId of [repair.id, workWriteRepair.id, decisionRepair.id, objected.id, rca.id]) {
@@ -112,16 +110,17 @@ it("移動: 異議された書き込みが移す前の置き場への移し戻�
 });
 
 it("置き換え: Knowledge は同じ scope / path の新しい本文に record_knowledge と同じ出所の規則で、Definition は同じ枝の新しい定義に置き換え、Behavior / Exemplar は DomainError", () => {
-  const { db, task, reviewed, memoryRepair, entry } = board();
+  const { db, task, reviewed, repairChild, entry } = board();
   const objected = task("index the tide charts");
   const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, objected.id);
   const defined = defineMemoryBranch(db, { scope: "charts", path: "build", text: "How it builds.", author: worker }, "worker", at, objected.id);
   const candidate = createBehaviorCandidate(db, { scope: "charts", path: "habits", title: "Small commits", text: "Commit small.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at).entry_id;
   const moved = moveMemoryByMetaReview(db, { entry_id: candidate, scope: "charts", path: "habits/commits", mover: metaReview }, "worker", at, reviewed.id);
-  const objections = [raiseObjection(db, wrote.event_id, "wrong", at), raiseObjection(db, defined.event_id, "wrong too", at)];
-  const misplaced = raiseObjection(db, moved.event_id, "wrong place", at);
+  raiseObjection(db, wrote.event_id, "wrong", at);
+  raiseObjection(db, defined.event_id, "wrong too", at);
+  raiseObjection(db, moved.event_id, "wrong place", at);
   commitTriage(db, at);
-  const repairs = new Map([[objected.id, memoryRepair(objected.id, objections)], [reviewed.id, memoryRepair(reviewed.id, [misplaced])]]);
+  const repairs = new Map([[objected.id, repairChild(objected.id)], [reviewed.id, repairChild(reviewed.id)]]);
   const repairer = (objectedId: string) => ({ taskId: repairs.get(objectedId)!.id, agent: "deckhand" });
 
   expect(() => repairReplace(db, repairer(objected.id), { entry_id: wrote.entry_id, title: "Rebase", text: "Always rebase." }, at)).toThrow("exactly one of event_id or commit");

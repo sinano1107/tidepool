@@ -2,7 +2,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { recordKnowledge } from "../src/memory.js";
 import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
 import { cancelTaskDirectly, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -98,23 +97,22 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   const decision = await loggedEntry(t, objected.id, "squashed the branch");
   await completeViaMcp(t, objected.id);
   await completeIntegrationReviews(t, objected.id);
-  /** 異議を打って triage を閉じ、束ねが立てた work の修理子と異議の id を返す。 */
-  const repairOf = async (entryId: number) => {
+  /** 異議を打って triage を閉じ、束ねが立てた `type` の修理子と異議の id を返す。 */
+  const repairOf = async (entryId: number, type: "work" | "memory_repair") => {
     await api(t.baseUrl, "POST", "/api/triage/start");
     const objection = await object(t, entryId, "undo it");
     await api(t.baseUrl, "POST", "/api/triage/close");
-    return { objection, work: (await children(t, objected.id)).filter((c: any) => c.type === "work").at(-1) };
+    return { objection, repair: (await children(t, objected.id)).filter((c: any) => c.type === type).at(-1) };
   };
-  const write = await repairOf(wrote.event_id);
-  // 束ねが memory_repair を立てるのは #2175 から —— それまでは同じ異議を材料に盤面の名義で直接立てる
-  const writeRepair = registerTask(
+  const write = await repairOf(wrote.event_id, "memory_repair");
+  // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)
+  const writeWorkRepair = registerTask(
     t.db,
-    { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
+    { type: "work", title: "repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
     t.clock.now(),
-    BOARD_WORKER_ID,
-    "board",
+    ...HUMAN_WEBUI,
   );
-  const decisionRepair = (await repairOf(decision.id)).work;
+  const decisionRepair = (await repairOf(decision.id, "work")).repair;
   const names = async (taskId: string) => {
     const client = await mcpClient(t.mcpBaseUrl, taskId);
     try {
@@ -124,14 +122,14 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
     }
   };
 
-  expect(await names(writeRepair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
-  for (const taskId of [write.work.id, decisionRepair.id, objected.id]) {
+  expect(await names(write.repair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
+  for (const taskId of [writeWorkRepair.id, decisionRepair.id, objected.id]) {
     expect((await names(taskId)).filter((name) => (MEMORY_REPAIR_VERBS as readonly string[]).includes(name))).toEqual([]);
   }
 
-  await runNow(t, writeRepair.id);
-  const dropped = body(await callAsTask(t, writeRepair.id, "invalidate_memory", { entry_id: wrote.entry_id, reason: "capability" }));
-  expect(await writeRecords(writeRepair.id)).toEqual([dropped.event_id]);
+  await runNow(t, write.repair.id);
+  const dropped = body(await callAsTask(t, write.repair.id, "invalidate_memory", { entry_id: wrote.entry_id, reason: "capability" }));
+  expect(await writeRecords(write.repair.id)).toEqual([dropped.event_id]);
 });
 
 it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
@@ -142,8 +140,7 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を�
     t.db,
     { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id },
     t.clock.now(),
-    BOARD_WORKER_ID,
-    "board",
+    ...HUMAN_WEBUI,
   );
   await runNow(t, repair.id);
   const client = await mcpClient(t.mcpBaseUrl, repair.id);

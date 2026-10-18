@@ -9,14 +9,21 @@ import {
   defineMemoryBranch,
   humanEntryInput,
   invalidateMemoryEntry,
+  readMemory,
   readMemorySettings,
   recordBehavior,
   recordExemplar,
   recordKnowledge,
   recordMemoryInjection,
+  repairReplace,
+  searchMemory,
 } from "../src/memory.js";
-import { getTask, logDecision, registerTask } from "../src/tasks.js";
+
+
+import { getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { commitTriage, raiseObjection } from "../src/triage.js";
 import { examineeRootId, HUMAN_WEBUI, interviewExaminee, POSED_HEAD, poseAccepted } from "./harness.js";
+
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -419,6 +426,33 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
   }
   changeMemorySettings(db, { injection_token_cap: 1 }, "webui", at);
   expect(buildMemoryInjection(db, examinee!, "tidepool", "deckhand")).toMatchObject({ entries: [], omitted: 1 });
+});
+
+it("Interview の root の書き込みへの異議で root の下に立った memory_repair が置き換えた Knowledge は、その書き込みへの再異議の memory_repair が置き換えたものも、出所が commit でも受験者の注入・search・read に出ず、root の read には印つきで出る(ADR 0272 帰結 / ADR 0264 決定3・6)", () => {
+  const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
+  const { db, task } = board(probe);
+  const examinee = interviewExaminee(db, at);
+  const root = getTask(db, examineeRootId(db, examinee.id))!;
+  const author = { activity: "worker_verb" as const, name: "suzumedai" };
+  const rootNote = recordKnowledge(db, { scope: "tidepool", path: "parser", title: "parser probe note", text: "the parser", source: { commit: "0a46a46" }, author }, "worker", at, root.id);
+  /** `objectedId` の書き込み `written` に異議を打って commit し、束ねが立てた memory_repair でそのエントリを置き換える。 */
+  const repairedBy = (objectedId: string, written: { entry_id: number; event_id: number }, title: string) => {
+    raiseObjection(db, written.event_id, "rewrite the note", at);
+    commitTriage(db, at);
+    const repair = listChildren(db, objectedId).find((child) => child.type === "memory_repair")!;
+    return { repair, ...repairReplace(db, { taskId: repair.id, agent: "suzumedai" }, { entry_id: written.entry_id, title, text: "the parser", source: { commit: "1b57b57" } }, at) };
+  };
+  const first = repairedBy(root.id, rootNote, "parser repaired note");
+  const again = repairedBy(first.repair.id, first, "parser repaired again").entry_id;
+  const reader = (taskId: string) => ({ taskId, scope: "tidepool", agent: "deckhand" });
+
+  for (const repaired of [first.entry_id, again]) {
+    expect(buildMemoryInjection(db, examinee, "tidepool", "deckhand").entries.map((e) => e.id)).not.toContain(repaired);
+    expect(searchMemory(db, reader(examinee.id), { query: "parser" }, at).results.map((r) => r.id)).not.toContain(repaired);
+    expect(readMemory(db, reader(examinee.id), { ids: [repaired] }, at)).toMatchObject({ entries: [], dropped: [] });
+  }
+  expect(readMemory(db, reader(root.id), { ids: [again] }, at).entries).toEqual([expect.objectContaining({ id: again, not_shown_to_examinees: true })]);
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").entries.map((e) => e.id)).toContain(again);
 });
 
 it("読み手が Interview の root のとき、受験者の視界に無いエントリ(root の書き込み・Interview の木を出所にするもの)の INDEX の行と関連 leaf の行に `not shown to examinees` の印が付き、本番の worker と pin の子の注入には印が出ない(ADR 0264 決定6)", () => {
