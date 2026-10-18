@@ -244,6 +244,13 @@ function toQuestionCardShape(
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'row' && { amendable: 'row' as const }),
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'tier_description' && { amendable: 'tier_description' as const }),
     ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'add_tier' && typeof q.question_proposal.tier === 'object' && { amendable: 'add_tier' as const, proposedTier: q.question_proposal.tier }),
+    ...(q.question_proposal?.kind === 'routing' && q.question_proposal.op === 'interview' && {
+      amendable: 'interview' as const,
+      proposedInterview: {
+        hypothesis: q.question_proposal.hypothesis!, measured_work: q.question_proposal.measured_work ?? '',
+        targets: q.question_proposal.targets!, workspace: q.question_proposal.workspace!,
+      },
+    }),
     ...(q.question_proposal?.kind === 'registry' && { amendable: 'agent_tier' as const, amendBelow: q.question_proposal.pin && 'tier' in q.question_proposal.pin ? q.question_proposal.pin.tier : undefined }),
     // 修正値の初期値は candidate の今の本文 —— 移されていれば末尾の複製
     ...(candidateId !== undefined && { amendable: 'memory' as const, candidateId: moved.find((m) => m.id === candidateId)?.tail_id ?? candidateId }),
@@ -259,6 +266,9 @@ function toQuestionCardShape(
     }),
   };
 }
+
+// 出題済みの Interview の root が blocked で待つもの(ADR 0273 決定3)
+const INTERVIEW_WAITING_COPY = { audit: 'awaiting audit', examinees: 'awaiting examinees' } as const;
 
 // Map the server board + decision log into the shape the kit screens consume.
 // `icons` is the registry's assignee name → icon map (issue #52's
@@ -355,6 +365,10 @@ function mapData(
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : undefined,
       landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : undefined,
+      // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は面接室 —— 列の値をそのまま見せない
+      interviewPlace: t.type === 'interview' ? `real environment: ${t.workspace ?? 'default workspace'}`
+        : t.interview_root_id ? `interview room (reproduces ${t.workspace ?? 'default workspace'})` : undefined,
+      interviewWaiting: t.interview_waiting && INTERVIEW_WAITING_COPY[t.interview_waiting],
     });
   }
   // 後始末中の session の行は「走っている」ではない (issue #561 / ADR 0113 決定2) ——
@@ -597,11 +611,22 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
 }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
+  // Interview の root の面接室の在り処と出題の head は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0082)
+  const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
+  React.useEffect(() => {
+    setInterview(null);
+    if (task.type !== 'interview') return;
+    api('GET /api/tasks/:id', { params: { id: task.id } })
+      .then((full) => setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' }))
+      .catch(() => {});
+  }, [task.id]);
+  const meta = { fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px', overflowWrap: 'anywhere' } as const;
   return (
     <div style={{ padding: '20px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
       <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>{task.title}</h1>
-      <p style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px' }}>{task.id} · {task.type}</p>
-      {review && <p style={{ fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px' }}>{review}</p>}
+      <p style={meta}>{task.id} · {task.type}</p>
+      {review && <p style={meta}>{review}</p>}
+      {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
       <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
       <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>

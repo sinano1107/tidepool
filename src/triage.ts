@@ -24,6 +24,8 @@ import {
   type BoardTask,
   getTask,
   isArtifactDiscarded,
+  isAuditSql,
+  latestPosedProbe,
   listBoard,
   moveTask,
   type RegisterTaskInput,
@@ -697,8 +699,9 @@ export interface LogEntry extends DecisionLogEntry {
   evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
   session_event_id: number | null;
-  /** Interview の印(ADR 0268 決定6)。受験者の行は一覧に出ないので、運ぶのは root の行だけ。 */
-  interview: { role: "examinee" | "root"; root_id: string } | null;
+  /** Interview のグループ(ADR 0273 決定10、ADR 0268 決定6 の印の昇格): root と監査 review の行だけが運ぶ —— 鍵は root の id、見出しは
+   *  最新の出題の題(出題前は root の題)と実環境の名前。受験者の行は一覧に出ない(ADR 0268 決定1)。 */
+  interview: { root_id: string; title: string; workspace: string | null } | null;
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -710,12 +713,13 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const rows = db
     .prepare(
       `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace,
-              EXISTS (SELECT 1 FROM interview_targets WHERE task_id = tasks.id) AS interview_root
+              CASE WHEN tasks.type = 'interview' THEN tasks.id
+                   WHEN ${isAuditSql("tasks.id")} THEN tasks.parent_id END AS interview_root_id
          FROM events JOIN tasks ON tasks.id = events.task_id
         WHERE events.kind IN (${placeholders}) AND ${SKIM_TASK_SQL} ORDER BY events.id`,
     )
     .all(defaultWorkspaceName ?? null, ...HUMAN_FACING_KINDS)
-    .map((r) => parseEventRow<{ workspace: string | null; interview_root: number }>(r));
+    .map((r) => parseEventRow<{ workspace: string | null; interview_root_id: string | null }>(r));
   // a second, flat query rather than N+1 per entry — grouped in JS below
   const objectionsByEntry = new Map<number, { comment: string; session_id: number }[]>();
   for (const o of entryObjections(db)) {
@@ -727,12 +731,23 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   // session の窓を切るのに要るのは spawn と exit だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
   const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
-  return rows.flatMap(({ interview_root, ...entry }) => {
+  // Interview ごとに1回だけ引く —— 同じ root の行は同じグループ
+  const groups = new Map<string, NonNullable<LogEntry["interview"]>>();
+  const interviewGroup = (rootId: string) => {
+    let group = groups.get(rootId);
+    if (!group) {
+      const root = getTask(db, rootId)!;
+      group = { root_id: rootId, title: latestPosedProbe(db, rootId)?.probe.title ?? root.title, workspace: root.workspace ?? defaultWorkspaceName ?? null };
+      groups.set(rootId, group);
+    }
+    return group;
+  };
+  return rows.flatMap(({ interview_root_id, ...entry }) => {
     if (!isDecisionLogEntry(entry)) return []; // SQL で kind を絞り済み —— 型の絞り込みのためだけ
     const attribution = attributions.get(entry.id);
     return {
       ...entry,
-      interview: interview_root ? { role: "root" as const, root_id: entry.task_id } : null,
+      interview: interview_root_id ? interviewGroup(interview_root_id) : null,
       objections: objectionsByEntry.get(entry.id) ?? [],
       cause: attribution?.cause ?? null,
       entries: attribution?.entries ?? null,

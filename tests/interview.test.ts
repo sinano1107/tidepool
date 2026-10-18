@@ -917,13 +917,14 @@ it("受験者の判断行・完了・記憶の書き込みへの異議は拒ま�
   expect(entryObjections(db).map((o) => o.entry_id)).toEqual([rootEntry, productionEntry]);
 });
 
-it("流し読みの一覧に受験者の行は無く、root の行は Interview の印を運ぶ —— 受験者の task の判断ログには今どおり出る(ADR 0268 決定1・6)", () => {
+it("流し読みの一覧に受験者の行は無く、root と監査の行は Interview のグループ(鍵は root の id、見出しは probe の題と実環境)を運ぶ —— 受験者の task の判断ログには今どおり出る(ADR 0268 決定1 / ADR 0273 決定10)", () => {
   const { db, root, child, examineeEntries, rootEntry, productionEntry } = examineeLogBoard();
-  // 監査の完了の行の流し読みの扱いは人間面(#2196)が決める
   const [audit] = listChildren(db, root.id);
-  expect(listLog(db).filter((entry) => entry.task_id !== audit!.id).map((entry) => [entry.id, entry.interview])).toEqual([
-    [rootEntry, { role: "root", root_id: root.id }],
-    [productionEntry, null],
+  const group = { root_id: root.id, title: POSE.title, workspace: "reef" };
+  expect(listLog(db, "reef").map((entry) => [entry.task_id, entry.id, entry.interview])).toEqual([
+    [root.id, rootEntry, group],
+    [audit!.id, taskDecisionLog(db, audit!.id).at(-1)!.id, group],
+    [expect.any(String), productionEntry, null],
   ]);
   expect(taskDecisionLog(db, child.id).map((entry) => entry.id)).toEqual(examineeEntries);
 });
