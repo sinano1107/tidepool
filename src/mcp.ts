@@ -76,6 +76,7 @@ import {
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
   interviewFields,
+  interviewRoomPath,
   interviewTargets,
   isArtifactDiscarded,
   joinHistory,
@@ -99,6 +100,8 @@ import {
   completionTreeGateApplies,
   resolveOrQuarantine,
   rootForkPoint,
+  safeRealpath,
+  taskRunPlace,
   treeIsDirty,
   UnknownWorkspaceError,
   type WorkspaceConfig,
@@ -306,7 +309,9 @@ export async function runVerb<R>(
 function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | undefined {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
-  return resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  // 門と後始末は走る場所に効く —— interview の root と受験者は面接室(ADR 0273 決定1・8)
+  return workspace && taskRunPlace(deps.db, task, workspace);
 }
 
 /** 完了の門(ADR 0084 決定1・2 / issue #240)。ここに立つのは `completeTask` を人間経路
@@ -396,15 +401,16 @@ async function taskContext(deps: McpDeps, task: Task) {
   return { id: task.id, ...content };
 }
 
-/** interview の root の envelope の構造欄(ADR 0273 決定9): 登録の欄、測る段の名前と説明、実環境の宣言のうち受験者に効く部分。 */
+/** interview の root の envelope の構造欄(ADR 0273 決定2・9): 登録の欄、測る段の名前と説明、実環境の在り処(cwd の面接室の外で
+ *  読みに開いている)と、その宣言のうち受験者に効く部分。 */
 function interviewEnvelope(deps: McpDeps, task: Task) {
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   const workspace = resolve && resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
   return {
     ...interviewFields(deps.db, task.id),
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
+    ...(workspace && { real_environment: safeRealpath(workspace.path) }),
     allowed_domains: workspace?.allowed_domains ?? [],
-    allowed_commands: workspace?.review_allowed_commands ?? [],
   };
 }
 
@@ -698,7 +704,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Pose this Interview's probe, once: the title, the probe (the problem statement every target solves), the completion " +
-          "criteria and the rubric you will score the answers against. The board logs all four as one decision, registers one " +
+          "criteria and the rubric you will score the answers against. Before posing, compose the environment the probe needs in your " +
+          "working directory, the interview room. The board logs all four as one decision, registers one " +
           "answer task per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
           "completion criteria, blocks this task until every answer settles, and frees the slot. The answer tasks never read the " +
           "rubric. Once every answer settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +
@@ -963,8 +970,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runVerb(deps, attributedTaskId, (task) => {
           const read = readPosition<{ task_id?: string }>("read_evidence_history", input);
-          const rows = evidenceHistoryRows(deps.db, task.id, read.args.task_id ?? "");
-          return packItems(read, "history", rows.map((row) => row.entry), {}, { keyOf: (_, i) => rows[i]!.id });
+          const evidenceId = read.args.task_id ?? "";
+          const rows = evidenceHistoryRows(deps.db, task.id, evidenceId);
+          // 根拠が Interview の root なら、その面接室も読みに開いている(ADR 0273 決定9)
+          const room = interviewRoomPath(deps.db, evidenceId);
+          return packItems(read, "history", rows.map((row) => row.entry), room === undefined ? {} : { interview_room: room }, { keyOf: (_, i) => rows[i]!.id });
         }),
     );
   }
@@ -1192,7 +1202,7 @@ function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewR
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
         "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
-        "workspace stage, each with the part of them that Interview children scored under interview, counted only once their Interview's root is done), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
+        "workspace stage, production sessions only — Interview examinees are not counted — and seed: null, or the kind (interview: an accepted score of a done Interview; human: a row added as observed) and event_id of the seed that stands in for the table's prior for that cell and tier), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
         "learner was promoted and chose what ran, and recommended is what the table would have chosen instead. Rows come oldest first. " +
         nextDescription("list_routing_shadow", "rows"),
@@ -1224,8 +1234,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "list_routing_cells",
     {
       description:
-        "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
-        "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced). " +
+        "List cells (provider, model, effort, advisor) first observed in a finished production session, or seeded, since the watermark " +
+        "(a seeded cell with no production session yet has first_observed_event_id null and advisor null), and the " +
+        "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced; a row added as observed carries seed with the human's rationale). " +
+        "Each cell carries seeds: the tiers whose table row for its provider, model and effort has a seed standing in for the table's prior, with the seed's kind (interview / human) and event_id. " +
         nextDescription("list_routing_cells", "cells", "The rows come in full"),
       inputSchema: { since_watermark, next },
     },

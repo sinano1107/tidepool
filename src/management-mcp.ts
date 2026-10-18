@@ -652,7 +652,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "change_execution_settings",
     {
       description:
-        "Apply one change to the board's execution settings as the human: add a table row (`row`; a model has at most one row per tier and one per effort), edit one (`row` with `key`, " +
+        "Apply one change to the board's execution settings as the human: add a table row (`row`; a model has at most one row per tier and one per effort; " +
+        "`seed: { comment }` starts the added row as observed in its tier, so the learner may move to it before any production session, weighed as one accepted session; " +
+        "the comment records why, and edits refuse it), edit one (`row` with `key`, " +
         "the provider + model + effort of the row to replace), delete one (`delete_row`, named by provider + model + effort — deleting " +
         "every row of a provider × tier just excludes that provider for tasks of that tier), " +
         "insert a tier (`insert_tier`: name — a lowercase letter, then a-z / 0-9 / - / _ — a one-line description, and position, an index into the tier list, 0 = lowest), " +

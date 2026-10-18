@@ -388,7 +388,7 @@ bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh local   # a Linux
 bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh pi      # the Pi
 ```
 
-Measures that an Interview root's floor holds for both providers (issue #2197 / ADR 0273 decision 2): cwd is a fresh git repository (the interview room), the work floor is emitted from the checkout's code, and the real environment is opened for reading on top. Claude runs one session with read-floor's spawn shape and the real environment added to `sandbox.filesystem.allowRead`. Codex runs `codex sandbox -P tidepool-work -C <room>` with the work `permissionConfig()` (`emit-sandbox-settings.ts --codex`) and the real environment added to the filesystem map as `read`, with no model turn. That one added entry per provider is the only hand-made part; #2192's `interview` type replaces it.
+Measures that an Interview root's floor holds for both providers (issue #2197 / ADR 0273 decision 2): cwd is a fresh git repository (the interview room), and the `interview` type's floor is emitted from the checkout's code (`emit-sandbox-settings.ts interview <room> --read <real env>`), which opens the real environment for reading. Claude runs one session with read-floor's spawn shape and that profile. Codex runs `codex sandbox -P tidepool-work -C <room>` with the same mode's `permissionConfig()` (`--codex`), with no model turn.
 
 `scripts/interview-room-canary-probe.sh` runs the same rows for each provider:
 

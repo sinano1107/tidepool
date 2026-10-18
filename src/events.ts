@@ -172,7 +172,7 @@ export type EventPayload =
   | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
-  // 採点された受験者、worker は root の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
+  // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
@@ -188,7 +188,10 @@ export type EventPayload =
   | { kind: "premise_breach_resolved"; outcome: "continue" | "redecompose" | "question" }
   // ADR 0248 決定3 / ADR 0267 決定4: probe の破綻の報告への retry と root の retry が登録した新しい Interview の root に、盤面が積む
   // 旧い root の id・出題の probe と rubric・報告の理由(報告への retry だけ)・人間のコメント。root の history にだけ並ぶ(人間向け kind ではない)
-  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string }
+  // interview_room は旧い root の面接室の在り処(ADR 0273 決定9: retry の新しい root は旧い面接室も読める)
+  | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string; interview_room?: string }
+  // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
+  | { kind: "interview_room_opened"; path: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
@@ -376,7 +379,8 @@ export type EventPayload =
   // kind's check and was accepted — pickup resumes for what that kind stops.
   // 回答なしで盤面名義に決着したときだけ observed_event_id を持つ: 行の Quarantine は表の編集がその行を消したとき
   // (ADR 0184 決定5 の門1)= 行を消した execution_settings_changed の id、断られた Interview の対象の question は
-  // その対象を走らせうる Interview が無くなったとき(ADR 0199 追記、issue #1992)= Interview の root を cancel した event の id
+  // その対象を走らせうる Interview が無くなったとき(ADR 0199 追記、issue #1992 / #1999)= その鍵を走らせうる最後の Interview を消した
+  // cancel の event の id —— root が同じ transaction で cancel されたなら root の、root が残るならその鍵の受験者の
   | { kind: "quarantine_released"; quarantine: string; value: string | null; observed_event_id?: number }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
@@ -562,7 +566,11 @@ export type EventPayload =
   // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
-  | ({ kind: "execution_settings_changed"; question_id?: string } & ExecutionSettingsChange)
+  // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。
+  | ({ kind: "execution_settings_changed"; question_id?: string } & (
+      | Exclude<ExecutionSettingsChange, { setting: "row" }>
+      | (Extract<ExecutionSettingsChange, { setting: "row" }> & { tier_id?: TierId })
+    ))
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。決定 log には現れない。
@@ -653,7 +661,7 @@ export type EventPayload =
   // decision の event、提案が question、枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
   // list_memory_proposals が返すエントリの id も持つ(precedent_entries / proposal_entries —— Precedent の seen に
   // 数える、issue #1230)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
-  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited)、人間が変えた行(execution_settings_changed)、
+  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
   // 提案の question。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[] })
   | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })

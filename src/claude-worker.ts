@@ -45,9 +45,9 @@ import {
   readRootRefusal,
 } from "./stream-json.js";
 import {
+  carriesReadOnly,
   type PickupStopped,
   resolveTaskAgent,
-  runsOnReviewFloor,
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
@@ -61,9 +61,11 @@ import {
   guardRegistryDefaultBranch,
   materializeWorkspaceProjectSettings,
   quarantineWorkspace,
+  type RunPlace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
+  taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -155,7 +157,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`。#2192 までは interview の root も —— `runsOnReviewFloor`)の harness deny(ADR 0013 追記 / issue #59 /
+/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
  *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
@@ -166,7 +168,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
  *  分離だが、CLI 側の列挙が要らない(Edit/Write/NotebookEdit とパターンは
  *  task.type だけで決まる固定集合)ぶん同期・ping 不要。*/
 export function reviewToolDenials(taskType: Task["type"]): string[] {
-  if (!runsOnReviewFloor(taskType)) return [];
+  if (!carriesReadOnly(taskType)) return [];
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
 }
 
@@ -239,7 +241,7 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  read-only 保証を運ぶ type(review / memory_repair)と #2192 までの interview の root(`runsOnReviewFloor`)以外はすべて
+ *  read-only 保証を運ぶ type(review / memory_repair)以外はすべて
  *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
  *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
@@ -251,7 +253,7 @@ export function spawnTools(taskType: Task["type"], slashCommandsDisabled: boolea
   // が毎回組み立て直しているのと同じ理由)。
   return WORKER_TOOLS.filter(
     (tool) =>
-      !(runsOnReviewFloor(taskType) && REVIEW_REMOVED_TOOLS.includes(tool)) &&
+      !(carriesReadOnly(taskType) && REVIEW_REMOVED_TOOLS.includes(tool)) &&
       !(slashCommandsDisabled && tool === "Skill"),
   );
 }
@@ -403,7 +405,7 @@ export function spawnAllowedTools(
   // 1つ目は task type に依らない — 綴られるのは一度だけで、それが「MCP は両
   // プロファイルに乗る」という決定そのものである。
   const allowed = [`mcp__${MCP_SERVER_NAME}`];
-  if (taskType !== "review" && taskType !== "interview") return allowed;
+  if (taskType !== "review") return allowed;
   return [...allowed, ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`)];
 }
 
@@ -1731,6 +1733,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       stopped,
     );
     if (!workspace) return;
+    // 走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室。下の検査・cwd・封じ込めの組はこちら、層と記憶は実環境
+    const place = taskRunPlace(this.options.db, task, workspace);
     // issue #60 / ADR 0033 (+ #144 / ADR 0035): the CLI merges the *workspace's*
     // own `.claude/settings.json` with the per-task `--settings` floor below,
     // and both floor-defining keys leak through — `sandbox.filesystem.allowRead`
@@ -1754,34 +1758,34 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // `.claude/settings.local.json` を持っていることが多い。後ろに置くと真だが
     // 的外れな診断(「settings が床を広げている」)が先に立ち、人間は
     // settings を消して回ることになる。
-    const overlap = this.options.boardState && boardStateOverlap(workspace.path, this.options.boardState);
+    const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
-      stopped(quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now()));
+      stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
       return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
-    const contained = claudeWorkspaceContainment(workspace.path);
+    const contained = claudeWorkspaceContainment(place.path);
     if (!contained.available) {
-      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", workspace.name), reason: contained.reason } as const;
+      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: contained.reason } as const;
       registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
       stopped(stop);
       return;
     }
-    const settings = workspaceSettingsDisposition(workspace.path);
+    const settings = workspaceSettingsDisposition(place.path);
     if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;
-        excludeWorkspaceProjectSettings(workspace);
-        this.restoreProjectSettingsAfterReclaim(reclaimed, workspace);
+        excludeWorkspaceProjectSettings(place);
+        this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
-        stopped(quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now()));
+        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
     } else if (settings.hiddenProjectSettings) {
       try {
-        materializeWorkspaceProjectSettings(workspace);
+        materializeWorkspaceProjectSettings(place);
       } catch (err) {
-        stopped(quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now()));
+        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
     }
@@ -1839,7 +1843,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // ADR 0025 point 6).
     const skills = agent.definition.skills;
     if (skills.length === 1 && skills[0] === SKILL_WILDCARD) {
-      this.launch(task, workspace, agent, registry, {
+      this.launch(task, workspace, place, agent, registry, {
         deny: [],
         disableSlashCommands: false,
         // nothing is denied, so ADR 0033's sandbox may open the skill roots
@@ -1849,7 +1853,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       return;
     }
     if (skills.length === 0) {
-      this.launch(task, workspace, agent, registry, {
+      this.launch(task, workspace, place, agent, registry, {
         deny: [],
         disableSlashCommands: true,
         permittedSkills: [],
@@ -1857,7 +1861,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       return;
     }
     // a rejected probe is the same "could not enumerate" as null — never the old wedge
-    void this.enumerateSkills(workspace.path).catch(() => null).then((enumerated) => {
+    void this.enumerateSkills(place.path).catch(() => null).then((enumerated) => {
       if (enumerated === null) {
         // spawn failure with no fail-open (ADR 0025 point 6): the deny list
         // could not be resolved, so no process starts and the allowlist is
@@ -1879,7 +1883,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // the @workspace/@host split is a difference against the checkout's own
       // skills — scanned only when a scope word is actually present.
       const needsScan = skills.some((s) => s === "@workspace" || s === "@host");
-      const workspaceSkills = needsScan ? scanWorkspaceSkills(workspace.path) : [];
+      const workspaceSkills = needsScan ? scanWorkspaceSkills(place.path) : [];
       const deny = computeSkillDenials(skills, enumerated, workspaceSkills);
       // ADR 0033: the sandbox's skill re-allow is the *permitted* set — the
       // same complement, the other way round — so a denied skill's directory
@@ -1890,7 +1894,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
       // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
-        this.launch(task, workspace, agent, registry, {
+        this.launch(task, workspace, place, agent, registry, {
           deny,
           disableSlashCommands: false,
           permittedSkills,
@@ -1937,6 +1941,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private launch(
     task: Task,
     workspace: WorkspaceConfig,
+    /** 走る場所(`taskRunPlace`): cwd と sandbox の書きと読み。`workspace` は層・許可ドメイン・記憶の実環境 */
+    place: RunPlace,
     agent: ResolvedAgent,
     registry: Registry,
     enforcement: {
@@ -1950,7 +1956,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const { definition, profile } = agent;
     // sandbox settings と cwd を実体の綴りで書く(issue #1954、Codex 側は #864)。無い checkout は
     // 何も作る前にここで投げ、spawn_failed に落ちる(scheduler の catch / ADR 0149 決定6)
-    const workspacePath = realpathSync(workspace.path);
+    const workspacePath = realpathSync(place.path);
     // ADR 0257 決定2: the session's task temp. Removed at settle, on a spawn
     // failure, and on any throw between here and the spawn; a failed removal only
     // logs, never stopping the rest of the cleanup (issue #705).
@@ -2072,6 +2078,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             allowedDomains: workspace.allowed_domains,
             taskTemp,
             lib64: existsSync("/lib64"),
+            readPaths: place.read_paths,
           }),
         ),
       );
@@ -2109,7 +2116,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // sandboxed Bash never reaches this layer in a work session and the OS
           // remains its only bound.
           "--permission-mode",
-          runsOnReviewFloor(task.type) ? "manual" : "acceptEdits",
+          carriesReadOnly(task.type) ? "manual" : "acceptEdits",
           // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
           // is flag tier, but permission *merges* across tiers: an `allow` in the
           // host human's `~/.claude/settings.json` or in the workspace's

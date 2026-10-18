@@ -94,3 +94,21 @@ question で止まり、前提の破綻の retry(ADR 0248 決定2)で写った�
 ## 追記(2026-10-18 の grilling、issue #2184 / ADR 0273)
 
 決定2 の対象の綴り (provider, model, effort, tier) は (provider, model, effort) の3欄になり、段は Interview 1件の属性(root の `tier`)になった(ADR 0273 決定6)。「対象が表にある」の判定は3欄 + Interview の段で変わらない。決定5 の提案は対象の段でなく Interview の段を名指し、purpose の代わりに仮説・測る仕事・根拠の task を運ぶ(ADR 0273 決定9)。決定1・3・4・6 はそのまま。
+
+## 追記(2026-10-18 の grilling、issue #1999)
+
+追記(#1992)の門「その対象を走らせうる未決着の Interview が盤面に残らなくなれば、question は回答なしで盤面名義に決着する」は、
+cancel の経路ごとに呼ぶ処理ではなく、**cancel を含む transaction の終わりに盤面が状態から導く1回の掃除**である。#1992 は2経路
+(root の直接 cancel、受験者の failure の abandon)に呼び出しを付けたが、「この対象は測らない」(#1999)と probe の破綻の報告への
+abandon / retry(#2132)は呼ばず、同じ model に model の鍵と effort の鍵の question が両方開いていると、model の鍵への回答が effort の
+鍵の受験者も cancel して、effort の鍵の question が走らせうる Interview の無いまま開いて残った(実測は #1999 のコメント)。経路ごとに
+付ける形は ADR 0267 が退けた「分岐を足し続ける」形で、root が残る場合(他の対象が生きている)も表現できなかった。
+
+- **掃除の範囲は、その transaction で cancel された task が運ぶ鍵だけ。** 盤面に task の無い鍵の question は、無関係な cancel では
+  閉じない(#1992 の線)。retry の新しい root は同じ transaction の内側で登録されるので、「retry の直後に閉じる」退けた案には当たらない。
+- **`observed_event_id` は、その鍵を走らせうる最後の Interview を消した cancel の event。** root が同じ transaction で cancel された
+  なら root の cancel の event(#1992 の文面どおり)、root が残るならその鍵の受験者の cancel の event。原因(人間の答え)は cancel の
+  event の `origin_question_id` から1手で辿れる —— 記録は直接の原因だけを指す盤面の他の記録と同じ形。
+
+退けた案: **3経路目・4経路目に呼び出しを足し、引数を root id から鍵へ広げる** —— 次に cancel の経路が増えたときまた付け忘れる。
+**人間の答えの event を観測に付ける** —— #1992 の2経路は cancel の event を指しており、経路によって指す距離が変わる。

@@ -2,6 +2,8 @@
 
 **Status 追記: 「組み込みは review 専用」は ADR 0273 決定2 で「review と interview」に広がった** —— どちらも work を実行する授権を持たず、interview が書けるのは面接室だけ(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
+**Status 追記2: 「review と interview」は ADR 0275 決定1 で「reviewer 定数の授権で走れる type(review / interview / memory_repair)」になった** —— memory_repair は記憶の店にだけ書き、PR も着地のダイヤルも持たない。決定3・4 の扉と quarantine 解除の依存は `work` だけを数える(2026-10-18 の grilling、issue #2209 / ADR 0275)。
+
 2026-10-10 の grilling(issue #1623)で決定。組み込みの `fugu` を assignee にした work タスクは、ADR 0013 の reviewer 定数を
 自分の profile として走っていた。merge ダイヤルを持たないので PR は盤面に問われず `external` と同じ面に着地し(#1623)、
 Authority 節には「read-only。直すな」が入る(#1736)。ADR 0117 決定1 は組み込みの profile を reviewer 定数のままにしたが、

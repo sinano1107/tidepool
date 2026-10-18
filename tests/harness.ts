@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { afterAll, expect } from "vitest";
+import { afterAll, expect, onTestFinished, vi } from "vitest";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import {
@@ -67,7 +67,7 @@ import {
   BOARD_WORKER_ID,
   HUMAN_WORKER_ID,
 } from "../src/worker-id.js";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
   FakeAttributionClient,
@@ -363,6 +363,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
+    // 面接室(ADR 0273 決定1)は盤面の dir の下に作る —— テストがホームの既定の基点に書かない
+    workspacesDir: join(dir, "workspaces"),
     watchdog: options.watchdog,
     github,
     authority: options.authority,
@@ -848,6 +850,28 @@ export function rememberedNote(t: Tidepool, title: string, taskId?: string): num
 /** setup のみ: 受験者の Interview の root の id。受験者は親を持たないので、詳細の読み口が名指す root を引く(ADR 0267 決定1・6)。 */
 export function examineeRootId(db: Db, examineeId: string): string {
   return presentTask(db, { id: examineeId }).interview_root_id!;
+}
+
+/** setup のみ: root の面接室を使い捨ての基点の下に開く(ADR 0273 決定1)—— 盤面の pickup を通らずに root や受験者を adapter で
+ *  走らせるテストが、pickup の代わりに置く。 */
+export function openTestInterviewRoom(db: Db, root: Task): void {
+  const base = mkdtempSync(join(tmpdir(), "tidepool-rooms-"));
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
+  openInterviewRoom(db, root, base, new Date(0));
+}
+
+/** setup のみ: このプロセスの git の commit だけを落とす(署名を求め、署名の program は無い)。他の git は通る。
+ *  config は既存の `GIT_CONFIG_*`(vitest.config.ts の env)の後ろに足す。途中で戻すのは `vi.unstubAllEnvs()`、テストの終わりには必ず戻る。 */
+export function failGitCommits(): void {
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  vi.stubEnv("GIT_CONFIG_COUNT", String(n + 2));
+  vi.stubEnv(`GIT_CONFIG_KEY_${n}`, "commit.gpgsign");
+  vi.stubEnv(`GIT_CONFIG_VALUE_${n}`, "true");
+  vi.stubEnv(`GIT_CONFIG_KEY_${n + 1}`, "gpg.program");
+  vi.stubEnv(`GIT_CONFIG_VALUE_${n + 1}`, "/nonexistent-gpg");
 }
 
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */

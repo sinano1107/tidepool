@@ -1,13 +1,13 @@
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, getTask, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, getTask, interviewRoomPath, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { RecordContainerError } from "../src/transcript-store.js";
-import { prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace } from "./harness.js";
+import { openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, rootForkPoint, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 受験者の checkout(ADR 0263 決定5・6 / ADR 0111 追記12)。分岐の土台と、決着した受験者のブランチを外すこと。
@@ -135,6 +135,48 @@ it("決着した受験者の答案は、外す前に盤面の記録の器へ bun
   const path = join(recordDir, `${done.id}.bundle`);
   expect(git(workspace.path, "bundle", "list-heads", path)).toBe(`${head} refs/heads/task/${done.id}`);
   expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head, path }]);
+  db.close();
+});
+
+it("面接室は規約の基点の下の root の id に、盤面名義の空コミット 'Initial commit' だけを持つ repo として開き、在り処を実体の綴りで残す —— 空コミットが落ちても在り処は先に残り、次に開くと残った repo の続きから作る(ADR 0273 決定1)", async () => {
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-room-open-");
+  failGitCommits();
+  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("/nonexistent-gpg");
+  vi.unstubAllEnvs();
+  const room = realpathSync(join(base, root.id));
+  expect(interviewRoomPath(db, root.id)).toBe(room);
+
+  openInterviewRoom(db, root, base, NOW);
+  openInterviewRoom(db, root, base, NOW);
+
+  expect(git(room, "log", "--format=%an %s", "main")).toBe("tidepool Initial commit");
+  expect(listEvents(db, root.id).filter((event) => event.payload.kind === "interview_room_opened")).toHaveLength(1);
+  db.close();
+});
+
+it("受験者の走る場所は root の面接室で、決着した兄弟の答案の除去・reflog・repack は面接室の中で起き、実環境の checkout の ref・reflog・object には触れない(ADR 0273 決定8 / ADR 0266)", async () => {
+  const workspace = await makeWorkspace("pin-room-cleanup");
+  const recordDir = await tempDir("tidepool-pin-room-cleanup-records-");
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  const room = taskRunPlace(db, root, workspace);
+  const [done, picked] = poseProbe(db, root, POSE, "auditor", NOW, "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
+  const head = answeredBranch(room, done.id);
+  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
+  const realEnv = () => [git(workspace.path, "for-each-ref"), git(workspace.path, "reflog", "show", "--no-abbrev", "HEAD"), git(workspace.path, "count-objects", "-v")];
+  const before = realEnv();
+
+  const place = taskRunPlace(db, picked, workspace);
+  await prepareWorkspaceAtPickup(db, place, picked, { recordDir, now: new Date(0) });
+
+  expect(place).toMatchObject({ name: root.id, path: room.path });
+  expect(git(room.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${picked.id}`);
+  expect(git(room.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  expect(() => git(room.path, "cat-file", "-e", head)).toThrow();
+  expect(realEnv()).toEqual(before);
   db.close();
 });
 

@@ -891,7 +891,7 @@ it.each([
 
 it.each([
   ["removed-agent", false, false, "unknown agent: removed-agent"],
-  ["fugu", true, true, "agent fugu is the built-in agent, which runs only reviews and Interviews"],
+  ["fugu", true, true, "agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs"],
 ] as const)("修理子に写せない %s は空に落ち、名前と門の拒否文が登録 event に残る(ADR 0237)", (name, registered, builtIn, reason) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
@@ -954,7 +954,7 @@ it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
   const repair = listChildren(db, task.id).find((child) => child.type === "work")!;
   expect(repair.assignee).toBeNull();
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).toMatchObject({
-    assignee_not_copied: { name: "fugu", reason: "agent fugu is the built-in agent, which runs only reviews and Interviews" },
+    assignee_not_copied: { name: "fugu", reason: "agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs" },
   });
 });
 

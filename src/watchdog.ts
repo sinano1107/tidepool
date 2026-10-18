@@ -228,9 +228,11 @@ export function queueReturnHandler(
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
-    let workspace: WorkspaceConfig | null | undefined;
+    // drift だけは後始末に workspace 無し(null)を渡し、同じ観測で quarantine を撃ち直させない。解決できるときは
+    // 後始末自身が走る場所(interview は面接室、ADR 0273 決定8)を解決するので渡さない(undefined)
+    let workspace: null | undefined;
     try {
-      workspace = deps.resolve?.(task.workspace);
+      deps.resolve?.(task.workspace);
     } catch (err) {
       // drift 以外の失敗は後始末自身の解決に任せる(落ちれば落ちた後始末の停止)
       if (err instanceof UnknownWorkspaceError) workspace = null;

@@ -14,8 +14,9 @@ import {
   UnknownAgentError,
 } from "./registry.js";
 import { unsettledSql } from "./task-status.js";
-import { type TaskType, typeAwareDefaultAgentSql, workSideTypeSql } from "./tasks.js";
+import { type TaskType, typeAwareDefaultAgentSql } from "./tasks.js";
 import type { Tier } from "./tier.js";
+import { whyAssigneeCannotTake } from "./webui-rules.js";
 import type { WorkspaceResolver } from "./workspace.js";
 
 /** An assignee (or the board's default) resolved against the registry —
@@ -59,13 +60,13 @@ export function resolveExecutionAgent(
   const definition = ownEntry(registry.agents, name);
   if (!definition) throw new UnknownAgentError(name);
   assertValidAgentDefinition(name, definition, tiers);
-  // 組み込みは review 専用(ADR 0228 決定1/4): 名前ではなく解決の結果を見るので、
-  // shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
+  // 組み込みが走らせる type は assignee の門と同じ線(ADR 0275 決定1 / ADR 0228 決定4): 名前ではなく
+  // 解決の結果を見るので、shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
   // 解決の失敗として agent 名の quarantine に乗せる。
-  if (definition.builtin && taskType !== "review" && taskType !== "interview") {
+  if (definition.builtin && whyAssigneeCannotTake(name, taskType, true) !== undefined) {
     throw new InvalidAgentDefinitionError(
       name,
-      `the built-in agent runs only reviews and Interviews, but a ${taskType} task resolved to it; ` +
+      `the built-in agent runs only reviews, Interviews and memory repairs, but a ${taskType} task resolved to it; ` +
         `restore a registry entry named ${name} or reassign that task`,
     );
   }
@@ -73,8 +74,8 @@ export function resolveExecutionAgent(
   // auditor の profile を書かず、組み込みは授権を増やさないので、床そのものである
   // ADR 0013 の定数を直に返す(registry の authority map には注入しない: 注入すると
   // profile 一覧・削除・authority select に、編集も削除もできない行が生える)。
-  // 組み込みは review しか走らないので、merge ダイヤルを持たないこの profile が
-  // 着地の面に読まれることはない(ADR 0228)。
+  // 組み込みは PR を開く type を走らせないので、merge ダイヤルを持たないこの profile が
+  // 着地の面に読まれることはない(ADR 0228 / ADR 0275 決定1)。
   const profile = definition.builtin
     ? REVIEWER_AUTHORITY_PROFILE
     : ownEntry(registry.authority, definition.authority);
@@ -122,7 +123,7 @@ export function resolveAgentOrQuarantine(
  *  (`"absent"` when no registry is configured at all — in which case only the
  *  "no more unsettled tasks" path can ever clear it). The built-in never counts
  *  as "back" (ADR 0228 決定4): a name resolving to it is not repaired, and while
- *  it does, only a work-side task (work or memory_repair, `workSideTypeSql`) counts as a dependent. `"registry"` means the name passes
+ *  it does, only a work task counts as a dependent (ADR 0275 決定1). `"registry"` means the name passes
  *  pickup's resolution, not merely that an entry exists (issue #1745): an entry
  *  whose definition does not hold is `"absent"`, and `definitionFailure` names why. */
 export function verifyAgentRepaired(
@@ -140,8 +141,8 @@ export function verifyAgentRepaired(
     ? `agent ${agentName}'s definition still does not hold (${definitionFailure})`
     : `agent ${agentName} is not back in the registry`;
   const fallback = typeAwareDefaultAgentSql("tasks");
-  // 名前が組み込みに解決される間、依存に数えるのは work 側の task だけ —— review は組み込みが走らせられる(ADR 0228 決定4)
-  const dependentTypes = resolution === "built-in" ? workSideTypeSql("tasks") : "type != 'question'";
+  // 名前が組み込みに解決される間、依存に数えるのは work だけ —— 他は組み込みが走らせられる(ADR 0228 決定4 / ADR 0275 決定1)
+  const dependentTypes = resolution === "built-in" ? "type = 'work'" : "type != 'question'";
   const stillUnsettled = db
     .prepare(`SELECT 1 FROM tasks WHERE ${dependentTypes} AND ${unsettledSql("status")}
               AND COALESCE(assignee, ${fallback}) = @agentName LIMIT 1`)

@@ -10,6 +10,7 @@ import {
   ensureWorkspaceToken,
   releaseWorkspace,
   resolveOrQuarantine,
+  taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -172,10 +173,12 @@ async function teardown(
   const task = getTask(db, taskId);
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
-  const workspace =
-    step.workspace === undefined
-      ? deps.resolve && resolveOrQuarantine(db, deps.resolve, task.workspace, clock.now())
-      : step.workspace;
+  // 後始末は走る場所に効く —— interview の root と受験者は面接室(ADR 0273 決定1・8)。門が渡した workspace は解決済みの走る場所
+  let workspace = step.workspace;
+  if (workspace === undefined) {
+    const resolved = deps.resolve && resolveOrQuarantine(db, deps.resolve, task.workspace, clock.now());
+    workspace = resolved && taskRunPlace(db, task, resolved);
+  }
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す

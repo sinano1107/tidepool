@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +16,7 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, listBoard, listChildren, logDecision, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -39,6 +39,7 @@ import {
   FULL_HANDOFF,
   HUMAN_WEBUI,
   mcpClient,
+  openTestInterviewRoom,
   POSED_HEAD,
   quarantineQuestion,
   type Tidepool,
@@ -78,7 +79,7 @@ function metaReviewTask(db: ReturnType<typeof openDb>, subject: "memory" | "rout
 /** Interview の root(openai の対象1つ)と、出題で立った pin の子 —— verb の差し替えと doctrine はこの2つでだけ形が変わる(ADR 0245 / ADR 0253)。 */
 const SOL = { provider: "openai", model: "gpt-5.6-sol", effort: "high" };
 function interviewRoot(db: ReturnType<typeof openDb>) {
-  return registerTask(db, {
+  const root = registerTask(db, {
     type: "interview",
     assignee: "codex-agent",
     title: "interview",
@@ -86,6 +87,9 @@ function interviewRoot(db: ReturnType<typeof openDb>) {
     tier: "standard",
     interview_targets: [SOL],
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+  // root も受験者も面接室で走る(ADR 0273 決定1)—— pickup の代わりに開く
+  openTestInterviewRoom(db, root);
+  return root;
 }
 function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
@@ -376,6 +380,43 @@ describe("CodexWorker (ADR 0098)", () => {
     const args = f.process.calls[0]!.args;
     expect(args[args.indexOf("-C") + 1]).toBe(f.workspace);
     expect(f.process.calls[0]!.cwd).toBe(f.workspace);
+  });
+
+  it("Interview の root は面接室を cwd と -C にして work の profile で面接室に書け(.git の行も work と同じ)、実環境と開ける面接室(根拠の Interview の root のもの)は read で載る(ADR 0273 決定2)", async () => {
+    const f = await fixture();
+    const evidence = interviewRoot(f.db);
+    const root = registerTask(f.db, { type: "interview", assignee: "codex-agent", title: "interview", hypothesis: "h", tier: "standard", evidence_task_ids: [evidence.id], interview_targets: [SOL] }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(f.db, root);
+
+    await f.start(root);
+
+    // spawn は実体の綴りで書く(issue #864)
+    const roomOf = (id: string) => realpathSync(interviewRoomPath(f.db, id)!);
+    const room = roomOf(root.id);
+    const args = f.process.calls[0]!.args;
+    expect(f.process.calls[0]!.cwd).toBe(room);
+    expect(args[args.indexOf("-C") + 1]).toBe(room);
+    expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-work"');
+    const rows = filesystem(args, "tidepool-work");
+    for (const row of [
+      `${JSON.stringify(room)}="write"`,
+      `${JSON.stringify(join(room, ".git"))}="write"`,
+      `${JSON.stringify(join(room, ".git", "hooks"))}="read"`,
+      `${JSON.stringify(f.workspace)}="read"`,
+      `${JSON.stringify(roomOf(evidence.id))}="read"`,
+    ]) expect(rows).toContain(row);
+  });
+
+  it("retry の新しい root は、retry が残した旧い root の面接室を read で載せる(ADR 0273 決定9)", async () => {
+    const f = await fixture();
+    const previous = posedInterviewRoot(f.db);
+    const root = retryInterviewRoot(f.db, previous, undefined, new Date(1), {}, "webui");
+    openTestInterviewRoom(f.db, root);
+
+    await f.start(root);
+
+    const rows = filesystem(f.process.calls[0]!.args, "tidepool-work");
+    expect(rows).toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, previous.id)!))}="read"`);
   });
 
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {

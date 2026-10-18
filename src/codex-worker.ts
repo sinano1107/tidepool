@@ -46,7 +46,7 @@ import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 
 
-import { type PickupStopped, resolveTaskAgent, runsOnReviewFloor, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
@@ -58,6 +58,7 @@ import {
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
+  taskRunPlace,
 } from "./workspace.js";
 
 const BOARD_VERBS = [
@@ -487,8 +488,10 @@ export function permissionConfig(
   taskTemp: string,
   executable: string,
   allowedDomains: readonly string[],
+  /** ADR 0273 決定2: cwd の外で読みだけ開ける checkout —— interview の root の実環境と開ける面接室。 */
+  readPaths: readonly string[] = [],
 ): string[] {
-  const review = runsOnReviewFloor(taskType);
+  const review = carriesReadOnly(taskType);
   const name = review ? "tidepool-review" : "tidepool-work";
   const parent = review ? ":read-only" : ":workspace";
   const access = review ? "read" : "write";
@@ -507,6 +510,7 @@ export function permissionConfig(
       [join(dotGit, "hooks")]: "read",
       [join(dotGit, "config")]: "read",
     }),
+    ...Object.fromEntries(readPaths.map((path) => [path, "read"])),
     [taskTemp]: "write",
     [dirname(process.execPath)]: "read",
     [dirname(executable)]: "read",
@@ -594,6 +598,8 @@ function spawnConfig(input: {
   enabledTools: readonly string[];
   workspace: string;
   allowedDomains: readonly string[];
+  /** ADR 0273 決定2: interview の root が読みだけ開ける checkout。 */
+  readPaths?: readonly string[];
   taskTemp: string;
   executable: string;
   /** `closedSkillsConfig()` の1行 —— Codex 自身の列挙から作る(ADR 0259 決定2)。 */
@@ -603,7 +609,7 @@ function spawnConfig(input: {
   return [
     `model_reasoning_effort=${toml(input.effort)}`,
     `developer_instructions=${toml(input.developerInstructions)}`,
-    ...permissionConfig(input.taskType, input.workspace, input.taskTemp, input.executable, input.allowedDomains),
+    ...permissionConfig(input.taskType, input.workspace, input.taskTemp, input.executable, input.allowedDomains, input.readPaths),
     ...closedSurfaceConfig(),
     'forced_login_method="chatgpt"',
     `mcp_servers.tidepool.url=${toml(input.mcpUrl)}`,
@@ -1164,9 +1170,11 @@ export class CodexWorker implements WorkerAdapter {
       stopped,
     );
     if (!workspace) return;
-    const overlap = this.options.boardState && boardStateOverlap(workspace.path, this.options.boardState);
+    // 走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室。検査・cwd・封じ込めの組はこちら、層と記憶は実環境
+    const place = taskRunPlace(this.options.db, task, workspace);
+    const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
-      stopped(quarantineWorkspace(this.options.db, workspace.name, new Error(overlap.reason), this.options.clock.now()));
+      stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
       return;
     }
     const assignee = resolveTaskAgent(
@@ -1197,7 +1205,7 @@ export class CodexWorker implements WorkerAdapter {
     // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
     const material = buildMetaReviewMaterial(this.options.db, task.id);
     // 実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
-    const workspacePath = realpathSync(workspace.path);
+    const workspacePath = realpathSync(place.path);
     const hook = installBoardHook(this.options.codexHome);
     const subject = metaReviewSubjectOf(this.options.db, task.id);
     const verbs = taskVerbSwap(this.options.db, task.id);
@@ -1234,6 +1242,7 @@ export class CodexWorker implements WorkerAdapter {
       ],
       workspace: workspacePath,
       allowedDomains: workspace.allowed_domains ?? [],
+      readPaths: place.read_paths,
       executable: this.options.executable,
       hook,
     };
@@ -1285,7 +1294,7 @@ export class CodexWorker implements WorkerAdapter {
       if (!checked.capability.available) {
         removeTaskTemp();
         // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
-        const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("codex", workspace.name), reason: checked.capability.reason } as const;
+        const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("codex", place.name), reason: checked.capability.reason } as const;
         registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
         stopped(stop);
         return;

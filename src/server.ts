@@ -143,6 +143,8 @@ export interface ServerOptions {
    *  ADR 0009), read fresh every call. Absent → every task runs against the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** ADR 0018 の規約の基点。盤面が面接室を作る場所(ADR 0273 決定1)。Absent の解決は scheduler が持つ。 */
+  workspacesDir?: string;
   /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
   watchdog?: WatchdogConfig;
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
@@ -178,8 +180,8 @@ export interface ServerOptions {
   agentRegistered?: (name: string) => boolean;
   /** Whether a name resolves to the built-in agent right now (no registry entry
    *  shadows it), read fresh against the registry — the assignee gates refuse it
-   *  for anything but review, and agent quarantine clearance does not count it as
-   *  back (ADR 0228). Absent → no registry configured. */
+   *  for work and question, and agent quarantine clearance does not count it as
+   *  back (ADR 0228 / ADR 0275 決定1). Absent → no registry configured. */
   resolvesToBuiltIn?: (name: string) => boolean;
   /** Why a registered name fails pickup's resolution, or undefined when it
    *  resolves — agent quarantine clearance counts only a resolving name as back
@@ -599,6 +601,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onPickupStopped,
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
+    workspacesDir: options.workspacesDir,
     auditorName,
     interviewerName,
     github: options.github,

@@ -2482,12 +2482,13 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
 }) {
-  const { Button, Card, Input, Select } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, Checkbox, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:execution-table';
   const open = edit.isOpen(id);
   const rowKey = (row: Pick<SettingsExecutionRow, 'provider' | 'model' | 'effort'>) => `${row.provider}:${row.model}:${row.effort}`;
   // 下書きの行は価格を入力欄の文字列で持つ —— サーバの行と下書きの行を toRow で同じ形に揃えて比べる
-  type DraftRow = Omit<SettingsExecutionRow, 'price_in' | 'price_out'> & { key: string; price_in: string; price_out: string };
+  // seed は足す行の「観測ありとして始める」の根拠(undefined = 選んでいない)—— 扉は追加にだけ受ける(ADR 0273 決定7)
+  type DraftRow = Omit<SettingsExecutionRow, 'price_in' | 'price_out'> & { key: string; price_in: string; price_out: string; seed?: string };
   const asDraft = (table: SettingsExecution['table']): DraftRow[] => table.map((row) => ({ ...row, key: rowKey(row), price_in: String(row.price_in), price_out: String(row.price_out) }));
   const [draft, setDraft] = React.useState(() => asDraft(settings.table));
   const [busy, setBusy] = React.useState(false);
@@ -2498,13 +2499,15 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
   const writes = draft.filter((d) => !same(current.get(d.key), toRow(d)))
     .map((d) => {
       const original = current.get(d.key);
-      return original ? { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) } : { row: toRow(d) };
+      if (original) return { key: { provider: original.provider, model: original.model, effort: original.effort }, row: toRow(d) };
+      return { row: toRow(d), ...(d.seed !== undefined && { seed: { comment: d.seed } }) };
     });
   const deletes = [...current.values()].filter((row) => !draft.some((d) => d.key === rowKey(row)));
   const dirty = writes.length > 0 || deletes.length > 0;
   // 1つの (model, effort) は1行、1つの段に同じ model は1行まで(ADR 0200 決定5)
   const unique = (of: (row: SettingsExecutionRow) => string) => new Set(draft.map((d) => of(toRow(d)))).size === draft.length;
-  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out)))
+  const ok = draft.every((d) => !TidepoolRules.whyBlank(d.model) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in)) && !TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))
+    && (d.seed === undefined || !TidepoolRules.whyBlank(d.seed)))
     && unique(rowKey) && unique((row) => `${row.provider}:${row.model}:${row.tier}`);
   useDirtySignal(edit, open, dirty);
 
@@ -2570,6 +2573,16 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 <Input label="Price in" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_in))} mono value={d.price_in} onChange={(e) => update(i, { price_in: e.target.value })} placeholder="USD / MTok" />
                 <Input label="Price out" error={TidepoolRules.whyInvalidPrice(readNumericDraft(d.price_out))} mono value={d.price_out} onChange={(e) => update(i, { price_out: e.target.value })} placeholder="USD / MTok" />
                 <Button variant="ghost" size="sm" onClick={() => setDraft(draft.filter((_, j) => j !== i))} aria-label={`remove ${d.provider} ${d.tier} ${d.model}`.trim()}>Remove</Button>
+                {d.key === 'new' && (
+                  <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <Checkbox label="Start as observed — the learner may move to this row before it has run here"
+                      checked={d.seed !== undefined} onChange={() => update(i, { seed: d.seed === undefined ? '' : undefined })} />
+                    {d.seed !== undefined && (
+                      <Input label="Why (recorded with the change)" value={d.seed} error={TidepoolRules.whyBlank(d.seed)}
+                        onChange={(e) => update(i, { seed: e.target.value })} placeholder="e.g. accepted by the standard Interview of the parser probe" />
+                    )}
+                  </div>
+                )}
               </div>
             ))}
             {/* ponytail: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}

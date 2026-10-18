@@ -74,7 +74,7 @@ function board() {
 
 const judge = { provider: "anthropic" as const, model: "claude-fable-5-1", effort: "high" };
 
-const none = { board: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } }, workspace: { accepted: 0, rejected: 0, interview: { accepted: 0, rejected: 0 } } };
+const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 /** recordShadow へ渡す組(setup のみ): 実績は空、候補は2行。 */
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting, basis: "prior" | "data") => ({
   recommended,
@@ -121,7 +121,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   rejectedSession(opus);
   rejectedSession(sol);
   const later = work("later");
-  const branch = (promoted: boolean) => selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), opus.tier_id, null) }).shadow;
+  const branch = (promoted: boolean) => selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), [], opus.tier_id, null) }).shadow;
   recordShadow(db, later.id, branch(false), at);
   recordShadow(db, later.id, branch(true), at);
   const reader = routingReview();
@@ -228,7 +228,7 @@ it("list_routing_cells の新セルは終わった session で初めて観測さ
   const seen = exit(task.id, spawn(task.id, "deckhand", executionSetting("moonshot", "kimi-k3")), []);
 
   expect(listRoutingCells(db, routingReview(), {})).toEqual({
-    cells: [{ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, first_observed_event_id: seen }],
+    cells: [{ cell: { provider: "moonshot", model: "kimi-k3", effort: "high", advisor: null }, first_observed_event_id: seen, seeds: [] }],
     rows: [],
   });
 });
@@ -243,7 +243,7 @@ it("effort「無い」のセルは shadow 行と list_routing_cells で effort n
 
   const cell = { provider: "anthropic", model: haiku.model, effort: null, advisor: null };
   expect(listRoutingShadow(db, reader, {}).shadow).toEqual([expect.objectContaining({ recommended: cell, actual: cell })]);
-  expect(listRoutingCells(db, reader, {}).cells).toEqual([{ cell, first_observed_event_id: seen }]);
+  expect(listRoutingCells(db, reader, {}).cells).toEqual([{ cell, first_observed_event_id: seen, seeds: [] }]);
 });
 
 it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP の直接編集だけで、提案 question への approve の適用は含まない(ADR 0151)", () => {
@@ -254,6 +254,55 @@ it("list_routing_cells の人間が変えた行は settings タブ / 管理MCP �
   const reader = routingReview();
 
   expect(listRoutingCells(db, reader, { since_watermark: 0 }).rows).toMatchObject([{ origin: "mcp", row: { effort: "max" } }]);
+});
+
+it("list_routing_cells のセルはその provider / model / effort の種を段・種別・出所の event id で運び、種の無いセルは空 —— 種つきで足した行の記録は根拠を運ぶ(ADR 0273 決定7)", () => {
+  const { db, work, spawn, exit, routingReview } = board();
+  const opusMax = executionSetting("anthropic", "claude-opus-5-5", { effort: "max", tier_id: tierIdOf(db, "frontier") });
+  const row = { provider: "anthropic" as const, tier: "frontier", model: "claude-opus-5-5", effort: "max", price_in: 5, price_out: 25 };
+  const seedId = applyExecutionSettingsChange(db, { setting: "row", row, seed: { comment: "accepted by the frontier Interview" } }, "mcp", at);
+  const task = work("t", "frontier");
+  const seenOpus = exit(task.id, spawn(task.id, "deckhand", opusMax), [opusMax.model]);
+  const seenSol = exit(task.id, spawn(task.id, "deckhand", sol), []);
+
+  expect(listRoutingCells(db, routingReview(), { since_watermark: 0 })).toEqual({
+    cells: [
+      { cell: { provider: "anthropic", model: "claude-opus-5-5", effort: "max", advisor: null }, first_observed_event_id: seenOpus, seeds: [{ tier: "frontier", kind: "human", event_id: seedId }] },
+      { cell: { provider: "openai", model: "gpt-5.6-sol", effort: "high", advisor: null }, first_observed_event_id: seenSol, seeds: [] },
+    ],
+    rows: [{ event_id: seedId, origin: "mcp", created_at: at.toISOString(), row, seed: { comment: "accepted by the frontier Interview" } }],
+  });
+});
+
+it("list_routing_cells の種は行のある (セル, 段) のものだけ —— 消した行と段を移した行の種は、event が残っても載らない(spec #2190)", () => {
+  const { db, routingReview } = board();
+  const change = (c: object) => applyExecutionSettingsChange(db, c as never, "webui", at)!;
+  const row = (model: string, tier = "economy") => ({ provider: "anthropic" as const, tier, model, effort: "low", price_in: 1, price_out: 5 });
+  const key = (model: string) => ({ provider: "anthropic", model, effort: "low" });
+  const kept = change({ setting: "row", row: row("claude-haiku-5-5"), seed: { comment: "kept" } });
+  change({ setting: "row", row: row("claude-haiku-5-6"), seed: { comment: "deleted" } });
+  change({ setting: "delete_row", ...key("claude-haiku-5-6") });
+  change({ setting: "row", row: row("claude-haiku-5-7"), seed: { comment: "moved" } });
+  change({ setting: "row", key: key("claude-haiku-5-7"), row: row("claude-haiku-5-7", "standard") });
+
+  expect(listRoutingCells(db, routingReview(), { since_watermark: 0 }).cells).toEqual([
+    { cell: { ...key("claude-haiku-5-5"), advisor: null }, first_observed_event_id: null, seeds: [{ tier: "economy", kind: "human", event_id: kept }] },
+  ]);
+});
+
+it("list_routing_cells は窓の中で種が置かれたセルを、初観測が窓より前でも載せる(ADR 0273 決定7)", () => {
+  const { db, work, spawn, exit, routingReview } = board();
+  const task = work("t", "standard");
+  const seen = exit(task.id, spawn(task.id, "deckhand", opus), [opus.model]);
+  routingReview(true);
+  // 種つきで足し直す(表の種に opus の standard の行があるので、消してから)
+  const opusRow = { provider: "anthropic" as const, tier: "standard", model: opus.model, effort: "high", price_in: 5, price_out: 25 };
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: opus.model, effort: "high" }, "webui", at);
+  const seedId = applyExecutionSettingsChange(db, { setting: "row", row: opusRow, seed: { comment: "re-measured" } }, "webui", at);
+
+  expect(listRoutingCells(db, routingReview(), {}).cells).toEqual([
+    { cell: { provider: "anthropic", model: opus.model, effort: "high", advisor: null }, first_observed_event_id: seen, seeds: [{ tier: "standard", kind: "human", event_id: seedId }] },
+  ]);
 });
 
 // 応答予算(ADR 0195 / issue #1390): 読み口は予算に収まるだけ返し、収まらない分は続き(next)で読む。

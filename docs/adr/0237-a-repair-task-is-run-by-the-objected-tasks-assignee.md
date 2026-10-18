@@ -33,3 +33,9 @@ agent を専門性で選び分ける盤面(ADR 0019 / 0031)では、既定 agent
 - **門を通らなければ Commit を拒む** —— 無関係な agent の削除が人間の異議を束ねられなくする。
 - **`human` は写さず既定 agent に任せる** —— 規則に例外が増え、しかもブランチを持たない human タスクの下の work は
   pickup で workspace の quarantine に落ちる(#1796、#1773 の実測)。
+
+## 追記(2026-10-18 の grilling、issue #2209 / ADR 0275)
+
+決定1 の「work なら列から写す」は type を問わず「列が名前なら写す」になり、空の参照(review / interview)は写さないのではなく、
+異議された task の最後の `worker_spawned` の名前(Executor)を写す。根拠は決定1 と同じ「走らせた agent」で、参照は pickup で終わる
+(ADR 0233 決定1)ので束ねの時点のポインタは見ない。門と `assignee_not_copied`(決定2)はそのまま。

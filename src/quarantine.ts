@@ -11,7 +11,7 @@ import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCaus
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -559,7 +559,7 @@ export function questionRefusedTarget(
   now: Date,
 ): void {
   // 受験者の root は対象の行から引く(ADR 0267 決定1)
-  const root = getTask(db, db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(child.interview_target_id) as string)!;
+  const root = getTask(db, interviewRootIdOf(db, child)!)!;
   const reason = `Task ${child.id} of Interview "${root.title}" (${root.id}) ${evidence}`;
   if (refusal.cause === "effort_not_advertised") {
     registerQuarantine(db, "interviewTargetEffort", tableRowEffortValue(refusal.provider, refusal.model, refusal.effort), reason, now);

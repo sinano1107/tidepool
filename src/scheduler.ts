@@ -25,7 +25,7 @@ import { type GitHubClient, IssueGoneError } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
-import { loadEpisodes, observedInTier, type RoutingEpisode, recordShadow, selectorBranch } from "./learner.js";
+import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
@@ -59,6 +59,7 @@ import {
   contentSourceFor,
   escalateTask,
   getTask,
+  interviewRootIdOf,
   isWorkSide,
   nextSlotTask,
   type PickupStopped,
@@ -83,9 +84,12 @@ import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
+  resolveWorkspacesBaseDir,
+  taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -110,9 +114,11 @@ function withoutStopped(
   return (task) => {
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
-    const workspace = task.workspace ?? defaultWorkspaceName;
+    // 組は走る場所の単位(ADR 0273 決定8、SQL の対は tasks.ts の `stoppedSql`): 受験者は面接室(root の id)だけ、root は実環境と面接室
+    const room = interviewRootIdOf(db, task);
+    const places = task.interview_target_id !== null ? [room] : [task.workspace ?? defaultWorkspaceName, room];
     return candidates(task).filter(
-      (setting) => !pairs.some((pair) => pair.workspace === workspace && pair.harness === canonicalHarness(setting.provider)),
+      (setting) => !pairs.some((pair) => places.includes(pair.workspace) && pair.harness === canonicalHarness(setting.provider)),
     );
   };
 }
@@ -278,6 +284,9 @@ export function startScheduler(deps: {
    *  ADR 0009), read fresh every call. Absent → every task runs in the
    *  board's single fixed `workspace` (pre-#26 behavior). */
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
+  /** 規約の基点(ADR 0018): interview の root の最初の pickup が面接室を作る場所(ADR 0273 決定1)。
+   *  Absent → `resolveWorkspacesBaseDir` 自身の既定(adapter の `workspacesDir` と同じ)。 */
+  workspacesDir?: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), the
    *  fallback a `review` task's unset assignee resolves to instead of
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
@@ -348,6 +357,7 @@ export function startScheduler(deps: {
     onPickupStopped,
     workspace,
     resolveWorkspace,
+    workspacesDir,
     auditorName = DEFAULT_AUDITOR_NAME,
     interviewerName = DEFAULT_INTERVIEWER_NAME,
     github,
@@ -477,12 +487,21 @@ export function startScheduler(deps: {
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
+      // ADR 0273 決定1・8: interview の root と受験者は面接室で走る。作れない面接室は、その面接室の quarantine に落ちる
+      if (picked.type === "interview") {
+        try {
+          openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+        } catch (err) {
+          return stopped(quarantineWorkspace(db, picked.id, err, clock.now()));
+        }
+      }
+      const place = taskRunPlace(db, picked, resolved);
       try {
-        await prepareWorkspaceAtPickup(db, resolved, picked, { githubAuth, registry, recordDir, now: clock.now() });
+        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {
         // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
         if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
-        return stopped(await quarantineWithRepoAccessGuidance(resolved, err));
+        return stopped(await quarantineWithRepoAccessGuidance(place, err));
       }
     }
     const started = { ...picked, ...content };
@@ -714,14 +733,16 @@ export function startScheduler(deps: {
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
-      // フラグは poll ごとに1度読み(判定者の task は分岐しない)、episode は分岐が要るときに1度だけ読む。集計は候補の段ごとに
+      // フラグは poll ごとに1度読み(判定者の task は分岐しない)、episode と種は分岐が要るときに1度だけ読む。集計は候補の段ごとに
       // 違うので pickup ごとに作る(ADR 0210 決定2)
       const promoted = readExecutionSettings(db).learnerPromoted;
       let episodes: RoutingEpisode[] | undefined;
+      let seeds: Seed[] | undefined;
       const branch = (task: Task, pool: ExecutionSetting[]) => {
         episodes ??= loadEpisodes(db);
+        seeds ??= loadSeeds(db);
         // 完了タスクは pickup で既定の名前に焼き込まれる(ADR 0233)ので、未着手の空のタスクも同じ名前で照合する
-        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
+        return selectorBranch({ promoted, candidates: pool, ...observedInTier(episodes, seeds, pool[0]!.tier_id, task.workspace ?? workspace?.name ?? null) });
       };
       let branched: ReturnType<typeof branch> | undefined;
       /** 1手の選択: 昇格中の work 側の task(`isWorkSide`)は学習器の選択、それ以外は表の先頭。どちらも下の観測 → 除外 →

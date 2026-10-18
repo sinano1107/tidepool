@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
@@ -34,7 +34,7 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, listBoard, nextSlotTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
@@ -53,7 +53,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, POSED_HEAD, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -837,6 +837,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, root);
     const [child] = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
@@ -849,6 +850,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, root);
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
@@ -860,6 +862,7 @@ describe("ClaudeCodeWorker", () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, root);
     poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(root.id);
     worker.start(root, setting(root));
@@ -1379,6 +1382,32 @@ describe("ClaudeCodeWorker", () => {
       FIXTURE_WORKSPACE,
       calls[0]!.env.TMPDIR,
     ]);
+  });
+
+  it("Interview の root は面接室を cwd に acceptEdits で走り、面接室に書けて実環境を読みに開き Read の許可も足す。受験者も面接室で走り、実環境は開かず、許可ドメインは実環境の宣言のまま(ADR 0273 決定1・2・8)", async () => {
+    const real = await realpath(await tempDir("tidepool-claude-real-env-"));
+    const { worker, setting, slot, calls, logDir, db } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${real}\n  allowed_domains:\n    - registry.npmjs.org\n` });
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+    const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    openTestInterviewRoom(db, root);
+    slot.occupy(root.id);
+    worker.start(root, setting(root));
+    const [child] = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "deckhand", new Date(0), "worker", POSED_HEAD);
+    slot.release();
+    slot.occupy(child!.id);
+    worker.start(child!, setting(child!));
+
+    const room = realpathSync(interviewRoomPath(db, root.id)!);
+    expect(calls.map((call) => call.cwd)).toEqual([room, room]);
+    const [rootCall, childCall] = calls as [(typeof calls)[0], (typeof calls)[0]];
+    expect(rootCall.args[rootCall.args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
+    const rootSandbox = sandboxSettings(rootCall.args, logDir);
+    expect(rootSandbox.filesystem.allowWrite).toEqual([room, rootCall.env.TMPDIR]);
+    expect(rootSandbox.filesystem.allowRead).toContain(real);
+    expect(JSON.parse(readFileSync(rootCall.args[rootCall.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${real}/**)`]);
+    const childSandbox = sandboxSettings(childCall.args, logDir);
+    expect(childSandbox.filesystem.allowRead).not.toContain(real);
+    expect(childSandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
   });
 
   // ADR 0257 決定2: CLI のプロセスの TMPDIR が task temp を指さないと、proxy の中継 socket が閉じた /tmp に
