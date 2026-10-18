@@ -34,8 +34,11 @@
 #                        entry did not open more than it names
 #       task-temp      — `mktemp` lands in the task temp
 #       allowed-domain — Claude only: the emitted allowlist's one domain answers
-#                        200. Codex's network allowlist rides its network proxy,
-#                        which `codex sandbox` does not start.
+#                        200. Under `codex sandbox` (codex-cli 0.147.0, VM) no
+#                        host was reachable, listed or not — with the work
+#                        config nothing resolved, and with
+#                        `features.network_proxy=true` added the connection was
+#                        reset — so this row cannot be a control there.
 # (a) and (c) are judged by what only a working read or write can produce — the
 # hash and token, and the commit on disk. A control that did not succeed is
 # VACUOUS, never a pass; a refusal in the harness's own words is a FAIL. Both

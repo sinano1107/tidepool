@@ -400,7 +400,7 @@ Measures that an Interview root's floor holds for both providers (issue #2197 / 
 | room-git | write, `git add` and `git commit` in the room | the commit is the room's HEAD on disk |
 | home | a token file under `~`, outside what is opened | refused **with the OS string** (`No such file or directory`, checked from outside first) |
 | task-temp | `mktemp` | the file landed in the task temp |
-| allowed-domain | Claude only: `curl https://registry.npmjs.org` | `code=200` |
+| allowed-domain | Claude only: `curl https://registry.npmjs.org`. Under `codex sandbox` no host was reachable, listed or not, so this row is not a control there | `code=200` |
 
 `home`, `task-temp` and `allowed-domain` are the controls: they show the settings were applied and the added entry opened no more than it names. Read the other rows only alongside them. The verdict functions are read-floor-canary.sh's, sourced. **Exit codes:** `0` means every row passed for both providers. `1` means something got out (handle it as a production incident, the same as read-floor), or the combination does not hold: `real-env-log`/`-cat` or `room-git` failed. The fallback for the second case is ADR 0273's rejected option 3, and switching to it is a human decision. `2` means a row could not be measured; this includes `codex` missing from PATH.
 
