@@ -61,10 +61,10 @@ export function resolveExecutionAgent(
   // 組み込みは review 専用(ADR 0228 決定1/4): 名前ではなく解決の結果を見るので、
   // shadow している間の work はここを通らない。扉の外で work が組み込みに落ちたら
   // 解決の失敗として agent 名の quarantine に乗せる。
-  if (definition.builtin && taskType !== "review") {
+  if (definition.builtin && taskType !== "review" && taskType !== "interview") {
     throw new InvalidAgentDefinitionError(
       name,
-      `the built-in agent runs reviews only, but a ${taskType} task resolved to it; ` +
+      `the built-in agent runs only reviews and Interviews, but a ${taskType} task resolved to it; ` +
         `restore a registry entry named ${name} or reassign that task`,
     );
   }

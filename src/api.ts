@@ -189,7 +189,7 @@ function formatValidationError(error: z.ZodError): string {
 // decompose)からしか生まれない。それらは registerTask を直接呼ぶため、
 // このスキーマでの絞り込みの影響を受けない。
 const registerTaskSchema = z.object({
-  type: z.enum(["work", "review"]),
+  type: z.enum(["work", "review", "interview"]),
   // the three content fields are optional at the schema so the issue-backed
   // form (issue #49: a github_issue_number instead of content) can omit
   // them — the same permissive-shape posture as `question` below: the
@@ -221,8 +221,11 @@ const registerTaskSchema = z.object({
   // human decompose (ADR 0047 decision 7): the reason is required for a
   // `parent_id` child and checked at the shared human door; roots do not need one.
   decompose_reason: z.string().optional(),
-  // an Interview's targets (ADR 0199 決定3): which values exist is the domain's to say (registerTask)
+  // an Interview's targets and fields (ADR 0199 決定3 / ADR 0273 決定9): which values exist is the domain's to say (registerTask)
   interview_targets: z.array(interviewTargetSchema).optional(),
+  hypothesis: z.string().optional(),
+  measured_work: z.string().optional(),
+  evidence_task_ids: z.array(z.string()).optional(),
   // shape stays permissive: the 1-4-item / 2-4-options + recommendation
   // invariants are enforced in the domain so callers get a domain error
   question: z

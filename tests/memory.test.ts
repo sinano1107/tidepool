@@ -41,7 +41,7 @@ import {
 import { countUnsettledAttachedChildren, getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
 
-import { bundledObjection, examineeRootId, HUMAN_WEBUI, interviewPinChild, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { bundledObjection, examineeRootId, HUMAN_WEBUI, interviewExaminee, QUIET_EXIT, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -363,7 +363,7 @@ it("同じ枝の定義は supersedes にその生きた定義を含めれば書�
 
 it("同じ scope・path に書き手の視界に無い生きた Definition があれば、define は拒まずに通り、新しい Definition がそれを後継つき superseded にし、書き手の書き込みの記録には載せない —— 受験者が Interview の root の定義に当たるとき。視界にある生きた Definition があれば拒み、拒否文は視界に無い id を名指さない(ADR 0264 決定4)", () => {
   const { db } = board();
-  const examinee = interviewPinChild(db, at);
+  const examinee = interviewExaminee(db, at);
   const root = examineeRootId(db, examinee.id);
   const define = (writer: string, text: string, supersedes?: number[]) => () => defineMemoryBranch(db, { ...definition, text, supersedes }, "worker", at, writer);
 

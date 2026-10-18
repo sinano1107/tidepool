@@ -55,7 +55,7 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
   assertAnswerable,
-  assertInterviewTargets,
+  assertInterviewFields,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
   assertUnsettledNotInProgress,
@@ -331,15 +331,15 @@ export async function registerThroughHumanDoor(
   origin: EventOrigin,
 ): Promise<RegisterThroughHumanDoorResult> {
   try {
-    if (input.type !== "work" && input.type !== "review") {
-      throw new DomainError("a human can register only work or review tasks");
+    if (input.type !== "work" && input.type !== "review" && input.type !== "interview") {
+      throw new DomainError("a human can register only work, review or interview tasks");
     }
     const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {
       throw new DomainError("a child task cannot be issue-backed");
     }
     // 子の登録は decompose を通り registerTask の検査に届かないので、同じ検査をここで呼ぶ
-    if (isHumanDecomposeChild) assertInterviewTargets(deps.db, input);
+    if (isHumanDecomposeChild) assertInterviewFields(deps.db, input);
     if (isHumanDecomposeChild) {
       const result = decomposeThroughHumanDoor(
         deps,

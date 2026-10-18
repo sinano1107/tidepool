@@ -433,9 +433,9 @@ export function startScheduler(deps: {
     // (ADR 0233): pickupTask writes the default workspace's name and a work (or
     // memory_repair, ADR 0272 決定4) task's resolved agent onto empty columns; a review's empty assignee is
     // left as the reference to the Auditor / Interviewer pointer (ADR 0233 決定3).
-    const agent = resolveTaskAgent(db, task, worker.id, auditorName, interviewerName);
+    const agent = resolveTaskAgent(task, worker.id, auditorName, interviewerName);
     const picked = pickupTask(db, task, agent, clock.now(), {
-      assignee: task.type !== "review" ? agent : undefined,
+      assignee: task.type !== "review" && task.type !== "interview" ? agent : undefined,
       workspace: workspace?.name,
     });
     // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
@@ -737,7 +737,7 @@ export function startScheduler(deps: {
           return true;
         } catch (error) {
           if (!isUnresolvableAgentError(error)) throw error;
-          const assignee = resolveTaskAgent(db, task, worker.id, auditorName, interviewerName);
+          const assignee = resolveTaskAgent(task, worker.id, auditorName, interviewerName);
           quarantineAgent(db, assignee, error, clock.now());
           stopped.assignees.push(assignee);
           return false;

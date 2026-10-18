@@ -44,7 +44,11 @@ import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
-import { carriesReadOnly, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+
+
+import { resolveTaskAgent, runsOnReviewFloor, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+
+
 import { tierNames } from "./tier.js";
 import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
@@ -482,10 +486,10 @@ export function permissionConfig(
   executable: string,
   allowedDomains: readonly string[],
 ): string[] {
-  const readOnly = carriesReadOnly(taskType);
-  const name = readOnly ? "tidepool-review" : "tidepool-work";
-  const parent = readOnly ? ":read-only" : ":workspace";
-  const access = readOnly ? "read" : "write";
+  const review = runsOnReviewFloor(taskType);
+  const name = review ? "tidepool-review" : "tidepool-work";
+  const parent = review ? ":read-only" : ":workspace";
+  const access = review ? "read" : "write";
   const dotGit = join(workspace, ".git");
   const filesystem = {
     ":root": "deny",
@@ -1161,7 +1165,6 @@ export class CodexWorker implements WorkerAdapter {
       return;
     }
     const assignee = resolveTaskAgent(
-      this.options.db,
       task,
       this.options.agent,
       this.options.auditorName ?? DEFAULT_AUDITOR_NAME,

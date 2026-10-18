@@ -33,12 +33,13 @@ interface RegisterScreenIssueFields {
   risk_flag: boolean;
   review_by?: string[];
 }
-interface RegisterScreenManualFields {
-  /** 画面が出すのはこの2つだけ(子追加は常に work)。 */
-  type: 'work' | 'review';
+interface RegisterScreenManualFields extends Partial<import('../src/tasks').InterviewFields> {
+  /** 子追加は常に work。 */
+  type: 'work' | 'review' | 'interview';
   title: string;
-  purpose: string;
-  completion_criteria: string;
+  /** interview は持たない —— 盤面が仮説・測る仕事・根拠から組む(ADR 0273 決定9)。 */
+  purpose?: string;
+  completion_criteria?: string;
   risk_flag: boolean;
   /** 欄が見えているときだけ送る —— 欄は子追加で、flag が意味を持つときだけ出る(ADR 0111 追記8)。 */
   review_flag?: boolean;
@@ -49,7 +50,7 @@ interface RegisterScreenManualFields {
   /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
   tier?: string;
   review_tier?: string;
-  /** Interview の対象(ADR 0199 決定3): root の review だけが持ち、1つ以上あるときだけ送る。 */
+  /** Interview の対象(ADR 0199 決定3)と欄(extends の InterviewFields、ADR 0273 決定9): type interview だけが送る。 */
   interview_targets?: InterviewTargetDraft[];
   /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
   github_issue_number?: never;
@@ -85,20 +86,20 @@ function ReviewerPicker({ candidates, value, onChange }: {
   );
 }
 
-/** Interview の対象1つ(POST /api/tasks の `interview_targets` の要素)。effort の null は「無い」(ADR 0218 決定5)。 */
-interface InterviewTargetDraft { provider: string; model: string; effort: string | null; tier: string }
+/** Interview の対象1つ(POST /api/tasks の `interview_targets` の要素)。effort の null は「無い」(ADR 0218 決定5)。段は Interview の tier(ADR 0273 決定6)。 */
+interface InterviewTargetDraft { provider: string; model: string; effort: string | null }
 
 /** Interview の対象の行を足し引きする欄(ADR 0199 決定3)。値の検査は登録の扉が言う —— 拒否は登録の失敗として出る。
  *  effort の選択肢は表の行の欄と同じ述語で model ごとに絞る。 */
-function InterviewTargetsField({ value, onChange, providers, tiers }: {
-  value: InterviewTargetDraft[]; onChange: (v: InterviewTargetDraft[]) => void; providers: string[]; tiers: SettingsExecution['tiers'];
+function InterviewTargetsField({ value, onChange, providers }: {
+  value: InterviewTargetDraft[]; onChange: (v: InterviewTargetDraft[]) => void; providers: string[];
 }) {
   const { Button, Input, Select } = window.TidepoolDesignSystem_8a0ead;
   const update = (i: number, patch: Partial<InterviewTargetDraft>) => onChange(value.map((t, j) => (j === i ? { ...t, ...patch } : t)));
   return (
     <div data-testid="interview-targets" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
-        Interview targets — measure each (provider, model, effort, tier) without putting it in the table; leave empty for an ordinary review
+        Interview targets — measure each (provider, model, effort) at the Interview's tier without putting it in the table
       </span>
       {value.map((t, i) => (
         <div key={i} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: 8, alignItems: 'end' }}>
@@ -106,12 +107,11 @@ function InterviewTargetsField({ value, onChange, providers, tiers }: {
           <Input label="Model" mono value={t.model} onChange={(e) => update(i, { model: e.target.value })} placeholder="concrete model id — e.g. claude-opus-5-5" />
           <Select label="Effort" options={[null, ...TidepoolRules.EFFORT_LEVELS].filter((effort) => effort === t.effort || !TidepoolRules.whyInvalidEffort(t.provider, t.model, effort)).map((effort) => effort ?? { value: '', label: 'no effort' })}
             value={t.effort ?? ''} onChange={(e) => update(i, { effort: e.target.value || null })} />
-          <Select label="Target tier" options={tiers.map((tier) => tier.name)} value={t.tier} onChange={(e) => update(i, { tier: e.target.value })} />
           <Button variant="ghost" size="sm" onClick={() => onChange(value.filter((_, j) => j !== i))} aria-label={`remove target ${i + 1}`}>Remove</Button>
         </div>
       ))}
-      <Button variant="secondary" size="sm" disabled={!providers.length || !tiers.length}
-        onClick={() => onChange([...value, { provider: providers[0]!, model: '', effort: 'high', tier: tiers[0]!.name }])}>Add target</Button>
+      <Button variant="secondary" size="sm" disabled={!providers.length}
+        onClick={() => onChange([...value, { provider: providers[0]!, model: '', effort: 'high' }])}>Add target</Button>
     </div>
   );
 }
@@ -131,7 +131,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
   const childMode = !!parentTask;
   const [source, setSource] = React.useState<'manual' | 'github issue'>('manual');
-  const [type, setType] = React.useState<'work' | 'review'>('work');
+  const [type, setType] = React.useState<'work' | 'review' | 'interview'>('work');
   const [title, setTitle] = React.useState('');
   const [purpose, setPurpose] = React.useState('');
   const [criteria, setCriteria] = React.useState('');
@@ -143,6 +143,9 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const [review, setReview] = React.useState(false);
   const [reviewBy, setReviewBy] = React.useState<string[]>([]);
   const [targets, setTargets] = React.useState<InterviewTargetDraft[]>([]);
+  const [hypothesis, setHypothesis] = React.useState('');
+  const [measuredWork, setMeasuredWork] = React.useState('');
+  const [evidence, setEvidence] = React.useState('');
   const [reason, setReason] = React.useState('');
   const [issueNumber, setIssueNumber] = React.useState('');
   const [gate, setGate] = React.useState<RegisterScreenGate | null>(null);
@@ -224,9 +227,13 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
         i.title.toLowerCase().includes(issueNumber.trim().toLowerCase()))
     : issues;
   const issueNumberReason = TidepoolRules.whyNotPositiveInteger(readNumericDraft(issueNumber));
+  // Interview は root だけ(ADR 0273 決定2)—— 子追加は常に work なので出ない
+  const interview = !childMode && type === 'interview';
   const ok = issueMode
     ? !TidepoolRules.whyBlank(workspace) && !issueNumberReason
-    : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
+    : interview
+      ? ![title, hypothesis, tier].some((value) => TidepoolRules.whyBlank(value)) && targets.length > 0
+      : ![title, purpose, criteria].some((value) => TidepoolRules.whyBlank(value)) && (!childMode || !TidepoolRules.whyBlank(reason));
   // 欄はサーバーと同じ規則で出す(ADR 0209)。issue 経路は常に work(type state は手入力側で review に切り替えたまま残りうる)
   const ruleSubject = { type: issueMode ? 'work' : type, parent_id: parentTask?.id, assignee, review_flag: review, risk_flag: risk };
   const showReviewFlag = TidepoolRules.reviewFlagCarriesMeaning(ruleSubject);
@@ -234,8 +241,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   // 隠れた欄の値は送らない、誰も選んでいなければキーごと送らない
   const reviewByField = showReviewBy && reviewBy.length ? { review_by: reviewBy } : {};
   const reviewTierField = showReviewBy && reviewTier ? { review_tier: reviewTier } : {};
-  // Interview は root の review(ADR 0199 決定3)—— 子追加は常に work なので出ない
-  const showTargets = !childMode && type === 'review';
+  const evidenceIds = evidence.split(/[\s,]+/).filter(Boolean);
   const fields = (): RegisterScreenFields =>
     issueMode
       ? {
@@ -250,7 +256,17 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           // a decompose child is always type work (decomposeTask's own
           // ChildSpec has no type field) — the type picker is dropped in
           // childMode below, so `type` state never leaves its 'work' default
-          type, title: TidepoolRules.normalizeText(title), purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria),
+          type, title: TidepoolRules.normalizeText(title),
+          // an Interview's purpose and criteria are the board's to compose (ADR 0273 決定9)
+          ...(interview
+            ? {
+                hypothesis: TidepoolRules.normalizeText(hypothesis),
+                interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })),
+                ...(TidepoolRules.whyBlank(measuredWork) ? {} : { measured_work: TidepoolRules.normalizeText(measuredWork) }),
+                ...(evidenceIds.length ? { evidence_task_ids: evidenceIds } : {}),
+                ...(reviewTier ? { review_tier: reviewTier } : {}),
+              }
+            : { purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria) }),
           risk_flag: risk, ...(showReviewFlag ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
           // execution time (CONTEXT.md) — omit rather than send '' so an
@@ -260,7 +276,6 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
           ...(tier ? (type === 'review' ? { review_tier: tier } : { tier }) : {}),
           ...reviewTierField,
           ...reviewByField,
-          ...(showTargets && targets.length ? { interview_targets: targets.map((t) => ({ ...t, model: t.model.trim() })) } : {}),
           ...childExtras(),
         };
   // the decompose reason is left alone: it sits outside the dump / plain form
@@ -271,6 +286,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
     setType('work'); setTitle(''); setPurpose(''); setCriteria('');
     setAssignee(''); setWorkspace(''); setTier(''); setReviewTier(''); setIssueNumber('');
     setRisk(false); setReview(false); setReviewBy([]); setTargets([]);
+    setHypothesis(''); setMeasuredWork(''); setEvidence('');
     // backing out of a pending dump's content leaves the row itself alone —
     // it is unconsumed and stays listed, pickable again later
     setSelectedDumpId(null);
@@ -468,12 +484,22 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
               {drafted ? 'drafted — edit freely' : 'plain form — same fields, no draft'}
             </span>
             <Input label="Title" error={TidepoolRules.whyBlank(title)} value={title} onChange={(e) => setTitle(e.target.value)} />
-            <Input label="Purpose" error={TidepoolRules.whyBlank(purpose)} multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
-            <Input label="Completion criteria" error={TidepoolRules.whyBlank(criteria)} multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
+            {interview ? (
+              <React.Fragment>
+                <Input label="Hypothesis" error={TidepoolRules.whyBlank(hypothesis)} multiline rows={2} value={hypothesis} onChange={(e) => setHypothesis(e.target.value)} placeholder="what you suspect, and what would settle it" />
+                <Input label="Measured work" multiline rows={2} value={measuredWork} onChange={(e) => setMeasuredWork(e.target.value)} placeholder="optional — the kind of work in the real environment to reproduce" />
+                <Input label="Evidence tasks" mono value={evidence} onChange={(e) => setEvidence(e.target.value)} placeholder="optional — task ids, comma-separated" />
+              </React.Fragment>
+            ) : (
+              <React.Fragment>
+                <Input label="Purpose" error={TidepoolRules.whyBlank(purpose)} multiline rows={2} value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="state prerequisites here — the agent verifies and escalates cheaply" />
+                <Input label="Completion criteria" error={TidepoolRules.whyBlank(criteria)} multiline rows={2} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="sloppy completion criteria are the expensive kind" />
+              </React.Fragment>
+            )}
             {/* a decompose child is always type work (decomposeTask's own ChildSpec has no type field) */}
             {!childMode && (
-              <Select label="Type" options={['work', 'review']} value={type} onChange={(e) => {
-                const next = e.target.value === 'review' ? 'review' : 'work';
+              <Select label="Type" options={['work', 'review', 'interview']} value={type} onChange={(e) => {
+                const next = e.target.value === 'review' || e.target.value === 'interview' ? e.target.value : 'work';
                 setType(next);
                 // review → work で、選ばれていた組み込みは外す(ADR 0235 決定2)
                 if (!canTake(assignee, next)) setAssignee('');
@@ -481,16 +507,18 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             )}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               {assigneeSelect}
-              <Select label="Workspace" options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
+              <Select label={interview ? '実環境(root が読む workspace)' : 'Workspace'} options={workspaceOptions} value={workspace} onChange={(e) => setWorkspace(e.target.value)} />
             </div>
-            <Select label="Tier" options={tierOptions(tiers, "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
+            {interview && <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>受験者は面接室で解く</span>}
+            <Select label={interview ? 'Measured tier' : 'Tier'} options={tierOptions(tiers, interview ? 'choose the tier to measure…' : "(agent's tier, then board default)")} value={tier} onChange={(e) => setTier(e.target.value)} />
+            {interview && <Select label="Root tier" options={tierOptions(tiers, '(the higher of the measured tier and the board judgement tier)')} value={reviewTier} onChange={(e) => setReviewTier(e.target.value)} />}
             {riskCheckbox}
             {showReviewFlag && (
               <Checkbox label="review flag — request an on-completion review" checked={review} onChange={() => setReview(!review)} />
             )}
             {reviewTierSelect}
             {reviewerPicker}
-            {showTargets && <InterviewTargetsField value={targets} onChange={setTargets} providers={providers} tiers={tiers} />}
+            {interview && <InterviewTargetsField value={targets} onChange={setTargets} providers={providers} />}
           </React.Fragment>
         )}
         <Button variant="primary" size="lg" full disabled={primaryAction.disabled} onClick={primaryAction.onClick}>{primaryAction.label}</Button>

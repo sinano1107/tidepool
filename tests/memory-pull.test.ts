@@ -522,10 +522,10 @@ it("無効化済み・candidate・宛先外・他 workspace のエントリは I
   expect(readMemory(db, reader, { ids: all }, at).entries.map((e) => e.id)).toEqual(expected);
 });
 
-const INTERVIEW = { type: "review" as const, title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
+const INTERVIEW = { type: "interview" as const, title: "interview", hypothesis: "the targets write the parser", tier: "standard" };
 const POSE = { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" };
-const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
 
 /** 受験者の盤面(ADR 0263 決定7): Interview A の pin の子2つ(読み手と兄弟)と、別の Interview B の pin の子。`write` は書き手の
  *  task の書き込みの記録つきで Knowledge を書く。読み手 `examinee` は A の1つ目、`reader` は本番の task。 */

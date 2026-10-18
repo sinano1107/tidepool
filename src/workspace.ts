@@ -291,7 +291,8 @@ export function resolveTaskBranchLineage(
   task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   // memory_repair は review と同じく lineage に透明(ADR 0272 決定6)
-  if (carriesReadOnly(task.type)) {
+  // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
+  if (carriesReadOnly(task.type) || task.type === "interview") {
     return {
       branch:
         task.parent_id && taskBranchExists(workspace, task.parent_id)

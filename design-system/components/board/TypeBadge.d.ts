@@ -1,9 +1,9 @@
 /**
- * Task type marker — work / question / review / memory_repair. Question tasks get the sun-amber
+ * Task type marker — work / question / review / memory_repair / interview. Question tasks get the sun-amber
  * treatment; they are the human's most expensive input.
  */
 export interface TypeBadgeProps {
-  type?: 'work' | 'question' | 'review' | 'memory_repair';
+  type?: 'work' | 'question' | 'review' | 'memory_repair' | 'interview';
   /** Glyph only when false (dense rows). */
   showLabel?: boolean;
   style?: React.CSSProperties;

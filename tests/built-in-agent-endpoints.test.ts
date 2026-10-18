@@ -77,9 +77,9 @@ it("agent 一覧は組み込みの Interviewer suzumedai も built-in として�
 it("Interviewer ポインタを替えると、Interview の root の空の assignee はその名前に解決される —— 本番の review は Auditor のまま(ADR 0269 決定2)", async () => {
   t = await bootTidepool({ auditorName: "fugu", interviewerName: "shako" });
   const review = { type: "review", purpose: "p", completion_criteria: "c" };
-  const target = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+  const target = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
 
-  const root = await api(t.baseUrl, "POST", "/api/tasks", { ...review, title: "interview", interview_targets: [target] });
+  const root = await api(t.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [target] });
   const plain = await api(t.baseUrl, "POST", "/api/tasks", { ...review, title: "review" });
 
   expect((await api(t.baseUrl, "GET", `/api/tasks/${root.json.id}`)).json).toMatchObject({ assignee: "shako", raw_assignee: null });
@@ -179,5 +179,5 @@ it("組み込みに解決される assignee の work の登録は 400 に写る(
     assignee: "fugu",
   });
   expect(refused.status).toBe(400);
-  expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs reviews only");
+  expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs only reviews and Interviews");
 });

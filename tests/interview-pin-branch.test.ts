@@ -15,14 +15,14 @@ import { tempDir } from "./temp-dir.js";
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 const NOW = new Date("2026-10-15T00:00:00.000Z");
-const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
-const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
+const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
 
 /** Interview を登録して出題し、受験者を返す。head は既定で今の main。 */
 function posed(db: Db, workspace: WorkspaceConfig, targets: object[] = [opusHigh], head = git(workspace.path, "rev-parse", "main")): Task[] {
-  const root = registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
   return poseProbe(db, root, POSE, "auditor", NOW, "worker", head);
 }
 

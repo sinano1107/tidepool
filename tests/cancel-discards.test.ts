@@ -13,7 +13,7 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, interviewPinChild } from "./harness.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, interviewExaminee } from "./harness.js";
 
 /** cancel の面が見せる「捨てられる done の work」の読み(ADR 0271 決定4)。範囲は cascade / abandon と同じ述語。 */
 const NOW = new Date("2026-10-17T00:00:00.000Z");
@@ -70,7 +70,7 @@ it("failure question の abandon は失敗 task の abandon の範囲で読む �
 
 it("Interview の root の直接 cancel は、done の受験者を捨てるものに数えない", () => {
   db = openDb(":memory:");
-  const examinee = interviewPinChild(db, NOW);
+  const examinee = interviewExaminee(db, NOW);
   done(examinee);
   const root = getTask(db, presentTask(db, examinee).interview_root_id!)!;
 

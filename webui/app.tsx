@@ -653,6 +653,8 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
     return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
   }
   const issueBacked = full.github_issue_number != null;
+  // Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない(ADR 0273 決定9)
+  const composedContent = full.type === 'interview';
   const set = (k: keyof EditTaskFields, v: string | boolean | string[]) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
   const withPlaceholder = (label: string, names: string[]) => [{ value: '', label }, ...names.map((n) => ({ value: n, label: n }))];
   // 欄はサーバーと同じ規則でフォーム上の値から出す(ADR 0209)
@@ -665,13 +667,13 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   if (currentAssignee && !assigneeNames.includes(currentAssignee)) assigneeNames.push(currentAssignee);
   // only the fields that actually changed — an unchanged submission is a no-op
   // server-side, but sending a minimal patch keeps the intent clear
-  const blankContent = !issueBacked && [fields.title, fields.purpose, fields.completion_criteria].some((value) => TidepoolRules.whyBlank(value));
+  const blankContent = !issueBacked && [fields.title, ...(composedContent ? [] : [fields.purpose, fields.completion_criteria])].some((value) => TidepoolRules.whyBlank(value));
   const changed = () => {
     const out: Partial<EditTaskFields> = {};
     if (!issueBacked) {
       if (fields.title !== (full.title ?? '')) out.title = TidepoolRules.normalizeText(fields.title);
-      if (fields.purpose !== (full.purpose ?? '')) out.purpose = TidepoolRules.normalizeText(fields.purpose);
-      if (fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = TidepoolRules.normalizeText(fields.completion_criteria);
+      if (!composedContent && fields.purpose !== (full.purpose ?? '')) out.purpose = TidepoolRules.normalizeText(fields.purpose);
+      if (!composedContent && fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = TidepoolRules.normalizeText(fields.completion_criteria);
       if (fields.workspace !== (full.workspace ?? '')) out.workspace = fields.workspace;
     }
     if (fields.assignee !== (full.raw_assignee ?? '')) out.assignee = fields.assignee;
@@ -715,8 +717,12 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
         {!issueBacked && (
           <React.Fragment>
             <Input label="Title" error={TidepoolRules.whyBlank(fields.title)} value={fields.title} onChange={(e) => set('title', e.target.value)} />
-            <Input label="Purpose" error={TidepoolRules.whyBlank(fields.purpose)} multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
-            <Input label="Completion criteria" error={TidepoolRules.whyBlank(fields.completion_criteria)} multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
+            {!composedContent && (
+              <React.Fragment>
+                <Input label="Purpose" error={TidepoolRules.whyBlank(fields.purpose)} multiline rows={2} value={fields.purpose} onChange={(e) => set('purpose', e.target.value)} />
+                <Input label="Completion criteria" error={TidepoolRules.whyBlank(fields.completion_criteria)} multiline rows={2} value={fields.completion_criteria} onChange={(e) => set('completion_criteria', e.target.value)} />
+              </React.Fragment>
+            )}
           </React.Fragment>
         )}
         <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>

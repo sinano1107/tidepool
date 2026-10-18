@@ -164,8 +164,8 @@ export type EventPayload =
   // head は root の分岐元 —— pin の子は全部ここから分岐する(ADR 0263 決定6・追記4)。head の無い出題は無い(追記5)
   | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
-  // Interview の採点(ADR 0199 / ADR 0181 決定4): root review が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
-  // 採点された pin の子、worker は review の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
+  // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
+  // 採点された受験者、worker は root の agent。学習器はこれを子の episode の outcome に読む(後の採点が有効)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }

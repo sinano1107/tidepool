@@ -136,7 +136,7 @@ function placeTier(db: Db, others: readonly number[], id: number, position: numb
 }
 
 /** 段を消せない理由(ADR 0200 決定2 / 追記 2026-10-06): 行がある・盤面設定が指す・未決着の task が要求している・未決着の
- *  Interview の対象が名指している(ADR 0199)・registry の
+ *  Interview の測る段である(ADR 0199 / ADR 0273 決定6)・registry の
  *  agent.md が名指している。空 = 消せる。`listAgents` は手元の clone を同期で読む(fetch しない)。無い = registry の無い盤面で、
  *  照合しない。読めなければ「名指していない」と見なさず削除ごと拒む。 */
 function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListAgentTiers): string[] {
@@ -146,11 +146,11 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
   const defaults = db.prepare("SELECT default_tier_id, judgement_tier_id FROM execution_defaults").get() as { default_tier_id: number; judgement_tier_id: number };
   if (defaults.default_tier_id === id) reasons.push("it is the board's default tier");
   if (defaults.judgement_tier_id === id) reasons.push("it is the board's judgement tier");
-  // Interview の root は対象の段を要求している
+  // Interview の root の測る段は root の tier_id(ADR 0273 決定6)
   const tasks = db
     .prepare(
       `SELECT id FROM tasks WHERE ${unsettledSql("status")}
-         AND (tier_id = @id OR review_tier_id = @id OR id IN (SELECT task_id FROM interview_targets WHERE tier_id = @id)) ORDER BY rowid`,
+         AND (tier_id = @id OR review_tier_id = @id) ORDER BY rowid`,
     )
     .all({ id }) as { id: string }[];
   if (tasks.length > 0) reasons.push(`unsettled tasks request it: ${tasks.map((task) => task.id).join(", ")}`);
@@ -367,11 +367,9 @@ function withAdvisor<M extends { model: string }>(
   return [{ main, ...derived }, ...(downgraded ? [{ main, advisor: downgraded.advisor, source: "window_downgraded" as const }] : [])];
 }
 
-/** Interview の対象の綴り(ADR 0199 決定2): 人間の登録の扉の一覧と、子の pin が同じ形を通る。値の検査は domain(registerTask /
- *  decomposeTask)が言う。 */
-export const interviewTargetSchema = z
-  .object({ provider: requiredTextSchema, model: requiredTextSchema, effort: requiredTextSchema.nullable(), tier: requiredTextSchema })
-  .strict();
+/** Interview の対象の綴り(ADR 0199 決定2 / ADR 0273 決定6): 人間の登録の扉の一覧の形。段は対象でなく root の tier。値の検査は
+ *  domain(registerTask)が言う。 */
+export const interviewTargetSchema = z.object({ provider: requiredTextSchema, model: requiredTextSchema, effort: requiredTextSchema.nullable() }).strict();
 
 /** pin が指す対象の行(段は id)。 */
 type PinnedTarget = { provider: Provider; model: string; effort: string | null; tier_id: TierId };
@@ -960,7 +958,10 @@ function selectorInputFor(
   task: SelectorTask | undefined,
 ): SelectorInput {
   const defaults = loadExecutionDefaults(db);
-  const review = task?.type === "review";
+  const review = task?.type === "review" || task?.type === "interview";
+  const tiers = liveTierRows(db);
+  // ADR 0273 決定6: Interview の root は盤面の判断の段・測る段・名指した root の段のうち最も上で走る(一覧は下から)
+  const interviewTier = task?.type === "interview" ? tiers.filter((t) => [defaults.judgementTier, task.tier, task.review_tier].includes(t.name)).at(-1)?.name : undefined;
   return {
     entries: definition.provider.map((entry) => ({
       provider: entry.name as Provider,
@@ -969,10 +970,10 @@ function selectorInputFor(
     providerRank: defaults.providerRank,
     taskTier: review ? undefined : task?.tier ?? undefined,
     priority: review ? defaults.reviewPriority : task?.priority ?? defaults.priority,
-    reviewTier: review ? task.review_tier ?? undefined : undefined,
+    reviewTier: interviewTier ?? (review ? task.review_tier ?? undefined : undefined),
     agentTier: definition.tier,
     boardTier: defaults.defaultTier,
-    tiers: liveTierRows(db),
+    tiers,
     advisorCeiling: defaults.advisorCeiling,
   };
 }
@@ -986,7 +987,9 @@ export function executionSettingsFor(
 ): ExecutionSetting[] {
   const input = selectorInputFor(db, definition, task);
   if (task === undefined || task.interview_target_id === null) return executionSettingCandidates(input, runnableTable(db));
-  const pin = db.prepare("SELECT provider, model, effort, tier_id FROM interview_targets WHERE id = ?").get(task.interview_target_id) as PinnedTarget;
+  const pin = db
+    .prepare("SELECT it.provider, it.model, it.effort, root.tier_id FROM interview_targets it JOIN tasks root ON root.id = it.task_id WHERE it.id = ?")
+    .get(task.interview_target_id) as PinnedTarget;
   return pinnedCandidates(input, pin);
 }
 

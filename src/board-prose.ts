@@ -57,7 +57,7 @@ export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, verbs:
 Work that needs independent completion criteria, separate authority, its own
 risk, or survival across sessions must not be routed to ${delegate} —
 that is delegation smuggled past the board. ${split ? `Register that split with the
-tidepool MCP's decompose instead.` : verbs.added.includes("pose_probe") ? POSE_PROBE : NOT_SPLIT}
+tidepool MCP's decompose instead.` : verbs.added.includes("pose_probe") && !verbs.posed ? POSE_PROBE : NOT_SPLIT}
 
 ${delegateAtSentenceStart} may only be used for labor-splitting that does not divide
 accountability (exploration, parallel research, mechanical edits): you carry
@@ -381,7 +381,7 @@ export function boardProse(input: {
   memorySection: string | null;
 }): string {
   const { db, task } = input;
-  const review = task.type === "review";
+  const review = task.type === "review" || task.type === "interview";
   const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
   const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
   // ADR 0272 決定3 / ADR 0271 決定2: guidance の文は変えず、その直後に盤面が1行足す。memory_repair は祖先の cancel の下でも修理の1行

@@ -76,14 +76,14 @@ function metaReviewTask(db: ReturnType<typeof openDb>, subject: "memory" | "rout
 }
 
 /** Interview の root(openai の対象1つ)と、出題で立った pin の子 —— verb の差し替えと doctrine はこの2つでだけ形が変わる(ADR 0245 / ADR 0253)。 */
-const SOL = { provider: "openai", model: "gpt-5.6-sol", effort: "high", tier: "standard" };
+const SOL = { provider: "openai", model: "gpt-5.6-sol", effort: "high" };
 function interviewRoot(db: ReturnType<typeof openDb>) {
   return registerTask(db, {
-    type: "review",
+    type: "interview",
     assignee: "codex-agent",
     title: "interview",
-    purpose: "the original task",
-    completion_criteria: "every target scored",
+    hypothesis: "the target writes the parser",
+    tier: "standard",
     interview_targets: [SOL],
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
 }

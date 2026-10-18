@@ -45,8 +45,8 @@ import {
   readRootRefusal,
 } from "./stream-json.js";
 import {
-  carriesReadOnly,
   resolveTaskAgent,
+  runsOnReviewFloor,
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
@@ -154,7 +154,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
+/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`。#2192 までは interview の root も —— `runsOnReviewFloor`)の harness deny(ADR 0013 追記 / issue #59 /
  *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
@@ -165,7 +165,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
  *  分離だが、CLI 側の列挙が要らない(Edit/Write/NotebookEdit とパターンは
  *  task.type だけで決まる固定集合)ぶん同期・ping 不要。*/
 export function reviewToolDenials(taskType: Task["type"]): string[] {
-  if (!carriesReadOnly(taskType)) return [];
+  if (!runsOnReviewFloor(taskType)) return [];
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
 }
 
@@ -238,7 +238,7 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  read-only 保証を運ぶ type(review / memory_repair、`carriesReadOnly`)以外はすべて
+ *  read-only 保証を運ぶ type(review / memory_repair)と #2192 までの interview の root(`runsOnReviewFloor`)以外はすべて
  *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
  *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
@@ -250,7 +250,7 @@ export function spawnTools(taskType: Task["type"], slashCommandsDisabled: boolea
   // が毎回組み立て直しているのと同じ理由)。
   return WORKER_TOOLS.filter(
     (tool) =>
-      !(carriesReadOnly(taskType) && REVIEW_REMOVED_TOOLS.includes(tool)) &&
+      !(runsOnReviewFloor(taskType) && REVIEW_REMOVED_TOOLS.includes(tool)) &&
       !(slashCommandsDisabled && tool === "Skill"),
   );
 }
@@ -402,7 +402,7 @@ export function spawnAllowedTools(
   // 1つ目は task type に依らない — 綴られるのは一度だけで、それが「MCP は両
   // プロファイルに乗る」という決定そのものである。
   const allowed = [`mcp__${MCP_SERVER_NAME}`];
-  if (taskType !== "review") return allowed;
+  if (taskType !== "review" && taskType !== "interview") return allowed;
   return [...allowed, ...reviewAllowedCommands.map((prefix) => `Bash(${prefix}*)`)];
 }
 
@@ -1789,7 +1789,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // work) — work keeps resolving to `this.options.agent`; questions have no
     // execution agent and must never reach this worker path.
     const taskAgent = resolveTaskAgent(
-      this.options.db,
       task,
       this.options.agent,
       this.options.auditorName ?? DEFAULT_AUDITOR_NAME,
@@ -2106,7 +2105,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // sandboxed Bash never reaches this layer in a work session and the OS
           // remains its only bound.
           "--permission-mode",
-          carriesReadOnly(task.type) ? "manual" : "acceptEdits",
+          runsOnReviewFloor(task.type) ? "manual" : "acceptEdits",
           // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
           // is flag tier, but permission *merges* across tiers: an `allow` in the
           // host human's `~/.claude/settings.json` or in the workspace's
