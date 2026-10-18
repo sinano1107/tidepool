@@ -197,6 +197,18 @@ it("reject では何も登録されず、根拠の行が書き換わるか対象
   expect(await interviews()).toEqual([]);
 });
 
+it("測る段が消えると、その段の Interview の提案は observed で決着する", async () => {
+  const reviewId = await boardWithRoutingReview();
+  const { eventId } = session("reef");
+  const settings = (change: Record<string, unknown>) => api(t.baseUrl, "POST", "/api/settings/execution", change);
+  expect((await settings({ setting: "insert_tier", name: "mid", description: "between", position: 2 })).status).toBe(200);
+  const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId], { tier: "mid", targets: [OPUS_MAX] }));
+
+  expect((await settings({ setting: "delete_tier", name: "mid" })).status).toBe(200);
+  expect(await task(question_id)).toMatchObject({ status: "done" });
+  expect(await interviews()).toEqual([]);
+});
+
 it("実環境が registry から消えた提案の approve は直す手段を添えて断られ、question は開いたまま —— 修正値で差し替えれば通る(ADR 0258 決定4)", async () => {
   const reviewId = await boardWithRoutingReview();
   const { eventId } = session("reef");
