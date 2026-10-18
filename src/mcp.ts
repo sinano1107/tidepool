@@ -411,7 +411,6 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
     measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
     ...(workspace && { real_environment: safeRealpath(workspace.path) }),
     allowed_domains: workspace?.allowed_domains ?? [],
-    allowed_commands: workspace?.review_allowed_commands ?? [],
   };
 }
 

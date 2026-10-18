@@ -184,7 +184,7 @@ it("worker MCP の tool 一覧は type で決まる —— interview の root �
   expect(await tools(childId)).toEqual(unsplit.filter((name) => name !== "record_knowledge" && name !== "define_memory_branch"));
 });
 
-it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインと許可コマンドを構造で載せる(ADR 0273 決定9)", async () => {
+it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインを構造で載せる(ADR 0273 決定9)", async () => {
   const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"], review_allowed_commands: ["npm test"] };
   t = await boot({ workspace });
   const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -198,7 +198,6 @@ it("root の get_current_task は仮説・測る仕事・根拠の id・測る�
     measured_tier: { name: "frontier", description: expect.any(String) },
     real_environment: realpathSync(workspace.path),
     allowed_domains: ["registry.npmjs.org"],
-    allowed_commands: ["npm test"],
   });
 });
 
