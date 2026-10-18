@@ -9,13 +9,17 @@ import { openQuarantineQuestion } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, getRegistrant, getTask, listBoard, poseProbe, registerTask, type Task } from "../src/tasks.js";
+
+
+import { completeTask, getRegistrant, getTask, listBoard, registerTask, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
+
+
 import { recordContainerHaltHandler } from "../src/watchdog.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { taskRunPlace } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面の記録の器が書けないことは盤面全体の停止で、踏んだ受験者は後始末を通って todo の先頭へ戻る(ADR 0266 決定3、#2094 / ADR 0274 決定4)。
@@ -35,7 +39,7 @@ async function brokenContainer(name: string) {
   // 受験者は root の面接室で走る(ADR 0273 決定1)—— root の pickup が作る面接室を先に開く
   openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
-  const [done, picked] = poseProbe(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
+  const [done, picked] = poseAccepted(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
   git(room.path, "checkout", "-b", `task/${done.id}`, "main");
   commitWork(room.path, "answer.txt", "an answer\n");
   git(room.path, "checkout", "main");

@@ -15,6 +15,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { unsettledSql } from "./task-status.js";
 import {
   type InterviewProposal,
+  interviewRootForTier,
   type RegistryProposal,
   type RoutingProposal,
   type RoutingRowProposal,
@@ -22,6 +23,7 @@ import {
   type Task,
   type TierNeighbour,
 } from "./tasks.js";
+
 import {
   assertKnownTier,
   liveTierId,
@@ -984,7 +986,7 @@ function loadExecutionDefaults(db: Db): ExecutionDefaults {
 }
 
 /** selector が読む task の断面(要求の列と、review か否か)。 */
-type SelectorTask = Pick<Task, "type" | "tier" | "priority" | "review_tier" | "interview_target_id">;
+type SelectorTask = Pick<Task, "id" | "type" | "tier" | "priority" | "review_tier" | "interview_target_id">;
 
 /** 盤面境界の1行: この agent の定義から selector の入力を組む。Claude / Codex 両
  *  アダプタと、pickup の除外判定・queue の skipped 表示が**同じこの1本**を通る ——
@@ -1005,8 +1007,9 @@ function selectorInputFor(
   const defaults = loadExecutionDefaults(db);
   const review = task?.type === "review" || task?.type === "interview";
   const tiers = liveTierRows(db);
-  // ADR 0273 決定6: Interview の root は盤面の判断の段・測る段・名指した root の段のうち最も上で走る(一覧は下から)
-  const interviewTier = task?.type === "interview" ? tiers.filter((t) => [defaults.judgementTier, task.tier, task.review_tier].includes(t.name)).at(-1)?.name : undefined;
+  // ADR 0273 決定6: Interview の root とその監査は盤面の判断の段・測る段・名指した root の段のうち最も上で走る(一覧は下から)
+  const root = task && interviewRootForTier(db, task);
+  const interviewTier = root && tiers.filter((t) => [defaults.judgementTier, root.tier, root.review_tier].includes(t.name)).at(-1)?.name;
   return {
     entries: definition.provider.map((entry) => ({
       provider: entry.name as Provider,

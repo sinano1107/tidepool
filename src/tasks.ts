@@ -4,8 +4,10 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+
+import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
+
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -412,6 +414,8 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   objection_event_ids?: number[];
   /** Board-internal only (ADR 0237): the repair assignee refused by the registration gate. */
   assignee_not_copied?: { name: string; reason: string };
+  /** Board-internal only (ADR 0273 決定3・4): the posed event an Interview's audit review audits. */
+  audited_probe?: number;
   review_by?: string[];
   review_tier?: string;
   type: TaskType;
@@ -564,6 +568,7 @@ export interface TaskVerbSwap {
     | "propose_from_objection"
   )[];
   added: readonly (
+    | "complete_audit"
     | "pose_probe"
     | "complete_interview"
     | "report_broken_probe"
@@ -572,8 +577,8 @@ export interface TaskVerbSwap {
     | "list_precedents"
     | "read_evidence_history"
   )[];
-  /** interview の root が出題済みか —— doctrine だけが読む(出題済みの root は1 session で完了せよと言う、ADR 0247 決定3)。 */
-  posed?: boolean;
+  /** interview の root の出題が監査に受理され受験者が立ったか —— doctrine だけが読む(受理後の root は1 session で完了せよと言う、ADR 0247 決定3)。 */
+  probeAccepted?: boolean;
 }
 
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
@@ -586,6 +591,13 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
+  // Interview の監査(ADR 0273 決定3・4): review の読み系と、受理 / 却下の専用の完了 verb
+  if (task && auditedPosedEventId(db, task.id) !== undefined) {
+    return {
+      withheld: ["complete_task", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "propose_from_objection", "list_agents"],
+      added: ["complete_audit"],
+    };
+  }
   if (task?.type === "interview") {
     return {
       withheld: ["decompose", "redecompose", "complete_task", "list_agents", "declare_premise_breach", "continue_decomposition", "propose_from_objection"],
@@ -598,7 +610,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
         "list_precedents",
         ...(interviewFields(db, taskId)?.evidence_task_ids?.length ? (["read_evidence_history"] as const) : []),
       ],
-      posed: interviewProbe(db, taskId) !== null,
+      probeAccepted: probeAccepted(db, taskId),
     };
   }
   if (isArtifactDiscarded(db, taskId)) return { withheld: ["decompose", "redecompose"], added: [] };
@@ -1124,6 +1136,7 @@ export function registerTask(
         ...(input.integration_review && { integration_review: true }),
         ...(input.objection_event_ids && { objection_event_ids: input.objection_event_ids }),
         ...(input.assignee_not_copied && { assignee_not_copied: input.assignee_not_copied }),
+        ...(input.audited_probe !== undefined && { audited_probe: input.audited_probe }),
         ...(input.based_on_decision !== undefined && {
           based_on_decision: input.based_on_decision,
         }),
@@ -1257,7 +1270,7 @@ export function completeTask(
   // ADR 0253 決定5: Interview の root は扉を問わず採点完了でだけ終わる —— 子0のまま完了する経路もここで閉じる
   if (interviewTargets(db, task.id) !== null) {
     throw new DomainError(
-      `an Interview root does not complete with complete_task: ${interviewProbe(db, task.id) === null ? "pose its probe with pose_probe first" : POSED_INTERVIEW_EXITS}`,
+      `an Interview root does not complete with complete_task: ${probeAccepted(db, task.id) ? POSED_INTERVIEW_EXITS : "pose its probe with pose_probe first"}`,
     );
   }
   return finishTask(db, task, handoff, workerId, now, origin);
@@ -2354,23 +2367,19 @@ export function logDecision(
 /** 出題済みの Interview の root の出口(ADR 0251 決定5): 拒否文は escalate でなくこの2つを指す。 */
 const POSED_INTERVIEW_EXITS = "score every done answer with complete_interview, or report the probe broken with report_broken_probe";
 
-/** 出題(ADR 0253 決定1・3 / ADR 0267 決定1・5): Interview の root が題・probe・完了基準・rubric を一度に書く。1つの transaction で、
- *  型つきの欄を持つ判断ログの1件と、一覧の対象ごとに受験者を一覧の順に1つ入れ、root を blocked にする。受験者は親も分解判断も持たず、
- *  対象の行でだけ root に結ばれる。全部同じ出題の値で、assignee は未指定(既定 agent)、workspace は root から写し、登録者は root の
- *  agent。決裁権の検査は通らない —— root が受験者ごとに選ぶものが無い。 */
-export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head: string): Task[] {
-  const targets = targetRows(db, root.id);
-  if (!targets.length) throw new DomainError("only an Interview root poses a probe");
-  if (interviewProbe(db, root.id) !== null) {
-    throw new DomainError(`this Interview's probe is already posed and is not posed again: ${POSED_INTERVIEW_EXITS}`);
-  }
+/** 出題(ADR 0253 決定1・3 / ADR 0273 決定3・4): Interview の root が題・probe・完了基準・rubric を書き、盤面が面接室の写しを commit した
+ *  `head` と一緒に型つきの欄を持つ判断ログの1件にする。同じ transaction で、その出題を監査する review を root の付帯子として盤面名義で
+ *  登録し(assignee は空 = Auditor、workspace は root の実環境)、root を blocked(監査待ち)にする。受験者を立てるのは監査の受理
+ *  (`completeAudit`)。受験者が1人も立っていないあいだは出題し直せる。 */
+export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head: string): Task {
+  assertPosable(db, root);
   const probe = { ...input };
   for (const field of ["title", "probe", "completion_criteria", "rubric"] as const) {
     if (whyBlank(probe[field])) throw new DomainError(`a probe requires a ${field}`);
     probe[field] = normalizeText(probe[field]);
   }
   return db.transaction(() => {
-    appendEvent(db, {
+    const posed = appendEvent(db, {
       taskId: root.id,
       workerId,
       origin,
@@ -2382,31 +2391,123 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
       },
       at: now,
     });
-    const examinees = targets.map(({ id }) =>
-      registerTask(
-        db,
-        {
-          type: "work",
-          title: probe.title,
-          purpose: probe.probe,
-          completion_criteria: probe.completion_criteria,
-          tier: root.tier ?? undefined,
-          workspace: root.workspace ?? undefined,
-          interview_target_id: id,
-        },
-        now,
-        workerId,
-        origin,
-      ),
+    const audit = registerTask(
+      db,
+      {
+        type: "review",
+        title: `audit: ${probe.title}`,
+        purpose:
+          "Audit the probe this Interview posed: read the interview room at the posed head and the real environment, and judge " +
+          "whether the environment, the probe and the rubric ask for the work the measured tier's description names, in a way " +
+          "the tier below it would not satisfy.",
+        completion_criteria: "the probe is accepted or rejected with findings through complete_audit",
+        parent_id: root.id,
+        workspace: root.workspace ?? undefined,
+        audited_probe: posed,
+      },
+      now,
+      // 盤面の規則が立てる(ADR 0194 決定3)—— 出題した agent の名義ではない
+      BOARD_WORKER_ID,
+      "board",
     );
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(root.id);
-    return examinees;
+    return audit;
   })();
 }
 
-/** Interview の root の出題の型つきの欄(ADR 0253 決定1)。出題前・Interview でない task は null。 */
+/** 出題できる root か: Interview の root で、受験者がまだ1人も立っておらず、前の出題の監査が決着している(ADR 0273 決定3)。
+ *  出題の gate が写しの commit の前にも読む。 */
+export function assertPosable(db: Db, root: Task): void {
+  if (!targetRows(db, root.id).length) throw new DomainError("only an Interview root poses a probe");
+  if (probeAccepted(db, root.id)) {
+    throw new DomainError(`this Interview's probe is already posed and accepted, so it is not posed again: ${POSED_INTERVIEW_EXITS}`);
+  }
+  if (db.prepare(`SELECT ${unsettledAuditSql("?")}`).pluck().get(root.id)) {
+    throw new DomainError("this Interview's probe is still under audit, so it is not posed again until the audit settles");
+  }
+}
+
+/** 監査 review が監査する出題の event の id(ADR 0273 決定3・4)。監査でない task は undefined。 */
+export function auditedPosedEventId(db: Db, taskId: string): number | undefined {
+  return latestEventOfTask(db, taskId, "task_registered")?.payload.audited_probe;
+}
+
+/** 出題の event の型つきの欄と、それを書いた root・agent(ADR 0253 決定1 / ADR 0273 決定3)。 */
+export interface PosedProbe {
+  root_id: string;
+  probe: InterviewProbe;
+  head: string;
+  worker_id: string;
+  origin: EventOrigin;
+}
+
+/** 出題の event の id から、その出題を読む1本の口。出題の event でない id は投げる。 */
+export function posedProbe(db: Db, eventId: number): PosedProbe {
+  const event = getEvent(db, eventId);
+  if (event?.payload.kind !== "decision_logged" || !event.payload.interview_probe) throw new Error(`event ${eventId} is not a posed probe`);
+  return { root_id: event.task_id!, probe: event.payload.interview_probe, head: event.payload.head, worker_id: event.worker_id, origin: event.origin };
+}
+
+/** 段を Interview の root から読む task の root(ADR 0273 決定6): root 自身と、その監査。他の task は undefined。 */
+export function interviewRootForTier(db: Db, task: Pick<Task, "id" | "type">): Pick<Task, "tier" | "review_tier"> | undefined {
+  if (task.type === "interview") return getTask(db, task.id);
+  const posed = auditedPosedEventId(db, task.id);
+  return posed === undefined ? undefined : getTask(db, posedProbe(db, posed).root_id);
+}
+
+/** 監査の完了(ADR 0273 決定3・4): 監査 review が受理 / 却下と findings を値で残して完了する。受理なら同じ transaction で、盤面が
+ *  監査した出題の対象ごとに受験者を一覧の順に1つ立てる —— 受験者は親も分解判断も持たず対象の行でだけ root に結ばれ、全部同じ出題の値で、
+ *  assignee は未指定(既定 agent)、workspace は root から写し、登録者は出題した root の agent。却下なら findings は root の history に
+ *  この子の行として並び、監査が決着した root は起きて出題し直す。 */
+export function completeAudit(
+  db: Db,
+  audit: Task,
+  { verdict, findings }: AuditVerdict,
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  const posedId = auditedPosedEventId(db, audit.id);
+  if (posedId === undefined) throw new DomainError("only an Interview's audit completes with complete_audit");
+  if (whyBlank(findings)) throw new DomainError("complete_audit requires findings");
+  findings = normalizeText(findings);
+  return db.transaction(() => {
+    appendEvent(db, { taskId: audit.id, workerId, origin, payload: { kind: "interview_audited", verdict, findings }, at: now });
+    const done = finishTask(db, audit, { outcome: findings }, workerId, now, origin);
+    if (verdict === "accepted") {
+      const posed = posedProbe(db, posedId);
+      const { probe } = posed;
+      const root = getTask(db, posed.root_id)!;
+      for (const { id } of targetRows(db, root.id)) {
+        registerTask(
+          db,
+          {
+            type: "work",
+            title: probe.title,
+            purpose: probe.probe,
+            completion_criteria: probe.completion_criteria,
+            tier: root.tier ?? undefined,
+            workspace: root.workspace ?? undefined,
+            interview_target_id: id,
+          },
+          now,
+          posed.worker_id,
+          posed.origin,
+        );
+      }
+    }
+    return done;
+  })();
+}
+
+/** 出題が監査に受理され、受験者が1人でも立ったか(ADR 0273 決定3)。採点と破綻の報告はこの後だけ、出題し直しはこの前だけ。 */
+function probeAccepted(db: Db, rootId: string): boolean {
+  return listExaminees(db, rootId).length > 0;
+}
+
+/** Interview の root の最新の出題の型つきの欄(ADR 0253 決定1)。却下で出題し直した root は最後の出題。出題前・Interview でない task は null。 */
 function interviewProbe(db: Db, rootId: string): InterviewProbe | null {
-  for (const { payload } of taskDecisionLog(db, rootId)) {
+  for (const { payload } of taskDecisionLog(db, rootId).reverse()) {
     if (payload.kind === "decision_logged" && payload.interview_probe) return payload.interview_probe;
   }
   return null;
@@ -2424,7 +2525,7 @@ export function completeInterview(
   origin: EventOrigin,
 ): Task {
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root completes with complete_interview");
-  if (interviewProbe(db, root.id) === null) throw new DomainError("this Interview has no probe to score yet: pose it with pose_probe first");
+  if (!probeAccepted(db, root.id)) throw new DomainError("this Interview has no answers to score yet: pose its probe with pose_probe first");
   if (handoff?.outcome === undefined || whyBlank(handoff.outcome)) throw new DomainError("complete_interview requires the findings in handoff.outcome");
   const examinees = new Map(listExaminees(db, root.id).map((examinee) => [examinee.id, examinee] as const));
   const scored = new Set<string>();
@@ -2458,7 +2559,7 @@ export function reportBrokenProbe(
 ): Task {
   if (interviewTargets(db, root.id) === null) throw new DomainError("only an Interview root reports a broken probe");
   const posed = interviewProbe(db, root.id);
-  if (posed === null) throw new DomainError("this Interview has no probe yet: pose it with pose_probe first");
+  if (posed === null || !probeAccepted(db, root.id)) throw new DomainError("this Interview has no answers yet: pose its probe with pose_probe first");
   if (brokenProbeReported(db, root.id)) {
     throw new DomainError(
       "this Interview's probe was already reported broken once and the human answered continue: score every done answer with complete_interview, or escalate if you still disagree",
@@ -2821,9 +2922,9 @@ export function decomposeTask(
   // ADR 0253 決定1・5: Interview の root は分けない —— 出題で進む
   if (interviewTargets(db, parent.id) !== null) {
     throw new DomainError(
-      interviewProbe(db, parent.id) === null
-        ? "an Interview root is not decomposed: pose its probe with pose_probe and the board registers one answer task per target"
-        : `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`,
+      probeAccepted(db, parent.id)
+        ? `an Interview root is not decomposed: ${POSED_INTERVIEW_EXITS}`
+        : "an Interview root is not decomposed: pose its probe with pose_probe and, once its audit accepts it, the board registers one answer task per target",
     );
   }
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
@@ -3241,16 +3342,27 @@ export function editTask(
 
 /** The one SQL shape of the derived-blocked rule (CONTEXT.md): an unsettled
  *  child the parent waits for — either part of a decomposition decision or an
- *  escalation question — or, for a posed Interview root, a target whose answer
- *  task is unsettled (ADR 0267 決定2: 出題前の対象は task を持たないので塞がない).
+ *  escalation question — or, for a posed Interview root, its unsettled audit or a target whose answer
+ *  task is unsettled (ADR 0267 決定2: 出題前の対象は task を持たないので塞がない / ADR 0273 決定3).
  *  `parentRef` is the SQL expression holding the parent's id. */
 function unfinishedChildSql(parentRef: string): string {
   return `(EXISTS (SELECT 1 FROM tasks c
             WHERE c.parent_id = ${parentRef}
               AND ${unsettledSql("c.status")}
               AND ${awaitedChildSql("c")})
-          OR EXISTS (SELECT 1 FROM interview_targets it JOIN tasks e ON e.interview_target_id = it.id
-            WHERE it.task_id = ${parentRef} AND ${unsettledSql("e.status")}))`;
+          OR ${unsettledAuditSql(parentRef)} OR ${unsettledExamineeSql(parentRef)})`;
+}
+
+/** 出題済みで監査が未決着の Interview の root か(ADR 0273 決定3)。監査は付帯子だが root を塞ぐ。 */
+function unsettledAuditSql(parentRef: string): string {
+  return `EXISTS (SELECT 1 FROM tasks a JOIN events r ON r.task_id = a.id AND r.kind = 'task_registered'
+            WHERE a.parent_id = ${parentRef} AND ${unsettledSql("a.status")} AND json_extract(r.payload, '$.audited_probe') IS NOT NULL)`;
+}
+
+/** 答案が未決着の対象を持つ Interview の root か(ADR 0267 決定2)。 */
+function unsettledExamineeSql(parentRef: string): string {
+  return `EXISTS (SELECT 1 FROM interview_targets it JOIN tasks e ON e.interview_target_id = it.id
+            WHERE it.task_id = ${parentRef} AND ${unsettledSql("e.status")})`;
 }
 
 /** 早期統合復帰(ADR 0121): 子の前提の破綻が開いていて、待っている未決着の子がすべてその
@@ -3304,6 +3416,11 @@ export function isArtifactDiscarded(db: Db, taskId: string): boolean {
  *  文面が同じこれを運ぶ —— 分解の verb を伏せるだけでは reviewer の guidance「findings become repair tasks」が宙に浮く。 */
 export const ARTIFACT_DISCARDED_NOTICE =
   "The artifact under review was discarded by a cancel in this task's lineage: no repair task can stand here, so write findings only.";
+
+/** Interview の監査に盤面が注入する1行(ADR 0273 決定3・4、ADR 0271 決定2 の形): reviewer の guidance「findings become repair tasks」の
+ *  行き先を言い直す。`get_current_task` の envelope と spawn の文面が同じこれを運ぶ。 */
+export const INTERVIEW_AUDIT_NOTICE =
+  "This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.";
 
 /** memory_repair に盤面が注入する1行(ADR 0272 決定3): 伏せた verb の理由。`get_current_task` の envelope と spawn の文面が同じこれを
  *  運ぶ。reviewer の authority guidance は使わない。 */
@@ -3620,6 +3737,7 @@ export function acceptedSql(taskId: string): string {
 type BoardRow = Omit<TaskRow, "status" | typeof storedRow> & {
   accepted: number;
   interview_root_id: string | null;
+  interview_waiting: "audit" | "examinees" | null;
   status: TaskStatus | "blocked" | "held" | "skipped";
   raw_assignee: string | null;
   registrant: string;
@@ -3645,6 +3763,8 @@ function boardRows(
        SELECT tasks.*, ${taskTierNamesSql("tasks")}, tasks.assignee AS raw_assignee, registered.worker_id AS registrant,
          ${acceptedSql("tasks.id")} AS accepted,
          (SELECT task_id FROM interview_targets WHERE id = tasks.interview_target_id) AS interview_root_id,
+         CASE WHEN status = 'todo' AND ${unsettledAuditSql("tasks.id")} THEN 'audit'
+              WHEN status = 'todo' AND ${unsettledExamineeSql("tasks.id")} THEN 'examinees' END AS interview_waiting,
          CASE WHEN tasks.type = 'question' THEN '${HUMAN_WORKER_ID}'
               ELSE COALESCE(tasks.assignee, ${fallback}) END AS assignee,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
@@ -3660,10 +3780,12 @@ function boardRows(
 }
 
 /** 提案の段は id で持つので、外へ見せる前にいまの名前へ引く(issue #1436)。 */
-function toBoardTask(db: Db, { tier_id: _tierId, review_tier_id: _reviewTierId, ...row }: BoardRow) {
+function toBoardTask(db: Db, { tier_id: _tierId, review_tier_id: _reviewTierId, interview_waiting, ...row }: BoardRow) {
   const proposal = parseJson<QuestionProposal>(row.question_proposal);
   return {
     ...fillContentPlaceholder(row),
+    // 出題済みの Interview の root が何を待って blocked か(ADR 0273 決定3): 監査か、受験者か
+    ...(interview_waiting && { interview_waiting }),
     accepted: row.accepted === 1,
     review_by: parseJson<string[]>(row.review_by),
     question_items: parseJson<QuestionItem[]>(row.question_items),
@@ -3821,7 +3943,17 @@ type HistoryChildContext = TaskContent &
     id?: string;
     /** この子が宣言して、まだ閉じていない前提の破綻の理由(ADR 0121)。 */
     premise_breach?: string;
+    /** 決着した監査だけ(ADR 0273 決定3)。 */
+    audit?: AuditVerdict;
   };
+
+/** 決着した監査 review の受理 / 却下と findings。他の task は何も足さない。 */
+function auditVerdict(db: Db, taskId: string): { audit?: AuditVerdict } {
+  const audited = latestEventOfTask(db, taskId, "interview_audited");
+  if (!audited) return {};
+  const { kind: _, ...audit } = audited.payload;
+  return { audit };
+}
 
 interface DecisionHistoryEntry {
   decision: string;
@@ -3920,6 +4052,8 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       ...(child.status === "done" && child.type === "work"
         ? { handoff_doc: child.handoff_doc }
         : {}),
+      // 監査の受理 / 却下と findings(ADR 0273 決定3): 却下された root はこれを読んで出題し直す
+      ...auditVerdict(db, child.id),
       ...(child.status === "done" && child.type === "question"
         ? {
             items: child.question_items ?? [],

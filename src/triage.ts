@@ -20,6 +20,7 @@ import {
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
+  auditedPosedEventId,
   type BoardTask,
   getTask,
   isArtifactDiscarded,
@@ -407,7 +408,8 @@ function bundleObjections(
     // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written");
     const decisionRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
-    if (decisionRows.length > 0 && objected.type !== "interview" && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+    // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
+    if (decisionRows.length > 0 && objected.type !== "interview" && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
     if (memoryRows.length > 0) registerRepair("memory_repair", "memory repair", "memory writes", memoryRows);

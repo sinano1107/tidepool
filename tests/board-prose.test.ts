@@ -2,7 +2,11 @@ import { expect, it } from "vitest";
 import { boardDoctrine, boardProse } from "../src/board-prose.js";
 import { openDb } from "../src/db.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, isArtifactDiscarded, registerTask, taskVerbSwap } from "../src/tasks.js";
+
+
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, poseProbe, registerTask, taskVerbSwap } from "../src/tasks.js";
+
+
 import { HUMAN_WEBUI } from "./harness.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
@@ -76,4 +80,28 @@ it("memory_repair の spawn の文面は assignee の Authority の直後に記�
   expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
   expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
   expect(prose).not.toContain("premise breach");
+});
+
+it("Interview の監査 review の spawn の文面は reviewer の Authority の直後に、findings の行き先が complete_audit の判定だという1行を置く(ADR 0273 決定3・4 / ADR 0271 決定2 の形)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-18T00:00:00.000Z");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
+  const audit = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "suzumedai", at, "worker", "0".repeat(40));
+  const verbs = taskVerbSwap(db, audit.id);
+
+  const prose = boardProse({
+    db,
+    registryDir: "",
+    registry: { commit: "c", agents: {}, authority: {}, workspaces: {} },
+    task: audit,
+    systemPrompt: "",
+    profile: { name: "default", guidance: "Prefer reversible actions." },
+    doctrine: boardDoctrine(CLAUDE, verbs),
+    verbs,
+    allowedDomains: undefined,
+    memorySection: null,
+  });
+
+  expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_AUDIT_NOTICE}\n\n`);
+  expect(INTERVIEW_AUDIT_NOTICE).toBe("This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.");
 });

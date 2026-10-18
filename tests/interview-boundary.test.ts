@@ -8,7 +8,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "../src/quarantine.js";
-import { getTask } from "../src/tasks.js";
+import { getTask, INTERVIEW_AUDIT_NOTICE } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
@@ -28,6 +28,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
+  poseThroughAudit,
   QUIET_EXIT,
   questions,
   readFollowingNext,
@@ -52,8 +53,8 @@ const INTERVIEW = { type: "interview", title: "interview", hypothesis: "the targ
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
 const FINDINGS = { outcome: "the parser probe separates the targets" };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
-/** root が出題し、立った受験者の id を返す。 */
-const pose = async (rootId: string): Promise<[string, ...string[]]> => JSON.parse((await callAsTask(t, rootId, "pose_probe", POSE)).content[0].text).child_ids;
+/** root が出題し、監査の受理で立った受験者の id を返す。 */
+const pose = async (rootId: string) => (await poseThroughAudit(t, rootId, POSE)) as [string, ...string[]];
 
 /** 既定 agent(scripted worker の id)を anthropic の advisor つき entry 1つで持つ盤面。上限は fable、学習器は既定で昇格済み。 */
 let workspacePath: string;
@@ -175,6 +176,8 @@ it("worker MCP の tool 一覧は type で決まる —— interview の root �
   for (const verb of [...ROOT_VERBS.filter((verb) => !ordinary.includes(verb)), "read_evidence_history"]) expect(ordinary).not.toContain(verb);
   expect((await tools(root.id)).sort()).toEqual([...ROOT_VERBS].sort());
   expect((await tools(withEvidence.id)).sort()).toEqual([...ROOT_VERBS, "read_evidence_history"].sort());
+  // 出題の後に監査より先に拾われないように退かせる(setup)
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${withEvidence.id}/cancel`, {})).status).toBe(200);
   // 出題の前に対象の一覧を読める(#1924 User Story 3)
   await runNow(t, root.id);
   expect(JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text).interview_targets).toEqual([opus46]);
@@ -245,9 +248,9 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
 
-  // 出題の head は面接室の root の分岐元(#2193 の写しの commit までは空コミット)で、受験者はそこから分岐する(ADR 0263 追記4)
+  // 受験者は出題の head(面接室の写しの commit)から分岐する(ADR 0273 決定3)
   const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
-  expect(posed.payload.head).toBe(git(room, "rev-parse", "main"));
+  expect(posed.payload.head).toBe(git(room, "rev-parse", `task/${childId}`));
   expect(t.worker.started.at(-1)!.id).toBe(childId);
   expect(git(room, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${childId}`);
   expect(git(workspacePath, "branch", "--list", `task/${root.id}`, `task/${childId}`)).toBe("");
@@ -274,7 +277,9 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
 
   const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
   await api(t.baseUrl, "POST", `/api/tasks/${retried.id}/move`, { after: null });
-  await pose(measured.id);
+  expect((await callAsTask(t, measured.id, "pose_probe", POSE)).isError).toBeFalsy();
+  t.worker.exit(measured.id);
+  await runNow(t, retried.id);
   expect(t.worker.started.at(-1)!.id).toBe(retried.id);
   const current = JSON.parse((await callAsTask(t, retried.id, "get_current_task", {})).content[0].text);
   expect(current.history).toContainEqual({ retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
@@ -288,10 +293,12 @@ const queueStatus = async (taskId: string) => (await api(t.baseUrl, "GET", "/api
 it("資源の停止は走る場所の単位 —— 実環境の quarantine と (Harness, 実環境) の封じ込めの組は interview の root の pickup を止めるが受験者を止めず、面接室の quarantine は受験者を止める(ADR 0273 決定8)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  // 監査は実環境で走るので、実環境の停止は受験者が立ってから
+  const [first, second] = await pose(root.id);
   registerQuarantine(t.db, "workspace", "reef", "the real environment broke", t.clock.now());
   registerQuarantine(t.db, "workspaceContainment", workspaceContainmentValue("claude-code", "reef"), "its settings widen the floor", t.clock.now());
-
-  const [first, second] = await pose(root.id);
+  // 監査の pickup が立てた meta-review を終えて枠を空ける
+  await completeMetaReviews(t);
 
   expect(t.worker.started.at(-1)!.id).toBe(first);
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -395,16 +402,58 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
 });
 
-it("root の HEAD が保護ブランチと共通祖先を持たなければ出題は失敗し、head の無い出題も今の ref の head の出題も残らない", async () => {
+/** 監査 review の worker MCP の verb(ADR 0273 決定3・4): review の読み系と complete_audit。 */
+const AUDIT_VERBS = ["get_current_task", "log_decision", "escalate", "complete_audit", "browse_memory", "search_memory", "read_memory"];
+
+// 監査の登録・blocked の理由・verb の差し替え・受理 / 却下・cancel の cascade・異議は interview.test.ts の domain 層が言う。ここは写像だけ
+it("出題の gate は面接室の写しを head に記録し、立った監査は root と同じ段で拾われ、その tools/list は review の読み系と complete_audit、envelope は head・面接室の在り処・root の構造欄と findings の行き先の1行を運ぶ(ADR 0273 決定3・4・6)", async () => {
   t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  git(roomOf(root.id), "checkout", "--orphan", "lone");
-  git(roomOf(root.id), "commit", "--allow-empty", "-m", "no shared history");
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, tier: "standard", interview_targets: [opus46] })).json;
+  const rootTier = t.worker.startedSettings.at(-1)!.tier_id;
+  const room = roomOf(root.id);
+  writeFileSync(join(room, "probe.txt"), "the environment\n");
 
   const posed: any = await callAsTask(t, root.id, "pose_probe", POSE);
 
-  expect(posed.isError).toBe(true);
-  expect(await posedRecord(root.id)).toEqual({ events: [], examinees: [] });
+  expect(posed.isError).toBeFalsy();
+  const { audit_id: auditId } = JSON.parse(posed.content[0].text);
+  const { head } = (await posedRecord(root.id)).events[0].payload;
+  expect(git(room, "show", `${head}:probe.txt`)).toBe("the environment");
+  await runNow(t, auditId);
+  expect(t.worker.started.at(-1)!.id).toBe(auditId);
+  expect(t.worker.startedSettings.at(-1)!.tier_id).toBe(rootTier);
+  expect(rootTier).toBe(tierIdOf(t.db, "frontier"));
+  expect((await tools(auditId)).sort()).toEqual([...AUDIT_VERBS].sort());
+  const envelope = JSON.parse((await callAsTask(t, auditId, "get_current_task", {})).content[0].text);
+  expect(envelope.interview_audit).toMatchObject({ notice: INTERVIEW_AUDIT_NOTICE, head, interview_room: room, hypothesis: INTERVIEW.hypothesis });
+});
+
+it("却下の後の出し直しは出題の gate が新しい写しを commit して新しい head にし、受理された受験者は却下された写しではなく最後の写しから分岐する(ADR 0273 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const room = roomOf(root.id);
+  const { audit_id: first } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
+  await runNow(t, first);
+  expect((await callAsTask(t, first, "complete_audit", { verdict: "rejected", findings: "the tier below solves it" })).isError).toBeFalsy();
+  t.worker.exit(first);
+  await runNow(t, root.id);
+  writeFileSync(join(room, "harder.txt"), "a harder environment\n");
+
+  const reposed: any = await callAsTask(t, root.id, "pose_probe", POSE);
+
+  expect(reposed.isError).toBeFalsy();
+  const { audit_id: second } = JSON.parse(reposed.content[0].text);
+  const heads = (await posedRecord(root.id)).events.map((event: any) => event.payload.head);
+  expect(git(room, "ls-tree", "--name-only", heads[1])).toContain("harder.txt");
+  expect(git(room, "ls-tree", "--name-only", heads[0])).not.toContain("harder.txt");
+  t.worker.exit(root.id);
+  await runNow(t, second);
+  expect((await callAsTask(t, second, "complete_audit", { verdict: "accepted", findings: "now it asks for frontier work" })).isError).toBeFalsy();
+  t.worker.exit(second);
+  const [examinee] = (await posedRecord(root.id)).examinees;
+  await runNow(t, examinee.id);
+  expect(t.worker.started.at(-1)!.id).toBe(examinee.id);
+  expect(git(room, "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
 it("ログ API の root の行は Interview の印を運び、受験者の行への異議 API は 409 に写る(ADR 0268 決定1・6)", async () => {
@@ -517,7 +566,11 @@ it("受験者の pickup は、学習器が昇格していない盤面でも shad
 it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新しい root を返し、走れない対象の拒否を回答の拒否の status(409)と isError に写して対象を名指す(ADR 0267 決定4 / ADR 0253 決定3)", async () => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  await pose(first.id);
+  const [firstChild] = await pose(first.id);
+  // 受験者は question を待って枠を空ける —— 受験者の question は root の cancel を止めない(ADR 0267 決定3)
+  const escalation = { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
+  expect((await callAsTask(t, firstChild, "escalate", escalation)).isError).toBeFalsy();
+  t.worker.exit(firstChild);
   const client = await managementMcpClient(t.baseUrl);
   definition.provider = [{ name: "openai", advisor: false }];
   const refused = await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {});
@@ -602,7 +655,7 @@ async function lastExaminee() {
   await callAsTask(t, root.id, "log_decision", { line: `chose the parser probe over the lexer one ${ROOT_MARK}` });
   const rootKnowledge = { path: "parser", title: `parser ${TREE_MEMORY}`, text: `the parser ${TREE_MEMORY}`, source: { commit: "0a46a46" } };
   const rootEntry = JSON.parse((await callAsTask(t, root.id, "record_knowledge", rootKnowledge)).content[0].text).entry_id;
-  const [done, cancelled, reader] = JSON.parse((await callAsTask(t, root.id, "pose_probe", SWEEP_POSE)).content[0].text).child_ids;
+  const [done, cancelled, reader] = (await poseThroughAudit(t, root.id, SWEEP_POSE)) as [string, string, string];
   const posed = listEvents(t.db, root.id).find((e) => e.payload.kind === "decision_logged" && e.payload.interview_probe)!.id;
   const exemplar = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", {
     workspace: getTask(t.db, root.id)!.workspace,

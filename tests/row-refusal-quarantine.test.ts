@@ -11,9 +11,10 @@ import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
+import { listExaminees } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -587,12 +588,16 @@ async function poseInterview(
 ): Promise<{ rootId: string; childIds: string[] }> {
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: targets })).json;
   beforePose();
-  const posed = await callAsTask(t, root.id, "pose_probe", POSE);
-  if (proc) {
+  const childIds = await poseThroughAudit(t, root.id, POSE, async (taskId) => {
+    // 監査の session を終える前に受験者を対象の順で先頭へ —— 監査の pickup が立てた meta-review より先に受験者が走る
+    if (taskId !== root.id) {
+      for (const { id } of listExaminees(t.db, root.id).reverse()) await api(t.baseUrl, "POST", `/api/tasks/${id}/move`, { after: null });
+    }
+    if (!proc) return t.worker.exit(taskId);
     proc.emitExitAt(proc.processes.length - 1, 0, null);
     await settle();
-  }
-  return { rootId: root.id, childIds: JSON.parse(posed.content[0].text).child_ids };
+  });
+  return { rootId: root.id, childIds };
 }
 
 /** 最後に spawn した session を `resultLine` で終わらせる。 */
@@ -624,7 +629,8 @@ it("行でない対象を pin した子が 404 で断られると、対象を名
   const timeline = await events(medium!);
   const spawned = timeline.filter((e) => e.kind === "worker_spawned");
   expect(timeline.find((e) => e.kind === "row_refused")?.payload).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" });
-  expect(timeline.map((e) => e.kind)).not.toContain("task_moved");
+  // 出題の setup が受験者を先頭へ動かした後で、断りは先頭へ戻さない
+  expect(timeline.slice(timeline.findIndex((e) => e.kind === "row_refused")).map((e) => e.kind)).not.toContain("task_moved");
   expect([await queueStatus(medium!), await queueStatus(low!)]).toEqual(["skipped", "skipped"]);
   // 兄弟の子は次の pickup で走る
   expect((await events(opus!)).find((e) => e.kind === "worker_spawned")?.payload.model).toBe("claude-opus-4-6");
