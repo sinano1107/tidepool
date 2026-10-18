@@ -1186,6 +1186,9 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
   );
 }
 
+/** 表の行の鍵、Interview の対象の綴り(provider, model, effort)。 */
+const rowKey = z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() });
+
 const since_watermark = z
   .number()
   .int()
@@ -1291,7 +1294,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier", "interview"]),
-        row: z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }).optional().describe("op row and add_tier only."),
+        row: rowKey.optional().describe("op row and add_tier only."),
         change: z.record(z.string(), z.unknown()).optional().describe(`op row only: tier and/or effort (${EFFORT_LEVELS.join(" / ")}), nothing else.`),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
         to: z.string().optional().describe("op agent_tier only: the tier one step below the agent's current tier."),
@@ -1302,10 +1305,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name. op interview: the tier measured."),
         hypothesis: z.string().optional().describe("op interview only: the claim the Interview tests."),
         measured_work: z.string().optional().describe("op interview only, optional: the kind of work to measure."),
-        targets: z
-          .array(z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }))
-          .optional()
-          .describe("op interview only: the (provider, model, effort) targets to measure in the tier."),
+        targets: z.array(rowKey).optional().describe("op interview only: the (provider, model, effort) targets to measure in the tier."),
         workspace: z.string().optional().describe("op interview only: the real environment the Interview's root reads, the workspace of one of the evidence sessions."),
         description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
         position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),

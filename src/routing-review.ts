@@ -377,7 +377,6 @@ function interviewProposal(
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
   const table = loadExecutionSettingTable(db);
   const rows = new Map<string, InterviewProposal["pin"]["rows"][number]>();
-  const evidenceTasks = new Set<string>();
   const evidenceWorkspaces = new Set<string | null>();
   for (const id of evidence) {
     const episode = episodes.get(id);
@@ -385,10 +384,9 @@ function interviewProposal(
     const row = table.find((r) => matchesRowKey(r, episode.cell));
     if (!row) throw new DomainError(`evidence ${id} ran on ${rowName(episode.cell)}, which is no longer in the execution-setting table`);
     rows.set(rowName(row), { ...row, tier: tierIdOf(db, row.tier) });
-    evidenceTasks.add(episode.task_id);
     evidenceWorkspaces.add(episode.workspace);
   }
-  assertInterviewFields(db, { type: "interview", hypothesis, measured_work, evidence_task_ids: [...evidenceTasks], tier, interview_targets: targets });
+  assertInterviewFields(db, { type: "interview", hypothesis, measured_work, tier, interview_targets: targets });
   for (const target of targets) {
     if (!table.some((r) => r.provider === target.provider && r.model === target.model)) {
       throw new DomainError(`the execution-setting table has no row for ${target.provider} / ${target.model}: propose another effort or tier of a model in the table; a new model is the human's to bring in`);
