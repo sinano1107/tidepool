@@ -71,10 +71,12 @@ import {
   decomposeTask,
   describeHandoffFields,
   escalateTask,
+  evidenceHistoryRows,
   getTask,
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
+  interviewFields,
   interviewTargets,
   isArtifactDiscarded,
   joinHistory,
@@ -84,6 +86,7 @@ import {
   redecompose,
   reportBrokenProbe,
   resolveTaskAgent,
+  runsOnReviewFloor,
   type Task,
   type TaskType,
   taskHistoryRows,
@@ -91,6 +94,7 @@ import {
   type Unstored,
 } from "./tasks.js";
 import { markTeardown, runTeardown, type TeardownDeps, teardownStep } from "./teardown.js";
+import { readTiers } from "./tier.js";
 import {
   buildWorkspaceResolver,
   completionTreeGateApplies,
@@ -220,7 +224,6 @@ export interface McpDeps {
  *  neither of which is ever unset (each falls back to its `DEFAULT_*`). */
 function attributedWorkerId(deps: McpDeps, task: Task): string {
   return resolveTaskAgent(
-    deps.db,
     task,
     deps.defaultAgentName,
     deps.auditorName ?? DEFAULT_AUDITOR_NAME,
@@ -238,7 +241,7 @@ function attributedWorkerId(deps: McpDeps, task: Task): string {
  *  error — neither unrestricted nor narrowest is guessed, and the slot stays
  *  (ADR 0224). */
 function attributedAuthorityOrQuarantine(deps: McpDeps, task: Task): AuthorityProfile | undefined {
-  if (task.type === "review") return REVIEWER_AUTHORITY_PROFILE;
+  if (runsOnReviewFloor(task.type)) return REVIEWER_AUTHORITY_PROFILE;
   try {
     return deps.resolveAuthority?.(task.assignee, task.type) ?? deps.authority;
   } catch (err) {
@@ -394,6 +397,18 @@ async function taskContext(deps: McpDeps, task: Task) {
   return { id: task.id, ...content };
 }
 
+/** interview の root の envelope の構造欄(ADR 0273 決定9): 登録の欄、測る段の名前と説明、実環境の宣言のうち受験者に効く部分。 */
+function interviewEnvelope(deps: McpDeps, task: Task) {
+  const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
+  const workspace = resolve && resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
+  return {
+    ...interviewFields(deps.db, task.id),
+    measured_tier: readTiers(deps.db).find((tier) => tier.name === task.tier),
+    allowed_domains: workspace?.allowed_domains ?? [],
+    allowed_commands: workspace?.review_allowed_commands ?? [],
+  };
+}
+
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
 const ESCALATE_UNFIXABLE = " — this task cannot fix that: escalate so a human decides";
 
@@ -453,6 +468,7 @@ export const REVIEW_FLAG_ONLY_ON_WORK_CHILDREN =
 export const REVIEW_TIER_BY_TYPE =
   "Quality tier whose meaning depends on the task type. " +
   "On a review task, it is the tier that review itself runs at, and no completion-review condition applies. " +
+  "On an Interview, it raises the tier its root runs at: at or above the measured tier, and the root runs at the highest of it, the measured tier and the board's judgement tier. " +
   `On a work task, it is the tier of its completion reviews: ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`;
 /** edit_task は変更後の状態で判定する(保存済みの値と同じ呼び出しの値を合わせた状態)。 */
 export const JUDGED_AFTER_THE_EDIT =
@@ -542,6 +558,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(await taskContext(deps, task)),
             type: task.type,
             ...(targets && { interview_targets: targets }),
+            ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
             // ADR 0271 決定2: 分解の verb を伏せた理由(spawn の文面と同じ1行)
             ...(isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
@@ -560,7 +577,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
+  if (!withheld.includes("list_agents")) server.registerTool(
     "list_agents",
     {
       description:
@@ -795,7 +812,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
+  if (!withheld.includes("declare_premise_breach")) server.registerTool(
     "declare_premise_breach",
     {
       description:
@@ -817,7 +834,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
+  if (!withheld.includes("continue_decomposition")) server.registerTool(
     "continue_decomposition",
     {
       description:
@@ -898,7 +915,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
-  server.registerTool(
+  if (!withheld.includes("propose_from_objection")) server.registerTool(
     "propose_from_objection",
     {
       description:
@@ -919,6 +936,32 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) =>
       runVerb(deps, attributedTaskId, (task) => proposeFromObjection(deps.db, task.id, input, deps, attributedWorkerId(deps, task), deps.clock.now())),
   );
+
+  // ADR 0273 決定2・9: interview の root は routing の読み口と、根拠があれば根拠の history の読み口を持つ
+  if (added.includes("list_routing_shadow")) {
+    const run: MetaReviewRun = (verb) => runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+    registerPrecedentRead(server, deps, run);
+    registerRoutingReads(server, deps, run);
+  }
+  if (added.includes("read_evidence_history")) {
+    server.registerTool(
+      "read_evidence_history",
+      {
+        description:
+          "Read the history of one of this Interview's evidence tasks (get_current_task's interview.evidence_task_ids): its decisions with " +
+          "their children, its completion with the handoff_doc, and the allocation reviews of its sessions, in the order they happened. " +
+          "A task that is not an evidence task of this Interview is refused. " +
+          nextDescription("read_evidence_history", "history rows"),
+        inputSchema: { task_id: requiredTextSchema.optional(), next },
+      },
+      async (input) =>
+        runVerb(deps, attributedTaskId, (task) => {
+          const read = readPosition<{ task_id?: string }>("read_evidence_history", input);
+          const rows = evidenceHistoryRows(deps.db, task.id, read.args.task_id ?? "");
+          return packItems(read, "history", rows.map((row) => row.entry), {}, { keyOf: (_, i) => rows[i]!.id });
+        }),
+    );
+  }
 
   if (subject !== null) {
     registerMetaReviewVerbs(server, deps, attributedTaskId, subject);
@@ -1105,7 +1148,13 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
       if (metaReviewSubjectOf(deps.db, task.id) !== subject) throw new DomainError(`${subject} meta-review verbs are only for a ${subject} meta-review task`);
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
+  registerPrecedentRead(server, deps, run);
+  if (subject === "memory") registerMemoryMetaReviewVerbs(server, deps, run);
+  else registerRoutingMetaReviewVerbs(server, deps, run);
+}
 
+/** Precedent の読み口: 両主題の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
+function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "list_precedents",
     {
@@ -1119,15 +1168,17 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
     },
     async (input) => run((reader, now) => listPrecedents(deps.db, reader, input, now)),
   );
-
-  if (subject === "memory") registerMemoryMetaReviewVerbs(server, deps, run);
-  else registerRoutingMetaReviewVerbs(server, deps, run);
 }
 
-/** 主題 routing の読み口(issue #917 / spec #916 C)。集計はドメイン層(routing-review.ts)。 */
-function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
-  const since_watermark = z.number().int().min(0).optional().describe("An event id; defaults to the previous completed routing meta-review's registration.");
+const since_watermark = z
+  .number()
+  .int()
+  .min(0)
+  .optional()
+  .describe("An event id; defaults to the previous completed routing meta-review's registration (for an Interview, the board's start).");
 
+/** shadow 行と配分の読み口: 主題 routing の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
+function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "list_routing_shadow",
     {
@@ -1157,6 +1208,11 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     },
     async (input) => run((reader) => listAllocations(deps.db, reader.taskId, input)),
   );
+}
+
+/** 主題 routing の読み口(issue #917 / spec #916 C)。集計はドメイン層(routing-review.ts)。 */
+function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
+  registerRoutingReads(server, deps, run);
 
   server.registerTool(
     "list_routing_cells",

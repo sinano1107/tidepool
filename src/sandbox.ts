@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { Task } from "./tasks.js";
+import { runsOnReviewFloor, type Task } from "./tasks.js";
 
 /** The CLI's own settings shape for a worker session (vendor shape, hence
  *  confined to this adapter-side module — ADR 0005). Key names and their
@@ -448,7 +448,7 @@ export interface WorkerSessionSettingsInput {
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
   const { taskType, workspacePath, permittedSkills, allowedDomains, taskTemp, lib64 } = input;
-  const readOnly = taskType === "review";
+  const readOnly = runsOnReviewFloor(taskType);
   return {
     // issue #378: not keyed on the profile — a subagent can smuggle a board
     // verb from either kind of worker, and the floor never depends on data

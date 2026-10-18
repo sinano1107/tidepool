@@ -176,14 +176,15 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
 
 it("Interview の root の空の assignee は Interviewer ポインタに解決され、spawn の解決と pickup 候補の fallback が一致する —— 本番の review は Auditor、名指した root はその agent(ADR 0269 決定2)", () => {
   const db = openDb(":memory:");
-  const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
+  const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
   const register = (fields: object) =>
     registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", ...fields }, new Date(0), ...HUMAN_WEBUI);
-  const root = register({ interview_targets: [target] as never });
-  const named = register({ interview_targets: [target] as never, assignee: "shako" });
+  const interview = { type: "interview", purpose: undefined, completion_criteria: undefined, hypothesis: "h", tier: "standard", interview_targets: [target] };
+  const root = register(interview);
+  const named = register({ ...interview, assignee: "shako" });
   const review = register({});
 
-  const spawned = [root, named, review].map((task) => resolveTaskAgent(db, task, "tako", "fugu", "suzumedai"));
+  const spawned = [root, named, review].map((task) => resolveTaskAgent(task, "tako", "fugu", "suzumedai"));
   expect(spawned).toEqual(["suzumedai", "shako", "fugu"]);
 
   // pickup 側: 解決した名前の quarantine がその task だけを止める
@@ -200,7 +201,7 @@ it("suzumedai 宛ての Behavior は Interview の root の注入に載る —�
   const db = openDb(":memory:");
   const root = registerTask(
     db,
-    { type: "review", title: "write the rubric", purpose: "measure", completion_criteria: "scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never },
+    { type: "interview", title: "write the rubric", hypothesis: "measure", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
     new Date(0),
     ...HUMAN_WEBUI,
   );
@@ -211,6 +212,6 @@ it("suzumedai 宛ての Behavior は Interview の root の注入に載る —�
     new Date(0),
   );
 
-  const agent = resolveTaskAgent(db, root, "tako", "fugu", DEFAULT_INTERVIEWER_NAME);
+  const agent = resolveTaskAgent(root, "tako", "fugu", DEFAULT_INTERVIEWER_NAME);
   expect(buildMemoryInjection(db, root, "tidepool", agent).entries).toEqual([{ id: entry_id, version: entry_id }]);
 });

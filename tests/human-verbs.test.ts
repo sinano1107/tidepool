@@ -100,7 +100,7 @@ it("人間の登録 door は memory_repair を root としても子としても 
       () => NOW,
       "webui",
     );
-    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: "a human can register only work or review tasks" } });
+    expect(result).toEqual({ ok: false, failure: { kind: "invalid", error: "a human can register only work, review or interview tasks" } });
   }
   expect(listBoard(db).map((task) => task.id)).toEqual([parent.id]);
 });

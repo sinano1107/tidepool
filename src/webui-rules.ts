@@ -60,8 +60,10 @@ export function whyReviewFlagIsInert(t: ReviewSubject): string | undefined {
 }
 
 /** tier / priority が意味を持たない理由。持つなら undefined。review task の要求は review_tier だけである
- *  (ADR 0111 追記10)。登録の拒否と #1552 の Edit が同じ関数を呼ぶ。 */
-export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">): string | undefined {
+ *  (ADR 0111 追記10)。Interview の root の tier は測る段で、priority は review と同じく効かない(ADR 0273 決定6)。
+ *  登録の拒否と #1552 の Edit が同じ関数を呼ぶ。 */
+export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">, field: "tier" | "priority" = "priority"): string | undefined {
+  if (t.type === "interview" && field === "priority") return "an Interview root runs at the board's review priority; its tier is the measured tier";
   return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : undefined;
 }
 
@@ -69,7 +71,7 @@ export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">): stri
  *  決定1)ので、組み込みに解決される名前は work / question / memory_repair(ADR 0272 決定4)に取れない。登録・Edit・decompose の門と、WebUI の Assignee
  *  候補の出し分けが同じ関数を呼ぶ(ADR 0235 決定3)。 */
 export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuiltIn: boolean): string | undefined {
-  return type !== "review" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : undefined;
+  return type !== "review" && type !== "interview" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : undefined;
 }
 
 export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;

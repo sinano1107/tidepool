@@ -43,12 +43,12 @@ const breached: Arrange = async () => {
   return { id: (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.id === a).parent_id };
 };
 
-const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
 const POSE = { title: "probe", probe: "write a parser", completion_criteria: "parses", rubric: "tests pass" };
 
 /** 出題前の Interview の root。 */
 const interview: Arrange = async () => {
-  const root = await api(t.baseUrl, "POST", "/api/tasks", { type: "review", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [opus46] });
+  const root = await api(t.baseUrl, "POST", "/api/tasks", { type: "interview", title: "interview", hypothesis: "h", tier: "frontier", interview_targets: [opus46] });
   await t.clock.advance(HOUR);
   return { id: root.json.id };
 };

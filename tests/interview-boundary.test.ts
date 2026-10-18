@@ -43,9 +43,9 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
-const sol = { provider: "openai", model: "gpt-5.6-sol", effort: "high", tier: "standard" };
-const INTERVIEW = { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
+const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
+const sol = { provider: "openai", model: "gpt-5.6-sol", effort: "high" };
+const INTERVIEW = { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "frontier" };
 const CHILD = { title: "probe", purpose: "run the probe", completion_criteria: "the probe's deliverable" };
 const FINDINGS = { outcome: "the parser probe separates the targets" };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
@@ -77,25 +77,59 @@ async function boot({
   return board;
 }
 
-it("登録の扉(WebUI の Register API・管理MCP)は対象の一覧を受け、検査の拒否をそれぞれの失敗に写す", async () => {
-  t = await boot();
-  const refused = await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [{ ...opus46, provider: "acme" }] });
-  expect(refused.status).toBe(400);
-  expect(refused.json.error).toContain('unknown provider "acme"');
+it("登録の扉(WebUI の Register API・管理MCP)は interview を新しい欄で受け、扉の拒否(仮説の空・3欄の重複・測る段より下の root の段・registry に無い実環境・対象の値)をそれぞれの失敗に写す(ADR 0273 決定6・9)", async () => {
+  const workspace = await makeWorkspace("reef");
+  t = await boot({
+    workspace,
+    resolveWorkspace: (name) => {
+      if (name !== null && name !== workspace.name) throw new UnknownWorkspaceError(name);
+      return workspace;
+    },
+  });
+  const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  const fields = { ...INTERVIEW, measured_work: "a config parser", evidence_task_ids: [evidence.id], review_tier: "frontier", interview_targets: [opus46] };
+  const refusals = [
+    [{ ...fields, hypothesis: " " }, "hypothesis"],
+    [{ ...fields, interview_targets: [opus46, { ...opus46 }] }, "appears more than once"],
+    [{ ...fields, tier: "frontier", review_tier: "standard" }, 'review_tier "standard" is below the measured tier "frontier"'],
+    [{ ...fields, workspace: "nowhere" }, "unknown workspace: nowhere"],
+    [{ ...fields, interview_targets: [{ ...opus46, provider: "acme" }] }, 'unknown provider "acme"'],
+  ] as const;
   const client = await managementMcpClient(t.baseUrl);
-  const viaMcp: any = await client.callTool({ name: "register_task", arguments: { ...INTERVIEW, interview_targets: [{ ...opus46, model: "opus" }] } });
-  await client.close();
-  expect(viaMcp.isError).toBe(true);
-  expect(viaMcp.content[0].text).toContain("is a Claude CLI alias");
-  const root = await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] });
-  expect(root.status).toBe(201);
-  const child = await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, parent_id: root.json.id, decompose_reason: "r", interview_targets: [opus46] });
-  expect(child.json.error).toContain("only a root review task (an Interview) carries interview_targets");
+  try {
+    for (const [body, error] of refusals) {
+      const refused = await api(t.baseUrl, "POST", "/api/tasks", body);
+      expect(refused.status).toBe(400);
+      expect(refused.json.error).toContain(error);
+      const viaMcp: any = await client.callTool({ name: "register_task", arguments: body });
+      expect(viaMcp.isError).toBe(true);
+      expect(JSON.parse(viaMcp.content[0].text).error).toContain(error);
+    }
+    const root = await api(t.baseUrl, "POST", "/api/tasks", fields);
+    expect(root.status).toBe(201);
+    expect(root.json).toMatchObject({ type: "interview", title: INTERVIEW.title, tier: "frontier", review_tier: "frontier" });
+    const viaMcp: any = await client.callTool({ name: "register_task", arguments: fields });
+    expect(viaMcp.isError).toBeFalsy();
+  } finally {
+    await client.close();
+  }
+  const child = await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, parent_id: evidence.id, decompose_reason: "r", interview_targets: [opus46] });
+  expect(child.json.error).toContain("only an Interview (type interview) carries interview_targets");
+});
+
+it("worker の MCP からは interview を登録できない —— 分解の子は type も Interview の欄も持たず、名指しても work の子になる(ADR 0273 決定2 / ADR 0021)", async () => {
+  t = await boot();
+  const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  const child = { ...CHILD, type: "interview", hypothesis: "h", tier: "frontier", interview_targets: [opus46] };
+  expect((await callAsTask(t, work.id, "decompose", { reason: "measure", children: [child] })).isError).toBeFalsy();
+  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+  expect(board.filter((task: any) => task.parent_id === work.id).map((task: any) => task.type)).toEqual(["work"]);
+  expect(board.map((task: any) => task.type)).not.toContain("interview");
 });
 
 it("既定 agent が走らせられない対象(entry に無い Provider・導出できない advisor)は、登録の扉(Register API・管理MCP)と出題が名指して拒み、出題の拒否は escalate を指す(ADR 0253 決定3)", async () => {
   t = await boot();
-  const ghost = { provider: "anthropic", model: "claude-ghost-1-0", effort: "high", tier: "frontier" };
+  const ghost = { provider: "anthropic", model: "claude-ghost-1-0", effort: "high" };
   for (const target of [sol, ghost]) {
     const refused = await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, target] });
     expect(refused.status).toBe(400);
@@ -119,29 +153,84 @@ it("既定 agent が走らせられない対象(entry に無い Provider・導�
   expect((await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.parent_id === root.id)).toEqual([]);
 });
 
-it("worker MCP の tool 一覧は taskVerbSwap に従う —— Interview の root は分解の verb も complete_task も持たず、出題前は pose_probe を、出題済みは complete_interview と report_broken_probe を持つ。受験者は分解の verb と記憶を書く verb を持たず、普通の work は分解の verb を持ち、受験者と普通の work はどの差し替えの verb も持たない(ADR 0253 決定4・5 / ADR 0251 決定1・2 / ADR 0268 決定2)", async () => {
+/** その task の worker MCP の tools/list の名前。 */
+async function tools(taskId: string) {
+  const client = await mcpClient(t.mcpBaseUrl, taskId);
+  try {
+    return (await client.listTools()).tools.map((tool) => tool.name);
+  } finally {
+    await client.close();
+  }
+}
+
+/** interview の root の verb の一覧(ADR 0273 決定2・9)。 */
+const ROOT_VERBS = [
+  "get_current_task", "pose_probe", "report_broken_probe", "complete_interview", "escalate", "log_decision",
+  "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory",
+  "list_routing_shadow", "list_allocations", "list_precedents",
+];
+
+it("worker MCP の tool 一覧は type で決まる —— interview の root は出題の前後で同じ一覧を持ち、根拠があれば根拠の history の読み口を足す。受験者は分解の verb と記憶を書く verb を持たず、普通の work はどの Interview の verb も持たない(ADR 0273 決定2・9 / ADR 0268 決定2)", async () => {
   t = await boot();
-  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
-  const tools = async (taskId: string) => {
-    const client = await mcpClient(t.mcpBaseUrl, taskId);
-    try {
-      return (await client.listTools()).tools.map((tool) => tool.name);
-    } finally {
-      await client.close();
-    }
-  };
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const withEvidence = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [work.id], interview_targets: [opus46] })).json;
   const ordinary = await tools(work.id);
   expect(ordinary).toEqual(expect.arrayContaining(["decompose", "redecompose", "complete_task"]));
-  for (const verb of ["pose_probe", "complete_interview", "report_broken_probe", "score_interview"]) expect(ordinary).not.toContain(verb);
-  const unsplit = ordinary.filter((name) => name !== "decompose" && name !== "redecompose");
-  const rootVerbs = unsplit.filter((name) => name !== "complete_task");
-  expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "pose_probe"].sort());
+  for (const verb of [...ROOT_VERBS.filter((verb) => !ordinary.includes(verb)), "read_evidence_history"]) expect(ordinary).not.toContain(verb);
+  expect((await tools(root.id)).sort()).toEqual([...ROOT_VERBS].sort());
+  expect((await tools(withEvidence.id)).sort()).toEqual([...ROOT_VERBS, "read_evidence_history"].sort());
   // 出題の前に対象の一覧を読める(#1924 User Story 3)
+  await runNow(t, root.id);
   expect(JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text).interview_targets).toEqual([opus46]);
   const [childId] = await pose(root.id);
-  expect((await tools(root.id)).sort()).toEqual([...rootVerbs, "complete_interview", "report_broken_probe"].sort());
+  expect((await tools(root.id)).sort()).toEqual([...ROOT_VERBS].sort());
+  const unsplit = ordinary.filter((name) => name !== "decompose" && name !== "redecompose");
   expect(await tools(childId)).toEqual(unsplit.filter((name) => name !== "record_knowledge" && name !== "define_memory_branch"));
+});
+
+it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインと許可コマンドを構造で載せる(ADR 0273 決定9)", async () => {
+  const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"], review_allowed_commands: ["npm test"] };
+  t = await boot({ workspace });
+  const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, measured_work: "a config parser", evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+  const { interview } = JSON.parse((await callAsTask(t, root.id, "get_current_task", {})).content[0].text);
+  expect(interview).toEqual({
+    hypothesis: INTERVIEW.hypothesis,
+    measured_work: "a config parser",
+    evidence_task_ids: [evidence.id],
+    measured_tier: { name: "frontier", description: expect.any(String) },
+    allowed_domains: ["registry.npmjs.org"],
+    allowed_commands: ["npm test"],
+  });
+});
+
+it("根拠の history の読み口は根拠の task の判断・完了の handoff・配分評価を history の行で返し、根拠でない task は拒む(ADR 0273 決定9)", async () => {
+  t = await boot();
+  const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  const other = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  await runNow(t, evidence.id);
+  await callAsTask(t, evidence.id, "log_decision", { line: "chose a hand-written lexer" });
+  commitWork(workspacePath, "lexer.txt", "lexer\n");
+  await callAsTask(t, evidence.id, "complete_task", { handoff: FULL_HANDOFF });
+  const allocation = { kind: "allocation_reviewed", review_task_id: other.id, worker_spawned_event_id: 1, judge: { provider: "anthropic", model: "claude-opus-4-6", effort: "high" }, allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } as const;
+  appendEvent(t.db, { taskId: evidence.id, workerId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+
+  const read: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: evidence.id });
+  expect(read.isError).toBeFalsy();
+  expect(JSON.parse(read.content[0].text).history).toEqual([
+    { decision: "chose a hand-written lexer", children: [] },
+    { completion: FULL_HANDOFF.outcome, handoff_doc: expect.stringContaining(FULL_HANDOFF.outcome) },
+    // 完了時レビュー(付帯子)は history の行のまま
+    { child_outside_the_decomposition: expect.objectContaining({ title: `review: ${CHILD.title}` }) },
+    { allocation_review: { allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } },
+  ]);
+  const refused: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: other.id });
+  expect(refused.isError).toBe(true);
+  expect(refused.content[0].text).toContain(`${other.id} is not an evidence task of this Interview`);
 });
 
 it("出題の event は、出題の verb が呼ばれた checkout の root の分岐元を持つ(ADR 0263 追記4)", async () => {
@@ -269,7 +358,7 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
-  const row = { setting: "row", row: { ...opus46, price_in: 1, price_out: 5 } };
+  const row = { setting: "row", row: { ...opus46, tier: "frontier", price_in: 1, price_out: 5 } };
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", row)).status).toBe(200);
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, tier: "frontier" })).json;
   await t.clock.advance(HOUR);
@@ -326,8 +415,8 @@ it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新�
   expect(JSON.parse(viaMcp.content[0].text).id).not.toBe(viaApi.json.id);
 });
 
-const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
-const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
+const sonnet55 = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
+const haiku45 = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
 const SWEEP_POSE = { ...POSE, rubric: "rubric-mark-7f3: the parser rejects a bad sample" };
 const SIBLING_ANSWER = "sibling-answer-mark-91c";
 const ROOT_MARK = "root-mark-3e9";
@@ -377,10 +466,10 @@ async function lastExaminee() {
   t = await boot({ watchdog: { timeLimits: {}, grace: HOUR } });
   const root = (
     await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "review",
+      type: "interview",
       title: `Interview the parser targets ${ROOT_MARK}`,
-      purpose: `Interview which target writes the parser ${ROOT_MARK}`,
-      completion_criteria: "every target scored",
+      hypothesis: `Interview which target writes the parser ${ROOT_MARK}`,
+      tier: "standard",
       interview_targets: [opus46, sonnet55, haiku45],
     })
   ).json;

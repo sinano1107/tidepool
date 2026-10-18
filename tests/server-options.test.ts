@@ -233,7 +233,7 @@ it("組み立てられたオプションは watchdog を持つ(#172)", async () 
 // 量子化される — WATCHDOG_TICK が 60秒なので、それ未満の差は tick に丸められる。
 it("時間リミットは work=90分 / review=45分 / memory_repair=90分(work と同じ、ADR 0272 決定4)、猶予は 1 tick(#172)", () => {
   expect(WATCHDOG).toEqual({
-    timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000 },
+    timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000, interview: 45 * 60_000 },
     grace: 60_000,
   });
 });

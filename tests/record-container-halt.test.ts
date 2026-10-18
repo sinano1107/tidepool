@@ -20,8 +20,8 @@ import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
-const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
+const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
 
 /** 答案を持って決着した受験者1人と、これから拾われる受験者1人。器の dir は消してある。 */
 async function brokenContainer(name: string) {
@@ -29,7 +29,7 @@ async function brokenContainer(name: string) {
   const recordDir = join(await tempDir(`tidepool-${name}-records-`), "worker-logs");
   const db = openDb(":memory:");
   const clock = new FakeClock();
-  const root = registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, clock.now(), ...HUMAN_WEBUI);
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, clock.now(), ...HUMAN_WEBUI);
   const [done, picked] = poseProbe(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(workspace.path, "rev-parse", "main")) as [Task, Task];
   git(workspace.path, "checkout", "-b", `task/${done.id}`, "main");
   commitWork(workspace.path, "answer.txt", "an answer\n");

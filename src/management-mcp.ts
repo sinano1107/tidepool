@@ -985,7 +985,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "Retry a posed, unsettled Interview root: cancel it as cancel_task does (its unsettled examinees and their questions too), then register " +
-        "a new Interview with the same targets (minus those dropped as not measured), title, purpose, criteria, workspace and review tier, " +
+        "a new Interview with the same targets (minus those dropped as not measured), title, hypothesis, measured work, evidence tasks, tier, review tier, workspace and assignee, " +
         `whose root sees the old root, its probe and rubric, and your comment. The task returned is the new root. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: { task_id: z.string(), comment: requiredTextSchema.optional() },
     },
@@ -1109,10 +1109,15 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   );
   // ADR 0111 追記10: review task の要求は review_tier だけ
   const WORK_TASKS_ONLY = "For work tasks only: refused on a review task, which takes review_tier instead.";
+  const INTERVIEW_ONLY = "Interview (type interview) only.";
   server.registerTool(
     "register_task",
     {
-      description: `Register a human work or review task, optionally backed by a GitHub issue. ${TASK_ACK_DESCRIPTION}`,
+      description:
+        "Register a human work or review task, optionally backed by a GitHub issue, or an Interview (type interview): a root that measures " +
+        "each target without staking production work on it. An Interview takes title, hypothesis, tier (the tier it measures) and " +
+        "interview_targets, and optionally measured_work, evidence_task_ids, review_tier, workspace (the real environment its root reads) " +
+        `and assignee (the board's Interviewer when omitted); it takes no purpose or completion_criteria. ${TASK_ACK_DESCRIPTION}`,
       inputSchema: {
         type: z.string(),
         title: z.string().optional(),
@@ -1127,7 +1132,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
-        tier: z.string().optional().describe(`${tierDescriptions.tier}\n${WORK_TASKS_ONLY}`),
+        tier: z.string().optional().describe(`${tierDescriptions.tier}\n${WORK_TASKS_ONLY} On an Interview, required: the tier it measures.`),
         review_by: z.array(requiredTextSchema).optional()
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
@@ -1137,12 +1142,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           .array(interviewTargetSchema)
           .optional()
           .describe(
-            "Root review tasks only: makes the review an Interview, which measures each target without staking production work on it. " +
-              "A target is the provider, model, effort and tier it is measured at; it need not be an execution-setting row, and effort " +
-              "null means the model takes no effort. Targets are not duplicated: two targets equal on all four fields are refused. " +
-              "The Interview's agent poses one probe and the board runs it as exactly one child per target, as the default agent; " +
+            `${INTERVIEW_ONLY} A target is the provider, model and effort measured at the Interview's tier; it need not be an execution-setting row, and effort ` +
+              "null means the model takes no effort. Targets are not duplicated: two targets equal on all three fields are refused. " +
+              "The Interview's agent poses one probe and the board runs it as exactly one answer task per target, as the default agent; " +
               "a target the default agent cannot run is refused by name.",
           ),
+        hypothesis: z.string().optional().describe(`${INTERVIEW_ONLY} Required: what is suspected and what would settle it.`),
+        measured_work: z.string().optional().describe(`${INTERVIEW_ONLY} The kind of work in the real environment the probe should reproduce.`),
+        evidence_task_ids: z.array(z.string()).optional().describe(`${INTERVIEW_ONLY} Ids of the tasks whose history the case rests on; the root reads them.`),
       },
     },
     async (input) => {

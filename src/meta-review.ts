@@ -158,9 +158,12 @@ function lastDoneWatermark(db: Db, subject: MetaReviewSubject | null, excludeTas
   )?.watermark ?? 0;
 }
 
-/** 読み手の task より前の、同主題で完了した最新の登録の watermark(読み口の既定、無ければ 0)。 */
-export const previousMetaReviewWatermark = (db: Db, readerTaskId: string): number =>
-  lastDoneWatermark(db, metaReviewSubjectOf(db, readerTaskId), readerTaskId);
+/** 読み手の task より前の、同主題で完了した最新の登録の watermark(読み口の既定、無ければ 0)。meta-review でない読み手
+ *  (interview の root、ADR 0273 決定2)は盤面の始まりから。 */
+export const previousMetaReviewWatermark = (db: Db, readerTaskId: string): number => {
+  const subject = metaReviewSubjectOf(db, readerTaskId);
+  return subject === null ? 0 : lastDoneWatermark(db, subject, readerTaskId);
+};
 
 /** 材料の窓 `(after, upTo]`。upTo 省略 = 上限なし(due の判定と verb の既定)。 */
 export type MetaReviewWindow = { after: number; upTo?: number };

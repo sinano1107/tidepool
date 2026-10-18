@@ -150,7 +150,7 @@ function pickedSetting(
   const loaded = loadedRegistries.get(key) ?? loadRegistry(registry.dir, registry.mode);
   loadedRegistries.set(key, loaded);
   const { agents } = loaded;
-  return executionSettingsFor(db, (agents[resolveTaskAgent(db, task, agent, auditorName, DEFAULT_INTERVIEWER_NAME)] ?? agents[agent])!, task)[0]!;
+  return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName, DEFAULT_INTERVIEWER_NAME)] ?? agents[agent])!, task)[0]!;
 }
 
 /** The definition_version a spawn of built-in `name` records today: its body's content hash (ADR 0270 決定1). */
@@ -830,8 +830,8 @@ describe("ClaudeCodeWorker", () => {
 
   it("Interview の pin の子の system prompt には、分けない doctrine が載る(ADR 0245 決定2)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
-    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-    const root = registerTask(db, { type: "review", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+    const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     const [child] = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
@@ -842,8 +842,8 @@ describe("ClaudeCodeWorker", () => {
 
   it("出題前の Interview の root の system prompt には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
-    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-    const root = registerTask(db, { type: "review", assignee: "deckhand", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+    const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
@@ -853,8 +853,8 @@ describe("ClaudeCodeWorker", () => {
 
   it("出題済みの Interview の root の system prompt には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
-    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-    const root = registerTask(db, { type: "review", assignee: "deckhand", title: "interview", purpose: "p", completion_criteria: "c", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
+    const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+    const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(root.id);
     worker.start(root, setting(root));

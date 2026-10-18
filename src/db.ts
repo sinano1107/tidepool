@@ -43,7 +43,7 @@ export function openDb(path: string): Db {
 
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
-      type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review', 'memory_repair')),
+      type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review', 'memory_repair', 'interview')),
       -- 'blocked' is not a stored status: it is derived from unfinished children
       status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,
@@ -510,15 +510,21 @@ export function openDb(path: string): Db {
     -- candidates: 除外を当てた後の候補の行数 —— 1 なら推薦は必ず表と一致する(ADR 0181 決定5)。
     -- event_watermark: 書いた時点の events の最大 id。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
     -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
-    -- Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2・3): root review が持つ (provider, model, effort, tier) の一覧。
-    -- 表の行でなくてよく、価格を持たない。effort の NULL は「無い」という値(ADR 0218 決定5)。段は id で指す(ADR 0200 決定2)。
+    -- Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2・3 / ADR 0273 決定6): interview root が持つ (provider, model, effort) の一覧。
+    -- 表の行でなくてよく、価格を持たない。effort の NULL は「無い」という値(ADR 0218 決定5)。段は root の tier_id(測る段)。
     CREATE TABLE IF NOT EXISTS interview_targets (
       id       INTEGER PRIMARY KEY,
       task_id  TEXT NOT NULL REFERENCES tasks(id),
       provider TEXT NOT NULL,
       model    TEXT NOT NULL,
-      effort   TEXT,
-      tier_id  INTEGER NOT NULL REFERENCES tiers(id)
+      effort   TEXT
+    );
+    -- Interview の登録の欄(ADR 0273 決定9): 仮説(必須)・測る仕事(任意)・根拠の task の id の JSON 配列。root の envelope が構造で読む。
+    CREATE TABLE IF NOT EXISTS interviews (
+      task_id       TEXT PRIMARY KEY REFERENCES tasks(id),
+      hypothesis    TEXT NOT NULL CHECK (hypothesis <> ''),
+      measured_work TEXT,
+      evidence      TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS learner_shadow (

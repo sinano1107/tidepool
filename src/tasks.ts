@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -53,7 +53,11 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
-export type TaskType = "work" | "question" | "review" | "memory_repair";
+export type TaskType = "work" | "question" | "review" | "memory_repair" | "interview";
+
+/** review の床(読むだけ + task temp、ADR 0013)で走る type。
+ *  ponytail: interview の root は面接室の床(#2192 / ADR 0273 決定2)が立つまで review の床で走る —— そこで interview 自身の床に分ける。 */
+export const runsOnReviewFloor = (type: TaskType): boolean => type === "review" || type === "interview";
 
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
@@ -421,19 +425,22 @@ export interface RegisterTaskInput extends Partial<TaskContent> {
    *  type here would only move that statement into each door's zod schema. */
   tier?: string;
   priority?: string;
-  /** Interview の対象の一覧(ADR 0199 決定3): root review だけが持つ。人間の登録の扉が渡す。 */
+  /** Interview の対象の一覧(ADR 0199 決定3): interview の root だけが持つ。人間の登録の扉が渡す。 */
   interview_targets?: InterviewTarget[];
+  /** Interview の登録の欄(ADR 0273 決定9): 仮説(必須)・測る仕事・根拠の task の id。purpose と完了基準は盤面がここから組む。 */
+  hypothesis?: string;
+  measured_work?: string;
+  evidence_task_ids?: string[];
   /** 受験者の pin(対象の行の id)。出題が渡す(ADR 0253 決定1)。 */
   interview_target_id?: number;
 }
 
-/** Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2): (provider, model, effort, tier)。表の行でなくてよく、advisor は
- *  名指さない。effort の null は「無い」という値(ADR 0218 決定5)。名前で喋る形で、盤面は段を id で持つ。 */
+/** Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2 / ADR 0273 決定6): (provider, model, effort)。表の行でなくてよく、
+ *  advisor は名指さない。effort の null は「無い」という値(ADR 0218 決定5)。段は root の tier(測る段)。 */
 export interface InterviewTarget {
   provider: string;
   model: string;
   effort: string | null;
-  tier: Tier;
 }
 
 /** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
@@ -443,16 +450,28 @@ function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "
   }
 }
 
-/** 対象を登録する扉の検査(ADR 0199 決定3): 行を書く扉と同じ述語 —— 既知の Provider、anthropic の alias の拒否
- *  (ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙(ADR 0216 / 0218)、盤面の段。4欄一致の対象は
- *  2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで比べる。 */
-export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets">): void {
-  if (input.interview_targets === undefined) return;
-  if (input.type !== "review" || input.parent_id !== undefined) throw new DomainError("only a root review task (an Interview) carries interview_targets");
-  if (input.interview_targets.length === 0) throw new DomainError("an Interview names at least one target");
+/** Interview の登録の検査(ADR 0199 決定3 / ADR 0273 決定6・9): 対象の一覧は interview の root だけが持ち、1つ以上。対象は行を書く扉と
+ *  同じ述語 —— 既知の Provider、anthropic の alias の拒否(ADR 0182 決定1)、(provider, model, effort) ごとの effort の語彙
+ *  (ADR 0216 / 0218)。3欄一致の対象は2つ置けない(ADR 0249 決定2)。UNIQUE 制約では effort の null 同士が別の値になるので、ここで
+ *  比べる。root は仮説と測る段を持ち、名指した root の段は測る段以上、根拠は盤面の task。 */
+export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "interview_targets" | "hypothesis" | "measured_work" | "evidence_task_ids" | "tier" | "review_tier">): void {
+  if (input.type !== "interview") {
+    if ([input.interview_targets, input.hypothesis, input.measured_work, input.evidence_task_ids].some((field) => field !== undefined)) {
+      throw new DomainError("only an Interview (type interview) carries interview_targets, hypothesis, measured_work and evidence_task_ids");
+    }
+    return;
+  }
+  if (input.parent_id !== undefined) throw new DomainError("an Interview is a root task");
+  if (!input.interview_targets?.length) throw new DomainError("an Interview names at least one target");
+  if (whyBlank(input.hypothesis ?? "")) throw new DomainError("an Interview requires a hypothesis");
+  if (input.tier === undefined) throw new DomainError("an Interview requires the tier it measures");
+  if (input.review_tier !== undefined && tierPosition(db, input.review_tier) < tierPosition(db, input.tier)) {
+    throw new DomainError(`review_tier "${input.review_tier}" is below the measured tier "${input.tier}": an Interview's root runs at or above the tier it measures`);
+  }
+  for (const id of input.evidence_task_ids ?? []) if (!getTask(db, id)) throw new DomainError(`unknown evidence task: ${id}`);
   const seen = new Set<string>();
-  for (const { provider, model, effort, tier } of input.interview_targets) {
-    const target = JSON.stringify({ provider, model, effort, tier });
+  for (const { provider, model, effort } of input.interview_targets) {
+    const target = JSON.stringify({ provider, model, effort });
     if (seen.has(target)) throw new DomainError(`target ${target} appears more than once: an Interview's targets are not duplicated`);
     seen.add(target);
     if (!(PROVIDER_VALUES as readonly string[]).includes(provider)) throw new DomainError(`unknown provider "${provider}" — one of ${PROVIDER_VALUES.join(", ")}`);
@@ -461,32 +480,86 @@ export function assertInterviewTargets(db: Db, input: Pick<RegisterTaskInput, "t
     }
     const effortProblem = whyInvalidEffort(provider, model, effort);
     if (effortProblem) throw new DomainError(effortProblem);
-    assertKnownTier(db, "tier", tier);
   }
 }
 
+/** 生きている段の位置(下が小さい)。名前は検査済み。 */
+const tierPosition = (db: Db, name: Tier) => db.prepare("SELECT position FROM tiers WHERE name = ? AND position IS NOT NULL").pluck().get(name) as number;
+
+/** Interview の root の purpose と完了基準(ADR 0273 決定9): 人間は書かず、汎用の読み手のために盤面が3欄から組む。 */
+function interviewContent(input: Pick<RegisterTaskInput, "hypothesis" | "measured_work" | "evidence_task_ids">) {
+  const lines = [
+    `Interview hypothesis: ${input.hypothesis}`,
+    ...(input.measured_work ? [`Work to measure: ${input.measured_work}`] : []),
+    ...(input.evidence_task_ids?.length ? [`Evidence tasks: ${input.evidence_task_ids.join(", ")}`] : []),
+  ];
+  return {
+    purpose: lines.join("\n"),
+    completion_criteria: "Every done answer is scored against the posed rubric with complete_interview, or the probe is reported broken.",
+  };
+}
+
+/** Interview の登録の欄(ADR 0273 決定9)。interview の root でなければ null。 */
+export function interviewFields(db: Db, taskId: string): { hypothesis: string; measured_work: string | null; evidence_task_ids: string[] } | null {
+  const row = db.prepare("SELECT hypothesis, measured_work, evidence FROM interviews WHERE task_id = ?").get(taskId) as
+    | { hypothesis: string; measured_work: string | null; evidence: string }
+    | undefined;
+  return row ? { hypothesis: row.hypothesis, measured_work: row.measured_work, evidence_task_ids: JSON.parse(row.evidence) } : null;
+}
+
 export interface TaskVerbSwap {
-  withheld: readonly ("decompose" | "redecompose" | "complete_task" | "record_knowledge" | "define_memory_branch")[];
-  added: readonly ("pose_probe" | "complete_interview" | "report_broken_probe")[];
+  withheld: readonly (
+    | "decompose"
+    | "redecompose"
+    | "complete_task"
+    | "record_knowledge"
+    | "define_memory_branch"
+    | "list_agents"
+    | "declare_premise_breach"
+    | "continue_decomposition"
+    | "propose_from_objection"
+  )[];
+  added: readonly (
+    | "pose_probe"
+    | "complete_interview"
+    | "report_broken_probe"
+    | "list_routing_shadow"
+    | "list_allocations"
+    | "list_precedents"
+    | "read_evidence_history"
+  )[];
+  /** interview の root が出題済みか —— doctrine だけが読む(出題済みの root は1 session で完了せよと言う、ADR 0247 決定3)。 */
+  posed?: boolean;
 }
 
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
- *  Interview の木では分解の verb を両方伏せ(ADR 0245 決定1 / ADR 0253 決定5)、受験者は記憶を書く verb も伏せ(ADR 0268 決定2)、
- *  root は complete_task も伏せて、出題前は出題の verb を、
- *  出題済みは採点完了の verb と、報告したことが無ければ probe の破綻の報告の verb を足す(ADR 0253 決定4 / ADR 0251 決定1・2)。
+ *  受験者は分解の verb と記憶を書く verb を伏せる(ADR 0245 決定1 / ADR 0268 決定2)。interview の root の一覧は type で決まり(ADR 0273
+ *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
+ *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは今は RCA だけ)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
-  if (getTask(db, taskId)?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
-  if (interviewTargets(db, taskId) !== null) {
-    const withheld = ["decompose", "redecompose", "complete_task"] as const;
-    if (interviewProbe(db, taskId) === null) return { withheld, added: ["pose_probe"] };
-    return { withheld, added: brokenProbeReported(db, taskId) ? ["complete_interview"] : ["complete_interview", "report_broken_probe"] };
+  const task = getTask(db, taskId);
+  if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
+  if (task?.type === "interview") {
+    return {
+      withheld: ["decompose", "redecompose", "complete_task", "list_agents", "declare_premise_breach", "continue_decomposition", "propose_from_objection"],
+      added: [
+        "pose_probe",
+        "complete_interview",
+        "report_broken_probe",
+        "list_routing_shadow",
+        "list_allocations",
+        "list_precedents",
+        ...(interviewFields(db, taskId)?.evidence_task_ids.length ? (["read_evidence_history"] as const) : []),
+      ],
+      posed: interviewProbe(db, taskId) !== null,
+    };
   }
   if (isArtifactDiscarded(db, taskId)) return { withheld: ["decompose", "redecompose"], added: [] };
   return { withheld: [], added: [] };
 }
 
-/** Interview の root の対象の一覧(段は名前)。対象を持たない task は null。 */
+/** Interview の root の対象の一覧。対象を持たない task は null。 */
 export function interviewTargets(db: Db, taskId: string): InterviewTarget[] | null {
   const rows = targetRows(db, taskId).map(({ id: _, ...target }) => target);
   return rows.length ? rows : null;
@@ -495,16 +568,16 @@ export function interviewTargets(db: Db, taskId: string): InterviewTarget[] | nu
 /** 対象の行(一覧の順)。出題と走れるかの検査は受験者が持つ行の id を要る。 */
 function targetRows(db: Db, taskId: string): Array<InterviewTarget & { id: number }> {
   return db
-    .prepare("SELECT id, provider, model, effort, (SELECT name FROM tiers WHERE id = tier_id) AS tier FROM interview_targets WHERE task_id = ? ORDER BY id")
+    .prepare("SELECT id, provider, model, effort FROM interview_targets WHERE task_id = ? ORDER BY id")
     .all(taskId) as Array<InterviewTarget & { id: number }>;
 }
 
 /** Interview の対象の (provider, model, effort)。 */
 export type TargetKey = { provider: Provider; model: string; effort: string | null };
 
-/** 4欄一致の行が表に無い対象(ADR 0199 決定2)。 */
+/** 3欄 + root の測る段が一致する行が表に無い対象(ADR 0199 決定2 / ADR 0273 決定6)。 */
 const UNROWED_TARGET_SQL = `NOT EXISTS (SELECT 1 FROM execution_settings e
-  WHERE e.provider = it.provider AND e.model = it.model AND e.effort IS it.effort AND e.tier_id = it.tier_id)`;
+  WHERE e.provider = it.provider AND e.model = it.model AND e.effort IS it.effort AND e.tier_id = (SELECT tier_id FROM tasks WHERE id = it.task_id))`;
 
 /** Interview の木の task の id(どの Interview でも): root(対象の一覧を持つ)と受験者。`IN (...)` に入れる SELECT。 */
 export const INTERVIEW_TREE_SQL = "SELECT task_id FROM interview_targets UNION SELECT id FROM tasks WHERE interview_target_id IS NOT NULL";
@@ -623,7 +696,7 @@ function assertExecutionRequest(
 ): void {
   // review task の要求は review_tier だけ(ADR 0111 追記10)
   for (const field of ["tier", "priority"] as const) {
-    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input);
+    const reason = input[field] !== undefined && whyExecutionRequestIsInert(input, field);
     if (reason) throw new DomainError(`${field} would have no effect — ${reason}`);
   }
   // 段は盤面の一覧(ADR 0200 決定2): 一覧に無い名前は、いまの一覧を添えて拒む
@@ -855,7 +928,7 @@ function assertReviewFieldsTakeEffect(
   };
   if (state.review_flag) refuse("review_flag", whyReviewFlagIsInert(state));
   if (reviewBy?.length) refuse("review_by", whyNoCompletionReview(state));
-  if (reviewTier !== undefined && state.type !== "review") refuse("review_tier", whyNoCompletionReview(state));
+  if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyNoCompletionReview(state));
 }
 
 /** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
@@ -876,8 +949,14 @@ export function registerTask(
   origin: EventOrigin,
 ): Task {
   input = { ...input };
-  for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority"] as const) {
+  for (const field of ["title", "purpose", "completion_criteria", "tier", "review_tier", "priority", "hypothesis", "measured_work"] as const) {
     if (input[field] !== undefined) input[field] = normalizeText(input[field]);
+  }
+  if (input.type === "interview") {
+    if (input.purpose !== undefined || input.completion_criteria !== undefined) {
+      throw new DomainError("an Interview takes no purpose or completion_criteria: the board composes them from its hypothesis, measured_work and evidence_task_ids");
+    }
+    input = { ...input, ...interviewContent(input) };
   }
   if (input.review_by) input.review_by = input.review_by.map(normalizeText);
   if (input.question) {
@@ -976,10 +1055,13 @@ export function registerTask(
         task.question_pending_child && JSON.stringify(task.question_pending_child),
       question_proposal: task.question_proposal && JSON.stringify(task.question_proposal),
     });
-    for (const target of input.interview_targets ?? []) {
-      db.prepare(`INSERT INTO interview_targets (task_id, provider, model, effort, tier_id) VALUES (?, ?, ?, ?, ${liveTierId("?")})`).run(
-        task.id, target.provider, target.model, target.effort, target.tier,
+    if (input.type === "interview") {
+      db.prepare("INSERT INTO interviews (task_id, hypothesis, measured_work, evidence) VALUES (?, ?, ?, ?)").run(
+        task.id, input.hypothesis, input.measured_work ?? null, JSON.stringify(input.evidence_task_ids ?? []),
       );
+    }
+    for (const target of input.interview_targets ?? []) {
+      db.prepare("INSERT INTO interview_targets (task_id, provider, model, effort) VALUES (?, ?, ?, ?)").run(task.id, target.provider, target.model, target.effort);
     }
     appendEvent(db, {
       taskId: task.id,
@@ -1908,13 +1990,16 @@ function retryInterview(
   remedy: string,
 ): Task {
   const { probe, rubric } = interviewProbe(db, previousRoot.id)!;
+  const { hypothesis, measured_work, evidence_task_ids } = interviewFields(db, previousRoot.id)!;
   const root = registerTask(
     db,
     {
       type: previousRoot.type,
       title: previousRoot.title,
-      purpose: previousRoot.purpose,
-      completion_criteria: previousRoot.completion_criteria,
+      hypothesis,
+      ...(measured_work !== null && { measured_work }),
+      ...(evidence_task_ids.length && { evidence_task_ids }),
+      tier: previousRoot.tier ?? undefined,
       workspace: previousRoot.workspace ?? undefined,
       review_tier: previousRoot.review_tier ?? undefined,
       assignee: previousRoot.assignee ?? undefined,
@@ -2239,7 +2324,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
       },
       at: now,
     });
-    const examinees = targets.map(({ id, tier }) =>
+    const examinees = targets.map(({ id }) =>
       registerTask(
         db,
         {
@@ -2247,7 +2332,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
           title: probe.title,
           purpose: probe.probe,
           completion_criteria: probe.completion_criteria,
-          tier,
+          tier: root.tier ?? undefined,
           workspace: root.workspace ?? undefined,
           interview_target_id: id,
         },
@@ -3219,21 +3304,15 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
  * the Interviewer pointer, ADR 0269 決定2). Questions are answered by a human and have
  * no execution agent; accepting one here would hide a broken execution path. */
 export function resolveTaskAgent(
-  db: Db,
-  task: Pick<Task, "id" | "type" | "assignee">,
+  task: Pick<Task, "type" | "assignee">,
   defaultAgentName: string,
   auditorName: string,
   interviewerName: string,
 ): string {
   if (task.type === "question") throw new Error("question tasks have no execution agent");
   if (task.assignee !== null) return task.assignee;
-  if (task.type !== "review") return defaultAgentName;
-  return db.prepare(`SELECT ${interviewRootSql("?")}`).pluck().get(task.id) ? interviewerName : auditorName;
-}
-
-/** その task が Interview の root(対象の一覧を持つ)か。spawn の解決と SQL の fallback が同じ1本を読む(ADR 0269 決定2)。 */
-function interviewRootSql(taskIdRef: string): string {
-  return `EXISTS (SELECT 1 FROM interview_targets WHERE task_id = ${taskIdRef})`;
+  if (task.type === "interview") return interviewerName;
+  return task.type === "review" ? auditorName : defaultAgentName;
 }
 
 /** The type-aware execution fallback pointer the assignee gates COALESCE an
@@ -3246,7 +3325,7 @@ function interviewRootSql(taskIdRef: string): string {
  *  gate only an explicit assignee" — no separate null-guard needed here. */
 export function typeAwareDefaultAgentSql(table: string): string {
   return `CASE WHEN ${table}.type = 'question' THEN NULL
-               WHEN ${table}.type = 'review' AND ${interviewRootSql(`${table}.id`)} THEN @interviewerName
+               WHEN ${table}.type = 'interview' THEN @interviewerName
                WHEN ${table}.type = 'review' THEN @auditorName
                ELSE @defaultAgentName END`;
 }
@@ -3698,6 +3777,18 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
     previous = decision;
   }
   return out;
+}
+
+/** 根拠の task の history(ADR 0273 決定9): history の行に、完了の行の handoff と配分評価の行を足す。Interview の根拠でない task は拒む。 */
+export function evidenceHistoryRows(db: Db, rootId: string, taskId: string) {
+  const evidence = interviewFields(db, rootId)?.evidence_task_ids ?? [];
+  if (!evidence.includes(taskId)) throw new DomainError(`${taskId} is not an evidence task of this Interview — one of ${evidence.join(", ")}`);
+  const { handoff_doc } = getTask(db, taskId)!;
+  const allocations = listEvents(db, taskId).flatMap(({ id, payload }) =>
+    payload.kind === "allocation_reviewed" ? [{ id, entry: { allocation_review: { allocation: payload.allocation, cause: payload.cause, evidence: payload.evidence } } }] : [],
+  );
+  const rows = taskHistoryRows(db, taskId).map(({ id, decision, entry }) => ({ id, decision, entry: "completion" in entry ? { ...entry, handoff_doc } : entry }));
+  return [...rows, ...allocations].sort((a, b) => a.id - b.id);
 }
 
 /** 1つの task の worker が読む history(event の順)を、decision の子ごとに分けた行の列(ADR 0195: 兄弟の handoff 群が応答予算を超えても続きで読めるように)。

@@ -331,8 +331,8 @@ export async function registerThroughHumanDoor(
   origin: EventOrigin,
 ): Promise<RegisterThroughHumanDoorResult> {
   try {
-    if (input.type !== "work" && input.type !== "review") {
-      throw new DomainError("a human can register only work or review tasks");
+    if (input.type !== "work" && input.type !== "review" && input.type !== "interview") {
+      throw new DomainError("a human can register only work, review or interview tasks");
     }
     const isHumanDecomposeChild = input.parent_id !== undefined && input.type === "work";
     if (isHumanDecomposeChild && input.github_issue_number !== undefined) {

@@ -1157,7 +1157,7 @@ export function createLanding(deps: LandingDeps): Landing {
         task,
         prNumber,
         sha,
-        resolveTaskAgent(deps.db, task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME, deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME),
+        resolveTaskAgent(task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME, deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME),
         deps.clock.now(),
         resolved.profile,
         deps.isProtectedWorkspace?.(workspace.name),

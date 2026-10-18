@@ -4,33 +4,59 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
+import { registerThroughHumanDoor } from "../src/human-verbs.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap } from "../src/tasks.js";
-import { tierIdOf, tierNames } from "../src/tier.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
-import { whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
+import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { UnknownWorkspaceError } from "../src/workspace.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, POSED_HEAD, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
 
-const ROOT = { type: "review" as const, title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
-const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
-const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, tier: "economy" };
-const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
+const ROOT = { type: "interview" as const, title: "interview", hypothesis: "the targets write the parser", tier: "standard" };
+/** Interview でない task の欄。 */
+const PLAIN = { title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
+const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
+const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
+const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
 
-function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: { workspace?: string; review_tier?: string; assignee?: string } = {}) {
+type InterviewFields = { workspace?: string; review_tier?: string; assignee?: string; tier?: string; measured_work?: string; evidence_task_ids?: string[] };
+function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: InterviewFields = {}) {
   return { db, root: registerTask(db, { ...ROOT, ...fields, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
 }
 
-it("Interview の root は対象の一覧を持つ —— 対象は表の行でなくてよく、effort の「無い」も対象の値(ADR 0199 決定1・2 / ADR 0218 決定5)", () => {
+it("Interview の root は type interview で対象の一覧を持つ —— 対象は表の行でなくてよく、effort の「無い」も対象の値で、段は root の tier(ADR 0199 決定1 / ADR 0218 決定5 / ADR 0273 決定2・6)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
+  expect(root).toMatchObject({ type: "interview", tier: "standard" });
   expect(interviewTargets(db, root.id)).toEqual([opusHigh, haikuNull]);
+});
+
+it("盤面は仮説・測る仕事・根拠の task から purpose と完了基準を組み、人間が書いた purpose は拒む(ADR 0273 決定9)", () => {
+  const db = openDb(":memory:");
+  const evidence = registerTask(db, { type: "work", ...PLAIN }, new Date(0), ...HUMAN_WEBUI);
+  const { root } = registerInterview(db, [opusHigh], { measured_work: "a parser for a config format", evidence_task_ids: [evidence.id] });
+  for (const text of [ROOT.hypothesis, "a parser for a config format", evidence.id]) expect(root.purpose).toContain(text);
+  expect(root.completion_criteria).toMatch(/complete_interview/);
+  expect(() => registerTask(db, { ...ROOT, ...PLAIN, interview_targets: [opusHigh] as never }, new Date(0), ...HUMAN_WEBUI)).toThrow(DomainError);
+});
+
+it("登録は仮説の空・測る段の欠け・測る段より下の root の段・知らない根拠の task・対象の無い一覧を拒む —— 測る段以上の root の段は通る(ADR 0273 決定6・9)", () => {
+  expect(() => registerTask(openDb(":memory:"), { ...ROOT, hypothesis: "  ", interview_targets: [opusHigh] as never }, new Date(0), ...HUMAN_WEBUI)).toThrow(/hypothesis/);
+  expect(() => registerTask(openDb(":memory:"), { ...ROOT, tier: undefined, interview_targets: [opusHigh] as never }, new Date(0), ...HUMAN_WEBUI)).toThrow(/tier/);
+  expect(() => registerInterview(undefined, [opusHigh], { review_tier: "economy" })).toThrow(/review_tier "economy" is below the measured tier "standard"/);
+  expect(() => registerInterview(undefined, [opusHigh], { evidence_task_ids: ["no-such-task"] })).toThrow(/no-such-task/);
+  expect(() => registerInterview(undefined, [])).toThrow(/at least one target/);
+  expect(registerInterview(undefined, [opusHigh], { review_tier: "frontier" }).root.review_tier).toBe("frontier");
+  // 対象の一覧は Interview だけが持つ
+  expect(() => registerTask(openDb(":memory:"), { type: "review", ...PLAIN, interview_targets: [opusHigh] as never }, new Date(0), ...HUMAN_WEBUI)).toThrow(DomainError);
 });
 
 it("登録の扉は未知の Provider、anthropic の alias、走らない effort の対象を拒む(ADR 0199 決定3 / ADR 0182 決定1 / ADR 0218 決定4)", () => {
@@ -40,10 +66,51 @@ it("登録の扉は未知の Provider、anthropic の alias、走らない effor
   expect(() => registerInterview(undefined, [{ ...opusHigh, effort: "ultra" }])).toThrow(/effort must be one of/);
 });
 
-it("登録の扉は4欄一致の対象を2つ含む一覧を拒み、effort の null 同士も一致として扱う —— effort だけ違う2つは通る(ADR 0249 決定2 / ADR 0218 決定5)", () => {
+it("登録の扉は3欄一致の対象を2つ含む一覧を拒み、effort の null 同士も一致として扱う —— effort だけ違う2つは通る(ADR 0249 決定2 / ADR 0218 決定5 / ADR 0273 決定6)", () => {
   expect(() => registerInterview(undefined, [haikuNull, opusHigh, { ...haikuNull }])).toThrow(`${JSON.stringify(haikuNull)} appears more than once`);
   const { db, root } = registerInterview(undefined, [opusHigh, { ...opusHigh, effort: "medium" }]);
   expect(interviewTargets(db, root.id)).toEqual([opusHigh, { ...opusHigh, effort: "medium" }]);
+});
+
+it("表の行と一致する対象かは3欄 + root の測る段で決まる —— 同じ3欄でも root の段に行が無ければ表の行でない(ADR 0199 決定2 / ADR 0273 決定6)", () => {
+  // 種の表は claude-opus-5-5 / high を standard に持つ
+  const examineeAt = (tier: string) => {
+    const { db, root } = registerInterview(undefined, [opusHigh], { tier });
+    return { db, examinee: poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD)[0]! };
+  };
+  const rowed = examineeAt("standard");
+  expect(unrowedTarget(rowed.db, rowed.examinee)).toBeUndefined();
+  const unrowed = examineeAt("frontier");
+  expect(unrowedTarget(unrowed.db, unrowed.examinee)).toEqual(opusHigh);
+});
+
+it("空の assignee は Interviewer ポインタに type で解決され、組み込み agent を interview の assignee に名指せる(ADR 0233 追記2 / ADR 0228 追記)", async () => {
+  const { db, root } = registerInterview();
+  expect(resolveTaskAgent(root, "tako", "auditor", "suzumedai")).toBe("suzumedai");
+  const deps = { db, pollNow: () => {}, agentRegistered: () => true, resolvesToBuiltIn: (name: string) => name === "fugu" };
+  const named = await registerThroughHumanDoor(deps, { ...ROOT, assignee: "fugu", interview_targets: [opusHigh] as never }, () => new Date(0), "webui");
+  expect(named).toMatchObject({ ok: true, task: { type: "interview", assignee: "fugu" } });
+  expect(whyAssigneeCannotTake("fugu", "interview", true)).toBeUndefined();
+});
+
+it("人間の扉は registry に無い実環境の Interview を拒む", async () => {
+  const db = openDb(":memory:");
+  const deps = { db, pollNow: () => {}, resolveWorkspace: (name: string | null): never => { throw new UnknownWorkspaceError(name ?? ""); } };
+  const refused = await registerThroughHumanDoor(deps, { ...ROOT, workspace: "nowhere", interview_targets: [opusHigh] as never }, () => new Date(0), "webui");
+  expect(refused).toEqual({ ok: false, failure: { kind: "invalid", error: "unknown workspace: nowhere" } });
+});
+
+it("root の走る段は盤面の判断の段・測る段・root の段の名指しのうち最も上(ADR 0273 決定6 / ADR 0200 決定4)", () => {
+  const tierOf = (judgement: string, fields: InterviewFields) => {
+    const db = openDb(":memory:");
+    applyExecutionSettingsChange(db, { setting: "judgement_tier", value: judgement }, "webui", new Date(0));
+    const { root } = registerInterview(db, [opusHigh], fields);
+    const [setting] = executionSettingsFor(db, { provider: [{ name: "anthropic", advisor: false }], tier: undefined }, getTask(db, root.id)!);
+    return tierNameOf(db, setting!.tier_id);
+  };
+  expect(tierOf("economy", { tier: "standard" })).toBe("standard");
+  expect(tierOf("economy", { tier: "standard", review_tier: "frontier" })).toBe("frontier");
+  expect(tierOf("frontier", { tier: "economy" })).toBe("frontier");
 });
 
 /** 子が走る pin: anthropic の entry を持つ agent の候補の値と段。 */
@@ -64,16 +131,16 @@ it("受験者は分解できない —— agent の decompose も人間の扉も
   expect(listBoard(db)).toHaveLength(before);
 });
 
-it("task ごとの verb の差し替え —— Interview の root は分解の verb と complete_task を伏せ、出題前は出題の verb を、出題済みは採点完了の verb と、報告したことが無ければ報告の verb を足す。受験者は分解の verb と記憶を書く verb を伏せる(ADR 0253 決定4・5 / ADR 0245 決定1 / ADR 0251 決定1 / ADR 0268 決定2)", () => {
+it("受験者は分解の verb と記憶を書く verb を伏せ、root の verb の一覧は出題の前後で変わらない(ADR 0245 決定1 / ADR 0268 決定2 / ADR 0273 決定2。root の一覧そのものは interview-boundary.test.ts の tools/list)", () => {
   const { db, root } = registerInterview();
-  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] });
+  const verbs = () => {
+    const { withheld, added } = taskVerbSwap(db, root.id);
+    return { withheld, added };
+  };
+  const before = verbs();
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
-  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] });
+  expect(verbs()).toEqual(before);
   expect(taskVerbSwap(db, child!.id)).toEqual({ withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] });
-  // 報告したあとの root は報告の verb を失う(ADR 0251 決定2)
-  completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
-  report(db, root);
-  expect(taskVerbSwap(db, root.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview"] });
 });
 
 it("Interview の root は作り直せない —— 出題済みの root の redecompose は拒まれ、受験者は cancel されず何も登録されない(ADR 0245 決定3)", () => {
@@ -147,7 +214,7 @@ it("受験者を失敗 question の abandon で全部 cancel すると、root �
 
 it("Interview でない task は、子を全部 abandon されて起きたあとも decompose で分け直せる", () => {
   const db = openDb(":memory:");
-  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   const [child] = decomposeTaskViaWorker(db, plain, { reason: "r", children: [CHILD] }, "tako", new Date(0));
   answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));
   const [again] = decomposeTaskViaWorker(db, getTask(db, plain.id)!, { reason: "another split", children: [CHILD] }, "tako", new Date(0));
@@ -315,7 +382,7 @@ it("受験者の完了は完了時レビューを立てない —— 規則の�
   const { db, root } = registerInterview();
   const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   completeTask(db, examinee, FULL_HANDOFF, "tako", new Date(0), "worker");
-  expect(listBoard(db).filter((task) => task.type === "review").map(({ id }) => id)).toEqual([root.id]);
+  expect(listBoard(db).filter((task) => task.type === "review")).toEqual([]);
 });
 
 /** 採点の段階の root: 出題して対象ごとの受験者を全部 done にした(答案は FULL_HANDOFF)。 */
@@ -343,7 +410,7 @@ it("probe の破綻の報告は root の agent 名義の question(continue / aba
 it("probe の破綻の報告は Interview でない task・受験者・出題前の root・報告したことのある root で DomainError になり、何も登録しない(ADR 0251 決定1・2)", () => {
   const { db, root, children } = scoringRoot();
   const unposed = registerInterview(db).root;
-  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   report(db, root);
   const before = listBoard(db).length;
   for (const task of [plain, children[0]!, unposed, root]) expect(() => report(db, task)).toThrow(DomainError);
@@ -471,7 +538,7 @@ it("走れない対象を写す root の retry は対象を名指して拒まれ
 it("出題前の root・Interview でない task・受験者・決着済みの root への retry は DomainError で、何も変わらない", () => {
   const { db, root, done } = examineesWithOpenQuestions();
   const unposed = registerInterview(db).root;
-  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   const settled = registerInterview(db).root;
   poseProbe(db, settled, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   cancelTaskDirectly(db, getTask(db, settled.id)!, null, new Date(0), {}, "webui");
@@ -490,8 +557,8 @@ it("出題前の root・Interview でない task・受験者・決着済みの r
 });
 
 it("断られた対象の question が開いたまま root を retry すると、新しい root がその対象を持つので question は開いたままで、決着の記録も無い(ADR 0199 追記)", () => {
-  const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
-  const { db, root } = registerInterview(undefined, [unrowed]);
+  const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
+  const { db, root } = registerInterview(undefined, [unrowed], { tier: "economy" });
   poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
   const question = listBoard(db).find((task) => task.question_quarantine_kind === "interviewTarget")!;
@@ -504,13 +571,13 @@ it("断られた対象の question が開いたまま root を retry すると�
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
 function pinnedChild(target: Record<string, unknown>, ceiling: AdvisorCeiling = "off") {
-  const { db, root } = registerInterview(undefined, [target]);
+  const { db, root } = registerInterview(undefined, [target], { tier: "frontier" });
   applyExecutionSettingsChange(db, { setting: "advisor_ceiling", value: ceiling }, "webui", new Date(0));
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   return { db, child: child! };
 }
 const agent = (advisor: boolean, ...providers: Provider[]) => ({ provider: providers.map((name) => ({ name, advisor })), tier: undefined });
-const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+const opus46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
 
 it("受験者は selector の並びを通らず、表に無い対象の (provider, model, effort) と対象の段の候補だけを持つ —— 出所は interview(ADR 0199 決定2 / ADR 0210 決定4)", () => {
   const { db, child } = pinnedChild(opus46);
@@ -558,7 +625,7 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
   const db = openDb(":memory:");
   const change = (setting: object) => applyExecutionSettingsChange(db, setting as never, "webui", new Date(0));
   change({ setting: "insert_tier", name: "trial", description: "A tier being measured.", position: 0 });
-  const { root } = registerInterview(db, [{ ...opusHigh, tier: "trial" }]);
+  const { root } = registerInterview(db, [opusHigh], { tier: "trial" });
   expect(() => change({ setting: "delete_tier", name: "trial" })).toThrow(`unsettled tasks request it: ${root.id}`);
   cancelTaskDirectly(db, root, null, new Date(0), {}, "webui");
   change({ setting: "delete_tier", name: "trial" });
@@ -569,8 +636,8 @@ it("未決着の Interview の対象が名指す段は消せない —— root �
 function ranChildren(db: Db, root: Task) {
   const targets = interviewTargets(db, root.id)!;
   return poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD).map((child, i) => {
-    const { model, effort, tier } = targets[i]!;
-    const spawned = { ...WORKER_SPAWNED, advisor: null, model, effort, tier_id: tierIdOf(db, tier) };
+    const { model, effort } = targets[i]!;
+    const spawned = { ...WORKER_SPAWNED, advisor: null, model, effort, tier_id: tierIdOf(db, root.tier!) };
     appendEvent(db, { taskId: child.id, workerId: "tako", origin: "board", at: new Date(0), payload: spawned });
     return completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
   });
@@ -650,7 +717,7 @@ it("採点完了は欠け・重複・done でない子・他の root の子・ou
 
 it("採点完了は Interview の root でない task・出題前の root・未決着の子が残る root を拒み、何も入れない(ADR 0253 決定4)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
-  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   const complete = (task: Task, scores: Array<{ child_id: string; outcome: "accepted" }> = []) => () =>
     completeInterview(db, task, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   expect(complete(plain)).toThrow(/only an Interview root/);
@@ -715,8 +782,8 @@ it("出題は判断ログの1件(型つきの欄つき)と、対象ごとの受�
   expect(listExaminees(db, root.id).map((child) => child.id)).toEqual(children.map((child) => child.id));
   expect(children.map((child) => [pinOf(db, child.id)?.model, pinOf(db, child.id)?.effort, child.tier])).toEqual([
     ["claude-opus-5-5", "high", "standard"],
-    ["claude-haiku-4-5", null, "economy"],
-    ["claude-sonnet-5-5", "high", "economy"],
+    ["claude-haiku-4-5", null, "standard"],
+    ["claude-sonnet-5-5", "high", "standard"],
   ]);
   for (const child of children) {
     expect(child).toMatchObject({ type: "work", title: POSE.title, purpose: POSE.probe, completion_criteria: POSE.completion_criteria, assignee: null, workspace: "reef", parent_id: null, based_on_decision: null });
@@ -729,7 +796,7 @@ it("出題は判断ログの1件(型つきの欄つき)と、対象ごとの受�
 it("2度目の出題・Interview でない task・受験者への出題は拒まれ、何も登録されない(ADR 0253 決定1 / ADR 0245 決定3)", () => {
   const { db, root } = registerInterview();
   const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
-  const plain = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   const before = listBoard(db).length;
   expect(() => poseProbe(db, getTask(db, root.id)!, POSE, "auditor", new Date(0), "worker", POSED_HEAD)).toThrow(/already posed/);
   expect(() => poseProbe(db, plain, POSE, "tako", new Date(0), "worker", POSED_HEAD)).toThrow(/only an Interview root poses a probe/);
@@ -779,7 +846,7 @@ function examineeLogBoard() {
   completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
   examineeEntries.push(taskDecisionLog(db, child.id).at(-1)!.id);
   const [rootEntry] = taskDecisionLog(db, root.id);
-  const production = registerTask(db, { ...ROOT, type: "work" }, new Date(0), ...HUMAN_WEBUI);
+  const production = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
   const productionEntry = appendEvent(db, { taskId: production.id, workerId: "tako", origin: "worker", at: new Date(0), payload: { kind: "decision_logged", line: "split the parser" } });
   return { db, root, child, examineeEntries, rootEntry: rootEntry!.id, productionEntry };
 }
@@ -824,7 +891,7 @@ const MEMORY_REPAIR = { type: "memory_repair" as const, title: "memory repair: i
 
 it("memory_repair は Interview の root の子として登録でき、受験者の子としては扉を問わず拒まれる(ADR 0272 決定6 / ADR 0268 決定5)", () => {
   const { db, root } = registerInterview();
-  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
     expect(() => registerTask(db, { ...MEMORY_REPAIR, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
   }
@@ -834,7 +901,7 @@ it("memory_repair は Interview の root の子として登録でき、受験者
 
 it("root の下の memory_repair は root の retry で倒れず todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0272 決定1・6)", () => {
   const { db, root } = registerInterview();
-  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker") as [Task];
+  const [examinee] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   const memoryRepair = registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
 
   const again = retryRoot(db, root, "the probe names the answer");
@@ -847,7 +914,7 @@ it("root の下の memory_repair は root の retry で倒れず todo のまま 
 
 it("開いた memory_repair を持つ root は、最後の受験者を失敗 question の abandon で cancel しても cancel されない —— root 自身の未決着の子に数える(ADR 0272 / ADR 0268 帰結)", () => {
   const { db, root } = registerInterview();
-  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker");
+  const [child] = poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), BOARD_WORKER_ID, "board");
 
   answerQuestionViaWebui(db, failureQuestion(db, child!.id, new Date(0)), ["abandon"], new Date(0));

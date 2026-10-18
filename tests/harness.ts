@@ -854,7 +854,7 @@ export function examineeRootId(db: Db, examineeId: string): string {
 export function interviewPinChild(db: Db, at: Date): Task {
   const interview = registerTask(
     db,
-    { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" }] as never },
+    { type: "interview", title: "interview", hypothesis: "the target writes the parser", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
     at,
     ...HUMAN_WEBUI,
   );

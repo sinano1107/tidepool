@@ -141,6 +141,7 @@ const readCliVersion = (command: string) => async () =>
  *    8時間のうち最大90分の損失に抑える側へ倒す。
  *  - `review` = 45分。読んで判断する仕事で、work のような長い実装ループを持たない。
  *  - `memory_repair` = work と同じ90分。実行の設定は work の修理子と同じ(ADR 0272 決定4)。
+ *  - `interview` = review と同じ45分。root は実環境を読んで出題し、答案を採点する(ADR 0273 決定2)。
  *  - `question` は**意図的に無い**。watchdog が見るのは slot のタスクだけだが
  *    (watchdog.ts の tick は `slot.currentTaskId` と `in_progress` で門番する)、
  *    pickup の抽出そのものが `t.type <> 'question'` で question を外している
@@ -154,7 +155,7 @@ const readCliVersion = (command: string) => async () =>
  *  - `reclaimTimeout` は既定のまま(watchdog.ts の `RECLAIM_TIMEOUT`)。ここに
  *    書かないのは判断が1つも無いからであり、置き場所が無いからではない。 */
 export const WATCHDOG: WatchdogConfig = {
-  timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000 },
+  timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000, interview: 45 * 60_000 },
   grace: 60_000,
 };
 
@@ -375,7 +376,7 @@ function taskExecutionCandidatesResolver(board: BoardComposition, db: Db): TaskE
   if (!board.registryDir) return implicitTaskExecutionCandidates(db);
   return (task) => {
     const registry = loadBoardRegistry(board);
-    const name = resolveTaskAgent(db, task, board.defaultAgentName, board.auditorName, board.interviewerName);
+    const name = resolveTaskAgent(task, board.defaultAgentName, board.auditorName, board.interviewerName);
     const agent = resolveExecutionAgent(registry, board.defaultAgentName, name, tierNames(db), task.type);
     return executionSettingsFor(db, agent.definition, task);
   };

@@ -8,7 +8,7 @@ export interface TaskCardProps {
     id?: string;
     title?: string;
     status?: 'todo' | 'in_progress' | 'blocked' | 'done' | 'cancelled';
-    type?: 'work' | 'question' | 'review' | 'memory_repair';
+    type?: 'work' | 'question' | 'review' | 'memory_repair' | 'interview';
     assignee?: string;
     assigneeIcon?: string;
     /** Assignee is the user. */

@@ -13,7 +13,7 @@ import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, questions, queueWork, registerQuestion, registerWork, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -257,6 +257,8 @@ async function bootOpenai(probe: (now: Date) => Promise<CodexAppServerProbeResul
       executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
     openaiUsage: probe,
   });
+  // Interview の root は判断の段以上で走る(ADR 0273 決定6)—— 種の frontier の openai 行は一覧に無いので、判断の段を economy に下ろす
+  applyExecutionSettingsChange(t.db, { setting: "judgement_tier", value: "economy" }, "webui", t.clock.now());
 }
 
 const listingProbe = (models: Map<string, string[]>) => async (now: Date) => ({ ...(await healthyOpenai(now)), models });
@@ -569,12 +571,12 @@ it("起動時の照合の question は、行の effort を表で直すと回答�
 
 // ── 行でない Interview の対象の拒否(ADR 0199 決定4、issue #1410) ──
 
-const INTERVIEW = { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored" };
+const INTERVIEW = { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "economy" };
 const POSE = { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" };
-/** model は表にあるが4欄が一致しない対象 —— 表の行ではない(ADR 0199 決定2)。2つは同じ (provider, model)。 */
-const SONNET_MEDIUM = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium", tier: "economy" };
-const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low", tier: "economy" };
-const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high", tier: "frontier" };
+/** model は表にあるが3欄 + root の段が一致しない対象 —— 表の行ではない(ADR 0199 決定2)。2つは同じ (provider, model)。 */
+const SONNET_MEDIUM = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
+const SONNET_LOW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" };
+const OPUS_46 = { provider: "anthropic", model: "claude-opus-4-6", effort: "high" };
 
 /** Interview を登録して出題し、pin の子の id を対象の順に返す。root は登録の poll で拾われ、実 adapter の盤面(`proc`)では
  *  その session を終えて枠を空ける。`beforePose` は root が拾われた後、出題の poll で子が拾われる前に走る。 */
@@ -629,13 +631,14 @@ it("行でない対象を pin した子が 404 で断られると、対象を名
 });
 
 /** openai の行でない対象: 一覧に無い model / 一覧がその effort を広告しない model / 一覧にある model。 */
-const MINI_UNLISTED = { provider: "openai", model: "gpt-5.4-mini", effort: "high", tier: "economy" };
-const GPT55_MAX = { provider: "openai", model: "gpt-5.5", effort: "max", tier: "standard" };
-const LUNA = { provider: "openai", model: "gpt-5.6-luna", effort: "high", tier: "economy" };
+const MINI_UNLISTED = { provider: "openai", model: "gpt-5.4-mini", effort: "high" };
+const GPT55_MAX = { provider: "openai", model: "gpt-5.5", effort: "max" };
+const LUNA = { provider: "openai", model: "gpt-5.6-luna", effort: "high" };
 
 it("openai の行でない対象が一覧に無い / effort が広告されないと、spawn の前に対象の question が鍵ごとに立ち、行の Quarantine は立たず、一覧にある兄弟の子は走る", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
   const { childIds: [mini, max, luna] } = await poseInterview(undefined, [MINI_UNLISTED, GPT55_MAX, LUNA]);
+  await completeMetaReviews(t);
   await t.clock.advance(HOUR);
 
   const opened = (await questions(t)).filter((q) => q.question_quarantine_kind?.startsWith("interviewTarget"));
@@ -795,7 +798,7 @@ it("最後の対象を「この対象は測らない」で外すと、採点で�
 /** 報告なく終わった session の枠は watchdog が空ける。 */
 const WATCHDOG = { timeLimits: { work: 24 * HOUR }, grace: HOUR, reclaimTimeout: HOUR };
 
-const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium", tier: "standard" };
+const OPUS_55_MEDIUM = { provider: "anthropic", model: "claude-opus-5-5", effort: "medium" };
 
 it("probe の破綻の報告の retry は、「この対象は測らない」で外した対象を新しい Interview に写さず、failure の abandon で外れた対象は写す", async () => {
   // 報告なき exit の failure question は watchdog の持つ経路
@@ -879,8 +882,8 @@ it("同じ (provider, model) を pin した Interview がもう1つ残ってい�
 
 // ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
 
-/** 種の economy 行と4欄が一致する対象 —— 断られると行の Quarantine になる。 */
-const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high", tier: "economy" };
+/** 種の economy 行と3欄 + root の段が一致する対象 —— 断られると行の Quarantine になる。 */
+const SONNET_ROW_TARGET = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
 
 /** 表の行と一致する対象を pin した子が 404 で断られ、次の poll も過ぎた盤面。回答時の probe は通る。 */
 async function refuseRowTarget() {
@@ -942,6 +945,7 @@ it("effort ごとの行の Quarantine は、その effort の対象を pin し�
 it("openai の一覧の照合が同じ poll で開いた行の Quarantine は、その行と一致する対象を pin した子をその poll で止める", async () => {
   await bootOpenai(listingProbe(MEASURED_OPENAI_MODELS));
   const { childIds: [mini] } = await poseInterview(undefined, [MINI_UNLISTED]);
+  await completeMetaReviews(t);
   // 子が拾われる poll の直前に、一覧に無い対象と一致する行を足す —— 行の Quarantine はその poll の観測で開く
   applyExecutionSettingsChange(
     t.db,

@@ -290,7 +290,7 @@ export function resolveTaskBranchLineage(
   task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
   // memory_repair は review と同じく lineage に透明(ADR 0272 決定6)
-  if (task.type === "review" || task.type === "memory_repair") {
+  if (task.type === "review" || task.type === "interview" || task.type === "memory_repair") {
     return {
       branch:
         task.parent_id && taskBranchExists(workspace, task.parent_id)

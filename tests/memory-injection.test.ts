@@ -375,11 +375,11 @@ it("受験者が読む枝の定義を Interview の root の定義が置き換�
 it("読み手が pin の子のとき、出所の event の task がどの Interview の root か pin の子であるエントリは、書き手を問わず INDEX・関連 leaf に出ず、上限で落とした件数にも数えない —— 出所が commit のものには出て、本番の task と root には出る(ADR 0264 決定3)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
-  const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high", tier: "standard" };
+  const opus = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
   const interview = (targets: object[]) =>
     poseProbe(
       db,
-      registerTask(db, { type: "review", title: "interview", purpose: "the original task", completion_criteria: "every target scored", interview_targets: targets as never }, at, ...HUMAN_WEBUI),
+      registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: targets as never }, at, ...HUMAN_WEBUI),
       { ...probe, probe: probe.purpose, rubric: "tests pass" },
       "auditor",
       at,
