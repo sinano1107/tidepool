@@ -214,7 +214,7 @@ export function sweepBoardStateOverlap(
     // overlap sweep は ADR 0040 の一斉検査
     console.error(
       "[board-state] could not enumerate registered workspaces for the board-state overlap sweep; " +
-        `pickup still checks each workspace as it is picked up (${String(err)})`,
+        `pickup still checks where each task runs (its workspace, or an Interview's room) as it is picked up (${String(err)})`,
     );
     return;
   }

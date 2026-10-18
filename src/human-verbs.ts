@@ -70,7 +70,6 @@ import {
   getTask,
   type HandoffDoc,
   humanDecomposeTask,
-  interviewRoomPath,
   latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
@@ -97,6 +96,7 @@ import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
+  recordedInterviewRoom,
   redoMergeBacks,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
@@ -702,15 +702,16 @@ function resolveWorkspaceForAnswer(
   action: string,
   missingResource = "workspace",
 ): WorkspaceConfig {
+  // 面接室は registry に無く、root の id の名前で止まる(ADR 0273 決定8)。resolver より先に引く —— registry の無い盤面の resolver は
+  // どの名前にも既定の workspace を返す
+  const room = taskWorkspace === null ? undefined : recordedInterviewRoom(deps.db, taskWorkspace);
+  if (room) return room;
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) throw new DomainError(`no ${missingResource} configured — ${action}`);
   try {
     return resolve(taskWorkspace);
   } catch (err) {
     if (!(err instanceof UnknownWorkspaceError)) throw err;
-    // 面接室は registry に無く、root の id の名前で止まる(ADR 0273 決定8)
-    const room = interviewRoomPath(deps.db, err.workspaceName);
-    if (room !== undefined) return { name: err.workspaceName, path: room };
     throw new DomainError(`no workspace configured for "${err.workspaceName}" — ${action}`);
   }
 }

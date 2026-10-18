@@ -59,7 +59,7 @@ import {
   contentSourceFor,
   escalateTask,
   getTask,
-  interviewRoomRoot,
+  interviewRootIdOf,
   isWorkSide,
   nextSlotTask,
   pickupTask,
@@ -114,7 +114,7 @@ function withoutStopped(
     const target = unrowedTarget(db, task);
     if ((target && refusedTargetQuestion(db, target)) || pinnedTargetRowQuarantined(db, task)) return [];
     // 組は走る場所の単位(ADR 0273 決定8、SQL の対は tasks.ts の `stoppedSql`): 受験者は面接室(root の id)だけ、root は実環境と面接室
-    const room = interviewRoomRoot(db, task);
+    const room = interviewRootIdOf(db, task);
     const places = task.interview_target_id !== null ? [room] : [task.workspace ?? defaultWorkspaceName, room];
     return candidates(task).filter(
       (setting) => !pairs.some((pair) => places.includes(pair.workspace) && pair.harness === canonicalHarness(setting.provider)),
@@ -477,14 +477,15 @@ export function startScheduler(deps: {
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
       // ADR 0273 決定1・8: interview の root と受験者は面接室で走る。作れない面接室は、その面接室の quarantine に落ちる
-      let place: WorkspaceConfig;
-      try {
-        if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
-        place = taskRunPlace(db, picked, resolved);
-      } catch (err) {
-        quarantineWorkspace(db, interviewRoomRoot(db, picked)!, err, clock.now());
-        return;
+      if (picked.type === "interview") {
+        try {
+          openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+        } catch (err) {
+          quarantineWorkspace(db, picked.id, err, clock.now());
+          return;
+        }
       }
+      const place = taskRunPlace(db, picked, resolved);
       try {
         await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, recordDir, now: clock.now() });
       } catch (err) {

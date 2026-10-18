@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { afterAll, expect, onTestFinished } from "vitest";
+import { afterAll, expect, onTestFinished, vi } from "vitest";
 import type { AgentAdmin } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import {
@@ -854,10 +854,21 @@ export function examineeRootId(db: Db, examineeId: string): string {
 
 /** setup のみ: root の面接室を使い捨ての基点の下に開く(ADR 0273 決定1)—— 盤面の pickup を通らずに root や受験者を adapter で
  *  走らせるテストが、pickup の代わりに置く。 */
-export function openTestInterviewRoom(db: Db, root: Task, at = new Date(0)): void {
+export function openTestInterviewRoom(db: Db, root: Task): void {
   const base = mkdtempSync(join(tmpdir(), "tidepool-rooms-"));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
-  openInterviewRoom(db, root, base, at);
+  openInterviewRoom(db, root, base, new Date(0));
+}
+
+/** setup のみ: このプロセスの git の commit だけを落とす(署名を求め、署名の program は無い)。他の git は通る。
+ *  config は既存の `GIT_CONFIG_*`(vitest.config.ts の env)の後ろに足す。戻すのは `vi.unstubAllEnvs()`。 */
+export function failGitCommits(): void {
+  const n = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+  vi.stubEnv("GIT_CONFIG_COUNT", String(n + 2));
+  vi.stubEnv(`GIT_CONFIG_KEY_${n}`, "commit.gpgsign");
+  vi.stubEnv(`GIT_CONFIG_VALUE_${n}`, "true");
+  vi.stubEnv(`GIT_CONFIG_KEY_${n + 1}`, "gpg.program");
+  vi.stubEnv(`GIT_CONFIG_VALUE_${n + 1}`, "/nonexistent-gpg");
 }
 
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */

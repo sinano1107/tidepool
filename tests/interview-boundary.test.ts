@@ -1,4 +1,4 @@
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
@@ -21,6 +21,7 @@ import {
   commitWork,
   completeMetaReviews,
   FULL_HANDOFF,
+  failGitCommits,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
@@ -233,7 +234,7 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
 /** root の面接室: 盤面の規約の基点(harness の既定は盤面の dir の下の workspaces)の下の root の id、実体の綴り。 */
 const roomOf = (rootId: string) => realpathSync(join(t.dir, "workspaces", rootId));
 
-it("root の pickup は面接室を盤面の規約の基点の下に root の id で git init と盤面名義の空コミットで作って root をそこで走らせ、受験者もそこで走る —— 実環境にはブランチが立たず、受験者の workspace 列は実環境の名前で、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8)", async () => {
+it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者もそこで走る —— 実環境にはブランチが立たず、受験者の workspace 列は実環境の名前で、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8)", async () => {
   const deletions: WorkspaceDeletionReferences[] = [];
   t = await boot({ workspaceAdmin: { delete: async (_input, references) => (deletions.push(references), "/checkout") } });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -241,7 +242,6 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
 
   const opened = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "interview_room_opened");
   expect(opened.map((e: any) => e.payload.path)).toEqual([room]);
-  expect(git(room, "log", "--format=%an %s", "main")).toBe("tidepool interview room");
   expect(git(room, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
@@ -251,14 +251,13 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   expect(posed.payload.head).toBe(git(room, "rev-parse", "main"));
   expect(t.worker.started.at(-1)!.id).toBe(childId);
   expect(git(room, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${childId}`);
-  expect(git(room, "rev-parse", `task/${childId}`)).toBe(posed.payload.head);
   expect(git(workspacePath, "branch", "--list", `task/${root.id}`, `task/${childId}`)).toBe("");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json.workspace).toBe("reef");
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "DELETE", "/api/workspaces/reef", { confirm: true })).status).toBe(200);
   expect(deletions.map((references) => references.unsettledTaskCount)).toEqual([0]);
-  expect(git(room, "log", "-1", "--format=%s", "main")).toBe("interview room");
+  expect(existsSync(join(room, ".git"))).toBe(true);
 });
 
 it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室の在り処を retry_of で、根拠が Interview の root ならその面接室の在り処を根拠の読み口で受ける —— 面接室は root の決着後も残る(ADR 0273 決定1・9)", async () => {
@@ -281,7 +280,7 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   const current = JSON.parse((await callAsTask(t, retried.id, "get_current_task", {})).content[0].text);
   expect(current.history).toContainEqual({ retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("cancelled");
-  expect(git(roomOf(first.id), "log", "-1", "--format=%s", "main")).toBe("interview room");
+  expect(existsSync(join(roomOf(first.id), ".git"))).toBe(true);
 });
 
 /** キューの読み口でのその task の status(skipped = 資源の停止で外れている)。 */
@@ -302,10 +301,56 @@ it("資源の停止は走る場所の単位 —— 実環境の quarantine と (
   expect(await queueStatus(second!)).toBe("todo");
   registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   expect(await queueStatus(second!)).toBe("skipped");
-  // 面接室の quarantine も人間の確認で解ける —— 面接室は registry に無いので、盤面は root の在り処で検査する
+});
+
+it.each([
+  ["registry の盤面(面接室の名前を知らない resolver)", true],
+  ["registry の無い盤面(どの名前にも既定の workspace を返す resolver)", false],
+])("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
+  const workspace = await makeWorkspace("reef");
+  const resolveWorkspace = (name: string | null) => {
+    if (name !== null && name !== workspace.name) throw new UnknownWorkspaceError(name);
+    return workspace;
+  };
+  t = await boot({ workspace, ...(registry && { resolveWorkspace }) });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", root.id);
+  const stray = join(roomOf(root.id), "stray.txt");
+  writeFileSync(stray, "left behind\n");
+
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(`workspace ${root.id} still has uncommitted changes`);
+  rmSync(stray);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
-  expect(await queueStatus(second!)).not.toBe("skipped");
+});
+
+it("面接室が作れなかった pickup は面接室の quarantine に落ち、時限の後始末は面接室で走って slot を空け、人間の回答で quarantine が解けると、次の pickup が残った面接室の続きから作って root を走らせる(ADR 0273 決定1・8)", async () => {
+  t = await boot({ watchdog: { timeLimits: { interview: HOUR }, grace: HOUR, reclaimTimeout: HOUR } });
+  failGitCommits();
+  let root: any;
+  try {
+    root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  } finally {
+    vi.unstubAllEnvs();
+  }
+  expect(t.worker.started).toEqual([]);
+  expect((await servedQuarantineQuestion(t, "workspace", root.id)).purpose).toContain("/nonexistent-gpg");
+
+  await t.clock.advance(3 * HOUR);
+
+  const open = (await questions(t)).filter((q) => q.status !== "done");
+  expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  const killed = open.find((q) => q.parent_id === root.id)!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+  await completeMetaReviews(t);
+
+  expect(t.worker.started.at(-1)!.id).toBe(root.id);
+  expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
+  expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
 });
 
 it("受験者の (Harness, 場所) の封じ込めの組は面接室で立つ(ADR 0273 決定8 / ADR 0259 決定1)", async () => {

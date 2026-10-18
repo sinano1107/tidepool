@@ -510,7 +510,7 @@ export function interviewFields(db: Db, taskId: string): InterviewFields | null 
 }
 
 /** その task が走る面接室の root(ADR 0273 決定1・8): interview の root は自分、受験者は対象 → root。他は undefined。 */
-export function interviewRoomRoot(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): string | undefined {
+export function interviewRootIdOf(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): string | undefined {
   if (task.type === "interview") return task.id;
   if (task.interview_target_id === null) return undefined;
   return db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(task.interview_target_id) as string;
@@ -522,7 +522,7 @@ export function interviewRoomPath(db: Db, rootId: string): string | undefined {
 }
 
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。 */
-export function openedInterviewRooms(db: Db, rootId: string): string[] {
+export function readableInterviewRooms(db: Db, rootId: string): string[] {
   const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => interviewRoomPath(db, id));
   rooms.push(latestEventOfTask(db, rootId, "interview_retried")?.payload.interview_room);
   return rooms.filter((path) => path !== undefined);
@@ -1926,7 +1926,7 @@ export function answerQuestion(
         }
         // 受験者の abandon が倒すのは受験者だけ。採点できる答案も未決着の答案も残らない Interview は、この答えで終える(ADR 0247 決定1 / ADR 0267 決定3)
         if (failed.interview_target_id !== null) {
-          const rootId = db.prepare("SELECT task_id FROM interview_targets WHERE id = ?").pluck().get(failed.interview_target_id) as string;
+          const rootId = interviewRootIdOf(db, failed)!;
           ended = interviewLeftEmpty(db, rootId) ? { rootId, eventId: cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin) } : undefined;
         }
         if (ended?.eventId !== undefined) settleUnrunnableTargetQuestions(db, ended.rootId, ended.eventId, now);

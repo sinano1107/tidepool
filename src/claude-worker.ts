@@ -60,10 +60,10 @@ import {
   guardRegistryDefaultBranch,
   materializeWorkspaceProjectSettings,
   quarantineWorkspace,
+  type RunPlace,
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
-  safeRealpath,
   taskRunPlace,
   type WorkspaceConfig,
 } from "./workspace.js";
@@ -1938,7 +1938,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     task: Task,
     workspace: WorkspaceConfig,
     /** 走る場所(`taskRunPlace`): cwd と sandbox の書きと読み。`workspace` は層・許可ドメイン・記憶の実環境 */
-    place: WorkspaceConfig,
+    place: RunPlace,
     agent: ResolvedAgent,
     registry: Registry,
     enforcement: {
@@ -2074,7 +2074,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             allowedDomains: workspace.allowed_domains,
             taskTemp,
             lib64: existsSync("/lib64"),
-            readPaths: (place.readPaths ?? []).map(safeRealpath),
+            readPaths: place.read_paths,
           }),
         ),
       );

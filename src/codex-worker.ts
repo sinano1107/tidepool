@@ -58,7 +58,6 @@ import {
   resolveExecutionWorkspace,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
-  safeRealpath,
   taskRunPlace,
 } from "./workspace.js";
 
@@ -1237,7 +1236,7 @@ export class CodexWorker implements WorkerAdapter {
       ],
       workspace: workspacePath,
       allowedDomains: workspace.allowed_domains ?? [],
-      readPaths: (place.readPaths ?? []).map(safeRealpath),
+      readPaths: place.read_paths,
       executable: this.options.executable,
       hook,
     };

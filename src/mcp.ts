@@ -705,10 +705,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Pose this Interview's probe, once: the title, the probe (the problem statement every target solves), the completion " +
-          "criteria and the rubric you will score the answers against. Before posing, compose in your working directory, the interview " +
-          "room, the environment the probe needs: read get_current_task's interview.real_environment, then copy, rename and cut down " +
-          "only what the probe needs, leaving out board vocabulary and any name that points at the real environment. " +
-          "The board logs all four as one decision, registers one " +
+          "criteria and the rubric you will score the answers against. Before posing, compose the environment the probe needs in your " +
+          "working directory, the interview room. The board logs all four as one decision, registers one " +
           "answer task per target in get_current_task's interview_targets with the same title, the probe as its purpose and the same " +
           "completion criteria, blocks this task until every answer settles, and frees the slot. The answer tasks never read the " +
           "rubric. Once every answer settles you resume and finish with complete_interview. A target the default agent cannot run is refused by name; you cannot fix that, so escalate. " +

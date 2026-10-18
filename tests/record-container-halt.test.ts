@@ -12,9 +12,9 @@ import { Slot } from "../src/slot.js";
 import { completeTask, getRegistrant, getTask, listBoard, poseProbe, registerTask, type Task } from "../src/tasks.js";
 import { recordContainerHaltHandler } from "../src/watchdog.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { openInterviewRoom, taskRunPlace } from "../src/workspace.js";
+import { taskRunPlace } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unusedLanding } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 盤面の記録の器が書けないことは盤面全体の停止で、踏んだ受験者は todo の先頭へ戻る(ADR 0266 決定3、#2094)。
@@ -32,7 +32,7 @@ async function brokenContainer(name: string) {
   const clock = new FakeClock();
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, clock.now(), ...HUMAN_WEBUI);
   // 受験者は root の面接室で走る(ADR 0273 決定1)—— root の pickup が作る面接室を先に開く
-  openInterviewRoom(db, root, await tempDir(`tidepool-${name}-rooms-`), clock.now());
+  openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
   const [done, picked] = poseProbe(db, root, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", clock.now(), "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
   git(room.path, "checkout", "-b", `task/${done.id}`, "main");

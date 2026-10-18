@@ -16,7 +16,7 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -399,6 +399,18 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(f.workspace)}="read"`,
       `${JSON.stringify(roomOf(evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
+  });
+
+  it("retry の新しい root は、retry が残した旧い root の面接室を read で載せる(ADR 0273 決定9)", async () => {
+    const f = await fixture();
+    const previous = posedInterviewRoot(f.db);
+    const root = retryInterviewRoot(f.db, previous, undefined, new Date(1), {}, "webui");
+    openTestInterviewRoom(f.db, root);
+
+    await f.start(root);
+
+    const rows = filesystem(f.process.calls[0]!.args, "tidepool-work");
+    expect(rows).toContain(`${JSON.stringify(realpathSync(interviewRoomPath(f.db, previous.id)!))}="read"`);
   });
 
   it("preflight の app-server が読む設定のキーは、work / review とも同じ種別の spawn のキーと一致する(ADR 0142 決定2・3)", async () => {
