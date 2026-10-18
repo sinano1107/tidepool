@@ -47,7 +47,7 @@ Back in this thread, run `/code-review` on both axes (Standards + Spec) against 
 
 Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
-Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. Every other call is yours, and it is accountable because it goes in the pull request.
+Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A seam agreed before dispatch is not one: when a finding shows a behaviour stated above its lowest seam, take it back to the user instead of citing the agreement. Every other call is yours, and it is accountable because it goes in the pull request.
 
 ## Filing what the run found
 
