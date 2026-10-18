@@ -4,6 +4,8 @@
 
 **Status 追記: 決定2 の「タスクブランチは決着後も削除されない」は、決着した pin の子のブランチについて [ADR 0263](0263-an-interview-examinee-reads-what-production-work-reads-except-what-reveals-the-measurement-or-unevens-the-targets.md) 決定5 が例外を置いた(2026-10-15)—— 盤面が後から走る pin の子の pickup の準備で、全 ref のスナップショットの前に外し、head を記録に残す。worker による削除が違反であることは変わらない。**
 
+**Status 追記: 上の ADR 0263 決定5 の例外は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で消えた(2026-10-19)—— 決着した受験者の checkout は残り、タスクブランチは決着後も削除されない、に戻る。ref snapshot の鍵は受験者の checkout ごとになる。**
+
 issue #234 のグリリング(2026-08-10)で決定。実運用テストで、worker が Tidepool の checkout した
 `task/<id>` から別ブランチへ移動する挙動が観測された。終了時の HEAD 確認だけで「タスクブランチ以外を
 変更できない」という境界を本当に保証できているかを測り、必要なら強化する、というのが元の射程である。

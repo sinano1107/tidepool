@@ -1,5 +1,7 @@
 # 受験者は本番の work と同じ面を読み、伏せる・揃えるのは「測られていると知らせるもの」と「対象どうしの条件をそろえないもの」だけにする
 
+**Status 追記: 決定5 の「決着した pin の子のブランチの ref を外す」は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で要らなくなった(2026-10-19)—— 受験者は出題の head から fetch した自分の checkout で解き、兄弟の checkout は床の外にある。決定6 の「出題が記録した head から分岐する」はそのまま(分岐の形が fetch になる)。**
+
 2026-10-15 の grilling(issue #2008)で決定。受験者(Interview の pin の子)が読む面は、漏れが見つかるたびに1か所ずつ塞いできた
 (ADR 0245 決定2、ADR 0253 決定2、#1899 のレビュー、#1932)。面を全部洗い出すと、親の欄(人間が書いた root の題・目的)は
 何も伏せておらず、兄弟の答案は親の history のほか checkout の git と記憶からも読め、対象ごとに解く土台のコードが違いうることが
