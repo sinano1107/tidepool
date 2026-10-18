@@ -48,3 +48,17 @@ root も書く。その行への異議は帰責と RCA だけ立ち、記憶の�
 - Interview の root の下の `memory_repair` の書き込みは、root 自身の書き込みと同じく受験者の視界に無い集合に入る(ADR 0264 決定3 の
   延長 —— 直すのは root の書き込みで、直した本文も root の判断の産物)。今の述語は書き手の task が root か Interview の木の出所かで
   見るので、修理子の task をそこに足す。
+
+## 追記(2026-10-18 の triage、issue #2179)
+
+決定4 の「実行の設定は work の修理子と同じ」は**学習器(ADR 0110 決定4)まで含む** —— 昇格後の行の選択、pickup ごとの shadow 行、
+episode の3つで、memory_repair は work と同じ側に立つ。実装は3箇所とも `work` だけを見ていて、memory_repair は review と同じ側
+(常に表の先頭行、shadow 行も episode も無し)に落ちていた。review を学習器から外す理由は判定者を一定に保つこと(ADR 0111
+決定3)で、memory_repair は判定者ではない。ADR 0110 決定4 の「work task にしか触れない」は第4の type が無い時点の文で、対比は
+review だけである。組み込み agent の影の門と watchdog の時間リミットは既に work と memory_repair を1つの側として扱っている。
+
+episode の形は新しくならない。work の修理子は flag 無しの非 root の子で完了時レビューを持たず、memory_repair も持たない(決定5)
+ので、どちらの episode も `accepted` にはならず、capability の帰責があれば `rejected`、無ければ `excluded` である(ADR 0115 決定5)。
+
+退けた形: **学習器から外す** —— 外す理由を新しく立てる必要があるが、記録にも機構にも無い。
+

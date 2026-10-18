@@ -1,5 +1,7 @@
 # 実行設定は pickup 時に要求から選ばれ、agent 定義は計算資源を持たない
 
+**Status 追記: 決定4 の「work task にしか触れない(review の設定は表のみ)」の work は work 側 —— work と `memory_repair`(ADR 0272 決定4 の追記)** —— 外すのは判定者(review / interview)だけで、記憶の修理子は昇格後の選択・shadow 行・episode のすべてで work と同じ側に立つ(2026-10-18 の triage、issue #2179)。
+
 **Status 追記: 決定4 の事前分布「表(観測1件分の重み)」は ADR 0273 決定7 で、Interview の採点と人間が行を足す扉で明示に置いた種が置き換えうる** —— ノブは露出しない線はそのまま(置けるのは受理1件分だけ)(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
 **Status 追記: 決定1 の省略の定義(「盤面が資格情報を持つ全 Provider を床の構成で」)は ADR 0116 決定1・3 で置き換え** —— 省略は「正準経路が宣言(skills)を満たす全 Provider」の静的な集合になり、資格情報は entry 集合の定義ではなく決定3 の除外条件「Provider 認証」に帰属する。advisor は entry の性質だけで、トップレベルの `advisor` は退役(ADR 0116 決定2)。
