@@ -92,7 +92,7 @@ export interface BoardTask extends QueueTask {
     candidate_id?: number;
     /** op tier_description は段の名前、op add_tier は足す段(名前・説明・位置)—— 後者は修正値の欄の初期値(issue #1439)。 */
     tier?: string | { name: string; description: string; position: number };
-    pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } };
+    pin?: { tier: string } | { promoted: boolean } | { description: string } | { row: { tier: string } } | { rows: Array<{ tier: string }> };
   } | null;
   /** 確認 question の Quarantine の種別(src/quarantine.ts の QuarantineKind)。行の Quarantine(`tableRow` と effort ごとの
    *  `tableRowEffort`)の question だけが settings タブを開くボタンを持つ(ADR 0184 決定6 / ADR 0218 決定2)。 */

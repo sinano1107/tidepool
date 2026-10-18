@@ -1200,7 +1200,7 @@ function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewR
     {
       description:
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
-        "and the selector's source, with that session's agent and outcome (accepted / rejected / excluded, cost, duration). " +
+        "and the selector's source, with that session's worker_spawned_event_id, workspace, agent and outcome (accepted / rejected / excluded, cost, duration). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
         "workspace stage, production sessions only — Interview examinees are not counted — and seed: null, or the kind (interview: an accepted score of a done Interview; human: a row added as observed) and event_id of the seed that stands in for the table's prior for that cell and tier), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
@@ -1280,12 +1280,17 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         "description when approving. op add_tier adds a tier named tier, with description as its one-line description, to the board's list at " +
         "position (an index into the list, lowest first; 0 puts it at the bottom) and moves the row named by provider, model and effort into " +
         "it, both at once; evidence lists the worker_spawned event ids your case rests on, and the human may amend the tier's name, " +
-        "description and position when approving. rationale is your evidence summary " +
+        "description and position when approving. op interview proposes measuring targets before any row changes: hypothesis is the claim to test, " +
+        "measured_work (optional) the kind of work to measure, tier the one tier measured, and targets one or more (provider, model, effort) of that tier — " +
+        "each another effort or tier of a model already in the table, never a row of the table in that tier. evidence (required) lists the worker_spawned " +
+        "event ids of the production sessions your case rests on (the shadow rows' worker_spawned_event_id); workspace is the real environment the " +
+        "Interview's root reads, a registered workspace that one of those sessions ran in (the shadow rows' workspace). Approval registers the Interview " +
+        "in the human's name; the human may amend the hypothesis, measured_work, the targets' efforts and the workspace. rationale is your evidence summary " +
         "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier"]),
+        op: z.enum(["row", "promote", "demote", "agent_tier", "tier_description", "add_tier", "interview"]),
         row: z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }).optional().describe("op row and add_tier only."),
         change: z.record(z.string(), z.unknown()).optional().describe(`op row only: tier and/or effort (${EFFORT_LEVELS.join(" / ")}), nothing else.`),
         agent: z.string().optional().describe("op agent_tier only: the agent whose default tier to lower."),
@@ -1293,14 +1298,24 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         evidence: z
           .array(z.number().int())
           .optional()
-          .describe("op agent_tier, tier_description and add_tier only: worker_spawned event ids of the sessions your case rests on."),
-        tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name."),
+          .describe("op agent_tier, tier_description, add_tier and interview only: worker_spawned event ids of the sessions your case rests on."),
+        tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name. op interview: the tier measured."),
+        hypothesis: z.string().optional().describe("op interview only: the claim the Interview tests."),
+        measured_work: z.string().optional().describe("op interview only, optional: the kind of work to measure."),
+        targets: z
+          .array(z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }))
+          .optional()
+          .describe("op interview only: the (provider, model, effort) targets to measure in the tier."),
+        workspace: z.string().optional().describe("op interview only: the real environment the Interview's root reads, the workspace of one of the evidence sessions."),
         description: z.string().optional().describe("op tier_description and add_tier only: the tier's description, one line."),
         position: z.number().int().nonnegative().optional().describe("op add_tier only: where the new tier goes, an index into the board's list (lowest first)."),
         rationale: requiredTextSchema,
       },
     },
-    async (input) => run((reader, now) => proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now, deps.agentAdmin?.list)),
+    async (input) =>
+      run((reader, now) =>
+        proposeRoutingChange(deps.db, reader.taskId, input, reader.agent, now, deps.agentAdmin?.list, (name) => assertWorkspaceKnown(name, deps.resolveWorkspace, deps.workspace)),
+      ),
   );
 }
 

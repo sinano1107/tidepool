@@ -73,6 +73,8 @@ export function proposalTierNames(db: Db, proposal: QuestionProposal): QuestionP
       return { ...proposal, pin: { row: row(proposal.pin.row), below: neighbour(proposal.pin.below), above: neighbour(proposal.pin.above) } };
     case "tier_description":
       return { ...proposal, tier: name(proposal.tier) };
+    case "interview":
+      return { ...proposal, tier: name(proposal.tier), pin: { rows: proposal.pin.rows.map(row) } };
     default:
       return proposal;
   }

@@ -20,7 +20,16 @@ import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type
 import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
-import { type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
+import {
+  assertInterviewFields,
+  type InterviewProposal,
+  type InterviewTarget,
+  type RegistryProposal,
+  type RoutingAddTierProposal,
+  type RoutingProposal,
+  registerTask,
+  type TierDescriptionProposal,
+} from "./tasks.js";
 import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
@@ -86,6 +95,8 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
         diverged,
         created_at: row.created_at,
         worker_spawned_event_id: session?.worker_spawned_event_id ?? null,
+        // 学習器が数える層と同じ値 —— Interview の提案の実環境はここから選ぶ(ADR 0258 決定3)
+        workspace: session?.workspace ?? null,
         agent: session?.agent ?? null,
         outcome: session?.outcome ?? null,
         cost_usd: session?.cost_usd ?? null,
@@ -349,6 +360,58 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   return { kind: "routing", op: "tier_description", tier: current.id, description, evidence, pin: { description: current.description } };
 }
 
+/** Interview の提案の門と pin(#921 / ADR 0199 決定5 / ADR 0258 決定1 / ADR 0273 決定6・9): 欄は人間の登録の扉と同じ検査を通し、
+ *  対象は表にある model の、測る段で行でないものだけ。根拠は本番の episode の worker_spawned で、その task が root の根拠の task に
+ *  なる。実環境は登録済みで、根拠の episode のどれかの workspace(学習器が数える層と同じ値)。pin は根拠の行の全欄。 */
+function interviewProposal(
+  db: Db,
+  input: { hypothesis?: string; measured_work?: string; evidence?: number[]; tier?: Tier; targets?: InterviewTarget[]; workspace?: string },
+  assertWorkspaceKnown?: (name: string) => void,
+): InterviewProposal {
+  const { hypothesis, measured_work, evidence, tier, targets, workspace } = input;
+  if (hypothesis === undefined || tier === undefined || !targets?.length || workspace === undefined || !evidence?.length) {
+    throw new DomainError("op interview names the hypothesis, the tier it measures, at least one target, the workspace and at least one evidence worker_spawned event id");
+  }
+  assertKnownTier(db, "tier", tier);
+  const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
+  // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
+  const table = loadExecutionSettingTable(db);
+  const rows = new Map<string, InterviewProposal["pin"]["rows"][number]>();
+  const evidenceTasks = new Set<string>();
+  const evidenceWorkspaces = new Set<string | null>();
+  for (const id of evidence) {
+    const episode = episodes.get(id);
+    if (!episode) throw new DomainError(`evidence ${id} is not a worker_spawned event of a work session`);
+    const row = table.find((r) => matchesRowKey(r, episode.cell));
+    if (!row) throw new DomainError(`evidence ${id} ran on ${rowName(episode.cell)}, which is no longer in the execution-setting table`);
+    rows.set(rowName(row), { ...row, tier: tierIdOf(db, row.tier) });
+    evidenceTasks.add(episode.task_id);
+    evidenceWorkspaces.add(episode.workspace);
+  }
+  assertInterviewFields(db, { type: "interview", hypothesis, measured_work, evidence_task_ids: [...evidenceTasks], tier, interview_targets: targets });
+  for (const target of targets) {
+    if (!table.some((r) => r.provider === target.provider && r.model === target.model)) {
+      throw new DomainError(`the execution-setting table has no row for ${target.provider} / ${target.model}: propose another effort or tier of a model in the table; a new model is the human's to bring in`);
+    }
+    if (table.some((r) => matchesRowKey(r, target) && r.tier === tier)) throw new DomainError(`target ${rowName(target)} is already a row of the table in tier ${tier}; there is nothing to measure`);
+  }
+  assertWorkspaceKnown?.(workspace);
+  if (!evidenceWorkspaces.has(workspace)) {
+    throw new DomainError(`workspace ${workspace} is not the workspace of any evidence session (${[...evidenceWorkspaces].map((w) => w ?? "none").join(", ")})`);
+  }
+  return {
+    kind: "routing",
+    op: "interview",
+    hypothesis,
+    ...(measured_work !== undefined && { measured_work }),
+    evidence,
+    tier: tierIdOf(db, tier),
+    targets,
+    workspace,
+    pin: { rows: [...rows.values()] },
+  };
+}
+
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
  *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、または段の追加と
  *  行の移動(op add_tier)を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
@@ -368,19 +431,27 @@ export function proposeRoutingChange(
     tier?: Tier;
     description?: string;
     position?: number;
+    hypothesis?: string;
+    measured_work?: string;
+    targets?: InterviewTarget[];
+    workspace?: string;
     rationale: string;
   },
   workerId: string,
   now: Date,
   agents?: () => readonly AgentView[],
+  assertWorkspaceKnown?: (name: string) => void,
 ): { question_id: string } {
   input = { ...input, rationale: normalizeText(input.rationale) };
   if (whyBlank(input.rationale)) throw new DomainError("a routing proposal requires a rationale");
-  for (const field of ["agent", "to", "tier", "description"] as const) {
+  for (const field of ["agent", "to", "tier", "description", "hypothesis", "measured_work", "workspace"] as const) {
     if (input[field] !== undefined) input[field] = normalizeText(input[field]);
   }
-  if (input.row) {
-    input.row = { provider: normalizeText(input.row.provider), model: normalizeText(input.row.model), effort: input.row.effort && normalizeText(input.row.effort) };
+  const key = (k: InterviewTarget) => ({ provider: normalizeText(k.provider), model: normalizeText(k.model), effort: k.effort && normalizeText(k.effort) });
+  if (input.row) input.row = key(input.row);
+  if (input.targets) input.targets = input.targets.map(key);
+  if (input.op !== "interview" && [input.hypothesis, input.measured_work, input.targets, input.workspace].some((field) => field !== undefined)) {
+    throw new DomainError(`op ${input.op} takes no hypothesis, measured_work, targets or workspace`);
   }
   let proposal: RoutingProposal | RegistryProposal;
   let title: string;
@@ -393,7 +464,23 @@ export function proposeRoutingChange(
   }
   if (input.op !== "add_tier" && input.position !== undefined) throw new DomainError(`op ${input.op} takes no position`);
   if (input.op === "agent_tier" && (input.tier !== undefined || input.description !== undefined)) throw new DomainError("op agent_tier takes no tier or description");
-  if (input.op === "tier_description") {
+  if (input.op === "interview") {
+    if (input.row !== undefined || input.change !== undefined || input.description !== undefined) throw new DomainError("op interview takes no row, change or description");
+    proposal = interviewProposal(db, input, assertWorkspaceKnown);
+    const { tier, targets, workspace, hypothesis, measured_work, pin } = proposalTierNames(db, proposal) as InterviewProposal<Tier>;
+    title = `Interview ${targets.length === 1 ? rowName(targets[0]!) : `${targets.length} targets`} in tier ${tier}`;
+    diff = [
+      `Hypothesis: ${hypothesis}`,
+      ...(measured_work ? [`Work to measure: ${measured_work}`] : []),
+      `Tier measured: ${tier}`,
+      `Targets: ${targets.map(rowName).join("; ")}`,
+      `Real environment (the workspace the Interview's root reads; examinees do not run there): ${workspace}`,
+      `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
+    ];
+    purpose =
+      "The routing meta-review proposes an Interview: measuring targets that are not rows of the execution-setting table, in one tier, before any row changes. " +
+      "Approve registers the Interview in your name, with your amendment of the hypothesis, the work to measure, the targets' efforts or the workspace if you give one; reject registers nothing.";
+  } else if (input.op === "tier_description") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
     proposal = tierDescriptionProposal(db, input);
     const tier = input.tier!;

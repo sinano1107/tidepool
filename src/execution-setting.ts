@@ -14,6 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { unsettledSql } from "./task-status.js";
 import {
+  type InterviewProposal,
   type RegistryProposal,
   type RoutingProposal,
   type RoutingRowProposal,
@@ -650,7 +651,7 @@ export function parseRoutingRowChange(tiers: readonly Tier[], input: unknown): R
 export function routingPinChanges(
   proposal: RoutingProposal | RegistryProposal,
   settings: { table: ExecutionSettingTable; learnerPromoted: boolean; tiers: readonly { id: TierId; name: Tier; description: string }[] },
-): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours" | "target_tier"> | null {
+): Array<"tier" | "price_in" | "price_out" | "learner_promoted" | "rows" | "tier_order" | "description" | "neighbours" | "target_tier" | "target_row"> | null {
   const liveName = (id: TierId) => settings.tiers.find((t) => t.id === id)?.name;
   if (proposal.kind === "registry") {
     const held = proposal.pin.rows.every((pinned) =>
@@ -662,6 +663,16 @@ export function routingPinChanges(
   if (proposal.op === "tier_description") {
     const tier = settings.tiers.find((t) => t.id === proposal.tier);
     return tier ? (tier.description === proposal.pin.description ? [] : ["description"]) : null;
+  }
+  if (proposal.op === "interview") {
+    // 測る段が消えれば測る問いが無い。根拠の行は全欄で、対象は3欄 + 測る段で行と照合する(ADR 0199 決定5)
+    const tier = liveName(proposal.tier);
+    if (tier === undefined) return null;
+    const held = proposal.pin.rows.every((pinned) =>
+      settings.table.some((row) => matchesRowKey(row, pinned) && row.tier === liveName(pinned.tier) && row.price_in === pinned.price_in && row.price_out === pinned.price_out),
+    );
+    const rowed = proposal.targets.some((target) => settings.table.some((row) => matchesRowKey(row, target) && row.tier === tier));
+    return [...(held ? [] : (["rows"] as const)), ...(rowed ? (["target_row"] as const) : [])];
   }
   if (proposal.op !== "row" && proposal.op !== "add_tier") return proposal.pin.promoted === settings.learnerPromoted ? [] : ["learner_promoted"];
   const pin = proposal.op === "row" ? proposal.pin : proposal.pin.row;
@@ -703,6 +714,30 @@ export type AddTierAmendment = z.infer<typeof addTierAmendmentSchema>;
 export function parseAddTierAmendment(amendment: unknown): AddTierAmendment {
   const parsed = addTierAmendmentSchema.safeParse(amendment);
   if (!parsed.success) throw new DomainError(`an add-tier amendment takes name, description and/or position, nothing else: ${parsed.error.issues.map((i) => i.message).join("; ")}`);
+  return parsed.data;
+}
+
+/** Interview の提案の修正値(ADR 0258 決定2 / ADR 0273 決定9): 仮説・測る仕事・対象・実環境の少なくとも1つ。対象は提案の一覧を同じ順で
+ *  書き直したもので、動かせるのは effort だけ(provider / model は根拠の行で pin の一部)。effort の述語・実環境の存在は回答時に
+ *  登録の扉がやり直す。 */
+const interviewAmendmentSchema = z
+  .object({
+    hypothesis: requiredTextSchema.optional(),
+    measured_work: z.string().optional(),
+    targets: z.array(z.object({ provider: z.string(), model: z.string(), effort: z.string().nullable() }).strict()).optional(),
+    workspace: requiredTextSchema.optional(),
+  })
+  .strict()
+  .refine((amendment) => Object.keys(amendment).length > 0, { message: "give at least one of hypothesis / measured_work / targets / workspace" });
+export type InterviewAmendment = z.infer<typeof interviewAmendmentSchema>;
+
+export function parseInterviewAmendment(proposal: InterviewProposal<Tier>, amendment: unknown): InterviewAmendment {
+  const parsed = interviewAmendmentSchema.safeParse(amendment);
+  const { targets } = parsed.success ? parsed.data : {};
+  const sameModels = !targets || (targets.length === proposal.targets.length && targets.every((t, i) => t.provider === proposal.targets[i]!.provider && t.model === proposal.targets[i]!.model));
+  if (!parsed.success || !sameModels) {
+    throw new DomainError("an Interview amendment takes hypothesis, measured_work, workspace and/or targets: the proposal's targets in the same order, with only effort changed");
+  }
   return parsed.data;
 }
 
