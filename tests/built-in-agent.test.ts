@@ -171,7 +171,24 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
   expect(resolved).toBeUndefined();
   expect(agentNeedsHuman(db, "suzumedai")).toBe(true);
   // 未知の名前としてではなく、組み込みの検査で落ちる
-  expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", seedTierNames, "work")).toThrow(/runs only reviews and Interviews/);
+  expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", seedTierNames, "work")).toThrow(
+    /runs only reviews, Interviews and memory repairs/,
+  );
+});
+
+it("suzumedai に解決される memory_repair は reviewer 定数の profile で解決し、agent 名の quarantine に落ちない(ADR 0275 決定1)", async () => {
+  const registry = loadRegistry(await makeRegistry(), "purely-local");
+  const db = openDb(":memory:");
+
+  const resolved = resolveAgentOrQuarantine(
+    db,
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, "memory_repair"),
+    "suzumedai",
+    new Date(0),
+  );
+
+  expect(resolved).toMatchObject({ name: "suzumedai", profile: REVIEWER_AUTHORITY_PROFILE });
+  expect(agentNeedsHuman(db, "suzumedai")).toBe(false);
 });
 
 it("Interview の root の空の assignee は Interviewer ポインタに解決され、spawn の解決と pickup 候補の fallback が一致する —— 本番の review は Auditor、名指した root はその agent(ADR 0269 決定2)", () => {

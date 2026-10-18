@@ -823,8 +823,7 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   return row.n;
 }
 
-/** 実行で work の側に立つ type —— 組み込み agent が走らせられない(ADR 0228 決定1 / ADR 0272 決定4)。削除の扉と
- *  agent 名の quarantine の解除が同じこれで依存を数える。`rowRef` は tasks の行の SQL 別名。 */
+/** 学習器の work 側に立つ type(ADR 0272 決定4 の追記)。`rowRef` は tasks の行の SQL 別名。 */
 export function workSideTypeSql(rowRef: string): string {
   return `${rowRef}.type IN ('work', 'memory_repair')`;
 }
@@ -834,12 +833,12 @@ export function workSideTypeSql(rowRef: string): string {
 export const isWorkSide = (type: TaskType): boolean => type === "work" || type === "memory_repair";
 
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
- *  `assignee` に持つ未決着の work 側の task(`workSideTypeSql`)。review は組み込みへ落ちても壊れないので数えない。 */
-export function countUnsettledWorkSideAssignedTo(db: Db, name: string): number {
+ *  `assignee` に持つ未決着の work。review / memory_repair は組み込みへ落ちても走るので数えない(ADR 0275 決定1)。 */
+export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
       `SELECT COUNT(*) AS n FROM tasks
-       WHERE assignee = ? AND ${workSideTypeSql("tasks")} AND ${unsettledSql("status")}`,
+       WHERE assignee = ? AND type = 'work' AND ${unsettledSql("status")}`,
     )
     .get(name) as { n: number };
   return row.n;
