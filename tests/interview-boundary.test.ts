@@ -325,25 +325,27 @@ it.each([
   expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
 });
 
-it("面接室が作れなかった pickup は面接室の quarantine に落ち、時限の後始末は面接室で走って slot を空け、人間の回答で quarantine が解けると、次の pickup が残った面接室の続きから作って root を走らせる(ADR 0273 決定1・8)", async () => {
-  t = await boot({ watchdog: { timeLimits: { interview: HOUR }, grace: HOUR, reclaimTimeout: HOUR } });
+it("面接室が作れなかった pickup は面接室の quarantine に落ち、root は failure question 無しに後始末を通って todo の先頭へ戻り、人間の回答で quarantine が解けると、次の pickup が残った面接室の続きから作って root を走らせる(ADR 0273 決定1・8 / ADR 0274 決定1)", async () => {
+  t = await boot();
   failGitCommits();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   vi.unstubAllEnvs();
-  expect(t.worker.started).toEqual([]);
   expect((await servedQuarantineQuestion(t, "workspace", root.id)).purpose).toContain("/nonexistent-gpg");
-
-  await t.clock.advance(3 * HOUR);
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("todo"));
+  // slot が空いて盤面は流れ続ける(ADR 0274 決定1)—— root は面接室の quarantine が外し、走ったのは他の task だけ
+  expect(t.worker.started.map((s) => s.id)).not.toContain(root.id);
 
   const open = (await questions(t)).filter((q) => q.status !== "done");
   expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
+  expect(open.filter((q) => q.type === "question" && q.parent_id === root.id)).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
+    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("/nonexistent-gpg") },
+  ]);
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
-  const killed = open.find((q) => q.parent_id === root.id)!;
-  expect((await api(t.baseUrl, "POST", `/api/tasks/${killed.id}/answer`, { answers: ["retry"] })).status).toBe(200);
   await completeMetaReviews(t);
 
-  expect(t.worker.started.at(-1)!.id).toBe(root.id);
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(root.id));
   expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
   expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
 });

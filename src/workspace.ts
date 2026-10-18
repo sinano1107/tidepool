@@ -2,7 +2,7 @@ import { lstatSync, mkdirSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
-import { appendEvent } from "./events.js";
+import { appendEvent, type ResourceStop } from "./events.js";
 import { git, gitBytes } from "./git.js";
 import {
   authedGitBounded,
@@ -628,11 +628,15 @@ export async function prepareWorkspaceAtPickup(
   await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
-  if (task.interview_target_id !== null) removeSettledExamineeBranches(db, workspace, board.recordDir, board.now);
-  // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
-  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した受験者のブランチを外すのも
-  // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ
-  snapshotRefs(db, workspace);
+  try {
+    if (task.interview_target_id !== null) removeSettledExamineeBranches(db, workspace, board.recordDir, board.now);
+  } finally {
+    // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
+    // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した受験者のブランチを外すのも
+    // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ。外しが記録の器の失敗で落ちても撮る
+    // —— その pickup は後始末を通って先頭へ戻り(ADR 0274 決定4)、tree rule が盤面自身の fetch と外しを違反と読まない
+    snapshotRefs(db, workspace);
+  }
 }
 
 /** ADR 0263 決定5 / ADR 0111 追記12: 後から走る受験者が他の受験者(どの Interview のものでも)の答案を git で読めないように、
@@ -1035,20 +1039,16 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
  *  Name-only (issue #26 / ADR 0009): the trigger can be a tree-rule failure
  *  (path known, folded into `cause`'s message) or an unknown workspace name
  *  encountered at resolution time (no path to know) — both quarantine the
- *  same way, keyed on the name alone. */
+ *  same way, keyed on the name alone. 返すのは止めた資源 —— pickup を止めた呼び手が `pickup_stopped` に刻む(ADR 0274)。 */
 export function quarantineWorkspace(
   db: Db,
   workspaceName: string,
   cause: unknown,
   now: Date,
-): void {
-  registerQuarantine(
-    db,
-    "workspace",
-    workspaceName,
-    cause instanceof Error ? cause.message : String(cause),
-    now,
-  );
+): ResourceStop {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  registerQuarantine(db, "workspace", workspaceName, reason, now);
+  return { quarantine: "workspace", value: workspaceName, reason };
 }
 
 export function safeRealpath(path: string): string {
@@ -1151,18 +1151,20 @@ export function buildWorkspaceResolver(
  *  never escapes to the caller; it quarantines the name in its place and the
  *  caller treats the workspace step as absent for this cycle. A human's own
  *  synchronous request (registration, a quarantine/merge answer) is not this
- *  seam — those fail fast with a DomainError instead (ADR 0009). */
+ *  seam — those fail fast with a DomainError instead (ADR 0009). `onStop` は止めた資源を pickup の呼び手へ渡す(ADR 0274)。 */
 export function resolveOrQuarantine(
   db: Db,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   taskWorkspace: string | null,
   now: Date,
+  onStop?: (stop: ResourceStop) => void,
 ): WorkspaceConfig | undefined {
   try {
     return resolve(taskWorkspace);
   } catch (err) {
     if (!(err instanceof UnknownWorkspaceError)) throw err;
-    quarantineWorkspace(db, err.workspaceName, err, now);
+    const stop = quarantineWorkspace(db, err.workspaceName, err, now);
+    onStop?.(stop);
     return undefined;
   }
 }

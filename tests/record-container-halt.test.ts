@@ -10,6 +10,7 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getRegistrant, getTask, listBoard, poseProbe, registerTask, type Task } from "../src/tasks.js";
+import { sessionInTeardown } from "../src/teardown.js";
 import { recordContainerHaltHandler } from "../src/watchdog.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { taskRunPlace } from "../src/workspace.js";
@@ -17,7 +18,7 @@ import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker, unused
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
-// 盤面の記録の器が書けないことは盤面全体の停止で、踏んだ受験者は todo の先頭へ戻る(ADR 0266 決定3、#2094)。
+// 盤面の記録の器が書けないことは盤面全体の停止で、踏んだ受験者は後始末を通って todo の先頭へ戻る(ADR 0266 決定3、#2094 / ADR 0274 決定4)。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -41,6 +42,9 @@ async function brokenContainer(name: string) {
   completeTask(db, done, FULL_HANDOFF, "tako", clock.now(), "worker");
   const worker = new ScriptedWorker(clock);
   const slot = new Slot();
+  const containers = fakeContainers();
+  // 後始末の pickup の契機は scheduler へ遅延束縛する(server.ts と同じ)
+  const teardown = { db, clock, slot, resolve: () => workspace, pollNow: () => scheduler.pollNow() };
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
     converge: async () => [],
@@ -48,9 +52,10 @@ async function brokenContainer(name: string) {
     clock,
     slot,
     worker,
-    containers: fakeContainers(),
+    containers,
     onSpawnFailed: () => {},
-    onRecordContainerFailed: recordContainerHaltHandler({ db, clock, slot }),
+    onRecordContainerFailed: recordContainerHaltHandler(teardown, containers),
+    onPickupStopped: () => {},
     taskExecutionCandidates: implicitTaskExecutionCandidates(db),
     workspace,
     recordDir,
@@ -58,15 +63,18 @@ async function brokenContainer(name: string) {
   return { workspace, room, recordDir, db, clock, worker, slot, scheduler, done, picked };
 }
 
-it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepool 名義の question 1枚で止まり、踏んだ受験者は失敗にならず todo の先頭へ戻って slot が空く", async () => {
+it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepool 名義の question 1枚で止まり、踏んだ受験者は失敗にならず後始末を通って todo の先頭へ戻り slot が空く", async () => {
   const { workspace, recordDir, db, clock, worker, slot, scheduler, done, picked } = await brokenContainer("record-container-halts");
   const path = join(recordDir, `${done.id}.bundle`);
 
   await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
   expect(worker.started).toEqual([]);
   expect(boardHalts(db)).toEqual([{ kind: "recordContainer" }]);
-  expect(slot.currentTaskId).toBeNull();
+  // 後始末の tree rule が checkout を休止位置へ戻している(ADR 0274 決定3・4)
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(sessionInTeardown(db)).toBeUndefined();
   const questions = listBoard(db).filter((t) => t.type === "question");
   expect(questions.map((q) => q.id)).toEqual([openQuarantineQuestion(db, "recordContainer", null)!.id]);
   const question = getTask(db, questions[0]!.id)!;
@@ -90,8 +98,9 @@ it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepoo
 });
 
 it("器がまだ書けなければ回答は拒まれて停止が残り、書けるようになれば受理されて、受験者は既に切られた自分のブランチのまま走る", async () => {
-  const { room, recordDir, db, clock, worker, scheduler, done, picked } = await brokenContainer("record-container-release");
+  const { room, recordDir, db, clock, worker, slot, scheduler, done, picked } = await brokenContainer("record-container-release");
   await clock.advance(HOURLY);
+  await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
   const branch = git(room.path, "rev-parse", `task/${picked.id}`);
   const question = getTask(db, openQuarantineQuestion(db, "recordContainer", null)!.id)!;
   const answer = () =>

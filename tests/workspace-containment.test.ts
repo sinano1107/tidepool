@@ -1,6 +1,6 @@
 import { mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createCodexWorkspaceCheck } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -11,6 +11,7 @@ import { registerQuarantine } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { Slot } from "../src/slot.js";
 import { getTask, registerTask } from "../src/tasks.js";
+import { queueReturnHandler } from "../src/watchdog.js";
 import type { WorkerAdapter } from "../src/worker.js";
 import {
   codexSkillsListAt,
@@ -72,6 +73,7 @@ it.each([
       containers: passthroughContainers(),
       onSpawnFailed: () => {},
       onRecordContainerFailed: () => {},
+      onPickupStopped: () => {},
       openaiUsage: () => healthyOpenai(clock.now()),
       taskExecutionCandidates: (task) =>
         executionSettingsFor(
@@ -85,6 +87,66 @@ it.each([
 
     expect(started).toEqual([[flowing.id, provider]]);
     expect(getTask(db, stopped.id)?.status).toBe("todo");
+    scheduler.stop();
+  },
+);
+
+it.each([
+  ["agent が別 Harness の行も宣言していれば、次の pickup がその行で同じ task を選び直す", "both-agent", ["anthropic", "openai"], "head"],
+  ["宣言が1つの agent なら、戻った task は skipped のまま下の task が拾われる", "claude-agent", ["anthropic", "openai"], "next"],
+] as const)(
+  "start の中で (claude-code, B) の組が止めた pickup は先頭へ戻って枠を空け、tick を待たずに次の pickup が走る —— %s(ADR 0274 決定1)",
+  async (_case, assignee, providers, secondRun) => {
+    const db = openDb(":memory:");
+    const clock = new FakeClock();
+    const slot = new Slot();
+    const containers = passthroughContainers();
+    const started: Array<[string, Provider]> = [];
+    // Claude adapter の同期の検査と同じく、start の中で組を quarantine して盤面の一撃を同期に呼ぶ(初回だけ)
+    const onPickupStopped = queueReturnHandler({ db, clock, slot, resolve: undefined, pollNow: () => scheduler.pollNow() }, containers);
+    const worker: WorkerAdapter = {
+      id: "claude-agent",
+      start: (task, setting) => {
+        started.push([task.id, setting.provider]);
+        if (started.length > 1) return;
+        const stop = { quarantine: "workspaceContainment", value: "claude-code/B", reason: "unsafe settings" } as const;
+        registerQuarantine(db, stop.quarantine, stop.value, stop.reason, clock.now());
+        onPickupStopped(task.id, { kind: "pickup_stopped", ...stop });
+      },
+      gracefulStop() {},
+      checkUsage: async () => healthyUsageText(clock.now()),
+    };
+    const work = (title: string, fields: { workspace: string; assignee: string }) =>
+      registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c", ...fields }, clock.now(), ...HUMAN_WEBUI);
+    const head = work("B の head", { workspace: "B", assignee });
+    const next = work("次の task", { workspace: "B", assignee: "codex-agent" });
+    const scheduler = startScheduler({
+      retrospectiveCalls: noRetrospectiveCalls,
+      converge: async () => [],
+      db,
+      clock,
+      slot,
+      worker,
+      containers,
+      onSpawnFailed: () => {},
+      onRecordContainerFailed: () => {},
+      onPickupStopped,
+      openaiUsage: () => healthyOpenai(clock.now()),
+      taskExecutionCandidates: (task) =>
+        executionSettingsFor(
+          db,
+          { provider: AGENTS[task.assignee!]!.map((name) => ({ name, advisor: false })), tier: undefined },
+          task,
+        ),
+    });
+
+    await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+
+    expect(started).toEqual([[head.id, providers[0]], [secondRun === "head" ? head.id : next.id, providers[1]]]);
+    expect(listEvents(db, head.id).map((e) => e.kind)).toContain("pickup_stopped");
+    expect(listEvents(db, head.id).map((e) => e.kind)).not.toContain("spawn_failed");
+    if (secondRun === "next") expect(getTask(db, head.id)?.status).toBe("todo");
     scheduler.stop();
   },
 );

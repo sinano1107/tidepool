@@ -18,7 +18,7 @@ import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
+import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
@@ -46,6 +46,7 @@ import {
 } from "./stream-json.js";
 import {
   carriesReadOnly,
+  type PickupStopped,
   resolveTaskAgent,
   type Task,
   taskVerbSwap,
@@ -1120,6 +1121,9 @@ export interface ClaudeWorkerOptions {
   /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
    *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
+  /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
+   *  `onCapInterrupted` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
+  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
@@ -1700,7 +1704,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // the clone's real default branch (origin/HEAD) — a mismatch drops the
     // registry workspace into quarantine rather than silently trusting a
     // branch that isn't the default. A side check: the current (non-registry)
-    // task keeps its slot regardless, same posture as the drift checks below.
+    // task keeps running regardless.
     guardRegistryDefaultBranch(
       this.options.db,
       registry,
@@ -1718,12 +1722,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // into quarantine rather than throwing out of start() — defense in depth
     // alongside the scheduler's own pre-pickup gate, which is what
     // ordinarily catches this before start() is ever called.
+    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が先頭へ戻す
+    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,
       (taskWorkspace) =>
         resolveExecutionWorkspace(registry, this.options.workspace, taskWorkspace, this.workspacesDir),
       task.workspace,
       this.options.clock.now(),
+      stopped,
     );
     if (!workspace) return;
     // 走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室。下の検査・cwd・封じ込めの組はこちら、層と記憶は実環境
@@ -1753,19 +1760,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // settings を消して回ることになる。
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
-      quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now());
+      stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
       return;
     }
     // Claude にしか効かない settings なので、止めるのは (claude-code, workspace) の組だけ(ADR 0259 決定1)
     const contained = claudeWorkspaceContainment(place.path);
     if (!contained.available) {
-      registerQuarantine(
-        this.options.db,
-        "workspaceContainment",
-        workspaceContainmentValue("claude-code", place.name),
-        contained.reason,
-        this.options.clock.now(),
-      );
+      const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("claude-code", place.name), reason: contained.reason } as const;
+      registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
+      stopped(stop);
       return;
     }
     const settings = workspaceSettingsDisposition(place.path);
@@ -1775,14 +1778,14 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         excludeWorkspaceProjectSettings(place);
         this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
-        quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now());
+        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
     } else if (settings.hiddenProjectSettings) {
       try {
         materializeWorkspaceProjectSettings(place);
       } catch (err) {
-        quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now());
+        stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
     }
@@ -1804,6 +1807,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         resolveExecutionAgent(registry, this.options.agent, taskAssignee, tierNames(this.options.db), task.type),
       taskAgent,
       this.options.clock.now(),
+      stopped,
     );
     if (!agent) return;
     // ADR 0097 決定4 / issue #445: the provider routing is derived once, here

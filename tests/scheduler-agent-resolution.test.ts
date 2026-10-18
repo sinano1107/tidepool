@@ -24,6 +24,7 @@ it.each(UNRESOLVABLE_AGENT)("先頭の assignee の候補解決が %s で倒れ�
     containers: fakeContainers(),
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
     taskExecutionCandidates: (task) => {
       if (task.assignee === "drifted") throw fail("drifted");
       return candidates(task);
@@ -69,6 +70,7 @@ it.each(UNRESOLVABLE_AGENT)("openai の観測後に引き直した候補解決�
     containers: fakeContainers(),
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
     openaiUsage: healthyOpenai,
     taskExecutionCandidates: (task) => {
       if (task.assignee !== "drifted") return candidates(task);
@@ -119,6 +121,7 @@ it("openai の観測後に引き直した候補解決が解決できない agent
     containers: fakeContainers(),
     onSpawnFailed: () => {},
     onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
     openaiUsage: healthyOpenai,
     taskExecutionCandidates: () => {
       calls++;

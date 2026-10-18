@@ -28,7 +28,7 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { appendEvent, type EventPayload } from "./events.js";
+import { appendEvent, type EventPayload, type ResourceStop } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { git } from "./git.js";
 import type { CodexWorkspaceCheck } from "./harness-containment.js";
@@ -46,7 +46,7 @@ import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 
 
-import { carriesReadOnly, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
@@ -307,6 +307,8 @@ export interface CodexWorkerOptions {
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
+  /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が先頭へ戻す。 */
+  onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
@@ -1158,18 +1160,21 @@ export class CodexWorker implements WorkerAdapter {
 
   start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
+    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が先頭へ戻す
+    const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,
       (name) => resolveExecutionWorkspace(registry, this.options.workspace, name, this.workspacesDir),
       task.workspace,
       this.options.clock.now(),
+      stopped,
     );
     if (!workspace) return;
     // 走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室。検査・cwd・封じ込めの組はこちら、層と記憶は実環境
     const place = taskRunPlace(this.options.db, task, workspace);
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {
-      quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now());
+      stopped(quarantineWorkspace(this.options.db, place.name, new Error(overlap.reason), this.options.clock.now()));
       return;
     }
     const assignee = resolveTaskAgent(
@@ -1183,6 +1188,7 @@ export class CodexWorker implements WorkerAdapter {
       (name) => resolveExecutionAgent(registry, this.options.agent, name, tierNames(this.options.db), task.type),
       assignee,
       this.options.clock.now(),
+      stopped,
     );
     if (!agent) return;
 
@@ -1288,13 +1294,9 @@ export class CodexWorker implements WorkerAdapter {
       if (!checked.capability.available) {
         removeTaskTemp();
         // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
-        registerQuarantine(
-          this.options.db,
-          "workspaceContainment",
-          workspaceContainmentValue("codex", place.name),
-          checked.capability.reason,
-          this.options.clock.now(),
-        );
+        const stop = { quarantine: "workspaceContainment", value: workspaceContainmentValue("codex", place.name), reason: checked.capability.reason } as const;
+        registerQuarantine(this.options.db, stop.quarantine, stop.value, stop.reason, this.options.clock.now());
+        stopped(stop);
         return;
       }
       // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
