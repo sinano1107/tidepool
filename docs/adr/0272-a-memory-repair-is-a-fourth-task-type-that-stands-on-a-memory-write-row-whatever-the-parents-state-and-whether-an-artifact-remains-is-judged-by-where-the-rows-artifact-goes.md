@@ -62,3 +62,12 @@ episode の形は新しくならない。work の修理子は flag 無しの非 
 
 退けた形: **学習器から外す** —— 外す理由を新しく立てる必要があるが、記録にも機構にも無い。
 
+## 追記2(2026-10-18 の grilling、issue #2209 / ADR 0275)
+
+決定4 の「組み込み agent は取れない」は撤回 —— ADR 0228 の3つの理由は work の授権の話で memory_repair に当たらず、組み込みは
+review / interview / memory_repair を取れる(ADR 0275 決定1)。決定2 の4つの食い違いは3つ(RCA の見分け・未設定 assignee の解決先・
+`review_tier`)になり、type の分離はそのまま立つ。追記1 の「組み込み agent の影の門は work と memory_repair を1つの側として扱う」は、
+memory_repair が組み込みへ落ちても走るので `work` だけに戻る(学習器の側は変わらない)。修理子の assignee は列が名前なら列、参照なら
+Executor(ADR 0275 決定2)。#2175 の grilling で決まった分も記す: 親の無い memory_repair は `registerTask` が拒む(退けた形「親の無い
+work」と同じ理由)、登録名義は work の修理子と同じ HUMAN 名義 + commit の origin(ADR 0194 決定3)、root の列は参照で写すものが無い
+(→ Executor)。
