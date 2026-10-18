@@ -158,6 +158,19 @@ it("修正値の対象は effort だけを動かせ、effort の述語に外れ�
   expect(await interviews()).toEqual([]);
 });
 
+it("approve は人間の扉と同じく既定 agent が走らせられない対象を拒み、回答ごと巻き戻って question は開いたまま(ADR 0253 決定3)", async () => {
+  const reviewId = await boardWithRoutingReview();
+  const { eventId } = session("reef");
+  // 既定 agent の entry は anthropic だけ —— openai の対象は走れない
+  const { question_id } = await call(reviewId, "propose_routing_change", proposal([eventId], { targets: [{ provider: "openai", model: "gpt-5.6-sol", effort: "low" }] }));
+
+  const refused = await answer(question_id, { answers: ["approve"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("cannot run as");
+  expect(await task(question_id)).toMatchObject({ status: "todo", question_answer: null });
+  expect(await interviews()).toEqual([]);
+});
+
 it("reject では何も登録されず、根拠の行が書き換わるか対象と一致する行が足されると question は observed で決着する", async () => {
   const reviewId = await boardWithRoutingReview();
   const { eventId } = session("reef");
