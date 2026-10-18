@@ -40,6 +40,7 @@ import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { capInterruptionHandler, RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
@@ -1405,15 +1406,19 @@ describe("ClaudeCodeWorker", () => {
     expect(childSandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
   });
 
-  it("Interview の監査 review は実環境を cwd に manual で走り、書けるのは task temp だけで、親の root の面接室を読みに開き Read の許可も足す(ADR 0273 決定4)", async () => {
+  it.each(["監査 review", "監査の判断行への異議から立つ RCA review(監査の子)"] as const)("Interview の%sは実環境を cwd に manual で走り、書けるのは task temp だけで、root の面接室を読みに開き Read の許可も足す —— 付帯子の review は親の読みの面を継ぐ(ADR 0273 決定1・4)", async (reviewer) => {
     const real = await realpath(await tempDir("tidepool-claude-real-env-"));
     const { worker, setting, slot, calls, logDir, db } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${real}\n` }, { auditorName: "deckhand" });
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
     const root = registerTask(db, { type: "interview", assignee: "deckhand", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
     const audit = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "deckhand", new Date(0), "worker", POSED_HEAD);
-    slot.occupy(audit.id);
-    worker.start(audit, setting(audit));
+    const task =
+      reviewer === "監査 review"
+        ? audit
+        : registerTask(db, { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id }, new Date(0), BOARD_WORKER_ID, "board");
+    slot.occupy(task.id);
+    worker.start(task, setting(task));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
     const [call] = calls as [(typeof calls)[0]];

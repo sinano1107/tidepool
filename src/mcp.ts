@@ -8,7 +8,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
-import { getEvent, INTERVIEW_OUTCOMES } from "./events.js";
+import { INTERVIEW_OUTCOMES } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -63,7 +63,7 @@ import {
   assertPosable,
   assertTargetsRunnable,
   assigneeNeedsApproval,
-  auditedProbe,
+  auditedPosedEventId,
   completeAudit,
   completeInterview,
   completeTask,
@@ -78,6 +78,7 @@ import {
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
+  INTERVIEW_AUDIT_NOTICE,
   interviewFields,
   interviewRoomPath,
   interviewTargets,
@@ -86,6 +87,7 @@ import {
   listExaminees,
   logDecision,
   MEMORY_REPAIR_NOTICE,
+  posedProbe,
   poseProbe,
   redecompose,
   reportBrokenProbe,
@@ -418,11 +420,12 @@ function interviewEnvelope(deps: McpDeps, task: Task) {
 }
 
 /** 監査 review の envelope(ADR 0273 決定3・4): 監査する出題の head と面接室の在り処、root の envelope の構造欄。 */
-function auditedProbeEnvelope(deps: McpDeps, task: Task, root: Task) {
-  const posed = auditedProbe(deps.db, task.id);
-  if (posed === undefined) return undefined;
-  const { head } = getEvent(deps.db, posed)!.payload as { head: string };
-  return { interview_audit: { head, interview_room: interviewRoomPath(deps.db, root.id), ...interviewEnvelope(deps, root) } };
+function auditedProbeEnvelope(deps: McpDeps, task: Task) {
+  const posedId = auditedPosedEventId(deps.db, task.id);
+  if (posedId === undefined) return undefined;
+  const { head, root_id } = posedProbe(deps.db, posedId);
+  // ADR 0271 決定2 の形: reviewer の guidance の行き先を言い直す1行(spawn の文面と同じ)
+  return { interview_audit: { notice: INTERVIEW_AUDIT_NOTICE, head, interview_room: interviewRoomPath(deps.db, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
 
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
@@ -576,7 +579,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             type: task.type,
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
-            ...(parent && auditedProbeEnvelope(deps, task, parent)),
+            ...auditedProbeEnvelope(deps, task),
             // ADR 0272 決定3 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。memory_repair は祖先の cancel の下でも修理の1行
             ...(task.type === "memory_repair"
               ? { memory_repair: MEMORY_REPAIR_NOTICE }

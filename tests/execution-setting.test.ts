@@ -809,7 +809,7 @@ function boardWithRefusedRows(extraRows: ExecutionSettingTable, refused: Array<[
   return db;
 }
 const anthropicAgent = (advisor: boolean) => ({ provider: [{ name: "anthropic", advisor }], tier: undefined });
-const workAt = (tier: Tier) => ({ type: "work" as const, tier, priority: null, review_tier: null, interview_target_id: null });
+const workAt = (tier: Tier) => ({ type: "work" as const, tier, priority: null, review_tier: null, interview_target_id: null, id: "selector-input" });
 
 it("行の Quarantine の照合は完全一致 —— claude-opus-5 の Quarantine は claude-opus-5-5 の行を外さない", () => {
   const db = boardWithRefusedRows(
@@ -1233,7 +1233,7 @@ it("盤面既定の段を選び直すと、要求も agent の tier も無い ta
   const db = openDb(":memory:");
   change(db, { setting: "default_tier", value: "standard" });
   expect(readExecutionSettings(db).defaultTier).toBe("standard");
-  expect(executionSettingsFor(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null, interview_target_id: null })[0]).toMatchObject({
+  expect(executionSettingsFor(db, anthropicAgent(false), { type: "work", tier: null, priority: null, review_tier: null, interview_target_id: null, id: "selector-input" })[0]).toMatchObject({
     model: "claude-opus-5-5",
     source: { tier: "board" },
   });
@@ -1252,8 +1252,8 @@ it("review 用の優先順位の既定は種 quality で、設定変更が読み
 /** anthropic と openai の2つの entry を持ち、standard を既定の段にする agent(review_tier の無い review も standard で走る)。 */
 const twoProviderAgent = { provider: [{ name: "anthropic", advisor: false }, { name: "openai", advisor: false }], tier: "standard" };
 const reviewTasks = [
-  { type: "review" as const, tier: null, priority: null, review_tier: "standard", interview_target_id: null },
-  { type: "review" as const, tier: null, priority: null, review_tier: null, interview_target_id: null },
+  { type: "review" as const, tier: null, priority: null, review_tier: "standard", interview_target_id: null, id: "selector-input" },
+  { type: "review" as const, tier: null, priority: null, review_tier: null, interview_target_id: null, id: "selector-input" },
 ];
 
 it("review task は review_tier の有無によらず review 用の既定で並び、work 用の既定を cost にしても判定者は動かない(ADR 0111 追記10)", () => {
@@ -1271,7 +1271,7 @@ it("review task は review_tier の有無によらず review 用の既定で並�
 it("work task は task の priority → work 用の既定で並び、review 用の既定を読まない", () => {
   const db = openDb(":memory:");
   change(db, { setting: "review_priority", value: "cost" });
-  const work = (priority: "quality" | "cost" | null) => ({ type: "work" as const, tier: null, priority, review_tier: null, interview_target_id: null });
+  const work = (priority: "quality" | "cost" | null) => ({ type: "work" as const, tier: null, priority, review_tier: null, interview_target_id: null, id: "selector-input" });
   expect(executionSettingsFor(db, twoProviderAgent, work(null))[0]).toMatchObject({ model: "claude-opus-5-5" });
   expect(executionSettingsFor(db, twoProviderAgent, work("cost"))[0]).toMatchObject({ model: "gpt-5.6-sol" });
   change(db, { setting: "priority", value: "cost" });

@@ -9,7 +9,7 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
@@ -751,7 +751,7 @@ it("Interview の root の history で、受験者は採点のための id を�
 it("出題は判断ログの1件(型つきの欄つき)を入れ、監査の受理が対象ごとの受験者を一覧の順に入れ、root は blocked のまま —— 受験者は親も分解判断も持たず対象の行で root に結ばれ、全部同じ題・目的・完了基準、assignee 未指定、root の workspace、出題した root の agent 名義。root の子は監査だけ(ADR 0253 決定1・3 / ADR 0267 決定1・5 / ADR 0273 決定3)", () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { ...ROOT, workspace: "reef", interview_targets: [opusHigh, haikuNull, sonnetHigh] }, new Date(0), ...HUMAN_WEBUI);
-  const children = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
+  const children = poseAccepted(db, root, POSE, "suzumedai", new Date(0), "worker", POSED_HEAD);
   const decisions = listEvents(db, root.id).filter((event) => event.kind === "decision_logged");
   expect(decisions).toHaveLength(1);
   const [decision] = decisions;
@@ -765,7 +765,7 @@ it("出題は判断ログの1件(型つきの欄つき)を入れ、監査の受�
   ]);
   for (const child of children) {
     expect(child).toMatchObject({ type: "work", title: POSE.title, purpose: POSE.probe, completion_criteria: POSE.completion_criteria, assignee: null, workspace: "reef", parent_id: null, based_on_decision: null });
-    expect(listEvents(db, child.id).find((event) => event.kind === "task_registered")!.worker_id).toBe("auditor");
+    expect(listEvents(db, child.id).find((event) => event.kind === "task_registered")!.worker_id).toBe("suzumedai");
   }
   expect(listChildren(db, root.id).map(({ type, title }) => [type, title])).toEqual([["review", `audit: ${POSE.title}`]]);
   expect(presentTask(db, getTask(db, root.id)!).status).toBe("blocked");
@@ -781,6 +781,85 @@ it("2度目の出題・Interview でない task・受験者への出題は拒ま
   expect(() => poseProbe(db, child!, POSE, "tako", new Date(0), "worker", POSED_HEAD)).toThrow(/only an Interview root poses a probe/);
   expect(listBoard(db)).toHaveLength(before);
   expect(listEvents(db, root.id).filter((event) => event.kind === "decision_logged")).toHaveLength(1);
+});
+
+/** 出題した root の agent と、監査を完了する Auditor —— 登録者がどちらの名義かを分けて言えるように別の名前。 */
+const POSER = "suzumedai";
+const AUDITOR = "fugu";
+const audited = (db: Db, audit: Task, verdict: "accepted" | "rejected", findings = "the probe asks for the measured tier's work") =>
+  completeAudit(db, getTask(db, audit.id)!, { verdict, findings }, AUDITOR, new Date(1), "worker");
+
+it("出題は監査 review を root の付帯子として盤面名義で立て(assignee は空、workspace は root の実環境)、root は監査待ちの blocked で拾われない。監査の verb は review の読み系と complete_audit で、complete_task・分解・記憶の書き込み・list_agents は無い。受理で root は受験者待ちになる(ADR 0273 決定3・4)", () => {
+  const { db, root } = registerInterview(undefined, [opusHigh], { workspace: "reef" });
+
+  const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+
+  expect(audit).toMatchObject({ type: "review", parent_id: root.id, assignee: null, workspace: "reef", status: "todo", based_on_decision: null });
+  expect(getRegistrant(db, audit.id)).toBe(BOARD_WORKER_ID);
+  expect(presentTask(db, getTask(db, root.id)!)).toMatchObject({ status: "blocked", interview_waiting: "audit" });
+  expect(nextSlotTask(db)?.id).toBe(audit.id);
+  expect(taskVerbSwap(db, audit.id)).toEqual({
+    withheld: ["complete_task", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "propose_from_objection", "list_agents"],
+    added: ["complete_audit"],
+  });
+  audited(db, audit, "accepted");
+  expect(presentTask(db, getTask(db, root.id)!)).toMatchObject({ status: "blocked", interview_waiting: "examinees" });
+});
+
+it("前の出題の監査が未決着のあいだの出題は拒まれる。監査の却下は findings を root の history の監査の行に載せて root を起こし、root は出題し直せて次の監査が立つ —— 受験者は立たない(ADR 0273 決定3)", () => {
+  const { db, root } = registerInterview();
+  const first = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+  expect(() => poseProbe(db, getTask(db, root.id)!, POSE, POSER, new Date(0), "worker", POSED_HEAD)).toThrow(/still under audit/);
+
+  audited(db, first, "rejected", "the tier below solves it");
+
+  expect(taskHistoryRows(db, root.id).map((row) => row.entry)).toContainEqual({
+    child_outside_the_decomposition: expect.objectContaining({ status: "done", audit: { verdict: "rejected", findings: "the tier below solves it" } }),
+  });
+  expect(nextSlotTask(db)?.id).toBe(root.id);
+  const second = poseProbe(db, getTask(db, root.id)!, POSE, POSER, new Date(2), "worker", POSED_HEAD);
+  expect(second.id).not.toBe(first.id);
+  expect(listEvents(db, root.id).filter((event) => event.kind === "decision_logged")).toHaveLength(2);
+  expect(listExaminees(db, root.id)).toEqual([]);
+});
+
+it("監査の完了は監査でない task(root を親にした人間登録の review・root)と空の findings を拒み、何も記録しない(ADR 0273 決定3)", () => {
+  const { db, root } = registerInterview();
+  const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+  const review = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: root.id }, new Date(0), ...HUMAN_WEBUI);
+
+  for (const task of [review, getTask(db, root.id)!]) expect(() => audited(db, task, "accepted")).toThrow("only an Interview's audit completes with complete_audit");
+  expect(() => audited(db, audit, "accepted", "  ")).toThrow(DomainError);
+
+  expect(getTask(db, audit.id)!.status).toBe("todo");
+  expect(listEvents(db, audit.id).map((event) => event.kind)).not.toContain("interview_audited");
+  expect(listExaminees(db, root.id)).toEqual([]);
+});
+
+it.each(["直接 cancel", "retry"] as const)("監査が未決着の root の%sは監査 review を倒す(ADR 0273 決定3 / ADR 0271 決定3)", (path) => {
+  const { db, root } = registerInterview();
+  const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+
+  if (path === "直接 cancel") cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui");
+  else retryRoot(db, root);
+
+  expect(getTask(db, audit.id)!.status).toBe("cancelled");
+});
+
+it("監査の判断行への異議を commit すると監査の下に RCA(self / auditor)だけが立ち、修理子は立たない —— 監査の成果は残らない(ADR 0273 決定3)", () => {
+  const { db, root } = registerInterview();
+  const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+  audited(db, audit, "accepted");
+  const entry = taskDecisionLog(db, audit.id).at(-1)!.id;
+  startTriage(db, new Date(2));
+  raiseObjection(db, entry, "the tier below solves it", new Date(2));
+
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, audit.id).map((child) => [child.type, child.title])).toEqual([
+    ["review", `rca (self): audit: ${POSE.title}`],
+    ["review", `rca (auditor): audit: ${POSE.title}`],
+  ]);
 });
 
 it("Interview の root は agent の decompose でも人間の扉でも分けられない —— 出題の前も後も拒まれ、何も登録されない(ADR 0253 決定5 / ADR 0111 決定6)", () => {

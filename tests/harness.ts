@@ -887,11 +887,11 @@ export function interviewExaminee(db: Db, at: Date): Task {
   return poseAccepted(db, interview, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", at, "worker", POSED_HEAD)[0]!;
 }
 
-/** setup のみ: root が出題し、その監査 review が受理して立った受験者を返す(ADR 0273 決定3)。受理は Auditor 名義。 */
+/** setup のみ: root が出題し、その監査 review が受理して立った受験者を返す(ADR 0273 決定3)。受理は出題した agent と別の名前の Auditor 名義。 */
 export function poseAccepted(...args: Parameters<typeof poseProbe>): Task[] {
   const [db, root, , , now] = args;
   const audit = poseProbe(...args);
-  completeAudit(db, audit, { verdict: "accepted", findings: "the probe asks for the measured tier's work" }, "auditor", now, "worker");
+  completeAudit(db, audit, { verdict: "accepted", findings: "the probe asks for the measured tier's work" }, "fugu", now, "worker");
   return listExaminees(db, root.id);
 }
 

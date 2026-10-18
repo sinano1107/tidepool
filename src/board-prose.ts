@@ -17,8 +17,10 @@ import {
 import {
   ARTIFACT_DISCARDED_NOTICE,
   AUTHORITY_WILDCARD,
+  auditedPosedEventId,
   getTask,
   HUMAN_ROSTER_AGENT,
+  INTERVIEW_AUDIT_NOTICE,
   isArtifactDiscarded,
   MEMORY_REPAIR_NOTICE,
   reviewedTaskExecutor,
@@ -58,7 +60,7 @@ export function boardDoctrine({ delegate, workflow }: DoctrineVocabulary, verbs:
 Work that needs independent completion criteria, separate authority, its own
 risk, or survival across sessions must not be routed to ${delegate} —
 that is delegation smuggled past the board. ${split ? `Register that split with the
-tidepool MCP's decompose instead.` : verbs.added.includes("pose_probe") && !verbs.posed ? POSE_PROBE : NOT_SPLIT}
+tidepool MCP's decompose instead.` : verbs.added.includes("pose_probe") && !verbs.probeAccepted ? POSE_PROBE : NOT_SPLIT}
 
 ${delegateAtSentenceStart} may only be used for labor-splitting that does not divide
 accountability (exploration, parallel research, mechanical edits): you carry
@@ -385,8 +387,13 @@ export function boardProse(input: {
   const review = task.type === "review" || task.type === "interview";
   const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
   const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
-  // ADR 0272 決定3 / ADR 0271 決定2: guidance の文は変えず、その直後に盤面が1行足す。memory_repair は祖先の cancel の下でも修理の1行
-  const notice = task.type === "memory_repair" ? MEMORY_REPAIR_NOTICE : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+  // ADR 0272 決定3 / ADR 0271 決定2 / ADR 0273 決定4: guidance の文は変えず、その直後に盤面が1行足す。memory_repair は祖先の cancel の下でも修理の1行
+  const notice =
+    task.type === "memory_repair"
+      ? MEMORY_REPAIR_NOTICE
+      : auditedPosedEventId(db, task.id) !== undefined
+        ? INTERVIEW_AUDIT_NOTICE
+        : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
   const injected = notice ? `\n\n${notice}` : "";
   return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

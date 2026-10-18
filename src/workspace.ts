@@ -216,12 +216,14 @@ export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefi
 }
 
 /** task が走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室、他は task の workspace。許可ドメインと層は呼び手が
- *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。root の付帯子の review(監査・RCA・人間登録の review 子)は
- *  親の読みの面を継いで、実環境で走り root の面接室と開ける面接室を読みだけ開く(ADR 0273 決定4)。 */
+ *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
+ *  —— review の親をたどって Interview の root に着く review(監査、root や監査の行への異議の RCA、人間登録の review 子)は、実環境で
+ *  走り root の面接室と開ける面接室を読みだけ開く。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
   if (rootId === undefined) {
-    const parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
+    let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
+    while (parent?.type === "review" && parent.parent_id !== null) parent = getTask(db, parent.parent_id);
     if (parent?.type !== "interview") return { ...workspace, read_paths: [] };
     return { ...workspace, read_paths: [interviewRoomPath(db, parent.id), ...readableInterviewRooms(db, parent.id)].filter((path) => path !== undefined).map(safeRealpath) };
   }

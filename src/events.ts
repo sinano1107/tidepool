@@ -169,7 +169,7 @@ export type EventPayload =
   // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
   // Interview の監査(ADR 0273 決定3・4): 監査 review が出題を受理したか却下したかと findings。task_id は監査 review
-  | { kind: "interview_audited"; verdict: InterviewOutcome; findings: string }
+  | ({ kind: "interview_audited" } & AuditVerdict)
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent
   | { kind: "task_picked_up"; resolved_from_default?: ResolvedFromDefault }
   | { kind: "task_moved"; after: string | null }
@@ -683,6 +683,12 @@ export type EventKind = EventPayload["kind"];
 /** Interview の採点の値(ADR 0181 決定4)。採点の verb の schema と学習器が同じこの1本を読む。 */
 export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
+
+/** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
+export interface AuditVerdict {
+  verdict: InterviewOutcome;
+  findings: string;
+}
 
 /** 盤面スコープの kind —— task を持たず、task_id を NULL で書く(issue #545 / #590 / #927)。
  *  一覧はここにだけ置き、`appendEvent` の型がこの一覧と taskId の null を結ぶ。 */
