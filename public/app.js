@@ -175,7 +175,7 @@ var TidepoolRules = (() => {
     return t.type === "review" ? "a review task runs at its review_tier; tier and priority are for work tasks only" : void 0;
   }
   function whyAssigneeCannotTake(name, type, resolvesToBuiltIn) {
-    return type !== "review" && type !== "interview" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs only reviews and Interviews` : void 0;
+    return type !== "review" && type !== "interview" && type !== "memory_repair" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs only reviews, Interviews and memory repairs` : void 0;
   }
   var completionReviewFires = (t) => whyNoCompletionReview(t) === void 0;
   var reviewFlagCarriesMeaning = (t) => whyReviewFlagIsInert(t) === void 0;

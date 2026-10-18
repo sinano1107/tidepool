@@ -577,7 +577,7 @@ function agentsSpeakingProvidersResolver(
  *  every task shared regardless of who it was actually assigned to. An
  *  assignee the registry no longer knows (UnknownAgentError) or whose
  *  definition no longer stands (InvalidAgentDefinitionError, ADR 0097 — and a
- *  non-review task resolving to the built-in, ADR 0228) throws,
+ *  work task resolving to the built-in, ADR 0228 / ADR 0275 決定1) throws,
  *  and each consumer quarantines the agent name: landing (ADR 0217 決定3) and
  *  the worker verbs that read authority, which are refused (ADR 0224).
  *  Without a registry, no agent's authority is knowable at all — unrestricted. */
