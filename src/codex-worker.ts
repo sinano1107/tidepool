@@ -38,14 +38,13 @@ import {
   type InjectionQuery,
   recordMemoryInjection,
   recordMetaReviewMaterial,
-  repairableEntries,
 } from "./memory.js";
 import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
-import { resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
@@ -483,9 +482,10 @@ function permissionConfig(
   executable: string,
   allowedDomains: readonly string[],
 ): string[] {
-  const name = taskType === "review" ? "tidepool-review" : "tidepool-work";
-  const parent = taskType === "review" ? ":read-only" : ":workspace";
-  const access = taskType === "review" ? "read" : "write";
+  const readOnly = carriesReadOnly(taskType);
+  const name = readOnly ? "tidepool-review" : "tidepool-work";
+  const parent = readOnly ? ":read-only" : ":workspace";
+  const access = readOnly ? "read" : "write";
   const dotGit = join(workspace, ".git");
   const filesystem = {
     ":root": "deny",
@@ -1209,16 +1209,17 @@ export class CodexWorker implements WorkerAdapter {
         systemPrompt: agent.definition.systemPrompt,
         profile: agent.profile,
         doctrine: codexDoctrine(verbs),
+        verbs,
         allowedDomains: workspace.allowed_domains,
         memorySection: memory.section ?? material?.section ?? null,
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(repairableEntries(this.options.db, task.id).size > 0 ? MEMORY_REPAIR_VERBS : [])]
+          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? MEMORY_REPAIR_VERBS : [])]
         ).filter((verb) => !withheld.includes(verb)),
         ...verbs.added,
       ],

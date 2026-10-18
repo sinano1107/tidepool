@@ -34,7 +34,6 @@ import {
   readMemory,
   readMemoryEntries,
   recordKnowledge,
-  repairableEntries,
   repairInvalidate,
   repairMove,
   repairMoveBranchBack,
@@ -80,6 +79,7 @@ import {
   joinHistory,
   listExaminees,
   logDecision,
+  MEMORY_REPAIR_NOTICE,
   poseProbe,
   redecompose,
   reportBrokenProbe,
@@ -507,7 +507,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
-  // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)
+  // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
+  // 登録しない(ADR 0272 決定3)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -542,8 +543,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(await taskContext(deps, task)),
             type: task.type,
             ...(targets && { interview_targets: targets }),
-            // ADR 0271 決定2: 分解の verb を伏せた理由(spawn の文面と同じ1行)
-            ...(isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
+            // ADR 0272 決定3 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。memory_repair は祖先の cancel の下でも修理の1行
+            ...(task.type === "memory_repair"
+              ? { memory_repair: MEMORY_REPAIR_NOTICE }
+              : isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
@@ -795,46 +798,50 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       }),
   );
 
-  server.registerTool(
-    "declare_premise_breach",
-    {
-      description:
-        "Declare that the premise of the decomposition decision your task rests on is false " +
-        "(for example, a sibling's result contradicts it). Not a failure. Every unsettled child " +
-        "of that decision, this task included, is held until the decision's author judges: an " +
-        "agent-authored decision returns your parent early to continue or redecompose; a " +
-        "human-authored decision, or a repeat breach of the same decision, becomes a " +
-        "continue / abandon question for the human. This task stays unsettled and the slot is " +
-        "freed — commit your work first. A root task or a child outside a decomposition " +
-        "decision escalates instead. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { reason: requiredTextSchema },
-    },
-    async ({ reason }) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-        const question = declarePremiseBreach(deps.db, task, reason, workerId, now, "worker");
-        return { question_id: question?.id ?? null, status: "held" };
-      }),
-  );
+  if (!withheld.includes("declare_premise_breach")) {
+    server.registerTool(
+      "declare_premise_breach",
+      {
+        description:
+          "Declare that the premise of the decomposition decision your task rests on is false " +
+          "(for example, a sibling's result contradicts it). Not a failure. Every unsettled child " +
+          "of that decision, this task included, is held until the decision's author judges: an " +
+          "agent-authored decision returns your parent early to continue or redecompose; a " +
+          "human-authored decision, or a repeat breach of the same decision, becomes a " +
+          "continue / abandon question for the human. This task stays unsettled and the slot is " +
+          "freed — commit your work first. A root task or a child outside a decomposition " +
+          "decision escalates instead. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { reason: requiredTextSchema },
+      },
+      async ({ reason }) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const question = declarePremiseBreach(deps.db, task, reason, workerId, now, "worker");
+          return { question_id: question?.id ?? null, status: "held" };
+        }),
+    );
+  }
 
-  server.registerTool(
-    "continue_decomposition",
-    {
-      description:
-        "Answer a child's premise breach by keeping your decomposition decision: records your " +
-        "judgment as one decision-log line (the child resumes with it in its history), releases " +
-        "the held children, blocks this task again, and frees the slot. Your continue is final " +
-        "for this premise — a repeat breach goes to the human. Only while a child of this task " +
-        "has an open premise breach; then plain decompose and complete_task are refused. " +
-        BOARD_WRITE_LANGUAGE_RULE,
-      inputSchema: { line: requiredTextSchema },
-    },
-    async ({ line }) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-        continueDecomposition(deps.db, task, line, workerId, now, "worker");
-        return { parent_status: "blocked" };
-      }),
-  );
+  if (!withheld.includes("continue_decomposition")) {
+    server.registerTool(
+      "continue_decomposition",
+      {
+        description:
+          "Answer a child's premise breach by keeping your decomposition decision: records your " +
+          "judgment as one decision-log line (the child resumes with it in its history), releases " +
+          "the held children, blocks this task again, and frees the slot. Your continue is final " +
+          "for this premise — a repeat breach goes to the human. Only while a child of this task " +
+          "has an open premise breach; then plain decompose and complete_task are refused. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { line: requiredTextSchema },
+      },
+      async ({ line }) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          continueDecomposition(deps.db, task, line, workerId, now, "worker");
+          return { parent_status: "blocked" };
+        }),
+    );
+  }
 
   if (!withheld.includes("redecompose")) {
     server.registerTool(
@@ -924,8 +931,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     registerMetaReviewVerbs(server, deps, attributedTaskId, subject);
     return server;
   }
-  // ADR 0252 決定4: 書き込みの行への異議の修理 task にだけ記憶の修理 verb を足す
-  if (attributedTaskId !== null && repairableEntries(deps.db, attributedTaskId).size > 0) registerMemoryRepairVerbs(server, deps, attributedTaskId);
+  // ADR 0252 決定4 / ADR 0272 決定3: 記憶の修理 verb は memory_repair の type で足す
+  if (attributedTaskId !== null && getTask(deps.db, attributedTaskId)?.type === "memory_repair") registerMemoryRepairVerbs(server, deps, attributedTaskId);
 
   if (!withheld.includes("define_memory_branch")) {
     server.registerTool(

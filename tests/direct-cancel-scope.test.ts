@@ -488,3 +488,15 @@ it("task ごとの verb の差し替えは、cancelled の work の祖先を挟�
   const { parent, done, review } = doneSiblingOfFailed(db);
   for (const task of [target, cancelled, parent, done, review]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
 });
+
+it("task ごとの verb の差し替えは、memory_repair で分解の verb と新規の記憶の書き込みの verb を伏せ、祖先の cancel の下でも同じ6本 —— 修理の射程は異議された書き込みが触ったエントリに限る(ADR 0272 決定3)", () => {
+  db = openDb(":memory:");
+  const { target, child } = doneChildrenWithAttachments(db);
+  const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, BOARD_WORKER_ID, "board");
+  const withheld = ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"];
+  expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
+
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  expect(isArtifactDiscarded(db, memoryRepair.id)).toBe(true);
+  expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
+});

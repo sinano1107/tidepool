@@ -99,6 +99,12 @@ describe("spawnTools", () => {
     ]);
   });
 
+  it("memory_repair は review と同じ面 —— read-only 保証を運ぶ type(ADR 0272 決定3)", () => {
+    for (const slashCommandsDisabled of [false, true]) {
+      expect(spawnTools("memory_repair", slashCommandsDisabled)).toEqual(spawnTools("review", slashCommandsDisabled));
+    }
+  });
+
   it("review 以外は work と同じ面 — read-only は review という task type の性質(ADR 0013)", () => {
     expect(spawnTools("question", false)).toEqual(spawnTools("work", false));
   });

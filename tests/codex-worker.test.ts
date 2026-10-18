@@ -22,6 +22,7 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
@@ -98,9 +99,16 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   const objected = task(db, "wrote a note");
   const author = { activity: "worker_verb" as const, name: "codex-agent" };
   const { event_id } = recordKnowledge(db, { scope: "work", path: "build", title: "t", text: "x.", source: { commit: "0a46a46" }, author }, "worker", at, objected.id);
-  raiseObjection(db, event_id, "undo it", at);
+  const objection = raiseObjection(db, event_id, "undo it", at);
   commitTriage(db, at);
-  return listChildren(db, objected.id).find((child) => child.type === "work")!;
+  // 束ねが memory_repair を立てるのは #2175 から —— それまでは盤面の名義で直接立てる
+  return registerTask(
+    db,
+    { type: "memory_repair", assignee: "codex-agent", title: "memory repair: wrote a note", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] },
+    at,
+    BOARD_WORKER_ID,
+    "board",
+  );
 }
 
 /** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
@@ -319,6 +327,15 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const config = f.process.calls[0]!.args.filter((_, index, args) => args[index - 1] === "-c").join("\n");
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
+  });
+
+  it("memory_repair task の spawn は review と同じ read-only の permission profile で走る(ADR 0272 決定3)", async () => {
+    const f = await fixture();
+    await f.start(writeRepairTask(f.db));
+
+    const args = f.process.calls[0]!.args;
+    expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
+    expect(configEntry(args, "permissions.tidepool-review.extends=")).toBe('permissions.tidepool-review.extends=":read-only"');
   });
 
   // work task の .git の行(write / hooks・config は read)は下の issue #864 のテストが同じ seam で固定する(ADR 0107 決定3)

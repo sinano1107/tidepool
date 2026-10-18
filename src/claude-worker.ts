@@ -45,6 +45,7 @@ import {
   readRootRefusal,
 } from "./stream-json.js";
 import {
+  carriesReadOnly,
   resolveTaskAgent,
   type Task,
   taskVerbSwap,
@@ -164,7 +165,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
  *  分離だが、CLI 側の列挙が要らない(Edit/Write/NotebookEdit とパターンは
  *  task.type だけで決まる固定集合)ぶん同期・ping 不要。*/
 export function reviewToolDenials(taskType: Task["type"]): string[] {
-  if (taskType !== "review") return [];
+  if (!carriesReadOnly(taskType)) return [];
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
 }
 
@@ -237,8 +238,9 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  review 以外はすべて work と同じ面である — read-only は review という task
- *  type の性質であって実行エージェントの性質ではない(ADR 0013)。
+ *  read-only 保証を運ぶ type(review / memory_repair、`carriesReadOnly`)以外はすべて
+ *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
+ *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
  *  で、CLI はそのフラグで面から `Skill` を外すので宣言からも外す(ADR 0185)。spawn の
  *  `--tools` と init 行の照合は、フラグを決めた同じ値でここを呼ぶ。 */
@@ -248,7 +250,7 @@ export function spawnTools(taskType: Task["type"], slashCommandsDisabled: boolea
   // が毎回組み立て直しているのと同じ理由)。
   return WORKER_TOOLS.filter(
     (tool) =>
-      !(taskType === "review" && REVIEW_REMOVED_TOOLS.includes(tool)) &&
+      !(carriesReadOnly(taskType) && REVIEW_REMOVED_TOOLS.includes(tool)) &&
       !(slashCommandsDisabled && tool === "Skill"),
   );
 }
@@ -1992,6 +1994,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
       // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
       const material = buildMetaReviewMaterial(this.options.db, task.id);
+      const verbs = taskVerbSwap(this.options.db, task.id);
       // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
       // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で
       // transcript / stderr のファイル名をセッションごとに一意にする。イベント
@@ -2102,7 +2105,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // sandboxed Bash never reaches this layer in a work session and the OS
           // remains its only bound.
           "--permission-mode",
-          task.type === "review" ? "manual" : "acceptEdits",
+          carriesReadOnly(task.type) ? "manual" : "acceptEdits",
           // WHO IS ALLOWED TO WRITE PERMISSION AT ALL (ADR 0038). The mode above
           // is flag tier, but permission *merges* across tiers: an `allow` in the
           // host human's `~/.claude/settings.json` or in the workspace's
@@ -2178,7 +2181,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             systemPrompt: definition.systemPrompt,
             profile,
             // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
-            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, taskVerbSwap(this.options.db, task.id)),
+            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
+            verbs,
             allowedDomains: workspace.allowed_domains,
             memorySection: memory.section ?? material?.section ?? null,
           }),
