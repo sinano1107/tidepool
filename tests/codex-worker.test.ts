@@ -38,6 +38,7 @@ import {
   FULL_HANDOFF,
   HUMAN_WEBUI,
   mcpClient,
+  POSED_HEAD,
   quarantineQuestion,
   type Tidepool,
   WORKER_SPAWNED,
@@ -87,7 +88,7 @@ function interviewRoot(db: ReturnType<typeof openDb>) {
 }
 function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
-  return poseProbe(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker")[0]!;
+  return poseProbe(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 

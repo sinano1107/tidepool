@@ -27,7 +27,7 @@ import { attributeObjections, refireRetrospectiveCalls } from "../src/retrospect
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
-import { examineeRootId, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
+import { examineeRootId, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, HUMAN_WEBUI, POSED_HEAD, QUIET_EXIT, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
@@ -532,7 +532,7 @@ const haiku = { provider: "anthropic", model: "claude-haiku-4-5", effort: null, 
 function examineeBoard() {
   const { db, task, reader } = board();
   const interview = (targets: object[]) =>
-    poseProbe(db, registerTask(db, { ...INTERVIEW, interview_targets: targets as never }, at, ...HUMAN_WEBUI), POSE, "auditor", at, "worker");
+    poseProbe(db, registerTask(db, { ...INTERVIEW, interview_targets: targets as never }, at, ...HUMAN_WEBUI), POSE, "auditor", at, "worker", POSED_HEAD);
   const [examinee, sibling] = interview([opus, haiku]);
   const [otherPinChild] = interview([opus]);
   const write = (writer: { id: string }, title: string, path = "tide") =>
