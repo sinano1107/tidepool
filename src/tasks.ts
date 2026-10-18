@@ -1017,6 +1017,8 @@ export function registerTask(
     if (input.purpose !== undefined || input.completion_criteria !== undefined) {
       throw new DomainError("an Interview takes no purpose or completion_criteria: the board composes them from its hypothesis, measured_work and evidence_task_ids");
     }
+    // 空の測る仕事は「無し」(ADR 0273 決定9)。interview の枝の中だけ —— 他の type の空は assertInterviewFields が拒む
+    if (input.measured_work === "") input.measured_work = undefined;
     input = { ...input, ...interviewContent(input) };
   }
   if (input.review_by) input.review_by = input.review_by.map(normalizeText);

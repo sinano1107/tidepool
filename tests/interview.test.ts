@@ -9,7 +9,7 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
@@ -44,6 +44,15 @@ it("盤面は仮説・測る仕事・根拠の task から purpose と完了基�
   for (const text of [ROOT.hypothesis, "a parser for a config format", evidence.id]) expect(root.purpose).toContain(text);
   expect(root.completion_criteria).toMatch(/complete_interview/);
   expect(() => registerTask(db, { ...ROOT, ...PLAIN, interview_targets: [opusHigh] as never }, new Date(0), ...HUMAN_WEBUI)).toThrow(DomainError);
+});
+
+it("空白だけの測る仕事は「無し」として記録され、欄にも purpose にも出ない —— Interview でない type の空の測る仕事は従来どおり拒む(ADR 0273 決定9)", () => {
+  for (const measured_work of ["", "  \n "]) {
+    const { db, root } = registerInterview(undefined, [opusHigh], { measured_work });
+    expect(interviewFields(db, root.id)).not.toHaveProperty("measured_work");
+    expect(root.purpose).not.toContain("Work to measure:");
+  }
+  expect(() => registerTask(openDb(":memory:"), { type: "work", ...PLAIN, measured_work: "" }, new Date(0), ...HUMAN_WEBUI)).toThrow(/only an Interview \(type interview\) carries/);
 });
 
 it("登録は仮説の空・測る段の欠け・測る段より下の root の段・知らない根拠の task・対象の無い一覧を拒む —— 測る段以上の root の段は通る(ADR 0273 決定6・9)", () => {
