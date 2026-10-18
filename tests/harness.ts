@@ -851,7 +851,7 @@ export function examineeRootId(db: Db, examineeId: string): string {
 }
 
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */
-export function interviewPinChild(db: Db, at: Date): Task {
+export function interviewExaminee(db: Db, at: Date): Task {
   const interview = registerTask(
     db,
     { type: "interview", title: "interview", hypothesis: "the target writes the parser", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },

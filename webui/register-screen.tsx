@@ -33,7 +33,7 @@ interface RegisterScreenIssueFields {
   risk_flag: boolean;
   review_by?: string[];
 }
-interface RegisterScreenManualFields {
+interface RegisterScreenManualFields extends Partial<import('../src/tasks').InterviewFields> {
   /** 子追加は常に work。 */
   type: 'work' | 'review' | 'interview';
   title: string;
@@ -50,11 +50,8 @@ interface RegisterScreenManualFields {
   /** 要求ティア(盤面の段の名前)。review task はレビューの要求(`review_tier`)として送る。 */
   tier?: string;
   review_tier?: string;
-  /** Interview の欄(ADR 0199 決定3 / ADR 0273 決定9): type interview だけが送る。 */
+  /** Interview の対象(ADR 0199 決定3)と欄(extends の InterviewFields、ADR 0273 決定9): type interview だけが送る。 */
   interview_targets?: InterviewTargetDraft[];
-  hypothesis?: string;
-  measured_work?: string;
-  evidence_task_ids?: string[];
   /** issue 由来の経路にしか無い —— 不在を型で明示して union を絞れるようにする。 */
   github_issue_number?: never;
   parent_id?: string;

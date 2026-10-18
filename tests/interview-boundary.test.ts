@@ -77,7 +77,7 @@ async function boot({
   return board;
 }
 
-it("登録の扉(WebUI の Register API・管理MCP)は interview を新しい欄で受け、扉の拒否(仮説の空・3欄の重複・測る段より下の root の段・registry に無い実環境・対象の値)をそれぞれの失敗に写す(ADR 0273 決定6・9)", async () => {
+it("登録の扉(WebUI の Register API・管理MCP)は interview を新しい欄で受け、扉の拒否をそれぞれの失敗(400・tool error)に写す —— 拒否の種類は interview.test.ts の domain 層(ADR 0273 決定9 / ADR 0107 決定3)", async () => {
   const workspace = await makeWorkspace("reef");
   t = await boot({
     workspace,
@@ -88,33 +88,23 @@ it("登録の扉(WebUI の Register API・管理MCP)は interview を新しい�
   });
   const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   const fields = { ...INTERVIEW, measured_work: "a config parser", evidence_task_ids: [evidence.id], review_tier: "frontier", interview_targets: [opus46] };
-  const refusals = [
-    [{ ...fields, hypothesis: " " }, "hypothesis"],
-    [{ ...fields, interview_targets: [opus46, { ...opus46 }] }, "appears more than once"],
-    [{ ...fields, tier: "frontier", review_tier: "standard" }, 'review_tier "standard" is below the measured tier "frontier"'],
-    [{ ...fields, workspace: "nowhere" }, "unknown workspace: nowhere"],
-    [{ ...fields, interview_targets: [{ ...opus46, provider: "acme" }] }, 'unknown provider "acme"'],
-  ] as const;
+  // registry に無い実環境の拒否は人間の扉(registerThroughHumanDoor)が持つ —— interview でこれを釘にするのはここだけ
+  const unknown = { ...fields, workspace: "nowhere" };
+  const refused = await api(t.baseUrl, "POST", "/api/tasks", unknown);
+  expect(refused.status).toBe(400);
+  expect(refused.json.error).toBe("unknown workspace: nowhere");
   const client = await managementMcpClient(t.baseUrl);
   try {
-    for (const [body, error] of refusals) {
-      const refused = await api(t.baseUrl, "POST", "/api/tasks", body);
-      expect(refused.status).toBe(400);
-      expect(refused.json.error).toContain(error);
-      const viaMcp: any = await client.callTool({ name: "register_task", arguments: body });
-      expect(viaMcp.isError).toBe(true);
-      expect(JSON.parse(viaMcp.content[0].text).error).toContain(error);
-    }
+    const refusedMcp: any = await client.callTool({ name: "register_task", arguments: unknown });
+    expect(refusedMcp.isError).toBe(true);
+    expect(JSON.parse(refusedMcp.content[0].text).error).toBe("unknown workspace: nowhere");
     const root = await api(t.baseUrl, "POST", "/api/tasks", fields);
     expect(root.status).toBe(201);
     expect(root.json).toMatchObject({ type: "interview", title: INTERVIEW.title, tier: "frontier", review_tier: "frontier" });
-    const viaMcp: any = await client.callTool({ name: "register_task", arguments: fields });
-    expect(viaMcp.isError).toBeFalsy();
+    expect((await client.callTool({ name: "register_task", arguments: fields })).isError).toBeFalsy();
   } finally {
     await client.close();
   }
-  const child = await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, parent_id: evidence.id, decompose_reason: "r", interview_targets: [opus46] });
-  expect(child.json.error).toContain("only an Interview (type interview) carries interview_targets");
 });
 
 it("worker の MCP からは interview を登録できない —— 分解の子は type も Interview の欄も持たず、名指しても work の子になる(ADR 0273 決定2 / ADR 0021)", async () => {
@@ -214,6 +204,9 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   await callAsTask(t, evidence.id, "log_decision", { line: "chose a hand-written lexer" });
   commitWork(workspacePath, "lexer.txt", "lexer\n");
   await callAsTask(t, evidence.id, "complete_task", { handoff: FULL_HANDOFF });
+  // 根拠の task には子(完了時レビュー)が立つ —— その行が返らないことを下で言う
+  const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.parent_id === evidence.id);
+  expect(review.type).toBe("review");
   const allocation = { kind: "allocation_reviewed", review_task_id: other.id, worker_spawned_event_id: 1, judge: { provider: "anthropic", model: "claude-opus-4-6", effort: "high" }, allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } as const;
   appendEvent(t.db, { taskId: evidence.id, workerId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
@@ -221,11 +214,10 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
 
   const read: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: evidence.id });
   expect(read.isError).toBeFalsy();
+  // 根拠の task 自身の行だけ —— 完了時レビュー(子)の行は返さない
   expect(JSON.parse(read.content[0].text).history).toEqual([
-    { decision: "chose a hand-written lexer", children: [] },
+    { decision: "chose a hand-written lexer" },
     { completion: FULL_HANDOFF.outcome, handoff_doc: expect.stringContaining(FULL_HANDOFF.outcome) },
-    // 完了時レビュー(付帯子)は history の行のまま
-    { child_outside_the_decomposition: expect.objectContaining({ title: `review: ${CHILD.title}` }) },
     { allocation_review: { allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } },
   ]);
   const refused: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: other.id });

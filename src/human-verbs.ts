@@ -55,7 +55,7 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
   assertAnswerable,
-  assertInterviewTargets,
+  assertInterviewFields,
   assertNoUnsettledIssueRef,
   assertTargetsRunnable,
   assertUnsettledNotInProgress,
@@ -339,7 +339,7 @@ export async function registerThroughHumanDoor(
       throw new DomainError("a child task cannot be issue-backed");
     }
     // 子の登録は decompose を通り registerTask の検査に届かないので、同じ検査をここで呼ぶ
-    if (isHumanDecomposeChild) assertInterviewTargets(deps.db, input);
+    if (isHumanDecomposeChild) assertInterviewFields(deps.db, input);
     if (isHumanDecomposeChild) {
       const result = decomposeThroughHumanDoor(
         deps,

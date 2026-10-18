@@ -71,7 +71,7 @@ export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">, field
  *  決定1)ので、組み込みに解決される名前は work / question / memory_repair(ADR 0272 決定4)に取れない。登録・Edit・decompose の門と、WebUI の Assignee
  *  候補の出し分けが同じ関数を呼ぶ(ADR 0235 決定3)。 */
 export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuiltIn: boolean): string | undefined {
-  return type !== "review" && type !== "interview" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs reviews only` : undefined;
+  return type !== "review" && type !== "interview" && resolvesToBuiltIn ? `agent ${name} is the built-in agent, which runs only reviews and Interviews` : undefined;
 }
 
 export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;

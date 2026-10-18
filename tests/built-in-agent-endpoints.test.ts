@@ -179,5 +179,5 @@ it("組み込みに解決される assignee の work の登録は 400 に写る(
     assignee: "fugu",
   });
   expect(refused.status).toBe(400);
-  expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs reviews only");
+  expect(refused.json.error).toBe("agent fugu is the built-in agent, which runs only reviews and Interviews");
 });

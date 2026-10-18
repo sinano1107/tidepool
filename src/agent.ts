@@ -64,7 +64,7 @@ export function resolveExecutionAgent(
   if (definition.builtin && taskType !== "review" && taskType !== "interview") {
     throw new InvalidAgentDefinitionError(
       name,
-      `the built-in agent runs reviews only, but a ${taskType} task resolved to it; ` +
+      `the built-in agent runs only reviews and Interviews, but a ${taskType} task resolved to it; ` +
         `restore a registry entry named ${name} or reassign that task`,
     );
   }

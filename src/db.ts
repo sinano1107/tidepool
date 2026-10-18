@@ -524,7 +524,7 @@ export function openDb(path: string): Db {
       task_id       TEXT PRIMARY KEY REFERENCES tasks(id),
       hypothesis    TEXT NOT NULL CHECK (hypothesis <> ''),
       measured_work TEXT,
-      evidence      TEXT NOT NULL
+      evidence_task_ids TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS learner_shadow (

@@ -16,7 +16,7 @@ import {
   recordMemoryInjection,
 } from "../src/memory.js";
 import { getTask, logDecision, poseProbe, registerTask } from "../src/tasks.js";
-import { examineeRootId, HUMAN_WEBUI, interviewPinChild, POSED_HEAD } from "./harness.js";
+import { examineeRootId, HUMAN_WEBUI, interviewExaminee, POSED_HEAD } from "./harness.js";
 
 const at = new Date("2026-09-14T00:00:00.000Z");
 
@@ -363,7 +363,7 @@ it("注入上限は未設定なら 2,000 トークンで、変更は読み口に
 
 it("受験者が読む枝の定義を Interview の root の定義が置き換えても、受験者の注入の INDEX には置き換えられた定義が生きて出る —— 視界に無い後継による無効化はその読み手には起きていない(ADR 0264 決定4)", () => {
   const { db, task } = board({ title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" });
-  const examinee = interviewPinChild(db, at);
+  const examinee = interviewExaminee(db, at);
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const production = defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the production work files.", author }, "worker", at, task.id).entry_id;
   defineMemoryBranch(db, { scope: "tidepool", path: "parser", text: "What the root files.", author, supersedes: [production] }, "worker", at, examineeRootId(db, examinee.id));
@@ -424,7 +424,7 @@ it("読み手が pin の子のとき、出所の event の task がどの Interv
 it("読み手が Interview の root のとき、受験者の視界に無いエントリ(root の書き込み・Interview の木を出所にするもの)の INDEX の行と関連 leaf の行に `not shown to examinees` の印が付き、本番の worker と pin の子の注入には印が出ない(ADR 0264 決定6)", () => {
   const probe = { title: "add a parser", purpose: "write a parser", completion_criteria: "the parser works" };
   const { db, task } = board(probe);
-  const examinee = interviewPinChild(db, at);
+  const examinee = interviewExaminee(db, at);
   const root = getTask(db, examineeRootId(db, examinee.id))!;
   const posed = listEvents(db, root.id).find((e) => e.kind === "decision_logged")!.id;
   const author = { activity: "worker_verb" as const, name: "deckhand" };

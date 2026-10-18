@@ -1107,8 +1107,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       return result.ok ? toolResult({}) : toolError(JSON.stringify(result.failure));
     },
   );
-  // ADR 0111 追記10: review task の要求は review_tier だけ
-  const WORK_TASKS_ONLY = "For work tasks only: refused on a review task, which takes review_tier instead.";
+  // ADR 0111 追記10: review task の要求は review_tier だけ。Interview の tier は測る段(ADR 0273 決定6)
   const INTERVIEW_ONLY = "Interview (type interview) only.";
   server.registerTool(
     "register_task",
@@ -1132,11 +1131,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         workspace: z.string().optional(),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
-        tier: z.string().optional().describe(`${tierDescriptions.tier}\n${WORK_TASKS_ONLY} On an Interview, required: the tier it measures.`),
+        tier: z
+          .string()
+          .optional()
+          .describe(`${tierDescriptions.tier}\nRefused on a review task, which takes review_tier instead. On an Interview it is required: the tier the Interview measures.`),
         review_by: z.array(requiredTextSchema).optional()
           .describe(`${REVIEWER_NAMES} Omit to use the board Auditor. ${ONLY_WHERE_COMPLETION_REVIEW_FIRES}`),
         review_tier: z.string().optional().describe(`${REVIEW_TIER_BY_TYPE}\n${tierDescriptions.review_tier_choices}`),
-        priority: z.string().optional().describe(`${PRIORITY_FIELD_DESCRIPTION}\n${WORK_TASKS_ONLY}`),
+        priority: z.string().optional().describe(`${PRIORITY_FIELD_DESCRIPTION}\nFor work tasks only: refused on a review task and on an Interview.`),
         decompose_reason: z.string().optional(),
         interview_targets: z
           .array(interviewTargetSchema)

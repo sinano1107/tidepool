@@ -10,13 +10,12 @@ import { loadEpisodes, observedInTier, selectorBranch } from "../src/learner.js"
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { UnknownWorkspaceError } from "../src/workspace.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, POSED_HEAD, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
@@ -28,8 +27,8 @@ const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "hig
 const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
 const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
 
-type InterviewFields = { workspace?: string; review_tier?: string; assignee?: string; tier?: string; measured_work?: string; evidence_task_ids?: string[] };
-function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: InterviewFields = {}) {
+type RootFields = Partial<InterviewFields> & { workspace?: string; review_tier?: string; assignee?: string; tier?: string };
+function registerInterview(db = openDb(":memory:"), targets: Array<Record<string, unknown>> = [opusHigh], fields: RootFields = {}) {
   return { db, root: registerTask(db, { ...ROOT, ...fields, interview_targets: targets as never }, new Date(0), ...HUMAN_WEBUI) };
 }
 
@@ -93,15 +92,8 @@ it("空の assignee は Interviewer ポインタに type で解決され、組�
   expect(whyAssigneeCannotTake("fugu", "interview", true)).toBeUndefined();
 });
 
-it("人間の扉は registry に無い実環境の Interview を拒む", async () => {
-  const db = openDb(":memory:");
-  const deps = { db, pollNow: () => {}, resolveWorkspace: (name: string | null): never => { throw new UnknownWorkspaceError(name ?? ""); } };
-  const refused = await registerThroughHumanDoor(deps, { ...ROOT, workspace: "nowhere", interview_targets: [opusHigh] as never }, () => new Date(0), "webui");
-  expect(refused).toEqual({ ok: false, failure: { kind: "invalid", error: "unknown workspace: nowhere" } });
-});
-
 it("root の走る段は盤面の判断の段・測る段・root の段の名指しのうち最も上(ADR 0273 決定6 / ADR 0200 決定4)", () => {
-  const tierOf = (judgement: string, fields: InterviewFields) => {
+  const tierOf = (judgement: string, fields: RootFields) => {
     const db = openDb(":memory:");
     applyExecutionSettingsChange(db, { setting: "judgement_tier", value: judgement }, "webui", new Date(0));
     const { root } = registerInterview(db, [opusHigh], fields);

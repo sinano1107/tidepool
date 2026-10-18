@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { registerTask } from "../src/tasks.js";
+import { openDb } from "../src/db.js";
+import { editTask, getTask, registerTask } from "../src/tasks.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -134,4 +135,15 @@ it("存在しないタスクへの編集は 404", async () => {
   t = await bootTidepool();
   const res = await api(t.baseUrl, "PATCH", "/api/tasks/no-such-task", { title: "x" });
   expect(res.status).toBe(404);
+});
+
+it("Interview の purpose と完了基準の編集は domain が拒み、題の編集は通る —— どちらも盤面が登録の欄から組んだ文(ADR 0273 決定9)", () => {
+  const db = openDb(":memory:");
+  const interview = { type: "interview" as const, title: "interview", hypothesis: "the target writes the parser", tier: "standard" };
+  const root = registerTask(db, { ...interview, interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, new Date(0), ...HUMAN_WEBUI);
+  for (const edit of [{ purpose: "measure something else" }, { completion_criteria: "anything goes" }]) {
+    expect(() => editTask(db, getTask(db, root.id)!, edit, new Date(0), "webui")).toThrow(/an Interview's purpose and completion_criteria are not editable/);
+  }
+  expect(getTask(db, root.id)).toMatchObject({ purpose: root.purpose, completion_criteria: root.completion_criteria });
+  expect(editTask(db, getTask(db, root.id)!, { title: "renamed" }, new Date(0), "webui").title).toBe("renamed");
 });
