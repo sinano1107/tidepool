@@ -1434,7 +1434,7 @@ export function escalateTask(
  *  again. The plan is discarded wholesale rather than branch-by-branch — no
  *  dependency edges exist between siblings to reason about, so a partial
  *  cancel can't be more correct than a full one. Every caller runs inside
- *  `inCancelTransaction`, whose sweep reads the events appended here. */
+ *  `withTargetQuestionSweep`, whose sweep reads the events appended here. */
 function cancelUnsettledSubtree(
   db: Db,
   rootTaskId: string,
@@ -1457,13 +1457,11 @@ function cancelUnsettledSubtree(
        WHERE ${unsettledSql("tasks.status")}`,
     )
     .all(rootTaskId) as Array<{ id: string }>;
-  db.transaction(() => {
-    for (const { id } of rows) {
-      // a cancelled declarer holds nothing — the cancel is the record that ends its breach
-      db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
-      appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
-    }
-  })();
+  for (const { id } of rows) {
+    // a cancelled declarer holds nothing — the cancel is the record that ends its breach
+    db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
+    appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
+  }
 }
 
 /** Cancel a task and every unfinished descendant via an abandon answer (ADR
@@ -1588,7 +1586,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
  *  subject is still open (`assertNoGatingQuestion`). No "delete" exists — this
  *  is always a cancel, and the record is never erased. A refused Interview
  *  target's question left with nothing to run it settles at the end of the
- *  same transaction (`inCancelTransaction`, ADR 0199 追記 #1999). */
+ *  same transaction (`withTargetQuestionSweep`, ADR 0199 追記、issue #1999). */
 export function cancelTaskDirectly(
   db: Db,
   task: Task,
@@ -1597,16 +1595,16 @@ export function cancelTaskDirectly(
   defaults: CancelDefaults,
   origin: EventOrigin,
   /** root の retry の登録(`retryInterviewRoot`)。transaction の終わりの掃除より前に走る —— 写った対象の question は開いたまま(ADR 0199 追記)。 */
-  beforeSettle?: () => void,
+  beforeSweep?: () => void,
 ): void {
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
-  inCancelTransaction(db, now, () => {
+  withTargetQuestionSweep(db, now, () => {
     cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
       kind: "task_cancelled_directly",
       reason,
     }, origin);
-    beforeSettle?.();
+    beforeSweep?.();
   });
 }
 
@@ -1845,7 +1843,7 @@ export function answerQuestion(
   answers = assertAnswerable(question, answers, comment);
   const items = question.question_items!;
   const answer = answers[0]!;
-  inCancelTransaction(db, now, () => {
+  withTargetQuestionSweep(db, now, () => {
     db.prepare(
       "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ?",
     ).run(JSON.stringify(answers), comment ?? null, question.id);
@@ -2049,9 +2047,9 @@ function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOri
 const refusedTargetValueSql = (kindRef: string) =>
   `it.provider || '/' || it.model || CASE ${kindRef} WHEN 'interviewTargetEffort' THEN '/' || COALESCE(it.effort, '') ELSE '' END`;
 
-/** cancel を含む transaction(ADR 0199 追記 #1999): `body` の後に、断られた対象の question の主題が盤面に残らなくなったかを
+/** cancel を含みうる transaction(ADR 0199 追記、issue #1999): `body` の後に、断られた対象の question の主題が盤面に残らなくなったかを
  *  状態から1回だけ導く。cancel の経路ごとに呼ばない —— retry の新しい root は `body` の内側で登録されるので掃除より先に居る。 */
-function inCancelTransaction<T>(db: Db, now: Date, body: () => T): T {
+function withTargetQuestionSweep<T>(db: Db, now: Date, body: () => T): T {
   return db.transaction(() => {
     const since = db.prepare("SELECT COALESCE(MAX(id), 0) FROM events").pluck().get() as number;
     const result = body();
@@ -2060,7 +2058,7 @@ function inCancelTransaction<T>(db: Db, now: Date, body: () => T): T {
   })();
 }
 
-/** 断られた対象の question の主題が盤面に残らなくなったときの門(ADR 0199 追記 #1992・#1999): `sinceEventId` より後に cancel された
+/** 断られた対象の question の主題が盤面に残らなくなったときの門(ADR 0199 追記、issue #1992 / #1999): `sinceEventId` より後に cancel された
  *  task が運ぶ鍵(root なら一覧の対象、受験者なら pin の対象)の question のうち、その対象を走らせうる未決着の Interview —— その対象を
  *  pin した未決着の子か、まだその対象の子を持たない未決着の root —— が残らないものを盤面名義に決着させる。観測はその鍵を運んだ
  *  cancel の event で、root の cancel があればそれ、無ければ受験者の cancel の最後。cancel された task の運ばない鍵の question は
@@ -2229,7 +2227,7 @@ export function redecompose(
     throw new DomainError(`an Interview is not redecomposed: ${POSED_INTERVIEW_EXITS}`);
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
-  return inCancelTransaction(db, now, () => {
+  return withTargetQuestionSweep(db, now, () => {
     for (const id of abandonScopeIds(db, declarerId)) {
       cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
     }

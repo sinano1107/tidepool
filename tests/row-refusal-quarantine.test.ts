@@ -832,7 +832,7 @@ it("probe の破綻の報告の retry は、「この対象は測らない」で
   expect(JSON.parse(current.content[0].text).interview_targets).toEqual([OPUS_46, OPUS_55_MEDIUM]);
 });
 
-// ── 対象を走らせうる Interview が無くなった対象の question(ADR 0199 追記、issue #1992) ──
+// ── 対象を走らせうる Interview が無くなった対象の question(ADR 0199 追記、issue #1992 / #1999) ──
 
 /** question の quarantine_released を [worker, origin, payload] で並べる(盤面名義かは worker と origin で言う)。 */
 const releases = async (questionId: string) =>
@@ -880,16 +880,16 @@ it("同じ (provider, model) を pin した Interview がもう1つ残ってい�
   expect(await queueStatus(other!)).toBe("skipped");
 });
 
-/** 同じ (provider, model) に model の鍵と effort の鍵の question が両方開いた盤面(ADR 0199 追記 #1999)。effort の鍵は直接立てる。 */
-async function refuseBothKeys(targets: object[]) {
+/** 同じ (provider, model) に model の鍵と effort の鍵の question が両方開いた盤面(ADR 0199 追記、issue #1999)。effort の鍵は直接立てる。 */
+async function refuseSonnetLowBothKeys(targets: object[]) {
   const board = await refuseUnrowedTarget(targets);
   registerQuarantine(t.db, "interviewTargetEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "low"), "another observation", t.clock.now());
   const effort = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTargetEffort")!;
   return { ...board, effort };
 }
 
-it("model の鍵の question に「この対象は測らない」と答えて root も cancel されると、走らせうる Interview の無くなった effort の鍵の question は回答なしで決着し、root の cancel を観測とする(ADR 0199 追記 #1999)", async () => {
-  const board = await refuseBothKeys([SONNET_MEDIUM, SONNET_LOW]);
+it("model の鍵の question に「この対象は測らない」と答えて root も cancel されると、走らせうる Interview の無くなった effort の鍵の question は回答なしで決着し、root の cancel を観測とする(ADR 0199 追記、issue #1999)", async () => {
+  const board = await refuseSonnetLowBothKeys([SONNET_MEDIUM, SONNET_LOW]);
 
   expect((await board.answer("do not measure this target")).status).toBe(200);
 
@@ -900,8 +900,8 @@ it("model の鍵の question に「この対象は測らない」と答えて ro
   ]);
 });
 
-it("root が別の対象で残っても、model の鍵への「この対象は測らない」で走らせうる受験者の無くなった effort の鍵の question は決着し、その鍵の受験者の cancel を観測とする(ADR 0199 追記 #1999)", async () => {
-  const board = await refuseBothKeys([SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
+it("root が別の対象で残っても、model の鍵への「この対象は測らない」で走らせうる受験者の無くなった effort の鍵の question は決着し、その鍵の受験者の cancel を観測とする(ADR 0199 追記、issue #1999)", async () => {
+  const board = await refuseSonnetLowBothKeys([SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
   const low = board.childIds[1]!;
 
   expect((await board.answer("do not measure this target")).status).toBe(200);

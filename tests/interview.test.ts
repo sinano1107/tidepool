@@ -561,6 +561,37 @@ it("断られた対象の question が開いたまま root を retry すると�
   expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
 });
 
+/** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる —— 今日の盤面では受験者の決着で先に閉じる)。 */
+function brokenWithRefusedTarget() {
+  const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
+  const { db, root } = registerInterview(undefined, [unrowed], { tier: "economy" });
+  for (const child of poseProbe(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD)) completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
+  const question = listBoard(db).find((task) => task.question_quarantine_kind === "interviewTarget")!;
+  return { db, root, question, report: report(db, root) };
+}
+
+it("probe の破綻の報告への abandon で root が cancel されると、断られた対象の question は回答なしで決着し、root の cancel を観測とする(ADR 0199 追記、issue #1999 / #2132)", () => {
+  const { db, root, question, report: broken } = brokenWithRefusedTarget();
+
+  answerQuestionViaWebui(db, broken, ["abandon"], new Date(1));
+
+  expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
+  const cancelled = listEvents(db, root.id).find((event) => event.kind === "task_cancelled")!;
+  expect(listEvents(db, question.id).filter((event) => event.kind === "quarantine_released").map((event) => event.payload)).toEqual([
+    { kind: "quarantine_released", quarantine: "interviewTarget", value: "anthropic/claude-sonnet-5-5", observed_event_id: cancelled.id },
+  ]);
+});
+
+it("probe の破綻の報告への retry では、新しい root がその対象を持つので断られた対象の question は開いたまま(ADR 0199 追記、issue #1999 / #2132)", () => {
+  const { db, question, report: broken } = brokenWithRefusedTarget();
+
+  answerQuestionViaWebui(db, broken, ["retry"], new Date(1));
+
+  expect(getTask(db, question.id)!.status).toBe("todo");
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
+});
+
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
 function pinnedChild(target: Record<string, unknown>, ceiling: AdvisorCeiling = "off") {
   const { db, root } = registerInterview(undefined, [target], { tier: "frontier" });

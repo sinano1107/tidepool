@@ -366,7 +366,8 @@ export type EventPayload =
   // kind's check and was accepted — pickup resumes for what that kind stops.
   // 回答なしで盤面名義に決着したときだけ observed_event_id を持つ: 行の Quarantine は表の編集がその行を消したとき
   // (ADR 0184 決定5 の門1)= 行を消した execution_settings_changed の id、断られた Interview の対象の question は
-  // その対象を走らせうる Interview が無くなったとき(ADR 0199 追記、issue #1992)= Interview の root を cancel した event の id
+  // その対象を走らせうる Interview が無くなったとき(ADR 0199 追記、issue #1992 / #1999)= その鍵を走らせうる最後の Interview を消した
+  // cancel の event の id —— root が同じ transaction で cancel されたなら root の、root が残るならその鍵の受験者の
   | { kind: "quarantine_released"; quarantine: string; value: string | null; observed_event_id?: number }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
