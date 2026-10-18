@@ -456,6 +456,14 @@ it("cancelled の work の祖先を挟む task を親にした memory_repair の
   }
 });
 
+it("親の無い memory_repair の登録は扉を問わず DomainError で、何も登録しない —— 修理子は異議された task の子(ADR 0272 追記2 / ADR 0046)", () => {
+  db = openDb(":memory:");
+  for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
+    expect(() => registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c" }, NOW, workerId, origin)).toThrow(DomainError);
+  }
+  expect(listBoard(db)).toEqual([]);
+});
+
 it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "R", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);

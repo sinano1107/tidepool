@@ -98,23 +98,23 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   const decision = await loggedEntry(t, objected.id, "squashed the branch");
   await completeViaMcp(t, objected.id);
   await completeIntegrationReviews(t, objected.id);
-  /** 異議を打って triage を閉じ、束ねが立てた work の修理子と異議の id を返す。 */
-  const repairOf = async (entryId: number) => {
+  /** 異議を打って triage を閉じ、束ねが立てた `type` の修理子と異議の id を返す。 */
+  const repairOf = async (entryId: number, type: "work" | "memory_repair") => {
     await api(t.baseUrl, "POST", "/api/triage/start");
     const objection = await object(t, entryId, "undo it");
     await api(t.baseUrl, "POST", "/api/triage/close");
-    return { objection, work: (await children(t, objected.id)).filter((c: any) => c.type === "work").at(-1) };
+    return { objection, repair: (await children(t, objected.id)).filter((c: any) => c.type === type).at(-1) };
   };
-  const write = await repairOf(wrote.event_id);
-  // 束ねが memory_repair を立てるのは #2175 から —— それまでは同じ異議を材料に盤面の名義で直接立てる
-  const writeRepair = registerTask(
+  const write = await repairOf(wrote.event_id, "memory_repair");
+  const writeRepair = write.repair;
+  // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)
+  const writeWorkRepair = registerTask(
     t.db,
-    { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
+    { type: "work", title: "repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
     t.clock.now(),
-    BOARD_WORKER_ID,
-    "board",
+    ...HUMAN_WEBUI,
   );
-  const decisionRepair = (await repairOf(decision.id)).work;
+  const decisionRepair = (await repairOf(decision.id, "work")).repair;
   const names = async (taskId: string) => {
     const client = await mcpClient(t.mcpBaseUrl, taskId);
     try {
@@ -125,7 +125,7 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   };
 
   expect(await names(writeRepair.id)).toEqual(expect.arrayContaining([...MEMORY_REPAIR_VERBS]));
-  for (const taskId of [write.work.id, decisionRepair.id, objected.id]) {
+  for (const taskId of [writeWorkRepair.id, decisionRepair.id, objected.id]) {
     expect((await names(taskId)).filter((name) => (MEMORY_REPAIR_VERBS as readonly string[]).includes(name))).toEqual([]);
   }
 

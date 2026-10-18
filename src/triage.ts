@@ -10,6 +10,7 @@ import {
   getEvent,
   HUMAN_FACING_KINDS,
   isDecisionLogEntry,
+  latestEventOfTask,
   listEventsOfKinds,
   parseEventRow,
   SKIM_TASK_SQL,
@@ -21,7 +22,6 @@ import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
   type BoardTask,
   getTask,
-  interviewTargets,
   isArtifactDiscarded,
   listBoard,
   moveTask,
@@ -287,14 +287,23 @@ function registerRcaReview(
   );
 }
 
-/** One repair task per objected task whose artifact remains on the board: every
- *  direction comment raised against a task's log entries this session lands in a
- *  single work task's purpose. An Interview root (its probe is fixed by retry,
- *  not repair) and a task whose artifact is discarded — the task itself is
- *  cancelled (ADR 0268 決定3), or a cancelled work ancestor sits between it and
- *  its root (ADR 0271 決定1・2 widens 0268 決定3's predicate to this) — get none:
- *  the repair is skipped, never left to the registration floor's refusal, and
- *  attribution and the RCAs below still stand by cause.
+/** Repair tasks per objected task, split by row kind — whether a row's artifact
+ *  remains is judged by where that row's artifact goes (ADR 0272 決定1・2, reading
+ *  ADR 0268 決定3 as 「行の成果の帰り先」). Every direction comment raised against
+ *  the task's decision rows this session lands in one work repair's purpose, and
+ *  every one against its memory-write rows in one `memory_repair`'s purpose: a task
+ *  objected on both kinds gets two children, each carrying only its own group's
+ *  objection ids. A decision row's artifact returns to the branch, so an Interview
+ *  root (its probe is fixed by retry, not repair) and a task whose artifact is
+ *  discarded — the task itself is cancelled, or a cancelled work ancestor sits
+ *  between it and its root (ADR 0271 決定1・2) — get no work repair: it is skipped,
+ *  never left to the registration floor's refusal. A memory write's artifact stays
+ *  in the memory store, so its `memory_repair` stands whatever the parent's state.
+ *  Attribution and the RCAs below stand by cause either way, never split by group.
+ *  Both repairs take the same assignee: the objected task's column when it holds a
+ *  name, else (a review / Interview's empty reference) the agent its last
+ *  `worker_spawned` names (ADR 0275 決定2), passed through the assignee gate for
+ *  the child's own type (ADR 0237 決定2).
  *
  *  Before anything is registered, every objected entry the Board call judged
  *  gets that judgment written as an `objection_attributed` event (ADR 0115
@@ -304,8 +313,9 @@ function registerRcaReview(
  *  decides what stands beside the repair (0115 決定3): only the entries whose
  *  cause needs an RCA (`RCA_CAUSES`) or that carry no judgment (read as
  *  `uncertain`, ADR 0168 決定3) feed the two RCA reviews below, and a task
- *  with none of them gets the repair alone (or nothing, where no repair stands —
- *  an Interview root or a discarded artifact). The second attribution round picks
+ *  with none of them gets the repairs alone — or only its `memory_repair` where no
+ *  work repair stands, and nothing at all where neither does (decision rows only,
+ *  on an Interview root or a discarded artifact). The second attribution round picks
  *  the unjudged ones up once those RCAs settle.
  *
  *  Layer 2 RCA (issue #15): in parallel, two kinds of read-only RCA review
@@ -369,11 +379,12 @@ function bundleObjections(
         at: now,
       });
     }
-    if (interviewTargets(db, taskId) === null && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
-      let assignee = objected.type === "work" ? objected.assignee ?? undefined : undefined;
+    const registerRepair = (type: "work" | "memory_repair", group: ObjectionPair[]): void => {
+      // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)
+      let assignee = objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id;
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
       try {
-        assertAssigneeCanTake(assigneeDeps, assignee, "work");
+        assertAssigneeCanTake(assigneeDeps, assignee, type);
       } catch (err) {
         if (!(err instanceof DomainError)) throw err;
         assigneeNotCopied = { name: assignee!, reason: err.message };
@@ -382,11 +393,11 @@ function bundleObjections(
       registerTask(
         db,
         {
-          type: "work",
-          title: `repair: ${objected.title}`,
+          type,
+          title: `${type === "work" ? "repair" : "memory repair"}: ${objected.title}`,
           purpose: renderObjectionPairs(
             `objections raised against decisions of "${objected.title}"`,
-            pairs,
+            group,
             judgments,
           ),
           completion_criteria: "every objection direction above is addressed",
@@ -394,13 +405,20 @@ function bundleObjections(
           assignee,
           assignee_not_copied: assigneeNotCopied,
           workspace: objected.workspace ?? undefined,
-          objection_event_ids: pairs.flatMap((p) => p.objection_event_ids),
+          objection_event_ids: group.flatMap((p) => p.objection_event_ids),
         },
         now,
         HUMAN_WORKER_ID,
         origin,
       );
+    };
+    // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)
+    const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written");
+    const judgmentRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
+    if (judgmentRows.length > 0 && objected.type !== "interview" && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+      registerRepair("work", judgmentRows);
     }
+    if (memoryRows.length > 0) registerRepair("memory_repair", memoryRows);
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {

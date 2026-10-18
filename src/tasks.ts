@@ -1006,6 +1006,10 @@ export function registerTask(
   assertInterviewFields(db, input);
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
+  // 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)
+  if (input.type === "memory_repair" && input.parent_id === undefined) {
+    throw new DomainError("a memory repair stands only as a child of the task whose memory write was objected");
+  }
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);

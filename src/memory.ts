@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -1819,12 +1819,13 @@ function readerHidden(db: Db, taskId: string): Set<number> {
 }
 
 /** 受験者の視界に無い集合(ADR 0264 決定3)とその本文が同じ後継(移動・復元の複製)—— どの受験者にも共通。readerHidden と採点者の印
- *  (readerSight)が使う。 */
+ *  (readerSight)が使う。root の下の memory_repair(再異議の鎖も)の書き込みは root の書き込みと同じ側(ADR 0272 帰結)。 */
 function examineeHidden(db: Db): Set<number> {
   const rows = db
     .prepare(
-      `SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
-        WHERE e.kind = 'memory_written' AND e.task_id IN (SELECT task_id FROM interview_targets)
+      `${subtreeSql("task_id FROM interview_targets", "c.type = 'memory_repair'")}
+       SELECT c.value AS id FROM events e, json_each(e.payload, '$.created') c
+        WHERE e.kind = 'memory_written' AND e.task_id IN (SELECT id FROM subtree)
        UNION
        SELECT m.id FROM memory_entries m JOIN events s ON s.id = CAST(m.source_ref AS INTEGER)
          JOIN events o ON o.id = IIF(s.kind = 'objection_attributed', json_extract(s.payload, '$.entry_id'), s.id)
