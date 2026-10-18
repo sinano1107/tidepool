@@ -6,7 +6,6 @@ import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, firstSelectable } from "../src/execution-setting.js";
 import { registerThroughHumanDoor } from "../src/human-verbs.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
-import { loadEpisodes, observedInTier } from "../src/learner.js";
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
@@ -634,19 +633,6 @@ function ranChildren(db: Db, root: Task) {
     return completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
   });
 }
-
-it("受験者の episode は種別 interview を持ち、採点されても推薦の観測に数えられない —— 採点は事前分布の種(ADR 0273 決定7)", () => {
-  // 同じ対象は1つの一覧に2つ置けない(ADR 0249 決定2)ので、同じセルの答案は Interview 2件から取る
-  const db = openDb(":memory:");
-  const roots = [1, 2].map(() => registerInterview(db).root);
-  const children = roots.map((root) => ranChildren(db, root)[0]!);
-  for (const [i, outcome] of (["accepted", "rejected"] as const).entries()) {
-    completeInterview(db, getTask(db, roots[i]!.id)!, { scores: [{ child_id: children[i]!.id, outcome }], handoff: FINDINGS }, "auditor", new Date(1), "worker");
-  }
-  const episodes = loadEpisodes(db);
-  expect(episodes.map(({ task_id, interview }) => ({ task_id, interview }))).toEqual(children.map(({ id }) => ({ task_id: id, interview: true })));
-  expect(observedInTier(episodes, [], tierIdOf(db, "standard"), null)).toMatchObject({ board: [], workspace: [] });
-});
 
 const FINDINGS = { outcome: "the parser probe separates the targets" };
 

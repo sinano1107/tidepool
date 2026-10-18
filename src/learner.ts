@@ -2,7 +2,7 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow, swapsMain } from "./events.js";
-import { type ExecutionSetting, matchesRowKey, type RowKeyFields } from "./execution-setting.js";
+import { type ExecutionSetting, matchesRowKey } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
 import type { TierId } from "./tier.js";
@@ -103,7 +103,7 @@ function aggregateCells(episodes: readonly LearnerEpisode[]): CellStats[] {
  *  出所は done の Interview の受理の採点(`interview`)か、行を足す扉の明示(`human`)。どちらの出所も advisor を持たない3欄なので、
  *  候補との照合は provider / model / effort の完全一致(ADR 0182 決定3)で advisor を見ない。 */
 export interface Seed {
-  cell: RowKeyFields;
+  cell: Omit<Cell, "advisor">;
   tier_id: TierId;
   kind: "interview" | "human";
   event_id: number;
@@ -169,7 +169,7 @@ const trackRecord = (candidate: ExecutionSetting, observed: Observed): TrackReco
  *  勝つ —— 先頭が残りを全部受理しても追いつけない、ADR 0182 決定4)、それ以外は事後平均の並べ方で先頭より前に来るとき。
  *  勝つ候補が無ければ先頭、あればその中で並べ方の1番目。並べ方は事後平均 → selector の並び —— 観測された session 費用は
  *  鍵にしない(ADR 0183。cost の鍵は表の価格で、selector の並びに既に入っている)。
- *  乱数は持たない(Thompson sampling をしないので seed も無い)。 */
+ *  乱数は持たない(Thompson sampling をしないので乱数の seed も無い —— 学習器の種 `Seed` とは別物)。 */
 export function recommend(input: Observed & { candidates: readonly ExecutionSetting[] }): Recommendation {
   const scored = input.candidates.map((candidate, order) => {
     const { board, workspace, seed } = trackRecord(candidate, input);
@@ -287,7 +287,7 @@ export function loadSeeds(db: Db): Seed[] {
        FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.seed') IS NOT NULL
        ORDER BY event_id`,
     )
-    .all() as Array<RowKeyFields & Omit<Seed, "cell">>;
+    .all() as Array<Seed["cell"] & Omit<Seed, "cell">>;
   const seeds = new Map<string, Seed>();
   for (const { event_id, tier_id, kind, ...cell } of rows) {
     seeds.set(JSON.stringify([cell.provider, cell.model, cell.effort, tier_id]), { cell, tier_id, kind, event_id });

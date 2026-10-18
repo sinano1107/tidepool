@@ -21,7 +21,7 @@ import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWat
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryProposal, type RoutingAddTierProposal, type RoutingProposal, registerTask, type TierDescriptionProposal } from "./tasks.js";
-import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNameOf, tierNames } from "./tier.js";
+import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -158,27 +158,33 @@ export function readRoutingSettings(db: Db, input: { next?: string }) {
   >;
 }
 
-/** list_routing_cells の2種の行(ページ割り前): 初観測が窓 `(after, upTo]` にあるセルと、窓の中の人間の行の編集。セルはその
- *  provider / model / effort の種(段ごと)を運ぶ(ADR 0273 決定7)。まだ走っていないセルの種は載せない —— Interview の種のセルは
- *  受験者の session で観測済みで、人間の種は行の編集の記録が根拠つきで運ぶ。 */
+/** list_routing_cells の2種の行(ページ割り前): 窓 `(after, upTo]` に本番の初観測か種の event があるセルと、窓の中の人間の行の
+ *  編集。受験者の session は観測ではないので初観測に数えない。セルはその provider / model / effort の種を段ごとに運ぶが、行の
+ *  ある (セル, 段) の種だけ —— 行を消しても種の event は残るが、読み手は読まない(spec #2190 / ADR 0273 決定7)。本番の session の
+ *  まだ無い種のセルは advisor null・初観測 null で載る。 */
 function cellRows(db: Db, window: MetaReviewWindow) {
-  const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number }>();
+  const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number | null }>();
   for (const e of loadEpisodes(db)) {
-    if (e.worker_exited_event_id === null) continue;
+    if (e.interview || e.worker_exited_event_id === null) continue;
     const key = cellJson(e.cell);
     const seen = firstSeen.get(key);
-    if (!seen || e.worker_exited_event_id < seen.first_observed_event_id) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
+    if (!seen || e.worker_exited_event_id < seen.first_observed_event_id!) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
   }
   const rows = listEventsOfKinds(db, ["execution_settings_changed"], window).flatMap(({ id, origin, created_at, payload: p }) =>
     p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, ...(p.key && { key: p.key }), row: p.row, ...(p.seed && { seed: p.seed }) }] : [],
   );
-  const seeds = loadSeeds(db);
+  const table = loadExecutionSettingTable(db);
+  const liveTiers = new Map(liveTierRows(db).map((t) => [t.id, t.name]));
+  const seeds = loadSeeds(db).flatMap(({ cell, tier_id, kind, event_id }) => {
+    const tier = liveTiers.get(tier_id);
+    return tier !== undefined && table.some((row) => row.tier === tier && matchesRowKey(row, cell)) ? [{ cell, tier, kind, event_id }] : [];
+  });
+  for (const { cell } of seeds) {
+    if (![...firstSeen.values()].some((c) => matchesRowKey(c.cell, cell))) firstSeen.set(cellJson({ ...cell, advisor: null }), { cell: { ...cell, advisor: null }, first_observed_event_id: null });
+  }
   const cells = [...firstSeen.values()]
-    .filter((c) => inWindow(c.first_observed_event_id, window))
-    .map((c) => ({
-      ...c,
-      seeds: seeds.filter((s) => matchesRowKey(c.cell, s.cell)).map((s) => ({ tier: tierNameOf(db, s.tier_id), kind: s.kind, event_id: s.event_id })),
-    }));
+    .map((c) => ({ ...c, seeds: seeds.filter((s) => matchesRowKey(c.cell, s.cell)).map(({ tier, kind, event_id }) => ({ tier, kind, event_id })) }))
+    .filter((c) => (c.first_observed_event_id !== null && inWindow(c.first_observed_event_id, window)) || c.seeds.some((s) => inWindow(s.event_id, window)));
   return { cells, rows };
 }
 
@@ -248,7 +254,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
     ["Allocation reviews", "Rows of list_allocations counting the annotations written in this window.", allocations.groups, "no allocation reviews"],
     [
       "New cells and changed rows",
-      "The cells and rows of list_routing_cells: cells first observed in this window, and execution-setting rows humans wrote in this window.",
+      "The cells and rows of list_routing_cells: cells first observed or seeded in this window, and execution-setting rows humans wrote in this window.",
       [...cells, ...rows],
       "no new cells or changed rows",
     ],

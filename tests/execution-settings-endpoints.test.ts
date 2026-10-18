@@ -2,14 +2,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor, SEED_EXECUTION_SETTINGS } from "../src/execution-setting.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { openQuarantineQuestion, registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
-import { SEED_TIERS, tierIdOf } from "../src/tier.js";
+import { SEED_TIERS } from "../src/tier.js";
 import { healthyOpenai } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  callAsTask,
   completeIntegrationReviews,
   completeMetaReviews,
   FULL_HANDOFF,
@@ -17,6 +19,7 @@ import {
   managementMcpClient,
   mcpClient,
   registerWork,
+  runNow,
   type Tidepool,
 } from "./harness.js";
 
@@ -90,7 +93,7 @@ it("表の行は (provider, model, effort) を鍵に追加・編集(key つき)�
   expect(table.find((row: any) => row.model === "gpt-6-astra")).toBeUndefined();
 });
 
-it("行を足す扉(settings タブ / 管理MCP)で「観測ありとして始める」を選ぶと、根拠と足した行の段の id が execution_settings_changed に種として残る —— 旗の無い行は今どおり種を持たない(ADR 0273 決定7)", async () => {
+it("行を足す扉(settings タブ / 管理MCP)で「観測ありとして始める」を選ぶと、list_routing_cells に根拠つきの行の記録と、その段(改名に付いていく)の人間の種が出る —— 旗の無い行は種を持たない(ADR 0273 決定7)", async () => {
   t = await bootTidepool();
   const haiku = { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 };
   const sol = { provider: "openai", tier: "standard", model: "gpt-5.7-sol", effort: "high", price_in: 2, price_out: 8 };
@@ -106,12 +109,24 @@ it("行を足す扉(settings タブ / 管理MCP)で「観測ありとして始�
   }
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: plain })).status).toBe(200);
 
-  // 学習器はこの event を種として読む(loadSeeds —— 読みの規則は learner のテストが言う)。段は改名に備えて id で焼かれる
-  const events = listEventsOfKinds(t.db, ["execution_settings_changed"]);
-  expect(events.map(({ origin, payload }) => ({ origin, ...(payload.setting === "row" && { seed: payload.seed, tier_id: payload.tier_id }) }))).toEqual([
-    { origin: "webui", seed: { comment: rationale }, tier_id: tierIdOf(t.db, "economy") },
-    { origin: "mcp", seed: { comment: "measured elsewhere" }, tier_id: tierIdOf(t.db, "standard") },
-    { origin: "webui", seed: undefined, tier_id: undefined },
+  // 種の段は id で焼かれる —— 読む前に段を改名しても、種は改名後の段に付いて読める
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "rename_tier", name: "economy", to: "budget" })).status).toBe(200);
+
+  // 読み手は routing meta-review の list_routing_cells(周期の待ちは meta-review の機構の話なので setup で立てる)
+  registerMetaReview(t.db, "routing", t.clock.now());
+  const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
+  await runNow(t, review.id);
+  const { cells, rows } = JSON.parse((await callAsTask(t, review.id, "list_routing_cells", { since_watermark: 0 })).content[0].text);
+  expect(rows).toMatchObject([
+    { origin: "webui", row: haiku, seed: { comment: rationale } },
+    { origin: "mcp", row: sol, seed: { comment: "measured elsewhere" } },
+    { origin: "webui", row: plain },
+  ]);
+  expect(rows[2]).not.toHaveProperty("seed");
+  const cell = ({ provider, model, effort }: typeof haiku) => ({ provider, model, effort, advisor: null });
+  expect(cells).toEqual([
+    { cell: cell(haiku), first_observed_event_id: null, seeds: [{ tier: "budget", kind: "human", event_id: rows[0].event_id }] },
+    { cell: cell(sol), first_observed_event_id: null, seeds: [{ tier: "standard", kind: "human", event_id: rows[1].event_id }] },
   ]);
 });
 

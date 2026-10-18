@@ -504,7 +504,7 @@ export function openDb(path: string): Db {
     -- ので worker_spawned の id は持てず、task_id と時刻で session に並ぶ。
     -- source: selector の出所 {tier, provider}(worker_spawned.source と同じ綴り ——
     -- spawn に辿り着かなかった pickup でも読めるようここにも持つ)。
-    -- basis: prior = 候補のどれにも観測が無く表そのまま / data = どれかの候補に観測がある(推薦が表と同じでもよい)。
+    -- basis: prior = 候補のどれにも観測も種も無く表そのまま / data = 本番の観測か種のある候補がある(推薦が表と同じでもよい)。
     -- record_recommended / record_actual: 推薦したセル / 走ったセルの、その pickup の推薦が数えた実績の JSON
     -- {board: {accepted, rejected}, workspace: {accepted, rejected}, seed: {kind, event_id} | null}(本番の観測だけで疑似観測を
     -- 含まない、書いた時点の値で数え直さない。seed はそのセル・その段の種 —— ADR 0273 決定7)。

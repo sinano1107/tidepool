@@ -367,6 +367,28 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   });
 });
 
+it("Interview の種は、置かれた窓の list_routing_cells に行のある段の種として出る —— 受験者の session はセルの初観測に数えない(ADR 0273 決定7)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [childId] = await pose(root.id);
+  await completeMetaReviews(t);
+  // 受験者の session の記録(scripted worker は刻まない)
+  const { advisor, ...setting } = t.worker.startedSettings.at(-1)!;
+  const spawned = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
+  appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
+  await t.clock.advance(HOUR);
+  await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
+  const scored = (await api(t.baseUrl, "GET", `/api/tasks/${childId}/events`)).json.find((e: any) => e.kind === "interview_scored");
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", row: { ...opus46, tier: "frontier", price_in: 1, price_out: 5 } })).status).toBe(200);
+
+  registerMetaReview(t.db, "routing", t.clock.now());
+  const [review] = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((task: any) => task.meta_review_subject === "routing" && task.status !== "done");
+  await runNow(t, review.id);
+  const { cells } = JSON.parse((await callAsTask(t, review.id, "list_routing_cells", {})).content[0].text);
+  expect(cells).toEqual([{ cell: { ...opus46, advisor: null }, first_observed_event_id: null, seeds: [{ tier: "frontier", kind: "interview", event_id: scored.id }] }]);
+});
+
 it("受験者の pickup は、学習器が昇格していない盤面でも shadow 行を残さない(選ぶ余地が無い)", async () => {
   t = await boot({ promoted: false });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;

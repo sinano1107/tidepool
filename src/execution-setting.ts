@@ -537,7 +537,7 @@ const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requir
 type RowKey = z.infer<typeof rowKeySchema>;
 
 /** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
-export type RowKeyFields = { provider: string; model: string; effort: string | null };
+type RowKeyFields = { provider: string; model: string; effort: string | null };
 
 /** この行が鍵の行か。 */
 export const matchesRowKey = (row: RowKeyFields, key: RowKeyFields) =>

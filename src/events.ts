@@ -553,7 +553,10 @@ export type EventPayload =
   // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
   // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。
-  | ({ kind: "execution_settings_changed"; question_id?: string; tier_id?: TierId } & ExecutionSettingsChange)
+  | ({ kind: "execution_settings_changed"; question_id?: string } & (
+      | Exclude<ExecutionSettingsChange, { setting: "row" }>
+      | (Extract<ExecutionSettingsChange, { setting: "row" }> & { tier_id?: TierId })
+    ))
   // ADR 0083 / spec #586 A: Memory の正本。エントリ表(memory_entries)は同じ
   // transaction で維持する投影で、この3つの再生で任意 watermark の approved 集合に
   // 戻せる。決定 log には現れない。
@@ -644,7 +647,7 @@ export type EventPayload =
   // decision の event、提案が question、枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
   // list_memory_proposals が返すエントリの id も持つ(precedent_entries / proposal_entries —— Precedent の seen に
   // 数える、issue #1230)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
-  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited)、人間が変えた行(execution_settings_changed)、
+  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
   // 提案の question。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[] })
   | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })

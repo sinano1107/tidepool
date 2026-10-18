@@ -1224,9 +1224,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
     "list_routing_cells",
     {
       description:
-        "List cells (provider, model, effort, advisor) first observed in a finished session since the watermark, and the " +
+        "List cells (provider, model, effort, advisor) first observed in a finished production session, or seeded, since the watermark " +
+        "(a seeded cell with no production session yet has first_observed_event_id null and advisor null), and the " +
         "execution-setting table rows humans wrote since then (an edit also carries the key of the row it replaced; a row added as observed carries seed with the human's rationale). " +
-        "Each cell carries seeds: the tiers where a seed stands in for the table's prior for its provider, model and effort, with the seed's kind (interview / human) and event_id. " +
+        "Each cell carries seeds: the tiers whose table row for its provider, model and effort has a seed standing in for the table's prior, with the seed's kind (interview / human) and event_id. " +
         nextDescription("list_routing_cells", "cells", "The rows come in full"),
       inputSchema: { since_watermark, next },
     },

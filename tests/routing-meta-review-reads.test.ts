@@ -274,6 +274,37 @@ it("list_routing_cells のセルはその provider / model / effort の種を段
   });
 });
 
+it("list_routing_cells の種は行のある (セル, 段) のものだけ —— 消した行と段を移した行の種は、event が残っても載らない(spec #2190)", () => {
+  const { db, routingReview } = board();
+  const change = (c: object) => applyExecutionSettingsChange(db, c as never, "webui", at)!;
+  const row = (model: string, tier = "economy") => ({ provider: "anthropic" as const, tier, model, effort: "low", price_in: 1, price_out: 5 });
+  const key = (model: string) => ({ provider: "anthropic", model, effort: "low" });
+  const kept = change({ setting: "row", row: row("claude-haiku-5-5"), seed: { comment: "kept" } });
+  change({ setting: "row", row: row("claude-haiku-5-6"), seed: { comment: "deleted" } });
+  change({ setting: "delete_row", ...key("claude-haiku-5-6") });
+  change({ setting: "row", row: row("claude-haiku-5-7"), seed: { comment: "moved" } });
+  change({ setting: "row", key: key("claude-haiku-5-7"), row: row("claude-haiku-5-7", "standard") });
+
+  expect(listRoutingCells(db, routingReview(), { since_watermark: 0 }).cells).toEqual([
+    { cell: { ...key("claude-haiku-5-5"), advisor: null }, first_observed_event_id: null, seeds: [{ tier: "economy", kind: "human", event_id: kept }] },
+  ]);
+});
+
+it("list_routing_cells は窓の中で種が置かれたセルを、初観測が窓より前でも載せる(ADR 0273 決定7)", () => {
+  const { db, work, spawn, exit, routingReview } = board();
+  const task = work("t", "standard");
+  const seen = exit(task.id, spawn(task.id, "deckhand", opus), [opus.model]);
+  routingReview(true);
+  // 種つきで足し直す(表の種に opus の standard の行があるので、消してから)
+  const opusRow = { provider: "anthropic" as const, tier: "standard", model: opus.model, effort: "high", price_in: 5, price_out: 25 };
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "anthropic", model: opus.model, effort: "high" }, "webui", at);
+  const seedId = applyExecutionSettingsChange(db, { setting: "row", row: opusRow, seed: { comment: "re-measured" } }, "webui", at);
+
+  expect(listRoutingCells(db, routingReview(), {}).cells).toEqual([
+    { cell: { provider: "anthropic", model: opus.model, effort: "high", advisor: null }, first_observed_event_id: seen, seeds: [{ tier: "standard", kind: "human", event_id: seedId }] },
+  ]);
+});
+
 // 応答予算(ADR 0195 / issue #1390): 読み口は予算に収まるだけ返し、収まらない分は続き(next)で読む。
 
 /** `first` の読みから next が尽きるまで追った応答の列。 */

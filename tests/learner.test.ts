@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { appendEvent, type EventPayload } from "../src/events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { episodeOutcome, type LearnerEpisode, loadEpisodes, loadSeeds, observedInTier, recommend, type Seed, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
@@ -727,7 +727,7 @@ function posedInterview(b: Board, tier: Tier = "standard") {
 function scoredInterview(b: Board, outcome: "accepted" | "rejected", tier?: Tier) {
   const { root, examinee } = posedInterview(b, tier);
   completeInterview(b.db, getTask(b.db, root.id)!, { scores: [{ child_id: examinee.id, outcome }], handoff: { outcome: "findings" } }, "auditor", b.clock.now(), "worker");
-  return (b.db.prepare("SELECT id FROM events WHERE task_id = ? AND kind = 'interview_scored'").get(examinee.id) as { id: number }).id;
+  return listEventsOfKinds(b.db, ["interview_scored"]).find((e) => e.task_id === examinee.id)!.id;
 }
 
 it("done の root の受理の採点が (セル, 段) の種になり、同じセルの最新の受理が勝つ —— 却下の採点と cancelled・未決着の Interview は種を置かず、段ごとに別の種(loadSeeds)", () => {
