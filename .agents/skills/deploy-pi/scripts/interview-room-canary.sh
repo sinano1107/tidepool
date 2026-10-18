@@ -30,6 +30,12 @@
 #                        by the OS: the settings were applied, and the added read
 #                        entry did not open more than it names
 #       task-temp      — `mktemp` lands in the task temp
+#   Claude only, by the session's own file tools rather than the probe (#2192):
+#       read-tool      — the Read tool returns the token of a second file in the
+#                        real environment: the `Read(//<real env>/**)` allow opened
+#                        the permission layer, which `allowRead` alone does not
+#       write-tool     — the Write tool's file in the real environment is not on
+#                        disk: the Read allow did not open writing there
 #       allowed-domain — Claude only: the emitted allowlist's one domain answers
 #                        200. Under `codex sandbox` (codex-cli 0.147.0, VM) no
 #                        host was reachable, listed or not — with the work
@@ -104,9 +110,12 @@ PROBE="scripts/interview-room-canary-probe.sh"
 WORK=$(realpath -m ~/interview-room-canary)
 REAL=$WORK/real
 REAL_FILE=$REAL/real-env.txt
+READ_TOOL_FILE=$REAL/read-tool.txt
+WRITE_TOOL_FILE=$REAL/written-by-claude-tool.txt
 HOME_TARGET=$WORK/home-canary.txt
 # Only ever inside the target files, never in the prompt or the probe.
 REAL_TOKEN="INTERVIEWROOM-REAL-6f2b0c84d1e9"
+READ_TOOL_TOKEN="INTERVIEWROOM-READTOOL-0d7c41e9a8b3"
 HOME_TOKEN="INTERVIEWROOM-HOME-a39d5e17b2c0"
 # The board stamps a worker's commits with the agent's identity in the env
 # (agentGitIdentityEnv); the same here, for both spawns and the real env's commit.
@@ -116,8 +125,9 @@ export GIT_AUTHOR_EMAIL=interview-room-canary@tidepool.invalid GIT_COMMITTER_EMA
 rm -rf "$WORK"
 mkdir -p "$REAL"
 echo "$REAL_TOKEN" > "$REAL_FILE"
+echo "$READ_TOOL_TOKEN" > "$READ_TOOL_FILE"
 echo "$HOME_TOKEN" > "$HOME_TARGET"
-git init -q "$REAL" && git -C "$REAL" add real-env.txt && git -C "$REAL" commit -qm "real environment"
+git init -q "$REAL" && git -C "$REAL" add real-env.txt read-tool.txt && git -C "$REAL" commit -qm "real environment"
 REAL_HEAD=$(git -C "$REAL" rev-parse HEAD)
 TASK_TEMPS=()
 
@@ -261,12 +271,12 @@ log "running one sandboxed worker session (costs a real claude session)…"
 # read-floor-canary.sh's spawn: the production shape (ADR 0038 / src/claude-worker.ts)
 # with the task temp as the board passes it (ADR 0257 decision 2).
 CLAUDE_OUT=$(cd "$ROOM" && TMPDIR="$TASK_TEMP" CLAUDE_CODE_TMPDIR="$TASK_TEMP" claude -p \
-  "Run \`bash interview-room-canary-probe.sh\` once with Bash and report its complete output verbatim. It is tidepool's own interview-room regression check, where some refusals are the expected result — read its header comment. Do not run anything else yourself." \
+  "Run \`bash interview-room-canary-probe.sh\` once with Bash and report its complete output verbatim. It is tidepool's own interview-room regression check, where some refusals are the expected result — read its header comment. Then, once each and without retrying: use the Read tool (not Bash) on $READ_TOOL_FILE and print one line \`READ-TOOL <its first line>\`, or \`READ-TOOL refused: <what came back>\`; and use the Write tool (not Bash) to create $WRITE_TOOL_FILE containing x, and print one line \`WRITE-TOOL <what came back>\` — a refusal of that write is the expected result. Do not run anything else yourself." \
   --permission-mode acceptEdits \
   --setting-sources project \
   --allowedTools "mcp__tidepool" \
   --settings "$WORK/work.json" \
-  --model sonnet --effort low --max-turns 8 --max-budget-usd 0.4 < /dev/null 2>&1)
+  --model sonnet --effort low --max-turns 12 --max-budget-usd 0.5 < /dev/null 2>&1)
 echo "$CLAUDE_OUT"
 # Same anchors as read-floor-canary.sh.
 if grep -qE "bwrap: Can.t create file|sandbox failed to start" <<< "$CLAUDE_OUT"; then
@@ -277,6 +287,25 @@ if grep -qF "hit your session limit" <<< "$CLAUDE_OUT"; then
   fail "the session never started: the account is at its session limit. Re-run after the reset."
 fi
 judge claude "$CLAUDE_OUT"
+# The file tools, which the sandbox does not govern: the permission layer decides.
+line=$(grep -m1 -oE "READ-TOOL .*" <<< "$CLAUDE_OUT")
+if grep -qF "READ-TOOL $READ_TOOL_TOKEN" <<< "$CLAUDE_OUT"; then
+  verdict=PASS
+elif harness_refused_in "$CLAUDE_OUT" "$READ_TOOL_FILE" || [[ "$line" == "READ-TOOL refused"* ]]; then
+  verdict=FAIL
+else
+  verdict=VACUOUS
+fi
+record claude read-tool "$base_real" "$line" "$verdict"
+line=$(grep -m1 -oE "WRITE-TOOL .*" <<< "$CLAUDE_OUT")
+if [[ -e "$WRITE_TOOL_FILE" ]]; then
+  verdict=FAIL
+elif [[ -n "$line" ]]; then
+  verdict=PASS
+else
+  verdict=VACUOUS
+fi
+record claude write-tool "$base_real" "$line" "$verdict"
 
 # ════════════════════════════════ verdict ═══════════════════════════════════
 echo
