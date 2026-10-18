@@ -12,6 +12,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { completeTask, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { type Tier, tierIdOf } from "../src/tier.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
@@ -285,6 +286,13 @@ function accept(b: Board, taskId: string) {
   for (const review of listChildren(b.db, taskId).filter((r) => r.type === "review" && r.status === "todo")) completeReview(b, review.id);
 }
 
+/** 受理済みの work を親に memory_repair を立てる(ADR 0272)。親はドメインで pickup するので slot は取らない。 */
+function queueMemoryRepair(b: Board) {
+  const parent = pickupTask(b.db, queueWork(b, "parent"), WORKER, b.clock.now())!;
+  accept(b, parent.id);
+  return registerTask(b.db, { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), BOARD_WORKER_ID, "board");
+}
+
 /** scheduler が pickup した work を受理させ、slot を空ける。poll が登録した meta-review は slot を取るので、後続の pickup を
  *  待たせないようドメインで完了させる。 */
 function finish(b: ScheduledBoard, taskId: string) {
@@ -511,6 +519,31 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
   expect(b.worker.startedSettings.at(-1)).toEqual(opus);
 });
 
+it("memory_repair の pickup も work と同じく shadow 行を1件残す —— 判定者ではないので学習器の work 側(ADR 0272 決定4 の追記)", async () => {
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  const repair = queueMemoryRepair(b);
+  await b.clock.advance(HOUR);
+
+  expect(b.worker.started.map((task) => task.id)).toEqual([repair.id]);
+  expect(shadowRows(b)).toEqual([{ task_id: repair.id, recommended: cellOf(opus), actual: cellOf(opus), source: opus.source, basis: "prior", candidates: 2 }]);
+});
+
+it("昇格中の memory_repair は work と同じく学習器の選択で走り出所は learner、shadow 行を1件残す(ADR 0272 決定4 の追記)", async () => {
+  const b = scheduledBoard({ openaiUsage: healthyOpenai, candidates: () => [opus, sol] });
+  promote(b);
+  await settledSession(b, opus, ["capability"]);
+  await settledSession(b, sol);
+  const before = shadowRows(b).length;
+
+  const repair = queueMemoryRepair(b);
+  await b.clock.advance(HOUR);
+
+  expect(settingsOf(b, repair.id)).toEqual(byLearner(sol));
+  expect(shadowRows(b).slice(before)).toEqual([
+    { task_id: repair.id, recommended: cellOf(opus), actual: cellOf(sol), source: byLearner(sol).source, basis: "data", candidates: 2 },
+  ]);
+});
+
 it("昇格中も学習器の選択は Throttle の除外を通る —— 選んだ Provider が throttle 中なら除外を当てた残りから選び直し、shadow 行の候補数は除外後の行の数", async () => {
   const throttledOpenai = async (now: Date): Promise<CodexAppServerProbeResult> => ({
     status: "observed",
@@ -570,6 +603,28 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   const episodes = loadEpisodes(b.db);
   const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
+});
+
+it("spawn を持つ memory_repair は episode になり、完了しても完了時レビューが無いので excluded、capability の帰責があれば rejected(ADR 0272 決定4 の追記・決定5 / ADR 0115 決定5、loadEpisodes)", () => {
+  const b = bareBoard();
+  const repair = pickupTask(b.db, queueMemoryRepair(b), WORKER, b.clock.now())!;
+  const spawnedId = recordSpawn(b, repair.id);
+  complete(b, repair.id);
+  const outcome = () => loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect(outcome()).toBe("excluded");
+
+  attribute(b, repair.id, logDecision(b.db, getTask(b.db, repair.id)!, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
+  expect(outcome()).toBe("rejected");
+});
+
+it("spawn を持つ review task は episode にならない —— 判定者は学習器の外(ADR 0111 決定3 / ADR 0272 決定4 の追記、loadEpisodes)", () => {
+  const b = bareBoard();
+  const { task } = spawnedWork(b, "a");
+  complete(b, task.id);
+  const review = listChildren(b.db, task.id).find((r) => r.type === "review")!;
+  recordSpawn(b, pickupTask(b.db, review, DEFAULT_AUDITOR_NAME, b.clock.now())!.id);
+
+  expect(loadEpisodes(b.db).map((e) => e.task_id)).toEqual([task.id]);
 });
 
 // ── 差し替え(issue #1523 / ADR 0215 決定4)────────────────────────────
