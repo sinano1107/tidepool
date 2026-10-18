@@ -476,7 +476,7 @@ function taskPrompt(task: Task): string {
     `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }
 
-function permissionConfig(
+export function permissionConfig(
   taskType: Task["type"],
   workspace: string,
   taskTemp: string,

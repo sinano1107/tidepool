@@ -359,7 +359,7 @@ bash .agents/skills/deploy-pi/scripts/read-floor-canary.sh pi      # the Pi
 
 Measures that a worker's Bash cannot read outside ADR 0257's default-deny range (its workspace, its task temp, the OS locations) — issue #1953. It carries #1950's real-environment confirmation: what #1950 observed getting through — another task's task temp, another session's files under `/tmp/claude-<uid>/` (read and appended to), the Mac home on the VM — is its refused rows. It is not part of the board's containment check, because the CLI cannot run a command in its sandbox without a model turn (ADR 0257 decision 3).
 
-**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other three canaries are expected to fail closed there too (unmeasured) — run them in the Lima VM as well.
+**`local` means a Linux host.** ADR 0257's re-opened set is Linux-only, so on macOS this script exits 2 up front without a session. The other canaries are expected to fail closed there too (unmeasured) — run them in the Lima VM as well.
 
 **Seven rows in one session**, run by `scripts/read-floor-canary-probe.sh` from a throwaway workspace with the emitted work profile, the production spawn flags, and a task temp made the board's way (`/tmp/tidepool-claude-<uuid>-XXXXXX`, so the CLI's proxy socket path is as long as in production):
 
@@ -380,6 +380,31 @@ The OS string is the sandbox e2e smoke's: `No such file or directory` under bwra
 **Exit codes: `0`** every refused row refused by the OS and every control succeeded — **`1`** a target was read or appended to, a target's refusal was harness-worded, or the sandbox failed to start — **`2`** nothing was read but a row could not be measured. `2` is not a steady state: all seven rows should pass on both hosts. The script refuses to run (exit 1) against a checkout whose emitted profile is not `denyRead: ["/"]` with the task temp opened — a deployed board older than ADR 0257. That check reads the emitted profile, not a `src/` identifier.
 
 `refused_row_verdict()`, `read_seen()`, `harness_refused_in()`, `control_verdict()`, `run_status()` and `os_refused_in()` are where "not measured" could quietly become "measured and fine"; `scripts/read-floor-canary.test.sh` pins every branch (`bash scripts/read-floor-canary.test.sh`, no Linux host and no session needed). The probe also prints, unjudged, whether `npm` works for a worker whose home is masked (`READ-FLOOR-DIAG npm-view`) and where its `~/.npm` stands.
+
+### Interview-room canary (ADR 0273 — re-run after every deploy and every `claude` / `codex` CLI update)
+
+```bash
+bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh local   # a Linux host (the Lima VM)
+bash .agents/skills/deploy-pi/scripts/interview-room-canary.sh pi      # the Pi
+```
+
+Measures that an Interview root's floor holds for both providers (issue #2197 / ADR 0273 decision 2): cwd is a fresh git repository (the interview room), the work floor is emitted from the checkout's code, and the real environment is opened for reading on top. Claude runs one session with read-floor's spawn shape and the real environment added to `sandbox.filesystem.allowRead`. Codex runs `codex sandbox -P tidepool-work -C <room>` with the work `permissionConfig()` (`emit-sandbox-settings.ts --codex`) and the real environment added to the filesystem map as `read`, with no model turn. That one added entry per provider is the only hand-made part; #2192's `interview` type replaces it.
+
+`scripts/interview-room-canary-probe.sh` runs the same rows for each provider:
+
+| row | what | pass |
+|---|---|---|
+| real-env-log | `git log -1` in the real environment | its HEAD hash came back |
+| real-env-cat | `cat` of a token file in it | the token came back |
+| real-env-write | a write into it | refused **with the OS string** (`Read-only file system`), and no file appeared |
+| room-git | write, `git add` and `git commit` in the room | the commit is the room's HEAD on disk |
+| home | a token file under `~`, outside what is opened | refused **with the OS string** (`No such file or directory`, checked from outside first) |
+| task-temp | `mktemp` | the file landed in the task temp |
+| allowed-domain | Claude only: `curl https://registry.npmjs.org`. Under `codex sandbox` no host was reachable, listed or not, so this row is not a control there | `code=200` |
+
+`home`, `task-temp` and `allowed-domain` are the controls, but only `home` tells a dropped profile apart: it is an OS-worded refusal of a file that exists outside, which also shows the added entry opened no more than it names (`mktemp` follows `$TMPDIR`, and the allowed domain answers without any profile; `real-env-write`'s `Read-only file system` is the other OS-worded proof). An (a)/(c) row therefore reads FAIL only beside a passing `home`, and VACUOUS otherwise. The verdict functions are read-floor-canary.sh's, sourced. **Exit codes:** `0` means every row passed for both providers. `1` means `home` was read (a production incident, the same as read-floor), or the combination does not hold: `real-env-write`, `real-env-log`/`-cat` or `room-git` failed. The fallback for the second case is ADR 0273's rejected option 3, and switching to it is a human decision. `2` means a row could not be measured; this includes `codex` missing from PATH and a setup step that failed before any session.
+
+First run on the Lima VM (2026-10-18, claude 2.1.286, codex-cli 0.147.0): all 13 rows passed, exit 0.
 
 ### After a token rotation
 
