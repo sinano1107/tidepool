@@ -880,6 +880,41 @@ it("同じ (provider, model) を pin した Interview がもう1つ残ってい�
   expect(await queueStatus(other!)).toBe("skipped");
 });
 
+/** 同じ (provider, model) に model の鍵と effort の鍵の question が両方開いた盤面(ADR 0199 追記 #1999)。effort の鍵は直接立てる。 */
+async function refuseBothKeys(targets: object[]) {
+  const board = await refuseUnrowedTarget(targets);
+  registerQuarantine(t.db, "interviewTargetEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "low"), "another observation", t.clock.now());
+  const effort = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTargetEffort")!;
+  return { ...board, effort };
+}
+
+it("model の鍵の question に「この対象は測らない」と答えて root も cancel されると、走らせうる Interview の無くなった effort の鍵の question は回答なしで決着し、root の cancel を観測とする(ADR 0199 追記 #1999)", async () => {
+  const board = await refuseBothKeys([SONNET_MEDIUM, SONNET_LOW]);
+
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.effort.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  const cancelled = (await events(board.rootId)).find((e) => e.kind === "task_cancelled");
+  expect(await releases(board.effort.id)).toEqual([
+    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTargetEffort", value: "anthropic/claude-sonnet-5-5/low", observed_event_id: cancelled.id }],
+  ]);
+});
+
+it("root が別の対象で残っても、model の鍵への「この対象は測らない」で走らせうる受験者の無くなった effort の鍵の question は決着し、その鍵の受験者の cancel を観測とする(ADR 0199 追記 #1999)", async () => {
+  const board = await refuseBothKeys([SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
+  const low = board.childIds[1]!;
+
+  expect((await board.answer("do not measure this target")).status).toBe(200);
+
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.rootId}`)).json.status).toBe("blocked");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${board.effort.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  const cancelled = (await events(low)).find((e) => e.kind === "task_cancelled");
+  expect(cancelled.payload.origin_question_id).toBe(board.question.id);
+  expect(await releases(board.effort.id)).toEqual([
+    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTargetEffort", value: "anthropic/claude-sonnet-5-5/low", observed_event_id: cancelled.id }],
+  ]);
+});
+
 // ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
 
 /** 種の economy 行と3欄 + root の段が一致する対象 —— 断られると行の Quarantine になる。 */
