@@ -700,7 +700,8 @@ export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
 
 /** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
- *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝(path)、値は left_as_is で、reason は任意。RCA の対象は
+ *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝(path)、値は left_as_is で、reason は任意。routing meta-review の
+ *  対象は行((provider, model, effort))・agent(名前)・段(id)・学習器で、値は no_change、reason は任意(ADR 0278 追記5)。RCA の対象は
  *  所見(entries)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_proposal を持つ(ADR 0280 決定3)。 */
 export type Judgment =
   | {

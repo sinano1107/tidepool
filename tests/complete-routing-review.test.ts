@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, listEvents, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, type EventPayload, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -67,9 +67,12 @@ it.each([
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
 
-it("注入の記録は評価の対象を complete_routing_review の鍵で運ぶ", () => {
-  const { injected } = cycle();
+it("注入の記録は評価の対象を運び、段は id で名指して注入した名前を添える —— agent が写す鍵は段を名前で名指す", () => {
+  const { db, review, injected } = cycle();
 
+  expect(latestEventOfTask(db, review.id, "meta_review_material_injected")!.payload).toMatchObject({
+    items: [{ row: OPUS, tier: "standard" }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "standard"), tier: "standard" }, { learner: true }],
+  });
   expect(injected).toEqual([{ row: OPUS, tier: "standard" }, { agent: "deckhand" }, { tier: "standard" }, { learner: true }]);
 });
 
@@ -109,6 +112,7 @@ const proposals: Array<[op: string, covers: object, propose: (db: Db, review: Ta
     "demote",
     { learner: true },
     (db, review) => {
+      // 昇格は承認の適用だけが書き、公開の扉は降格しか受けない(executionSettingsChangeSchema の learner_promoted)
       db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
       return proposeRoutingChange(db, review.id, { op: "demote", rationale: "r" }, "auditor", at);
     },
@@ -158,14 +162,27 @@ it.each([
   expect(judgmentRows(db, review.id)).toHaveLength(3);
 });
 
-it("注入の後に段が改名されれば、注入した名前の段はもう項目でなく、その値は受け取られて行は書かれない —— 今の計算は絞り込みにだけ使う", () => {
+it("注入の後に段が改名されても段は id で同じ項目のまま —— 改名は行為ではなく、注入した名前で値が無ければ unjudged、値があれば今の名前の文で行になる", () => {
   const { db, review, injected } = cycle();
   applyExecutionSettingsChange(db, { setting: "rename_tier", name: "standard", to: "steady" }, "webui", at);
 
+  expect(() => complete(db, review, injected.filter((item) => !("tier" in item && !("row" in item))))).toThrow("unjudged: tier standard —");
   const done = complete(db, review, injected);
 
   expect(done.status).toBe("done");
-  expect(judgmentRows(db, review.id).map((row) => row.judgment)).not.toContainEqual(expect.objectContaining({ tier: expect.anything() }));
+  expect(judgmentRows(db, review.id)).toContainEqual({ kind: "decision_logged", line: "no_change: tier steady", judgment: { kind: "routing", tier_id: tierIdOf(db, "steady"), value: "no_change" } });
+});
+
+it.each([
+  ["段の位置だけを動かした", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", position: 0 }, "webui", at)],
+  ["段を足した", (db: Db) => applyExecutionSettingsChange(db, { setting: "insert_tier", name: "careful", description: "Careful work.", position: 2 }, "webui", at)],
+] as const)("注入の後に人間が%sのは段の項目への行為ではなく、値が無ければ unjudged で、値があれば行になる", (_, act) => {
+  const { db, review, injected } = cycle();
+  act(db);
+
+  expect(() => complete(db, review, injected.filter((item) => !("tier" in item && !("row" in item))))).toThrow("unjudged: tier standard —");
+  complete(db, review, injected);
+  expect(judgmentRows(db, review.id)).toHaveLength(4);
 });
 
 it("再 spawn で注入の記録が2つあれば最新の記録の項目を読み、2つ目で増えた項目は unjudged で拒まれる", () => {
@@ -205,7 +222,7 @@ it("no_change の対象ごとに対象を名指す型つきの decision_logged �
   expect(judgmentRows(db, review.id)).toEqual([
     { kind: "decision_logged", line: "no_change: anthropic / claude-opus-5-5 at effort high (standard) — still fits", judgment: { kind: "routing", row: OPUS, value: "no_change", reason: "still fits" } },
     { kind: "decision_logged", line: "no_change: agent deckhand", judgment: { kind: "routing", agent: "deckhand", value: "no_change" } },
-    { kind: "decision_logged", line: "no_change: tier standard", judgment: { kind: "routing", tier: "standard", value: "no_change" } },
+    { kind: "decision_logged", line: "no_change: tier standard", judgment: { kind: "routing", tier_id: tierIdOf(db, "standard"), value: "no_change" } },
     { kind: "decision_logged", line: "no_change: the learner", judgment: { kind: "routing", learner: true, value: "no_change" } },
   ]);
 });

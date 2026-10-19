@@ -563,6 +563,9 @@ export function readableInterviewRooms(db: Db, rootId: string): { name: string; 
   return rooms.filter((room): room is { name: string; path: string } => room.path !== undefined);
 }
 
+/** meta-review の主題ごとの完了の verb(ADR 0278 決定1)。META_REVIEW_SUBJECTS は tasks.ts を import するのでここに置く。 */
+const META_REVIEW_COMPLETION = { memory: "complete_memory_review", routing: "complete_routing_review" } as const;
+
 export interface TaskVerbSwap {
   withheld: readonly (
     | "decompose"
@@ -632,7 +635,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
-  if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [`complete_${task.meta_review_subject}_review`] };
+  if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
   return { withheld: [], added: [] };
 }
 
@@ -1297,7 +1300,7 @@ export function completeTask(
   // ADR 0278 決定1: 統合レビューと meta-review も扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
   if (task.meta_review_subject) {
-    throw new DomainError(`a ${task.meta_review_subject} meta-review does not complete with complete_task: complete it with complete_${task.meta_review_subject}_review`);
+    throw new DomainError(`a ${task.meta_review_subject} meta-review does not complete with complete_task: complete it with ${META_REVIEW_COMPLETION[task.meta_review_subject]}`);
   }
   if (isRca(db, task.id)) throw new DomainError("an RCA does not complete with complete_task: complete it with complete_rca");
   // ADR 0278 決定6: agent の完了は判断を運ぶ —— work の全欄の要求は finishTask が持つ

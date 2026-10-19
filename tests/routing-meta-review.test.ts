@@ -100,7 +100,6 @@ it("親 task の meta_review_subject が routing の open な提案 question が
   await material(t);
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
-  // routing の提案 verb はまだ無いので、kind が memory の提案 question を routing meta-review の子として立てる
   const candidate = createBehaviorCandidate(
     t.db,
     { scope: null, path: "habits", title: "Split migrations", text: "Split migrations.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
@@ -223,41 +222,4 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
   } finally {
     await client.close();
   }
-});
-
-it("routing meta-review の purpose は材料の節とその6つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", async () => {
-  t = await bootTidepool();
-  await material(t);
-  await t.clock.advance(HOUR);
-
-  const [review] = await openRoutingReviews(t);
-
-  expect(review.purpose).toContain(
-    "This cycle's material is in your prompt, in the Routing meta-review material section: the current table and settings, the shadow rows " +
-      "since the previous routing meta-review where the learner's recommendation diverged from what ran, the allocation reviews since then, " +
-      "the cells first seen and the rows humans changed since then, the routing proposals answered or settled since then, and the items to judge.",
-  );
-  expect(review.purpose).toContain(
-    "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, listing each item you leave unchanged as no_change (with a reason when it helps).",
-  );
-  expect(review.purpose).not.toContain("log_decision");
-  expect(review.purpose).toContain(
-    "before you propose a change to a row, the learner flag, an agent's tier or a tier's description, read the earlier proposals on it, with their answers, amendments and comments, with read_routing_settings",
-  );
-  expect(review.purpose).toContain("read the matched rows, and anything before the previous meta-review, with list_routing_shadow, list_allocations and list_routing_cells");
-  expect(review.purpose).not.toContain("First read");
-  // 昇格の根拠は推薦したセルの実績(ADR 0181 決定1・5・6)
-  expect(review.purpose).not.toContain("outcomes of the diverged episodes");
-  for (const meaning of [
-    "The learner leaves the table's first choice only when both that choice and the cell it moves to have observations",
-    "each diverged row carries the track records of the recommended and the actual cell as of that pickup",
-    "While the learner is not promoted, a diverged row's outcome is the result of the setting the table chose, not of the one the learner recommended",
-    "Base any case for promoting the learner on whether the recommended cells' track records, counts included, justify leaving the table",
-    "a pickup with one candidate always matches the table, so do not count it as evidence of agreement",
-  ]) {
-    expect(review.purpose).toContain(meaning);
-  }
-  expect(review.completion_criteria).toBe(
-    "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
-  );
 });

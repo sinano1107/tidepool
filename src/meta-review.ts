@@ -214,32 +214,36 @@ export function injectedMaterial<S extends MetaReviewSubject>(db: Db, reviewId: 
 /** meta-review の完了の骨格(ADR 0278 決定2〜4・追記4、memory と routing が共有): 開いている項目 = 注入した一覧 ∩ `open`(今も項目で、
  *  この review の行為も記録の後の誰かの行為も判断済みにしていないもの)。足りない項目と、注入した一覧に無い対象は名指して拒み、何も記録しない。
  *  注入済みでも開いていない項目への値は受け取って何もしない。値1つが対象を名指す型つきの判断ログ1行で、文は盤面が「<値>: <対象> — <reason>」で
- *  組み、完了と同じ transaction で書く。 */
-export function completeMetaReview<I>(
+ *  組み、完了と同じ transaction で書く。`items` は項目の一覧、`judging` は主題ごとの綴り —— 項目と判断を突き合わせる鍵、文の対象の綴り、
+ *  判断の型(kind と value)と、その行が名指す対象。 */
+export function completeMetaReview<I, J = I>(
   db: Db,
   review: Task,
-  { judgments, handoff }: { judgments: ReadonlyArray<I & { reason?: string }>; handoff?: Partial<HandoffDoc> },
-  items: { injected: readonly I[]; open: readonly I[]; name: (item: I) => string; label: (item: I) => string; value: string; judgment: (item: I, reason?: string) => Judgment },
+  { judgments, handoff }: { judgments: ReadonlyArray<J & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  items: { injected: readonly I[]; open: readonly I[] },
+  judging: { key: (item: I | J) => string; label: (item: I) => string; object: (item: I) => object } & ({ kind: "memory"; value: "left_as_is" } | { kind: "routing"; value: "no_change" }),
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
-  const injected = new Set(items.injected.map(items.name));
-  const open = new Map(items.open.flatMap((item) => (injected.has(items.name(item)) ? [[items.name(item), item] as const] : [])));
-  const given = new Map(judgments.map((judgment) => [items.name(judgment), judgment]));
-  const unknown = [...given.keys()].filter((name) => !injected.has(name));
-  const unjudged = [...open.keys()].filter((name) => !given.has(name));
-  const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as ${items.value}`];
+  const injected = new Set(items.injected.map(judging.key));
+  const open = new Map(items.open.flatMap((item) => (injected.has(judging.key(item)) ? [[judging.key(item), item] as const] : [])));
+  const given = new Map(judgments.map((judgment) => [judging.key(judgment), judgment]));
+  const unknown = [...given.keys()].filter((key) => !injected.has(key));
+  const unjudged = [...open.keys()].filter((key) => !given.has(key));
+  const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as ${judging.value}`];
   if (refusals.some(Boolean)) throw new DomainError(refusals.filter(Boolean).join("; "));
   return db.transaction(() => {
-    for (const [name, item] of open) {
-      const { reason } = given.get(name)!;
+    for (const [key, item] of open) {
+      const { reason } = given.get(key)!;
       const said = reason === undefined || whyBlank(reason) ? undefined : normalizeText(reason);
+      // 対象の形は主題の object が決める —— kind と value の組は judging の型が縛る
+      const judgment = { kind: judging.kind, ...judging.object(item), value: judging.value, ...(said && { reason: said }) } as Judgment;
       appendEvent(db, {
         taskId: review.id,
         workerId,
         origin,
-        payload: { kind: "decision_logged", line: `${items.value}: ${items.label(item)}${said ? ` — ${said}` : ""}`, judgment: items.judgment(item, said) },
+        payload: { kind: "decision_logged", line: `${judging.value}: ${judging.label(item)}${said ? ` — ${said}` : ""}`, judgment },
         at: now,
       });
     }

@@ -34,7 +34,7 @@ import {
   type Task,
   type TierDescriptionProposal,
 } from "./tasks.js";
-import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
+import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNameOf, tierNames } from "./tier.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -235,70 +235,93 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   });
 }
 
-/** routing meta-review の評価の対象(ADR 0278 決定5・追記5): 行は (provider, model, effort) の3欄で名指す。判断ログの行の `judgment` が持つ。 */
-export type RoutingObject = { row: RowKey } | { agent: string } | { tier: Tier } | { learner: true };
-/** 判断を要する項目: complete_routing_review の鍵と同じ形で、行には盤面が今の表の段を読み物として添える(鍵ではなく、判断では省ける)。 */
-export type RoutingJudgmentItem = { row: RowKey; tier?: Tier } | Exclude<RoutingObject, { row: RowKey }>;
+/** routing meta-review の評価の対象(ADR 0278 決定5・追記5): 行は (provider, model, effort) の3欄、段は盤面の中の照合なので id で名指す
+ *  (ADR 0200 決定2)。判断ログの行の `judgment` が持つ。 */
+export type RoutingObject = { row: RowKey } | { agent: string } | { tier_id: TierId } | { learner: true };
+/** 判断を要する項目(材料の部分と注入の記録): 対象に、盤面が読み物として行には今の表の段を、段にはその名前を添える。 */
+export type RoutingJudgmentItem = { row: RowKey; tier: Tier } | { agent: string } | { tier_id: TierId; tier: Tier } | { learner: true };
+/** complete_routing_review が受ける判断の鍵(節の Items to judge が並べる形): 段は名前で名指し、行に添えた段は省ける。 */
+export type RoutingJudgmentKey = { row: RowKey; tier?: Tier } | { agent: string } | { tier: Tier } | { learner: true };
 
-/** 対象を文面で名指す綴り(拒否文と判断ログの文)。行は rowName。 */
-const itemName = (item: { row: Parameters<typeof rowName>[0] } | Exclude<RoutingObject, { row: RowKey }>) =>
+/** 項目を verb の鍵の形に(節の Items to judge が並べる形)。 */
+export const judgmentKey = (item: RoutingJudgmentItem): RoutingJudgmentKey => ("tier_id" in item ? { tier: item.tier } : item);
+
+/** 対象を文面で名指す綴り(拒否文と判断ログの文)。行は rowName、段は名前。 */
+const itemName = (item: { row: Parameters<typeof rowName>[0] } | { agent: string } | { tier: Tier } | { learner: true }) =>
   "row" in item ? rowName(item.row) : "agent" in item ? `agent ${item.agent}` : "tier" in item ? `tier ${item.tier}` : "the learner";
 
 /** この review の提案 question が判断済みにする対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、
  *  `tier_description` は段、`promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。 */
-function proposedObjects(db: Db, reviewId: string): Set<string> {
-  return new Set(
-    listChildren(db, reviewId).flatMap(({ question_proposal }) => {
-      if (question_proposal?.kind === "registry") return [itemName({ agent: question_proposal.agent })];
-      if (question_proposal?.kind !== "routing") return [];
-      const proposal = proposalTierNames(db, question_proposal) as RoutingProposal<Tier>;
-      if (proposal.op === "row" || proposal.op === "add_tier") return [itemName({ row: proposal.row })];
-      if (proposal.op === "tier_description") return [itemName({ tier: proposal.tier })];
-      if (proposal.op === "interview") return proposal.pin.rows.map((row) => itemName({ row }));
-      return [itemName({ learner: true })];
-    }),
-  );
+function proposedObjects(db: Db, reviewId: string): RoutingObject[] {
+  return listChildren(db, reviewId).flatMap(({ question_proposal: proposal }): RoutingObject[] => {
+    if (proposal?.kind === "registry") return [{ agent: proposal.agent }];
+    if (proposal?.kind !== "routing") return [];
+    switch (proposal.op) {
+      case "row":
+      case "add_tier":
+        return [{ row: proposal.row }];
+      case "tier_description":
+        return [{ tier_id: proposal.tier }];
+      case "interview":
+        return proposal.pin.rows.map((row) => ({ row }));
+      case "promote":
+      case "demote":
+        return [{ learner: true }];
+      default:
+        return proposal satisfies never;
+    }
+  });
 }
 
 /** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
- *  への段の書き込み、段は説明の書き換え、学習器は昇格 / 降格。 */
-function actedSince(db: Db, recordId: number): Set<string> {
-  return new Set(
-    listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }) => {
-      if (p.kind === "agent_tier_changed") return [itemName({ agent: p.agent })];
-      if (p.setting === "row") return [itemName({ row: p.row }), ...(p.key ? [itemName({ row: p.key })] : [])];
-      if (p.setting === "delete_row") return [itemName({ row: p })];
-      if (p.setting === "edit_tier") return [itemName({ tier: p.name })];
-      return p.setting === "learner_promoted" ? [itemName({ learner: true })] : [];
-    }),
-  );
+ *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない)、学習器は昇格 / 降格。段の event は名前で名指すので、
+ *  注入した名前から改名をたどって id に引く。 */
+function actedSince(db: Db, recordId: number, injectedTiers: ReadonlyMap<TierId, Tier>): RoutingObject[] {
+  const tierIds = new Map([...injectedTiers].map(([id, name]) => [name, id]));
+  return listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
+    if (p.kind === "agent_tier_changed") return [{ agent: p.agent }];
+    if (p.setting === "row") return [{ row: p.row }, ...(p.key ? [{ row: p.key }] : [])];
+    if (p.setting === "delete_row") return [{ row: p }];
+    if (p.setting === "learner_promoted") return [{ learner: true }];
+    const id = "name" in p ? tierIds.get(p.name) : undefined;
+    if (id === undefined) return [];
+    if (p.setting === "rename_tier") {
+      tierIds.delete(p.name);
+      tierIds.set(p.to, id);
+    }
+    return p.setting === "edit_tier" && p.description !== undefined ? [{ tier_id: id }] : [];
+  });
 }
 
 /** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
- *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。行の文には今の段を添える。 */
+ *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。段は id で同じ項目で、鍵は注入した名前 —— spawn 後の
+ *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。 */
 export function completeRoutingReview(
   db: Db,
   review: Task,
-  input: { judgments: Array<RoutingJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  input: { judgments: Array<RoutingJudgmentKey & { reason?: string }>; handoff?: Partial<HandoffDoc> },
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
   if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
   const record = injectedMaterial(db, review.id, "routing");
-  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id)]);
-  const open = routingMaterial(db, metaReviewWindow(db, review.id)).parts.items.filter((item) => !judged.has(itemName(item)));
-  return completeMetaReview(
+  const injectedTiers = new Map(record.items.flatMap((item) => ("tier_id" in item ? [[item.tier_id, item.tier] as const] : [])));
+  const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
+    itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
+  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
+  const open = routingMaterial(db, metaReviewWindow(db, review.id)).parts.items.filter((item) => !judged.has(key(item)));
+  return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
     review,
     input,
+    { injected: record.items, open },
     {
-      injected: record.items,
-      open,
-      name: itemName,
+      key,
       label: (item) => ("row" in item ? `${itemName(item)} (${item.tier})` : itemName(item)),
+      kind: "routing",
       value: "no_change",
-      judgment: (item, reason) => ({ kind: "routing", ...("row" in item ? { row: item.row } : item), value: "no_change", ...(reason && { reason }) }),
+      object: (item): RoutingObject => ("row" in item ? { row: item.row } : "tier_id" in item ? { tier_id: item.tier_id } : item),
     },
     workerId,
     now,
@@ -322,7 +345,7 @@ function judgmentItems(
   const { groups } = parts.allocations;
   const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])));
   const tiers = new Set(groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])));
-  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier })), { learner: true }];
+  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
 }
 
 /** routing の材料の節の6つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
@@ -373,7 +396,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
         "for reading), the agents of the allocation reviews under an agent's default tier, the tiers of those under a task's requested tier, and " +
         "the learner. A new cell with no row in the table is not an item. Act on each item with propose_routing_change, or pass it to " +
         "complete_routing_review as no_change.",
-      parts.items,
+      parts.items.map(judgmentKey),
       "no items to judge",
     ],
   ]);
