@@ -230,7 +230,7 @@ it.each(["直接 cancel", "failure question の abandon"] as const)(
     expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
     for (const rca of rcas) {
       expect(taskHistoryRows(db, parent.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
-      expect(completeTask(db, getTask(db, rca.id)!, { outcome: "no findings" }, "auditor", NOW, "worker").status).toBe("done");
+      expect(settleReview(db, getTask(db, rca.id)!, "auditor", NOW).status).toBe("done");
     }
   },
 );
@@ -321,7 +321,7 @@ it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
     expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
     for (const rca of rcas) {
       expect(taskHistoryRows(db, child.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
-      expect(completeTask(db, getTask(db, rca.id)!, { outcome: "no findings" }, "auditor", NOW, "worker").status).toBe("done");
+      expect(settleReview(db, getTask(db, rca.id)!, "auditor", NOW).status).toBe("done");
     }
   },
 );
@@ -481,7 +481,6 @@ it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最
 it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);
-  expect(taskVerbSwap(db, rcas[0]!.id)).toEqual({ withheld: [], added: [] });
 
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
   const cancelled = registerTask(db, { type: "work", title: "X", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
@@ -493,7 +492,7 @@ it("task ごとの verb の差し替えは、cancelled の work の祖先を挟�
 
   const underCancel = [...rcas, ...listChildren(db, cancelled.id)];
   expect(underCancel.map((task) => task.title)).toEqual(["rca (self): B", "rca (auditor): B", "rca (self): X", "rca (auditor): X"]);
-  for (const rca of underCancel) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  for (const rca of underCancel) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_rca"] });
   const { parent, done, review } = doneSiblingOfFailed(db);
   for (const task of [target, cancelled, parent, done]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
   // 生きた系譜の統合レビューは分解の verb を伏せず、自分の完了の差し替え(ADR 0278 決定1)だけを持つ

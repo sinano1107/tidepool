@@ -543,22 +543,15 @@ it("異議されたエントリを event id 順の対として修理タスクへ
   const auditorReview = board.find(
     (entry: any) => entry.title === "rca (auditor): 対の修理",
   );
-  expect(selfReview.purpose).toBe(
-    'objections raised against decisions fake-worker made on "対の修理":\n\n' +
-      "> 先に古い判断\n" +
-      "- 古い判断を見直す\n" +
-      "\n" +
-      "> 後の判断\n" +
-      "- 後の判断を見直す",
-  );
-  expect(auditorReview.purpose).toBe(
-    'objections raised against decisions of "対の修理":\n\n' +
-      "> 先に古い判断\n" +
-      "- 古い判断を見直す\n" +
-      "\n" +
-      "> 後の判断\n" +
-      "- 後の判断を見直す",
-  );
+  // RCA の引用はエントリを名指す —— complete_rca の所見が被覆する id(ADR 0278 決定3)
+  const rcaPairs =
+    `> entry ${decision.id}: 先に古い判断\n` +
+    "- 古い判断を見直す\n" +
+    "\n" +
+    `> entry ${laterDecision.id}: 後の判断\n` +
+    "- 後の判断を見直す";
+  expect(selfReview.purpose).toBe(`objections raised against decisions fake-worker made on "対の修理":\n\n${rcaPairs}`);
+  expect(auditorReview.purpose).toBe(`objections raised against decisions of "対の修理":\n\n${rcaPairs}`);
 });
 
 it("同一ログエントリへの2件目の異議は1件目を上書きせず、修理タスクと self/auditor RCA の purpose に両方とも並ぶ(issue #251)", async () => {
@@ -585,12 +578,13 @@ it("同一ログエントリへの2件目の異議は1件目を上書きせず�
     'objections raised against decisions of "二重の異議":\n\n' + expectedPair,
   );
   const selfReview = board.find((entry: any) => entry.title === "rca (self): 二重の異議");
+  const rcaPair = `> entry ${decision.id}: 一度きりの判断\n- 1件目の方向コメント\n- 2件目の方向コメント`;
   expect(selfReview.purpose).toBe(
-    'objections raised against decisions fake-worker made on "二重の異議":\n\n' + expectedPair,
+    'objections raised against decisions fake-worker made on "二重の異議":\n\n' + rcaPair,
   );
   const auditorReview = board.find((entry: any) => entry.title === "rca (auditor): 二重の異議");
   expect(auditorReview.purpose).toBe(
-    'objections raised against decisions of "二重の異議":\n\n' + expectedPair,
+    'objections raised against decisions of "二重の異議":\n\n' + rcaPair,
   );
 });
 
@@ -1014,7 +1008,10 @@ it("修理の purpose は判定のある対の steering の後に board judged �
       "> skipped the lint\n- redo it",
   );
   // RCA の findings は第2回の帰責の証拠 —— 初回の判定を見せない(循環)
-  const rcaPairs = "> guessed the schema\n- redo it\n\n> picked a name\n- redo it\n\n> skipped the lint\n- redo it";
+  const rcaPairs =
+    `> entry ${guessed}: guessed the schema\n- redo it\n\n` +
+    `> entry ${unsure}: picked a name\n- redo it\n\n` +
+    `> entry ${unjudged}: skipped the lint\n- redo it`;
   expect(purposes["rca (self): t deckhand"]).toBe(`objections raised against decisions deckhand made on "t":\n\n${rcaPairs}`);
   expect(purposes["rca (auditor): t null"]).toBe(`objections raised against decisions of "t":\n\n${rcaPairs}`);
 });

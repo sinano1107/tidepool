@@ -634,6 +634,9 @@ export type EventPayload =
   // line は盤面が同じ transaction の店の event から組む。created / invalidated はその呼び出しが作った・無効化したエントリの id
   // (作成の event id = エントリの id)。event id は tool 結果に載り、Precedent の memory_write マーカーになる。
   | { kind: "memory_written"; line: string; created: number[]; invalidated: number[] }
+  // ADR 0280 決定1: RCA の propose_from_objection 1回(呼んだ RCA の task 帰属)。entry_id は材料の異議されたエントリ、memory_event_id は
+  // 書いた記憶の店の event(= 記憶の id)。判断ログの行ではない(memory_pulled と同じ側)—— complete_rca が所見の行為をここから読む
+  | { kind: "proposed_from_objection"; entry_id: number; memory_event_id: number }
   // spec #586 G: エントリ表と FTS を events から作り直した。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
@@ -696,7 +699,8 @@ export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
 
 /** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
- *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝(path)、値は left_as_is で、reason は任意。 */
+ *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝(path)、値は left_as_is で、reason は任意。RCA の対象は
+ *  所見(entries)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_proposal を持つ(ADR 0280 決定3)。 */
 export type Judgment =
   | {
       kind: "integration_review";
@@ -705,7 +709,15 @@ export type Judgment =
       findings: string;
       repairs: Array<{ id: string; status: TaskStatus }>;
     }
-  | ({ kind: "memory"; value: "left_as_is"; reason?: string } & MemoryJudgmentItem);
+  | ({ kind: "memory"; value: "left_as_is"; reason?: string } & MemoryJudgmentItem)
+  | {
+      kind: "rca";
+      entries: number[];
+      root_cause: string;
+      memories: Array<{ id: number; kind: MemoryEntryFields["kind"] }>;
+      repairs: Array<{ id: string; status: TaskStatus }>;
+      no_proposal?: true;
+    };
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
 export interface AuditVerdict {

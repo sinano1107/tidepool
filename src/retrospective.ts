@@ -10,6 +10,7 @@ import {
   bundleName,
   currentAttributions,
   type DecisionLogEntry,
+  type EventOrigin,
   type EventPayload,
   getEvent,
   isDecisionLogEntry,
@@ -23,8 +24,9 @@ import {
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
 import type { ProcessContainers } from "./process-container.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
-import { getTask, getTextAuthor, listChildren, type Task } from "./tasks.js";
+import { finishTask, getTask, getTextAuthor, type HandoffDoc, isRca, listChildren, repairChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
@@ -592,7 +594,8 @@ function learningTarget(
 
 /** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
  *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先はその review が材料にした異議群の判定(ADR 0171 決定3)の
- *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。 */
+ *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。
+ *  書いた記憶とエントリを結ぶ記録を呼んだ RCA に、店の書き込みと同じ transaction で残す(ADR 0280 決定1)。 */
 export function proposeFromObjection(
   db: Db,
   reviewId: string,
@@ -627,9 +630,78 @@ export function proposeFromObjection(
     source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(db, based_on_decision, reviewId) },
     author: { activity: "rca" as const, name: author },
   };
-  return target.kind === "knowledge"
-    ? recordKnowledge(db, entryInput, "worker", now, reviewId)
-    : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
+  return db.transaction(() => {
+    const written =
+      target.kind === "knowledge"
+        ? recordKnowledge(db, entryInput, "worker", now, reviewId)
+        : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
+    // 記憶の id は店の作成 event の id(Knowledge の event_id は書き込みの行の id)
+    const payload = { kind: "proposed_from_objection" as const, entry_id, memory_event_id: written.entry_id };
+    appendEvent(db, { taskId: reviewId, workerId: author, origin: "worker", payload, at: now });
+    return written;
+  })();
+}
+
+/** RCA の材料のエントリ: 登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
+const rcaMaterial = (db: Db, reviewId: string) =>
+  new Set(
+    (latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? []).flatMap((id) => {
+      const objection = getEvent(db, id)?.payload;
+      return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
+    }),
+  );
+
+/** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
+ *  名指して拒み何も記録しない。所見ごとの行為は記録から列挙する —— この RCA の起草の記録のうち所見の entries と交わるものの記憶と、
+ *  この RCA の修理子(子は全所見に載る RCA 単位の近似、#2279)。行為の無い所見だけが no_proposal を要し、行為のある所見への
+ *  no_proposal は受け取って何もしない。所見1つが型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
+export function completeRca(
+  db: Db,
+  review: Task,
+  { findings, handoff }: { findings: Array<{ entries: number[]; root_cause: string; no_proposal?: true }>; handoff?: Partial<HandoffDoc> },
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  if (!isRca(db, review.id)) throw new DomainError("only an RCA completes with complete_rca");
+  if (findings.some((f) => f.entries.length === 0)) throw new DomainError("a finding names no entries");
+  if (findings.some((f) => whyBlank(f.root_cause))) throw new DomainError("every finding requires a root_cause");
+  const material = rcaMaterial(db, review.id);
+  const given = findings.flatMap((f) => f.entries);
+  const ids = (list: number[]) => [...new Set(list)].join(", ");
+  const unknown = given.filter((id) => !material.has(id));
+  const repeated = given.filter((id, i) => given.indexOf(id) !== i);
+  const missing = [...material].filter((id) => !given.includes(id));
+  const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_objection" ? [payload] : []));
+  const repairs = repairChildren(db, review.id);
+  const judged = findings.map(({ entries, root_cause, no_proposal }) => {
+    const memories = drafted
+      .filter((d) => entries.includes(d.entry_id))
+      .flatMap(({ memory_event_id: id }) => {
+        const created = getEvent(db, id)?.payload;
+        return created?.kind === "memory_entry_created" ? [{ id, kind: created.entry.kind }] : [];
+      });
+    const acts = [...memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`), ...repairs.map(({ id }) => `repair ${id}`)];
+    // 行為のある所見への no_proposal は受け取って載せない(ADR 0278 決定3)
+    const judgment = { kind: "rca" as const, entries, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
+    const named = `entries ${entries.join(", ")}`;
+    const line = acts.length ? `${named} → ${acts.join(", ")} — ${judgment.root_cause}` : `no_proposal: ${named} — ${judgment.root_cause}`;
+    return { judgment, line, unjustified: !acts.length && !no_proposal };
+  });
+  const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.entries : []));
+  const refusals = [
+    unknown.length > 0 && `not in this RCA's material: entries ${ids(unknown)}`,
+    repeated.length > 0 && `named more than once: entries ${ids(repeated)}`,
+    missing.length > 0 && `in no finding: entries ${ids(missing)}`,
+    unjustified.length > 0 && `no act and no no_proposal: entries ${ids(unjustified)} — draft from them, file a repair, or pass no_proposal: true`,
+  ].filter(Boolean);
+  if (refusals.length > 0) throw new DomainError(refusals.join("; "));
+  return db.transaction(() => {
+    for (const { judgment, line } of judged) {
+      appendEvent(db, { taskId: review.id, workerId, origin, payload: { kind: "decision_logged", line, judgment }, at: now });
+    }
+    return finishTask(db, review, handoff, workerId, now, origin);
+  })();
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));

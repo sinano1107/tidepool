@@ -4,7 +4,7 @@ import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, listMemoryEntries, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
-import { attributeObjections, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
+import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
@@ -15,6 +15,7 @@ import {
   bootTidepool,
   children,
   commit,
+  completeByKindViaMcp,
   completeIntegrationReviews,
   completeViaMcp,
   FULL_HANDOFF,
@@ -31,10 +32,13 @@ import {
   objectedForDraft,
   propose,
   questions,
+  RCA_ROOT_CAUSE,
+  rcaFindings,
   registerWork,
   rememberedNote,
   runNow,
   settleRcaByWorker,
+  settleReview,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -44,6 +48,8 @@ afterEach(() => t?.stop());
 
 /** 定型の outcome で完了した RCA 子が findings に残す1行(RCA review は人間の直接 cancel の範囲外 —— ADR 0194)。 */
 const RCA_OUTCOME = `completion report: ${FULL_HANDOFF.outcome}`;
+/** RCA の所見の行の文(harness の complete_rca は材料を1つの所見に no_proposal で入れる、ADR 0280 決定3)。 */
+const noProposal = (entry: number, rootCause = RCA_ROOT_CAUSE) => `no_proposal: entries ${entry} — ${rootCause}`;
 
 async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   const task = await registerWork(t, title);
@@ -125,11 +131,11 @@ it.each(["capability", "task_ambiguity", "missing_information"] as const)(
   );
   expect(kids.find((x: any) => x.title === "rca (self): mixed").purpose).toBe(
     'objections raised against decisions fake-worker made on "mixed":\n\n' +
-      "> skipped the fixtures\n- bring the fixtures back",
+      `> entry ${entries[1].id}: skipped the fixtures\n- bring the fixtures back`,
   );
   expect(kids.find((x: any) => x.title === "rca (auditor): mixed").purpose).toBe(
     'objections raised against decisions of "mixed":\n\n' +
-      "> skipped the fixtures\n- bring the fixtures back",
+      `> entry ${entries[1].id}: skipped the fixtures\n- bring the fixtures back`,
   );
   expect((await attributions(t, task.id)).map((e: any) => [e.payload.entry_id, e.payload.cause])).toEqual([
     [entries[0].id, "preference"],
@@ -404,14 +410,13 @@ async function lineUpSelfRca(t: Tidepool, selfId: string, auditorId: string) {
   await api(t.baseUrl, "POST", `/api/tasks/${auditorId}/move`, { after: board.at(-1).id });
 }
 
-/** RCA 子を worker として決着させる: 先頭へ移して pickup、所見を1行 log して完了。 */
+/** RCA 子を worker として決着させる: 先頭へ移して pickup、材料を1つの所見(`finding` が根本原因)にして complete_rca で完了。 */
 async function settleRca(t: Tidepool, reviewId: string, finding: string, outcome: string) {
   await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
   // 先頭での2回目の move が Run now(harness の completeIntegrationReviews と同じ)
   await api(t.baseUrl, "POST", `/api/tasks/${reviewId}/move`, { after: null });
   const client = await mcpClient(t.mcpBaseUrl, reviewId);
-  await client.callTool({ name: "log_decision", arguments: { line: finding } });
-  await client.callTool({ name: "complete_task", arguments: { handoff: { outcome } } });
+  await client.callTool({ name: "complete_rca", arguments: { ...rcaFindings(t.db, reviewId, finding), handoff: { outcome } } });
   await client.close();
 }
 
@@ -455,7 +460,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     steering: ["bring the fixtures back"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
-    rca_findings: [RCA_OUTCOME, "the criteria named the fixtures explicitly", "completion report: fixtures were required"],
+    rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
   });
 });
 
@@ -635,7 +640,7 @@ it.each([
     expect(s.behaviorDraftClient.calls.map((c) => c.input)).toEqual([
       expect.objectContaining({
         entry_id: s.entry.id,
-        rca_findings: [RCA_OUTCOME, "the criteria named the fixtures", "completion report: fixtures were required"],
+        rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
       }),
     ]);
   },
@@ -817,7 +822,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
 
   const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
   expect(second.payload).toMatchObject({ cause: "capability", round: "after_rca" });
-  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [RCA_OUTCOME, RCA_OUTCOME], [RCA_OUTCOME, RCA_OUTCOME]]);
+  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id), RCA_OUTCOME], [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id), RCA_OUTCOME]]);
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
@@ -1140,7 +1145,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     steering: ["always keep the fixtures"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
-    rca_findings: [RCA_OUTCOME, "the criteria named the fixtures", "completion report: fixtures were required"],
+    rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
@@ -1160,7 +1165,7 @@ it("open session の未帰責の異議は、同じタスクの RCA 子がすべ�
   await object(t, completion.id, "the report should name the fixtures");
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
 
-  await completeViaMcp(t, auditor.id, false);
+  await completeByKindViaMcp(t, auditor);
   await nextPoll(t);
 
   expect(s.attributionClient.calls.map((c) => c.input.entry_id)).toEqual([s.entry.id, s.entry.id]);
@@ -1178,7 +1183,7 @@ it("前の RCA 群の第2回が次の session の開いている間に確定し�
   await api(t.baseUrl, "POST", "/api/triage/start");
   const again = await object(t, s.entry.id, "the fixtures, again");
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the first RCA decided it" });
-  await completeViaMcp(t, first.auditor.id, false);
+  await completeByKindViaMcp(t, first.auditor);
   await nextPoll(t);
   await api(t.baseUrl, "POST", "/api/triage/close", { close_only: true });
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
@@ -1238,7 +1243,7 @@ async function settleRcasThenTick(t: Tidepool, taskId: string) {
     const rca = (await children(t, taskId)).find((x: any) => x.title.startsWith("rca (") && ["todo", "in_progress"].includes(x.status));
     if (!rca) break;
     if (rca.status === "todo") await settleRcaByWorker(t, rca.id);
-    else await completeViaMcp(t, rca.id, false);
+    else await completeByKindViaMcp(t, rca);
   }
   await nextPoll(t);
 }
@@ -1463,7 +1468,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
-  for (const r of rca) completeTask(b.db, r, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+  for (const r of rca) settleReview(b.db, r, "auditor", at);
 
   refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   // sweep は fire-and-forget: fake の返答が着地するまで回す
@@ -1496,8 +1501,7 @@ it.each([
     logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
     completeTask(db, task, { ...FULL_HANDOFF, outcome: "done as specified" }, "deckhand", at, "worker");
     for (const rca of listChildren(db, task.id).filter((c) => c.type === "review" && listEvents(db, c.id).some((e) => e.payload.kind === "task_registered" && e.payload.objection_event_ids?.includes(objection)))) {
-      logDecision(db, rca, `finding from ${rca.title}`, "auditor", at, "worker");
-      completeTask(db, rca, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+      completeRca(db, rca, rcaFindings(db, rca.id, `finding from ${rca.title}`), "auditor", at, "worker");
     }
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
     const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
@@ -1509,7 +1513,7 @@ it.each([
     const material = {
       decision_log: ["skipped the fixtures"],
       steering: ["keep the fixtures"],
-      rca_findings: ["finding from rca (self): t", RCA_OUTCOME, "finding from rca (auditor): t", RCA_OUTCOME],
+      rca_findings: [noProposal(entry, "finding from rca (self): t"), RCA_OUTCOME, noProposal(entry, "finding from rca (auditor): t"), RCA_OUTCOME],
     };
     expect(client.calls.at(-1)!.input).toMatchObject(material);
     expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material)]);
@@ -1555,7 +1559,7 @@ it.each([
     const judgments = await attributing;
     if (when === "after") decideLater();
     commitTriage(db, at, [], judgments);
-    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) completeTask(db, rca, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) settleReview(db, rca, "auditor", at);
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
     const draft = { path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "worker" as const };
     drafter.scriptDraft(entry, retry ? new Error("temporary draft failure") : draft);
@@ -1588,7 +1592,7 @@ it("修理子の無い未帰責の異議群(cancelled の task への異議)も�
     commitTriage(db, at, [], new Map());
     const rcas = listChildren(db, task.id);
     expect(rcas.map((c) => c.type)).toEqual(["review", "review"]);
-    for (const rca of rcas) completeTask(db, rca, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+    for (const rca of rcas) settleReview(db, rca, "auditor", at);
     const client = new FakeAttributionClient();
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
 
@@ -1620,7 +1624,7 @@ it("判断の行と記憶の行が混在した task の未帰責の異議群は�
     commitTriage(db, at, [], new Map());
     expect(listChildren(db, task.id).map((c) => c.type)).toEqual(["work", "memory_repair", "review", "review"]);
     logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
-    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) completeTask(db, rca, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review")) settleReview(db, rca, "auditor", at);
     const client = new FakeAttributionClient();
     for (const entry of [decision, wrote]) client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
 
@@ -1659,7 +1663,7 @@ function twoBundles(same: boolean) {
     for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at, "worker");
   }
   const settle = (objection: number) => {
-    for (const r of rcasOf(objection)) completeTask(db, r, { outcome: FULL_HANDOFF.outcome }, "auditor", at, "worker");
+    for (const r of rcasOf(objection)) completeRca(db, r, rcaFindings(db, r.id), "auditor", at, "worker");
   };
   const client = new FakeAttributionClient();
   const sweep = async (now = at) => {
@@ -1667,7 +1671,7 @@ function twoBundles(same: boolean) {
     // sweep は fire-and-forget: fake の返答が着地するまで回す
     await new Promise((resolve) => setImmediate(resolve));
   };
-  return { db, task, x, a, b, settle, client, sweep };
+  return { db, task, x, y, a, b, settle, client, sweep };
 }
 
 it.each([
@@ -1680,7 +1684,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
-    [s.x, ["A's direction"], ["A's finding from rca (self): t", RCA_OUTCOME, "A's finding from rca (auditor): t", RCA_OUTCOME]],
+    [s.x, ["A's direction"], ["A's finding from rca (self): t", noProposal(s.x), RCA_OUTCOME, "A's finding from rca (auditor): t", noProposal(s.x), RCA_OUTCOME]],
   ]);
 });
 
@@ -1694,7 +1698,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
-    [["B's direction"], ["B's finding from rca (self): t", RCA_OUTCOME, "B's finding from rca (auditor): t", RCA_OUTCOME]],
+    [["B's direction"], ["B's finding from rca (self): t", noProposal(s.y), RCA_OUTCOME, "B's finding from rca (auditor): t", noProposal(s.y), RCA_OUTCOME]],
   ]);
 });
 

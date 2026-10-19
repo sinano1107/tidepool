@@ -212,11 +212,13 @@ export function objectionsById(db: Db, entryId: number, ids: number[]): Objectio
  * ordered by their own event id; comments retain objection event order.
  * `judgments` is the repair's alone (ADR 0213 決定3): each judged pair gets a
  * `board judged:` line, except `uncertain` which tells the worker nothing. RCA
- * purposes never pass it — their findings are the second round's evidence. */
+ * purposes never pass it — their findings are the second round's evidence.
+ * `entryIds: true` is the RCA's alone: each quote names its entry, the ids
+ * `complete_rca`'s findings must cover (ADR 0278 決定3 の項目の注入). */
 function renderObjectionPairs(
   purposeIntro: string,
   pairs: ObjectionPair[],
-  judgments?: Map<number, GatedJudgment>,
+  { judgments, entryIds }: { judgments?: Map<number, GatedJudgment>; entryIds?: boolean },
 ): string {
   return (
     `${purposeIntro}:\n\n` +
@@ -227,7 +229,8 @@ function renderObjectionPairs(
         const judgment = judgments?.get(pair.entry.id);
         const judged =
           judgment && judgment.cause !== "uncertain" ? `\nboard judged: ${judgment.cause} — ${judgment.evidence}` : "";
-        return `> ${objectedEntryText(pair.entry)}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}${judged}`;
+        const quoted = entryIds ? `entry ${pair.entry.id}: ${objectedEntryText(pair.entry)}` : objectedEntryText(pair.entry);
+        return `> ${quoted}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}${judged}`;
       })
       .join("\n\n")
   );
@@ -275,7 +278,7 @@ function registerRcaReview(
     {
       type: "review",
       title: spec.title,
-      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs),
+      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs, { entryIds: true }),
       completion_criteria:
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
@@ -393,7 +396,7 @@ function bundleObjections(
           purpose: renderObjectionPairs(
             `objections raised against ${rows} of "${objected.title}"`,
             group,
-            judgments,
+            { judgments },
           ),
           completion_criteria: "every objection direction above is addressed",
           parent_id: taskId,

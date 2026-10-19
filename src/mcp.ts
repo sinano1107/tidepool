@@ -54,7 +54,7 @@ import {
 } from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
-import { proposeFromObjection } from "./retrospective.js";
+import { completeRca, proposeFromObjection } from "./retrospective.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
@@ -555,7 +555,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
   // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
-  // complete_memory_review を登録する(ADR 0278 決定1)
+  // complete_memory_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -852,6 +852,32 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
+  if (added.includes("complete_rca")) {
+    server.registerTool(
+      "complete_rca",
+      {
+        description:
+          "Complete this RCA, in one call. findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
+          "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
+          "repeated or non-material entry is refused, named by id, and nothing is recorded. The board records one decision line per finding " +
+          "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries, and the repair " +
+          "tasks you filed with decompose (every repair task is listed on every finding; call this once each has settled). Only a finding " +
+          "without an act needs no_proposal: true, and without it the call is refused; on a finding with an act it is harmless and records " +
+          `nothing. The handoff takes the same fields as complete_task (${describeHandoffFields()}); none is required. ` +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          findings: z.array(z.strictObject({ entries: z.array(z.number().int()), root_cause: requiredTextSchema, no_proposal: z.literal(true).optional() })),
+          handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+        },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const done = completeRca(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }, resolveOnly),
+    );
+  }
+
   if (added.includes("complete_interview")) {
     server.registerTool(
       "complete_interview",
@@ -1046,6 +1072,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
+        "The board records the write on your review with the entry it came from, and complete_rca lists it on the finding that holds that entry. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         entry_id: z.number().int(),

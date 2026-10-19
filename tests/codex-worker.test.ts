@@ -127,6 +127,20 @@ function discardedRca(db: ReturnType<typeof openDb>) {
   return listChildren(db, child!.id).find((c) => c.title.startsWith("rca (self)"))!;
 }
 
+/** 異議の commit が立てた RCA(self は異議された行の書き手 codex-agent、auditor は Auditor の pointer)—— complete_task の代わりに
+ *  complete_rca を持つ(ADR 0278 決定1)。 */
+function rca(kind: "self" | "auditor") {
+  return (db: ReturnType<typeof openDb>) => {
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const objected = task(db, `objected for ${kind}`);
+    const entry = logDecision(db, objected, "codex-agent's call", "codex-agent", at, "worker");
+    startTriage(db, at);
+    raiseObjection(db, entry, "redo it", at);
+    commitTriage(db, at);
+    return listChildren(db, objected.id).find((c) => c.title.startsWith(`rca (${kind})`))!;
+  };
+}
+
 /** 完了時に盤面が立てた統合レビュー(review_by で codex-agent が担う)—— complete_task の代わりに complete_integration_review を持つ(ADR 0278 決定1)。 */
 function integrationReview(db: ReturnType<typeof openDb>) {
   const work = registerTask(db, { type: "work", assignee: "codex-agent", workspace: "work", title: "reviewed", purpose: "p", completion_criteria: "c", review_by: ["codex-agent"] }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
@@ -629,10 +643,13 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の pin の子", pinnedChild],
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
+    ["self RCA", rca("self")],
+    ["auditor RCA", rca("auditor")],
     ["祖先の cancel の下の RCA", discardedRca],
     ["統合レビュー", integrationReview],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
-    const f = await fixture();
+    // auditor RCA は Auditor の pointer で走る
+    const f = await fixture(undefined, undefined, undefined, undefined, { auditorName: "codex-agent" });
     await f.start(register(f.db));
     t = await bootTidepool();
     const client = await mcpClient(t.mcpBaseUrl, register(t.db).id);

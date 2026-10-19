@@ -579,6 +579,7 @@ export interface TaskVerbSwap {
     | "complete_audit"
     | "complete_integration_review"
     | "complete_memory_review"
+    | "complete_rca"
     | "pose_probe"
     | "complete_interview"
     | "report_broken_probe"
@@ -598,7 +599,7 @@ export interface TaskVerbSwap {
  *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。memory meta-review も同じ形で
- *  complete_memory_review を足す。 */
+ *  complete_memory_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
@@ -625,7 +626,9 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
       probeAccepted: probeAccepted(db, taskId),
     };
   }
-  if (isArtifactDiscarded(db, taskId)) return { withheld: ["decompose", "redecompose"], added: [] };
+  const discarded = isArtifactDiscarded(db, taskId);
+  if (isRca(db, taskId)) return { withheld: [...(discarded ? (["decompose", "redecompose"] as const) : []), "complete_task"], added: ["complete_rca"] };
+  if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
   if (task?.meta_review_subject === "memory") return { withheld: ["complete_task"], added: ["complete_memory_review"] };
@@ -1293,6 +1296,7 @@ export function completeTask(
   // ADR 0278 決定1: 統合レビューと memory meta-review も扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
   if (task.meta_review_subject === "memory") throw new DomainError("a memory meta-review does not complete with complete_task: complete it with complete_memory_review");
+  if (isRca(db, task.id)) throw new DomainError("an RCA does not complete with complete_task: complete it with complete_rca");
   // ADR 0278 決定6: agent の完了は判断を運ぶ —— work の全欄の要求は finishTask が持つ
   if (task.type !== "work" && task.assignee !== HUMAN_WORKER_ID && whyBlank(handoff?.outcome ?? "")) {
     throw new DomainError(`a ${task.type} task cannot complete without a handoff outcome`);
@@ -2393,6 +2397,13 @@ export function logDecision(
   });
 }
 
+/** review の修理子(review が分解した work —— 完了が待つ子と同じ鍵、`awaitedChildSql`)の id と status。統合レビューと RCA の行が名指す。 */
+export function repairChildren(db: Db, reviewId: string): Array<{ id: string; status: TaskStatus }> {
+  return listChildren(db, reviewId)
+    .filter((child) => child.type === "work" && child.based_on_decision !== null)
+    .map(({ id, status }) => ({ id, status }));
+}
+
 /** 統合レビューの完了(ADR 0278 決定2〜5): findings は必須。修理子(review が分解した work —— 完了が待つ子と同じ鍵、`awaitedChildSql`)が
  *  無ければ no_findings の印が要り、あれば値は盤面が repaired と導いて行に修理子の id と status を書く —— そのとき no_findings は受け取って
  *  何もしない。判断は成果物(被レビュー task)を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。未決着の修理子は
@@ -2408,9 +2419,7 @@ export function completeIntegrationReview(
   if (!isIntegrationReview(db, review.id)) throw new DomainError("only an integration review completes with complete_integration_review");
   if (whyBlank(findings)) throw new DomainError("complete_integration_review requires findings");
   findings = normalizeText(findings);
-  const repairs = listChildren(db, review.id)
-    .filter((child) => child.type === "work" && child.based_on_decision !== null)
-    .map(({ id, status }) => ({ id, status }));
+  const repairs = repairChildren(db, review.id);
   if (!repairs.length && !no_findings) {
     throw new DomainError("this review filed no repair task: pass no_findings: true if the deliverable has nothing to repair, or file the findings as repair tasks with decompose first");
   }
@@ -3462,9 +3471,18 @@ function awaitedChildSql(rowRef: string): string {
  *  review and a human-registered review child fall: their repair cannot land and their fitness is to a discarded
  *  criterion. An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
-  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type = 'memory_repair' OR (${rowRef}.type = 'review'
-    AND EXISTS (SELECT 1 FROM events registered WHERE registered.task_id = ${rowRef}.id AND registered.kind = 'task_registered'
-      AND json_array_length(registered.payload, '$.objection_event_ids') > 0))))`;
+  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type = 'memory_repair' OR ${rcaSql(rowRef)}))`;
+}
+
+/** RCA review: a review whose registration record carries the objections it bundles (ADR 0171 決定1) —— never told by title. */
+function rcaSql(rowRef: string): string {
+  return `(${rowRef}.type = 'review' AND EXISTS (SELECT 1 FROM events registered WHERE registered.task_id = ${rowRef}.id
+    AND registered.kind = 'task_registered' AND json_array_length(registered.payload, '$.objection_event_ids') > 0))`;
+}
+
+/** RCA か(ADR 0278 決定1): 親の cancel を生き延びる付帯子の判定(`survivesParentCancelSql`)と同じ印を読む。 */
+export function isRca(db: Db, taskId: string): boolean {
+  return db.prepare(`SELECT ${rcaSql("t")} FROM tasks t WHERE t.id = ?`).pluck().get(taskId) === 1;
 }
 
 /** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。
