@@ -5,7 +5,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, latestEventOfTask, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
+import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
 import {
   completeMetaReview,
@@ -21,7 +21,9 @@ import {
   metaReviewSubjectOf,
   metaReviewWindow,
   objectedJudgments,
+  objectedRowIds,
   previousMetaReviewWatermark,
+  repairJudgments,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
@@ -760,16 +762,6 @@ type Repairer = { taskId: string; agent: string };
  *  落としたエントリ(それ以外の無効化)。 */
 type WriteTouch = { created: number[]; moved: number[]; dropped: number[] };
 
-/** 修理 task の束が異議した行(task_registered の objection_event_ids → 異議の entry_id → 行)。memory_repair の修理子でなければ空
- *  (ADR 0272 決定3)—— work の修理子と RCA の review 子も同じ欄を持つ。 */
-function objectedRowIds(db: Db, taskId: string): number[] {
-  if (getTask(db, taskId)?.type !== "memory_repair") return [];
-  return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
-    const objection = getEvent(db, id)?.payload;
-    return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
-  });
-}
-
 const objectedRows = (db: Db, taskId: string): EventPayload[] => objectedRowIds(db, taskId).flatMap((id) => getEvent(db, id)?.payload ?? []);
 
 /** 異議された記憶の書き込み(memory_written の行)がしたこと。 */
@@ -784,17 +776,12 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
 }
 
 /** 異議された memory meta-review の型つきの判断の行が名指す対象(ADR 0279 決定3)。 */
-function repairJudgments(db: Db, taskId: string): MemoryJudgmentItem[] {
-  return objectedJudgments(
-    db,
-    objectedRowIds(db, taskId).map((decision_event_id) => ({ decision_event_id })),
-    "memory",
-  ).map((j) => ("entry" in j ? { entry: j.entry } : { branch: j.branch }));
-}
+const memoryRepairJudgments = (db: Db, taskId: string): MemoryJudgmentItem[] =>
+  repairJudgments(db, taskId, "memory").map((j) => ("entry" in j ? { entry: j.entry } : { branch: j.branch }));
 
 /** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
 export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
-  const judgments = repairJudgments(db, taskId).length > 0;
+  const judgments = memoryRepairJudgments(db, taskId).length > 0;
   return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
 }
 
@@ -835,7 +822,7 @@ const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", n
 
 /** 異議された判断の行が名指すエントリ(と、その後に移された複製)と枝。 */
 function namedObjects(db: Db, taskId: string) {
-  const judged = repairJudgments(db, taskId);
+  const judged = memoryRepairJudgments(db, taskId);
   return {
     entries: withMovedCopies(db, judged.flatMap((item) => ("entry" in item ? [item.entry] : []))),
     branches: judged.flatMap((item) => ("branch" in item ? [item.branch] : [])),

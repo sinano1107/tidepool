@@ -1,16 +1,14 @@
 import { expect, it } from "vitest";
-import type { AgentView } from "../src/agent-create.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
-import { recordShadow } from "../src/learner.js";
 import { routingPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, proposeRoutingChange } from "../src/routing-review.js";
 import { completeTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { executionSetting, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
 
@@ -24,25 +22,15 @@ function register(db: Db, done = false): Task {
   return getTask(db, taskId)!;
 }
 
-const OPUS = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
-const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
-const deckhand: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], systemPrompt: "p" };
+const OPUS = OPUS_ROW;
+const deckhand = DECKHAND_AGENT;
 
-/** 前回の後に standard を求めた task の opus の行の session が2つ走った routing meta-review(setup): 1つは乖離した shadow 行の pickup で
- *  段の出所が agent、もう1つは段の出所が task で、どちらにも配分評価が付く。項目は opus の行・agent deckhand・段 standard・学習器。 */
+/** 前回の後に opus の行の session が2つ走った routing meta-review(setup、tests/harness.ts の routedOpusSessions)。項目は opus の行・
+ *  agent deckhand・段 standard・学習器。 */
 function cycle() {
   const db = openDb(":memory:");
   register(db, true);
-  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
-  const sonnet = executionSetting("anthropic", "claude-sonnet-5-5");
-  recordShadow(db, work, { recommended: sonnet, actual: executionSetting("anthropic", OPUS.model), basis: "prior", recommended_record: none, actual_record: none, candidates: 2 }, at);
-  const spawn = (tier: "agent" | "task") =>
-    appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
-  const evidence = [spawn("agent"), spawn("task")];
-  for (const spawned of evidence) {
-    const payload = { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "overpowered", cause: "uncertain", evidence: "e" };
-    appendEvent(db, { taskId: work, workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
-  }
+  const evidence = routedOpusSessions(db, at);
   const review = register(db);
   return { db, review, evidence, injected: injectRoutingMaterial(db, review.id, "auditor", at, [deckhand]) };
 }

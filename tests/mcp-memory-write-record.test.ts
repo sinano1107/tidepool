@@ -1,6 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { memoryRepairVerbs, recordKnowledge } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
+import { routingRepairVerbs } from "../src/routing-review.js";
 import { cancelTaskDirectly, listChildren, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
 import {
@@ -21,6 +22,7 @@ import {
   mcpClient,
   object,
   registerWork,
+  routingJudgmentRepairTask,
   runNow,
   type Tidepool,
 } from "./harness.js";
@@ -182,7 +184,7 @@ it("memory_repair の tools/list の記憶の verb は、書き込みの行だ�
   for (const repair of repairs) expect(await memoryVerbs(repair.id)).toEqual(memoryRepairVerbs(t.db, repair.id).sort());
 });
 
-it("routing_repair の worker MCP は tools/list が基本の面(get_current_task / log_decision / escalate / complete_task)だけで、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {
+it("routing_repair の worker MCP の tools/list は基本の面(get_current_task / log_decision / escalate / complete_task)と routingRepairVerbs の集合 —— 型つきの行を運ばなければ基本の面だけ(中身は domain の釘、ADR 0107 決定3)で、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {
   t = await bootTidepool();
   const objected = registerTask(t.db, { type: "work", title: "judge the routing table", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
   cancelTaskDirectly(t.db, objected, null, t.clock.now(), {}, "webui");
@@ -195,7 +197,15 @@ it("routing_repair の worker MCP は tools/list が基本の面(get_current_tas
   await runNow(t, repair.id);
   const client = await mcpClient(t.mcpBaseUrl, repair.id);
   try {
-    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["complete_task", "escalate", "get_current_task", "log_decision"]);
+    const basic = ["complete_task", "escalate", "get_current_task", "log_decision"];
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(basic);
+    const judged = routingJudgmentRepairTask(t.db, t.clock.now());
+    const judgedClient = await mcpClient(t.mcpBaseUrl, judged.id);
+    try {
+      expect((await judgedClient.listTools()).tools.map((tool) => tool.name).sort()).toEqual([...basic, ...routingRepairVerbs(t.db, judged.id)].sort());
+    } finally {
+      await judgedClient.close();
+    }
     const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
     expect(envelope.routing_repair).toBe(
       "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.",

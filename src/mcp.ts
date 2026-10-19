@@ -55,7 +55,7 @@ import {
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, proposeFromObjection } from "./retrospective.js";
-import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
+import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
@@ -555,8 +555,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
-  // 登録せず(ADR 0272 決定3)、routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を
-  // 登録しない(ADR 0279 決定4)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
+  // 登録せず(ADR 0272 決定3)、routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の
+  // verb を登録しない(ADR 0279 決定4 —— routing の判断の行を運べば routing の読み口と提案 verb は下で足す)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
   // complete_memory_review を、routing meta-review は complete_routing_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
@@ -1148,6 +1148,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   }
   // ADR 0252 決定4 / ADR 0272 決定3: 記憶の修理 verb は memory_repair の type で足す
   if (attributedTaskId !== null && getTask(deps.db, attributedTaskId)?.type === "memory_repair") registerMemoryRepairVerbs(server, deps, attributedTaskId);
+  // ADR 0279 決定4: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb を足す(対象の門は domain が持つ)
+  if (attributedTaskId !== null && routingRepairVerbs(deps.db, attributedTaskId).length > 0) {
+    const run: MetaReviewRun = (verb) => runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+    registerPrecedentRead(server, deps, run);
+    registerRoutingMetaReviewVerbs(server, deps, run);
+  }
 
   if (!withheld.includes("define_memory_branch")) {
     server.registerTool(
@@ -1361,7 +1367,7 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
         "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
-        "Rows are limited to your subject: a routing meta-review sees the decisions of routing meta-reviews and their children, a memory meta-review " +
+        "Rows are limited to your subject: a routing meta-review or routing repair sees the decisions of routing meta-reviews and their children, a memory meta-review " +
         "or memory repair every other decision, and an Interview all of them. " +
         "Defaults to objections since the previous completed meta-review of your subject (for an Interview or a repair, the board's start); pass since_watermark (an event id) to look further back. " +
         nextDescription("list_precedents", "precedents"),
@@ -1379,7 +1385,7 @@ const since_watermark = z
   .int()
   .min(0)
   .optional()
-  .describe("An event id; defaults to the previous completed routing meta-review's registration (for an Interview, the board's start).");
+  .describe("An event id; defaults to the previous completed routing meta-review's registration (for an Interview or a repair, the board's start).");
 
 /** shadow 行と配分の読み口: 主題 routing の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
 function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {

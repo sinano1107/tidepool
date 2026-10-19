@@ -3,10 +3,11 @@ import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, expect, onTestFinished, vi } from "vitest";
-import type { AgentAdmin } from "../src/agent-create.js";
+import type { AgentAdmin, AgentView } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import {
   bootstrapUrl as authBootstrapUrl,
@@ -26,6 +27,7 @@ import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment,
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
+import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
 import { metaReviewSubjectOf, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
@@ -40,7 +42,7 @@ import type {
   RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
-import { completeRoutingReview, judgmentKey, type RegistryAgent } from "../src/routing-review.js";
+import { completeRoutingReview, judgmentKey, type RegistryAgent, type RoutingObject } from "../src/routing-review.js";
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -66,6 +68,7 @@ import {
   type TaskType,
   taskVerbSwap,
 } from "../src/tasks.js";
+import { tierIdOf } from "../src/tier.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -1165,6 +1168,56 @@ export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, execut
   if (moved !== undefined) raiseObjection(db, moved, "move it back", at);
   commitTriage(db, at);
   return listChildren(db, review.id).find((child) => child.type === "memory_repair")!;
+}
+
+/** routing の材料の setup で走る行(段 standard)。 */
+export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
+/** registry の agent deckhand(組み込みでなく段 standard —— agent_tier で1段下げられる)。 */
+export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], systemPrompt: "p" };
+
+/** setup のみ: standard を求めた task の opus の行の session が2つ走る —— 1つは乖離した shadow 行の pickup で段の出所が agent、もう1つは
+ *  段の出所が task で、どちらにも配分評価が付く。routing meta-review の窓の中なら項目は opus の行・agent deckhand・段 standard・学習器。
+ *  返り値は2つの worker_spawned の id(出所 agent、task の順)。 */
+export function routedOpusSessions(db: Db, at: Date): number[] {
+  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
+  const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
+  recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: none, actual_record: none, candidates: 2 }, at);
+  const spawn = (tier: "agent" | "task") =>
+    appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
+  const evidence = [spawn("agent"), spawn("task")];
+  for (const spawned of evidence) {
+    const payload = { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "overpowered", cause: "uncertain", evidence: "e" };
+    appendEvent(db, { taskId: work, workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
+  }
+  return evidence;
+}
+
+/** 型つきの判断の行(ADR 0278 決定4)を書いた routing meta-review(setup は domain): 前の周期を閉じてから stock() で窓の中に材料を作り、
+ *  周期を登録して材料を注入し、注入した項目をすべて no_change で完了する。row(object) はその対象の判断の行の id。executor は review を
+ *  走らせた agent。registry は DECKHAND_AGENT だけ。 */
+export function judgedRoutingReview(db: Db, at: Date, stock: () => void = () => {}, executor = "auditor") {
+  registerMetaReview(db, "routing", at);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'routing'").run();
+  stock();
+  registerMetaReview(db, "routing", at);
+  const review = listBoard(db).find((task) => task.meta_review_subject === "routing" && task.status === "todo")! as Task;
+  const judgments = injectRoutingMaterial(db, review.id, executor, at, [DECKHAND_AGENT]);
+  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, executor, at, "worker", routingPrecedents(db, review.id), [DECKHAND_AGENT]);
+  const row = (object: RoutingObject) =>
+    listEvents(db, review.id).find(({ payload: p }) => {
+      if (p.kind !== "decision_logged" || p.judgment?.kind !== "routing") return false;
+      const { kind: _, value: __, reason: ___, ...named } = p.judgment;
+      return isDeepStrictEqual(named, object);
+    })!.id;
+  return { review, row };
+}
+
+/** routing meta-review の学習器の no_change の行への異議で束ねた routing_repair(ADR 0279 決定4)。修理子は executor の名前を写す。 */
+export function routingJudgmentRepairTask(db: Db, at: Date, { executor = "auditor" } = {}): Task {
+  const { review, row } = judgedRoutingReview(db, at, undefined, executor);
+  raiseObjection(db, row({ learner: true }), "promote the learner", at);
+  commitTriage(db, at);
+  return listChildren(db, review.id).find((child) => child.type === "routing_repair")!;
 }
 
 /** 判断ログのうち完了の verb が書いた型つきの行(ADR 0278 決定4)。 */
