@@ -303,8 +303,7 @@ function registerRcaReview(
  *  work ancestor sits between it and its root (ADR 0271 決定1・2) — get no work
  *  repair: it is skipped, never left to the registration floor's refusal. A
  *  subject task's (memory / routing meta-review) decision rows have no work
- *  repair either: the work type lacks the subject's verbs, and the subject
- *  repair covers only rows that name an object (ADR 0279 決定3・4). The
+ *  repair either: the work type lacks the subject's verbs (ADR 0279 決定3・4). The
  *  `memory_repair` stands whatever the parent's state. Attribution and the RCAs
  *  below stand by cause either way, never split by group.
  *
