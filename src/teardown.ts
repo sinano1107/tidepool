@@ -70,15 +70,16 @@ type Settlement = "completed" | "released" | "interrupted" | "never_ran";
 const NO_PROCESS_STOP_KINDS = ["pickup_stopped", "record_container_unwritable", "spawn_failed"] as const satisfies readonly EventKind[];
 
 /** 後始末中の status と、最後の pickup の後に盤面が刻んだ決着の event が経路を一意に定める(ADR 0113 決定3 /
- *  ADR 0274 決定3)。process を1つも持たなかった session の status は `todo` でエスカレーション・分解と同じ値なので、
- *  process を持たない pickup の event(資源の停止・記録の器・spawn の失敗、ADR 0118 決定1)で見分ける。復旧・確認回答・
- *  回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、対応表がここ以外に
- *  増えたらそれは写しである。 */
+ *  ADR 0274 決定3)。`in_progress` / `done` 以外(`todo` / `cancelled`)は status では分けられない —— process を1つも
+ *  持たなかった session の `todo` はエスカレーション・分解と同じ値で、後始末の途中で人間が直接 cancel すれば
+ *  `cancelled` になる —— ので、process を持たない pickup の event(資源の停止・記録の器・spawn の失敗、ADR 0118
+ *  決定1)の有無で `never_ran` / `released` を分ける。復旧・確認回答・回収済み観測と、読み口の経路フィールドが
+ *  この1点を通る —— 経路を表す永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
 function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Settlement {
   if (task?.status === "in_progress") return "interrupted";
   if (task?.status === "done") return "completed";
   const neverRan =
-    task?.status === "todo" &&
+    (task?.status === "todo" || task?.status === "cancelled") &&
     db
       .prepare(
         `SELECT 1 FROM events WHERE task_id = ? AND kind IN (${NO_PROCESS_STOP_KINDS.map(() => "?").join(", ")})

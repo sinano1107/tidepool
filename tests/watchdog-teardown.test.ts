@@ -2,13 +2,14 @@ import { writeFile } from "node:fs/promises";
 import { expect, it, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/execution-setting.js";
 import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, registerQuarantine } from "../src/quarantine.js";
+import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { capInterruptionHandler, queueReturnHandler, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
@@ -20,7 +21,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -333,6 +334,47 @@ it("準備が checkout より前に落ちた pickup の後始末が再起動で�
   await settle();
 
   expectUntouchedReturn(f, slot);
+});
+
+/** 準備が checkout より前に落ちた pickup の後始末を、容器で止めたままにする(issue #2257)。 */
+async function heldMidTeardown() {
+  const f = await stoppedBeforeCheckout(true);
+  f.runtime.hold(f.task.id);
+  f.handler(f.task.id, { kind: "pickup_stopped", ...f.stop });
+  await settle();
+  expect(markedSession(f.db)?.taskId).toBe(f.task.id);
+  return f;
+}
+
+const cancelDefaults = (f: Awaited<ReturnType<typeof stoppedBeforeCheckout>>) => ({ defaultWorkspaceName: f.ws.name, defaultAgentName: "deckhand", quarantined: quarantineStops(f.db) });
+
+it.each([
+  ["回収済み観測で", false],
+  ["再起動を跨いで", true],
+])("準備が checkout より前に落ちた pickup が後始末の途中で直接 cancel されても、修理したばかりの workspace に偽の Quarantine を立てずに枠を空ける —— %s(ADR 0274 決定3 / issue #2257)", async (_, restart) => {
+  const f = await heldMidTeardown();
+  answerQuestionViaWebui(f.db, getTask(f.db, openQuarantineQuestion(f.db, "workspace", f.ws.name)!.id)!, ["repaired by hand"], f.clock.now());
+  cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
+
+  let slot = f.slot;
+  if (restart) slot = restartMidTeardown(f, () => f.ws);
+  else f.runtime.fireEmpty(f.task.id);
+  await settle();
+
+  expect(openQuarantineQuestion(f.db, "workspace", f.ws.name)).toBeUndefined();
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(getTask(f.db, f.task.id)?.status).toBe("cancelled");
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(slot.currentTaskId).toBeNull();
+  expect(f.triggered).toEqual(["pollNow"]);
+});
+
+it("issue #2257 の対照: 止めた workspace の question を回答する前は、後始末の途中の直接 cancel そのものが資源の門で拒まれる(issue #130)", async () => {
+  const f = await heldMidTeardown();
+
+  const cancel = () => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
+  expect(cancel).toThrow(DomainError);
+  expect(cancel).toThrow(/quarantine confirmation/);
 });
 
 it("準備が task ブランチへ checkout した後で spawn が落ちた pickup の後始末は、今日どおり退避して休止位置へ戻す(ADR 0274 決定3 / ADR 0052 決定7)", async () => {
