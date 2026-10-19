@@ -281,8 +281,8 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
         `WITH reviews AS (SELECT id FROM tasks WHERE meta_review_subject = @subject)
          SELECT 1 FROM tasks WHERE ${unsettledSql("status")}
            AND (meta_review_subject = @subject
-             OR parent_id IN reviews
-             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE parent_id IN reviews)))`,
+             OR parent_id IN (SELECT id FROM reviews)
+             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE parent_id IN (SELECT id FROM reviews))))`,
       )
       .get({ subject });
     if (open) continue;
