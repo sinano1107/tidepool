@@ -731,7 +731,6 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const guidance = buildMemoryInjection(f.db, review, "work", "codex-agent");
     const { section } = buildMetaReviewMaterial(f.db, review.id)!;
-    expect(guidance.section).toContain(`#${entry_id} behavior Fold duplicates first`);
     expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${guidance.section}\n\n${section}\n\n`)).toBe(true);
     expect(listEvents(f.db, review.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
       entries: [{ id: entry_id, version: entry_id }],

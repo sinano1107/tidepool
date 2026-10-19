@@ -500,13 +500,11 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
-  let scope: string | null = null;
-  if (metaReviewSubjectOf(db, taskId) === null) {
-    try {
-      scope = memoryScope(deps, task);
-    } catch {
-      return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
-    }
+  let scope: string | null;
+  try {
+    scope = learnedScope(db, deps, task);
+  } catch {
+    return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
   }
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
@@ -543,6 +541,11 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     }
   });
 }
+
+/** 行から学んだ記憶の置き場(起草と propose_from_objection が共有): 主題つきの task(meta-review)の行は盤面全体(null)、
+ *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事(ADR 0279 決定1)。 */
+const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Task): string | null =>
+  metaReviewSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
 
 /** 初回の帰責の判定が読んだ decision log の切れ目(この event id より前、#1572)。 */
 const readCut = (initial: Attribution) => (initial.decision_log_through === undefined ? initial.id : initial.decision_log_through + 1);
@@ -626,8 +629,7 @@ export function proposeFromObjection(
   }
   const entryInput = {
     ...fields,
-    // 主題つきの親(meta-review)の行は盤面全体に置く(ADR 0279 決定1)
-    scope: metaReviewSubjectOf(db, task.parent_id) === null ? memoryScope(board, getTask(db, task.parent_id)!) : null,
+    scope: learnedScope(db, board, getTask(db, task.parent_id)!),
     source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(db, based_on_decision, reviewId) },
     author: { activity: "rca" as const, name: author },
   };

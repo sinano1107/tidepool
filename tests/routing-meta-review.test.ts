@@ -134,7 +134,7 @@ async function boardWithRoutingReview() {
   return { review, client, call };
 }
 
-it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb を除き読み口4本と list_precedents と提案 verb を足したもの", async () => {
+it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb を除き読み口4本と list_precedents と提案 verb と指針の節の id 読み(read_memory_entries、ADR 0279 決定2)を足したもの", async () => {
   const { client } = await boardWithRoutingReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -144,7 +144,7 @@ it("主題 routing の task の接続は、普通の task の一覧から worker
     const worker = await names(workClient);
     const memory: string[] = [...WORKER_MEMORY_VERBS];
     expect(worker.filter((name) => [...ROUTING_READS, "list_precedents", "propose_routing_change"].includes(name))).toEqual([]);
-    expect(routing.sort()).toEqual([...worker.filter((name) => !memory.includes(name)), ...ROUTING_READS, "list_precedents", "propose_routing_change"].sort());
+    expect(routing.sort()).toEqual([...worker.filter((name) => !memory.includes(name)), ...ROUTING_READS, "list_precedents", "propose_routing_change", "read_memory_entries"].sort());
   } finally {
     await client.close();
     await workClient.close();

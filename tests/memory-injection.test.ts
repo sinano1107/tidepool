@@ -229,12 +229,15 @@ it("title / purpose / completion criteria が stopword だけの task は、関�
   expect(injection.section).not.toContain("### Relevant entries");
 });
 
-it("主題つきの meta-review には INDEX の代わりに指針の節が付き、走る agent 宛てか全員宛ての盤面全体の approved な Behavior だけが id・種別・title・path の行で載る —— 他の宛先・workspace scope・Knowledge は載らない(ADR 0279 決定2)", () => {
-  const { db, record } = board();
+it("主題つきの meta-review には INDEX の代わりに指針の節が付き、走る agent 宛てか全員宛ての盤面全体の approved な Behavior と Exemplar だけが id・種別・title・path の行で載る —— 他の宛先・workspace scope・Knowledge は載らない(ADR 0279 決定2)", () => {
+  const { db, task, record } = board();
   const behavior = (workspace: string | null, addressee: string | null, title: string) =>
     recordBehavior(db, humanEntryInput(db, { workspace, path: "review", title, text: `${title}.`, addressee }), "webui", at).entry_id;
   const mine = behavior(null, "deckhand", "Fold duplicates first");
   const everyone = behavior(null, null, "Cite the precedent");
+  const annotations = [{ anchor: "whole", polarity: "imitate", text: "Fold like this." }];
+  const source_event_id = logDecision(db, task, "folded 12 into 5", "deckhand", at, "worker");
+  const exemplar = recordExemplar(db, humanEntryInput(db, { workspace: null, path: "review", title: "Fold case", addressee: null, source_event_id, annotations }), "webui", at).entry_id;
   behavior(null, "someone-else", "Not for this agent");
   behavior("tidepool", "deckhand", "Workspace scoped");
   record({ path: "review", title: "Board-wide knowledge", scope: null });
@@ -252,9 +255,10 @@ it("主題つきの meta-review には INDEX の代わりに指針の節が付�
         "",
         `- #${mine} behavior Fold duplicates first (path: review)`,
         `- #${everyone} behavior Cite the precedent (path: review)`,
+        `- #${exemplar} exemplar Fold case (path: review)`,
       ].join("\n"),
     );
-    expect(guidance).toMatchObject({ entries: [{ id: mine, version: mine }, { id: everyone, version: everyone }], omitted: 0, index_depth: 0 });
+    expect(guidance).toMatchObject({ entries: [mine, everyone, exemplar].map((id) => ({ id, version: id })), omitted: 0, index_depth: 0 });
     expect(guidance.tokens).toBeGreaterThan(0);
   }
 });

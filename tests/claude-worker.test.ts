@@ -794,7 +794,6 @@ describe("ClaudeCodeWorker", () => {
     const args = calls.at(-1)!.args;
     const guidance = buildMemoryInjection(db, task, "work", "deckhand");
     const { section } = buildMetaReviewMaterial(db, task.id)!;
-    expect(guidance.section).toContain(`#${entry_id} behavior Fold duplicates first`);
     expect(args[args.indexOf("--append-system-prompt") + 1]!.endsWith(`\n\n${guidance.section}\n\n${section}`)).toBe(true);
     expect(listEvents(db, task.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
       entries: [{ id: entry_id, version: entry_id }],

@@ -36,6 +36,7 @@ import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
   type InjectionQuery,
+  memoryPromptSection,
   recordMemoryInjection,
   recordMetaReviewMaterial,
 } from "./memory.js";
@@ -1228,7 +1229,7 @@ export class CodexWorker implements WorkerAdapter {
         doctrine: codexDoctrine(verbs),
         verbs,
         allowedDomains: workspace.allowed_domains,
-        memorySection: [memory.section, material?.section].filter(Boolean).join("\n\n") || null,
+        memorySection: memoryPromptSection(memory, material),
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
       // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは

@@ -645,11 +645,11 @@ export function readPulls(
   workerSpawnedEventId: number,
   pulls: ReadonlyArray<Extract<EventPayload, { kind: "memory_pulled" }>>,
 ): number[] {
-  const guidance = new Set(
+  const injected = new Set(
     events.flatMap(({ payload: p }) => (p.kind === "memory_injected" && p.worker_spawned_event_id === workerSpawnedEventId ? p.entries.map((e) => e.id) : [])),
   );
   return pulls.flatMap((p) =>
-    p.verb === "read_memory" ? p.returned_ids : p.verb === "read_memory_entries" ? p.returned_ids.filter((id) => guidance.has(id)) : [],
+    p.verb === "read_memory" ? p.returned_ids : p.verb === "read_memory_entries" ? p.returned_ids.filter((id) => injected.has(id)) : [],
   );
 }
 

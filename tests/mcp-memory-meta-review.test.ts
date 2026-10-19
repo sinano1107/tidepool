@@ -135,7 +135,7 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
   try {
     const { tools } = await client.listTools();
     expect(tools.find((tool) => tool.name === "read_memory_entries")?.description).toBe(
-      "Read memory entries by id, across every scope, addressee and state: the row list_memory_entries returns, plus case for a Behavior " +
+      "Read memory entries by id, across every scope, addressee and state: each entry's row (the one a memory meta-review's list_memory_entries returns), plus case for a Behavior " +
         "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
         "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
         "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +

@@ -1302,8 +1302,28 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
   registerPrecedentRead(server, deps, run);
+  registerMemoryEntriesRead(server, deps, run);
   if (subject === "memory") registerMemoryMetaReviewVerbs(server, deps, run);
   else registerRoutingMetaReviewVerbs(server, deps, run);
+}
+
+/** 指針の節の id 読み: 両主題の meta-review が持つ(ADR 0279 決定2 —— 指針の節は両主題に注入され、その本文はこれで読む)。 */
+function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
+  server.registerTool(
+    "read_memory_entries",
+    {
+      description:
+        "Read memory entries by id, across every scope, addressee and state: each entry's row (the one a memory meta-review's list_memory_entries returns), plus case for a Behavior " +
+        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
+        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
+        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
+        "Entries come in id order. " +
+        nextDescription("read_memory_entries", "entries", "`missing` comes"),
+      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
+    },
+    async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
+  );
 }
 
 /** Precedent の読み口: 両主題の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
@@ -1493,22 +1513,6 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
-  );
-
-  server.registerTool(
-    "read_memory_entries",
-    {
-      description:
-        "Read memory entries by id, across every scope, addressee and state: the row list_memory_entries returns, plus case for a Behavior " +
-        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
-        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
-        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
-        "Entries come in id order. " +
-        nextDescription("read_memory_entries", "entries", "`missing` comes"),
-      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
-    },
-    async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
   );
 
   server.registerTool(

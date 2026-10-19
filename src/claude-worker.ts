@@ -21,7 +21,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, memoryPromptSection, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -2195,7 +2195,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
             verbs,
             allowedDomains: workspace.allowed_domains,
-            memorySection: [memory.section, material?.section].filter(Boolean).join("\n\n") || null,
+            memorySection: memoryPromptSection(memory, material),
           }),
         ],
         // the agent's own commits are stamped with the agent's identity (issue

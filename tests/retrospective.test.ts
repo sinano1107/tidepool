@@ -1414,13 +1414,25 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   ]);
 });
 
-it("meta-review の帰責の入力の読んだ記憶は、その session の指針の節に載っていて read_memory_entries で読んだ entry —— 材料として読んだ entry は入らない(ADR 0279 決定2 / #1927)", async () => {
+it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の入力の読んだ記憶は、その session の指針の節に載っていて read_memory_entries で読んだ entry —— 材料の節に載って読んだ entry は入らない(ADR 0279 決定2 / #1927)", async (subject) => {
   const b = memoryBoard();
   const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
   const material = b.knowledge("Material note");
-  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
   const spawned = appendEvent(b.db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordMemoryInjection(b.db, review.id, "deckhand", spawned, buildMemoryInjection(b.db, review, null, "deckhand"), at);
+  // setup のみ: 材料の節に material が載った記録(エントリを運ぶのは主題 memory の材料だけ)
+  const common = { kind: "meta_review_material_injected" as const, worker_spawned_event_id: spawned, previous_watermark: 0, material_watermark: spawned, tokens: 1, tokenizer: "t", tokenizer_version: "1" };
+  appendEvent(b.db, {
+    taskId: review.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload:
+      subject === "memory"
+        ? { ...common, subject, store_changes: [material], candidates: [], precedents: [], precedent_entries: [], proposals: [], proposal_entries: [], branches: [], items: [] }
+        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocations: [], cells: [], rows: [], proposals: [] },
+  });
   readMemoryEntries(b.db, { taskId: review.id, agent: "deckhand" }, { ids: [guidance, material] }, at);
   const decision = logDecision(b.db, review, "kept candidate 12", "deckhand", at, "worker");
   const client = new FakeAttributionClient();

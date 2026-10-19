@@ -377,6 +377,11 @@ it("read_memory_entries が返した id は、その session の memory_injected
       payload: { kind: "memory_injected", worker_spawned_event_id: 5, watermark: 3, entries: [{ id: 4, version: 4 }], tokens: 10, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
       created_at: at,
     },
+    {
+      id: 7, task_id: task, worker_id: "tako", origin: "board", kind: "meta_review_material_injected",
+      payload: { kind: "meta_review_material_injected", subject: "memory", worker_spawned_event_id: 5, previous_watermark: 0, material_watermark: 3, tokens: 10, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0", store_changes: [2], candidates: [], precedents: [], precedent_entries: [], proposals: [], proposal_entries: [], branches: [], items: [] },
+      created_at: at,
+    },
     { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: {}, returned_ids: [2, 4], watermark: 3 }, created_at: at },
     { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
   ];

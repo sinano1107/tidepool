@@ -2366,12 +2366,8 @@ type MemoryInjection = {
   omitted: number;
 };
 
-/** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
- *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
- *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
- *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。主題つきの meta-review には INDEX の代わりに
- *  指針の節(metaReviewGuidance)を組む —— INDEX が案内する pull verb はその接続に無い(ADR 0122 決定2、ADR 0279 決定2)。 */
+/** spawn 注入の節(provider 非依存): 主題つきの meta-review には指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf
+ *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
@@ -2407,7 +2403,11 @@ function metaReviewGuidance(db: Db, taskId: string, agent: string): MemoryInject
     let shown = rows;
     let section = render(shown);
     let tokens = countTokens(section);
-    while (shown.length > 0 && tokens > cap) tokens = countTokens((section = render((shown = shown.slice(0, -1)))));
+    while (shown.length > 0 && tokens > cap) {
+      shown = shown.slice(0, -1);
+      section = render(shown);
+      tokens = countTokens(section);
+    }
     return {
       section: shown.length === 0 ? null : section,
       watermark,
@@ -2420,8 +2420,12 @@ function metaReviewGuidance(db: Db, taskId: string, agent: string): MemoryInject
   })();
 }
 
-/** 定義つき INDEX と関連 leaf の節(buildMemoryInjection の worker の側)。Board call の起草も INDEX をここから組む —— 主題つきの
- *  task の行なら scope null の視界で(ADR 0279 決定1)。 */
+/** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
+ *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
+ *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
+ *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。Board call の起草も INDEX を
+ *  ここから組む —— 主題つきの task の行なら scope null の視界で(ADR 0279 決定1)。 */
 export function memoryIndex(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
@@ -2498,6 +2502,11 @@ export function memoryIndex(
       omitted: relevant.length - leaves.length,
     };
   })();
+}
+
+/** spawn 文面の記憶の枠(両 adapter が共有): 注入の節(指針の節か INDEX)の後ろに主題の材料の節が続く(ADR 0180 決定2・ADR 0279 決定2)。 */
+export function memoryPromptSection(injection: Pick<MemoryInjection, "section">, material: { section: string } | null): string | null {
+  return [injection.section, material?.section].filter(Boolean).join("\n\n") || null;
 }
 
 /** spawn 直後の注入記録(task 帰属、worker_spawned の直後に両 adapter が書く)。 */
