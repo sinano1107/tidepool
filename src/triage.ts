@@ -218,7 +218,7 @@ export function objectionsById(db: Db, entryId: number, ids: number[]): Objectio
 function renderObjectionPairs(
   purposeIntro: string,
   pairs: ObjectionPair[],
-  { judgments, entryIds = false }: { judgments?: Map<number, GatedJudgment>; entryIds?: boolean } = {},
+  { judgments, entryIds }: { judgments?: Map<number, GatedJudgment>; entryIds?: boolean },
 ): string {
   return (
     `${purposeIntro}:\n\n` +
