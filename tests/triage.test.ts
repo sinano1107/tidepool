@@ -1143,7 +1143,7 @@ it.each([
 
   commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
 
-  expect(listChildren(db, review.id).map((child) => child.title).filter((title) => !title.startsWith("review"))).toEqual(["rca (self): t", "rca (auditor): t"]);
+  expect(listChildren(db, review.id).map((child) => child.title)).toEqual(["rca (self): t", "rca (auditor): t"]);
   expect(listEvents(db, review.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
 });
 
