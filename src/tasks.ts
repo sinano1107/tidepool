@@ -55,12 +55,19 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
-export type TaskType = "work" | "question" | "review" | "memory_repair" | "interview";
+export type TaskType = "work" | "question" | "review" | RepairType | "interview";
 
+/** 異議の束ねが立てる修理子だけが取る type —— memory_repair と routing_repair(ADR 0272 決定2 / ADR 0279 決定4)。目的が違うので
+ *  type は分け、同じ性質(親が必須・read-only・cascade で残る・学習器の work 側)はこの集合の共有で写す。 */
+const REPAIR_TYPES = ["memory_repair", "routing_repair"] as const;
+export type RepairType = (typeof REPAIR_TYPES)[number];
+export const isRepairType = (type: TaskType): type is RepairType => (REPAIR_TYPES as readonly TaskType[]).includes(type);
+/** REPAIR_TYPES の SQL の `IN` の中身。 */
+const REPAIR_TYPES_SQL = REPAIR_TYPES.map((type) => `'${type}'`).join(", ");
 
-/** read-only 保証を運ぶ type(CONTEXT.md の type): review と memory_repair(ADR 0272 決定3)。repo への書き込みの床
+/** read-only 保証を運ぶ type(CONTEXT.md の type): review と修理子の type(ADR 0272 決定3 / ADR 0279 決定4)。repo への書き込みの床
  *  (harness deny・spawn の面・sandbox・permission mode・Codex の profile)と lineage の透明さが同じここを引く。 */
-export const carriesReadOnly = (type: TaskType): boolean => type === "review" || type === "memory_repair";
+export const carriesReadOnly = (type: TaskType): boolean => type === "review" || isRepairType(type);
 
 /** 盤面の解決(`presentTask` / `boardRows`)を通っていない値の、型だけの目印(ADR 0220)。実行時には存在しない。
  *  `Task` と `TaskRow` が持ち、解決の出力(`BoardRow` / `BoardTask`)だけが `Omit` で外す。 */
@@ -467,14 +474,14 @@ export interface InterviewTarget {
   effort: string | null;
 }
 
-/** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 /** 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)。 */
-function assertMemoryRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
-  if (input.type === "memory_repair" && input.parent_id === undefined) {
-    throw new DomainError("a memory repair stands only as a child of the task whose memory write was objected");
+function assertRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
+  if (isRepairType(input.type) && input.parent_id === undefined) {
+    throw new DomainError(`a ${input.type} task stands only as a child of the task whose row was objected`);
   }
 }
 
+/** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
     throw new DomainError("an Interview's answer task takes no children other than a question");
@@ -577,6 +584,9 @@ export interface TaskVerbSwap {
     | "declare_premise_breach"
     | "continue_decomposition"
     | "propose_from_objection"
+    | "browse_memory"
+    | "search_memory"
+    | "read_memory"
   )[];
   added: readonly (
     | "complete_audit"
@@ -600,13 +610,15 @@ export interface TaskVerbSwap {
  *  受験者は分解の verb と記憶を書く verb を伏せる(ADR 0245 決定1 / ADR 0268 決定2)。interview の root の一覧は type で決まり(ADR 0273
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
- *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
+ *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
+ *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せる(ADR 0279 決定4)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
  *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
+  if (task?.type === "routing_repair") return { withheld: ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   // Interview の監査(ADR 0273 決定3・4): review の読み系と、受理 / 却下の専用の完了 verb
   if (task && auditedPosedEventId(db, task.id) !== undefined) {
@@ -894,17 +906,17 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
   return row.n;
 }
 
-/** 学習器の work 側に立つ type(ADR 0272 決定4 の追記)。`rowRef` は tasks の行の SQL 別名。 */
+/** 学習器の work 側に立つ type —— work と修理子の type(ADR 0272 決定4 の追記 / ADR 0279 決定4)。`rowRef` は tasks の行の SQL 別名。 */
 export function workSideTypeSql(rowRef: string): string {
-  return `${rowRef}.type IN ('work', 'memory_repair')`;
+  return `${rowRef}.type IN ('work', ${REPAIR_TYPES_SQL})`;
 }
 
 /** `workSideTypeSql` の TS の対。学習器が選び・shadow 行を残し・episode に数えるのもこの側で、判定者(review / interview)は外
  *  (ADR 0272 決定4 の追記 / ADR 0110 決定4 の Status 追記)。 */
-export const isWorkSide = (type: TaskType): boolean => type === "work" || type === "memory_repair";
+export const isWorkSide = (type: TaskType): boolean => type === "work" || isRepairType(type);
 
 /** 組み込みを shadow するエントリの削除の扉が数える参照(ADR 0228 決定3): この名前を
- *  `assignee` に持つ未決着の work。review / interview / memory_repair は組み込みへ落ちても走るので数えない(ADR 0275 決定1)。 */
+ *  `assignee` に持つ未決着の work。review / interview / 修理子の type は組み込みへ落ちても走るので数えない(ADR 0275 決定1)。 */
 export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
   const row = db
     .prepare(
@@ -1065,7 +1077,7 @@ export function registerTask(
   assertInterviewFields(db, input);
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
-  assertMemoryRepairHasParent(input);
+  assertRepairHasParent(input);
   // assertGithubRef above guarantees workspace whenever the ref is present
   if (input.github_issue_number !== undefined && input.workspace) {
     assertNoUnsettledIssueRef(db, input.workspace, input.github_issue_number);
@@ -3472,12 +3484,13 @@ function awaitedChildSql(rowRef: string): string {
 
 /** An attached child the parent's cancel leaves running (ADR 0271 決定3, revising ADR 0268 決定4; ADR 0272 決定1): only
  *  one whose work's addressee outlives the parent — an RCA review, whose findings go to attribution (ADR 0115), and a
- *  memory_repair, whose artifact lives in the memory store rather than the parent's branch. The RCA is told by its
- *  registration record carrying the objections it bundles, never by title; a memory_repair by its type. A completion
+ *  repair-type child (memory_repair / routing_repair, ADR 0279 決定4), whose artifact lives in the memory store or the
+ *  routing table rather than the parent's branch. The RCA is told by its registration record carrying the objections it
+ *  bundles, never by title; a repair-type child by its type. A completion
  *  review and a human-registered review child fall: their repair cannot land and their fitness is to a discarded
  *  criterion. An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
-  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type = 'memory_repair' OR ${rcaSql(rowRef)}))`;
+  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type IN (${REPAIR_TYPES_SQL}) OR ${rcaSql(rowRef)}))`;
 }
 
 /** RCA review: a review whose registration record carries the objections it bundles (ADR 0171 決定1) —— never told by title. */
@@ -3519,6 +3532,13 @@ export const INTERVIEW_AUDIT_NOTICE =
  *  運ぶ。spawn の文面では Authority 節の本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
 export const MEMORY_REPAIR_NOTICE =
   "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.";
+
+/** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。 */
+export const ROUTING_REPAIR_NOTICE =
+  "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.";
+
+/** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
+export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };
 
 /** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
 function discardingAncestor(db: Db, taskId: string): Task | undefined {

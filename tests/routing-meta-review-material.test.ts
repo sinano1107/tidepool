@@ -3,19 +3,20 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, getEvent, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting, readExecutionSettings } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
-import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory.js";
+import { buildMetaReviewMaterial, listPrecedents, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
+import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
-import { getTask, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, executionSetting, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
 
-/** routing の meta-review を登録し、その task の id を返す。done にすれば次の登録の「前回」になる(setup のみ)。 */
-function register(db: Db, done = false): string {
-  registerMetaReview(db, "routing", at);
+/** 主題(既定 routing)の meta-review を登録し、その task の id を返す。done にすれば次の登録の「前回」になる(setup のみ)。 */
+function register(db: Db, done = false, subject: "routing" | "memory" = "routing"): string {
+  registerMetaReview(db, subject, at);
   const taskId = listEventsOfKinds(db, ["meta_review_registered"]).at(-1)!.task_id!;
   if (done) db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(taskId);
   return taskId;
@@ -31,7 +32,7 @@ function routingMaterialOf(db: Db, taskId: string, agents: readonly { name: stri
   return material;
 }
 
-it("材料の節は両端の watermark と6つの部分の見出しを持ち、材料の無い部分は空と書く —— 学習器は毎周期の項目", () => {
+it("材料の節は両端の watermark と7つの部分の見出しを持ち、材料の無い部分は空と書く —— 学習器は毎周期の項目", () => {
   const db = openDb(":memory:");
   register(db, true);
   const review = register(db);
@@ -50,6 +51,8 @@ it("材料の節は両端の watermark と6つの部分の見出しを持ち、�
     "(no allocation reviews)",
     "### New cells and changed rows",
     "(no new cells or changed rows)",
+    "### Objected decisions",
+    "(no objected decisions)",
     "### Settled proposals",
     "(no settled proposals)",
     "### Items to judge",
@@ -382,7 +385,7 @@ it("人間が足した行が同じ窓で走って初観測になれば、走っ�
   expect(parts.items).toEqual([{ row: haiku, tier: "economy" }, { learner: true }]);
 });
 
-it("routing meta-review の purpose は材料の節とその6つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", () => {
+it("routing meta-review の purpose は材料の節とその7つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", () => {
   const db = openDb(":memory:");
 
   const review = getTask(db, register(db))!;
@@ -390,7 +393,7 @@ it("routing meta-review の purpose は材料の節とその6つの部分を名�
   expect(review.purpose).toContain(
     "This cycle's material is in your prompt, in the Routing meta-review material section: the current table and settings, the shadow rows " +
       "since the previous routing meta-review where the learner's recommendation diverged from what ran, the allocation reviews since then, " +
-      "the cells first seen and the rows humans changed since then, the routing proposals answered or settled since then, and the items to judge.",
+      "the cells first seen and the rows humans changed since then, the decisions objected to since then, the routing proposals answered or settled since then, and the items to judge.",
   );
   expect(review.purpose).toContain(
     "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, listing each item you leave unchanged as no_change (with a reason when it helps).",
@@ -415,4 +418,29 @@ it("routing meta-review の purpose は材料の節とその6つの部分を名�
   expect(review.completion_criteria).toBe(
     "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
   );
+});
+
+/** setup のみ: 1 marker = 1 episode の直挿しで、task に異議つき decision を置く(memory-meta-review-material.test.ts と同じ形)。 */
+function objectedDecision(db: Db, taskId: string, i: number): number {
+  const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, taskId);
+  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+  bundledObjection(db, taskId, decision, at);
+  return decision;
+}
+
+it("Objected decisions は読み手 routing の list_precedents の行を載せ、記録はその decision の event id と行のエントリを運ぶ —— 窓に memory meta-review とその子の行と worker の行があっても(ADR 0279 決定6)", () => {
+  const { db, work } = board();
+  const memory = register(db, true, "memory");
+  const previous = register(db, true);
+  const child = (parent_id: string) => registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
+  [memory, child(memory), previous, child(previous), work("w")].forEach((taskId, i) => objectedDecision(db, taskId, i + 1));
+  const review = register(db);
+  const material = routingMaterialOf(db, review);
+
+  const record = getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload;
+
+  expect(material.parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
+  expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the objections raised in this window.\n${JSON.stringify(material.parts.precedents[0])}`);
+  expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_entries: [] });
 });

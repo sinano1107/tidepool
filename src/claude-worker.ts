@@ -21,7 +21,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, memoryPromptSection, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -157,8 +157,8 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
- *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
+/** read-only 保証を運ぶ type(review と修理子の type、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
+ *  ADR 0272 決定3 / ADR 0279 決定4): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
@@ -241,7 +241,7 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  read-only 保証を運ぶ type(review / memory_repair)以外はすべて
+ *  read-only 保証を運ぶ type(review / memory_repair / routing_repair)以外はすべて
  *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
  *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
@@ -392,7 +392,7 @@ const MCP_SERVER_NAME = "tidepool";
  *
  *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
  *  は task type の性質であって実行エージェントの性質ではない(ADR 0013)。
- *  memory_repair も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
+ *  修理子の type も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
  *  コマンドを要らないので開けない。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
  *  確認)ので、registry が `git commit` や `rm` を開くことはできない —— ただし
  *  天井が覆うのは `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこの
@@ -2002,7 +2002,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         ? this.options.cliVersion()
         : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
       const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
-      // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
+      // ADR 0180 決定2・追記 #1239 / ADR 0279 決定2: meta-review は INDEX の代わりに指針の節を受け、主題の材料の節がその後ろに続く
       const material = buildMetaReviewMaterial(this.options.db, task.id, Object.values(registry.agents));
       const verbs = taskVerbSwap(this.options.db, task.id);
       // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
@@ -2195,7 +2195,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
             verbs,
             allowedDomains: workspace.allowed_domains,
-            memorySection: memory.section ?? material?.section ?? null,
+            memorySection: memoryPromptSection(memory, material),
           }),
         ],
         // the agent's own commits are stamped with the agent's identity (issue

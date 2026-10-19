@@ -36,6 +36,7 @@ import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
   type InjectionQuery,
+  memoryPromptSection,
   recordMemoryInjection,
   recordMetaReviewMaterial,
 } from "./memory.js";
@@ -1202,7 +1203,7 @@ export class CodexWorker implements WorkerAdapter {
       throw new Error(`CodexWorker refuses provider ${setting.provider}; no Harness fallback`);
     }
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
-    // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
+    // ADR 0180 決定2・追記 #1239 / ADR 0279 決定2: meta-review は INDEX の代わりに指針の節を受け、主題の材料の節がその後ろに続く
     const material = buildMetaReviewMaterial(this.options.db, task.id, Object.values(registry.agents));
     // 実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
     const workspacePath = realpathSync(place.path);
@@ -1228,10 +1229,10 @@ export class CodexWorker implements WorkerAdapter {
         doctrine: codexDoctrine(verbs),
         verbs,
         allowedDomains: workspace.allowed_domains,
-        memorySection: memory.section ?? material?.section ?? null,
+        memorySection: memoryPromptSection(memory, material),
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject

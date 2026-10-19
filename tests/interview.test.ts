@@ -1006,20 +1006,20 @@ it("受験者を親にした work と review の登録は扉を問わず拒ま�
 // 記憶の修理子(ADR 0272)。立てるのは異議の束ね(#2175)で、ここでは束ねと同じ人間の名義の registerTask で立てる
 const MEMORY_REPAIR = { type: "memory_repair" as const, title: "memory repair: interview", purpose: "repair the objected memory write", completion_criteria: "every objection direction above is addressed" };
 
-it("memory_repair は Interview の root の子として登録でき、受験者の子としては扉を問わず拒まれる(ADR 0272 決定6 / ADR 0268 決定5)", () => {
+it.each(["memory_repair", "routing_repair"] as const)("%s は Interview の root の子として登録でき、受験者の子としては扉を問わず拒まれる(ADR 0272 決定6 / ADR 0268 決定5 / ADR 0279 決定4)", (type) => {
   const { db, root } = registerInterview();
   const [child] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
-    expect(() => registerTask(db, { ...MEMORY_REPAIR, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
+    expect(() => registerTask(db, { ...MEMORY_REPAIR, type, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
   }
   expect(listChildren(db, child.id)).toEqual([]);
-  expect(registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI)).toMatchObject({ type: "memory_repair", parent_id: root.id });
+  expect(registerTask(db, { ...MEMORY_REPAIR, type, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI)).toMatchObject({ type, parent_id: root.id });
 });
 
-it("root の下の memory_repair は root の retry で倒れず todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0272 決定1・6)", () => {
+it.each(["memory_repair", "routing_repair"] as const)("root の下の %s は root の retry で倒れず todo のまま pickup 候補に残る —— 旧い root と受験者は cancelled(ADR 0272 決定1・6 / ADR 0279 決定4)", (type) => {
   const { db, root } = registerInterview();
   const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
-  const memoryRepair = registerTask(db, { ...MEMORY_REPAIR, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI);
+  const memoryRepair = registerTask(db, { ...MEMORY_REPAIR, type, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI);
 
   const again = retryRoot(db, root, "the probe names the answer");
 

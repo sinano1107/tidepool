@@ -6,7 +6,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { finishTask, type HandoffDoc, registerTask, type Task } from "./tasks.js";
+import { ancestorsSql, finishTask, type HandoffDoc, registerTask, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -30,8 +30,10 @@ export const MEMORY_META_REVIEW_VERBS = [
   "invalidate_memory",
   "propose_memory_change",
 ] as const;
-/** 主題 routing の読み口と提案 verb、両主題が共有する Precedent の読み口(issue #917・#918)。 */
+/** 主題 routing の読み口と提案 verb、両主題が共有する Precedent の読み口(issue #917・#918)と指針の節の id 読み(ADR 0279 決定2)。 */
 export const ROUTING_META_REVIEW_VERBS = [
+  // 指針の節の本文の読み口(ADR 0279 決定2)
+  "read_memory_entries",
   "list_routing_shadow",
   "list_allocations",
   "list_routing_cells",
@@ -112,7 +114,7 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of how the board routes work to execution settings. This cycle's material is in your prompt, in the " +
         "Routing meta-review material section: the current table and settings, the shadow rows since the previous routing meta-review " +
         "where the learner's recommendation diverged from what ran, the allocation reviews since then, the cells first seen and the rows " +
-        "humans changed since then, the routing proposals answered or settled since then, and the items to judge. " +
+        "humans changed since then, the decisions objected to since then, the routing proposals answered or settled since then, and the items to judge. " +
         "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, " +
         "listing each item you leave unchanged as no_change (with a reason when it helps). " +
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
@@ -150,6 +152,18 @@ export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
 export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
   return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").get(taskId) as { meta_review_subject: MetaReviewSubject | null } | undefined)
     ?.meta_review_subject ?? null;
+}
+
+/** 行の主題(ADR 0279 決定6): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA は親の主題に載る。
+ *  祖先にも無ければ null。材料の Objected decisions と list_precedents が共有する precedentRows の絞りが読む。 */
+export function lineageSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
+  return (
+    metaReviewSubjectOf(db, taskId) ??
+    ((db
+      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
+      .pluck()
+      .get(taskId) as MetaReviewSubject | undefined) ?? null)
+  );
 }
 
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。

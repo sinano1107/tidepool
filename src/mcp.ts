@@ -85,12 +85,13 @@ import {
   interviewRoomPath,
   interviewTargets,
   isArtifactDiscarded,
+  isRepairType,
   joinHistory,
   listExaminees,
   logDecision,
-  MEMORY_REPAIR_NOTICE,
   posedProbe,
   poseProbe,
+  REPAIR_NOTICES,
   redecompose,
   reportBrokenProbe,
   resolveTaskAgent,
@@ -554,7 +555,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
-  // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
+  // 登録せず(ADR 0272 決定3)、routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を
+  // 登録しない(ADR 0279 決定4)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
   // complete_memory_review を、routing meta-review は complete_routing_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
@@ -600,9 +602,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
             ...auditedProbeEnvelope(deps, task),
-            // ADR 0272 決定3 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。memory_repair は祖先の cancel の下でも修理の1行
-            ...(task.type === "memory_repair"
-              ? { memory_repair: MEMORY_REPAIR_NOTICE }
+            // ADR 0272 決定3 / ADR 0279 決定4 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。修理子は祖先の cancel の下でも修理の1行
+            ...(isRepairType(task.type)
+              ? { [task.type]: REPAIR_NOTICES[task.type] }
               : isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
@@ -652,7 +654,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete the current task. Work tasks require the full handoff doc (" +
           describeHandoffFields() +
           ") and a committed work tree — commit your changes before calling this. " +
-          "Every other type (review and memory_repair tasks) requires outcome: the findings or judgment you reached. " +
+          "Every other type requires outcome: the findings or judgment you reached. " +
           "resume_context is what the next session needs to pick the work back up — " +
           "do not describe landing state (push / PR / merge): the board lands the " +
           "branch after you complete, and you cannot observe that. " +
@@ -1179,7 +1181,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // (Precedent の memory マーカーの結合キー)。
   const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
 
-  server.registerTool(
+  if (!withheld.includes("browse_memory")) server.registerTool(
     "browse_memory",
     {
       description:
@@ -1194,7 +1196,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) => runVerb(deps, attributedTaskId, (task) => browseMemory(deps.db, reader(task), input, deps.clock.now())),
   );
 
-  server.registerTool(
+  if (!withheld.includes("search_memory")) server.registerTool(
     "search_memory",
     {
       description:
@@ -1208,7 +1210,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
   );
 
-  server.registerTool(
+  if (!withheld.includes("read_memory")) server.registerTool(
     "read_memory",
     {
       description:
@@ -1324,8 +1326,28 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
   registerPrecedentRead(server, deps, run);
+  registerMemoryEntriesRead(server, deps, run);
   if (subject === "memory") registerMemoryMetaReviewVerbs(server, deps, run);
   else registerRoutingMetaReviewVerbs(server, deps, run);
+}
+
+/** 指針の節の id 読み: 両主題の meta-review が持つ(ADR 0279 決定2 —— 指針の節は両主題に注入され、その本文はこれで読む)。 */
+function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
+  server.registerTool(
+    "read_memory_entries",
+    {
+      description:
+        "Read memory entries by id, across every scope, addressee and state: each entry's row (the one a memory meta-review's list_memory_entries returns), plus case for a Behavior " +
+        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
+        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
+        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
+        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
+        "Entries come in id order. " +
+        nextDescription("read_memory_entries", "entries", "`missing` comes"),
+      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
+    },
+    async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
+  );
 }
 
 /** Precedent の読み口: 両主題の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
@@ -1337,6 +1359,8 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
         "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
+        "Rows are limited to your subject: a routing meta-review sees the decisions of routing meta-reviews and their children, a memory meta-review " +
+        "every other decision, and an Interview all of them. " +
         "Defaults to objections since the previous completed meta-review of your subject (for an Interview, the board's start); pass since_watermark (an event id) to look further back. " +
         nextDescription("list_precedents", "precedents"),
       inputSchema: { since_watermark: z.number().int().min(0).optional(), next },
@@ -1515,22 +1539,6 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       },
     },
     async (input) => run((reader, now) => pullMemoryList(deps.db, reader, "list_memory_entries", input, now)),
-  );
-
-  server.registerTool(
-    "read_memory_entries",
-    {
-      description:
-        "Read memory entries by id, across every scope, addressee and state: the row list_memory_entries returns, plus case for a Behavior " +
-        "or Exemplar — the example it was drafted from (the decision, the steering objections raised against it, and that session's handoff " +
-        "and result, or a whole session's decisions in order with the handoff and result); null when there is none. An id whose entry was " +
-        "moved or restored returns the entry it now lives as, with requested_id set to the id you asked for. Any other invalidated entry comes " +
-        "back as it is, text included, with its invalidation_reason and successor_id. Ids that do not exist are listed in missing. " +
-        "Entries come in id order. " +
-        nextDescription("read_memory_entries", "entries", "`missing` comes"),
-      inputSchema: { ids: z.array(z.number().int()).min(1).optional(), next },
-    },
-    async (input) => run((reader, now) => readMemoryEntries(deps.db, reader, input, now)),
   );
 
   server.registerTool(

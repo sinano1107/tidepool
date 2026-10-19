@@ -115,6 +115,17 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   ]);
 });
 
+it("主題つきの親(meta-review)の行からの Behavior candidate は、盤面に既定 workspace があっても scope null(盤面全体)で作る(ADR 0279 決定1)", () => {
+  const db = openDb(":memory:");
+  const review = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_WORKER_ID, "webui");
+  const entry = objected(db, review, "capability");
+  const auditor = rca(db, "rca (auditor): memory meta-review", review);
+
+  const { entry_id } = proposeFromObjection(db, auditor.id, { ...draft, entry_id: entry }, { workspace: { name: "charts" } }, "auditor", at);
+
+  expect(listMemoryEntries(db, {})).toEqual([expect.objectContaining({ id: entry_id, kind: "behavior", state: "candidate", scope: null, addressee: "deckhand" })]);
+});
+
 it("agent 登録の task では task_ambiguity と missing_information(as: behavior)は登録者宛て、missing_information(as: knowledge)は宛先なしで即 approved・出所は RCA 自身の decision・cause は null", () => {
   const db = openDb(":memory:");
   const delegated = task(db, "work", "delegated", "tako");

@@ -10,7 +10,7 @@ import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSki
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
@@ -111,6 +111,13 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   commitTriage(db, at);
   // 束ねが立てた memory_repair(assignee は異議された task の列 codex-agent を写す)
   return listChildren(db, objected.id).find((child) => child.type === "memory_repair")!;
+}
+
+/** routing meta-review の判断の行への異議の修理 task(routing_repair、ADR 0279 決定4)。束ねは後続の ticket なので、束ねと同じ人間の名義で立てる。 */
+function routingRepairTask(db: ReturnType<typeof openDb>) {
+  const at = new Date("2026-08-24T00:00:00.000Z");
+  const objected = task(db, "judged the routing table");
+  return registerTask(db, { type: "routing_repair", assignee: "codex-agent", workspace: "work", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: objected.id }, at, ...HUMAN_WEBUI);
 }
 
 /** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
@@ -361,9 +368,12 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
-  it("memory_repair task の spawn は review と同じ read-only の permission profile で走る(ADR 0272 決定3)", async () => {
+  it.each([
+    ["memory_repair", writeRepairTask],
+    ["routing_repair", routingRepairTask],
+  ] as const)("%s task の spawn は review と同じ read-only の permission profile で走る(ADR 0272 決定3 / ADR 0279 決定4)", async (_, register) => {
     const f = await fixture();
-    await f.start(writeRepairTask(f.db));
+    await f.start(register(f.db));
 
     const args = f.process.calls[0]!.args;
     expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
@@ -643,6 +653,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の pin の子", pinnedChild],
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
+    ["routing meta-review の判断の行への異議の修理", routingRepairTask],
     ["self RCA", rca("self")],
     ["auditor RCA", rca("auditor")],
     ["祖先の cancel の下の RCA", discardedRca],
@@ -717,6 +728,25 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Routing meta-review material");
     expect(developerInstructions(f.process.calls[2]!.args)).not.toContain("meta-review material");
     expect(listEvents(f.db, work.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+  });
+
+  it("主題つきの meta-review の spawn は指針の節を材料の節と別に、その直前に置き、memory_injected は指針の節の id と token 量を持つ(Claude と同じ —— ADR 0279 決定2)", async () => {
+    const f = await fixture();
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const { entry_id } = recordBehavior(f.db, humanEntryInput(f.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "x", addressee: "codex-agent" }), "webui", at);
+    // setup のみ: 盤面名義で登録し、codex-agent に割り当てる
+    registerMetaReview(f.db, "memory", at);
+    f.db.prepare("UPDATE tasks SET assignee = 'codex-agent' WHERE meta_review_subject = 'memory'").run();
+    const review = getTask(f.db, listBoard(f.db).find((value) => value.meta_review_subject === "memory")!.id)!;
+    await f.start(review);
+
+    const guidance = buildMemoryInjection(f.db, review, "work", "codex-agent");
+    const { section } = buildMetaReviewMaterial(f.db, review.id)!;
+    expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${guidance.section}\n\n${section}\n\n`)).toBe(true);
+    expect(listEvents(f.db, review.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
+      entries: [{ id: entry_id, version: entry_id }],
+      tokens: guidance.tokens,
+    });
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {

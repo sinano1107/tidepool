@@ -89,8 +89,8 @@ it("worker 用 complete_task の description は HANDOFF_FIELDS の全フィー�
     for (const field of HANDOFF_FIELDS) {
       expect(description).toContain(field);
     }
-    // ADR 0278 決定6: work 以外(review / memory_repair)も outcome が要る
-    expect(description).toContain("review and memory_repair tasks) requires outcome");
+    // ADR 0278 決定6: work 以外の type も outcome が要る
+    expect(description).toContain("Every other type requires outcome");
   } finally {
     await client.close();
   }

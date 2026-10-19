@@ -172,12 +172,12 @@ it("answering a proposal question does not return its parent to the queue head(i
   db.close();
 });
 
-it("memory_repair は付帯子 —— 親を塞がず、未決着の間は着地の門に数えられ、outcome だけの complete_task で終わる(ADR 0272 決定5 / ADR 0278 決定6)", () => {
+it.each(["memory_repair", "routing_repair"] as const)("%s は付帯子 —— 親を塞がず、未決着の間は着地の門に数えられ、outcome だけの complete_task で終わる(ADR 0272 決定5 / ADR 0278 決定6 / ADR 0279 決定4)", (type) => {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
   const memoryRepair = registerTask(
     db,
-    { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id },
+    { type, title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id },
     new Date(1),
     ...HUMAN_WEBUI,
   );

@@ -311,7 +311,7 @@ export function completeRoutingReview(
   const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
     itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
   const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
-  const open = routingMaterial(db, metaReviewWindow(db, review.id), agents).parts.items.filter((item) => !judged.has(key(item)));
+  const open = routingMaterial(db, metaReviewWindow(db, review.id), [], agents).parts.items.filter((item) => !judged.has(key(item)));
   return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
     review,
@@ -351,10 +351,10 @@ function judgmentItems(
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
 }
 
-/** routing の材料の節の6つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
- *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案、判断を要する項目。
- *  行はそれぞれの読み口と同じ。 */
-export function routingMaterial(db: Db, window: Required<MetaReviewWindow>, agents?: readonly RegistryAgent[]) {
+/** routing の材料の節の7つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
+ *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、窓の中で
+ *  決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断の行は memory.ts の list_precedents の行を呼び手が渡す(import の循環を避ける)。 */
+export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, precedents: P[], agents?: readonly RegistryAgent[]) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
@@ -366,6 +366,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>, agen
     allocations,
     cells,
     rows,
+    precedents,
     proposals: listRoutingProposals(db, window),
   };
   const parts = { ...read, items: judgmentItems(db, read, agents) };
@@ -391,6 +392,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>, agen
       [...cells, ...rows],
       "no new cells or changed rows",
     ],
+    ["Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"],
     ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
     [
       "Items to judge",

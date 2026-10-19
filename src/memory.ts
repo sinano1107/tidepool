@@ -11,6 +11,8 @@ import {
   completeMetaReview,
   injectedMaterial,
   inWindow,
+  lineageSubjectOf,
+  type MetaReviewSubject,
   type MetaReviewWindow,
   materialEvents,
   materialSection,
@@ -2124,7 +2126,7 @@ export function listPrecedents(
   const read = readPosition("list_precedents", input);
   return db.transaction(() => {
     const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
-    const rows = precedentRows(db, { after: since });
+    const rows = precedentRows(db, { after: since }, metaReviewSubjectOf(db, reader.taskId));
     // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
     const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids: precedentEntryIds(packed.precedents) }, packed, at);
@@ -2135,15 +2137,23 @@ export function listPrecedents(
 const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
 
 /** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
- *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
-function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+ *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と同じものだけ ——
+ *  主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件(ADR 0279 決定6)。 */
+function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
   const objectedIn = db.prepare(
     `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
   );
+  // 祖先にも主題の無い行(worker・work の修理子)は memory の行
+  const subjects = new Map<string, MetaReviewSubject>();
+  const rowSubject = (taskId: string) => {
+    if (!subjects.has(taskId)) subjects.set(taskId, lineageSubjectOf(db, taskId) ?? "memory");
+    return subjects.get(taskId)!;
+  };
   return listEpisodes(db, {}).flatMap((episode) => {
     // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
     const objected = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objectedIn.get(m.eventId, after, upTo) !== undefined);
-    const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
+    if (objected.length === 0 || (readerSubject !== null && rowSubject(episode.taskId) !== readerSubject)) return [];
+    const events = listEvents(db, episode.taskId);
     return objected.map((m) => ({
       task_id: episode.taskId,
       workspace: episode.workspace,
@@ -2376,13 +2386,71 @@ type MemoryInjection = {
   omitted: number;
 };
 
+/** spawn 注入の節(provider 非依存): 主題つきの meta-review には指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf
+ *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。
+ *  routing_repair(主題 routing の修理子、ADR 0279 決定4・6)にも同じ理由で INDEX を組まず、節は空。 */
+export function buildMemoryInjection(
+  db: Db,
+  task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
+  scope: string | null,
+  agent: string,
+  query?: InjectionQuery,
+): MemoryInjection {
+  if (getTask(db, task.id)?.type === "routing_repair") {
+    return { query, section: null, watermark: memoryWatermark(db), entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+  }
+  return metaReviewSubjectOf(db, task.id) === null ? memoryIndex(db, task, scope, agent, query) : metaReviewGuidance(db, task.id, agent);
+}
+
+const GUIDANCE_PREAMBLE =
+  "Approved board-wide behaviors and exemplars addressed to you. Read the ones that bear on your judgments with " +
+  "read_memory_entries before acting on them.";
+
+/** 主題つきの meta-review の指針の節(ADR 0279 決定2): 盤面全体(scope null)の読み手の視界の3段目にある approved な Behavior /
+ *  Exemplar(走る agent 宛てか全員宛て)を id 順に、本文なしの行で。上限は worker の注入と同じ盤面設定で、行を下から落とす。 */
+function metaReviewGuidance(db: Db, taskId: string, agent: string): MemoryInjection {
+  return db.transaction(() => {
+    const watermark = memoryWatermark(db);
+    const rows = visibleEntries(db, readerSight(db, { taskId, scope: null, agent })).filter((row) => row.kind === "behavior" || row.kind === "exemplar");
+    const render = (shown: EntryRow[]) => {
+      const omitted = rows.length - shown.length;
+      return [
+        "## Guidance",
+        "",
+        GUIDANCE_PREAMBLE,
+        "",
+        ...shown.map((row) => `- #${row.id} ${row.kind} ${row.title} (path: ${row.path})`),
+        ...(omitted > 0 ? ["", `${omitted} ${omitted === 1 ? "entry" : "entries"} omitted`] : []),
+      ].join("\n");
+    };
+    const cap = readMemorySettings(db).injection_token_cap;
+    let shown = rows;
+    let section = render(shown);
+    let tokens = countTokens(section);
+    while (shown.length > 0 && tokens > cap) {
+      shown = shown.slice(0, -1);
+      section = render(shown);
+      tokens = countTokens(section);
+    }
+    return {
+      section: shown.length === 0 ? null : section,
+      watermark,
+      entries: shown.map((row) => ({ id: row.id, version: row.version! })),
+      tokens: shown.length === 0 ? 0 : tokens,
+      index_depth: 0,
+      index_max_depth: 0,
+      omitted: rows.length - shown.length,
+    };
+  })();
+}
+
 /** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
  *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
  *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)には組まない ——
- *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
-export function buildMemoryInjection(
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。Board call の起草も INDEX を
+ *  ここから組む —— 主題つきの task の行なら scope null の視界で(ADR 0279 決定1)。 */
+export function memoryIndex(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
   scope: string | null,
@@ -2392,7 +2460,6 @@ export function buildMemoryInjection(
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
     const none = { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
-    if (metaReviewSubjectOf(db, task.id) !== null) return none;
     const sight = readerSight(db, { taskId: task.id, scope, agent });
     const visible = visibleEntries(db, sight);
     if (visible.length === 0) return none;
@@ -2461,6 +2528,11 @@ export function buildMemoryInjection(
   })();
 }
 
+/** spawn 文面の記憶の枠(両 adapter が共有): 注入の節(指針の節か INDEX)の後ろに主題の材料の節が続く(ADR 0180 決定2・ADR 0279 決定2)。 */
+export function memoryPromptSection(injection: Pick<MemoryInjection, "section">, material: { section: string } | null): string | null {
+  return [injection.section, material?.section].filter(Boolean).join("\n\n") || null;
+}
+
 /** spawn 直後の注入記録(task 帰属、worker_spawned の直後に両 adapter が書く)。 */
 export function recordMemoryInjection(
   db: Db,
@@ -2514,7 +2586,7 @@ export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonl
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const material = subject === "routing" ? routingMaterial(db, window, agents) : memoryMaterial(db, window, readerHidden(db, taskId));
+    const material = subject === "routing" ? routingMaterial(db, window, precedentRows(db, window, "routing"), agents) : memoryMaterial(db, window, readerHidden(db, taskId));
     return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
 }
@@ -2524,7 +2596,7 @@ export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonl
 const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
   store_changes: storeChanges(db, window, hidden),
   candidates: memoryListRows(db, "list_memory_candidates", {}),
-  precedents: precedentRows(db, window),
+  precedents: precedentRows(db, window, "memory"),
   proposals: memoryProposalRows(db, window),
   branches: metaReviewBranches(db, hidden),
 });
@@ -2671,6 +2743,8 @@ export function recordMetaReviewMaterial(
             // 本番の session の無い種のセルは種の event で名指す
             cells: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
             rows: material.parts.rows.map((r) => r.event_id),
+            precedents: material.parts.precedents.map((p) => p.decision_event_id),
+            precedent_entries: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),
             items: material.parts.items,
           }

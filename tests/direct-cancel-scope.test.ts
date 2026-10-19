@@ -39,6 +39,9 @@ import {
   settleReview,
 } from "./harness.js";
 
+/** 主題の修理子の2つの type —— 性質は同じで、関数の共有で写す(ADR 0272 決定2 / ADR 0279 決定4)。 */
+const REPAIR_TYPES = ["memory_repair", "routing_repair"] as const;
+
 /** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
  *  root(question を除く)」、Edit は「文面の書き手が人間の task」。 */
 const NOW = new Date("2026-10-05T00:00:00.000Z");
@@ -235,13 +238,13 @@ it.each(["直接 cancel", "failure question の abandon"] as const)(
   },
 );
 
-it.each(["直接 cancel", "failure question の abandon"] as const)(
-  "親の%sで、親の下の memory_repair は todo のまま pickup 候補に残り、同じ親の work の修理子は cancelled —— 記憶の行の成果は店に残る(ADR 0272 決定1・6)",
-  (path) => {
+it.each((["直接 cancel", "failure question の abandon"] as const).flatMap((path) => REPAIR_TYPES.map((type) => [path, type] as const)))(
+  "親の%sで、親の下の %s は todo のまま pickup 候補に残り、同じ親の work の修理子は cancelled —— 記憶の行の成果は店に残る(ADR 0272 決定1・6 / ADR 0279 決定4)",
+  (path, type) => {
     db = openDb(":memory:");
     const { parent, repair } = objectedAndCommitted(db);
     // 立てるのは異議の束ね(#2175)。残るのは型で決まるので、異議の id は持たせない
-    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair: t", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+    const memoryRepair = registerTask(db, { type, title: "memory repair: t", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
 
     if (path === "直接 cancel") cancelTaskDirectly(db, parent, null, NOW, {}, "webui");
     else answerQuestionViaWebui(db, failureQuestion(db, parent.id, NOW), ["abandon"], NOW);
@@ -326,12 +329,12 @@ it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
   },
 );
 
-it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
-  "祖先の%sで、done の子の下の memory_repair は todo のまま残り、同じ子の work の修理子は cancelled(ADR 0272 決定1・6 / ADR 0271 決定3)",
-  (path) => {
+it.each((["直接 cancel", "自身の failure question の abandon"] as const).flatMap((path) => REPAIR_TYPES.map((type) => [path, type] as const)))(
+  "祖先の%sで、done の子の下の %s は todo のまま残り、同じ子の work の修理子は cancelled(ADR 0272 決定1・6 / ADR 0271 決定3 / ADR 0279 決定4)",
+  (path, type) => {
     db = openDb(":memory:");
     const { target, child, repair } = doneChildrenWithAttachments(db);
-    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair: B", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, ...HUMAN_WEBUI);
+    const memoryRepair = registerTask(db, { type, title: "memory repair: B", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, ...HUMAN_WEBUI);
 
     if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
     else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
@@ -445,22 +448,22 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
   expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
 });
 
-it("cancelled の work の祖先を挟む task を親にした memory_repair の登録は、祖先の cancel の後でも ADR 0271 決定2 の床に当たらず通る —— 床が拒むのは work だけ(ADR 0272 決定6)", () => {
+it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にした %s の登録は、祖先の cancel の後でも ADR 0271 決定2 の床に当たらず通る —— 床が拒むのは work だけ(ADR 0272 決定6 / ADR 0279 決定4)", (type) => {
   db = openDb(":memory:");
   const { target, child, rcas } = doneChildrenWithAttachments(db);
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
 
   for (const parent of [child, getTask(db, rcas[0]!.id)!]) {
     expect(isArtifactDiscarded(db, parent.id)).toBe(true);
-    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
-    expect(memoryRepair).toMatchObject({ type: "memory_repair", parent_id: parent.id, status: "todo" });
+    const memoryRepair = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+    expect(memoryRepair).toMatchObject({ type, parent_id: parent.id, status: "todo" });
   }
 });
 
-it("親の無い memory_repair の登録は扉を問わず DomainError で、何も登録しない —— 修理子は異議された task の子(ADR 0272 追記2 / ADR 0046)", () => {
+it.each(REPAIR_TYPES)("親の無い %s の登録は扉を問わず DomainError で、何も登録しない —— 修理子は異議された task の子(ADR 0272 追記2 / ADR 0046 / ADR 0279 決定4)", (type) => {
   db = openDb(":memory:");
   for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
-    expect(() => registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c" }, NOW, workerId, origin)).toThrow(DomainError);
+    expect(() => registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c" }, NOW, workerId, origin)).toThrow(DomainError);
   }
   expect(listBoard(db)).toEqual([]);
 });
@@ -509,4 +512,15 @@ it("task ごとの verb の差し替えは、memory_repair で分解の verb と
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
   expect(isArtifactDiscarded(db, memoryRepair.id)).toBe(true);
   expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
+});
+
+it("task ごとの verb の差し替えは、routing_repair で基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せ、祖先の cancel の下でも同じ —— routing の verb は後続(ADR 0279 決定4)", () => {
+  db = openDb(":memory:");
+  const { target, child } = doneChildrenWithAttachments(db);
+  const routingRepair = registerTask(db, { type: "routing_repair", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, ...HUMAN_WEBUI);
+  const withheld = ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"];
+  expect(taskVerbSwap(db, routingRepair.id)).toEqual({ withheld, added: [] });
+
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  expect(taskVerbSwap(db, routingRepair.id)).toEqual({ withheld, added: [] });
 });

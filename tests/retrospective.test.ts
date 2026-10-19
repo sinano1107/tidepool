@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { buildMemoryInjection, listMemoryEntries, readMemory, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
+import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
@@ -1414,6 +1414,34 @@ it("帰責の入力の読んだ記憶は、異議された decision と同じ wo
   ]);
 });
 
+it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の入力の読んだ記憶は、その session の指針の節に載っていて read_memory_entries で読んだ entry —— 材料の節に載って読んだ entry は入らない(ADR 0279 決定2 / #1927)", async (subject) => {
+  const b = memoryBoard();
+  const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
+  const material = b.knowledge("Material note");
+  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+  const spawned = appendEvent(b.db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  recordMemoryInjection(b.db, review.id, "deckhand", spawned, buildMemoryInjection(b.db, review, null, "deckhand"), at);
+  // setup のみ: 材料の節に material が載った記録(エントリを運ぶのは主題 memory の材料だけ)
+  const common = { kind: "meta_review_material_injected" as const, worker_spawned_event_id: spawned, previous_watermark: 0, material_watermark: spawned, tokens: 1, tokenizer: "t", tokenizer_version: "1" };
+  appendEvent(b.db, {
+    taskId: review.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload:
+      subject === "memory"
+        ? { ...common, subject, store_changes: [material], candidates: [], precedents: [], precedent_entries: [], proposals: [], proposal_entries: [], branches: [], items: [] }
+        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocations: [], cells: [], rows: [], precedents: [], precedent_entries: [], proposals: [], items: [] },
+  });
+  readMemoryEntries(b.db, { taskId: review.id, agent: "deckhand" }, { ids: [guidance, material] }, at);
+  const decision = logDecision(b.db, review, "kept candidate 12", "deckhand", at, "worker");
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+
+  expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
+});
+
 /** 同じ session で `read` を読んでから decision を書き、異議を打つ(`unread` は読まずに店にあるだけの entry)。 */
 function objectedAfterReading() {
   const b = memoryBoard();
@@ -1477,6 +1505,48 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
   expect(attributed(b.db, b.task.id)[1]).toMatchObject({ entries: entries(b), ...expected });
   expect(drafter.calls).toEqual([]);
+});
+
+/** 主題 memory の meta-review の判断の行に preference の異議を帰責し、起草の Board call を撃つ(盤面には既定 workspace がある)。 */
+async function draftOnMetaReviewRow(draftPath: string) {
+  const db = openDb(":memory:");
+  const author = { activity: "worker_verb" as const, name: "deckhand" };
+  defineMemoryBranch(db, { scope: null, path: "review", text: "How meta-reviews judge.", author }, "worker", at);
+  defineMemoryBranch(db, { scope: "charts", path: "charts-only", text: "Charts workspace notes.", author }, "worker", at);
+  const registered = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const review = pickupTask(db, registered, "deckhand", at)!;
+  const entry = logDecision(db, review, "kept candidate 12", "deckhand", at, "worker");
+  const session = startTriage(db, at);
+  raiseObjection(db, entry, "fold it into 5", at);
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(entry, { cause: "preference", evidence: "taste" });
+  const drafter = new FakeBehaviorDraftClient();
+  drafter.scriptDraft(entry, { path: draftPath, title: "Fold near-duplicates", text: "Fold near-duplicate candidates.", addressee: "worker" });
+  const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+  commitTriage(db, at, [], await attributeObjections(db, deps, session.id, at));
+  refireRetrospectiveCalls(db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+  return { db, review, drafter };
+}
+
+it("主題つきの task の行への Board call の起草は、盤面に既定 workspace があっても scope null の candidate を作り、INDEX は盤面全体の木で組む(ADR 0279 決定1)", async () => {
+  const { db, drafter } = await draftOnMetaReviewRow("review");
+
+  expect(listMemoryEntries(db, {}).filter((m) => m.kind === "behavior")).toEqual([
+    expect.objectContaining({ title: "Fold near-duplicates", state: "candidate", scope: null, addressee: "deckhand" }),
+  ]);
+  const index = drafter.calls[0]!.input.index!;
+  expect(index).toContain("- review/ — How meta-reviews judge.");
+  expect(index).not.toContain("charts-only");
+});
+
+it("盤面全体で起草した candidate が一木の門に当たると、例外を漏らさず起草の失敗 event を残し、店には何も載らない(ADR 0279 帰結 / ADR 0164)", async () => {
+  const { db, review } = await draftOnMetaReviewRow("charts-only");
+
+  expect(listMemoryEntries(db, {}).filter((m) => m.kind === "behavior")).toEqual([]);
+  expect(listEvents(db, review.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual([
+    expect.objectContaining({ kind: "memory_draft_failed", round: "initial", reason: expect.stringContaining("charts-only") }),
+  ]);
 });
 
 // 異議群を覆う RCA 子(ADR 0171 / issue #1124)—— ドメイン層

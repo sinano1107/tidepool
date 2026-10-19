@@ -22,7 +22,8 @@ import {
   HUMAN_ROSTER_AGENT,
   INTERVIEW_AUDIT_NOTICE,
   isArtifactDiscarded,
-  MEMORY_REPAIR_NOTICE,
+  isRepairType,
+  REPAIR_NOTICES,
   reviewedTaskExecutor,
   type Task,
   type TaskVerbSwap,
@@ -79,7 +80,7 @@ denial, make the call yourself from the main thread.`;
 // (src/sandbox.ts) — its "main-thread only" wording, this paragraph, and the
 // canary's BOARD_HOOK_WORDING move together.
 
-/** 前提の破綻の宣言の1文 —— その verb を伏せた task(memory_repair、ADR 0272 決定3)の文面からは落とす。 */
+/** 前提の破綻の宣言の1文 —— その verb を伏せた task(修理子の type、ADR 0272 決定3 / ADR 0279 決定4)の文面からは落とす。 */
 const PREMISE_BREACH_SENTENCE =
   "When the premise of the decomposition decision your task rests on turns out to be false, " +
   "declare a premise breach rather than working around it or escalating it. ";
@@ -365,8 +366,8 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   );
 }
 
-/** Authority 節の本文・Roster の元・その直後の1行を type で選ぶ。memory_repair は Authority 節が
- *  MEMORY_REPAIR_NOTICE だけで roster を持たない(ADR 0272 追記3)。review / interview は reviewer の
+/** Authority 節の本文・Roster の元・その直後の1行を type で選ぶ。修理子の type は Authority 節が
+ *  REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。review / interview は reviewer の
  *  guidance と executor 1名の roster(ADR 0056)で、guidance の文は変えず直後に盤面が1行足す
  *  (ADR 0271 決定2 / ADR 0273 決定4)。それ以外は実行 agent の profile のまま。 */
 function authorityByType(
@@ -374,7 +375,7 @@ function authorityByType(
   task: Task,
   profile: AuthorityProfile,
 ): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
-  if (task.type === "memory_repair") return { guidance: MEMORY_REPAIR_NOTICE, rosterAssignableTo: undefined, notice: undefined };
+  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined, notice: undefined };
   const notice =
     auditedPosedEventId(db, task.id) !== undefined
       ? INTERVIEW_AUDIT_NOTICE
@@ -388,7 +389,7 @@ function authorityByType(
  *  定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory。
  *  doctrine は adapter が自分の語彙で組んで渡す(決定2)。review task は registry の
  *  profile でなく reviewer の authority と、被レビュー task の executor 1名の roster を
- *  持つ(ADR 0056)。memory_repair は Authority 節が MEMORY_REPAIR_NOTICE だけで roster を
+ *  持つ(ADR 0056)。修理子の type は Authority 節が REPAIR_NOTICES の1行だけで roster を
  *  持たない(ADR 0272 追記3)。当事者レビュー(self RCA)は当時版の定義を証拠として持つ(ADR 0020 part 4)。 */
 export function boardProse(input: {
   db: Db;

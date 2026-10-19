@@ -38,8 +38,8 @@ describe("reviewToolDenials", () => {
     );
   });
 
-  it("memory_repair タスクは review と同じ集合を deny する —— read-only 保証を運ぶ type(ADR 0272 決定3)", () => {
-    expect(reviewToolDenials("memory_repair")).toEqual(reviewToolDenials("review"));
+  it.each(["memory_repair", "routing_repair"] as const)("%s タスクは review と同じ集合を deny する —— read-only 保証を運ぶ type(ADR 0272 決定3 / ADR 0279 決定4)", (type) => {
+    expect(reviewToolDenials(type)).toEqual(reviewToolDenials("review"));
   });
 
   it("work タスクは何も deny しない(work タスクの spawn に影響しない)", () => {
