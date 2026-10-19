@@ -135,6 +135,9 @@ export class UnknownWorkspaceError extends Error {
   }
 }
 
+/** An Interview task's place (its room, or an examinee's own checkout) has no opened event: the board never got as far as making it. */
+export class PlaceNotOpenError extends Error {}
+
 export class GitDirNotADirectoryError extends Error {
   constructor(path: string) {
     super(`${join(path, ".git")} is not a directory — linked worktrees and submodules cannot be workspaces`);
@@ -197,8 +200,8 @@ export function resolveExecutionWorkspace(
 }
 
 /** ADR 0273 決定1: 面接室を root の pickup で開く —— 盤面の規約の基点の下に root の id の名前で作り、在り処を root の event に残してから
- *  `git init` と盤面名義の空コミットを置く。在り処が git の手順より先に残るので、途中で落ちた面接室も quarantine の回答と後始末が
- *  この名前で引け、次の pickup は残った repo の続きから作る。registry には載せない。消さない(消す扉も無い)。 */
+ *  `git init` と盤面名義の空コミットを置く。在り処が git の手順より先に残るので、git の途中で落ちた面接室も
+ *  次の pickup は残った repo の続きから作る。registry には載せない。消さない(消す扉も無い)。 */
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
   const path = interviewRoomPath(db, root.id) ?? recordOpened(db, root.id, "interview_room_opened", workspacesBaseDir, now);
   // 既存の repo への init は何も変えない(HEAD も残る)
@@ -208,7 +211,7 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
 }
 
 /** ADR 0276 決定1: 受験者の checkout を pickup で開く —— 面接室の外(規約の基点の下の受験者の id)に作り、在り処を受験者の event に
- *  残してから(面接室と同じ順: 途中で落ちても後始末と次の pickup がこの在り処で引ける)、出題の head を面接室で引き、`git init` して
+ *  残してから(面接室と同じ順: git の途中で落ちても次の pickup がこの在り処で引ける)、出題の head を面接室で引き、`git init` して
  *  面接室からその head だけを fetch し `main` にする(`clone` は root のブランチごと運ぶ)。タスクブランチは準備が `main` から切る。
  *  再開(タスクブランチがある)は何もしない —— 自分の WIP も ignored の生成物も残る。消さない(面接室と同じ、ADR 0276 決定4)。 */
 export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: string, now: Date): void {
@@ -229,7 +232,8 @@ export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: 
 }
 
 /** 面接室・受験者の checkout の在り処を規約の基点の下の task の id に作り、実体の綴りで task の event に残す —— cwd・sandbox の読み・
- *  root に渡す在り処が同じ綴りになる(issue #1954)。git の手順より先に残すので、途中で落ちても後始末と次の pickup がこの在り処で引ける。 */
+ *  root に渡す在り処が同じ綴りになる(issue #1954)。git の手順より先に残すので、git の途中で落ちても次の pickup がこの在り処で引ける。
+ *  mkdir で落ちれば event は無い —— quarantine の回答の検査は event でなく基点と task の id から番地を導く。 */
 function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "examinee_checkout_opened", workspacesBaseDir: string, now: Date): string {
   const at = conventionCheckoutPath(taskId, workspacesBaseDir);
   mkdirSync(at, { recursive: true });
@@ -238,8 +242,7 @@ function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "e
   return path;
 }
 
-/** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。
- *  registry に無いこの名前の quarantine の回答も、ここで引く。 */
+/** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。 */
 export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig | undefined {
   const path = interviewRoomPath(db, rootId);
   return path === undefined ? undefined : { name: rootId, path };
@@ -261,11 +264,11 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   if (task.type !== "interview") {
     const path = examineeCheckoutPath(db, task.id);
-    if (path === undefined) throw new Error(`the checkout of ${task.id} is not open`);
+    if (path === undefined) throw new PlaceNotOpenError(`the checkout of ${task.id} is not open`);
     return { name: rootId, path, reads: [], snapshot_key: task.id };
   }
   const room = recordedInterviewRoom(db, rootId);
-  if (!room) throw new Error(`the interview room of ${rootId} is not open`);
+  if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
   return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(inRealSpelling) };
 }
 
