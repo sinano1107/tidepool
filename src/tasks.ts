@@ -548,6 +548,11 @@ export function interviewRoomPath(db: Db, rootId: string): string | undefined {
   return latestEventOfTask(db, rootId, "interview_room_opened")?.payload.path;
 }
 
+/** 受験者の checkout の在り処(ADR 0276 決定1・4): 最初の pickup が残した event から引く。まだ開いていなければ undefined。 */
+export function examineeCheckoutPath(db: Db, examineeId: string): string | undefined {
+  return latestEventOfTask(db, examineeId, "examinee_checkout_opened")?.payload.path;
+}
+
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。 */
 export function readableInterviewRooms(db: Db, rootId: string): string[] {
   const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => interviewRoomPath(db, id));

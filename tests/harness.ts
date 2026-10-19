@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -860,6 +860,17 @@ export function openTestInterviewRoom(db: Db, root: Task): void {
   const base = mkdtempSync(join(tmpdir(), "tidepool-rooms-"));
   onTestFinished(() => rm(base, { recursive: true, force: true }));
   openInterviewRoom(db, root, base, new Date(0));
+}
+
+/** setup のみ: 受験者の pickup が開く自分の checkout の代わりに、空コミットだけの repo を在り処として残す(ADR 0276 決定1)—— 盤面の
+ *  pickup を通らずに受験者を adapter で走らせるテストが置く。 */
+export function openTestExamineeCheckout(db: Db, examinee: Task): string {
+  const path = realpathSync(mkdtempSync(join(tmpdir(), "tidepool-examinee-")));
+  onTestFinished(() => rm(path, { recursive: true, force: true }));
+  git(path, "init", "--quiet", "--initial-branch=main");
+  git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  appendEvent(db, { taskId: examinee.id, workerId: "tidepool", origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
+  return path;
 }
 
 /** setup のみ: このプロセスの git の commit だけを落とす(署名を求め、署名の program は無い)。他の git は通る。

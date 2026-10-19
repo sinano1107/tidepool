@@ -84,6 +84,7 @@ import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
@@ -273,7 +274,7 @@ export function startScheduler(deps: {
   containers: ProcessContainers;
   /** ADR 0118: `start` が同期で投げた pickup の記録と後始末(`spawnFailureHandler` 製)。 */
   onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
-  /** ADR 0266 決定3・4: 記録の器が書けない pickup(準備の答案の写し・`start` の中の transcript の open)の一撃
+  /** ADR 0266 決定3・4: 記録の器が書けない pickup(`start` の中の transcript の open、ADR 0276 決定5)の一撃
    *  (`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— 先頭へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
@@ -333,8 +334,6 @@ export function startScheduler(deps: {
    *  **2つの宣言**を持ち、その食い違いが quarantine になるからである。Absent →
    *  registry を持たない盤面なので、食い違う相手の宣言そのものが無い。 */
   registry?: RegistrySource;
-  /** 盤面の記録の器(ADR 0266 決定2): 受験者の pickup の準備が決着した他の受験者の答案を写す先。Absent → 写さない。 */
-  recordDir?: string;
   /** registry の agent 一覧(issue #920): routing の due 判定の直前に tier の提案の pin を照合する。Absent → registry の無い盤面。 */
   agents?: ListAgentTiers;
   /** 振り返り Board call(帰責・起草・配分評価、ADR 0172): 発火は poll の sweep だけ。 */
@@ -370,7 +369,6 @@ export function startScheduler(deps: {
     cliAuth,
     githubAuth,
     registry,
-    recordDir,
     agents,
     retrospectiveCalls,
     translationClient,
@@ -487,20 +485,21 @@ export function startScheduler(deps: {
       // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
       // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
       // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
-      // ADR 0273 決定1・8: interview の root と受験者は面接室で走る。作れない面接室は、その面接室の quarantine に落ちる
-      if (picked.type === "interview") {
+      // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
+      // どちらも作れなければ面接室(root id)の quarantine に落ちる
+      const rootId = interviewRootIdOf(db, picked);
+      if (rootId !== undefined) {
         try {
-          openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+          if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+          else openExamineeCheckout(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
         } catch (err) {
-          return stopped(quarantineWorkspace(db, picked.id, err, clock.now()));
+          return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
         }
       }
       const place = taskRunPlace(db, picked, resolved);
       try {
-        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, recordDir, now: clock.now() });
+        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
       } catch (err) {
-        // ADR 0266 決定3: 器は盤面全体の資源なので workspace ではなく盤面が止まる
-        if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
         return stopped(await quarantineWithRepoAccessGuidance(place, err));
       }
     }

@@ -1,38 +1,22 @@
-import { mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, getTask, interviewRoomPath, registerTask, type Task } from "../src/tasks.js";
-import { RecordContainerError } from "../src/transcript-store.js";
-import { commitRoomCopy, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { completeTask, examineeCheckoutPath, interviewRoomPath, registerTask, type Task } from "../src/tasks.js";
+import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
-// 受験者の checkout(ADR 0263 決定5・6 / ADR 0111 追記12)。分岐の土台と、決着した受験者のブランチを外すこと。
+// 出題の写しと面接室の開き方(ADR 0273 決定1・3)、受験者の checkout(ADR 0276)。
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 const NOW = new Date("2026-10-15T00:00:00.000Z");
 const opusHigh = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
 const sonnetHigh = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" };
-const haikuNull = { provider: "anthropic", model: "claude-haiku-4-5", effort: null };
 const POSE = { title: "add a parser", probe: "write a parser for the config format", completion_criteria: "the parser handles every sample", rubric: "tests pass, no new dependency" };
-
-/** Interview を登録して出題し、受験者を返す。head は既定で今の main。 */
-function posed(db: Db, workspace: WorkspaceConfig, targets: object[] = [opusHigh], head = git(workspace.path, "rev-parse", "main")): Task[] {
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
-  return poseAccepted(db, root, POSE, "auditor", NOW, "worker", head);
-}
-
-/** 先に走った task の答案が載ったブランチ(その task の pickup と commit の跡)。 */
-function answeredBranch(workspace: WorkspaceConfig, taskId: string): string {
-  git(workspace.path, "checkout", "-b", `task/${taskId}`, "main");
-  commitWork(workspace.path, `${taskId}.txt`, "an answer\n");
-  git(workspace.path, "checkout", "main");
-  return git(workspace.path, "rev-parse", `task/${taskId}`);
-}
 
 /** 面接室を開いて root の pickup の姿(root のタスクブランチを checkout)にし、走る場所を返す。 */
 async function pickedRoom(db: Db) {
@@ -94,93 +78,6 @@ it("写しは session の最中のサンドボックスの shadow 残骸(ADR 006
   db.close();
 });
 
-it("受験者の新しいブランチは、出題の後に main が進んでも、受験者が分解判断に乗らなくても、対象 → root の出題が記録した保護ブランチの head から分岐する", async () => {
-  const workspace = await makeWorkspace("pin-posed-head");
-  const db = openDb(":memory:");
-  const [examinee] = posed(db, workspace);
-  const child = getTask(db, examinee!.id);
-  const posedHead = git(workspace.path, "rev-parse", "main");
-  commitWork(workspace.path, "later.txt", "main moved on after the probe was posed\n");
-
-  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
-
-  expect(git(workspace.path, "rev-parse", `task/${child!.id}`)).toBe(posedHead);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${child!.id}`);
-  db.close();
-});
-
-it("failure の retry で再開する受験者は、既存のブランチのまま走る", async () => {
-  const workspace = await makeWorkspace("pin-retry-resumes");
-  const db = openDb(":memory:");
-  const [child] = posed(db, workspace);
-  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
-  commitWork(workspace.path, "wip.txt", "the first session's work\n");
-  const wip = git(workspace.path, "rev-parse", "HEAD");
-  git(workspace.path, "checkout", "main");
-
-  await prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) });
-
-  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(wip);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${child!.id}`);
-  db.close();
-});
-
-it("出題が記録した head を checkout で引けなければ、pickup の準備はその理由で投げ、ブランチを切らない", async () => {
-  const workspace = await makeWorkspace("pin-unresolvable-head");
-  const db = openDb(":memory:");
-  const unknown = "0123456789abcdef0123456789abcdef01234567";
-  const [child] = posed(db, workspace, [opusHigh], unknown);
-
-  await expect(prepareWorkspaceAtPickup(db, workspace, child!, { now: new Date(0) })).rejects.toThrow(
-    `the protected branch head the probe recorded for ${child!.id} (${unknown}) cannot be resolved in this checkout`,
-  );
-  expect(git(workspace.path, "branch", "--list", `task/${child!.id}`)).toBe("");
-  db.close();
-});
-
-it("受験者の pickup の準備は、決着した受験者(別の Interview のものも)のブランチを外して head を記録し、決着していない受験者と受験者でない task のブランチは残す —— ref の検査は違反を立てない", async () => {
-  const workspace = await makeWorkspace("pin-settled-branches");
-  const db = openDb(":memory:");
-  const [done, pending, picked] = posed(db, workspace, [opusHigh, sonnetHigh, haikuNull]) as [Task, Task, Task];
-  const [earlier] = posed(db, workspace) as [Task];
-  const work = registerTask(db, { type: "work", title: "production work", purpose: "ship", completion_criteria: "shipped", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
-  const heads = Object.fromEntries([done, pending, earlier, work].map(({ id }) => [id, answeredBranch(workspace, id)]));
-  for (const task of [done, earlier, work]) completeTask(db, task, FULL_HANDOFF, "tako", NOW, "worker");
-
-  await prepareWorkspaceAtPickup(db, workspace, picked, { now: new Date(0) });
-
-  const branches = git(workspace.path, "for-each-ref", "--format=%(refname:short)", "refs/heads/task/").split("\n");
-  expect(branches.sort()).toEqual([`task/${pending.id}`, `task/${picked.id}`, `task/${work.id}`].sort());
-  for (const removed of [done, earlier]) {
-    expect(listEvents(db, removed.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head: heads[removed.id] }]);
-  }
-  releaseWorkspace(db, workspace, picked, NOW);
-  expect(workspaceNeedsHuman(db, workspace.name)).toBe(false);
-  db.close();
-});
-
-/** 決着した受験者1人(答案つき)と、これから拾われる受験者1人。 */
-async function settledSibling(name: string) {
-  const workspace = await makeWorkspace(name);
-  const recordDir = await tempDir(`tidepool-${name}-records-`);
-  const db = openDb(":memory:");
-  const [done, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
-  const head = answeredBranch(workspace, done.id);
-  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
-  return { workspace, recordDir, db, done, picked, head };
-}
-
-it("決着した受験者の答案は、外す前に盤面の記録の器へ bundle で写され、event は head と写した先を持つ", async () => {
-  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-answer-copy");
-
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
-
-  const path = join(recordDir, `${done.id}.bundle`);
-  expect(git(workspace.path, "bundle", "list-heads", path)).toBe(`${head} refs/heads/task/${done.id}`);
-  expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head, path }]);
-  db.close();
-});
-
 it("面接室は規約の基点の下の root の id に、盤面名義の空コミット 'Initial commit' だけを持つ repo として開き、在り処を実体の綴りで残す —— 空コミットが落ちても在り処は先に残り、次に開くと残った repo の続きから作る(ADR 0273 決定1)", async () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
@@ -199,184 +96,152 @@ it("面接室は規約の基点の下の root の id に、盤面名義の空コ
   db.close();
 });
 
-it("受験者の走る場所は root の面接室で、決着した兄弟の答案の除去・reflog・repack は面接室の中で起き、実環境の checkout の ref・reflog・object には触れない(ADR 0273 決定8 / ADR 0266)", async () => {
-  const workspace = await makeWorkspace("pin-room-cleanup");
-  const recordDir = await tempDir("tidepool-pin-room-cleanup-records-");
-  const db = openDb(":memory:");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh, sonnetHigh] as never }, NOW, ...HUMAN_WEBUI);
+/** root が面接室に環境を組んで出題し、監査が受理した姿: root のブランチに WIP、`room` は出題の写しを持つ。`compose` は写しの前に
+ *  面接室の作業ツリーへ書く。受験者の checkout の基点は面接室と同じ規約の基点。 */
+async function posedInRoom(db: Db, targets: object[] = [opusHigh], compose: (room: string) => void = () => {}) {
+  const workspace = await makeWorkspace("examinee-checkout-real");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: targets as never }, NOW, ...HUMAN_WEBUI);
   openTestInterviewRoom(db, root);
   const room = taskRunPlace(db, root, workspace);
-  const [done, picked] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", git(room.path, "rev-parse", "main")) as [Task, Task];
-  const head = answeredBranch(room, done.id);
-  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
-  const realEnv = () => [git(workspace.path, "for-each-ref"), git(workspace.path, "reflog", "show", "--no-abbrev", "HEAD"), git(workspace.path, "count-objects", "-v")];
-  const before = realEnv();
+  git(room.path, "checkout", "-b", `task/${root.id}`, "main");
+  commitWork(room.path, "probe.txt", "the environment\n");
+  compose(room.path);
+  const head = commitRoomCopy(db, room);
+  const examinees = poseAccepted(db, root, POSE, "auditor", NOW, "worker", head);
+  return { workspace, root, room, head, examinees, base: dirname(room.path) };
+}
 
-  const place = taskRunPlace(db, picked, workspace);
-  await prepareWorkspaceAtPickup(db, place, picked, { recordDir, now: new Date(0) });
+/** 受験者の pickup の順(scheduler と同じ): checkout を開き、走る場所で準備する。 */
+async function pickUp(db: Db, examinee: Task, workspace: WorkspaceConfig, base: string) {
+  openExamineeCheckout(db, examinee, base, NOW);
+  const place = taskRunPlace(db, examinee, workspace);
+  await prepareWorkspaceAtPickup(db, place, examinee);
+  return place;
+}
 
-  expect(place).toMatchObject({ name: root.id, path: room.path });
-  expect(git(room.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${picked.id}`);
-  expect(git(room.path, "branch", "--list", `task/${done.id}`)).toBe("");
-  expect(() => git(room.path, "cat-file", "-e", head)).toThrow();
-  expect(realEnv()).toEqual(before);
-  db.close();
-});
-
-it.each([
-  ["loose", false],
-  ["pack に入った", true],
-])("ブランチを外した pickup の準備の後、答案(%s)は HEAD の reflog からも到達できない object からも読めない", async (_, packed) => {
-  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-answer-cleanup");
-  if (packed) git(workspace.path, "repack", "-a", "-d");
-
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
-
-  const reflog = git(workspace.path, "reflog", "show", "--no-abbrev", "HEAD");
-  expect(reflog).not.toContain(done.id);
-  expect(reflog).not.toContain(head);
-  expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
-  expect(git(workspace.path, "fsck", "--unreachable")).toBe("");
-  db.close();
-});
-
-it("掃除は本番の task のブランチ自身の reflog とそこからだけ辿れる commit、index の blob、fetch した object を残す", async () => {
-  const { workspace, publish } = await makeRemoteBackedWorkspace("pin-cleanup-keeps");
-  const recordDir = await tempDir("tidepool-pin-cleanup-keeps-records-");
+it("受験者の初回の pickup は面接室の外(規約の基点の下の受験者の id)に checkout を開いて在り処を実体の綴りで残し、履歴は出題の head とその祖先だけで、兄弟・root のブランチも keep-around も持たない —— 走る場所は名前が root の id、path が自分の checkout、読みに開く場所は無く、root の走る場所は変わらない(ADR 0276 決定1・3)", async () => {
   const db = openDb(":memory:");
-  const [done, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
-  answeredBranch(workspace, done.id);
-  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
-  const work = registerTask(db, { type: "work", title: "production work", purpose: "ship", completion_criteria: "shipped", workspace: workspace.name }, NOW, ...HUMAN_WEBUI);
-  git(workspace.path, "checkout", "-b", `task/${work.id}`, "main");
-  commitWork(workspace.path, "kept.txt", "kept\n");
-  commitWork(workspace.path, "discarded.txt", "reset away\n");
-  const discarded = git(workspace.path, "rev-parse", "HEAD");
-  git(workspace.path, "reset", "--hard", "HEAD~1");
-  git(workspace.path, "checkout", "main");
-  const workReflog = git(workspace.path, "reflog", "show", `task/${work.id}`).split("\n").length;
-  writeFileSync(join(workspace.path, "staged.txt"), "staged, never committed\n");
-  git(workspace.path, "add", "staged.txt");
-  const staged = git(workspace.path, "rev-parse", ":staged.txt");
-  publish("merged.txt", "merged on the remote\n", "a human merge");
+  const { workspace, root, room, head, examinees, base } = await posedInRoom(db, [opusHigh, sonnetHigh]);
+  const [first, second] = examinees as [Task, Task];
+  const rootPlace = taskRunPlace(db, root, workspace);
 
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+  const place = await pickUp(db, first, workspace, base);
+  await pickUp(db, second, workspace, base);
 
-  expect(git(workspace.path, "reflog", "show", `task/${work.id}`).split("\n").length).toBe(workReflog);
-  for (const object of [discarded, staged]) {
-    expect(() => git(workspace.path, "cat-file", "-e", object)).not.toThrow();
-  }
-  expect(git(workspace.path, "log", "-1", "--format=%s", "origin/main")).toBe("a human merge");
+  const checkout = realpathSync(join(base, first.id));
+  expect(place).toMatchObject({ name: root.id, path: checkout, read_paths: [] });
+  expect(examineeCheckoutPath(db, first.id)).toBe(checkout);
+  expect(checkout.startsWith(`${room.path}/`)).toBe(false);
+  expect(git(checkout, "log", "--all", "--format=%s").split("\n")).toEqual(["Add the project files", "Initial commit"]);
+  expect(git(checkout, "for-each-ref", "--format=%(refname) %(objectname)").split("\n")).toEqual([`refs/heads/main ${head}`, `refs/heads/task/${first.id} ${head}`]);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${first.id}`);
+  expect(git(checkout, "status", "--porcelain")).toBe("");
+  expect(readdirSync(checkout).sort()).toEqual([".git", "probe.txt"]);
+  expect(taskRunPlace(db, root, workspace)).toEqual(rootPlace);
   db.close();
 });
 
-it("外すものの無い受験者の pickup の準備は HEAD の reflog を減らさない", async () => {
-  const workspace = await makeWorkspace("pin-nothing-to-remove");
-  const recordDir = await tempDir("tidepool-pin-nothing-to-remove-records-");
+it("root が .gitignore で外したものも先の受験者の ignored の生成物も、次の受験者の作業ツリーに無い(ADR 0276 決定2)", async () => {
   const db = openDb(":memory:");
-  const [, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
-  git(workspace.path, "checkout", "-b", "scratch");
-  git(workspace.path, "checkout", "main");
-  const before = git(workspace.path, "reflog", "show", "HEAD").split("\n").length;
+  const { workspace, examinees, base } = await posedInRoom(db, [opusHigh, sonnetHigh], (room) => {
+    writeFileSync(join(room, ".gitignore"), "build/\n");
+    mkdirSync(join(room, "build"));
+    writeFileSync(join(room, "build", "root-made.txt"), "the root's build\n");
+  });
+  const [first, second] = examinees as [Task, Task];
+  const firstPlace = await pickUp(db, first, workspace, base);
+  mkdirSync(join(firstPlace.path, "build"));
+  writeFileSync(join(firstPlace.path, "build", "first-made.txt"), "the first target's build\n");
+  releaseWorkspace(db, firstPlace, first, NOW);
 
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+  const secondPlace = await pickUp(db, second, workspace, base);
 
-  // pickup 自身の checkout の1行だけ増える
-  expect(git(workspace.path, "reflog", "show", "HEAD").split("\n").length).toBe(before + 1);
+  expect(readdirSync(secondPlace.path).sort()).toEqual([".git", ".gitignore", "probe.txt"]);
+  expect(git(secondPlace.path, "status", "--porcelain", "--ignored")).toBe("");
   db.close();
 });
 
-it("盤面の記録の器に書けなければ、ブランチを外さず器の失敗として投げ、器が直れば次の pickup の準備が同じ手順をやり直す", async () => {
-  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-record-container-fails");
-  const missing = join(recordDir, "gone");
-  const path = join(missing, `${done.id}.bundle`);
-
-  const failed = await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir: missing, now: new Date(0) }).catch((err: unknown) => err);
-
-  expect(failed).toBeInstanceOf(RecordContainerError);
-  expect(failed).toMatchObject({ taskId: done.id, path, reason: expect.stringContaining("ENOENT") });
-  expect(git(workspace.path, "rev-parse", `task/${done.id}`)).toBe(head);
-  expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed")).toEqual([]);
-
-  mkdirSync(missing);
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir: missing, now: new Date(0) });
-
-  expect(git(workspace.path, "bundle", "list-heads", path)).toBe(`${head} refs/heads/task/${done.id}`);
-  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
-  db.close();
-});
-
-it("答案の bundle が git 側の理由で作れなければ、準備の他の失敗と同じ例外で投げ、ブランチを外さない", async () => {
-  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-bundle-git-fails");
-  // 答案の blob を壊す —— commit は読めるので出題の head との比較は通り、bundle の pack だけが落ちる
-  const blob = git(workspace.path, "rev-parse", `${head}:${done.id}.txt`);
-  rmSync(join(workspace.path, ".git", "objects", blob.slice(0, 2), blob.slice(2)));
-
-  const failed = await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) }).catch((err: unknown) => err);
-
-  expect(failed).not.toBeInstanceOf(RecordContainerError);
-  expect((failed as Error).message).toContain("bundle create");
-  expect(git(workspace.path, "for-each-ref", "--format=%(objectname)", `refs/heads/task/${done.id}`)).toBe(head);
-  expect(readdirSync(recordDir)).toEqual([]);
-  db.close();
-});
-
-it("commit の無い決着した受験者(head が出題の head)は写さず、event は head だけ持つ", async () => {
-  const workspace = await makeWorkspace("pin-no-answer-copy");
-  const recordDir = await tempDir("tidepool-pin-no-answer-copy-records-");
+it("解放は受験者の checkout で tree rule を通して main に戻し、再開は同じ checkout で退避した WIP の commit と ignored の生成物を持ったまま走る(ADR 0276 決定1)", async () => {
   const db = openDb(":memory:");
-  const [done, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
-  git(workspace.path, "branch", `task/${done.id}`, "main");
-  const head = git(workspace.path, "rev-parse", "main");
-  completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
+  const { workspace, root, examinees, base } = await posedInRoom(db, [opusHigh], (room) => writeFileSync(join(room, ".gitignore"), "build/\n"));
+  const [examinee] = examinees as [Task];
+  const place = await pickUp(db, examinee, workspace, base);
+  writeFileSync(join(place.path, "wip.txt"), "half an answer\n");
+  mkdirSync(join(place.path, "build"));
+  writeFileSync(join(place.path, "build", "out.txt"), "generated\n");
 
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+  releaseWorkspace(db, place, examinee, NOW);
 
-  expect(readdirSync(recordDir)).toEqual([]);
-  expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head }]);
-  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  expect(workspaceNeedsHuman(db, root.id)).toBe(false);
+  expect(git(place.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  const wip = git(place.path, "rev-parse", `task/${examinee.id}`);
+
+  expect(await pickUp(db, examinee, workspace, base)).toEqual(place);
+
+  expect(git(place.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${examinee.id}`);
+  expect(git(place.path, "rev-parse", "HEAD")).toBe(wip);
+  expect(git(place.path, "show", "HEAD:wip.txt")).toBe("half an answer");
+  expect(existsSync(join(place.path, "build", "out.txt"))).toBe(true);
   db.close();
 });
 
-it("出題の head の祖先に留まる決着した受験者(出題の head から commit が無い)は写さず、ブランチを外す", async () => {
-  const workspace = await makeWorkspace("pin-behind-posed-head");
-  const recordDir = await tempDir("tidepool-pin-behind-posed-head-records-");
+it("出題が記録した head を面接室で引けなければ、checkout を開くことはその理由で投げ、repo もブランチも作らない(ADR 0276 決定1)", async () => {
   const db = openDb(":memory:");
-  const behind = git(workspace.path, "rev-parse", "main");
-  commitWork(workspace.path, "later.txt", "main moved on before the probe was posed\n");
-  const [done, picked] = posed(db, workspace, [opusHigh, sonnetHigh]) as [Task, Task];
-  git(workspace.path, "branch", `task/${done.id}`, behind);
+  const workspace = await makeWorkspace("examinee-unresolvable-head");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  openTestInterviewRoom(db, root);
+  const room = interviewRoomPath(db, root.id)!;
+  const unknown = "0123456789abcdef0123456789abcdef01234567";
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", NOW, "worker", unknown) as [Task];
+
+  expect(() => openExamineeCheckout(db, examinee, dirname(room), NOW)).toThrow(
+    `the protected branch head the probe recorded for ${examinee.id} (${unknown}) cannot be resolved in this checkout`,
+  );
+  expect(existsSync(join(dirname(room), examinee.id, ".git"))).toBe(false);
+  expect(git(room, "branch", "--list", `task/${examinee.id}`)).toBe("");
+  db.close();
+});
+
+it("ref の基準は受験者の checkout ごと —— 中断中の受験者の基準は次の受験者の準備で上書きされず、その解放は盤面自身の違反を立てない(ADR 0276 決定3 / ADR 0064)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, root, examinees, base } = await posedInRoom(db, [opusHigh, sonnetHigh]);
+  const [interrupted, next] = examinees as [Task, Task];
+  const interruptedPlace = await pickUp(db, interrupted, workspace, base);
+  const nextPlace = await pickUp(db, next, workspace, base);
+
+  releaseWorkspace(db, interruptedPlace, interrupted, NOW);
+  releaseWorkspace(db, nextPlace, next, NOW);
+
+  expect(workspaceNeedsHuman(db, root.id)).toBe(false);
+  db.close();
+});
+
+it("決着した受験者の checkout とタスクブランチは、次の受験者の準備の後も別の Interview の受験者の準備の後も残り、面接室の ref・reflog・object は減らない(ADR 0276 決定4)", async () => {
+  const db = openDb(":memory:");
+  const { workspace, room, examinees, base } = await posedInRoom(db, [opusHigh, sonnetHigh]);
+  const [done, next] = examinees as [Task, Task];
+  const donePlace = await pickUp(db, done, workspace, base);
+  commitWork(donePlace.path, "answer.txt", "an answer\n");
+  const answer = git(donePlace.path, "rev-parse", "HEAD");
+  releaseWorkspace(db, donePlace, done, NOW, true, undefined, undefined, true);
   completeTask(db, done, FULL_HANDOFF, "tako", NOW, "worker");
+  const roomState = () => [git(room.path, "for-each-ref"), git(room.path, "reflog", "show", "--no-abbrev", "HEAD"), git(room.path, "count-objects", "-v")];
+  const before = roomState();
+  const other = await posedInRoom(db);
 
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
+  await pickUp(db, next, workspace, base);
+  await pickUp(db, other.examinees[0]!, other.workspace, other.base);
 
-  expect(readdirSync(recordDir)).toEqual([]);
-  expect(listEvents(db, done.id).filter((e) => e.kind === "task_branch_removed").map((e) => e.payload)).toEqual([{ kind: "task_branch_removed", head: behind }]);
-  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
+  expect(git(donePlace.path, "rev-parse", `task/${done.id}`)).toBe(answer);
+  expect(git(donePlace.path, "show", `task/${done.id}:answer.txt`)).toBe("an answer");
+  expect(roomState()).toEqual(before);
   db.close();
 });
 
-it("写しを書いた後でブランチを外す前に落ちても、次の pickup の準備が同じ手順をやり直す", async () => {
-  const { workspace, recordDir, db, done, picked, head } = await settledSibling("pin-redo-after-copy");
-  const lock = join(workspace.path, ".git", "refs", "heads", "task", `${done.id}.lock`);
-  writeFileSync(lock, "");
-
-  await expect(prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) })).rejects.toThrow();
-  expect(git(workspace.path, "rev-parse", `task/${done.id}`)).toBe(head);
-
-  rmSync(lock);
-  await prepareWorkspaceAtPickup(db, workspace, picked, { recordDir, now: new Date(0) });
-
-  expect(git(workspace.path, "bundle", "list-heads", join(recordDir, `${done.id}.bundle`))).toBe(`${head} refs/heads/task/${done.id}`);
-  expect(git(workspace.path, "branch", "--list", `task/${done.id}`)).toBe("");
-  expect(() => git(workspace.path, "cat-file", "-e", head)).toThrow();
-  db.close();
-});
 
 it("決着した受験者の下に repair の work を登録すると拒まれる(ADR 0268 決定5)", async () => {
-  const workspace = await makeWorkspace("pin-lineage-without-ref");
   const db = openDb(":memory:");
-  const [child] = posed(db, workspace) as [Task];
+  const [child] = (await posedInRoom(db)).examinees as [Task];
   const settled = completeTask(db, child, FULL_HANDOFF, "tako", NOW, "worker");
 
   expect(() => registerTask(db, { type: "work", title: "repair", purpose: "fix the answer", completion_criteria: "fixed", parent_id: settled.id }, NOW, ...HUMAN_WEBUI)).toThrow(DomainError);

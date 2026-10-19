@@ -1,5 +1,5 @@
-import { existsSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
@@ -249,8 +249,10 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
 
 /** root の面接室: 盤面の規約の基点(harness の既定は盤面の dir の下の workspaces)の下の root の id、実体の綴り。 */
 const roomOf = (rootId: string) => realpathSync(join(t.dir, "workspaces", rootId));
+/** 受験者の checkout: 同じ基点の下の受験者の id、実体の綴り(ADR 0276 決定1)。 */
+const examineeCheckoutOf = (examineeId: string) => realpathSync(join(t.dir, "workspaces", examineeId));
 
-it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者もそこで走る —— 実環境にはブランチが立たず、受験者の workspace 列は実環境の名前で、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8)", async () => {
+it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者は同じ基点の下の自分の id の checkout で出題の head から走る —— 面接室にも実環境にも受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4)", async () => {
   const deletions: WorkspaceDeletionReferences[] = [];
   t = await boot({ workspaceAdmin: { delete: async (_input, references) => (deletions.push(references), "/checkout") } });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -264,11 +266,15 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
 
   // 受験者は出題の head(面接室の写しの commit)から分岐する(ADR 0273 決定3)
   const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
-  expect(posed.payload.head).toBe(git(room, "rev-parse", `task/${childId}`));
+  const checkout = examineeCheckoutOf(childId);
   expect(t.worker.started.at(-1)!.id).toBe(childId);
-  expect(git(room, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${childId}`);
+  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${childId}`);
+  expect(git(checkout, "rev-parse", "HEAD")).toBe(posed.payload.head);
+  expect(git(room, "branch", "--list", `task/${childId}`)).toBe("");
   expect(git(workspacePath, "branch", "--list", `task/${root.id}`, `task/${childId}`)).toBe("");
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json.workspace).toBe("reef");
+  const detail = (await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json;
+  expect(detail.workspace).toBe("reef");
+  expect(detail.examinee_checkout).toBe(checkout);
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "DELETE", "/api/workspaces/reef", { confirm: true })).status).toBe(200);
@@ -371,6 +377,38 @@ it("面接室が作れなかった pickup は面接室の quarantine に落ち�
   expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
 });
 
+it("受験者の checkout が作れなかった pickup は面接室(root id)の quarantine に落ち、受験者は failure question 無しに後始末を通って todo の先頭へ戻り、人間の回答で quarantine が解けると、次の pickup が checkout を作り直して走らせる(ADR 0276 決定3 / ADR 0274 決定1)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  const [first, second] = await pose(root.id);
+  await completeMetaReviews(t);
+  expect(t.worker.started.at(-1)!.id).toBe(first);
+  // 2人目の在り処に repo として読めない .git を置く —— init が落ちる
+  const blocker = join(t.dir, "workspaces", second!, ".git");
+  mkdirSync(dirname(blocker), { recursive: true });
+  writeFileSync(blocker, "not a git dir\n");
+  expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  t.worker.exit(first);
+
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.some((e: any) => e.kind === "pickup_stopped")).toBe(true));
+  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo"));
+  expect(t.worker.started.map((s) => s.id)).not.toContain(second);
+  const open = (await questions(t)).filter((q) => q.status !== "done");
+  expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
+  expect(open.filter((q) => q.type === "question" && q.parent_id === second)).toEqual([]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
+    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(".git") },
+  ]);
+
+  rmSync(blocker);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  await runNow(t, second!);
+
+  expect(t.worker.started.at(-1)!.id).toBe(second);
+  expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
+});
+
 it("受験者の (Harness, 場所) の封じ込めの組は面接室で立つ(ADR 0273 決定8 / ADR 0259 決定1)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
@@ -467,7 +505,7 @@ it("却下の後の出し直しは出題の gate が新しい写しを commit �
   const [examinee] = (await posedRecord(root.id)).examinees;
   await runNow(t, examinee.id);
   expect(t.worker.started.at(-1)!.id).toBe(examinee.id);
-  expect(git(room, "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
+  expect(git(examineeCheckoutOf(examinee.id), "rev-parse", `task/${examinee.id}`)).toBe(heads[1]);
 });
 
 // どの行がグループに入り受験者の行が出ないかは domain 層(tests/interview.test.ts の listLog)が言う。ここは線の上の形だけ
@@ -503,7 +541,7 @@ it("出題で立った受験者は対象で spawn され、PR も完了時レビ
 
   expect(t.worker.started.at(-1)!.id).toBe(childId);
   expect(t.worker.startedSettings.at(-1)).toMatchObject({ model: "claude-opus-4-6", tier_id: tierIdOf(t.db, "frontier"), source: { tier: "interview", provider: "interview" } });
-  commitWork(roomOf(root.id), "probe.txt", "probe\n");
+  commitWork(examineeCheckoutOf(childId), "probe.txt", "probe\n");
   expect((await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.filter((task: any) => task.parent_id === childId)).toEqual([]);
@@ -700,7 +738,7 @@ async function lastExaminee() {
   registerQuarantine(t.db, "interviewTarget", tableRowValue("anthropic", sonnet55.model), "the provider refused", t.clock.now());
   const refusal = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${refusal.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
-  commitWork(roomOf(root.id), "probe.txt", "probe\n");
+  commitWork(examineeCheckoutOf(done), "probe.txt", "probe\n");
   expect((await callAsTask(t, done, "complete_task", { handoff: { ...FULL_HANDOFF, outcome: SIBLING_ANSWER } })).isError).toBeFalsy();
   await t.clock.advance(HOUR);
   expect(t.worker.started.at(-1)!.id).toBe(reader);
@@ -744,14 +782,17 @@ async function lastExaminee() {
     } finally {
       await productionClient.close();
     }
-    return { rootId: root.id, siblings: [done, cancelled], pages, pulls: pulled, refusals, unregistered, injection, tools: (await client.listTools()).tools, production };
+    return { rootId: root.id, reader, siblings: [done, cancelled], pages, pulls: pulled, refusals, unregistered, injection, tools: (await client.listTools()).tools, production };
   } finally {
     await client.close();
   }
 }
 
 it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答・記憶を書く verb の拒否・記憶の注入の節に、Interview と面接室の語・面接室の在り処・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・採点者の印・親の欄・親の history の行・登録者の名前が出ず、記憶を書く verb の拒否は本番の未登録の verb と同じ(ADR 0263 決定7・10、ADR 0264 決定6、ADR 0267 決定7、ADR 0268 決定2、ADR 0273 決定1)", async () => {
-  const { rootId, siblings, pages, pulls, refusals, unregistered, injection, tools, production } = await lastExaminee();
+  const { rootId, reader, siblings, pages, pulls, refusals, unregistered, injection, tools, production } = await lastExaminee();
+  // cwd は自分の checkout で、面接室の在り処はそこに入らない(ADR 0276 決定1)
+  expect(git(examineeCheckoutOf(reader), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${reader}`);
+  expect(examineeCheckoutOf(reader)).not.toContain(roomOf(rootId));
   expect(pages.length).toBeGreaterThan(1);
   for (const page of pages) expect(page.parent ?? null).toBeNull();
   // 登録者は root の agent —— root の面には出ている名前で、受験者の面に出ないことを確かめる
@@ -761,7 +802,7 @@ it("最後の受験者が読む get_current_task の全ページ・tools/list �
   const read = [...pages, ...pulls, ...refusals, injection, ...tools].map((item) => JSON.stringify(item)).join("\n");
   // 面接室の語(英語の面は "interview room" で上の照合に入る)と在り処も出ない(ADR 0273 決定1)
   expect(read).not.toMatch(/interview/i);
-  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, TREE_MEMORY, ROOT_MARK, DEFAULT_INTERVIEWER_NAME, "not shown to examinees", "面接室", roomOf(rootId), ...siblings]) {
+  for (const text of [SWEEP_POSE.rubric, opus46.model, sonnet55.model, haiku45.model, SIBLING_ANSWER, TREE_MEMORY, ROOT_MARK, DEFAULT_INTERVIEWER_NAME, "not shown to examinees", "面接室", roomOf(rootId), ".gitignore anything you want the targets", ...siblings]) {
     expect(read).not.toContain(text);
   }
   // 写像: 本番の親なし work の tools/list(名前・説明文・schema)との差は分解の verb と記憶を書く verb だけ(ADR 0267 決定7 /

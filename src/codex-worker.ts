@@ -1170,7 +1170,7 @@ export class CodexWorker implements WorkerAdapter {
       stopped,
     );
     if (!workspace) return;
-    // 走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室。検査・cwd・封じ込めの組はこちら、層と記憶は実環境
+    // 走る場所(ADR 0273 決定1・8 / ADR 0276 決定1): interview の root は面接室、受験者は自分の checkout。検査・cwd・封じ込めの組はこちら、層と記憶は実環境
     const place = taskRunPlace(this.options.db, task, workspace);
     const overlap = this.options.boardState && boardStateOverlap(place.path, this.options.boardState);
     if (overlap) {

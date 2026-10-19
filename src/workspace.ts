@@ -1,10 +1,10 @@
-import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 
 import { appendEvent, type ResourceStop } from "./events.js";
-import { git, gitBytes, gitWithEnv } from "./git.js";
+import { git, gitWithEnv } from "./git.js";
 
 import {
   authedGitBounded,
@@ -28,6 +28,7 @@ import { SANDBOX_SHADOW_PATHS, workspaceSettingsDisposition } from "./sandbox.js
 import { isSettled } from "./task-status.js";
 import {
   carriesReadOnly,
+  examineeCheckoutPath,
   getTask,
   interviewRoomPath,
   interviewRootIdOf,
@@ -35,7 +36,6 @@ import {
   readableInterviewRooms,
   type Task,
 } from "./tasks.js";
-import { writeAnswerCopy } from "./transcript-store.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
@@ -67,10 +67,11 @@ export interface WorkspaceConfig {
   allowed_domains?: string[];
 }
 
-/** Where a task runs (`taskRunPlace`): its workspace, or the interview room for an Interview root and its examinees.
+/** Where a task runs (`taskRunPlace`): its workspace, the interview room for an Interview root, or an examinee's own checkout.
  *  `read_paths` are the checkouts outside it opened for reading only, in their real spelling — an Interview root's
- *  real environment and the rooms it may open. Empty for every other task. */
-export type RunPlace = WorkspaceConfig & { read_paths: string[] };
+ *  real environment and the rooms it may open. Empty for every other task. `snapshot_key` keys the ADR 0064 ref snapshot
+ *  when it is not `name` — an examinee's checkout, named after its room (ADR 0276 決定3). */
+export type RunPlace = WorkspaceConfig & { read_paths: string[]; snapshot_key?: string };
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
@@ -210,6 +211,28 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
   if (readRef({ name: root.id, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
 }
 
+/** ADR 0276 決定1: 受験者の checkout を pickup で開く —— 面接室の外(規約の基点の下の受験者の id)に作り、在り処を受験者の event に
+ *  残してから(面接室と同じ順: 途中で落ちても後始末と次の pickup がこの在り処で引ける)、出題の head を面接室で引き、`git init` して
+ *  面接室からその head だけを fetch し `main` にする(`clone` は root のブランチごと運ぶ)。タスクブランチは準備が `main` から切る。
+ *  再開(タスクブランチがある)は何もしない —— 自分の WIP も ignored の生成物も残る。消さない(面接室と同じ、ADR 0276 決定4)。 */
+export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: string, now: Date): void {
+  const room = recordedInterviewRoom(db, interviewRootIdOf(db, examinee)!)!;
+  let path = examineeCheckoutPath(db, examinee.id);
+  // repo の無い在り処(前の pickup が init の前に落ちた)で rev-parse を撃つと「無い」ではなく失敗になる
+  if (path !== undefined && existsSync(join(path, ".git")) && taskBranchExists({ ...room, path }, examinee.id)) return;
+  if (path === undefined) {
+    const at = conventionCheckoutPath(examinee.id, workspacesBaseDir);
+    mkdirSync(at, { recursive: true });
+    path = realpathSync(at);
+    appendEvent(db, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: now });
+  }
+  const head = resolvablePosedHead(db, room, examinee);
+  git(path, "init", "--quiet", "--initial-branch=main");
+  git(path, "fetch", "--quiet", room.path, head);
+  // 未生の `main` に ref だけ書くと index が空のまま残る —— checkout で作業ツリーごと置く
+  git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, "FETCH_HEAD");
+}
+
 /** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。
  *  registry に無いこの名前の quarantine の回答も、ここで引く。 */
 export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefined {
@@ -217,7 +240,8 @@ export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefi
   return path === undefined ? undefined : { name: rootId, path, read_paths: [] };
 }
 
-/** task が走る場所(ADR 0273 決定1・8): interview の root と受験者は面接室、他は task の workspace。許可ドメインと層は呼び手が
+/** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
+ *  root id、ref の基準の鍵だけ受験者の id)、他は task の workspace。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
  *  —— review の親をたどって Interview の root に着く review(監査、root や監査の行への異議の RCA、人間登録の review 子)は、実環境で
  *  走り root の面接室と開ける面接室を読みだけ開く。 */
@@ -229,9 +253,13 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
     if (parent?.type !== "interview") return { ...workspace, read_paths: [] };
     return { ...workspace, read_paths: [interviewRoomPath(db, parent.id), ...readableInterviewRooms(db, parent.id)].filter((path) => path !== undefined).map(safeRealpath) };
   }
+  if (task.type !== "interview") {
+    const path = examineeCheckoutPath(db, task.id);
+    if (path === undefined) throw new Error(`the checkout of ${task.id} is not open`);
+    return { name: rootId, path, read_paths: [], snapshot_key: task.id };
+  }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
-  if (task.type !== "interview") return room;
   return { ...room, read_paths: [workspace.path, ...readableInterviewRooms(db, rootId)].map(safeRealpath) };
 }
 
@@ -321,7 +349,7 @@ export function taskBranchTip(workspace: WorkspaceConfig, taskId: string): strin
 
 /** 出題の写し(ADR 0273 決定3): 面接室の作業ツリーを一時 index で tree にし、保護ブランチの head を親にした盤面名義の commit にして
  *  ref を1本置き、その sha を返す。root の session の HEAD・作業ツリー・本物の index には触れない(ADR 0064)。ignore されたファイルと
- *  shadow 残骸は写らない(新しい clone と同じ)。ref は受験者のブランチの土台と、却下された出題の写しを決着後の prune から守る。 */
+ *  shadow 残骸は写らない(新しい clone と同じ)。ref は受験者が fetch する元(ADR 0276 決定1)で、却下された出題の写しも object として残す。 */
 export function commitRoomCopy(db: Db, room: WorkspaceConfig): string {
   const dir = mkdtempSync(join(tmpdir(), "tidepool-room-index-"));
   let tree: string;
@@ -404,25 +432,17 @@ export function lineageTaskBranch(
 }
 
 /** Branch discipline at pickup: work never happens on the protected branch.
- *  A fresh task forks from its live lineage — an examinee from the interview room's copy
- *  its probe recorded (ADR 0263 決定6 / ADR 0273 決定3); a resumed task only checks its existing
- *  branch out again, WIP intact. */
+ *  A fresh task forks from its live lineage — an examinee, with no lineage, from its own checkout's `main`, which is the
+ *  head its probe recorded (ADR 0276 決定1); a resumed task only checks its existing branch out again, WIP intact. */
 export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task): void {
   const branch = taskBranch(task.id);
   if (!taskBranchExists(workspace, task.id)) {
-    git(
-      workspace.path,
-      "branch",
-      branch,
-      task.interview_target_id !== null
-        ? resolvablePosedHead(db, workspace, task)
-        : (lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace)),
-    );
+    git(workspace.path, "branch", branch, lineageTaskBranch(db, workspace, task) ?? protectedBranchRef(workspace));
   }
   git(workspace.path, "checkout", branch);
 }
 
-/** 引けない head から黙って今の head へ逃げない —— 投げて pickup の準備の失敗(workspace の quarantine)に落とす。 */
+/** 引けない head から黙って今の head へ逃げない —— 投げて受験者の checkout を開く失敗(面接室の quarantine)に落とす。 */
 function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)。出題し直した root は最後の出題(ADR 0273 決定3)
   const head = db
@@ -644,8 +664,7 @@ export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  /** `recordDir` は盤面の記録の器(worker transcript の dir)。Absent → 答案を写さない(器を持たない盤面・テスト)。 */
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource; recordDir?: string; now: Date },
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource } = {},
 ): Promise<void> {
   assertOwnGitDirectory(workspace.path);
   assertRegistryRoleAgrees(workspace, board.registry);
@@ -653,51 +672,9 @@ export async function prepareWorkspaceAtPickup(
   await ensureWorkspaceToken(workspace, board.githubAuth);
   refreshWorkspace(workspace, board.githubAuth);
   ensureTaskBranch(db, workspace, task);
-  try {
-    if (task.interview_target_id !== null) removeSettledExamineeBranches(db, workspace, board.recordDir, board.now);
-  } finally {
-    // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
-    // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ。決着した受験者のブランチを外すのも
-    // この前(ADR 0263 決定5)—— session の最中に消すと、外すこと自体が違反として立つ。外しが記録の器の失敗で落ちても撮る
-    // —— その pickup は後始末を通って先頭へ戻り(ADR 0274 決定4)、tree rule が盤面自身の fetch と外しを違反と読まない
-    snapshotRefs(db, workspace);
-  }
-}
-
-/** ADR 0263 決定5 / ADR 0111 追記12: 後から走る受験者が他の受験者(どの Interview のものでも)の答案を git で読めないように、
- *  この checkout にある決着した受験者のタスクブランチの ref を外し、head をその受験者の event に残す。走るのは自分のブランチを
- *  checkout した後なので、外すブランチが checkout 中であることは無い。
- *  ADR 0266 決定1・2: 外す前に答案を盤面の記録の器へ写し、1本でも外したら HEAD の reflog と到達できない object を落とす。
- *  器を持たない盤面(`recordDir` 無し)は写せないので掃除もしない —— 写しの無いまま答案の object を消さない */
-function removeSettledExamineeBranches(db: Db, workspace: WorkspaceConfig, recordDir: string | undefined, now: Date): void {
-  const branches = git(workspace.path, "for-each-ref", "--format=%(objectname) %(refname:lstrip=3)", "refs/heads/task/");
-  let removed = 0;
-  for (const [head, id] of branches.split("\n").filter(Boolean).map((line) => line.split(" ") as [string, string])) {
-    const examinee = getTask(db, id);
-    if (examinee?.interview_target_id == null || !isSettled(examinee.status)) continue;
-    // 写し → 記録 → 外す の順(ADR 0266 決定2)—— 外した後で落ちると、答案がどこにも残らない
-    const path = recordDir === undefined ? undefined : copyAnswer(db, workspace, examinee, head, recordDir);
-    appendEvent(db, { taskId: id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "task_branch_removed", head, ...(path && { path }) }, at: now });
-    git(workspace.path, "branch", "-D", taskBranch(id));
-    removed += 1;
-  }
-  if (removed === 0 || recordDir === undefined) return;
-  // ADR 0266 決定1: HEAD の reflog を全部消し、どこからも辿れない object を pack からも loose からも落とす。
-  // ブランチ自身の reflog は触らない —— 本番のタスクブランチの記録はそこに残る
-  git(workspace.path, "reflog", "expire", "--expire=now", "HEAD");
-  git(workspace.path, "repack", "-a", "-d");
-  git(workspace.path, "prune", "--expire=now");
-}
-
-/** ADR 0266 決定2: 答案を盤面の記録の器に写し、その path を返す。出題の head から commit が無ければ写さない。
- *  bundle は git が stdout に出し、器へは `writeAnswerCopy` が書く —— git の非ゼロ終了は準備の他の失敗と同じ例外のまま、器の fs の
- *  例外だけが `RecordContainerError` になる。 */
-function copyAnswer(db: Db, workspace: WorkspaceConfig, examinee: Task, head: string, recordDir: string): string | undefined {
-  const posedHead = resolvablePosedHead(db, workspace, examinee);
-  // 出題の head かその祖先に留まるブランチは写す commit が無い —— git は空の bundle を拒む
-  if (isAncestor(workspace, head, posedHead)) return undefined;
-  // ponytail: bundle を丸ごとメモリに持つ。答案が巨大になると観測されたら一時ファイル経由へ
-  return writeAnswerCopy(recordDir, examinee.id, gitBytes(workspace.path, "bundle", "create", "-", taskBranch(examinee.id), `^${posedHead}`));
+  // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
+  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ
+  snapshotRefs(db, workspace);
 }
 
 /** ADR 0064 決定1: この checkout が今持っている **`refs/*` 全部**。タグも stash も
@@ -720,6 +697,11 @@ function currentRefs(workspace: WorkspaceConfig): string {
   );
 }
 
+/** 基準の行の鍵: 走る場所の名前。受験者の checkout だけは名前(面接室の root id)を兄弟と共有するので受験者の id(ADR 0276 決定3)。 */
+function snapshotKey(workspace: WorkspaceConfig): string {
+  return (workspace as RunPlace).snapshot_key ?? workspace.name;
+}
+
 /** ADR 0064 決定5: worker に checkout を手渡した瞬間の全 ref を基準として焼く。
  *  撮るのは pickup の1回だけで、ここから先は盤面自身が書いた ref の行だけが
  *  書く前の予告と書いた後の畳みで更新される(`writeBoardRefs`)。 */
@@ -727,7 +709,7 @@ function snapshotRefs(db: Db, workspace: WorkspaceConfig): void {
   db.prepare(
     `INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)
      ON CONFLICT(name) DO UPDATE SET ref_snapshot = excluded.ref_snapshot`,
-  ).run(workspace.name, currentRefs(workspace));
+  ).run(snapshotKey(workspace), currentRefs(workspace));
 }
 
 function storedRefs(db: Db, workspaceName: string): string {
@@ -773,7 +755,7 @@ function recordedRef(db: Db, workspaceName: string, ref: string): string | undef
  *  人間の修理手順がそのまま読める形になる。予告中の行は2値のまま載る。 */
 function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: string): void {
   const except = `refs/heads/${taskBranch(taskId)}`;
-  const before = refValues(storedRefs(db, workspace.name));
+  const before = refValues(storedRefs(db, snapshotKey(workspace)));
   const after = refValues(currentRefs(workspace));
   const moved = [...new Set([...before.keys(), ...after.keys()])].filter(
     (ref) => ref !== except && !baselineAllows(before.get(ref), after.get(ref)),
@@ -793,7 +775,7 @@ function assertOnlyTaskBranchMoved(db: Db, workspace: WorkspaceConfig, taskId: s
 function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<string, string>) => void): boolean {
   const stored = db
     .prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?")
-    .get(workspace.name) as { ref_snapshot: string | null } | undefined;
+    .get(snapshotKey(workspace)) as { ref_snapshot: string | null } | undefined;
   if (!stored?.ref_snapshot) return false;
   const values = refValues(stored.ref_snapshot);
   edit(values);
@@ -803,7 +785,7 @@ function updateBaseline(db: Db, workspace: WorkspaceConfig, edit: (values: Map<s
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([ref, value]) => `${value} ${ref}`)
       .join("\n"),
-    workspace.name,
+    snapshotKey(workspace),
   );
   return true;
 }

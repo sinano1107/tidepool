@@ -241,7 +241,8 @@ export function openDb(path: string): Db {
     -- objectname だが、symref の行だけは指し先 "symref=<refname>" である ——
     -- ADR 0081)。slot 解放時にこれと現在を比べ、
     -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
-    -- 場所であることが要件なので git の ref ではなくここに置く。
+    -- 場所であることが要件なので git の ref ではなくここに置く。name は走る場所の
+    -- 名前、受験者の checkout だけは受験者の id(兄弟と面接室の名前を共有する —— ADR 0276 決定3)。
     CREATE TABLE IF NOT EXISTS workspace_state (
       name         TEXT PRIMARY KEY,
       ref_snapshot TEXT

@@ -38,6 +38,7 @@ import {
   FULL_HANDOFF,
   HUMAN_WEBUI,
   mcpClient,
+  openTestExamineeCheckout,
   openTestInterviewRoom,
   POSED_HEAD,
   poseAccepted,
@@ -87,13 +88,16 @@ function interviewRoot(db: ReturnType<typeof openDb>) {
     tier: "standard",
     interview_targets: [SOL],
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
-  // root も受験者も面接室で走る(ADR 0273 決定1)—— pickup の代わりに開く
+  // root は面接室で走る(ADR 0273 決定1)—— pickup の代わりに開く
   openTestInterviewRoom(db, root);
   return root;
 }
 function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
-  return poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
+  const child = poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
+  // 受験者は自分の checkout で走る(ADR 0276 決定1)—— pickup の代わりに開く
+  openTestExamineeCheckout(db, child);
+  return child;
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 

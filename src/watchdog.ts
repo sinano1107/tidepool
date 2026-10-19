@@ -248,7 +248,7 @@ export function queueReturnHandler(
   };
 }
 
-/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は pickup の準備の答案の写しと transcript の open で、観測点は
+/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
  *  scheduler の catch と adapter の launch の catch。盤面全体の停止を登録してから `queueReturnHandler` で先頭へ戻す —— 盤面が
  *  止まっているので、後始末の pickup の契機は `boardHalts` が止める。踏んだ task は解放後の pickup で自分のブランチへ戻って続ける。 */
 export function recordContainerHaltHandler(
