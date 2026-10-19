@@ -57,3 +57,9 @@ commit で立つものがどれも meta-review に届かなかった —— 修�
 
 routing の「初観測のセル」の項目は行に畳まれ、セルを名指す判断の行は無くなった。決定4 の「セルを名指す行には、そのセルの行への提案を
 許す」と、決定5 の routing の対象の「セル」は空文になる —— routing の判断の行が名指す対象は 行・agent・段・学習器。
+
+## 追記2(2026-10-20 の grilling、issue #2304 / ADR 0281)
+
+決定3 の「同じ task に両方の行の異議があれば修理子は1本で、verb は和」の「和」は verb の集合の和であって射程の融合ではなく、同じ操作で
+射程だけが違う verb(`invalidate_memory` / `move_memory` / `move_memory_branch`)はどの組でも1つの tool で門が対象で切り替わる。書き込みの行の修理の枝の
+移し戻しは meta-review の `move_memory_branch` と操作が違うので `restore_memory_branch` と別名(ADR 0281)。

@@ -61,3 +61,12 @@ meta-review の判断の行への異議が meta-review に届かない既存の�
 決定5 の「meta-review のセッションには Behavior が注入されず」は ADR 0279 決定2 で変わる —— 主題つきの meta-review にも盤面全体の
 Behavior / Exemplar の節が注入される。材料(Objected decisions)に載せる決定はそのまま。書き込みの行への異議の帰責の入力「その書き込み
 より前に読んだ記憶」には、指針の節から読んだ行が `read` として入る(#1927 の答え)。
+
+## 追記4(2026-10-20 の grilling、issue #2304 / ADR 0281)
+
+決定4 の3つの操作の verb 名は code の写しで、本 ADR は名指していなかった。逆操作のうち「移したものの移し戻し」は、エントリ1つなら
+`move_memory`(移し戻しの行き先なら門なし)、枝なら `restore_memory_branch`(旧・`move_memory_branch` —— meta-review の枝の改名・統合と
+同名で操作が違ったので改名)。「作ったものの無効化」は `invalidate_memory`、「無効化したものの復元」は `restore_memory`、置き換えは
+`replace_memory`。移動は meta-review と同じく枝ごとの移動(`move_memory_branch`)を含み、枝は「その書き込みが定義を作った・そこへ
+エントリを移した」で射程に入る —— code はエントリ1件の移動しか写していなかった。同じ操作の verb は meta-review 版と1つの tool で、射程は
+門に付く(ADR 0281)。
