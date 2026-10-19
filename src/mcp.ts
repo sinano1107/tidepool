@@ -15,6 +15,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
 import {
   browseMemory,
+  completeMemoryReview,
   defineMemoryBranch,
   defineMemoryByMetaReview,
   foldMemory,
@@ -553,7 +554,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
-  // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を登録する(ADR 0278 決定1)
+  // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
+  // complete_memory_review を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -809,6 +811,39 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeIntegrationReview(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }, resolveOnly),
+    );
+  }
+
+  if (added.includes("complete_memory_review")) {
+    server.registerTool(
+      "complete_memory_review",
+      {
+        description:
+          "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
+          "judgment on: entries ({entry: id}) — the candidates drafted in this window, the candidates and entries named by the settled " +
+          "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path}) that hold " +
+          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define. An item you acted on in " +
+          "this session — wrote, folded, moved, retired, defined or named in a proposal — is already judged. Every other item goes in " +
+          "judgments, which means you left it as is, with an optional one-line reason; the board records one decision line per item. " +
+          "Listing an item you acted on is harmless: it is accepted and records nothing. A missing item is refused as unjudged and an " +
+          "entry or branch that is not an item is refused, each named by id or path, and nothing is recorded. The handoff takes the same " +
+          `fields as complete_task (${describeHandoffFields()}); none is required. ` +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          judgments: z.array(
+            z.union([
+              z.strictObject({ entry: z.number().int(), reason: z.string().optional() }),
+              z.strictObject({ branch: z.string(), reason: z.string().optional() }),
+            ]),
+          ),
+          handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+        },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const done = completeMemoryReview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
         }, resolveOnly),
     );

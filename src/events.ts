@@ -2,7 +2,7 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
-import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
+import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
@@ -695,14 +695,16 @@ export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
 
 /** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
- *  修理子から導いた repaired。 */
-export interface Judgment {
-  kind: "integration_review";
-  deliverable: string;
-  value: "no_findings" | "repaired";
-  findings: string;
-  repairs: Array<{ id: string; status: TaskStatus }>;
-}
+ *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝(path)、値は left_as_is で、reason は任意。 */
+export type Judgment =
+  | {
+      kind: "integration_review";
+      deliverable: string;
+      value: "no_findings" | "repaired";
+      findings: string;
+      repairs: Array<{ id: string; status: TaskStatus }>;
+    }
+  | ({ kind: "memory"; value: "left_as_is"; reason?: string } & MemoryJudgmentItem);
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
 export interface AuditVerdict {

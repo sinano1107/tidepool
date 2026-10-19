@@ -62,7 +62,7 @@ async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) 
   return { review, client, call, material };
 }
 
-it("主題 memory の task の接続の tool 一覧は、普通の task の一覧から worker の memory verb を除き専用 verb を足したもの(Codex の enabled_tools と同じ定数)", async () => {
+it("主題 memory の task の接続の tool 一覧は、普通の task の一覧から worker の memory verb と complete_task を除き専用 verb と complete_memory_review を足したもの(Codex の enabled_tools と同じ定数)", async () => {
   const { client } = await boardWithMetaReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -72,7 +72,7 @@ it("主題 memory の task の接続の tool 一覧は、普通の task の一�
     const worker = await names(workClient);
     expect(worker).toEqual(expect.arrayContaining([...WORKER_MEMORY, "get_current_task", "log_decision", "complete_task"]));
     expect(worker.filter((name) => META_REVIEW_MEMORY.includes(name))).toEqual([]);
-    expect(metaReview.sort()).toEqual([...worker.filter((name) => !WORKER_MEMORY.includes(name)), ...META_REVIEW_MEMORY].sort());
+    expect(metaReview.sort()).toEqual([...worker.filter((name) => !WORKER_MEMORY.includes(name) && name !== "complete_task"), ...META_REVIEW_MEMORY, "complete_memory_review"].sort());
   } finally {
     await client.close();
     await workClient.close();
@@ -192,19 +192,21 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
   }
 });
 
-it("memory meta-review の purpose は材料の節とその5つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、completion_criteria は変わらない(ADR 0180)", async () => {
+it("memory meta-review の purpose は材料の節とその6つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、判断を要する項目を行為か complete_memory_review の据え置きで閉じると言い、completion_criteria は項目を名指す(ADR 0180 / ADR 0278 決定3)", async () => {
   const { review, client } = await boardWithMetaReview();
   try {
     expect(review.purpose).toContain(
       "This cycle's material is in your prompt, in the Memory meta-review material section: the store changes since the previous memory " +
-        "meta-review, every live candidate, the decisions objected to since then, the memory proposals answered or settled since then, and the branch list.",
+        "meta-review, every live candidate, the decisions objected to since then, the memory proposals answered or settled since then, the branch list, and the items to judge.",
     );
     expect(review.purpose).toContain("search_memory_entries with like");
     expect(review.purpose).toContain("read why it was dropped (its invalidation_reason, and for a rejected candidate the human's comment in list_memory_proposals)");
     expect(review.purpose).toContain("list_memory_entries (path)");
     expect(review.purpose).not.toContain("First read the past memory proposals");
+    expect(review.purpose).toContain("End the session with complete_memory_review, listing each item you leave as is");
+    expect(review.purpose).not.toContain("log_decision and leave the entry in place");
     expect(review.completion_criteria).toBe(
-      "every candidate and store change since the previous meta-review is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or deliberately left as is",
+      "every item to judge in this cycle's material is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or listed as left as is in complete_memory_review",
     );
   } finally {
     await client.close();

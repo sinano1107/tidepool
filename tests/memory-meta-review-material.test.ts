@@ -47,7 +47,7 @@ function memoryMaterialOf(db: Db, taskId: string) {
   return material;
 }
 
-it("材料の節は主題 memory の meta-review に memory の部分で組まれ、両端の watermark と5つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task には null、主題 routing の meta-review には routing の部分(ADR 0180 追記 #1239)", () => {
+it("材料の節は主題 memory の meta-review に memory の部分で組まれ、両端の watermark と6つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task には null、主題 routing の meta-review には routing の部分(ADR 0180 追記 #1239)", () => {
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const review = register(db, "memory");
@@ -69,6 +69,8 @@ it("材料の節は主題 memory の meta-review に memory の部分で組ま�
     "(no settled proposals)",
     "### Branches",
     "(no branches)",
+    "### Items to judge",
+    "(no items to judge)",
   ]) {
     expect(material.section).toContain(line);
   }
@@ -219,6 +221,43 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   expect(parts.proposals).toEqual(pullMemoryProposals(db, reader, {}, at).proposals.filter((p) => [rejected, settled].includes(p.question_id)));
   expect(parts.branches).toEqual(pullMemoryBranches(db, reader, {}, at).branches);
   expect(parts.branches.flatMap((b) => b.definitions)).toEqual([expect.not.objectContaining({ original: expect.anything() })]);
+});
+
+it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草された candidate・窓で決着した提案が名指す candidate・cause memory の異議つき判断が名指すエントリ・店の変更、定義の無い枝と複数 scope が定義した path —— 窓の外の candidate と定義のある枝は載らない(ADR 0278 決定5)", () => {
+  const db = openDb(":memory:");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
+  const decision = objectedDecision(db, work, 1);
+  const older = candidate(db, "Older habit");
+  const answered = candidate(db, "Answered");
+  const followed = knowledge(db, "tools/node");
+  for (const scope of ["tidepool", "reef"]) defineMemoryBranch(db, { scope, path: "tools", text: "Tools.", author: deckhand }, "worker", at);
+  defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
+  const previous = register(db, "memory", true);
+  const drafted = candidate(db, "New habit");
+  const written = knowledge(db, "notes");
+  const question = proposeMemoryChange(db, previous, { op: "approve", candidate_id: answered, rationale: "r" }, "auditor", at).question_id;
+  answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "No." });
+  rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
+  appendEvent(db, {
+    taskId: work,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", entries: [followed], round: "initial" },
+    at,
+  });
+  const review = register(db, "memory");
+  candidate(db, "Late");
+
+  const { parts, section } = memoryMaterialOf(db, review);
+
+  expect(parts.items).toEqual([
+    ...[followed, answered, drafted, written].sort((a, b) => a - b).map((entry) => ({ entry })),
+    { branch: "tools" },
+    { branch: "tools/node" },
+  ]);
+  expect(ids(parts.candidates)).toContain(older);
+  expect(section).toContain("### Items to judge");
+  for (const item of parts.items) expect(section).toContain(JSON.stringify(item));
 });
 
 it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・トークン数と計数器を持つ", () => {

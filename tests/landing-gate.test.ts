@@ -5,7 +5,7 @@ import {
   attachChild,
   bootTidepool,
   commitWork,
-  completeIntegrationReviewOrTaskViaMcp,
+  completeByKindViaMcp,
   completeIntegrationReviews,
   completeIntegrationReviewViaMcp,
   completeViaMcp,
@@ -378,7 +378,7 @@ async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<v
     if (pending.length === 0) return;
     const child = pending.find((candidate: any) => candidate.status === "in_progress") ?? pending[0];
     if (child.status !== "in_progress") await pickUp(pool, child.id);
-    const res = await completeIntegrationReviewOrTaskViaMcp(pool, child);
+    const res = await completeByKindViaMcp(pool, child);
     expect(res.isError ?? false).toBe(false);
   }
 }

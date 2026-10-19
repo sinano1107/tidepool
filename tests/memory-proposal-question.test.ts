@@ -8,7 +8,7 @@ import {
   type BootOptions,
   bootTidepool,
   bundledObjection,
-  completeViaMcp,
+  completeMemoryReviewViaMcp,
   HOUR,
   makeWorkspace,
   managementMcpClient,
@@ -93,7 +93,7 @@ it("提案 question が open でも meta-review は完了できる", async () =>
   try {
     const questionId = await propose(ids[0]!);
 
-    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await completeMemoryReviewViaMcp(t, review.id)).isError).not.toBe(true);
     expect(await task(review.id)).toMatchObject({ status: "done" });
     expect(await task(questionId)).toMatchObject({ status: "todo" });
   } finally {
@@ -157,7 +157,7 @@ it("reject の回答は reject の export に届き(candidate が rejected)、�
     expect(await entry(ids[0]!)).toMatchObject({ invalidation_reason: "rejected" });
     expect((await events(questionId)).map((e) => e.kind)).toEqual(["task_registered", "question_answered"]);
     // 無効化は回答の印を持ち、周期が過ぎても次の memory meta-review を登録しない(ADR 0151)
-    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await completeMemoryReviewViaMcp(t, review.id)).isError).not.toBe(true);
     expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
     await t.clock.advance(2 * 24 * HOUR); // 周期(1日)を越える
     expect(((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory")).toEqual([]);
@@ -186,7 +186,7 @@ it("defer の回答は comment が無ければ 409 で question を開いたま�
     expect(await memoryEntries(t)).toEqual(before);
     expect((await call("list_memory_proposals", {})).proposals).toMatchObject([{ question_id: questionId, answer: "defer", comment: undecided }]);
 
-    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await completeMemoryReviewViaMcp(t, review.id)).isError).not.toBe(true);
     expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
     await t.clock.advance(2 * 24 * HOUR); // 周期(1日)を越えるが、defer は材料でない(ADR 0151)
     const memoryReviews = async () => ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory");

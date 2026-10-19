@@ -59,7 +59,9 @@ export const META_REVIEW_SUBJECTS = {
       purpose:
         "Periodic meta-review of the board's memory store. This cycle's material is in your prompt, in the Memory meta-review material section: " +
         "the store changes since the previous memory meta-review, every live candidate, the decisions objected to since then, the memory proposals " +
-        "answered or settled since then, and the branch list. " +
+        "answered or settled since then, the branch list, and the items to judge. " +
+        "Every item to judge needs a judgment: act on it with the verbs below, or leave it as is. End the session with complete_memory_review, " +
+        "listing each item you leave as is (with a reason when it helps). " +
         "Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
         "Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries. " +
         "For each store change, check that it fits the Definition of its branch (move it with move_memory when it does not), and look for an entry " +
@@ -84,7 +86,7 @@ export const META_REVIEW_SUBJECTS = {
         "merge: true (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
         "widen a candidate before you propose it, so the question shows the human the scope it will have. You cannot narrow " +
         "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
-        "you judge one of those right, say so with log_decision and leave the entry in place. " +
+        "you judge one of those right, leave the entry in place and say so in its reason in complete_memory_review. " +
         "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
         "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
@@ -96,7 +98,7 @@ export const META_REVIEW_SUBJECTS = {
         "or approve the Behavior or Exemplar candidate alone to leave the entries it would have replaced in place. " +
         "Where a human amended a candidate when approving it (a superseded candidate whose invalidated_by is a question and whose successor a human wrote — not one you folded into an existing entry), draft closer to the human's wording.",
       completion_criteria:
-        "every candidate and store change since the previous meta-review is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or deliberately left as is",
+        "every item to judge in this cycle's material is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or listed as left as is in complete_memory_review",
     },
     material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
     verbs: MEMORY_META_REVIEW_VERBS,

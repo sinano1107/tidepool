@@ -112,7 +112,7 @@ export function allocationInput(db: Db, target: AllocationTarget): AllocationRev
         p.kind === "worker_exited" && p.worker_spawned_event_id === target.spawned_event_id,
     );
   const judgment = listEvents(db, target.review_task_id)
-    .flatMap(({ payload }) => (payload.kind === "decision_logged" && payload.judgment ? [payload.judgment] : []))
+    .flatMap(({ payload }) => (payload.kind === "decision_logged" && payload.judgment?.kind === "integration_review" ? [payload.judgment] : []))
     .at(-1);
   return buildAllocationReviewInput({
     verdict: judgment?.value ?? null,
