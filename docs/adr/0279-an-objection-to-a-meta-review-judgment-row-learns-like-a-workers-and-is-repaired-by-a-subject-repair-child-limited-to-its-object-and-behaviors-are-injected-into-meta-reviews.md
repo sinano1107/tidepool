@@ -28,8 +28,8 @@ commit で立つものがどれも meta-review に届かなかった —— 修�
 5. **次周期の Items to judge に、窓で異議された同主題の判断の行が名指す対象(生きているもの)を足す。** 両主題。修理子が直した場合は
    その書き込みが店の変更として既に項目なので、これは修理子が直さなかったときの安全網である。
 6. **routing の材料に「Objected decisions」の節を足し、Objected decisions と `list_precedents` の行は、行の task が meta-review なら
-   読み手と同じ主題のときだけ載せる。** worker・修理子の行は今どおり memory の読み手に載り、主題を持たない読み手(Interview の root)は
-   全件。
+   読み手と同じ主題のときだけ載せる。** 行の主題は task 自身の列、無ければ最も近い主題つきの祖先の列で読む —— 主題の修理子の行は
+   親の主題に載る。worker の行(祖先に meta-review が無い)は今どおり memory の読み手に載り、主題を持たない読み手(Interview の root)は全件。
 7. **次周期の「未決着」の門に、同主題の meta-review の open な子(修理子・RCA)と、その子の下の open な提案 question を足す。** 理由は
    ADR 0165 決定1 と同じ —— 修理子の結果は次の review が読む材料で、読まずに次の判断を始めさせない。RCA は述語を1本にするために含める。
 
