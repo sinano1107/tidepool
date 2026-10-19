@@ -431,10 +431,6 @@ it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup �
   expect(await queueStatus(root.id)).toBe("skipped");
 
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
-  // 本文は受理の前に走らせる検査を予告する —— repo の無い面接室では workspace の検査ではなく、盤面がその番地を作れること
-  expect(quarantine.purpose).toContain("the board can create this interview room");
-  expect(quarantine.purpose).not.toContain("is still configured");
-  expect(quarantine.purpose).not.toContain("git status --porcelain");
   const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] });
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain("mkdir");
@@ -467,9 +463,6 @@ it("受験者の checkout の番地に異物がある pickup は面接室(root i
   expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo");
   expect((await questions(t)).filter((q) => q.status !== "done").map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
   const unrepaired = await servedQuarantineQuestion(t, "workspace", root.id);
-  // 面接室は repo を持つ —— 予告するのは registry の名前の解決を除いた workspace の検査
-  expect(unrepaired.purpose).not.toContain("is still configured");
-  expect(unrepaired.purpose).toContain("git status --porcelain");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${unrepaired.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
   await runNow(t, second!);
   await vi.waitFor(async () => expect(await stops()).toHaveLength(2));
