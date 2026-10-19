@@ -644,6 +644,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete the current task. Work tasks require the full handoff doc (" +
           describeHandoffFields() +
           ") and a committed work tree — commit your changes before calling this. " +
+          "Every other type (review and memory_repair tasks) requires outcome: the findings or judgment you reached. " +
           "resume_context is what the next session needs to pick the work back up — " +
           "do not describe landing state (push / PR / merge): the board lands the " +
           "branch after you complete, and you cannot observe that. " +

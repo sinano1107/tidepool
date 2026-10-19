@@ -230,7 +230,7 @@ it.each(["直接 cancel", "failure question の abandon"] as const)(
     expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
     for (const rca of rcas) {
       expect(taskHistoryRows(db, parent.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
-      expect(completeTask(db, getTask(db, rca.id)!, undefined, "auditor", NOW, "worker").status).toBe("done");
+      expect(completeTask(db, getTask(db, rca.id)!, { outcome: "no findings" }, "auditor", NOW, "worker").status).toBe("done");
     }
   },
 );
@@ -321,7 +321,7 @@ it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
     expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
     for (const rca of rcas) {
       expect(taskHistoryRows(db, child.id, rca.id).map((row) => row.entry)).toContainEqual(expect.objectContaining({ decision: "deckhand's call" }));
-      expect(completeTask(db, getTask(db, rca.id)!, undefined, "auditor", NOW, "worker").status).toBe("done");
+      expect(completeTask(db, getTask(db, rca.id)!, { outcome: "no findings" }, "auditor", NOW, "worker").status).toBe("done");
     }
   },
 );
