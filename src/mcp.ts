@@ -824,11 +824,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
           "judgment on: entries ({entry: id}) — the candidates drafted in this window, the candidates and entries named by the settled " +
           "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path}) that hold " +
-          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define. An item you acted on in " +
-          "this session — wrote, folded, moved, retired, defined or named in a proposal — is already judged. Every other item goes in " +
+          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define. That list, injected when " +
+          "this session started, is the whole set of items: anything added to the store since belongs to the next cycle. An item you acted " +
+          "on in this session — wrote, folded, moved, retired, defined or named in a proposal — is already judged. Every other item goes in " +
           "judgments, which means you left it as is, with an optional one-line reason; the board records one decision line per item. " +
-          "Listing an item you acted on is harmless: it is accepted and records nothing. A missing item is refused as unjudged and an " +
-          "entry or branch that is not an item is refused, each named by id or path, and nothing is recorded. The handoff takes the same " +
+          "Listing an item acted on since this session started, by you or by anyone else, is harmless: it is accepted and records nothing. " +
+          "A missing item is refused as unjudged, and an entry or branch not on the injected list — even one you wrote in this session — " +
+          "is refused; each is named by id or path, and nothing is recorded. The handoff takes the same " +
           `fields as complete_task (${describeHandoffFields()}); none is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {

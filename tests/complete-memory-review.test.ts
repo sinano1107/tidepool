@@ -6,6 +6,7 @@ import {
   createBehaviorCandidate,
   defineMemoryByMetaReview,
   invalidateMemoryByMetaReview,
+  invalidateMemoryEntry,
   moveMemoryByMetaReview,
   proposeMemoryChange,
   recordKnowledge,
@@ -13,7 +14,7 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { completeTask, getTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectedJudgmentItems, judgmentRows } from "./harness.js";
+import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
 
@@ -34,11 +35,17 @@ const knowledge = (db: Db, path: string) =>
 const candidate = (db: Db, title: string) =>
   createBehaviorCandidate(db, { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at).entry_id;
 
+/** 材料を注入した memory meta-review を登録する(setup): 完了の verb は注入の記録から項目を読む。 */
+function injectedReview(db: Db) {
+  const review = register(db, "memory");
+  return { review, injected: injectMemoryMaterial(db, review.id, "auditor", at) };
+}
+
 /** 前回の後に worker が Knowledge を1つ書いた memory meta-review: 項目はそのエントリと、定義の無いその枝。 */
 function cycle(db = openDb(":memory:")) {
   register(db, "memory", true);
   const written = knowledge(db, "notes");
-  return { db, written, review: register(db, "memory") };
+  return { db, written, ...injectedReview(db) };
 }
 
 it("memory meta-review の verb の差し替えは complete_task を伏せ complete_memory_review を足し、routing meta-review は差し替えない", () => {
@@ -78,8 +85,7 @@ it("注入された項目をそのまま left_as_is で渡しても、この ses
   const [retired, proposed] = ["Retired", "Proposed"].map((title) => candidate(db, title));
   const kept = knowledge(db, "notes");
   const moved = knowledge(db, "drafts/x");
-  const review = register(db, "memory");
-  const injected = injectedJudgmentItems(db, review.id);
+  const { review, injected } = injectedReview(db);
   invalidateMemoryByMetaReview(db, { entry_id: retired!, reason: "rejected" }, "auditor", "worker", at, review.id);
   proposeMemoryChange(db, review.id, { op: "approve", candidate_id: proposed!, rationale: "r" }, "auditor", at);
   moveMemoryByMetaReview(db, { entry_id: moved, scope: "tidepool", path: "notes/x", mover: metaReview }, "worker", at, review.id);
@@ -97,12 +103,73 @@ it("注入された項目をそのまま left_as_is で渡しても、この ses
   expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([{ kind: "memory", entry: kept, value: "left_as_is" }]);
 });
 
+it("注入の後に他の worker が定義の無い path に Knowledge を書いても、注入した一覧どおりの完了は done になり、その枝の行は書かれない —— 項目の全体は注入の記録", () => {
+  const { db, written, review, injected } = cycle();
+  knowledge(db, "later");
+
+  const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
+
+  expect(done.status).toBe("done");
+  expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([
+    { kind: "memory", entry: written, value: "left_as_is" },
+    { kind: "memory", branch: "notes", value: "left_as_is" },
+  ]);
+});
+
+it("注入の後に人間が引退させた candidate への left_as_is は受け取られ、行を書かずに done になる —— 今の計算は絞り込みにだけ使う", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const retired = candidate(db, "Retired");
+  const { review, injected } = injectedReview(db);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+
+  const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
+
+  expect(injected).toContainEqual({ entry: retired });
+  expect(done.status).toBe("done");
+  expect(judgmentRows(db, review.id)).toEqual([]);
+});
+
+it("この review 自身が注入の後に書いたエントリへの値は注入した一覧に無いので名指して拒まれ、何も記録しない", () => {
+  const { db, written, review } = cycle();
+  const defined = defineMemoryByMetaReview(db, { scope: "tidepool", path: "notes", text: "Notes.", author: metaReview }, "worker", at, review.id).entry_id;
+  const before = listEvents(db, review.id).length;
+
+  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: written }, { entry: defined }] }, "auditor", at, "worker")).toThrow(
+    `not items to judge: entry #${defined}`,
+  );
+  expect(listEvents(db, review.id)).toHaveLength(before);
+  expect(getTask(db, review.id)!.status).toBe("todo");
+});
+
+it("再 spawn で注入の記録が2つあれば最新の記録の項目を読み、2つ目で増えた項目は unjudged で拒まれる", () => {
+  const { db, review, injected } = cycle();
+  knowledge(db, "later");
+  injectMemoryMaterial(db, review.id, "auditor", at);
+
+  expect(() => completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker")).toThrow("unjudged: branch later —");
+});
+
+it("材料の注入が記録されていない memory meta-review の完了は判断を要する項目が読めないので拒まれ、何も記録しない", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const written = knowledge(db, "notes");
+  const review = register(db, "memory");
+  const before = listEvents(db, review.id).length;
+
+  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: written }, { branch: "notes" }] }, "auditor", at, "worker")).toThrow(
+    "material was not injected",
+  );
+  expect(listEvents(db, review.id)).toHaveLength(before);
+  expect(getTask(db, review.id)!.status).toBe("todo");
+});
+
 it("祖先の枝や scope だけの移動は枝の項目を覆わず、その枝は unjudged で拒まれる", () => {
   const db = openDb(":memory:");
   register(db, "memory", true);
   const stays = knowledge(db, "tools");
   const leaves = knowledge(db, "tools/node");
-  const review = register(db, "memory");
+  const { review } = injectedReview(db);
   moveMemoryByMetaReview(db, { entry_id: leaves, scope: "tidepool", path: "misc", mover: metaReview }, "worker", at, review.id);
   moveMemoryByMetaReview(db, { entry_id: stays, scope: null, path: "tools", mover: metaReview }, "worker", at, review.id);
 

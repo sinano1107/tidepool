@@ -112,6 +112,19 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
   }
 });
 
+it("complete_memory_review の説明は、項目の全体がこの session の開始時に注入した一覧だと言い、一覧に無い id / path は拒み、開始以後に誰かが行為済みにした項目は受け取って記録しないと言う(ADR 0278 追記4)", async () => {
+  const { client } = await boardWithMetaReview();
+  try {
+    const { tools } = await client.listTools();
+    const description = tools.find((tool) => tool.name === "complete_memory_review")?.description;
+    expect(description).toContain("That list, injected when this session started, is the whole set of items: anything added to the store since belongs to the next cycle.");
+    expect(description).toContain("Listing an item acted on since this session started, by you or by anyone else, is harmless: it is accepted and records nothing.");
+    expect(description).toContain("an entry or branch not on the injected list — even one you wrote in this session — is refused");
+  } finally {
+    await client.close();
+  }
+});
+
 it("read_memory_entries は主題 memory の接続に出て管理MCP には出ず、呼ぶと行と missing を返す —— 説明は読める範囲・case・鎖のたどり・missing を言い、purpose と propose_memory_change の注釈の説明はこの verb で case を読むと言う(ADR 0122 追記 #1225)", async () => {
   const { review, client, call, material } = await boardWithMetaReview();
   const management = await managementMcpClient(t.baseUrl);
