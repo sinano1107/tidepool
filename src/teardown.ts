@@ -1,6 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
+import type { EventKind } from "./events.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
@@ -8,9 +9,11 @@ import type { Slot } from "./slot.js";
 import { getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
+  onTaskBranch,
   releaseWorkspace,
   resolveOrQuarantine,
   taskRunPlace,
+  UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";
 
@@ -49,6 +52,9 @@ export interface TeardownStep {
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
    *  merge-back まで進む。 */
   completion?: boolean;
+  /** process を1つも持たなかった session(ADR 0274 決定3): task ブランチに乗っていない checkout と解決できない名前には
+   *  tree rule を当てない。 */
+  neverRan?: boolean;
   /** 門が既に解決した workspace。`resolveOrQuarantine` は解決できない名前を
    *  **quarantine する副作用を持って `undefined` を返す**ので、「解決済み・該当なし」を
    *  `null` で、「まだ解決していない」を `undefined` で言い分ける —— 区別しないと、
@@ -57,24 +63,39 @@ export interface TeardownStep {
   workspace?: WorkspaceConfig | null;
 }
 
-type Settlement = "completed" | "released" | "interrupted";
+type Settlement = "completed" | "released" | "interrupted" | "never_ran";
 
-/** 後始末中の status が経路を一意に定める(ADR 0113 決定3)。復旧・確認回答・回収済み
- *  観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、
- *  対応表がここ以外に増えたらそれは写しである。 */
-function settlementOf(status: Task["status"] | undefined): Settlement {
-  if (status === "in_progress") return "interrupted";
-  return status === "done" ? "completed" : "released";
+/** 盤面が process を持たないまま決着させた pickup の event(ADR 0274 決定3 / ADR 0266 / ADR 0118 決定5)。 */
+const NO_PROCESS_STOP_KINDS = ["pickup_stopped", "record_container_unwritable", "spawn_failed"] as const satisfies readonly EventKind[];
+
+/** 後始末中の status と、最後の pickup の後に盤面が刻んだ決着の event が経路を一意に定める(ADR 0113 決定3 /
+ *  ADR 0274 決定3)。process を1つも持たなかった session の status は `todo` でエスカレーション・分解と同じ値なので、
+ *  process を持たない pickup の event(資源の停止・記録の器・spawn の失敗、ADR 0118 決定1)で見分ける。復旧・確認回答・
+ *  回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す永続事実は持たないので、対応表がここ以外に
+ *  増えたらそれは写しである。 */
+function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Settlement {
+  if (task?.status === "in_progress") return "interrupted";
+  if (task?.status === "done") return "completed";
+  const neverRan =
+    task?.status === "todo" &&
+    db
+      .prepare(
+        `SELECT 1 FROM events WHERE task_id = ? AND kind IN (${NO_PROCESS_STOP_KINDS.map(() => "?").join(", ")})
+           AND id > (SELECT MAX(id) FROM events WHERE task_id = ? AND kind = 'task_picked_up')`,
+      )
+      .get(task.id, ...NO_PROCESS_STOP_KINDS, task.id) !== undefined;
+  return neverRan ? "never_ran" : "released";
 }
 
 export function teardownStep(db: Db, taskId: string): TeardownStep {
-  const settlement = settlementOf(getTask(db, taskId)?.status);
+  const settlement = settlementOf(db, getTask(db, taskId));
   if (settlement === "interrupted") {
     return {
       ready: (current) => current.status === "in_progress",
       transition: (current, now) => returnToQueueHead(db, current, { kind: "cap_interrupted" }, now),
     };
   }
+  if (settlement === "never_ran") return { neverRan: true };
   return { completion: settlement === "completed" };
 }
 
@@ -175,10 +196,7 @@ async function teardown(
   if (step.ready && !step.ready(task)) return;
   // 後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)。門が渡した workspace は解決済みの走る場所
   let workspace = step.workspace;
-  if (workspace === undefined) {
-    const resolved = deps.resolve && resolveOrQuarantine(db, deps.resolve, task.workspace, clock.now());
-    workspace = resolved && taskRunPlace(db, task, resolved);
-  }
+  if (workspace === undefined) workspace = deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step);
   const mergeBack = Boolean(step.completion) && task.type === "work";
   // ADR 0093: merge-back は帰り先を決めるために fetch する。その token の取得だけが
   // ネットワークなので、同期の `releaseWorkspace` の手前で撃つ。失敗は投げずに持ち越す
@@ -214,6 +232,29 @@ async function teardown(
   deps.pollNow();
 }
 
+/** 後始末が tree rule を当てる走る場所(無ければ当てない)。process を1つも持たなかった session(ADR 0274 決定3)は worker が
+ *  触った checkout を持たない —— 解決できない名前(drift)は止めた Quarantine を撃ち直さず、task ブランチに乗っていない checkout
+ *  は動いていないので、どちらも当てない。task ブランチに乗った checkout(準備の checkout の後で止まった)だけ今日どおり退避する。 */
+function runPlaceToRelease(
+  { db, clock }: TeardownDeps,
+  resolve: (taskWorkspace: string | null) => WorkspaceConfig,
+  task: Task,
+  step: TeardownStep,
+): WorkspaceConfig | undefined {
+  if (!step.neverRan) {
+    const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
+    return resolved && taskRunPlace(db, task, resolved);
+  }
+  let place: WorkspaceConfig;
+  try {
+    place = taskRunPlace(db, task, resolve(task.workspace));
+  } catch (err) {
+    if (err instanceof UnknownWorkspaceError) return undefined;
+    throw err;
+  }
+  return onTaskBranch(place, task.id) ? place : undefined;
+}
+
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は
  *  盤面の crash を越えないので、未了は行に持つ。 */
 export function markTeardown(db: Db, taskId: string, now: Date): void {
@@ -243,7 +284,7 @@ export function sessionInTeardown(
       taskId: row.id,
       startedAt: row.teardown_started_at,
       // 読み手が行の status から経路を導き直さないように、ここで写像を1度だけ当てる
-      settlement: settlementOf(row.status),
+      settlement: settlementOf(db, row),
     }
   );
 }

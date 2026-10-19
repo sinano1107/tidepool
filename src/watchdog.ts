@@ -19,7 +19,7 @@ import {
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
-import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
 
@@ -218,8 +218,9 @@ export function rowRefusalHandler(
  *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
  *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
  *  形は行の拒否(ADR 0184 決定4)と同じ: 先頭復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
- *  経路は解放の step に読まれる(ADR 0113 決定3)。process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。
- *  registry drift で解決できない workspace は `null` で渡す —— 止めた quarantine を後始末がもう一度撃たない。 */
+ *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
+ *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
+ *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。 */
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
@@ -228,15 +229,6 @@ export function queueReturnHandler(
     if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
-    // drift だけは後始末に workspace 無し(null)を渡し、同じ観測で quarantine を撃ち直させない。解決できるときは
-    // 後始末自身が走る場所(interview の root は面接室、受験者は自分の checkout —— ADR 0273 決定8 / ADR 0276 決定1)を解決するので渡さない(undefined)
-    let workspace: null | undefined;
-    try {
-      deps.resolve?.(task.workspace);
-    } catch (err) {
-      // drift 以外の失敗は後始末自身の解決に任せる(落ちれば落ちた後始末の停止)
-      if (err instanceof UnknownWorkspaceError) workspace = null;
-    }
     const now = deps.clock.now();
     deps.db.transaction(() => {
       returnToQueueHead(deps.db, task, payload, now);
@@ -244,7 +236,7 @@ export function queueReturnHandler(
     })();
     deps.slot.enterTeardown();
     containers.forceReclaim(taskId);
-    void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, { ...teardownStep(deps.db, taskId), workspace }));
+    void containers.reclaimed(taskId).then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
   };
 }
 
@@ -267,8 +259,8 @@ export function recordContainerHaltHandler(
  *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event はそれぞれの観測点が書く。
  *
  *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
- *  escalate verb と同じ順で、後始末中の status が `todo` になるので経路は
- *  エスカレーションの step に読まれる(ADR 0113 決定3)。process を1つも持たない session
+ *  escalate verb と同じ順で、後始末中の status は `todo` になり、経路は `spawn_failed` の event から
+ *  process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)。process を1つも持たない session
  *  なので、容器は空のまま強制回収を撃つ。 */
 export function spawnFailureHandler(
   deps: TeardownDeps,

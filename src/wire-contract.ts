@@ -19,7 +19,7 @@ export interface Teardown {
   taskId: string;
   startedAt: string;
   /** 値集合の正本は src/teardown.ts の Settlement(移送は issue #352)。 */
-  settlement: "completed" | "released" | "interrupted";
+  settlement: "completed" | "released" | "interrupted" | "never_ran";
 }
 
 /** サーバ側の正本は src/throttle.ts の DisplayProviderUsage(値集合の移送は issue #352)。 */
