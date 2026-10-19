@@ -3532,16 +3532,38 @@ export function typeAwareDefaultAgentSql(table: string): string {
  *  workspace は `task.workspace ?? 既定`(既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
  *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。
- *  workspace の側は走る場所の単位(ADR 0273 決定8、TS の対は scheduler の `withoutStopped`): 受験者は面接室(root の id)だけ、interview の root は
- *  実環境と面接室の両方。 */
+ *  workspace の側は task が開く場所すべての名前(`openedPlaceNamesSql`)と比べる。 */
 function stoppedSql(taskRef: string, fallback: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
-             WHERE value IN (
-               CASE WHEN ${taskRef}.interview_target_id IS NULL THEN COALESCE(${taskRef}.workspace, @defaultWorkspaceName) END,
-               CASE WHEN ${taskRef}.type = 'interview' THEN ${taskRef}.id END,
-               (SELECT it.task_id FROM interview_targets it WHERE it.id = ${taskRef}.interview_target_id))))
+             WHERE value IN (${openedPlaceNamesSql(taskRef)})))
            OR EXISTS (SELECT 1 FROM json_each(@stoppedAssignees)
              WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
+}
+
+/** task が開く場所すべての名前(ADR 0273 決定8・追記、issue #2265)の唯一の SQL —— 資源の停止と封じ込めの組はこの集合と比べる。
+ *  受験者は面接室(対象の root id)だけ。それ以外は `workspace` 列(無ければ `@defaultWorkspaceName`)に加えて、interview の root と
+ *  review の親を review の鎖で辿って着く root(`taskRunPlace` と同じ辿り方)には、その root の面接室と他に読める面接室
+ *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。 */
+function openedPlaceNamesSql(taskRef: string): string {
+  return `WITH RECURSIVE chain(id, type, parent_id) AS (
+              SELECT ${taskRef}.id, ${taskRef}.type, ${taskRef}.parent_id
+              UNION ALL SELECT p.id, p.type, p.parent_id FROM tasks p JOIN chain c ON p.id = c.parent_id WHERE c.type = 'review'),
+            roots(id) AS (SELECT id FROM chain WHERE type = 'interview')
+          SELECT COALESCE(${taskRef}.workspace, @defaultWorkspaceName) AS name WHERE ${taskRef}.interview_target_id IS NULL
+          UNION ALL SELECT it.task_id FROM interview_targets it WHERE it.id = ${taskRef}.interview_target_id
+          UNION ALL SELECT id FROM roots
+          UNION ALL SELECT e.value FROM roots JOIN interviews i ON i.task_id = roots.id, json_each(i.evidence_task_ids) e
+            WHERE e.value IN (SELECT task_id FROM interviews)
+          UNION ALL SELECT json_extract(ev.payload, '$.previous_root_id') FROM roots JOIN events ev ON ev.task_id = roots.id AND ev.kind = 'interview_retried'`;
+}
+
+/** `openedPlaceNamesSql` を1 task について引く(TS の読み手 —— scheduler の封じ込めの組の検査)。 */
+export function openedPlaceNames(db: Db, taskId: string, defaultWorkspaceName: string | undefined): string[] {
+  const names = db
+    .prepare(`SELECT (SELECT json_group_array(name) FROM (${openedPlaceNamesSql("t")})) FROM tasks t WHERE t.id = @taskId`)
+    .pluck()
+    .get({ taskId, defaultWorkspaceName: defaultWorkspaceName ?? null }) as string;
+  return (JSON.parse(names) as (string | null)[]).filter((name): name is string => name !== null);
 }
 
 /** Held (CONTEXT.md, ADR 0006 / 0048): while a question is unanswered, keep

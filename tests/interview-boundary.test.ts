@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
 import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -18,6 +18,8 @@ import {
   type BootOptions,
   bootTidepool,
   callAsTask,
+  children,
+  commit,
   commitWork,
   completeMetaReviews,
   FULL_HANDOFF,
@@ -29,6 +31,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
+  object,
   poseThroughAudit,
   QUIET_EXIT,
   questions,
@@ -363,7 +366,7 @@ it("root の pickup で読む実環境の refresh が落ちると実環境の qu
   expect((await questions(t)).filter((q) => q.status !== "done" && q.parent_id === waiting.id)).toEqual([]);
 });
 
-it("監査の pickup は読む面接室を remote へ追従させない —— 面接室の quarantine は監査の pickup の門に掛からず、落とすと同じ監査を毎回拾い直す(issue #2223)", async () => {
+it("監査の pickup は読む面接室を remote へ追従させない —— 面接室の quarantine は監査の pickup の門に掛かるが、監査の pickup が面接室を準備して quarantine を立てることはない(issue #2223 / issue #2265)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   // 面接室が remote を持つと宣言との突き合わせが落ちる —— 監査の pickup がそこへ当たれば面接室の quarantine が立つ
@@ -374,6 +377,63 @@ it("監査の pickup は読む面接室を remote へ追従させない —— �
 
   expect(examinees).toHaveLength(1);
   expect((await questions(t)).filter((q) => q.status !== "done" && q.question_quarantine_kind === "workspace")).toEqual([]);
+});
+
+it("面接室の quarantine が開いている間、root 配下の監査と root の行への異議の RCA はキューで外れ、slot が空いても拾われず、回答で解けると監査が拾われて走る(issue #2265 / ADR 0273 追記)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
+  await api(t.baseUrl, "POST", "/api/triage/start");
+  await object(t, taskDecisionLog(t.db, root.id)[0]!.id, "the probe names the answer");
+  const { self, auditor } = await commit(t, root.id, INTERVIEW.title);
+  const reviews = [audit_id, self.id, auditor.id];
+  registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
+  t.worker.exit(root.id);
+  await completeMetaReviews(t);
+
+  for (const id of reviews) expect(await queueStatus(id)).toBe("skipped");
+  expect(t.worker.started.map((s) => s.id)).not.toContain(audit_id);
+  expect(t.worker.started.map((s) => s.id)).not.toContain(self.id);
+  expect(t.worker.started.map((s) => s.id)).not.toContain(auditor.id);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  await completeMetaReviews(t);
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(audit_id));
+  for (const id of [self.id, auditor.id]) expect(await queueStatus(id)).toBe("todo");
+});
+
+it("(Harness, 面接室)の封じ込めの組が開いている間、root 配下の監査はキューで外れる(issue #2265 / ADR 0273 追記)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
+
+  registerQuarantine(t.db, "workspaceContainment", workspaceContainmentValue("claude-code", root.id), "its settings widen the floor", t.clock.now());
+
+  expect(await queueStatus(audit_id)).toBe("skipped");
+});
+
+it("根拠の root の面接室・retry の旧い root の面接室の quarantine が開いている間、それを読む新しい root はキューで外れ、その面接室を読む root の受験者は止まらない(issue #2265 / ADR 0273 決定9・追記)", async () => {
+  t = await boot();
+  // first の受験者を2人にして、1人が決着しても first は受験者待ちのまま(todo に戻って slot を取らない)
+  const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  await pose(first.id);
+  const measured = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46, sonnet55] })).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${measured.id}/move`, { after: null });
+  await runNow(t, measured.id);
+  // first の残りの受験者より先に監査を拾わせ、監査を終える前に first の面接室を止める
+  const examinees = await poseThroughAudit(t, measured.id, POSE, async (taskId) => {
+    if (taskId === measured.id) await api(t.baseUrl, "POST", `/api/tasks/${(await children(t, measured.id))[0].id}/move`, { after: null });
+    else registerQuarantine(t.db, "workspace", first.id, "the interview room broke", t.clock.now());
+    t.worker.exit(taskId);
+  });
+
+  expect(examinees).toHaveLength(2);
+  for (const id of examinees) expect(await queueStatus(id)).not.toBe("skipped");
+  const reading = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46] })).json;
+  expect(await queueStatus(reading.id)).toBe("skipped");
+  const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
+  expect(await queueStatus(retried.id)).toBe("skipped");
 });
 
 /** 面接室の quarantine の回答が resolver に落ちないことを測る2つの盤面。 */
