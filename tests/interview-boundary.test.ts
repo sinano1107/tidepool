@@ -25,6 +25,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  makeRemoteBackedWorkspace,
   makeWorkspace,
   managementMcpClient,
   mcpClient,
@@ -277,6 +278,20 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   expect(existsSync(join(room, ".git"))).toBe(true);
 });
 
+it("root の pickup は読む実環境を remote へ追従させる —— origin の main が進んでいれば実環境の origin/main と作業ツリーが進み、実環境に root のブランチは立たない(issue #2223 / ADR 0052 決定1・2)", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("reef");
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  t = await boot({ workspace });
+
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+
+  expect(t.worker.started.at(-1)!.id).toBe(root.id);
+  expect(git(workspace.path, "rev-parse", "refs/remotes/origin/main")).toBe(git(workspace.repo!, "rev-parse", "main"));
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(git(workspace.path, "rev-parse", "refs/remotes/origin/main"));
+  expect(existsSync(join(workspace.path, "merged.txt"))).toBe(true);
+  expect(git(workspace.path, "branch", "--list", `task/${root.id}`)).toBe("");
+});
+
 it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室の在り処を retry_of で、根拠が Interview の root ならその面接室の在り処を根拠の読み口で受ける —— 面接室は root の決着後も残る(ADR 0273 決定1・9)", async () => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -322,6 +337,30 @@ it("資源の停止は走る場所の単位 —— 実環境の quarantine と (
   expect(await queueStatus(second!)).toBe("todo");
   registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   expect(await queueStatus(second!)).toBe("skipped");
+});
+
+it("root の pickup で読む実環境の refresh が落ちると実環境の quarantine に落ち、root は failure question 無しに todo の先頭へ戻り、受験者の pickup は止まらない(issue #2223 / ADR 0273 決定8 / ADR 0274 決定1)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("reef");
+  t = await boot({ workspace });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  // 監査は実環境で走るので、実環境を壊すのは受験者が立ってから
+  const [first, second] = await pose(root.id);
+  await completeMetaReviews(t);
+  expect(t.worker.started.at(-1)!.id).toBe(first);
+  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/workspace-remote");
+  const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${waiting.id}/move`, { after: null });
+
+  expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  t.worker.exit(first);
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(second));
+  expect(t.worker.started.map((s) => s.id)).not.toContain(waiting.id);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${waiting.id}`)).json.status).toBe("todo");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${waiting.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
+    { kind: "pickup_stopped", quarantine: "workspace", value: "reef", reason: expect.stringContaining("/nonexistent/workspace-remote") },
+  ]);
+  expect((await questions(t)).filter((q) => q.status !== "done" && q.parent_id === waiting.id)).toEqual([]);
 });
 
 it.each([

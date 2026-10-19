@@ -68,10 +68,12 @@ export interface WorkspaceConfig {
 }
 
 /** Where a task runs (`taskRunPlace`): its workspace, the interview room for an Interview root, or an examinee's own checkout.
- *  `read_paths` are the checkouts outside it opened for reading only, in their real spelling — an Interview root's
- *  real environment and the rooms it may open. Empty for every other task. `snapshot_key` keys the ADR 0064 ref snapshot
- *  when it is not `name` — an examinee's checkout, named after its room (ADR 0276 決定3). */
-export type RunPlace = WorkspaceConfig & { read_paths: string[]; snapshot_key?: string };
+ *  `reads` are the places outside it opened for reading only, in their real spelling — an Interview root's real
+ *  environment and the rooms it may open, or the rooms a review under an Interview root reads. Empty for every other task.
+ *  They are places, not paths, so the pickup brings them to their rest position the same way as the run place (issue #2223).
+ *  `snapshot_key` keys the ADR 0064 ref snapshot when it is not `name` — an examinee's checkout, named after its room
+ *  (ADR 0276 決定3). */
+export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_key?: string };
 
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
@@ -237,9 +239,9 @@ function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "e
 
 /** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。
  *  registry に無いこの名前の quarantine の回答も、ここで引く。 */
-export function recordedInterviewRoom(db: Db, rootId: string): RunPlace | undefined {
+export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig | undefined {
   const path = interviewRoomPath(db, rootId);
-  return path === undefined ? undefined : { name: rootId, path, read_paths: [] };
+  return path === undefined ? undefined : { name: rootId, path };
 }
 
 /** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
@@ -252,18 +254,23 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   if (rootId === undefined) {
     let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
     while (parent?.type === "review" && parent.parent_id !== null) parent = getTask(db, parent.parent_id);
-    if (parent?.type !== "interview") return { ...workspace, read_paths: [] };
-    return { ...workspace, read_paths: [interviewRoomPath(db, parent.id), ...readableInterviewRooms(db, parent.id)].filter((path) => path !== undefined).map(safeRealpath) };
+    if (parent?.type !== "interview") return { ...workspace, reads: [] };
+    const room = recordedInterviewRoom(db, parent.id);
+    return { ...workspace, reads: [...(room ? [room] : []), ...readableInterviewRooms(db, parent.id)].map(real) };
   }
   if (task.type !== "interview") {
     const path = examineeCheckoutPath(db, task.id);
     if (path === undefined) throw new Error(`the checkout of ${task.id} is not open`);
-    return { name: rootId, path, read_paths: [], snapshot_key: task.id };
+    return { name: rootId, path, reads: [], snapshot_key: task.id };
   }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
-  return { ...room, read_paths: [workspace.path, ...readableInterviewRooms(db, rootId)].map(safeRealpath) };
+  // 実環境は path でなく WorkspaceConfig のまま —— pickup の鮮度の段が remote へ追従させる(issue #2223)
+  return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(real) };
 }
+
+/** 読む場所を実体の綴りで —— sandbox の読みの path と cwd・root に渡す在り処が同じ綴りになる(issue #1954)。 */
+const real = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
  *  convention-derived location under the base dir. Every consumer that has to
@@ -655,27 +662,37 @@ function assertRegistryRoleAgrees(
   );
 }
 
-/** pickup が checkout に対して行うことの全体(issue #211): 宣言どうし・宣言と実態を
- *  突き合わせ、remote 正本を宣言していれば refresh し、それからブランチ規律を敷く。
+/** pickup の鮮度の段(issue #211 / issue #2223): 宣言どうし・宣言と実態を突き合わせ、remote 正本を宣言していれば refresh し、
+ *  休止位置(ADR 0052 決定7)へ追従させる。task が触る場所の全部 —— 走る場所と読む場所(`RunPlace.reads`)—— に当てる:
+ *  盤面が読む正本は pickup 直前の remote の保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。
  *
- *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その workspace の
- *  quarantine —— だからである(scheduler 側の try/catch 1つが全部受ける)。順序は
- *  意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
+ *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その場所の quarantine —— だからである(scheduler 側の
+ *  try/catch 1つが全部受ける)。順序は意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
+export async function freshenPlaceAtPickup(
+  place: WorkspaceConfig,
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource } = {},
+): Promise<void> {
+  assertOwnGitDirectory(place.path);
+  assertRegistryRoleAgrees(place, board.registry);
+  assertRemoteDeclarationMatchesClone(place);
+  await ensureWorkspaceToken(place, board.githubAuth);
+  refreshWorkspace(place, board.githubAuth);
+  parkOnProtectedBranch(place);
+}
+
+/** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。読む場所には当てない —— タスクブランチも基準も
+ *  走る場所だけのもの(実環境に root のブランチを立てない、ADR 0273 決定2)。 */
 export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
   board: { githubAuth?: GitHubAuth; registry?: RegistrySource } = {},
 ): Promise<void> {
-  assertOwnGitDirectory(workspace.path);
-  assertRegistryRoleAgrees(workspace, board.registry);
-  assertRemoteDeclarationMatchesClone(workspace);
-  await ensureWorkspaceToken(workspace, board.githubAuth);
-  refreshWorkspace(workspace, board.githubAuth);
+  await freshenPlaceAtPickup(workspace, board);
   ensureTaskBranch(db, workspace, task);
-  // ADR 0064 決定5: fetch の**後**でなければならない —— `refreshWorkspace` が
-  // `refs/remotes` を動かすので、前に撮ると盤面自身の fetch が違反として立つ
+  // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `refreshWorkspace` が `refs/remotes` を、休止位置の ff が
+  // 保護ブランチを動かすので、前に撮ると盤面自身の書き込みが違反として立つ
   snapshotRefs(db, workspace);
 }
 
@@ -1009,7 +1026,7 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
  *  決定7 が求めるのは「追従していること」なので、ff のあと HEAD がリモートの ref と
  *  同じコミットを指していることまで要求する。分岐(両側に差がある)は merge 自身が
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
- *  `releaseWorkspace` が受ける)。 */
+ *  `releaseWorkspace` と pickup の鮮度の段 `freshenPlaceAtPickup` が受ける)。 */
 function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
   const branch = protectedBranch(workspace);
   git(workspace.path, "checkout", branch);

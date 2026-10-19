@@ -84,6 +84,7 @@ import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  freshenPlaceAtPickup,
   openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -406,7 +407,7 @@ export function startScheduler(deps: {
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
-   *  `prepareWorkspaceAtPickup` が落ちた瞬間に**1回だけ**、その repo の token を
+   *  pickup の準備(`freshenPlaceAtPickup` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
    *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
    *
    *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
@@ -502,11 +503,16 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
         }
       }
+      // issue #2223: task が触る場所の全部に鮮度の段を当て、走る場所だけその上にブランチと ref の基準を積む。落ちた場所の
+      // quarantine に落ちる。読む場所を先に当てるので、読む場所で落ちた pickup は走る場所を動かしていない
       const place = taskRunPlace(db, picked, resolved);
-      try {
-        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
-      } catch (err) {
-        return stopped(await quarantineWithRepoAccessGuidance(place, err));
+      for (const at of [...place.reads, place]) {
+        try {
+          if (at === place) await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
+          else await freshenPlaceAtPickup(at, { githubAuth, registry });
+        } catch (err) {
+          return stopped(await quarantineWithRepoAccessGuidance(at, err));
+        }
       }
     }
     const started = { ...picked, ...content };
