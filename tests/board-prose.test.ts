@@ -1,13 +1,14 @@
 import { expect, it } from "vitest";
 import { boardDoctrine, boardProse } from "../src/board-prose.js";
 import { openDb } from "../src/db.js";
-import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
+import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, poseProbe, registerTask, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, MEMORY_REPAIR_NOTICE, poseProbe, registerTask, taskVerbSwap } from "../src/tasks.js";
 
 
 import { HUMAN_WEBUI } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
 
@@ -54,7 +55,8 @@ it("出題済みの Interview の root の doctrine は、採点完了の verb �
   for (const vocabulary of [CLAUDE, CODEX]) expect(boardDoctrine(vocabulary, POSED)).toBe(boardDoctrine(vocabulary, NOT_SPLIT_SWAP));
 });
 
-it("memory_repair の spawn の文面は assignee の Authority の直後に記憶の修理の1行を置き、祖先の cancel の下でも成果が捨てられた旨を置かず、reviewer の guidance も前提の破綻の宣言も言わない(ADR 0272 決定3)", () => {
+/** 祖先の cancel の下の memory_repair と、その文面(組み込みでない deckhand を持つ registry —— Roster が組める形)。 */
+async function memoryRepairProse(profile: AuthorityProfile) {
   const db = openDb(":memory:");
   const at = new Date("2026-10-18T00:00:00.000Z");
   const parent = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
@@ -62,24 +64,35 @@ it("memory_repair の spawn の文面は assignee の Authority の直後に記�
   const task = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
   expect(isArtifactDiscarded(db, task.id)).toBe(true);
   const verbs = taskVerbSwap(db, task.id);
-
-  const prose = boardProse({
+  return boardProse({
     db,
     registryDir: "",
-    registry: { commit: "c", agents: {}, authority: {}, workspaces: {} },
+    registry: loadRegistry(await makeRegistry(), "purely-local"),
     task,
     systemPrompt: "",
-    profile: { name: "default", guidance: "Prefer reversible actions." },
+    profile,
     doctrine: boardDoctrine(CLAUDE, verbs),
     verbs,
     allowedDomains: undefined,
     memorySection: null,
   });
+}
 
-  expect(prose).toContain(`## Authority\n\nPrefer reversible actions.\n\nThis task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.\n\n`);
+it("memory_repair の spawn の文面は Authority 節が記憶の修理の1行だけで、profile の guidance も Roster 節も無く、祖先の cancel の下でも成果が捨てられた旨を置かず、前提の破綻の宣言も言わない(ADR 0272 決定3・追記3)", async () => {
+  const prose = await memoryRepairProse({ name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] });
+
+  expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
+  expect(prose).not.toContain("Prefer reversible actions.");
+  expect(prose).not.toContain("## Roster");
   expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
-  expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
   expect(prose).not.toContain("premise breach");
+});
+
+it("profile が reviewer 定数でも、memory_repair の Authority 節は記憶の修理の1行だけ(ADR 0272 追記3)", async () => {
+  const prose = await memoryRepairProse(REVIEWER_AUTHORITY_PROFILE);
+
+  expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
+  expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
 });
 
 it("Interview の監査 review の spawn の文面は reviewer の Authority の直後に、findings の行き先が complete_audit の判定だという1行を置く(ADR 0273 決定3・4 / ADR 0271 決定2 の形)", () => {
