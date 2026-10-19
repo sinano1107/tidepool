@@ -1127,7 +1127,6 @@ export const FULL_HANDOFF = {
   known_issues: "n/a",
 };
 
-/** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
 /** 盤面の完了時レビューをすべて決着させる —— 着地の門を、fixture の子だけが閉じる形にする。 */
 export function settleReviews(db: Db, now: Date): void {
   for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) settleReview(db, getTask(db, review.id)!, "shako", now);
@@ -1140,6 +1139,7 @@ export function settleReview(db: Db, review: Task, workerId: string, now: Date):
     : completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
 
+/** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
 export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,
