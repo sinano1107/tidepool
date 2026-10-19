@@ -497,6 +497,46 @@ it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指
   ]);
 });
 
+/** setup のみ: 両主題の meta-review とその子(修理子・RCA の位置)、worker の task に異議つき decision を1つずつ置く。子の行は
+ *  自身に主題を持たず、祖先から読む(ADR 0279 決定6)。 */
+function lineages() {
+  const b = board();
+  const { db, task } = b;
+  const register = (input: { meta_review_subject?: "routing"; parent_id?: string }) =>
+    registerTask(db, { type: input.meta_review_subject ? "review" : "work", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI).id;
+  const objected = (taskId: string, i: number) => {
+    const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
+    db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, taskId);
+    db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+    bundledObjection(db, taskId, decision, at);
+    return decision;
+  };
+  const routing = register({ meta_review_subject: "routing" });
+  const rows = {
+    memory: objected(task.id, 1),
+    memoryChild: objected(register({ parent_id: task.id }), 2),
+    routing: objected(routing, 3),
+    routingChild: objected(register({ parent_id: routing }), 4),
+    worker: objected(register({}), 5),
+  };
+  return { ...b, routing, rows, register };
+}
+
+const precedentIds = (db: ReturnType<typeof openDb>, taskId: string) => listPrecedents(db, { taskId, agent: "auditor" }, {}, at).precedents.map((p) => p.decision_event_id);
+
+it("list_precedents は行の主題(自身か最も近い祖先の meta_review_subject)が読み手と同じ行だけを返す —— memory の読み手には routing meta-review とその子の行が無く、主題の無い worker の行は載る。routing の読み手には memory meta-review とその子の行と worker の行が無い(ADR 0279 決定6)", () => {
+  const { db, task, routing, rows } = lineages();
+
+  expect(precedentIds(db, task.id)).toEqual([rows.memory, rows.memoryChild, rows.worker]);
+  expect(precedentIds(db, routing)).toEqual([rows.routing, rows.routingChild]);
+});
+
+it("主題の無い読み手(Interview の root)の list_precedents は両主題の系譜の行も worker の行も全件返す(ADR 0279 決定6)", () => {
+  const { db, rows, register } = lineages();
+
+  expect(precedentIds(db, register({}))).toEqual(Object.values(rows));
+});
+
 const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id, replaces: [] }, "question-1", "webui", at);
 

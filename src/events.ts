@@ -669,9 +669,9 @@ export type EventPayload =
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
   // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
-  // 提案の question。表と設定は id を持たない。
+  // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、提案の question。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[]; items: MemoryJudgmentItem[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }

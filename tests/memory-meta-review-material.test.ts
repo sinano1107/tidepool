@@ -185,6 +185,20 @@ it("abandon で取り消された登録は窓の起点にならない: 次の回
   expect(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents.map((p) => p.decision_event_id)).toEqual([beforeCancelled, afterCancelled]);
 });
 
+it("異議つき判断は行の主題(自身か最も近い祖先)が memory の行と主題の無い worker の行だけ —— routing meta-review とその子の行は載らない(ADR 0279 決定6)", () => {
+  const db = openDb(":memory:");
+  const previous = register(db, "memory", true);
+  const routing = register(db, "routing", true);
+  const work = (parent_id?: string) => registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
+  const [memory, memoryChild, routingRow, routingChild, worker] = [previous, work(previous), routing, work(routing), work()].map((taskId, i) => objectedDecision(db, taskId, i + 1));
+  for (const decision of [memory, memoryChild, routingRow, routingChild, worker]) bundledObjection(db, getEvent(db, decision!)!.task_id!, decision!, at);
+  const review = register(db, "memory");
+
+  const { parts } = memoryMaterialOf(db, review);
+
+  expect(parts.precedents.map((p) => p.decision_event_id)).toEqual([memory, memoryChild, worker]);
+});
+
 it("異議つき判断は窓の中に異議のある decision だけを list_precedents の行で、決着した提案は窓の中に回答か陳腐化のあるものだけを list_memory_proposals の行で、枝の一覧は list_memory_branches の行で載せる", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
@@ -364,6 +378,8 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       allocations: [9002],
       cells: [9003],
       rows: [9004],
+      precedents: [],
+      precedent_entries: [],
       proposals: [],
     },
     at,
