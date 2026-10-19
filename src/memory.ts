@@ -2370,8 +2370,9 @@ type MemoryInjection = {
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
  *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
  *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)には組まない ——
- *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)と routing_repair
+ *  (主題 routing の修理子、ADR 0279 決定4・6)には組まない —— 節は scope を task から解決し、案内する pull verb はその接続に無い
+ *  (ADR 0122 決定2)。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
@@ -2382,7 +2383,7 @@ export function buildMemoryInjection(
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
     const none = { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
-    if (metaReviewSubjectOf(db, task.id) !== null) return none;
+    if (metaReviewSubjectOf(db, task.id) !== null || getTask(db, task.id)?.type === "routing_repair") return none;
     const sight = readerSight(db, { taskId: task.id, scope, agent });
     const visible = visibleEntries(db, sight);
     if (visible.length === 0) return none;

@@ -237,6 +237,17 @@ it("主題 memory の meta-review には、見える approved があっても節
   expect(buildMemoryInjection(db, review, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
 });
 
+it("routing_repair には、見える approved があっても節を出さない —— 主題 routing の修理子で、案内する pull verb はその面に無い。memory_repair には今どおり出す(ADR 0279 決定4・6 / ADR 0122 決定2)", () => {
+  const { db, task, record } = board();
+  record({ path: "tide", title: "fix tide chart" });
+  const review = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, ...HUMAN_WEBUI);
+  const repair = (type: "memory_repair" | "routing_repair") =>
+    registerTask(db, { type, title: "fix tide chart", purpose: "p", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
+  expect(buildMemoryInjection(db, repair("routing_repair"), "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
+  expect(buildMemoryInjection(db, repair("memory_repair"), "tidepool", "deckhand").section).not.toBeNull();
+  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).not.toBeNull();
+});
+
 it("approved が1つも見えなければ節を出さず、entries は空", () => {
   const { db, task, record } = board();
   record({ path: "tide", title: "tide elsewhere", scope: "sandbox" });
