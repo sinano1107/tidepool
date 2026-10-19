@@ -555,7 +555,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
-  // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
+  // 登録せず(ADR 0272 決定3)、routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を
+  // 登録しない(ADR 0279 決定4)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
   // complete_memory_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 

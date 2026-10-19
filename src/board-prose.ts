@@ -80,7 +80,7 @@ denial, make the call yourself from the main thread.`;
 // (src/sandbox.ts) — its "main-thread only" wording, this paragraph, and the
 // canary's BOARD_HOOK_WORDING move together.
 
-/** 前提の破綻の宣言の1文 —— その verb を伏せた task(memory_repair、ADR 0272 決定3)の文面からは落とす。 */
+/** 前提の破綻の宣言の1文 —— その verb を伏せた task(修理子の type、ADR 0272 決定3 / ADR 0279 決定4)の文面からは落とす。 */
 const PREMISE_BREACH_SENTENCE =
   "When the premise of the decomposition decision your task rests on turns out to be false, " +
   "declare a premise breach rather than working around it or escalating it. ";

@@ -55,11 +55,15 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
-export type TaskType = "work" | "question" | "review" | "memory_repair" | "routing_repair" | "interview";
+export type TaskType = "work" | "question" | "review" | RepairType | "interview";
 
 /** 異議の束ねが立てる修理子だけが取る type —— memory_repair と routing_repair(ADR 0272 決定2 / ADR 0279 決定4)。目的が違うので
- *  type は分け、同じ性質(親が必須・read-only・cascade で残る・学習器の work 側)はこの述語の共有で写す。 */
-export const isRepairType = (type: TaskType): type is "memory_repair" | "routing_repair" => type === "memory_repair" || type === "routing_repair";
+ *  type は分け、同じ性質(親が必須・read-only・cascade で残る・学習器の work 側)はこの集合の共有で写す。 */
+const REPAIR_TYPES = ["memory_repair", "routing_repair"] as const;
+export type RepairType = (typeof REPAIR_TYPES)[number];
+export const isRepairType = (type: TaskType): type is RepairType => (REPAIR_TYPES as readonly TaskType[]).includes(type);
+/** REPAIR_TYPES の SQL の `IN` の中身。 */
+const REPAIR_TYPES_SQL = REPAIR_TYPES.map((type) => `'${type}'`).join(", ");
 
 /** read-only 保証を運ぶ type(CONTEXT.md の type): review と修理子の type(ADR 0272 決定3 / ADR 0279 決定4)。repo への書き込みの床
  *  (harness deny・spawn の面・sandbox・permission mode・Codex の profile)と lineage の透明さが同じここを引く。 */
@@ -602,7 +606,7 @@ export interface TaskVerbSwap {
  *  受験者は分解の verb と記憶を書く verb を伏せる(ADR 0245 決定1 / ADR 0268 決定2)。interview の root の一覧は type で決まり(ADR 0273
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
- *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
+ *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
  *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せる(ADR 0279 決定4)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。memory meta-review も同じ形で
@@ -900,7 +904,7 @@ function countUnsettledTasksReferencingWorkspace(db: Db, name: string): number {
 
 /** 学習器の work 側に立つ type —— work と修理子の type(ADR 0272 決定4 の追記 / ADR 0279 決定4)。`rowRef` は tasks の行の SQL 別名。 */
 export function workSideTypeSql(rowRef: string): string {
-  return `${rowRef}.type IN ('work', 'memory_repair', 'routing_repair')`;
+  return `${rowRef}.type IN ('work', ${REPAIR_TYPES_SQL})`;
 }
 
 /** `workSideTypeSql` の TS の対。学習器が選び・shadow 行を残し・episode に数えるのもこの側で、判定者(review / interview)は外
@@ -3480,7 +3484,7 @@ function awaitedChildSql(rowRef: string): string {
  *  review and a human-registered review child fall: their repair cannot land and their fitness is to a discarded
  *  criterion. An attached work (repair, which carries objection ids too) or proposal question falls with the parent. */
 function survivesParentCancelSql(rowRef: string): string {
-  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type IN ('memory_repair', 'routing_repair') OR ${rcaSql(rowRef)}))`;
+  return `(NOT ${awaitedChildSql(rowRef)} AND (${rowRef}.type IN (${REPAIR_TYPES_SQL}) OR ${rcaSql(rowRef)}))`;
 }
 
 /** RCA review: a review whose registration record carries the objections it bundles (ADR 0171 決定1) —— never told by title. */
@@ -3528,7 +3532,7 @@ export const ROUTING_REPAIR_NOTICE =
   "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.";
 
 /** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
-export const REPAIR_NOTICES = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE } as const;
+export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };
 
 /** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
 function discardingAncestor(db: Db, taskId: string): Task | undefined {
