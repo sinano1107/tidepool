@@ -1110,25 +1110,42 @@ export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string
   return material.parts.items.map(judgmentKey);
 }
 
-/** memory meta-review の型つきの判断の行(ADR 0278 決定4)への異議で束ねた memory_repair(ADR 0279 決定3)。withWrite なら同じ review の
- *  書き込みの行(エントリの移動)への異議も同じ commit に入り、両方の行を運ぶ修理子になる(ADR 0281)。executor は review を走らせた
- *  agent で、修理子はその名前を写す。setup は domain で組む。 */
+/** 型つきの判断の行(ADR 0278 決定4)を書いた memory meta-review(setup は domain): 前の周期を閉じてから stock() で窓の中に店を作り、
+ *  周期を登録して材料を注入し、act(review) の後に注入した項目をすべて left_as_is で完了する。row は項目(エントリの id か枝の path)の
+ *  判断の行の id。executor は review を走らせた agent。 */
+export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (review: Task) => void = () => {}, executor = "fugu") {
+  registerMetaReview(db, "memory", at);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run();
+  stock();
+  registerMetaReview(db, "memory", at);
+  const review = listBoard(db).find((task) => task.meta_review_subject === "memory" && task.status === "todo")! as Task;
+  const items = injectMemoryMaterial(db, review.id, executor, at);
+  act(review);
+  completeMemoryReview(db, getTask(db, review.id)!, { judgments: items }, executor, at, "worker");
+  const row = (object: number | string) =>
+    listEvents(db, review.id).find(({ payload: p }) => p.kind === "decision_logged" && p.judgment?.kind === "memory" && ("entry" in p.judgment ? p.judgment.entry : p.judgment.branch) === object)!.id;
+  return { review, row };
+}
+
+/** memory meta-review の型つきの判断の行への異議で束ねた memory_repair(ADR 0279 決定3)。withWrite なら同じ review の書き込みの行
+ *  (エントリの移動)への異議も同じ commit に入り、両方の行を運ぶ修理子になる(ADR 0281)。修理子は executor の名前を写す。 */
 export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, executor = "fugu" } = {}): Task {
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const note = (title: string, path: string) => recordKnowledge(db, { scope: null, path, title, text: `${title}.`, source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
   const moving = note("Moving note", "misc");
-  // 前の周期を閉じてから窓の中に Knowledge を書き、次の周期を注入して据え置きで完了する
-  registerMetaReview(db, "memory", at);
-  db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run();
-  const judged = note("Squash", "build");
-  registerMetaReview(db, "memory", at);
-  const review = listBoard(db).find((task) => task.meta_review_subject === "memory" && task.status === "todo")! as Task;
-  const items = injectMemoryMaterial(db, review.id, executor, at);
-  const moved = withWrite && moveMemoryByMetaReview(db, { entry_id: moving, scope: null, path: "misc/old", mover: { activity: "meta_review", name: executor } }, "worker", at, review.id);
-  completeMemoryReview(db, review, { judgments: items }, executor, at, "worker");
-  const row = listEvents(db, review.id).find(({ payload: p }) => p.kind === "decision_logged" && p.judgment?.kind === "memory" && "entry" in p.judgment && p.judgment.entry === judged)!;
-  raiseObjection(db, row.id, "fold it into the build notes", at);
-  if (moved) raiseObjection(db, moved.event_id, "move it back", at);
+  let judged = 0;
+  let moved: number | undefined;
+  const { review, row } = judgedMemoryReview(
+    db,
+    at,
+    () => (judged = note("Squash", "build")),
+    (review) => {
+      if (withWrite) moved = moveMemoryByMetaReview(db, { entry_id: moving, scope: null, path: "misc/old", mover: { activity: "meta_review", name: executor } }, "worker", at, review.id).event_id;
+    },
+    executor,
+  );
+  raiseObjection(db, row(judged), "fold it into the build notes", at);
+  if (moved !== undefined) raiseObjection(db, moved, "move it back", at);
   commitTriage(db, at);
   return listChildren(db, review.id).find((child) => child.type === "memory_repair")!;
 }

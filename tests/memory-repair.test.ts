@@ -3,7 +3,6 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { latestEventOfTask, listEvents } from "../src/events.js";
 import {
-  completeMemoryReview,
   createBehaviorCandidate,
   defineMemoryBranch,
   defineMemoryByMetaReview,
@@ -21,16 +20,16 @@ import {
   repairReplace,
   repairRestore,
 } from "../src/memory.js";
-import { MEMORY_META_REVIEW_VERBS, registerMetaReview } from "../src/meta-review.js";
-import { getTask, listBoard, listChildren, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
+import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
+import { listChildren, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection } from "../src/triage.js";
-import { HUMAN_WEBUI, injectMemoryMaterial } from "./harness.js";
+import { HUMAN_WEBUI, judgedMemoryReview } from "./harness.js";
 
 /** 修理子から同じ操作の verb を呼ぶ —— meta-review と1つの関数で、射程は門が対象で切り替える(ADR 0281 決定1)。 */
-const repairInvalidate = (db: Db, repairer: { taskId: string; agent: string }, input: { entry_id: number; reason: "capability" }, at: Date) => ({
+const invalidateAsRepairer = (db: Db, repairer: { taskId: string; agent: string }, input: { entry_id: number; reason: "capability" }, at: Date) => ({
   event_id: invalidateMemoryByMetaReview(db, input, repairer.agent, "worker", at, repairer.taskId),
 });
-const repairMove = (db: Db, repairer: { taskId: string; agent: string }, input: { entry_id: number; scope: string | null; path: string }, at: Date) =>
+const moveAsRepairer = (db: Db, repairer: { taskId: string; agent: string }, input: { entry_id: number; scope: string | null; path: string }, at: Date) =>
   moveMemoryByMetaReview(db, { ...input, mover: { activity: "worker_verb", name: repairer.agent } }, "worker", at, repairer.taskId);
 
 /** 書き込みの行への異議の修理 task の記憶の修理 verb(issue #632 / ADR 0252 決定4)のドメイン層。tool の登録と写像はサーバ境界
@@ -55,22 +54,8 @@ function board() {
     return repairChild(objected);
   };
   const entry = (id: number) => listMemoryEntries(db, {}).find((e) => e.id === id)!;
-  /** 型つきの判断の行(ADR 0278 決定4)を書いた memory meta-review: 前の周期を閉じてから stock() で店を作り、周期を登録して材料を注入し、
-   *  act(review) の後に注入した項目をすべて left_as_is で完了する。row は項目(エントリの id か枝の path)の判断の行の id。 */
-  const judged = (stock: () => void, act: (review: Task) => void = () => {}) => {
-    registerMetaReview(db, "memory", at);
-    db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run();
-    stock();
-    registerMetaReview(db, "memory", at);
-    const review = listBoard(db).find((t) => t.meta_review_subject === "memory" && t.status === "todo")! as Task;
-    const items = injectMemoryMaterial(db, review.id, "fugu", at);
-    act(review);
-    completeMemoryReview(db, getTask(db, review.id)!, { judgments: items }, "fugu", at, "worker");
-    const rows = listEvents(db, review.id).filter((e) => e.payload.kind === "decision_logged" && e.payload.judgment);
-    const row = (object: number | string) =>
-      rows.find(({ payload: p }) => p.kind === "decision_logged" && p.judgment?.kind === "memory" && ("entry" in p.judgment ? p.judgment.entry : p.judgment.branch) === object)!.id;
-    return { review, row };
-  };
+  /** 型つきの判断の行を書いた memory meta-review(tests/harness.ts の judgedMemoryReview)。 */
+  const judged = (stock: () => void, act?: (review: Task) => void) => judgedMemoryReview(db, at, stock, act);
   return { db, task, reviewed, knowledge, repairChild, repairOf, entry, judged };
 }
 
@@ -82,7 +67,7 @@ it("逆操作: 異議された畳みの後継を無効化し、畳まれたエ�
   const repair = repairOf(fold.event_id, reviewed.id);
   const repairer = { taskId: repair.id, agent: "deckhand" };
 
-  const dropped = repairInvalidate(db, repairer, { entry_id: fold.entry_id, reason: "capability" }, at);
+  const dropped = invalidateAsRepairer(db, repairer, { entry_id: fold.entry_id, reason: "capability" }, at);
   const [restoredA, restoredB] = [a, b].map((entry_id) => repairRestore(db, repairer, { entry_id }, at));
 
   expect(entry(fold.entry_id)).toMatchObject({ invalidation_reason: "capability", invalidated_by: { activity: "worker_verb" } });
@@ -114,15 +99,15 @@ it("修理 verb は異議された書き込みが触ったエントリ(path_move
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [] }, at, ...HUMAN_WEBUI);
 
   // invalidate_memory / move_memory は meta-review と1つの関数で、修理子でない書き手には meta-review の規則が掛かる —— その門は MCP の登録(ADR 0281 決定1)
-  expect(() => repairInvalidate(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: untouched, reason: "capability" }, at)).toThrow(DomainError);
-  expect(() => repairMove(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: untouched, scope: "charts", path: "elsewhere" }, at)).toThrow(DomainError);
+  expect(() => invalidateAsRepairer(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: untouched, reason: "capability" }, at)).toThrow(DomainError);
+  expect(() => moveAsRepairer(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: untouched, scope: "charts", path: "elsewhere" }, at)).toThrow(DomainError);
   for (const taskId of [repair.id, workWriteRepair.id, decisionRepair.id, objected.id, rca.id]) {
     const repairer = { taskId, agent: "deckhand" };
     const entry_id = taskId === repair.id ? untouched : later;
     expect(() => repairReplace(db, repairer, { entry_id, title: "t", text: "x.", source: { commit: "0a46a46" } }, at)).toThrow(DomainError);
   }
   // 書き込みが作ったエントリは、後で移された複製まで鎖をたどって受ける
-  expect(repairInvalidate(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: later, reason: "capability" }, at)).toMatchObject({ event_id: expect.any(Number) });
+  expect(invalidateAsRepairer(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: later, reason: "capability" }, at)).toMatchObject({ event_id: expect.any(Number) });
 });
 
 it("移動: 異議された書き込みが移す前の置き場への移し戻しは門を掛けず、それ以外は meta-review と同じ門(scope は盤面全体へ広げる向きだけ)", () => {
@@ -131,8 +116,8 @@ it("移動: 異議された書き込みが移す前の置き場への移し戻�
   const repair = repairOf(widened.event_id, reviewed.id);
   const repairer = { taskId: repair.id, agent: "deckhand" };
 
-  expect(() => repairMove(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "elsewhere" }, at)).toThrow("only within it or to the whole board");
-  const back = repairMove(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "build" }, at);
+  expect(() => moveAsRepairer(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "elsewhere" }, at)).toThrow("only within it or to the whole board");
+  const back = moveAsRepairer(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "build" }, at);
 
   expect(entry(back.entry_id)).toMatchObject({ scope: "charts", path: "build", title: "Node 22", invalidation_reason: null });
   expect(entry(widened.entry_id)).toMatchObject({ invalidation_reason: "path_moved", successor_id: back.entry_id, invalidated_by: { activity: "worker_verb" } });
@@ -176,13 +161,13 @@ it("逆操作は書き込みがしたことに結ぶ —— 移動の複製(appr
   const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, objected.id);
   const writeRepair = { taskId: repairOf(wrote.event_id, objected.id).id, agent: "deckhand" };
 
-  expect(() => repairInvalidate(db, moveRepair, { entry_id: moved.entry_id, reason: "capability" }, at)).toThrow("was not created by the objected memory write");
+  expect(() => invalidateAsRepairer(db, moveRepair, { entry_id: moved.entry_id, reason: "capability" }, at)).toThrow("was not created by the objected memory write");
   expect(() => repairRestore(db, moveRepair, { entry_id: behavior }, at)).toThrow("was not invalidated by the objected memory write");
-  repairInvalidate(db, writeRepair, { entry_id: wrote.entry_id, reason: "capability" }, at);
+  invalidateAsRepairer(db, writeRepair, { entry_id: wrote.entry_id, reason: "capability" }, at);
   expect(() => repairRestore(db, writeRepair, { entry_id: wrote.entry_id }, at)).toThrow("was not invalidated by the objected memory write");
 
   expect(entry(moved.entry_id)).toMatchObject({ kind: "behavior", state: "approved", invalidation_reason: null });
-  const back = repairMove(db, moveRepair, { entry_id: moved.entry_id, scope: "charts", path: "habits" }, at);
+  const back = moveAsRepairer(db, moveRepair, { entry_id: moved.entry_id, scope: "charts", path: "habits" }, at);
   expect(entry(back.entry_id)).toMatchObject({ kind: "behavior", state: "approved", path: "habits", invalidation_reason: null });
 });
 
@@ -335,13 +320,14 @@ it("片側の verb の射程は広げない —— define_memory / fold_memory /
   const { db, knowledge, repairChild, judged, entry } = board();
   const candidate = (title: string) =>
     createBehaviorCandidate(db, { scope: "charts", path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at).entry_id;
-  const [other, otherCandidate] = [knowledge("Other note"), candidate("Old habit")];
-  let named = { c: 0, k: 0, k2: 0 };
+  const approved = (title: string) => recordBehavior(db, { scope: "charts", path: "habits", title, text: `${title}.`, addressee: null, author: HUMAN_AUTHOR }, "webui", at).entry_id;
+  const [other, otherCandidate, otherApproved] = [knowledge("Other note"), candidate("Old habit"), approved("Rebase first")];
+  let named = { c: 0, k: 0, k2: 0, b: 0, b2: 0 };
   const { review, row } = judged(() => {
-    named = { c: candidate("Small commits"), k: knowledge("Squash"), k2: knowledge("Squash it") };
+    named = { c: candidate("Small commits"), k: knowledge("Squash"), k2: knowledge("Squash it"), b: approved("Merge often"), b2: approved("Tag releases") };
     knowledge("High tide", "charts", "tides");
   });
-  for (const id of [row(named.c), row(named.k), row(named.k2), row("tides")]) raiseObjection(db, id, "redo it", at);
+  for (const id of [row(named.c), row(named.k), row(named.k2), row(named.b), row(named.b2), row("tides")]) raiseObjection(db, id, "redo it", at);
   commitTriage(db, at);
   const repair = repairChild(review.id);
   const author = { activity: "worker_verb" as const, name: "deckhand" };
@@ -357,6 +343,12 @@ it("片側の verb の射程は広げない —— define_memory / fold_memory /
   fold([named.k, named.k2]);
   expect(approve(named.c)).toMatchObject({ question_id: expect.any(String) });
   expect(() => approve(otherCandidate)).toThrow(`entry #${otherCandidate} is not named by the objected judgment`);
+  // invalidate は target、consolidate は replaces が変える対象 —— consolidate の後継(candidate_id)は行き先なので名指されていなくてよい
+  const propose = (input: Omit<Parameters<typeof proposeMemoryChange>[2], "rationale">) => proposeMemoryChange(db, repair.id, { ...input, rationale: "it holds" }, "deckhand", at);
+  expect(() => propose({ op: "invalidate", target_id: otherApproved, reason: "capability" })).toThrow(`entry #${otherApproved} is not named by the objected judgment`);
+  expect(propose({ op: "invalidate", target_id: named.b, reason: "capability" })).toMatchObject({ question_id: expect.any(String) });
+  expect(() => propose({ op: "consolidate", candidate_id: otherCandidate, replaces: [otherApproved] })).toThrow(`entry #${otherApproved} is not named by the objected judgment`);
+  expect(propose({ op: "consolidate", candidate_id: otherCandidate, replaces: [named.b2] })).toMatchObject({ question_id: expect.any(String) });
   for (const write of [
     () => repairRestore(db, repairer, { entry_id: named.k }, at),
     () => repairReplace(db, repairer, { entry_id: named.k2, title: "t", text: "x.", source: { commit: "0a46a46" } }, at),

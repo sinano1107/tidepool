@@ -23,7 +23,7 @@ import {
   invalidationSchema,
   listPrecedents,
   memoryListFilterSchema,
-  memoryRepairVerbs,
+  memoryRepairKinds,
   memoryScope,
   metaReviewAnnotationSchema,
   metaReviewInvalidationSchema,
@@ -1232,26 +1232,33 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   return server;
 }
 
-/** 記憶の修理子の書き込み verb に足す射程の文(ADR 0281): 門は domain が対象で切り替える。 */
-const MEMORY_REPAIR_REACH =
-  "This repair changes only what the objected rows in your purpose reach: the entries the objected memory writes created, invalidated or moved " +
-  "(and the copies those were moved to since) and the branches they defined or moved entries into, under the repair rules — moving an entry back " +
-  "to where that write moved it from always works; and the entries and branches the objected judgments name, under the meta-review rules — " +
-  "define_memory, fold_memory and propose_memory_change take only those. Anything else is refused.";
+/** 記憶の修理子の書き込み verb に足す射程の文(ADR 0281): 門は domain が対象で切り替える。運ぶ行の種類の分だけ言う。 */
+function memoryRepairReach({ writes, judgments }: { writes: boolean; judgments: boolean }): string {
+  const reaches = [
+    ...(writes
+      ? [
+          "the entries the objected memory writes created, invalidated or moved (and the copies those were moved to since) and the branches they defined " +
+            "or moved entries into, under the repair rules — moving an entry back to where that write moved it from always works",
+        ]
+      : []),
+    ...(judgments ? ["the entries and branches the objected judgments name, under the meta-review rules — define_memory, fold_memory and propose_memory_change take only those"] : []),
+  ];
+  return ` This repair changes only what the objected rows in your purpose reach: ${reaches.join("; and ")}. Anything else is refused.`;
+}
 
 /** 記憶の修理子の verb(ADR 0252 決定4 / ADR 0279 決定3 / ADR 0281): 運ぶ行の種類で組を登録する —— 同じ操作の verb は meta-review と
  *  1つの tool で、対象の範囲と門は domain が呼び出し時に持つ。 */
 function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string): void {
-  const verbs = memoryRepairVerbs(deps.db, attributedTaskId);
+  const kinds = memoryRepairKinds(deps.db, attributedTaskId);
   const run: MetaReviewRun = (verb) =>
     runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
-  const side = { activity: "worker_verb", reach: ` ${MEMORY_REPAIR_REACH}` } as const;
-  if (verbs.includes("list_memory_candidates")) {
+  const side: MemoryWriteSide = { activity: "worker_verb", reach: memoryRepairReach(kinds), judges: kinds.judgments };
+  if (kinds.judgments) {
     registerPrecedentRead(server, deps, run);
     registerMemoryEntriesRead(server, deps, run);
     registerMemoryMetaReviewVerbs(server, deps, run, side);
   } else registerMemoryMoves(server, deps, run, side);
-  if (!verbs.includes("restore_memory")) return;
+  if (!kinds.writes) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
 
@@ -1352,8 +1359,8 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
         "Rows are limited to your subject: a routing meta-review sees the decisions of routing meta-reviews and their children, a memory meta-review " +
-        "every other decision, and an Interview all of them. " +
-        "Defaults to objections since the previous completed meta-review of your subject (for an Interview, the board's start); pass since_watermark (an event id) to look further back. " +
+        "or memory repair every other decision, and an Interview all of them. " +
+        "Defaults to objections since the previous completed meta-review of your subject (for an Interview or a repair, the board's start); pass since_watermark (an event id) to look further back. " +
         nextDescription("list_precedents", "precedents"),
       inputSchema: { since_watermark: z.number().int().min(0).optional(), next },
     },
@@ -1494,9 +1501,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
   );
 }
 
-/** 書き込み verb の書き手の側: meta-review か記憶の修理子(ADR 0281)。activity は書き込みの印、reach は修理子の射程の文。 */
-type MemoryWriteSide = { activity: "meta_review" | "worker_verb"; reach: string };
-const META_REVIEW_SIDE: MemoryWriteSide = { activity: "meta_review", reach: "" };
+/** 書き込み verb の書き手の側: meta-review か記憶の修理子(ADR 0281)。activity は書き込みの印、reach は修理子の射程の文、judges は
+ *  判断の側の verb(define_memory / fold_memory / propose_memory_change)を持つか —— 説明文が持たない verb を指さないため。 */
+type MemoryWriteSide = { activity: "meta_review" | "worker_verb"; reach: string; judges: boolean };
+const META_REVIEW_SIDE: MemoryWriteSide = { activity: "meta_review", reach: "", judges: true };
 const memoryScopeSchema = requiredTextSchema.nullable().describe("A registry workspace name, or null for the whole board.");
 
 /** 主題 memory の専用 verb(issue #619)。判断の行を運ぶ記憶の修理子も同じ組を持つ(ADR 0279 決定3)。 */
@@ -1727,7 +1735,7 @@ function registerMemoryMoves(server: McpServer, deps: McpDeps, run: MetaReviewRu
         "Moving a whole-board branch to another whole-board path also carries every workspace's entries under path, each " +
         "staying in its own scope. When a moved Definition would land on a path already defined in its scope, the move is " +
         "refused and names every such pair. To merge, pass merge: true: each of those Definitions is folded into the one " +
-        "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
+        "already there (superseded — the destination's wording stays; revise it in place with " + (side.judges ? "define_memory" : "replace_memory") + " before or " +
         "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved and folded (how " +
         "many entries were moved and how many Definitions were folded) with to_scope and to_path." + side.reach,
       inputSchema: { scope, path: requiredTextSchema, to_scope: scope, to_path: requiredTextSchema, merge: z.boolean().optional() },
@@ -1746,8 +1754,11 @@ function registerMemoryMoves(server: McpServer, deps: McpDeps, run: MetaReviewRu
       description:
         "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
         "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
-        "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
-        "An approved Behavior or Exemplar cannot be invalidated here — propose it instead." + side.reach,
+        (side.judges
+          ? "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
+            "An approved Behavior or Exemplar cannot be invalidated here — propose it instead."
+          : "To replace an entry, use replace_memory, move_memory or move_memory_branch.") +
+        side.reach,
       inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
     },
     async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now, reader.taskId) })),

@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { recordKnowledge } from "../src/memory.js";
+import { memoryRepairVerbs, recordKnowledge } from "../src/memory.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
 import { cancelTaskDirectly, listChildren, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
@@ -161,7 +161,7 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を�
   }
 });
 
-it("memory_repair の tools/list の記憶の verb は運ぶ行の種類で決まる —— 書き込みの行だけなら6本、memory meta-review の判断の行だけなら13本、両方なら名前の集合の和16本(ADR 0281)", async () => {
+it("memory_repair の tools/list の記憶の verb は、書き込みの行だけ・判断の行だけ・両方のどの組でも memoryRepairVerbs の集合(中身は domain の釘、ADR 0281 / ADR 0107 決定3)", async () => {
   t = await bootTidepool();
   const at = t.clock.now();
   const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c", workspace: "charts" }, at, ...HUMAN_WEBUI);
@@ -179,13 +179,7 @@ it("memory_repair の tools/list の記憶の verb は運ぶ行の種類で決�
     }
   };
 
-  const writes = ["invalidate_memory", "move_memory", "move_memory_branch", "replace_memory", "restore_memory", "restore_memory_branch"];
-  expect(await Promise.all(repairs.map((repair) => memoryVerbs(repair.id)))).toEqual([
-    writes,
-    [...MEMORY_META_REVIEW_VERBS].sort(),
-    [...new Set([...MEMORY_META_REVIEW_VERBS, ...writes])].sort(),
-  ]);
-  expect(new Set([...MEMORY_META_REVIEW_VERBS, ...writes]).size).toBe(16);
+  for (const repair of repairs) expect(await memoryVerbs(repair.id)).toEqual(memoryRepairVerbs(t.db, repair.id).sort());
 });
 
 it("routing_repair の worker MCP は tools/list が基本の面(get_current_task / log_decision / escalate / complete_task)だけで、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {

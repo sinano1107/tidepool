@@ -715,7 +715,7 @@ export function moveMemoryByMetaReview(
 
 /** meta-review の `move_memory_branch`(ADR 0176 決定1・5 / ADR 0177 決定5): 移す行すべて(盤面全体 → 盤面全体で運ぶ workspace の行も)
  *  に scope の門を掛けてから、人間の面と同じ本体で移す。1件でも門に掛かれば何も書かない —— 枝を自分で割らない。記憶の修理子も同じ関数で、
- *  枝は射程(branchReach)に入っていなければ拒む(ADR 0281)。 */
+ *  枝は射程(requireBranchReach)に入っていなければ拒む(ADR 0281)。 */
 export function moveMemoryBranchByMetaReview(
   db: Db,
   input: Parameters<typeof moveMemoryBranch>[1],
@@ -725,7 +725,7 @@ export function moveMemoryBranchByMetaReview(
 ): ReturnType<typeof moveMemoryBranch> & { event_id: number } {
   return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
     db.transaction(() => {
-      branchReach(db, writer, input.scope, checkedPath(input.path));
+      requireBranchReach(db, writer, input.scope, checkedPath(input.path));
       requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
       return moveMemoryBranch(db, input, origin, at);
     })(),
@@ -788,11 +788,16 @@ function objectedJudgments(db: Db, taskId: string): MemoryJudgmentItem[] {
   );
 }
 
-/** memory_repair の記憶の verb(ADR 0281): 書き込みの行の修理 verb、判断の行の memory meta-review の verb、両方なら名前の集合の和。
- *  判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。MCP の登録と Codex の `enabled_tools` が同じこれを読む。 */
-export function memoryRepairVerbs(db: Db, taskId: string): string[] {
+/** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
+export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
   const judgments = objectedJudgments(db, taskId).length > 0;
-  const writes = !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written");
+  return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
+}
+
+/** memory_repair の記憶の verb(ADR 0281): 書き込みの行の修理 verb、判断の行の memory meta-review の verb、両方なら名前の集合の和。
+ *  Codex の `enabled_tools` が読み、MCP の登録は memoryRepairKinds で同じ組を登録する。 */
+export function memoryRepairVerbs(db: Db, taskId: string): string[] {
+  const { writes, judgments } = memoryRepairKinds(db, taskId);
   return [...new Set([...(writes ? MEMORY_REPAIR_VERBS : []), ...(judgments ? MEMORY_META_REVIEW_VERBS : [])])];
 }
 
@@ -854,17 +859,17 @@ function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void
   if (outside) throw new DomainError(`${itemName(outside)} is not named by the objected judgment: a memory repair defines, folds and proposes only what that judgment names`);
 }
 
-/** 枝の射程(ADR 0281 決定2): 書き込みが path に Definition を作った、または path かその下へエントリを移した(同じ scope)なら書き込みの
- *  射程で、配下に触っていない leaf があっても枝ごと動く。判断の行は枝を path で名指す。 */
-function branchReach(db: Db, writer: string, scope: string | null, path: string): Reach {
-  if (getTask(db, writer)?.type !== "memory_repair") return "meta";
+/** 枝の射程の門(ADR 0281 決定2): memory_repair の書き手なら、書き込みが path に Definition を作った、または path かその下へエントリを
+ *  移した(同じ scope)枝か、判断の行が path で名指す枝だけを通す —— 配下に触っていない leaf があっても枝ごと動く。どちらの射程でも
+ *  規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない書き手(meta-review)は門を持たない。 */
+function requireBranchReach(db: Db, writer: string, scope: string | null, path: string): void {
+  if (getTask(db, writer)?.type !== "memory_repair") return;
   const writes = objectedWrites(db, writer);
   const into = [
     ...writes.flatMap((w) => w.created.map((id) => requireEntry(db, id))).filter((row) => row.kind === "definition" && row.path === path),
     ...writes.flatMap((w) => w.moved.map((id) => requireEntry(db, requireEntry(db, id).successor_id!))).filter((row) => atOrUnder(row.path, path)),
   ];
-  if (into.some((row) => row.scope === scope)) return "write";
-  if (namedObjects(db, writer).branches.includes(path)) return "judgment";
+  if (into.some((row) => row.scope === scope) || namedObjects(db, writer).branches.includes(path)) return;
   throw new DomainError(
     `branch ${path} in scope ${scope ?? "whole board"} was neither defined nor moved into by the objected memory write, nor named by the objected judgment: a memory repair moves only those branches`,
   );
@@ -2196,7 +2201,8 @@ export function listPrecedents(
   const read = readPosition("list_precedents", input);
   return db.transaction(() => {
     const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
-    const rows = precedentRows(db, { after: since }, metaReviewSubjectOf(db, reader.taskId));
+    // 読み手の主題も祖先から読む —— 主題の修理子は親の主題の行を読む(ADR 0279 決定6)
+    const rows = precedentRows(db, { after: since }, lineageSubjectOf(db, reader.taskId));
     // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
     const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids: precedentEntryIds(packed.precedents) }, packed, at);
