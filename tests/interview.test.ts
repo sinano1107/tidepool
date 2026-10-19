@@ -9,7 +9,7 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
@@ -570,6 +570,28 @@ it("断られた対象の question が開いたまま root を retry すると�
 
   expect(getTask(db, question.id)!.status).toBe("todo");
   expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
+});
+
+it("task が開く場所の名前は、受験者は面接室(root id)だけ、root は実環境・自分の面接室・他に読める面接室(根拠の root と retry の旧い root)、root 配下の review は親が review でも実環境・root の面接室・root の他に読める面接室、その他は workspace 列だけ —— 面接室の在り処は見ない(ADR 0273 追記、issue #2265)", () => {
+  const db = openDb(":memory:");
+  const plain = registerTask(db, { type: "work", ...PLAIN }, new Date(0), ...HUMAN_WEBUI);
+  const { root: evidence } = registerInterview(db);
+  const { root } = registerInterview(db, [opusHigh], { workspace: "reef", evidence_task_ids: [evidence.id, plain.id] });
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
+  const audit = listChildren(db, root.id).find((child) => child.type === "review")!;
+  const nested = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  const again = retryRoot(db, root);
+  const names = (task: Task) => openedPlaceNames(db, task.id, "sandbox").sort();
+
+  expect(names(examinee)).toEqual([root.id]);
+  expect(names(root)).toEqual(["reef", root.id, evidence.id].sort());
+  expect(names(again)).toEqual(["reef", again.id, evidence.id, root.id].sort());
+  for (const review of [audit, nested]) expect(names(review)).toEqual(["reef", root.id, evidence.id].sort());
+  expect(names(plain)).toEqual(["sandbox"]);
+  // review の鎖は review でない祖先で切れる(`taskRunPlace` と同じ辿り方)
+  const workUnderAudit = registerTask(db, { type: "work", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  const reviewUnderWork = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: workUnderAudit.id }, new Date(0), ...HUMAN_WEBUI);
+  for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
 
 /** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる —— 今日の盤面では受験者の決着で先に閉じる)。 */
