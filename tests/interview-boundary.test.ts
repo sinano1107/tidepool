@@ -363,6 +363,19 @@ it("root の pickup で読む実環境の refresh が落ちると実環境の qu
   expect((await questions(t)).filter((q) => q.status !== "done" && q.parent_id === waiting.id)).toEqual([]);
 });
 
+it("監査の pickup は読む面接室を remote へ追従させない —— 面接室の quarantine は監査の pickup の門に掛からず、落とすと同じ監査を毎回拾い直す(issue #2223)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  // 面接室が remote を持つと宣言との突き合わせが落ちる —— 監査の pickup がそこへ当たれば面接室の quarantine が立つ
+  const examinees = await poseThroughAudit(t, root.id, POSE, async (taskId) => {
+    t.worker.exit(taskId);
+    if (taskId === root.id) git(roomOf(root.id), "remote", "add", "origin", "/nonexistent/room-remote");
+  });
+
+  expect(examinees).toHaveLength(1);
+  expect((await questions(t)).filter((q) => q.status !== "done" && q.question_quarantine_kind === "workspace")).toEqual([]);
+});
+
 it.each([
   ["registry の盤面(面接室の名前を知らない resolver)", true],
   ["registry の無い盤面(どの名前にも既定の workspace を返す resolver)", false],

@@ -70,7 +70,8 @@ export interface WorkspaceConfig {
 /** Where a task runs (`taskRunPlace`): its workspace, the interview room for an Interview root, or an examinee's own checkout.
  *  `reads` are the places outside it opened for reading only, in their real spelling — an Interview root's real
  *  environment and the rooms it may open, or the rooms a review under an Interview root reads. Empty for every other task.
- *  They are places, not paths, so the pickup brings them to their rest position the same way as the run place (issue #2223).
+ *  They are places, not paths, so the pickup can bring a remote-backed one to its rest position the same way as the run place
+ *  (issue #2223).
  *  `snapshot_key` keys the ADR 0064 ref snapshot when it is not `name` — an examinee's checkout, named after its room
  *  (ADR 0276 決定3). */
 export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_key?: string };
@@ -256,7 +257,7 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
     while (parent?.type === "review" && parent.parent_id !== null) parent = getTask(db, parent.parent_id);
     if (parent?.type !== "interview") return { ...workspace, reads: [] };
     const room = recordedInterviewRoom(db, parent.id);
-    return { ...workspace, reads: [...(room ? [room] : []), ...readableInterviewRooms(db, parent.id)].map(real) };
+    return { ...workspace, reads: [...(room ? [room] : []), ...readableInterviewRooms(db, parent.id)].map(inRealSpelling) };
   }
   if (task.type !== "interview") {
     const path = examineeCheckoutPath(db, task.id);
@@ -265,11 +266,11 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
-  return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(real) };
+  return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(inRealSpelling) };
 }
 
 /** 読む場所を実体の綴りで —— sandbox の読みの path と cwd・root に渡す在り処が同じ綴りになる(issue #1954)。 */
-const real = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
+const inRealSpelling = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place, path: safeRealpath(place.path) });
 
 /** ADR 0018 in one place: an entry's own `path`, or — when it omits one — the
  *  convention-derived location under the base dir. Every consumer that has to
@@ -662,7 +663,7 @@ function assertRegistryRoleAgrees(
 }
 
 /** pickup の鮮度の段(issue #211 / issue #2223): 宣言どうし・宣言と実態を突き合わせ、remote 正本を宣言していれば refresh し、
- *  休止位置(ADR 0052 決定7)へ追従させる。task が触る場所の全部 —— 走る場所と読む場所(`RunPlace.reads`)—— に当てる:
+ *  休止位置(ADR 0052 決定7)へ追従させる。走る場所と、読む場所(`RunPlace.reads`)のうち remote 正本を持つものに当てる:
  *  盤面が読む正本は pickup 直前の remote の保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。
  *
  *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その場所の quarantine —— だからである(scheduler 側の

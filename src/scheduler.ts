@@ -85,6 +85,7 @@ import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   freshenPlaceAtPickup,
+  isRemoteBacked,
   openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -503,16 +504,21 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
         }
       }
-      // issue #2223: task が触る場所の全部に鮮度の段を当て、走る場所だけその上にブランチと ref の基準を積む。落ちた場所の
-      // quarantine に落ちる。読む場所を先に当てるので、読む場所で落ちた pickup は走る場所を動かしていない
+      // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
+      // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
+      // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
       const place = taskRunPlace(db, picked, resolved);
-      for (const at of [...place.reads, place]) {
+      for (const read of place.reads.filter(isRemoteBacked)) {
         try {
-          if (at === place) await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
-          else await freshenPlaceAtPickup(at, { githubAuth, registry });
+          await freshenPlaceAtPickup(read, { githubAuth, registry });
         } catch (err) {
-          return stopped(await quarantineWithRepoAccessGuidance(at, err));
+          return stopped(await quarantineWithRepoAccessGuidance(read, err));
         }
+      }
+      try {
+        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
+      } catch (err) {
+        return stopped(await quarantineWithRepoAccessGuidance(place, err));
       }
     }
     const started = { ...picked, ...content };

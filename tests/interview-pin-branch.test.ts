@@ -96,7 +96,7 @@ it("面接室は規約の基点の下の root の id に、盤面名義の空コ
   db.close();
 });
 
-it("root の走る場所は実環境を path でなく場所(名前・repo・保護ブランチを持つ WorkspaceConfig、在り処は実体の綴り)として読む —— pickup の鮮度の段がそこへ当たる(issue #2223 / ADR 0052 決定1・2)", async () => {
+it("root の走る場所は実環境を path でなく場所(名前・repo・保護ブランチを持つ WorkspaceConfig、在り処は実体の綴り)として読む —— pickup が remote へ追従させられる(issue #2223 / ADR 0052 決定1・2)", async () => {
   const db = openDb(":memory:");
   const workspace = { ...(await makeWorkspace("reads-real")), repo: "https://github.com/acme/reads-real.git", branch: "main" };
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", workspace: workspace.name, interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
