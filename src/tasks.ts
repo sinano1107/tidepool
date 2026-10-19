@@ -1272,7 +1272,7 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
  *
  *  ADR 0111: root work and risk children are mandatory integration points;
  *  ordinary children opt into individual review through review_flag.
- *  Human tasks, questions and reviews are outside this rule. */
+ *  Human tasks, questions and reviews are outside the integration-point rule. */
 export function completeTask(
   db: Db,
   task: Task,

@@ -58,5 +58,5 @@ for (const type of ["review", "memory_repair"] as const) {
 it("a human-assignee review completes without a handoff outcome", () => {
   const db = openDb(":memory:");
   const review = registerTask(db, { type: "review", title: "eyeball it", purpose: "p", completion_criteria: "c", assignee: HUMAN_WORKER_ID }, NOW, ...HUMAN_WEBUI);
-  expect(completeTask(db, review, undefined, HUMAN_WORKER_ID, NOW, "worker").status).toBe("done");
+  expect(completeTask(db, review, undefined, HUMAN_WORKER_ID, NOW, "webui").status).toBe("done");
 });

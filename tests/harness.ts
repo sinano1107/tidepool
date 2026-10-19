@@ -1064,9 +1064,9 @@ export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string |
   return open && getTask(db, open.id);
 }
 
-/** slot task を MCP の `complete_task` で完了させる: `handoff` は全欄、false は work 以外に要る outcome だけ(ADR 0278 決定6)。 */
-export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true): Promise<any> {
-  return callAsTask(t, taskId, "complete_task", { handoff: handoff ? FULL_HANDOFF : { outcome: FULL_HANDOFF.outcome } });
+/** slot task を MCP の `complete_task` で完了させる: `fullHandoff` は全欄、false は work 以外に要る outcome だけ(ADR 0278 決定6)。 */
+export async function completeViaMcp(t: Tidepool, taskId: string, fullHandoff = true): Promise<any> {
+  return callAsTask(t, taskId, "complete_task", { handoff: fullHandoff ? FULL_HANDOFF : { outcome: FULL_HANDOFF.outcome } });
 }
 
 /** 修理子の無い統合レビューを閉じる complete_integration_review の引数(ADR 0278 決定2)。 */
