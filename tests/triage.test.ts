@@ -2,9 +2,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
-import { moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
+import { completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { registerMetaReview } from "../src/meta-review.js";
+import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -17,6 +18,7 @@ import {
   FULL_HANDOFF,
   HOUR,
   HUMAN_WEBUI,
+  injectMemoryMaterial,
   interviewExaminee,
   loggedEntry,
   mcpClient,
@@ -1124,26 +1126,39 @@ it.each([
 
 it.each([
   ["memory", "判断の行"],
+  ["memory", "型つきの判断の行"],
   ["memory", "完了の行"],
   ["routing", "判断の行"],
   ["routing", "完了の行"],
 ] as const)("%s の meta-review の%sへの異議の commit は work の修理子を立てず、帰責 event と RCA は立つ(ADR 0279 決定1・3・4)", (subject, rowKind) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-20T00:00:00.000Z");
-  const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
-  spawnedAs(db, review, "fugu", at);
-  // 型つきの判断の行(#2283 / #2284)はまだ無いので、対象を名指さない自由文の判断の行と完了の行で釘を打つ
+  let review: Task;
   let row: number;
-  if (rowKind === "判断の行") row = logDecision(db, review, "fugu's call", "fugu", at, "worker");
-  else {
-    finishTask(db, pickupTask(db, review, "fugu", at)!, { outcome: "done" }, "fugu", at, "worker");
-    row = listEvents(db, review.id).find((event) => event.kind === "task_completed")!.id;
+  if (rowKind === "型つきの判断の行") {
+    // completeMemoryReview が書く、対象を名指す型つきの行(#2283)。routing の型つきの行は #2284 待ち
+    registerMetaReview(db, "memory", at);
+    db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run();
+    recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at);
+    registerMetaReview(db, "memory", at);
+    review = listBoard(db).find((task) => task.meta_review_subject === "memory" && task.status === "todo")! as Task;
+    const items = injectMemoryMaterial(db, review.id, "fugu", at);
+    completeMemoryReview(db, review, { judgments: items }, "fugu", at, "worker");
+    row = listEvents(db, review.id).find(({ payload }) => payload.kind === "decision_logged" && payload.judgment)!.id;
+  } else {
+    review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+    spawnedAs(db, review, "fugu", at);
+    if (rowKind === "判断の行") row = logDecision(db, review, "fugu's call", "fugu", at, "worker");
+    else {
+      finishTask(db, pickupTask(db, review, "fugu", at)!, { outcome: "done" }, "fugu", at, "worker");
+      row = listEvents(db, review.id).find((event) => event.kind === "task_completed")!.id;
+    }
   }
   raiseObjection(db, row, "redo it", at);
 
   commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
 
-  expect(listChildren(db, review.id).map((child) => child.title)).toEqual(["rca (self): t", "rca (auditor): t"]);
+  expect(listChildren(db, review.id).map((child) => child.title)).toEqual([`rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
   expect(listEvents(db, review.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
 });
 
