@@ -677,11 +677,14 @@ export function completeRca(
     const memories = drafted
       .filter((d) => entries.includes(d.entry_id))
       .map(({ memory_event_id: id }) => ({ id, kind: (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "memory_entry_created" }>).entry.kind }));
+    const acts = [...memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`), ...repairs.map(({ id }) => `repair ${id}`)];
     // 行為のある所見への no_proposal は受け取って載せない(ADR 0278 決定3)
-    const idle = memories.length === 0 && repairs.length === 0;
-    return { kind: "rca" as const, entries, root_cause: normalizeText(root_cause), memories, repairs, ...(idle && no_proposal && { no_proposal }) };
+    const judgment = { kind: "rca" as const, entries, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
+    const named = `entries ${entries.join(", ")}`;
+    const line = acts.length ? `${named} → ${acts.join(", ")} — ${judgment.root_cause}` : `no_proposal: ${named} — ${judgment.root_cause}`;
+    return { judgment, line, unjustified: !acts.length && !no_proposal };
   });
-  const unjustified = judged.filter((j) => j.memories.length === 0 && j.repairs.length === 0 && !j.no_proposal).flatMap((j) => j.entries);
+  const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.entries : []));
   const refusals = [
     unknown.length > 0 && `not in this RCA's material: entries ${ids(unknown)}`,
     repeated.length > 0 && `in more than one finding: entries ${ids(repeated)}`,
@@ -690,13 +693,7 @@ export function completeRca(
   ].filter(Boolean);
   if (refusals.length > 0) throw new DomainError(refusals.join("; "));
   return db.transaction(() => {
-    for (const judgment of judged) {
-      const acts = [
-        ...judgment.memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`),
-        ...repairs.map(({ id }) => `repair ${id}`),
-      ];
-      const entries = `entries ${judgment.entries.join(", ")}`;
-      const line = judgment.no_proposal ? `no_proposal: ${entries} — ${judgment.root_cause}` : `${entries} → ${acts.join(", ")} — ${judgment.root_cause}`;
+    for (const { judgment, line } of judged) {
       appendEvent(db, { taskId: review.id, workerId, origin, payload: { kind: "decision_logged", line, judgment }, at: now });
     }
     return finishTask(db, review, handoff, workerId, now, origin);

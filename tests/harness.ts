@@ -49,6 +49,7 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
+  isRca,
   listBoard,
   listChildren,
   listExaminees,
@@ -1100,9 +1101,6 @@ export const judgmentRows = (db: Db, taskId: string) =>
 export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
   return callAsTask(t, reviewId, "complete_memory_review", { judgments: injectedJudgmentItems(t.db, reviewId) });
 }
-
-/** RCA か —— その完了の verb が足されているかで見る。 */
-const isRca = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_rca");
 
 /** harness の complete_rca の所見の根本原因の既定。 */
 export const RCA_ROOT_CAUSE = "the objection came from the call itself";
