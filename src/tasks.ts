@@ -610,24 +610,7 @@ export interface TaskVerbSwap {
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
-  if (task?.type === "routing_repair") {
-    return {
-      withheld: [
-        "list_agents",
-        "decompose",
-        "redecompose",
-        "continue_decomposition",
-        "declare_premise_breach",
-        "record_knowledge",
-        "define_memory_branch",
-        "browse_memory",
-        "search_memory",
-        "read_memory",
-        "propose_from_objection",
-      ],
-      added: [],
-    };
-  }
+  if (task?.type === "routing_repair") return { withheld: ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   // Interview の監査(ADR 0273 決定3・4): review の読み系と、受理 / 却下の専用の完了 verb
   if (task && auditedPosedEventId(db, task.id) !== undefined) {

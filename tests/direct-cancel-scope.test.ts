@@ -518,19 +518,7 @@ it("task ごとの verb の差し替えは、routing_repair で基本の面(get_
   db = openDb(":memory:");
   const { target, child } = doneChildrenWithAttachments(db);
   const routingRepair = registerTask(db, { type: "routing_repair", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: child.id }, NOW, ...HUMAN_WEBUI);
-  const withheld = [
-    "list_agents",
-    "decompose",
-    "redecompose",
-    "continue_decomposition",
-    "declare_premise_breach",
-    "record_knowledge",
-    "define_memory_branch",
-    "browse_memory",
-    "search_memory",
-    "read_memory",
-    "propose_from_objection",
-  ];
+  const withheld = ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"];
   expect(taskVerbSwap(db, routingRepair.id)).toEqual({ withheld, added: [] });
 
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
