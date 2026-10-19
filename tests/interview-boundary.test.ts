@@ -656,7 +656,7 @@ async function scoring(rootId: string) {
 it.each([
   ["complete_audit", auditing],
   ["complete_interview", scoring],
-])("%s の時に workspace が registry から消えていても(registry drift)、Quarantine はその名前に1枚だけで撃ち直されず、task は done になり枠が空いて次の pickup が走る(ADR 0274 決定3 / issue #2259)", async (verb, arrange) => {
+])("%s の時に workspace が registry から消えていても(registry drift)、門がその名前の Quarantine を1枚だけ立て、task は done になり枠が空いて次の pickup が走る(ADR 0274 決定3 / issue #2259)", async (verb, arrange) => {
   const workspace = await makeWorkspace("reef");
   const other = await makeWorkspace("other");
   let drifted = false;

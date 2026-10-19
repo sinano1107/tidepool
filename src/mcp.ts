@@ -332,7 +332,7 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
   );
 }
 
-/** 検査を持たない完了の門: workspace を前倒しで解決するだけ(`done` へ決着させる verb は門を持つ —— ADR 0274 決定3)。 */
+/** 検査を持たない門: workspace を前倒しで解決するだけ(監査・Interview の完了には ADR 0084 の完了の門が無い)(`done` へ決着させる verb は門を持つ —— ADR 0274 決定3)。 */
 const resolveOnly = (): void => {};
 
 /** Verbs that end the slot session (complete, decompose, escalate, and the other
