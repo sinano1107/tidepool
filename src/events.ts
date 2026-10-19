@@ -195,6 +195,8 @@ export type EventPayload =
   | { kind: "interview_retried"; previous_root_id: string; probe: string; rubric: string; reason?: string; comment?: string; interview_room?: string }
   // ADR 0273 決定1: 盤面が root の最初の pickup で面接室を作った —— path はその在り処。基点が後で変わっても在り処はこれで引く
   | { kind: "interview_room_opened"; path: string }
+  // ADR 0276 決定1・4: 盤面が受験者の最初の pickup で自分の checkout を面接室の外に作った —— path はその在り処(面接室と同じ形)
+  | { kind: "examinee_checkout_opened"; path: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
@@ -204,7 +206,7 @@ export type EventPayload =
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
   // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
   | ({ kind: "row_refused" } & (RowRefusal | ListedRefusal))
-  // ADR 0266 決定3: pickup の準備が盤面の記録の器に書けず、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
+  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
   // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
   | { kind: "record_container_unwritable"; path: string; reason: string }
   // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに `todo` の先頭へ戻された。
@@ -265,10 +267,6 @@ export type EventPayload =
   // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
   // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
   | { kind: "pr_promotion_abandoned"; head: string | null }
-  // ADR 0263 決定5 / ADR 0111 追記12: 後から走る pin の子の pickup の準備が、決着したこの pin の子のタスクブランチの ref を
-  // 外した —— head は外した時点の値で、答案の diff はここから後で確かめる
-  // ADR 0266 決定2: path は盤面の記録の器に写した答案の bundle。出題の head から commit が無ければ写さないので持たない
-  | { kind: "task_branch_removed"; head: string; path?: string }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

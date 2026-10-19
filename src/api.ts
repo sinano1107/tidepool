@@ -115,6 +115,7 @@ import {
   countUnsettledTasksReferencing,
   countUnsettledWorkAssignedTo,
   directCancelDiscards,
+  examineeCheckoutPath,
   getTask,
   HANDOFF_FIELDS,
   interviewRoomPath,
@@ -2178,6 +2179,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, closedRoot) }),
       // 見えないことだけが穴(ADR 0082 の線): Interview の root の面接室のホスト上の在り処と、受験者が分岐する出題の head(ADR 0273 決定1・3)
       ...(task.type === "interview" && { interview_room: interviewRoomPath(db, task.id) ?? null, posed_head: latestPosedProbe(db, task.id)?.head ?? null }),
+      // 受験者の答案の在り処 —— 自分の checkout(ADR 0276 決定4)
+      ...(task.interview_target_id !== null && { examinee_checkout: examineeCheckoutPath(db, task.id) ?? null }),
     } satisfies WireContract["GET /api/tasks/:id"]);
   });
 

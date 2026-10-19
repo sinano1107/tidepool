@@ -72,7 +72,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
-  await prepareWorkspaceAtPickup(db, ws, picked, { now: new Date(0) });
+  await prepareWorkspaceAtPickup(db, ws, picked);
   commitWork(ws.path, "deliverable.txt", "the real work\n");
   const task =
     route === "complete"

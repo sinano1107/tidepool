@@ -229,7 +229,7 @@ export function queueReturnHandler(
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
     // drift だけは後始末に workspace 無し(null)を渡し、同じ観測で quarantine を撃ち直させない。解決できるときは
-    // 後始末自身が走る場所(interview は面接室、ADR 0273 決定8)を解決するので渡さない(undefined)
+    // 後始末自身が走る場所(interview の root は面接室、受験者は自分の checkout —— ADR 0273 決定8 / ADR 0276 決定1)を解決するので渡さない(undefined)
     let workspace: null | undefined;
     try {
       deps.resolve?.(task.workspace);
@@ -248,7 +248,7 @@ export function queueReturnHandler(
   };
 }
 
-/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は pickup の準備の答案の写しと transcript の open で、観測点は
+/** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
  *  scheduler の catch と adapter の launch の catch。盤面全体の停止を登録してから `queueReturnHandler` で先頭へ戻す —— 盤面が
  *  止まっているので、後始末の pickup の契機は `boardHalts` が止める。踏んだ task は解放後の pickup で自分のブランチへ戻って続ける。 */
 export function recordContainerHaltHandler(

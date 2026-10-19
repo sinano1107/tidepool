@@ -16,7 +16,7 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -38,6 +38,7 @@ import {
   FULL_HANDOFF,
   HUMAN_WEBUI,
   mcpClient,
+  openTestExamineeCheckout,
   openTestInterviewRoom,
   POSED_HEAD,
   poseAccepted,
@@ -87,13 +88,16 @@ function interviewRoot(db: ReturnType<typeof openDb>) {
     tier: "standard",
     interview_targets: [SOL],
   }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
-  // root も受験者も面接室で走る(ADR 0273 決定1)—— pickup の代わりに開く
+  // root は面接室で走る(ADR 0273 決定1)—— pickup の代わりに開く
   openTestInterviewRoom(db, root);
   return root;
 }
 function pinnedChild(db: ReturnType<typeof openDb>) {
   const probe = { title: "probe", probe: "run the probe", completion_criteria: "the probe's deliverable", rubric: "it runs" };
-  return poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
+  const child = poseAccepted(db, interviewRoot(db), probe, "auditor", new Date("2026-08-24T00:00:00.000Z"), "worker", POSED_HEAD)[0]!;
+  // 受験者は自分の checkout で走る(ADR 0276 決定1)—— pickup の代わりに開く
+  openTestExamineeCheckout(db, child);
+  return child;
 }
 const posedInterviewRoot = (db: ReturnType<typeof openDb>) => getTask(db, examineeRootId(db, pinnedChild(db).id))!;
 
@@ -402,6 +406,18 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(f.workspace)}="read"`,
       `${JSON.stringify(roomOf(evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
+  });
+
+  it("受験者は自分の checkout を cwd と -C にして走り、面接室の在り処(root の id)はそこに入らない(ADR 0276 決定1)", async () => {
+    const f = await fixture();
+    const child = pinnedChild(f.db);
+
+    await f.start(child);
+
+    const args = f.process.calls[0]!.args;
+    expect(f.process.calls[0]!.cwd).toBe(examineeCheckoutPath(f.db, child.id));
+    expect(args[args.indexOf("-C") + 1]).toBe(examineeCheckoutPath(f.db, child.id));
+    expect(f.process.calls[0]!.cwd).not.toContain(examineeRootId(f.db, child.id));
   });
 
   it("Interview の監査 review は実環境を cwd に review の profile で走り、親の root の面接室を read で載せる(ADR 0273 決定4)", async () => {

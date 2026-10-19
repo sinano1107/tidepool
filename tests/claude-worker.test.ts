@@ -54,7 +54,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -840,6 +840,7 @@ describe("ClaudeCodeWorker", () => {
     const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [target] }, new Date(0), ...HUMAN_WEBUI);
     openTestInterviewRoom(db, root);
     const [child] = poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
+    openTestExamineeCheckout(db, child!);
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
     const args = calls[0]!.args;
@@ -1385,7 +1386,7 @@ describe("ClaudeCodeWorker", () => {
     ]);
   });
 
-  it("Interview の root は面接室を cwd に acceptEdits で走り、面接室に書けて実環境を読みに開き Read の許可も足す。受験者も面接室で走り、実環境は開かず、許可ドメインは実環境の宣言のまま(ADR 0273 決定1・2・8)", async () => {
+  it("Interview の root は面接室を cwd に acceptEdits で走り、面接室に書けて実環境を読みに開き Read の許可も足す。受験者は自分の checkout を cwd に走り、面接室も実環境も開かず、許可ドメインは実環境の宣言のまま(ADR 0273 決定1・2・8 / ADR 0276 決定1)", async () => {
     const real = await realpath(await tempDir("tidepool-claude-real-env-"));
     const { worker, setting, slot, calls, logDir, db } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${real}\n  allowed_domains:\n    - registry.npmjs.org\n` });
     const target = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" };
@@ -1394,12 +1395,13 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const [child] = poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "deckhand", new Date(0), "worker", POSED_HEAD);
+    const checkout = openTestExamineeCheckout(db, child!);
     slot.release();
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
-    expect(calls.map((call) => call.cwd)).toEqual([room, room]);
+    expect(calls.map((call) => call.cwd)).toEqual([room, checkout]);
     const [rootCall, childCall] = calls as [(typeof calls)[0], (typeof calls)[0]];
     expect(rootCall.args[rootCall.args.indexOf("--permission-mode") + 1]).toBe("acceptEdits");
     const rootSandbox = sandboxSettings(rootCall.args, logDir);
@@ -1408,6 +1410,7 @@ describe("ClaudeCodeWorker", () => {
     expect(JSON.parse(readFileSync(rootCall.args[rootCall.args.indexOf("--settings") + 1]!, "utf8")).permissions.allow).toEqual([`Read(/${real}/**)`]);
     const childSandbox = sandboxSettings(childCall.args, logDir);
     expect(childSandbox.filesystem.allowRead).not.toContain(real);
+    expect(childSandbox.filesystem.allowRead).not.toContain(room);
     expect(childSandbox.network.allowedDomains).toEqual(["registry.npmjs.org"]);
   });
 
@@ -4682,7 +4685,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     runtime.hold(task.id);
     // pickup が checkout に対してすること(ブランチ規律 + ref のスナップショット)を
     // 実物で通す —— tree rule はその基準に対して退避する
-    await prepareWorkspaceAtPickup(db, ws, task, { now: new Date(0) });
+    await prepareWorkspaceAtPickup(db, ws, task);
     // 途中ターンの WIP: session はタスクブランチの上で作業していた
     writeFileSync(join(ws.path, "wip.txt"), "half-done work\n");
     processes[0]!.stdout.write(CAP_STREAM);

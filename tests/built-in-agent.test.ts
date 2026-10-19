@@ -56,6 +56,10 @@ it("本文履歴表の既存の版は書き換わらない —— 本文を変�
   expect(builtInBodyAt("fugu", "e3b0c44298fc1c14")).toBe("");
   expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f")).toMatch(/^You run Interviews/);
   expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "1cf9caffd86b5578")).toContain("Composing the environment:");
+  // ADR 0276 決定2: 受験者に渡したいものを ignore しない、の1行は環境を組む節に住む
+  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "fc043e28dba56c77")).toMatch(
+    /Composing the environment:\n(- .*\n)*- Do not list in \.gitignore anything you want the targets to have: ignored files never reach their environment\.\n\nWriting the probe/,
+  );
 });
 
 it("agents/fugu.md があればそのファイルの定義が fugu であり、組み込みの印は付かない(ADR 0117 決定2 の shadowing)", async () => {

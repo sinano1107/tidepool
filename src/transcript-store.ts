@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, createWriteStream, openSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-/** 盤面の記録の器(worker transcript と受験者の答案の写しを置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
+/** 盤面の記録の器(worker transcript を置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
  *  どの task の・どの path への書き込みが・どの例外で落ちたかを運ぶ —— 原因の所在は断言しない。 */
 export class RecordContainerError extends Error {
   constructor(
@@ -22,13 +22,6 @@ function writeRecord<T>(taskId: string, path: string, write: () => T): T {
   } catch (err) {
     throw new RecordContainerError(taskId, resolve(path), err instanceof Error ? err.message : String(err));
   }
-}
-
-/** ADR 0266 決定2: 受験者の答案の bundle を `<dir>/<task id>.bundle` に写し、その絶対 path を返す。 */
-export function writeAnswerCopy(dir: string, taskId: string, bundle: Buffer): string {
-  const path = resolve(dir, `${taskId}.bundle`);
-  writeRecord(taskId, path, () => writeFileSync(path, bundle));
-  return path;
 }
 
 /** 記録の器の停止の解放の門(ADR 0266 決定3): 同じ dir へ一時ファイルを書いて消す。先行の検査は無く、書けるかは書いてみて知る。
@@ -59,7 +52,7 @@ export interface Transcript {
 
 /** worker session ごとの transcript(CONTEXT.md「Transcript」—— stream と stderr の2本で
  *  1単位)を開く盤面側の器(ADR 0149 決定5)。容器(`ProcessContainers`)と同じ立て付けで、
- *  adapter は開いた2本へ pipe するだけである。記録の器への書き込み(この open・答案の写し・解放の検査)と
+ *  adapter は開いた2本へ pipe するだけである。記録の器への書き込み(この open・解放の検査)と
  *  その失敗方針はこの module 1箇所に住む —— 書けなければ `RecordContainerError`、走ってからなら `onFailed`。順序は
  *  データ依存で固定される —— open は `worker_spawned` の event id を要り、spawn は
  *  open が返した2本へ pipe する。
@@ -68,7 +61,7 @@ export class TranscriptStore {
   /** 走ってから書けなくなった観測の盤面側の一撃。盤面(`startServer`)が差し込む。 */
   onFailed: (failure: TranscriptFailure) => void = () => {};
 
-  /** 盤面の記録の器(ADR 0266)—— 受験者の答案の写しも同じ dir に置く。 */
+  /** 盤面の記録の器(ADR 0266 決定3)—— 記録の器の停止の解放の門もこの dir を検査する。 */
   constructor(readonly dir: string) {}
 
   /** `worker_spawned` の後・spawn の前に同期で開く。開けなければ `RecordContainerError` が呼び手へ返り、

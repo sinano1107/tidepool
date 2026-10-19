@@ -27,7 +27,7 @@ it("`.git` がファイルの checkout は pickup の準備で拒否され、理
     ...HUMAN_WEBUI,
   );
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task, { now: new Date(0) })).rejects.toThrow(
+  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
     ".git is not a directory — linked worktrees and submodules cannot be workspaces",
   );
   db.close();
@@ -55,7 +55,7 @@ it("親 repo の部分ディレクトリは pickup の準備で拒否され、�
     ...HUMAN_WEBUI,
   );
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task, { now: new Date(0) })).rejects.toThrow(
+  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
     "has no .git of its own",
   );
   expect(git(parent.path, "symbolic-ref", "HEAD")).toBe(headBefore);

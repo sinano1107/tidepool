@@ -67,7 +67,7 @@ async function sessionInTeardown(
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
-  await prepareWorkspaceAtPickup(db, ws, picked, { now: new Date(0) });
+  await prepareWorkspaceAtPickup(db, ws, picked);
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
   containers.open(picked.id);
   runtime.hold(picked.id);
@@ -197,7 +197,7 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
   const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand", workspace: ws.name })!;
   slot.occupy(task.id);
   containers.open(task.id);
-  if (!taskWorkspace) await prepareWorkspaceAtPickup(db, ws, task, { now: clock.now() });
+  if (!taskWorkspace) await prepareWorkspaceAtPickup(db, ws, task);
   moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), null, clock.now(), ...HUMAN_WEBUI);
   const triggered: string[] = [];
   const resolve = (name: string | null) => {
