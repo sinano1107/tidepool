@@ -23,7 +23,7 @@ import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
-import { routingMaterial } from "./routing-review.js";
+import { type RegistryAgent, routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
@@ -2507,13 +2507,14 @@ function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
 }
 
 /** meta-review の材料の節(ADR 0180 決定2・追記 #1239、provider 非依存): 読み手の窓 `(前回, 今回]` の材料を、主題ごとの部分に
- *  それぞれの読み口と同じ行で組む。上限は置かない。meta-review でなければ null。 */
-export function buildMetaReviewMaterial(db: Db, taskId: string) {
+ *  それぞれの読み口と同じ行で組む。上限は置かない。meta-review でなければ null。`agents` は registry の agent 一覧(routing の agent の項目を
+ *  agent_tier が届くものに絞る)。 */
+export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonly RegistryAgent[]) {
   const subject = metaReviewSubjectOf(db, taskId);
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window, readerHidden(db, taskId));
+    const material = subject === "routing" ? routingMaterial(db, window, agents) : memoryMaterial(db, window, readerHidden(db, taskId));
     return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
 }

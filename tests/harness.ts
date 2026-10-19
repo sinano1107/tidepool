@@ -39,7 +39,7 @@ import type {
   RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
-import { completeRoutingReview, judgmentKey } from "../src/routing-review.js";
+import { completeRoutingReview, judgmentKey, type RegistryAgent } from "../src/routing-review.js";
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -1088,8 +1088,8 @@ export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: str
 
 /** meta-review の spawn の注入を記録し、材料を返す(setup、ADR 0278 追記4): 記録を書くのは実 adapter の spawn だけで ScriptedWorker は
  *  刻まないので、WORKER_SPAWNED の写しを刻み、その event id で材料の節を記録する。 */
-function injectMaterial(db: Db, reviewId: string, workerId: string, at: Date) {
-  const material = buildMetaReviewMaterial(db, reviewId);
+function injectMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
+  const material = buildMetaReviewMaterial(db, reviewId, agents);
   if (!material) throw new Error(`${reviewId} is not a meta-review`);
   const spawned = appendEvent(db, { taskId: reviewId, workerId, origin: "board", at, payload: WORKER_SPAWNED });
   recordMetaReviewMaterial(db, reviewId, workerId, spawned, material, at);
@@ -1104,8 +1104,8 @@ export function injectMemoryMaterial(db: Db, reviewId: string, workerId: string,
 }
 
 /** routing meta-review の注入を記録し、節の「Items to judge」が並べる判断の鍵(agent が写す形)を返す(setup)。 */
-export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string, at: Date) {
-  const material = injectMaterial(db, reviewId, workerId, at);
+export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
+  const material = injectMaterial(db, reviewId, workerId, at, agents);
   if (material.subject !== "routing") throw new Error(`${reviewId} is not a routing meta-review`);
   return material.parts.items.map(judgmentKey);
 }

@@ -21,9 +21,12 @@ function register(db: Db, done = false): string {
   return taskId;
 }
 
+/** registry の agent(setup): deckhand は standard で、1段下げる先がある。 */
+const AGENTS = [{ name: "deckhand", tier: "standard" }];
+
 /** 主題 routing の材料の節(型を routing の部分に絞る)。 */
-function routingMaterialOf(db: Db, taskId: string) {
-  const material = buildMetaReviewMaterial(db, taskId);
+function routingMaterialOf(db: Db, taskId: string, agents: readonly { name: string; tier?: string }[] = AGENTS) {
+  const material = buildMetaReviewMaterial(db, taskId, agents);
   if (material?.subject !== "routing") throw new Error(`no routing material for ${taskId}`);
   return material;
 }
@@ -313,6 +316,19 @@ it("Items to judge は complete_routing_review の鍵で評価の対象を並べ
   expect(section).toContain("### Items to judge");
   for (const key of [...parts.items.slice(0, 4), { tier: "economy" }, { learner: true }]) expect(section).toContain(JSON.stringify(key));
   expect(section).not.toContain('"tier_id"');
+});
+
+it("段の出所が agent の集計の agent は、agent_tier が届くときだけ項目 —— 一番下の段の agent と registry に無い agent は項目にならない", () => {
+  const { db, work, spawn, allocate } = board();
+  register(db, true);
+  const task = work("t");
+  for (const agent of ["deckhand", "reef-crab", "gone"]) allocate(task, spawn(task, agent, opus), "overpowered");
+  const review = register(db);
+
+  const { parts } = routingMaterialOf(db, review, [...AGENTS, { name: "reef-crab", tier: "economy" }]);
+
+  expect(parts.allocations.groups.map((g) => g.agent)).toEqual(["deckhand", "reef-crab", "gone"]);
+  expect(parts.items).toEqual([{ agent: "deckhand" }, { learner: true }]);
 });
 
 it("乖離 shadow 行で走った行が spawn の前に表から消されていれば項目にならず、出所が task の集計の段が消された(引退した)段なら項目にならない", () => {

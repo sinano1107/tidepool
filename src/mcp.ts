@@ -876,7 +876,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      completing(completeRoutingReview),
+      completing((db, task, input: Parameters<typeof completeRoutingReview>[2], workerId, now, origin) =>
+        completeRoutingReview(db, task, input, workerId, now, origin, deps.agentAdmin?.list?.()),
+      ),
     );
   }
 

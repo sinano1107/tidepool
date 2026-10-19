@@ -43,11 +43,11 @@ function cycle() {
     appendEvent(db, { taskId: work, workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
   }
   const review = register(db);
-  return { db, review, evidence, injected: injectRoutingMaterial(db, review.id, "auditor", at) };
+  return { db, review, evidence, injected: injectRoutingMaterial(db, review.id, "auditor", at, [deckhand]) };
 }
 
 const complete = (db: Db, review: Task, judgments: Parameters<typeof completeRoutingReview>[2]["judgments"]) =>
-  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker");
+  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", [deckhand]);
 
 it("routing meta-review の verb の差し替えは complete_task を伏せ complete_routing_review を足す", () => {
   const { db, review } = cycle();
@@ -174,7 +174,7 @@ it("注入の後に段が改名されても段は id で同じ項目のまま �
 });
 
 it.each([
-  ["段の位置だけを動かした", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", position: 0 }, "webui", at)],
+  ["段の位置だけを動かした", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", position: 2 }, "webui", at)],
   ["段を足した", (db: Db) => applyExecutionSettingsChange(db, { setting: "insert_tier", name: "careful", description: "Careful work.", position: 2 }, "webui", at)],
 ] as const)("注入の後に人間が%sのは段の項目への行為ではなく、値が無ければ unjudged で、値があれば行になる", (_, act) => {
   const { db, review, injected } = cycle();

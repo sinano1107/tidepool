@@ -295,7 +295,7 @@ function actedSince(db: Db, recordId: number, injectedTiers: ReadonlyMap<TierId,
 
 /** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
  *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。段は id で同じ項目で、鍵は注入した名前 —— spawn 後の
- *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。 */
+ *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。`agents` は registry の agent 一覧(今の項目の agent の絞り込み)。 */
 export function completeRoutingReview(
   db: Db,
   review: Task,
@@ -303,6 +303,7 @@ export function completeRoutingReview(
   workerId: string,
   now: Date,
   origin: EventOrigin,
+  agents?: readonly RegistryAgent[],
 ): Task {
   if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
   const record = injectedMaterial(db, review.id, "routing");
@@ -310,7 +311,7 @@ export function completeRoutingReview(
   const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
     itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
   const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
-  const open = routingMaterial(db, metaReviewWindow(db, review.id)).parts.items.filter((item) => !judged.has(key(item)));
+  const open = routingMaterial(db, metaReviewWindow(db, review.id), agents).parts.items.filter((item) => !judged.has(key(item)));
   return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
     review,
@@ -330,11 +331,12 @@ export function completeRoutingReview(
 }
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5・追記5): 行は、session に辿り着いた乖離 shadow 行で走った行・人間が変えた行・
- *  初観測のセルの和集合で、今の表にある行だけ —— 行の無い対象には verb が届かない。agent は段の出所が agent の配分評価の集計の agent、
- *  段は出所が task の集計の生きている段、学習器は毎周期。 */
+ *  初観測のセルの和集合で、今の表にある行だけ —— 行の無い対象には verb が届かない。agent は段の出所が agent の配分評価の集計の agent の
+ *  うち agent_tier が届くもの(registry にあり、組み込みでなく、一番下の段でない)、段は出所が task の集計の生きている段、学習器は毎周期。 */
 function judgmentItems(
   db: Db,
   parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows> } & ReturnType<typeof cellRows>,
+  registry: readonly RegistryAgent[] = [],
 ): RoutingJudgmentItem[] {
   const table = loadExecutionSettingTable(db);
   const rows = new Map<string, RoutingJudgmentItem>();
@@ -343,7 +345,8 @@ function judgmentItems(
     if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
   }
   const { groups } = parts.allocations;
-  const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])));
+  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
+  const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" && lowerable(g.agent) ? [g.agent] : [])));
   const tiers = new Set(groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])));
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
 }
@@ -351,7 +354,7 @@ function judgmentItems(
 /** routing の材料の節の6つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
  *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案、判断を要する項目。
  *  行はそれぞれの読み口と同じ。 */
-export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
+export function routingMaterial(db: Db, window: Required<MetaReviewWindow>, agents?: readonly RegistryAgent[]) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
@@ -365,7 +368,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
     rows,
     proposals: listRoutingProposals(db, window),
   };
-  const parts = { ...read, items: judgmentItems(db, read) };
+  const parts = { ...read, items: judgmentItems(db, read, agents) };
   const section = materialSection("routing", window, [
     [
       "Table and settings",
@@ -403,6 +406,17 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
   return { subject: "routing" as const, section, parts };
 }
 
+/** registry の agent の、段の提案が読む欄(AgentView も registry の定義も持つ)。 */
+export type RegistryAgent = { name: string; tier?: string; builtin?: boolean };
+
+/** agent の今の段(書いていなければ盤面既定)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序(ADR 0200 決定4)で、
+ *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。 */
+function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } {
+  const tiers = tierNames(db);
+  const from = agent.tier ?? boardDefaultTier(db);
+  return { from, below: tiers[tiers.indexOf(from) - 1] };
+}
+
 /** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
  *  1段下へ。下げ先に agent の entry の行が無ければ下げた agent は skipped になるので断る。根拠はその agent の worker_spawned で、
  *  pin の行はそれらが走った表の行の現在値。 */
@@ -412,10 +426,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
-  // 「1段下」は盤面の一覧の順序(ADR 0200 決定4)
-  const tiers = tierNames(db);
-  const from = agent.tier ?? boardDefaultTier(db);
-  const below = tiers[tiers.indexOf(from) - 1];
+  const { from, below } = tierStep(db, agent);
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
