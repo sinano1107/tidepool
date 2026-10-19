@@ -4,12 +4,13 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
+import { routingPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, proposeRoutingChange } from "../src/routing-review.js";
 import { completeTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { executionSetting, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { executionSetting, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
 
@@ -47,7 +48,7 @@ function cycle() {
 }
 
 const complete = (db: Db, review: Task, judgments: Parameters<typeof completeRoutingReview>[2]["judgments"]) =>
-  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", [deckhand]);
+  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", routingPrecedents(db, review.id), [deckhand]);
 
 it("routing meta-review の verb の差し替えは complete_task を伏せ complete_routing_review を足す", () => {
   const { db, review } = cycle();
@@ -86,6 +87,18 @@ it("値も提案も無い対象があれば unjudged で名指して拒まれ、
   ).toThrow("not items to judge: anthropic / claude-opus-5-5 at effort max, agent kimi, tier frontier");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
+});
+
+it("窓で異議された前の判断の行が名指す行・agent・段は項目で、値も提案も無ければ unjudged で拒まれ、no_change を渡せば完了する(ADR 0279 決定5)", () => {
+  const db = openDb(":memory:");
+  const previous = register(db, true);
+  const sonnet = { provider: "anthropic" as const, model: "claude-sonnet-5-5", effort: "high" };
+  for (const object of [{ row: sonnet }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "frontier") }]) objectedJudgment(db, previous.id, { kind: "routing", value: "no_change", ...object }, at);
+  const review = register(db);
+  injectRoutingMaterial(db, review.id, "auditor", at, [deckhand]);
+
+  expect(() => complete(db, review, [{ learner: true }])).toThrow("unjudged: anthropic / claude-sonnet-5-5 at effort high, agent deckhand, tier frontier —");
+  expect(complete(db, review, [{ row: sonnet }, { agent: "deckhand" }, { tier: "frontier" }, { learner: true }]).status).toBe("done");
 });
 
 /** 提案の op ごとに、その提案が覆う対象(ADR 0278 決定5)。 */

@@ -39,6 +39,7 @@ import {
   repairMoveBranchBack,
   repairReplace,
   repairRestore,
+  routingPrecedents,
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
@@ -825,7 +826,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
           "judgment on: entries ({entry: id}) — the candidates drafted in this window, the candidates and entries named by the settled " +
           "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path}) that hold " +
-          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define. That list, injected when " +
+          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define — plus the live entries and " +
+          "branches named by the judgments of the objected decisions. That list, injected when " +
           "this session started, is the whole set of items: anything added to the store since belongs to the next cycle. An item acted on " +
           "since this session started is already judged: one you wrote, folded, moved, retired, defined or named in a proposal, or one " +
           "anyone else has since folded, moved, retired or defined. Every other item goes in judgments, which means you left it as is, " +
@@ -857,7 +859,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this routing meta-review, in one call. The Items to judge part of your material section lists the objects this cycle " +
           "needs a judgment on: rows ({row: {provider, model, effort}}; the tier beside a row is for reading and may be left out) — the rows " +
           "that ran in the diverged shadow rows, the rows humans changed and the rows of the new cells — agents ({agent: name}) and tiers " +
-          "({tier: name}) of the allocation reviews, and the learner ({learner: true}). That list, injected when this session started, is the " +
+          "({tier: name}) of the allocation reviews, and the learner ({learner: true}) — plus the rows, agents and tiers named by the " +
+          "judgments of the objected decisions, under the same conditions. That list, injected when this session started, is the " +
           "whole set of items. An item is already judged when one of your proposals names it — op row or add_tier its row, agent_tier its " +
           "agent, tier_description its tier, promote or demote the learner, interview the rows its evidence sessions ran on — or when anyone " +
           "has changed it since this session started. Every other item goes in judgments, which means no_change, with an optional one-line " +
@@ -878,7 +881,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         },
       },
       completing((db, task, input: Parameters<typeof completeRoutingReview>[2], workerId, now, origin) =>
-        completeRoutingReview(db, task, input, workerId, now, origin, deps.agentAdmin?.list?.()),
+        completeRoutingReview(db, task, input, workerId, now, origin, routingPrecedents(db, task.id), deps.agentAdmin?.list?.()),
       ),
     );
   }

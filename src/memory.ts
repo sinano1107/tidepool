@@ -20,6 +20,7 @@ import {
   materialSection,
   metaReviewSubjectOf,
   metaReviewWindow,
+  objectedJudgments,
   previousMetaReviewWatermark,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -761,14 +762,15 @@ type WriteTouch = { created: number[]; moved: number[]; dropped: number[] };
 
 /** 修理 task の束が異議した行(task_registered の objection_event_ids → 異議の entry_id → 行)。memory_repair の修理子でなければ空
  *  (ADR 0272 決定3)—— work の修理子と RCA の review 子も同じ欄を持つ。 */
-function objectedRows(db: Db, taskId: string): EventPayload[] {
+function objectedRowIds(db: Db, taskId: string): number[] {
   if (getTask(db, taskId)?.type !== "memory_repair") return [];
   return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
     const objection = getEvent(db, id)?.payload;
-    const row = objection?.kind === "objection_raised" ? getEvent(db, objection.entry_id)?.payload : undefined;
-    return row ? [row] : [];
+    return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
   });
 }
+
+const objectedRows = (db: Db, taskId: string): EventPayload[] => objectedRowIds(db, taskId).flatMap((id) => getEvent(db, id)?.payload ?? []);
 
 /** 異議された記憶の書き込み(memory_written の行)がしたこと。 */
 function objectedWrites(db: Db, taskId: string): WriteTouch[] {
@@ -782,15 +784,17 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
 }
 
 /** 異議された memory meta-review の型つきの判断の行が名指す対象(ADR 0279 決定3)。 */
-function objectedJudgments(db: Db, taskId: string): MemoryJudgmentItem[] {
-  return objectedRows(db, taskId).flatMap((row) =>
-    row.kind === "decision_logged" && row.judgment?.kind === "memory" ? ["entry" in row.judgment ? { entry: row.judgment.entry } : { branch: row.judgment.branch }] : [],
-  );
+function repairJudgments(db: Db, taskId: string): MemoryJudgmentItem[] {
+  return objectedJudgments(
+    db,
+    objectedRowIds(db, taskId).map((decision_event_id) => ({ decision_event_id })),
+    "memory",
+  ).map((j) => ("entry" in j ? { entry: j.entry } : { branch: j.branch }));
 }
 
 /** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
 export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
-  const judgments = objectedJudgments(db, taskId).length > 0;
+  const judgments = repairJudgments(db, taskId).length > 0;
   return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
 }
 
@@ -831,7 +835,7 @@ const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", n
 
 /** 異議された判断の行が名指すエントリ(と、その後に移された複製)と枝。 */
 function namedObjects(db: Db, taskId: string) {
-  const judged = objectedJudgments(db, taskId);
+  const judged = repairJudgments(db, taskId);
   return {
     entries: withMovedCopies(db, judged.flatMap((item) => ("entry" in item ? [item.entry] : []))),
     branches: judged.flatMap((item) => ("branch" in item ? [item.branch] : [])),
@@ -2667,6 +2671,9 @@ export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonl
   })();
 }
 
+/** routing meta-review の読み手の窓の異議つき判断 —— 完了の verb が項目を計算し直すときに渡す(routing-review.ts は memory.ts を import しない)。 */
+export const routingPrecedents = (db: Db, reviewId: string) => precedentRows(db, metaReviewWindow(db, reviewId), "routing");
+
 /** memory の読み口の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
  *  (readerHidden)を載せない(ADR 0264 決定2)。 */
 const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
@@ -2697,7 +2704,8 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
       "Items to judge",
       "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
         "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
-        "entries without a Definition in their scope or whole-board, and the paths two or more scopes define. Act on each item, or pass it to " +
+        "entries without a Definition in their scope or whole-board, the paths two or more scopes define, and the entries and branches named " +
+        "by the judgments of the objected decisions, if still live. Act on each item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
       "no items to judge",
@@ -2714,18 +2722,37 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
- *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。 */
+ *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。異議つき判断のうち
+ *  前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と枝(今の木にあるもの)も載る(ADR 0279 決定5)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const tail = (id: number) => bodyTail(db, restored, id);
+  const objected = objectedJudgments(db, parts.precedents, "memory");
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
     ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).map(tail) : [])),
     ...parts.store_changes.map(({ id }) => id),
+    ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
   ]);
+  // 木に無い枝は、配下だったエントリの移動の鎖の末尾から今の path を引く(エントリが鎖の末尾で名指されるのと同じ)
+  const inTree = new Set(parts.branches.map(({ path }) => path));
+  const moved = db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason = 'path_moved'").all() as EntryRow[];
+  const objectedBranches = new Set(
+    objected.flatMap((j) => {
+      if (!("branch" in j)) return [];
+      if (inTree.has(j.branch)) return [j.branch];
+      return moved.flatMap((row) => {
+        if (!atOrUnder(row.path, j.branch)) return [];
+        const rest = row.path.slice(j.branch.length);
+        const now = sameBodyChain(db, row, restored).at(-1)!.path;
+        return now.endsWith(rest) ? [now.slice(0, now.length - rest.length)] : [];
+      });
+    }),
+  );
   const branches = parts.branches.filter(
-    ({ definitions, scopes }) => scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1,
+    ({ path, definitions, scopes }) =>
+      scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1 || objectedBranches.has(path),
   );
   return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches.map(({ path }) => ({ branch: path }))];
 }
