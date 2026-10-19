@@ -8,6 +8,7 @@ import {
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
+  completeIntegrationReviewViaMcp,
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -43,7 +44,7 @@ async function landedWork(workspace: WorkspaceConfig): Promise<any> {
     (task: any) => task.type === "review" && task.parent_id === work.id,
   );
   await t.clock.advance(HOUR);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
   return (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
 }
 
@@ -138,7 +139,7 @@ it("squash merge 後に review 子が決着しただけの再発火は、push �
   t.github.scriptMergedOutside(landed.pr_number);
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.pushes).toEqual([]);

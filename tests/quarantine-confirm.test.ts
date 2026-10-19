@@ -8,6 +8,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviewViaMcp,
   completeViaMcp,
   FULL_HANDOFF as fullHandoff,
   GIT_FIXTURE_TEST_TIMEOUT,
@@ -222,7 +223,7 @@ it("workspace の quarantine が抱えていた根は、その quarantine に答
   );
   await t.clock.advance(HOUR);
   quarantineWorkspace(t.db, workspace.name, new Error("repair the checkout"), t.clock.now());
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   expect(t.github.requests).toEqual([]);
   const failures = (await api(t.baseUrl, "GET", "/api/tasks")).json.filter((q: any) => q.title.startsWith("PR promotion"));

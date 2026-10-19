@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { cancelTaskDirectly, completeTask, getTask, listBoard, listQueue, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
+import { HUMAN_WEBUI, humanDecomposeTaskViaWebui, settleReview } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -53,7 +53,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     );
     completeTask(db, root, HANDOFF, "reef-crab", new Date(1), "worker");
     const review = listBoard(db).find((task) => task.type === "review")!;
-    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2), "worker");
+    settleReview(db, getTask(db, review.id)!, "fugu", new Date(2));
 
     const board = listBoard(db);
 
@@ -93,7 +93,7 @@ describe("Board は settled ツリーを退かせる(issue #35)", () => {
     completeTask(db, root, HANDOFF, "reef-crab", new Date(1), "worker");
 
     const review = listBoard(db).find((task) => task.type === "review")!;
-    completeTask(db, getTask(db, review.id)!, undefined, "fugu", new Date(2), "worker");
+    settleReview(db, getTask(db, review.id)!, "fugu", new Date(2));
     const queue = listQueue(db);
 
     expect(queue.some((t) => t.id === root.id)).toBe(false);

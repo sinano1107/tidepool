@@ -14,7 +14,7 @@ import { cancelTaskDirectly, completeInterview, completeTask, getTask, listBoard
 import { type Tier, tierIdOf } from "../src/tier.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, fakeContainers, healthyOpenai, listedOpenaiModels, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
-import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, executionSetting, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, POSED_HEAD, poseAccepted, QUIET_EXIT, settleReview, WORKER_SPAWNED } from "./harness.js";
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
@@ -330,7 +330,7 @@ const complete = (b: Board, taskId: string) => completeTask(b.db, getTask(b.db, 
 
 /** todo の review task を Auditor の名義で pickup して完了させる。 */
 const completeReview = (b: Board, reviewId: string) =>
-  completeTask(b.db, pickupTask(b.db, getTask(b.db, reviewId)!, DEFAULT_AUDITOR_NAME, b.clock.now())!, undefined, DEFAULT_AUDITOR_NAME, b.clock.now(), "worker");
+  settleReview(b.db, pickupTask(b.db, getTask(b.db, reviewId)!, DEFAULT_AUDITOR_NAME, b.clock.now())!, DEFAULT_AUDITOR_NAME, b.clock.now());
 
 /** work を完了させ、立った統合点レビューもドメインで完了させる —— work は受理になる。 */
 function accept(b: Board, taskId: string) {

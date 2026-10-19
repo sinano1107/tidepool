@@ -3,7 +3,6 @@ import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEvents } from "./events.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
-import { getTask } from "./tasks.js";
 import { type Tier, tierNameOf } from "./tier.js";
 
 /** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
@@ -44,8 +43,7 @@ export interface AllocationClient {
   ): Promise<AllocationJudgment>;
 }
 
-/** 入力の組み立て(ドメイン層の純関数、spec #541)。verdict は review の
- *  `task_completed.result`、findings は review の handoff doc、実行設定と出所は
+/** 入力の組み立て(ドメイン層の純関数、spec #541)。verdict と findings は統合レビューの判断の行(ADR 0278 決定5)、実行設定と出所は
  *  被レビュー task の対象 `worker_spawned`、走った段はその `tier_id` の名前、usage はその session の `worker_exited`、
  *  行動列は Precedent のマーカー(相談 / compaction / commit)の計数。 */
 export function buildAllocationReviewInput(data: {
@@ -103,7 +101,7 @@ export function allocationTargets(db: Db): AllocationTarget[] {
   ).filter((r): r is AllocationTarget => r.spawned_event_id !== null);
 }
 
-/** 対象1件の入力: verdict は review の完了 event の result、findings は review の handoff doc、実行設定は固定した session の
+/** 対象1件の入力: verdict と findings は review の判断の行(値と findings)、実行設定は固定した session の
  *  spawn、走った段はその id の名前(消した段も含む)、usage はその session の `worker_exited`、行動列はその session の Precedent のマーカー。 */
 export function allocationInput(db: Db, target: AllocationTarget): AllocationReviewInput {
   const spawned = getEvent(db, target.spawned_event_id)!.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
@@ -113,9 +111,12 @@ export function allocationInput(db: Db, target: AllocationTarget): AllocationRev
       (p): p is Extract<EventPayload, { kind: "worker_exited" }> =>
         p.kind === "worker_exited" && p.worker_spawned_event_id === target.spawned_event_id,
     );
+  const judgment = listEvents(db, target.review_task_id)
+    .flatMap(({ payload }) => (payload.kind === "decision_logged" && payload.judgment ? [payload.judgment] : []))
+    .at(-1);
   return buildAllocationReviewInput({
-    verdict: (getEvent(db, target.completed_event_id)!.payload as Extract<EventPayload, { kind: "task_completed" }>).result,
-    findings: getTask(db, target.review_task_id)!.handoff_doc,
+    verdict: judgment?.value ?? null,
+    findings: judgment?.findings ?? null,
     tier: tierNameOf(db, spawned.tier_id),
     spawned,
     exited,

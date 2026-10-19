@@ -6,6 +6,8 @@ import {
   bootTidepool,
   commitWork,
   completeIntegrationReviews,
+  completeIntegrationReviewViaMcp,
+  completeOwnVerbViaMcp,
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -57,7 +59,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
   );
 
   await pickUp(t, review.id);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   const landing = await questions(t);
   expect(landing).toHaveLength(1);
@@ -86,7 +88,7 @@ it("remote-backed(escalate): 付帯子が未決着なら PR を開かず、決�
     (candidate: any) => candidate.type === "review" && candidate.parent_id === task.id,
   );
   await pickUp(t, review.id);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.branch).toBe(`task/${task.id}`);
@@ -114,7 +116,7 @@ it("remote-backed(auto_if_ci_green、risk なし): 付帯子が未決着なら a
     (candidate: any) => candidate.type === "review" && candidate.parent_id === task.id,
   );
   await pickUp(t, review.id);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(t.github.requests).toHaveLength(1);
   await t.clock.advance(60 * 1000);
@@ -138,7 +140,7 @@ it("remote-backed(external): 付帯子の決着後に PR が開く", async () =>
     (candidate: any) => candidate.type === "review" && candidate.parent_id === task.id,
   );
   await pickUp(t, review.id);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.branch).toBe(`task/${task.id}`);
@@ -200,7 +202,7 @@ it("待機中に付いた2つ目の付帯子が着地をもう一度待たせ、
     (candidate: any) => candidate.type === "review" && candidate.parent_id === task.id,
   );
   await pickUp(t, review.id);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(await questions(t)).toEqual([]);
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
@@ -376,7 +378,7 @@ async function settleAttachedChildren(pool: Tidepool, taskId: string): Promise<v
     if (pending.length === 0) return;
     const child = pending.find((candidate: any) => candidate.status === "in_progress") ?? pending[0];
     if (child.status !== "in_progress") await pickUp(pool, child.id);
-    const res = await completeViaMcp(pool, child.id, child.type === "work");
+    const res = await completeOwnVerbViaMcp(pool, child);
     expect(res.isError ?? false).toBe(false);
   }
 }

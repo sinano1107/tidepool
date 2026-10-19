@@ -5,6 +5,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviewViaMcp,
   completeViaMcp,
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
@@ -129,7 +130,7 @@ it("PR を開く時点で profile が読めず agent 名の quarantine が抱え
     (task: any) => task.type === "review" && task.parent_id === work.id,
   );
   await t.clock.advance(HOUR);
-  await completeViaMcp(t, review.id, false);
+  await completeIntegrationReviewViaMcp(t, review.id);
   const { assignee } = (await api(t.baseUrl, "GET", `/api/tasks/${work.id}`)).json;
   const question = await servedQuarantineQuestion(t, "agent", assignee);
   expect(t.github.requests).toEqual([]);

@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
 import type { Provider } from "./provider.js";
+import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import type { Tier, TierId } from "./tier.js";
 
@@ -170,8 +171,9 @@ export type EventPayload =
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string }; audited_probe?: number }
   // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
   // head は面接室の写しの commit —— 受験者は全部ここから分岐する(ADR 0263 決定6 / ADR 0273 決定3)。head の無い出題は無い(追記5)
-  | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined }
-  | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string }
+  // judgment: 完了の verb が運ぶ判断(ADR 0278 決定4)。line は盤面が組む文で、読み手は今までどおり line を読む
+  | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined; judgment?: Judgment }
+  | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string; judgment?: undefined }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; outcome: InterviewOutcome }
@@ -691,6 +693,14 @@ export type EventKind = EventPayload["kind"];
 /** Interview の採点の値(ADR 0181 決定4)。採点の verb の schema と学習器が同じこの1本を読む。 */
 export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
+
+/** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの値は no_findings か、修理子から導いた repaired。 */
+export interface Judgment {
+  kind: "integration_review";
+  value: "no_findings" | "repaired";
+  findings: string;
+  repairs: Array<{ id: string; status: TaskStatus }>;
+}
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
 export interface AuditVerdict {
