@@ -51,16 +51,14 @@ export interface TeardownStep {
    *  ときだけ)。 */
   ready?: (task: Task) => boolean;
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
-   *  merge-back まで進む。 */
+   *  merge-back まで進む。解決できない名前は quarantine しない(`done` へ決着させる verb はどれも verb の前に workspace を解決する門を通り、門が既に撃った。ADR 0274 決定3)。 */
   completion?: boolean;
   /** process を1つも持たなかった session(ADR 0274 決定3): task ブランチに乗っていない checkout と解決できない名前には
    *  tree rule を当てない。 */
   neverRan?: boolean;
-  /** 門が既に解決した workspace。`resolveOrQuarantine` は解決できない名前を
-   *  **quarantine する副作用を持って `undefined` を返す**ので、「解決済み・該当なし」を
-   *  `null` で、「まだ解決していない」を `undefined` で言い分ける —— 区別しないと、
-   *  門が既に撃った quarantine を後始末が同じ観測でもう一度撃つ(1つの verb 呼び出しで
-   *  2度撃たない)。 */
+  /** 門が既に解決した workspace。「解決済み・該当なし」を `null` で、「まだ解決していない」を
+   *  `undefined` で言い分ける。解決できない名前を quarantine しない側は `completion` と
+   *  `neverRan` の2つで、どちらも記録(`settlementOf`)から導くので復旧はこの欄に依存しない。 */
   workspace?: WorkspaceConfig | null;
 }
 
@@ -234,16 +232,20 @@ async function teardown(
   deps.pollNow();
 }
 
-/** 後始末が tree rule を当てる走る場所(無ければ当てない)。process を1つも持たなかった session(ADR 0274 決定3)は worker が
- *  触った checkout を持たない —— 解決できない名前(drift)は止めた Quarantine を撃ち直さず、task ブランチに乗っていない checkout
- *  は動いていないので、どちらも当てない。task ブランチに乗った checkout(準備の checkout の後で止まった)だけ今日どおり退避する。 */
+/** 後始末が tree rule を当てる走る場所(無ければ当てない)。解決できない名前(drift)を quarantine しないのは2種類だけである
+ *  (ADR 0274 決定3)—— 他の決着(エスカレーション・分解・中断)は後始末が最初の観測者なので `resolveOrQuarantine` を通す。
+ *  - 完了(`completion`): `done` へ決着させる verb はどれも verb の前に workspace を解決する門を通る(`runReleasingVerb` が強制)ので、門が後始末より前に同じ名前を解決しており、解決できなければ門がそこで撃っている。再起動の
+ *    復旧でも撃ち直さず当てない。解決できれば今日どおり走る場所へ当てる。
+ *  - process を1つも持たなかった session(`neverRan`): worker が触った checkout を持たない —— drift は止めた Quarantine を
+ *    撃ち直さず、task ブランチに乗っていない checkout は動いていないので、どちらも当てない。task ブランチに乗った
+ *    checkout(準備の checkout の後で止まった)だけ今日どおり退避する。 */
 function runPlaceToRelease(
   { db, clock }: TeardownDeps,
   resolve: (taskWorkspace: string | null) => WorkspaceConfig,
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
-  if (!step.neverRan) {
+  if (!step.completion && !step.neverRan) {
     const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
     return resolved && taskRunPlace(db, task, resolved);
   }
@@ -254,10 +256,10 @@ function runPlaceToRelease(
     if (err instanceof UnknownWorkspaceError) return undefined;
     // 開いた event は在り処の mkdir の直後、git の手順より前に書く —— event が無ければ盤面はこの task の場所を作れておらず、
     // 触る checkout が無い。記録はあって repo がまだ無い場所は下の `onTaskBranch` が外す
-    if (err instanceof PlaceNotOpenError) return undefined;
+    if (step.neverRan && err instanceof PlaceNotOpenError) return undefined;
     throw err;
   }
-  return onTaskBranch(place, task.id) ? place : undefined;
+  return !step.neverRan || onTaskBranch(place, task.id) ? place : undefined;
 }
 
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は

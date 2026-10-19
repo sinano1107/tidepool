@@ -635,6 +635,61 @@ it("root の workspace が registry から消えた(registry drift)まま出題�
   expect(await servedQuarantineQuestion(t, "workspace", workspace.name)).toBeDefined();
 });
 
+/** 監査を拾った盤面: 監査の id と complete_audit の引数。 */
+async function auditing(rootId: string) {
+  const { audit_id } = JSON.parse((await callAsTask(t, rootId, "pose_probe", POSE)).content[0].text);
+  t.worker.exit(rootId);
+  await runNow(t, audit_id);
+  return { id: audit_id as string, args: { verdict: "rejected", findings: "the tier below solves it" } };
+}
+
+/** 受験者が完了して統合復帰した root: root の id と complete_interview の引数。 */
+async function scoring(rootId: string) {
+  const [childId] = await pose(rootId);
+  await completeMetaReviews(t);
+  commitWork(examineeCheckoutOf(childId), "probe.txt", "probe\n");
+  await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
+  await t.clock.advance(HOUR);
+  return { id: rootId, args: { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS } };
+}
+
+it.each([
+  ["complete_audit", auditing],
+  ["complete_interview", scoring],
+])("%s の時に workspace が registry から消えていても(registry drift)、門がその名前の Quarantine を1枚だけ立て、task は done になり枠が空いて次の pickup が走る(ADR 0274 決定3 / issue #2259)", async (verb, arrange) => {
+  const workspace = await makeWorkspace("reef");
+  const other = await makeWorkspace("other");
+  let drifted = false;
+  t = await boot({
+    workspace,
+    resolveWorkspace: (name) => {
+      if (name === other.name) return other;
+      if (drifted) throw new UnknownWorkspaceError(name ?? workspace.name);
+      return workspace;
+    },
+  });
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const { id, args } = await arrange(root.id);
+  // 枠が空いたことと pickup の契機は、別の workspace で待つ task が拾われることで見る
+  const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
+  drifted = true;
+
+  const completed: any = await callAsTask(t, id, verb, args);
+  // drift は verb の間だけ —— 後の pickup が同じ名前を解決し直すと、門が撃ったかどうかが見えなくなる
+  drifted = false;
+
+  expect(completed.isError).toBeFalsy();
+  t.worker.exit(id);
+  await vi.waitFor(() => expect(t.worker.started.at(-1)!.id).toBe(waiting.id));
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status).toBe("done");
+  const quarantines = (await questions(t)).filter((q: any) => q.question_quarantine_kind === "workspace");
+  expect(quarantines.map((q: any) => q.question_quarantine_value)).toEqual([workspace.name]);
+  const kinds = (await api(t.baseUrl, "GET", `/api/tasks/${quarantines[0].id}/events`)).json.map((e: any) => e.kind);
+  expect(kinds).not.toContain("quarantine_refired");
+  expect(t.worker.started.filter((s) => s.id === waiting.id)).toHaveLength(1);
+});
+
 /** 監査 review の worker MCP の verb(ADR 0273 決定3・4): review の読み系と complete_audit。 */
 const AUDIT_VERBS = ["get_current_task", "log_decision", "escalate", "complete_audit", "browse_memory", "search_memory", "read_memory"];
 
