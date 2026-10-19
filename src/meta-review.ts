@@ -258,7 +258,7 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧、無ければ registry の無い盤面)。due = 前回登録から周期が経ち
- *  (取り消された登録も周期の起点、ADR 0193 決定2)、同主題の open な task・提案 question が無く、完了した前回の watermark より後に主題の材料がある
+ *  (取り消された登録も周期の起点、ADR 0193 決定2)、同主題の open な task・meta-review の子・その下の提案 question が無く、完了した前回の watermark より後に主題の材料がある
  *  (前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
  *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTiers): void {
@@ -273,13 +273,16 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
     if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
     // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
     if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
-    // 未決着 = 同主題の open な task か、親が同主題の meta-review である open な提案 question(ADR 0120 決定2)。
+    // 未決着 = 同主題の open な task、同主題の meta-review の open な子(提案 question・修理子・RCA)、
+    // その子の下の open な提案 question(子の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7)。
     // 提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)
     const open = db
       .prepare(
-        `SELECT 1 FROM tasks WHERE ${unsettledSql("status")}
+        `WITH reviews AS (SELECT id FROM tasks WHERE meta_review_subject = @subject)
+         SELECT 1 FROM tasks WHERE ${unsettledSql("status")}
            AND (meta_review_subject = @subject
-             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE meta_review_subject = @subject)))`,
+             OR parent_id IN (SELECT id FROM reviews)
+             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE parent_id IN (SELECT id FROM reviews))))`,
       )
       .get({ subject });
     if (open) continue;
