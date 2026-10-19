@@ -2550,12 +2550,15 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
 /** memory meta-review の判断を要する項目(ADR 0278 決定5): エントリは id、枝は path で、complete_memory_review の鍵と同じ形。 */
 export type MemoryJudgmentItem = { entry: number } | { branch: string };
 
+/** id の本文が同じ鎖の末尾の id(移動・復元の複製をたどる)。 */
+const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
+
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
  *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
-  const tail = (id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
+  const tail = (id: number) => bodyTail(db, restored, id);
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
@@ -2583,7 +2586,7 @@ function judgmentActs(db: Db, reviewId: string): (item: MemoryJudgmentItem) => b
   const proposed = (db.prepare("SELECT question_proposal FROM tasks WHERE parent_id = ? AND json_extract(question_proposal, '$.kind') = 'memory'").pluck().all(reviewId) as string[]).flatMap(
     (proposal) => pinnedIds(JSON.parse(proposal) as MemoryProposal, false),
   );
-  const entries = new Set([...written, ...proposed].flatMap((id) => [id, sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id]));
+  const entries = new Set([...written, ...proposed].flatMap((id) => [id, bodyTail(db, restored, id)]));
   const rows = written.map((id) => requireEntry(db, id));
   const defined = new Set(rows.filter((row) => row.kind === "definition").map((row) => row.path));
   const moved = rows.filter((row) => row.invalidation_reason === "path_moved").flatMap((row) => [row.path, requireEntry(db, row.successor_id!).path]);
@@ -2609,14 +2612,8 @@ export function completeMemoryReview(
   const given = new Map(judgments.map((judgment) => [itemName(judgment), judgment]));
   const unknown = [...given].flatMap(([name, judgment]) => (open.has(name) || acted(judgment) ? [] : [name]));
   const unjudged = [...open.keys()].filter((name) => !given.has(name));
-  if (unknown.length > 0 || unjudged.length > 0) {
-    throw new DomainError(
-      [
-        ...(unknown.length > 0 ? [`not items to judge: ${unknown.join(", ")}`] : []),
-        ...(unjudged.length > 0 ? [`unjudged: ${unjudged.join(", ")} — act on each or pass it as left as is`] : []),
-      ].join("; "),
-    );
-  }
+  const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as left as is`];
+  if (refusals.some(Boolean)) throw new DomainError(refusals.filter(Boolean).join("; "));
   return db.transaction(() => {
     for (const [name, item] of open) {
       const { reason } = given.get(name)!;
