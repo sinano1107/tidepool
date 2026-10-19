@@ -12,8 +12,8 @@ import {
   tableRowEffortValue,
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
-import { cancelTaskDirectly, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { cancelTaskDirectly, getTask, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
+import { HUMAN_WEBUI, openTestInterviewRoom } from "./harness.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -226,4 +226,37 @@ it("Quarantine の question は項目を0個で持てる(回答の道を持た�
   const question = registerTask(db, { ...zeroItems, question_kind: { kind: "quarantine", quarantine: "tableRowEffort", value: "anthropic/claude-haiku-4-5/high" } }, NOW, ...HUMAN_WEBUI);
   expect(question.question_items).toEqual([]);
   expect(() => registerTask(db, zeroItems, NOW, ...HUMAN_WEBUI)).toThrow("a question carries 1 to 4 items");
+});
+
+describe("workspace の Quarantine の本文が予告する受理の検査", () => {
+  const purposeFor = (db: ReturnType<typeof openDb>, name: string) => {
+    registerQuarantine(db, "workspace", name, "the place broke", NOW);
+    return getTask(db, openQuarantineQuestion(db, "workspace", name)!.id)!.purpose;
+  };
+  const interviewRoot = (db: ReturnType<typeof openDb>) =>
+    registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, NOW, ...HUMAN_WEBUI);
+
+  it("registry の workspace は、名前の解決と git の検査を予告する", () => {
+    const purpose = purposeFor(openDb(":memory:"), "sandbox");
+    expect(purpose).toContain('a workspace named "sandbox" is still configured');
+    expect(purpose).toContain("git status --porcelain");
+  });
+
+  it("repo がまだ無い面接室(Interview の root の id)は、盤面がその番地を作れることだけを予告し、workspace の検査を出さない(ADR 0277 決定1)", () => {
+    const db = openDb(":memory:");
+    const purpose = purposeFor(db, interviewRoot(db).id);
+    expect(purpose).toContain("the board can create this interview room");
+    expect(purpose).not.toContain("is still configured");
+    expect(purpose).not.toContain("git status --porcelain");
+  });
+
+  it("repo のある面接室は、registry の名前の解決を除いた git の検査を予告する(ADR 0277 決定1)", () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const purpose = purposeFor(db, root.id);
+    expect(purpose).not.toContain("is still configured");
+    expect(purpose).not.toContain("the board can create this interview room");
+    expect(purpose).toContain("git status --porcelain");
+  });
 });

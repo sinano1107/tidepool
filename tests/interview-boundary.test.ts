@@ -324,16 +324,23 @@ it("資源の停止は走る場所の単位 —— 実環境の quarantine と (
   expect(await queueStatus(second!)).toBe("skipped");
 });
 
-it.each([
+/** 面接室の quarantine の回答が resolver に落ちないことを測る2つの盤面。 */
+const ROOM_ANSWER_BOARDS = [
   ["registry の盤面(面接室の名前を知らない resolver)", true],
   ["registry の無い盤面(どの名前にも既定の workspace を返す resolver)", false],
-])("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
+] as const;
+/** 実環境 reef の盤面。registry ありなら reef 以外の名前を知らない resolver を渡す。 */
+async function bootReef(registry: boolean): Promise<Tidepool> {
   const workspace = await makeWorkspace("reef");
   const resolveWorkspace = (name: string | null) => {
     if (name !== null && name !== workspace.name) throw new UnknownWorkspaceError(name);
     return workspace;
   };
-  t = await boot({ workspace, ...(registry && { resolveWorkspace }) });
+  return boot({ workspace, ...(registry && { resolveWorkspace }) });
+}
+
+it.each(ROOM_ANSWER_BOARDS)("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
+  t = await bootReef(registry);
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", root.id);
@@ -402,6 +409,71 @@ it("受験者の checkout が作れなかった pickup は面接室(root id)の 
   await runNow(t, second!);
 
   expect(t.worker.started.at(-1)!.id).toBe(second);
+  expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
+});
+
+it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup は面接室の quarantine に落ちても後始末を落とさずに slot を空け、root は quarantine が開いている間キューで外れ、%sでも直さない回答は理由つきで拒まれ、直した回答の後の pickup が面接室を作って root を走らせる(ADR 0277 決定1〜3)", async (_board, registry) => {
+  t = await bootReef(registry);
+  const base = join(t.dir, "workspaces");
+  writeFileSync(base, "not a directory\n");
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+
+  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
+
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
+  expect(await stops()).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("mkdir") }]);
+  // slot が空いて盤面は流れ続ける —— 落ちた後始末(盤面全体の停止)なら次の task は拾われない
+  const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  await completeMetaReviews(t);
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(work.id));
+  expect((await questions(t)).filter((q) => q.status !== "done").map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}`)).json.status).toBe("todo");
+  expect(await queueStatus(root.id)).toBe("skipped");
+
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("mkdir");
+  expect((await servedQuarantineQuestion(t, "workspace", root.id))?.id).toBe(quarantine.id);
+  rmSync(base);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  await runNow(t, root.id);
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(root.id));
+  // 受理の検査は番地を作れることを確かめるだけで、在り処の記録は次の pickup が1度だけ書く
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "interview_room_opened").map((e: any) => e.payload.path)).toEqual([roomOf(root.id)]);
+  expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
+  expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
+});
+
+it("受験者の checkout の番地に異物がある pickup は面接室(root id)の quarantine に落ちても後始末を落とさず、回答の検査は受験者の番地ではなく面接室を見る —— 直さない回答も受理されて次の pickup が同じ理由で止まり直し、直した回答の後は受験者が走る(ADR 0277 決定1・3 / ADR 0276 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46, sonnet55] })).json;
+  const [first, second] = await pose(root.id);
+  await completeMetaReviews(t);
+  expect(t.worker.started.at(-1)!.id).toBe(first);
+  const blocker = join(t.dir, "workspaces", second!);
+  writeFileSync(blocker, "not a directory\n");
+  expect((await callAsTask(t, first, "complete_task", { handoff: FULL_HANDOFF })).isError).toBeFalsy();
+  t.worker.exit(first);
+  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
+
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
+  expect(await stops()).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("mkdir") }]);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo");
+  expect((await questions(t)).filter((q) => q.status !== "done").map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
+  const unrepaired = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${unrepaired.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  await runNow(t, second!);
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(2));
+  expect((await stops())[1]).toEqual({ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(`mkdir '${blocker}'`) });
+
+  rmSync(blocker);
+  const repaired = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${repaired.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  await runNow(t, second!);
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(second));
   expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
 });
 

@@ -10,6 +10,7 @@ import { getTask, returnToQueueHead, type Task } from "./tasks.js";
 import {
   ensureWorkspaceToken,
   onTaskBranch,
+  PlaceNotOpenError,
   releaseWorkspace,
   resolveOrQuarantine,
   taskRunPlace,
@@ -250,6 +251,9 @@ function runPlaceToRelease(
     place = taskRunPlace(db, task, resolve(task.workspace));
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) return undefined;
+    // 開いた event は在り処の mkdir の直後、git の手順より前に書く —— event が無ければ盤面はこの task の場所を作れておらず、
+    // 触る checkout が無い。記録はあって repo がまだ無い場所は下の `onTaskBranch` が外す
+    if (err instanceof PlaceNotOpenError) return undefined;
     throw err;
   }
   return onTaskBranch(place, task.id) ? place : undefined;
