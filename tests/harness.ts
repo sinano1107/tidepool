@@ -22,7 +22,7 @@ import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventPayload, type EventRow, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow, getEvent, latestEventOfTask, listEvents } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
@@ -37,7 +37,7 @@ import type {
   RegistrySource,
   RosterAgent,
 } from "../src/registry.js";
-import type { AttributionClient, BehaviorDraftClient } from "../src/retrospective.js";
+import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -462,6 +462,7 @@ const RELEASING_VERBS = new Set([
   "complete_interview",
   "complete_integration_review",
   "complete_memory_review",
+  "complete_rca",
 ]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
@@ -1100,11 +1101,26 @@ export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string):
   return callAsTask(t, reviewId, "complete_memory_review", { judgments: injectedJudgmentItems(t.db, reviewId) });
 }
 
+/** RCA か —— その完了の verb が足されているかで見る。 */
+const isRca = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_rca");
+
+/** harness の complete_rca の所見の根本原因の既定。 */
+export const RCA_ROOT_CAUSE = "the objection came from the call itself";
+
+/** RCA の材料の全エントリを1つの所見に入れた complete_rca の引数(ADR 0278 決定5 / ADR 0280)。no_proposal は行為が無い所見に要り、
+ *  行為があれば無害。handoff の outcome は complete_task の RCA と同じ完了の result を残す。 */
+export function rcaFindings(db: Db, reviewId: string, root_cause = RCA_ROOT_CAUSE) {
+  const objections = latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? [];
+  const entries = [...new Set(objections.map((id) => (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id))];
+  return { findings: [{ entries, root_cause, no_proposal: true as const }], handoff: { outcome: FULL_HANDOFF.outcome } };
+}
+
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
- *  他は complete_task(work だけ handoff 付き)。 */
+ *  RCA は材料を1つの所見に、他は complete_task(work だけ handoff 付き)。 */
 export async function completeByKindViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
   if (isIntegrationReview(t.db, task.id)) return completeIntegrationReviewViaMcp(t, task.id);
   if (isMemoryReview(t.db, task.id)) return completeMemoryReviewViaMcp(t, task.id);
+  if (isRca(t.db, task.id)) return callAsTask(t, task.id, "complete_rca", rcaFindings(t.db, task.id));
   return completeViaMcp(t, task.id, task.type === "work");
 }
 
@@ -1156,10 +1172,11 @@ export function settleReviews(db: Db, now: Date): void {
 }
 
 /** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory meta-review は
- *  complete_memory_review で項目をすべて据え置き、他は complete_task。 */
+ *  complete_memory_review で項目をすべて据え置き、RCA は complete_rca で材料を1つの所見に、他は complete_task。 */
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
   if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
   if (isMemoryReview(db, review.id)) return completeMemoryReview(db, review, { judgments: injectedJudgmentItems(db, review.id) }, workerId, now, "worker");
+  if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), workerId, now, "worker");
   return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
 
@@ -1342,11 +1359,11 @@ export async function poseThroughAudit(
   return listExaminees(t.db, rootId).map(({ id }) => id);
 }
 
-/** RCA 子を worker の完了で決着させる(所見なし)。RCA review は盤面の名義なので人間の直接 cancel は届かない
- *  (ADR 0194)—— `runNow` で拾わせて完了する。 */
+/** RCA 子を worker の complete_rca で決着させる(材料を1つの所見に、no_proposal)。RCA review は盤面の名義なので人間の直接 cancel は
+ *  届かない(ADR 0194)—— `runNow` で拾わせて完了する。 */
 export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
   await runNow(t, reviewId);
-  const res = await completeViaMcp(t, reviewId, false);
+  const res = await callAsTask(t, reviewId, "complete_rca", rcaFindings(t.db, reviewId));
   if (res.isError) throw new Error(`RCA completion failed: ${JSON.stringify(res)}`);
 }
 
