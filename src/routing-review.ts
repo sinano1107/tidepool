@@ -18,7 +18,7 @@ import {
   rowName,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
+import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, objectedJudgments, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
@@ -341,10 +341,7 @@ function judgmentItems(
   parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows>; precedents: { decision_event_id: number }[] } & ReturnType<typeof cellRows>,
   registry: readonly RegistryAgent[] = [],
 ): RoutingJudgmentItem[] {
-  const objected = parts.precedents.flatMap(({ decision_event_id }): RoutingObject[] => {
-    const payload = getEvent(db, decision_event_id)?.payload;
-    return payload?.kind === "decision_logged" && payload.judgment?.kind === "routing" ? [payload.judgment] : [];
-  });
+  const objected = objectedJudgments(db, parts.precedents, "routing");
   const table = loadExecutionSettingTable(db);
   const rows = new Map<string, RoutingJudgmentItem>();
   for (const key of [
@@ -359,10 +356,9 @@ function judgmentItems(
   const { groups } = parts.allocations;
   const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
   const agents = new Set([...groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])), ...objected.flatMap((o) => ("agent" in o ? [o.agent] : []))].filter(lowerable));
-  const live = new Map(liveTierRows(db).map((t) => [t.id, t.name]));
   const tiers = new Set([
     ...groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])),
-    ...objected.flatMap((o) => ("tier_id" in o && live.has(o.tier_id) ? [live.get(o.tier_id)!] : [])),
+    ...objected.flatMap((o) => ("tier_id" in o ? liveTierRows(db).filter((t) => t.id === o.tier_id).map((t) => t.name) : [])),
   ]);
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
 }

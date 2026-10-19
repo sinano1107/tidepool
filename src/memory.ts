@@ -18,6 +18,7 @@ import {
   materialSection,
   metaReviewSubjectOf,
   metaReviewWindow,
+  objectedJudgments,
   previousMetaReviewWatermark,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -2647,10 +2648,7 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const tail = (id: number) => bodyTail(db, restored, id);
-  const objected = parts.precedents.flatMap(({ decision_event_id }) => {
-    const payload = getEvent(db, decision_event_id)?.payload;
-    return payload?.kind === "decision_logged" && payload.judgment?.kind === "memory" ? [payload.judgment] : [];
-  });
+  const objected = objectedJudgments(db, parts.precedents, "memory");
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
