@@ -1,7 +1,11 @@
-import { writeFile } from "node:fs/promises";
-import { expect, it, vi } from "vitest";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
+import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, loadExecutionSettingTable } from "../src/execution-setting.js";
@@ -9,10 +13,11 @@ import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { capInterruptionHandler, queueReturnHandler, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
+  openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
   resolveOrQuarantine,
@@ -415,6 +420,66 @@ it("issue #2257 の対照: 止めた workspace の question を回答する前�
   const cancel = () => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
   expect(cancel).toThrow(DomainError);
   expect(cancel).toThrow(/quarantine confirmation/);
+});
+
+/** Interview の root の pickup が面接室を開けず(ADR 0277)、面接室(root id)の quarantine に落ちて後始末に入り、容器で止まったまま
+ *  (issue #2271)。`mkdir` は規約の基点がファイルで落ちる(開いた event 無し)、`git` は番地に `.git` という名のファイルがあって
+ *  `git init` が落ちる(event あり・repo 無し)。 */
+async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const ws = await makeWorkspace("sandbox");
+  const slot = new Slot();
+  const runtime = new FakeContainerRuntime();
+  const containers = new ProcessContainers(runtime);
+  const triggered: string[] = [];
+  const deps = { db, clock, slot, resolve: () => ws, pollNow: () => triggered.push("pollNow") };
+  const registered = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, clock.now(), ...HUMAN_WEBUI);
+  const task = pickupTask(db, registered, resolveTaskAgent(registered, "deckhand", "fugu", DEFAULT_INTERVIEWER_NAME), clock.now(), { workspace: ws.name })!;
+  slot.occupy(task.id);
+  containers.open(task.id);
+  const base = join(mkdtempSync(join(tmpdir(), "tidepool-rooms-")), "workspaces");
+  onTestFinished(() => rm(base, { recursive: true, force: true }));
+  if (roomBroken === "mkdir") writeFileSync(base, "not a directory\n");
+  else {
+    mkdirSync(join(base, task.id), { recursive: true });
+    writeFileSync(join(base, task.id, ".git"), "not a gitfile\n");
+  }
+  const failure = await Promise.resolve().then(() => openInterviewRoom(db, task, base, clock.now())).then(() => undefined, (err: unknown) => err);
+  expect(failure).toBeInstanceOf(Error);
+  expect(listEvents(db, task.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(roomBroken === "git" ? 1 : 0);
+  const stop = quarantineWorkspace(db, task.id, failure, clock.now());
+  runtime.hold(task.id);
+  queueReturnHandler(deps, containers)(task.id, { kind: "pickup_stopped", ...stop });
+  await settle();
+  expect(markedSession(db)?.taskId).toBe(task.id);
+  return { db, clock, ws, slot, runtime, task, triggered };
+}
+
+it.each([
+  ["mkdir で落ちた面接室(開いた event 無し)を回収済み観測で", "mkdir", false],
+  ["mkdir で落ちた面接室(開いた event 無し)を再起動を跨いで", "mkdir", true],
+  ["git init で落ちた面接室(event あり・repo 無し)を回収済み観測で", "git", false],
+  ["git init で落ちた面接室(event あり・repo 無し)を再起動を跨いで", "git", true],
+] as const)("面接室が開けず止まった Interview の root が後始末の途中で直接 cancel されても、後始末は落ちず面接室の Quarantine に偽の理由を積まずに枠を空ける —— %s(ADR 0274 決定3 / ADR 0277 決定3 / issue #2271)", async (_, broken, restart) => {
+  const f = await rootHeldMidTeardown(broken);
+  const room = openQuarantineQuestion(f.db, "workspace", f.task.id)!;
+  // 面接室の quarantine は root id で立ち、root の workspace 列は実環境なので、直接 cancel の門(issue #130)は掛からない —— setup であって釘ではない
+  cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), { defaultWorkspaceName: f.ws.name, defaultAgentName: "deckhand", interviewerName: DEFAULT_INTERVIEWER_NAME, quarantined: quarantineStops(f.db) }, "webui");
+  expect(getTask(f.db, f.task.id)?.status).toBe("cancelled");
+
+  let slot = f.slot;
+  if (restart) slot = restartMidTeardown(f, () => f.ws);
+  else f.runtime.fireEmpty(f.task.id);
+  await settle();
+
+  expect(questions(f.db).filter((q) => q.status === "todo").map((q) => q.id)).toEqual([room.id]);
+  expect(listEvents(f.db, room.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(getTask(f.db, f.task.id)?.status).toBe("cancelled");
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(slot.currentTaskId).toBeNull();
+  expect(f.triggered).toEqual(["pollNow"]);
 });
 
 it("準備が task ブランチへ checkout した後で spawn が落ちた pickup の後始末は、今日どおり退避して休止位置へ戻す(ADR 0274 決定3 / ADR 0052 決定7)", async () => {
