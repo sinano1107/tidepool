@@ -597,9 +597,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       };
       // repo がまだ無い面接室には検査する git が無い —— 確かめるのは次の pickup が作れること。event は次の pickup が書く
       if (getTask(deps.db, value!)?.type === "interview" && !existsSync(join(target.path, ".git"))) {
-        await refuseOnError(() => {
-          mkdirSync(target.path, { recursive: true });
-        });
+        await refuseOnError(() => void mkdirSync(target.path, { recursive: true }));
         return;
       }
       await refuseOnError(() => verifyWorkspaceClean(target));

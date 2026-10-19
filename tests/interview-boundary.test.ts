@@ -324,16 +324,23 @@ it("資源の停止は走る場所の単位 —— 実環境の quarantine と (
   expect(await queueStatus(second!)).toBe("skipped");
 });
 
-it.each([
+/** 面接室の quarantine の回答が resolver に落ちないことを測る2つの盤面。 */
+const ROOM_ANSWER_BOARDS = [
   ["registry の盤面(面接室の名前を知らない resolver)", true],
   ["registry の無い盤面(どの名前にも既定の workspace を返す resolver)", false],
-])("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
+] as const;
+/** 実環境 reef の盤面。registry ありなら reef 以外の名前を知らない resolver を渡す。 */
+async function bootReef(registry: boolean): Promise<Tidepool> {
   const workspace = await makeWorkspace("reef");
   const resolveWorkspace = (name: string | null) => {
     if (name !== null && name !== workspace.name) throw new UnknownWorkspaceError(name);
     return workspace;
   };
-  t = await boot({ workspace, ...(registry && { resolveWorkspace }) });
+  return boot({ workspace, ...(registry && { resolveWorkspace }) });
+}
+
+it.each(ROOM_ANSWER_BOARDS)("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
+  t = await bootReef(registry);
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", root.id);
@@ -405,16 +412,8 @@ it("受験者の checkout が作れなかった pickup は面接室(root id)の 
   expect(git(examineeCheckoutOf(second!), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${second}`);
 });
 
-it.each([
-  ["registry の盤面(面接室の名前を知らない resolver)", true],
-  ["registry の無い盤面(どの名前にも既定の workspace を返す resolver)", false],
-])("規約の基点に面接室が作れない pickup は面接室の quarantine に落ちても後始末を落とさずに slot を空け、root は quarantine が開いている間キューで外れ、%sでも直さない回答は理由つきで拒まれ、直した回答の後の pickup が面接室を作って root を走らせる(ADR 0277 決定1〜3)", async (_board, registry) => {
-  const workspace = await makeWorkspace("reef");
-  const resolveWorkspace = (name: string | null) => {
-    if (name !== null && name !== workspace.name) throw new UnknownWorkspaceError(name);
-    return workspace;
-  };
-  t = await boot({ workspace, ...(registry && { resolveWorkspace }) });
+it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup は面接室の quarantine に落ちても後始末を落とさずに slot を空け、root は quarantine が開いている間キューで外れ、%sでも直さない回答は理由つきで拒まれ、直した回答の後の pickup が面接室を作って root を走らせる(ADR 0277 決定1〜3)", async (_board, registry) => {
+  t = await bootReef(registry);
   const base = join(t.dir, "workspaces");
   writeFileSync(base, "not a directory\n");
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;

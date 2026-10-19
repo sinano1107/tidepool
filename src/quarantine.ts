@@ -227,7 +227,7 @@ export const QUARANTINES = [
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
       // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
-      const roomPath = room ? interviewRoomPath(db, name!) : undefined;
+      const roomPath = interviewRoomPath(db, name!);
       const checks =
         room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
           ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
