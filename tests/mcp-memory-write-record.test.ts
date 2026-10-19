@@ -158,3 +158,28 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を�
     await client.close();
   }
 });
+
+it("routing_repair の worker MCP は tools/list が基本の面(get_current_task / log_decision / escalate / complete_task)だけで、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {
+  t = await bootTidepool();
+  const objected = registerTask(t.db, { type: "work", title: "judge the routing table", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  cancelTaskDirectly(t.db, objected, null, t.clock.now(), {}, "webui");
+  const repair = registerTask(
+    t.db,
+    { type: "routing_repair", title: "routing repair", purpose: "redo it", completion_criteria: "c", parent_id: objected.id },
+    t.clock.now(),
+    ...HUMAN_WEBUI,
+  );
+  await runNow(t, repair.id);
+  const client = await mcpClient(t.mcpBaseUrl, repair.id);
+  try {
+    expect((await client.listTools()).tools.map((tool) => tool.name).sort()).toEqual(["complete_task", "escalate", "get_current_task", "log_decision"]);
+    const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
+    expect(envelope.routing_repair).toBe(
+      "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.",
+    );
+    expect(envelope.memory_repair).toBeUndefined();
+    expect(envelope.artifact_discarded).toBeUndefined();
+  } finally {
+    await client.close();
+  }
+});

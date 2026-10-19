@@ -87,7 +87,7 @@ it("組み込みに解決される agent を assignee にした decompose の子
   await client.close();
 
   expect(res.isError).toBe(true);
-  expect(res.content[0].text).toContain("agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs");
+  expect(res.content[0].text).toContain("agent fugu is the built-in agent, which runs only reviews, Interviews, memory repairs and routing repairs");
   const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(board.filter((x: any) => x.type === "question")).toEqual([]);
 });

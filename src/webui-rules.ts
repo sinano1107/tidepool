@@ -68,11 +68,12 @@ export function whyExecutionRequestIsInert(t: Pick<ReviewSubject, "type">, field
 }
 
 /** その名前が type の assignee に取れない理由。取れるなら undefined。組み込み agent が取れるのは reviewer 定数の授権で
- *  走れる type(review / interview / memory_repair、ADR 0275 決定1)なので、組み込みに解決される名前は work / question に取れない。
+ *  走れる type(review / interview / memory_repair / routing_repair、ADR 0275 決定1 / ADR 0279 決定4)なので、組み込みに解決される名前は
+ *  work / question に取れない。
  *  登録・Edit・decompose の門と、WebUI の Assignee 候補の出し分けが同じ関数を呼ぶ(ADR 0235 決定3)。 */
 export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuiltIn: boolean): string | undefined {
-  return type !== "review" && type !== "interview" && type !== "memory_repair" && resolvesToBuiltIn
-    ? `agent ${name} is the built-in agent, which runs only reviews, Interviews and memory repairs`
+  return (type === "work" || type === "question") && resolvesToBuiltIn
+    ? `agent ${name} is the built-in agent, which runs only reviews, Interviews, memory repairs and routing repairs`
     : undefined;
 }
 

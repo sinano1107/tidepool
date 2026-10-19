@@ -231,9 +231,9 @@ it("組み立てられたオプションは watchdog を持つ(#172)", async () 
 // 値は「一晩を無駄にしない上限」と「正常な長時間タスクを殺さない下限」の間の判断で
 // あって導出ではないので、動かすときに目に入るようここで固定する。すべて分単位に
 // 量子化される — WATCHDOG_TICK が 60秒なので、それ未満の差は tick に丸められる。
-it("時間リミットは work=90分 / review=45分 / memory_repair=90分(work と同じ、ADR 0272 決定4)、猶予は 1 tick(#172)", () => {
+it("時間リミットは work=90分 / review=45分 / memory_repair・routing_repair=90分(work と同じ、ADR 0272 決定4 / ADR 0279 決定4)、猶予は 1 tick(#172)", () => {
   expect(WATCHDOG).toEqual({
-    timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000, interview: 45 * 60_000 },
+    timeLimits: { work: 90 * 60_000, review: 45 * 60_000, memory_repair: 90 * 60_000, routing_repair: 90 * 60_000, interview: 45 * 60_000 },
     grace: 60_000,
   });
 });
@@ -568,7 +568,7 @@ it("agentDefinitionFailure は pickup と同じ解決で定義の不成立を理
   // 登録の門の口は意味を変えない —— 壊れた定義の agent もエントリはある
   expect(options.agentRegistered?.("broken")).toBe(true);
   // work として解決するので組み込みは不成立になる —— 解除検査が組み込みの判定を先に置く理由
-  expect(failure("fugu")).toMatch(/runs only reviews, Interviews and memory repairs/);
+  expect(failure("fugu")).toMatch(/runs only reviews, Interviews, memory repairs and routing repairs/);
 
   writeFileSync(join(registryDir, "agents/broken.md"), brokenTier(""));
   execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "fix broken"], {
@@ -595,7 +595,7 @@ it("既定 agent が組み込みに解決される盤面は起動しない —�
   const board = { ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "fugu" };
 
   await expect(bootTidepool({ workerAdapter: buildWorkerFactory(board) })).rejects.toThrow(
-    "agent fugu: the built-in agent runs only reviews, Interviews and memory repairs",
+    "agent fugu: the built-in agent runs only reviews, Interviews, memory repairs and routing repairs",
   );
 });
 

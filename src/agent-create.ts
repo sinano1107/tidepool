@@ -360,7 +360,7 @@ export async function deleteAgent(
   const reasons: DeletionBlockedReason[] = [];
   // 組み込みを shadow しているエントリだけは、Auditor ポインタの指す先でも review に
   // 参照されていても消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する
-  // 唯一の例外である(ADR 0117 決定2): 消えれば名前は組み込みへ落ち、review / interview / memory_repair は
+  // 唯一の例外である(ADR 0117 決定2): 消えれば名前は組み込みへ落ち、review / interview / 修理子の type は
   // 組み込みが走らせ続ける。work は組み込みへ落ちられない(ADR 0275 決定1)ので、その未決着タスクと
   // 着地を待つ完了タスクは普通の agent と同じく数える(ADR 0228 決定3)。
   // `board_default` は緩めない —— 既定 agent は registry に残る(ADR 0117 決定3)。

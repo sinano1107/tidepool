@@ -1431,7 +1431,7 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
     payload:
       subject === "memory"
         ? { ...common, subject, store_changes: [material], candidates: [], precedents: [], precedent_entries: [], proposals: [], proposal_entries: [], branches: [], items: [] }
-        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocations: [], cells: [], rows: [], proposals: [] },
+        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocations: [], cells: [], rows: [], precedents: [], precedent_entries: [], proposals: [] },
   });
   readMemoryEntries(b.db, { taskId: review.id, agent: "deckhand" }, { ids: [guidance, material] }, at);
   const decision = logDecision(b.db, review, "kept candidate 12", "deckhand", at, "worker");

@@ -4,7 +4,7 @@ import { openDb } from "../src/db.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, MEMORY_REPAIR_NOTICE, poseProbe, registerTask, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, MEMORY_REPAIR_NOTICE, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, taskVerbSwap } from "../src/tasks.js";
 
 
 import { HUMAN_WEBUI } from "./harness.js";
@@ -55,13 +55,13 @@ it("出題済みの Interview の root の doctrine は、採点完了の verb �
   for (const vocabulary of [CLAUDE, CODEX]) expect(boardDoctrine(vocabulary, POSED)).toBe(boardDoctrine(vocabulary, NOT_SPLIT_SWAP));
 });
 
-/** 祖先の cancel の下の memory_repair と、その文面(組み込みでない deckhand を持つ registry —— Roster が組める形)。 */
-async function memoryRepairProse(profile: AuthorityProfile) {
+/** 祖先の cancel の下の修理子(memory_repair / routing_repair)と、その文面(組み込みでない deckhand を持つ registry —— Roster が組める形)。 */
+async function repairProse(profile: AuthorityProfile, type: "memory_repair" | "routing_repair") {
   const db = openDb(":memory:");
   const at = new Date("2026-10-18T00:00:00.000Z");
   const parent = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   cancelTaskDirectly(db, parent, null, at, {}, "webui");
-  const task = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
+  const task = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
   expect(isArtifactDiscarded(db, task.id)).toBe(true);
   const verbs = taskVerbSwap(db, task.id);
   return boardProse({
@@ -78,20 +78,25 @@ async function memoryRepairProse(profile: AuthorityProfile) {
   });
 }
 
-it("memory_repair の spawn の文面は Authority 節が記憶の修理の1行だけで、profile の guidance も Roster 節も無く、祖先の cancel の下でも成果が捨てられた旨を置かず、前提の破綻の宣言も言わない(ADR 0272 決定3・追記3)", async () => {
-  const prose = await memoryRepairProse({ name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] });
+const REPAIR_NOTICES = [
+  ["memory_repair", MEMORY_REPAIR_NOTICE],
+  ["routing_repair", ROUTING_REPAIR_NOTICE],
+] as const;
 
-  expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
+it.each(REPAIR_NOTICES)("%s の spawn の文面は Authority 節が修理の1行だけで、profile の guidance も Roster 節も無く、祖先の cancel の下でも成果が捨てられた旨を置かず、前提の破綻の宣言も言わない(ADR 0272 決定3・追記3 / ADR 0279 決定4)", async (type, notice) => {
+  const prose = await repairProse({ name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] }, type);
+
+  expect(prose).toContain(`## Authority\n\n${notice}\n\n`);
   expect(prose).not.toContain("Prefer reversible actions.");
   expect(prose).not.toContain("## Roster");
   expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
   expect(prose).not.toContain("premise breach");
 });
 
-it("profile が reviewer 定数でも、memory_repair の Authority 節は記憶の修理の1行だけ(ADR 0272 追記3)", async () => {
-  const prose = await memoryRepairProse(REVIEWER_AUTHORITY_PROFILE);
+it.each(REPAIR_NOTICES)("profile が reviewer 定数でも、%s の Authority 節は修理の1行だけ(ADR 0272 追記3 / ADR 0279 決定4)", async (type, notice) => {
+  const prose = await repairProse(REVIEWER_AUTHORITY_PROFILE, type);
 
-  expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
+  expect(prose).toContain(`## Authority\n\n${notice}\n\n`);
   expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
 });
 

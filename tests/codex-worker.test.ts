@@ -113,6 +113,13 @@ function writeRepairTask(db: ReturnType<typeof openDb>) {
   return listChildren(db, objected.id).find((child) => child.type === "memory_repair")!;
 }
 
+/** routing meta-review の判断の行への異議の修理 task(routing_repair、ADR 0279 決定4)。束ねは後続の ticket なので、束ねと同じ人間の名義で立てる。 */
+function routingRepairTask(db: ReturnType<typeof openDb>) {
+  const at = new Date("2026-08-24T00:00:00.000Z");
+  const objected = task(db, "judged the routing table");
+  return registerTask(db, { type: "routing_repair", assignee: "codex-agent", workspace: "work", title: "routing repair", purpose: "p", completion_criteria: "c", parent_id: objected.id }, at, ...HUMAN_WEBUI);
+}
+
 /** 祖先の cancel の下の RCA(self)—— 成果が捨てられた task は分解の verb を伏せる(ADR 0271 決定2)。 */
 function discardedRca(db: ReturnType<typeof openDb>) {
   const at = new Date("2026-08-24T00:00:00.000Z");
@@ -361,9 +368,12 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(config).toContain('permissions.tidepool-review.network={"enabled"=true,"domains"={"api.github.com"="allow","127.0.0.1"="allow"}');
   });
 
-  it("memory_repair task の spawn は review と同じ read-only の permission profile で走る(ADR 0272 決定3)", async () => {
+  it.each([
+    ["memory_repair", writeRepairTask],
+    ["routing_repair", routingRepairTask],
+  ] as const)("%s task の spawn は review と同じ read-only の permission profile で走る(ADR 0272 決定3 / ADR 0279 決定4)", async (_, register) => {
     const f = await fixture();
-    await f.start(writeRepairTask(f.db));
+    await f.start(register(f.db));
 
     const args = f.process.calls[0]!.args;
     expect(configEntry(args, "default_permissions=")).toBe('default_permissions="tidepool-review"');
@@ -643,6 +653,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の pin の子", pinnedChild],
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
+    ["routing meta-review の判断の行への異議の修理", routingRepairTask],
     ["self RCA", rca("self")],
     ["auditor RCA", rca("auditor")],
     ["祖先の cancel の下の RCA", discardedRca],

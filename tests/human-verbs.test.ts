@@ -89,14 +89,14 @@ it("人間の登録 door は通常タスクを登録して返す", async () => {
   });
 });
 
-it("人間の登録 door は memory_repair を root としても子としても type で拒み、何も登録しない —— 立てるのは異議の束ねだけ(ADR 0272 決定2)", async () => {
+it.each(["memory_repair", "routing_repair"] as const)("人間の登録 door は %s を root としても子としても type で拒み、何も登録しない —— 立てるのは異議の束ねだけ(ADR 0272 決定2 / ADR 0279 決定4)", async (type) => {
   db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
 
   for (const parent_id of [undefined, parent.id]) {
     const result = await registerThroughHumanDoor(
       { db, pollNow: () => {} },
-      { type: "memory_repair", title: "repair memory", purpose: "p", completion_criteria: "c", parent_id, decompose_reason: "split" },
+      { type, title: "repair memory", purpose: "p", completion_criteria: "c", parent_id, decompose_reason: "split" },
       () => NOW,
       "webui",
     );
@@ -132,7 +132,7 @@ it("人間の登録 door は未知の assignee を GateFailure として返す",
 // その名前は registry の普通の agent で work も受ける。人間の登録・子の登録・Edit は同じ1つの門を通る。
 const BUILT_IN_FUGU = { agentRegistered: () => true, resolvesToBuiltIn: (name: string): boolean => name === "fugu" };
 const SHADOWED_FUGU = { agentRegistered: () => true, resolvesToBuiltIn: () => false };
-const BUILT_IN_REFUSAL = "agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs";
+const BUILT_IN_REFUSAL = "agent fugu is the built-in agent, which runs only reviews, Interviews, memory repairs and routing repairs";
 
 function registerFor(lookup: typeof BUILT_IN_FUGU, type: "work" | "review", parentId?: string) {
   return registerThroughHumanDoor(
@@ -914,7 +914,7 @@ it("組み込みに解決される名前は、定義の解決が通らないと�
   registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", assignee: "fugu" }, NOW, ...HUMAN_WEBUI);
 
   await expect(
-    quarantineChecks({ db, ...BUILT_IN_FUGU, agentDefinitionFailure: () => "the built-in agent runs only reviews, Interviews and memory repairs" }).agent!("fugu"),
+    quarantineChecks({ db, ...BUILT_IN_FUGU, agentDefinitionFailure: () => "the built-in agent runs only reviews, Interviews, memory repairs and routing repairs" }).agent!("fugu"),
   ).resolves.toBeUndefined();
 });
 

@@ -121,8 +121,8 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     scheduler.stop();
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("pickup された assignee 未指定の memory_repair には work と同じく既定 agent の名前が書かれる —— Auditor には落ちない(ADR 0272 決定4 / ADR 0233 決定2)", async () => {
-    const workspace = await makeWorkspace("pickup-fill-memory-repair");
+  it.each(["memory_repair", "routing_repair"] as const)("pickup された assignee 未指定の %s には work と同じく既定 agent の名前が書かれる —— Auditor には落ちない(ADR 0272 決定4 / ADR 0233 決定2 / ADR 0279 決定4)", async (type) => {
+    const workspace = await makeWorkspace(`pickup-fill-${type}`);
     const db = openDb(":memory:");
     const clock = new FakeClock();
     const scheduler = startScheduler({
@@ -143,7 +143,7 @@ describe("scheduler の pickup が既定の名前を書く先", () => {
     });
     // 親は人間の task —— pickup の候補に入らないので、slot は memory_repair を取る
     const parent = registerTask(db, { type: "work", assignee: "human", title: "parent", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
-    const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, clock.now(), ...HUMAN_WEBUI);
+    const memoryRepair = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, clock.now(), ...HUMAN_WEBUI);
 
     await clock.advance(HOURLY);
 

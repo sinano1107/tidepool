@@ -43,7 +43,7 @@ export function openDb(path: string): Db {
 
     CREATE TABLE IF NOT EXISTS tasks (
       id                  TEXT PRIMARY KEY,
-      type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review', 'memory_repair', 'interview')),
+      type                TEXT NOT NULL CHECK (type IN ('work', 'question', 'review', 'memory_repair', 'routing_repair', 'interview')),
       -- 'blocked' is not a stored status: it is derived from unfinished children
       status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,

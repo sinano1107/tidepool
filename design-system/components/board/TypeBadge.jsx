@@ -3,6 +3,7 @@ const typeStyles = {
   question: { color: 'var(--type-question-fg)', symbol: '?' },
   review:   { color: 'var(--type-review-fg)', symbol: '◍' },
   memory_repair: { color: 'var(--type-work-fg)', symbol: '◐' },
+  routing_repair: { color: 'var(--type-work-fg)', symbol: '◑' },
   interview: { color: 'var(--type-review-fg)', symbol: '◇' },
 };
 

@@ -2385,7 +2385,8 @@ type MemoryInjection = {
 };
 
 /** spawn 注入の節(provider 非依存): 主題つきの meta-review には指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf
- *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。 */
+ *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。
+ *  routing_repair(主題 routing の修理子、ADR 0279 決定4・6)にも同じ理由で INDEX を組まず、節は空。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
@@ -2393,6 +2394,9 @@ export function buildMemoryInjection(
   agent: string,
   query?: InjectionQuery,
 ): MemoryInjection {
+  if (getTask(db, task.id)?.type === "routing_repair") {
+    return { query, section: null, watermark: memoryWatermark(db), entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
+  }
   return metaReviewSubjectOf(db, task.id) === null ? memoryIndex(db, task, scope, agent, query) : metaReviewGuidance(db, task.id, agent);
 }
 

@@ -66,7 +66,7 @@ export function resolveExecutionAgent(
   if (definition.builtin && whyAssigneeCannotTake(name, taskType, true) !== undefined) {
     throw new InvalidAgentDefinitionError(
       name,
-      `the built-in agent runs only reviews, Interviews and memory repairs, but a ${taskType} task resolved to it; ` +
+      `the built-in agent runs only reviews, Interviews, memory repairs and routing repairs, but a ${taskType} task resolved to it; ` +
         `restore a registry entry named ${name} or reassign that task`,
     );
   }
