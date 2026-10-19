@@ -4,7 +4,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
 import type { GatedJudgment } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -1120,6 +1120,43 @@ it.each([
   expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual(
     entries.map((entry) => expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" })),
   );
+});
+
+it.each([
+  ["memory", "判断の行"],
+  ["memory", "完了の行"],
+  ["routing", "判断の行"],
+  ["routing", "完了の行"],
+] as const)("%s の meta-review の%sへの異議の commit は work の修理子を立てず、帰責 event と RCA は立つ(ADR 0279 決定1・3・4)", (subject, rowKind) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-20T00:00:00.000Z");
+  const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+  spawnedAs(db, review, "fugu", at);
+  // 型つきの判断の行(#2283 / #2284)はまだ無いので、対象を名指さない自由文の判断の行と完了の行で釘を打つ
+  let row: number;
+  if (rowKind === "判断の行") row = logDecision(db, review, "fugu's call", "fugu", at, "worker");
+  else {
+    finishTask(db, pickupTask(db, review, "fugu", at)!, { outcome: "done" }, "fugu", at, "worker");
+    row = listEvents(db, review.id).find((event) => event.kind === "task_completed")!.id;
+  }
+  raiseObjection(db, row, "redo it", at);
+
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, review.id).map((child) => child.title).filter((title) => !title.startsWith("review"))).toEqual(["rca (self): t", "rca (auditor): t"]);
+  expect(listEvents(db, review.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
+});
+
+it("memory の meta-review の記憶の書き込みの行への異議は今どおり memory_repair 1本に束ねられる(ADR 0272 決定1)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-20T00:00:00.000Z");
+  const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  spawnedAs(db, review, "fugu", at);
+  raiseObjection(db, recordNote(db, at, review.id).event_id, "drop the note", at);
+
+  commitTriage(db, at);
+
+  expect(listChildren(db, review.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["memory_repair"]);
 });
 
 const interviewRoot = (db: Db, at: Date, assignee?: string) =>
