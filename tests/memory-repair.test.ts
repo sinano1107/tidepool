@@ -272,7 +272,7 @@ function unionRepair() {
   for (const id of [widened.event_id, defined.event_id, row(c), row(k), row(behavior)]) raiseObjection(db, id, "redo it", at);
   commitTriage(db, at);
   const repair = repairChild(review.id);
-  return { ...b, repair, p, o, c, k, behavior, widened, defined, mover: { activity: "worker_verb" as const, name: "deckhand" } };
+  return { ...b, repair, o, c, k, behavior, widened, defined, mover: { activity: "worker_verb" as const, name: "deckhand" } };
 }
 
 it("両方の行の修理子の invalidate_memory / move_memory / move_memory_branch は対象で門が切り替わる —— (i) 書き込みの射程には修理の規則(移し戻しは scope の門なし)、(ii) 判断の行が名指す対象には meta-review の規則、(iii) どちらにも無い対象は名指して拒む(ADR 0281 決定1)", () => {

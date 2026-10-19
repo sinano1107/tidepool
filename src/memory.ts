@@ -845,8 +845,6 @@ function entryReach(db: Db, writer: string, entryId: number): Reach {
   throw new DomainError(`memory entry ${entryId} was neither touched by the objected memory write nor named by the objected judgment: a memory repair changes only those`);
 }
 
-/** 枝の射程(ADR 0281 決定2): 書き込みが path に Definition を作った、または path かその下へエントリを移した(同じ scope)なら書き込みの
- *  射程で、配下に触っていない leaf があっても枝ごと動く。判断の行は枝を path で名指す。 */
 /** 判断の側にしかない verb(define_memory / fold_memory / propose_memory_change)の門(ADR 0281 決定4): memory_repair の書き手なら、
  *  対象は異議された判断の行が名指すものだけ —— 書き込みの射程には広げない。それ以外の書き手(meta-review)は門を持たない。 */
 function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void {
@@ -856,6 +854,8 @@ function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void
   if (outside) throw new DomainError(`${itemName(outside)} is not named by the objected judgment: a memory repair defines, folds and proposes only what that judgment names`);
 }
 
+/** 枝の射程(ADR 0281 決定2): 書き込みが path に Definition を作った、または path かその下へエントリを移した(同じ scope)なら書き込みの
+ *  射程で、配下に触っていない leaf があっても枝ごと動く。判断の行は枝を path で名指す。 */
 function branchReach(db: Db, writer: string, scope: string | null, path: string): Reach {
   if (getTask(db, writer)?.type !== "memory_repair") return "meta";
   const writes = objectedWrites(db, writer);
