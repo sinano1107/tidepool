@@ -236,14 +236,13 @@ function runPlaceToRelease(
     const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
     return resolved && taskRunPlace(db, task, resolved);
   }
-  let resolved: WorkspaceConfig;
+  let place: WorkspaceConfig;
   try {
-    resolved = resolve(task.workspace);
+    place = taskRunPlace(db, task, resolve(task.workspace));
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) return undefined;
     throw err;
   }
-  const place = taskRunPlace(db, task, resolved);
   return onTaskBranch(place, task.id) ? place : undefined;
 }
 
