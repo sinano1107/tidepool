@@ -52,3 +52,9 @@
 
 決定6 の「`complete_task` は type を問わず `outcome` 必須」は第5の type `routing_repair` にも当たる。決定5 の memory / routing の項目に、
 窓で異議された同主題の判断の行が名指す対象(生きているもの)を足す(ADR 0279 決定5)。
+
+## 追記3(2026-10-19 の grilling、issue #2285 / ADR 0280)
+
+決定5 の RCA の「`proposed` はこの RCA が立てた candidate から、`repair` は子の有無から導く」は、記録が RCA を名指さなかった(self と
+auditor の RCA は同じ異議群を材料にする)ので成り立たず、ADR 0280 に改めた —— 行為は RCA の task に帰属する記録から読み、所見の行は
+行為(書いた記憶・子)を列挙して `no_proposal` だけを値に持つ。決定3 の「candidate の作成は記録が既に持つ」は、この記録が持つと読む。
