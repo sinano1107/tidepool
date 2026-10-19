@@ -1,0 +1,49 @@
+# 盤面が完了を材料として読む review は種別ごとの完了 verb で終わり、verb が運ぶのは記録が示せない判断だけで、判断1つが対象を名指す判断ログ1行になる
+
+2026-10-19 の triage / grilling(issue #1919)で決定。worker が task を終える verb は種別によらず汎用の `complete_task` 1つで、
+`completeTask` が見るのは work の handoff と未決着の子だけだった。統合レビュー・RCA・memory / routing の meta-review は、種別固有の
+仕事(判定・所見・candidate やセルの判断)をしたかを盤面に見られずに done になれ、「何もしなかった完了」と「判断した結果、何もない
+完了」を盤面も人間も区別できないまま、後続の機構(受理と配分評価、第2回の帰責、材料の窓の消費)がその完了を材料として読んでいた。
+実測(`file:line`)と各種別の例は #1919 のコメントに置く。先例は Interview の出題の監査(ADR 0273 決定4)——review type のまま
+種別を構造で見分け、`complete_task` を伏せて専用 verb で判定を値で残す。
+
+## 決定
+
+1. **完了を盤面の機構が材料として読む review の種別は、種別ごとの完了 verb で終わる。** 統合レビュー(受理と配分評価が読む)、
+   RCA(第2回の帰責が読む)、memory / routing の meta-review(材料の窓を閉じる)。線は列挙ではなく性質で引き、読み手が人間だけの
+   review(root の独立監査、親を名指した review 子)は汎用の完了のまま。verb の差し替えは `taskVerbSwap`(ADR 0122 決定2)で、
+   domain はその種別への `complete_task` を扉を問わず拒む(ADR 0253 決定5 の線)。type は増やさない —— 権限面が review と同じなので
+   review の中の種別である(ADR 0272 決定2)。
+2. **判断は項目ごとに閉じた語彙の値で、「何もない」も値である** —— memory `left_as_is`、routing `no_change`、RCA `no_proposal`、
+   統合レビュー `no_findings`。任意の1行 `reason` を添えられ、文は盤面が「<値>: <対象> — <reason>」の形で組む。
+3. **verb が運ぶのは記録が示せない判断だけ。** 記憶の書き込みの行(ADR 0252)、提案 question、candidate の作成、修理子は記録が
+   既に持つので二度申告させない。盤面は 被覆 = 判断を要する項目 − 記録の行為 を計算し、項目の一覧を材料の節に注入する(必ず読むものは
+   注入、ADR 0180)。不足と材料に無い id は何も記録せず拒み、拒否文は id を名指す。**行為済みの項目への値は受け取り、何も記録せず、
+   応答にも書かない** —— 記録を優先すれば矛盾は残らず、完了の verb は session を終えるので応答の読み手はいない。
+4. **判断1つは型つきの `decision_logged` 1行になり、対象を名指し、文は盤面が組み、完了と同じ transaction で書く**(出題の行と同じ形)。
+   ADR 0252 決定2「行の単位は verb の呼び出し1回」の根拠は判断1回 = 1行であり、書き込みの verb が判断を1つ運ぶから一致していた ——
+   完了の verb は判断を N 個運ぶので N 行である。Interview の採点が N 個の値を受験者側に置くのは対象が task だからで、ここでの対象
+   (candidate・エントリ・行・agent・段・異議されたエントリ・成果物)は task ではないので、行は review 自身に置く。
+5. **種別ごとの項目。** memory: 被覆は残高でなく窓で切る —— 窓で起草された candidate、窓で決着した提案が名指す candidate / エントリ、
+   Objected decisions が cause `memory` で名指すエントリ、窓の店の変更、配下にエントリを持つ定義の無い枝、複数 scope が定義した path。
+   読み手は今どおり残高を読み、どの candidate にも行為できる。routing: 項目は材料の行ではなく評価の対象 —— 窓の乖離 shadow 行で走った
+   行、初観測のセル、人間が変えた行、配分評価の集計に現れる agent(agent の段の出所)と段(task の段の出所)、学習器。提案は op で
+   対象に写す(`row` / `add_tier` は行、`agent_tier` は agent、`tier_description` は段、`promote` / `demote` は学習器、`interview` は根拠
+   session が走った行)。RCA: 項目は**所見**(`entries` + `root_cause`)で、材料の各エントリがちょうど1つの所見に入る。`proposed` は
+   この RCA が立てた candidate から、`repair` はこの RCA の子の有無から導き(所見が2つ以上で子が1つなら RCA 単位の近似)、どちらも
+   無い所見に `no_proposal`。第2回の帰責は所見の行を読む。統合レビュー: 項目は成果物1つ、`findings` は必須、修理子が無いときだけ
+   `no_findings` の印が要り、`repaired` は修理子から導く。受理は今どおり done から導き(ADR 0111)、配分評価は verdict と findings を
+   この行から読む。
+6. **`complete_task` は type を問わず handoff の `outcome` を必須にする**(work は今の全欄のまま、人間 assignee の完了は免除)。review と
+   memory_repair だけが空で done になれたのは同じ穴で、人間登録の review と記憶の修理子の産物は findings そのものである。
+
+## 退けた案
+
+- **`complete_task` に種別ごとの必須欄** —— 名前が1つのままでは Codex の `enabled_tools` に差を写せない。
+- **verb が全判断を運び盤面が記録と照合する**(RCA の `consequence`、routing の提案 id、統合レビューの `verdict` 欄)—— 記録が持つ
+  行為を欄で言わせ、欄が記録と食い違える。食い違いを拒めば agent は追跡の手間と再呼び出しを払う。
+- **完了1回 = 1行** —— 異議が判断を名指せず、#1915 の修理の対象が引けない。
+- **memory の被覆を残高全件にする** —— 変化の無い candidate 全件に毎周期同じ行が付き、流し読みを定型文で埋める。
+- **routing の項目を材料の行にする** —— 配分評価の集計行はセルを名指さず、「集計行に no_change」という不自然な申告になる。
+- **行為済みの項目への値を拒む / 無視した旨を応答に返す** —— 指示に従っただけの呼び出しを拒んで token を使わせ、返しても読み手がいない。
+- **`outcome` 必須を review だけにする** —— memory_repair にも同じ穴がある。線は type ではなく「agent の完了は判断を運ぶ」。
