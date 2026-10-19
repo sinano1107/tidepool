@@ -244,17 +244,7 @@ function runPlaceToRelease(
   task: Task,
   step: TeardownStep,
 ): WorkspaceConfig | undefined {
-  if (step.completion) {
-    let resolved: WorkspaceConfig;
-    try {
-      resolved = resolve(task.workspace);
-    } catch (err) {
-      if (err instanceof UnknownWorkspaceError) return undefined;
-      throw err;
-    }
-    return taskRunPlace(db, task, resolved);
-  }
-  if (!step.neverRan) {
+  if (!step.completion && !step.neverRan) {
     const resolved = resolveOrQuarantine(db, resolve, task.workspace, clock.now());
     return resolved && taskRunPlace(db, task, resolved);
   }
@@ -265,10 +255,10 @@ function runPlaceToRelease(
     if (err instanceof UnknownWorkspaceError) return undefined;
     // 開いた event は在り処の mkdir の直後、git の手順より前に書く —— event が無ければ盤面はこの task の場所を作れておらず、
     // 触る checkout が無い。記録はあって repo がまだ無い場所は下の `onTaskBranch` が外す
-    if (err instanceof PlaceNotOpenError) return undefined;
+    if (step.neverRan && err instanceof PlaceNotOpenError) return undefined;
     throw err;
   }
-  return onTaskBranch(place, task.id) ? place : undefined;
+  return !step.neverRan || onTaskBranch(place, task.id) ? place : undefined;
 }
 
 /** session が決着した = 後始末に入った(ADR 0113)。in-memory の callback は
