@@ -16,7 +16,7 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -406,6 +406,18 @@ describe("CodexWorker (ADR 0098)", () => {
       `${JSON.stringify(f.workspace)}="read"`,
       `${JSON.stringify(roomOf(evidence.id))}="read"`,
     ]) expect(rows).toContain(row);
+  });
+
+  it("受験者は自分の checkout を cwd と -C にして走り、面接室の在り処(root の id)はそこに入らない(ADR 0276 決定1)", async () => {
+    const f = await fixture();
+    const child = pinnedChild(f.db);
+
+    await f.start(child);
+
+    const args = f.process.calls[0]!.args;
+    expect(f.process.calls[0]!.cwd).toBe(examineeCheckoutPath(f.db, child.id));
+    expect(args[args.indexOf("-C") + 1]).toBe(examineeCheckoutPath(f.db, child.id));
+    expect(f.process.calls[0]!.cwd).not.toContain(examineeRootId(f.db, child.id));
   });
 
   it("Interview の監査 review は実環境を cwd に review の profile で走り、親の root の面接室を read で載せる(ADR 0273 決定4)", async () => {

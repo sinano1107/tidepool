@@ -11,7 +11,7 @@ import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "..
 import { getTask, INTERVIEW_AUDIT_NOTICE } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
-import { taskRunPlace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceDeletionReferences } from "../src/workspace-create.js";
 import {
   api,
@@ -785,12 +785,7 @@ async function lastExaminee() {
 }
 
 it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答・記憶を書く verb の拒否・記憶の注入の節に、Interview と面接室の語・面接室の在り処・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・採点者の印・親の欄・親の history の行・登録者の名前が出ず、記憶を書く verb の拒否は本番の未登録の verb と同じ(ADR 0263 決定7・10、ADR 0264 決定6、ADR 0267 決定7、ADR 0268 決定2、ADR 0273 決定1)", async () => {
-  const { rootId, reader, siblings, pages, pulls, refusals, unregistered, injection, tools, production } = await lastExaminee();
-  // cwd は自分の checkout で、面接室の在り処はそこに入らない(ADR 0276 決定1)—— adapter が cwd を引くのと同じ taskRunPlace で、盤面の
-  // pickup が残した在り処を読む。その path が spawn の cwd になることは adapter の seam(claude-worker.test.ts)が言う
-  const cwd = taskRunPlace(t.db, getTask(t.db, reader)!, { name: "reef", path: workspacePath }).path;
-  expect(cwd).toBe(examineeCheckoutOf(reader));
-  expect(cwd).not.toContain(rootId);
+  const { rootId, siblings, pages, pulls, refusals, unregistered, injection, tools, production } = await lastExaminee();
   expect(pages.length).toBeGreaterThan(1);
   for (const page of pages) expect(page.parent ?? null).toBeNull();
   // 登録者は root の agent —— root の面には出ている名前で、受験者の面に出ないことを確かめる
