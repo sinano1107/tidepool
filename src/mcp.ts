@@ -23,6 +23,7 @@ import {
   invalidationSchema,
   listPrecedents,
   memoryListFilterSchema,
+  memoryRepairVerbs,
   memoryScope,
   metaReviewAnnotationSchema,
   metaReviewInvalidationSchema,
@@ -35,8 +36,6 @@ import {
   readMemory,
   readMemoryEntries,
   recordKnowledge,
-  repairInvalidate,
-  repairMove,
   repairMoveBranchBack,
   repairReplace,
   repairRestore,
@@ -1233,23 +1232,28 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   return server;
 }
 
-/** 記憶の修理 verb(ADR 0252 決定4)。対象の範囲と門は domain が呼び出し時に持つ。 */
+/** 記憶の修理子の書き込み verb に足す射程の文(ADR 0281): 門は domain が対象で切り替える。 */
+const MEMORY_REPAIR_REACH =
+  "This repair changes only what the objected rows in your purpose reach: the entries the objected memory writes created, invalidated or moved " +
+  "(and the copies those were moved to since) and the branches they defined or moved entries into, under the repair rules — moving an entry back " +
+  "to where that write moved it from always works; and the entries and branches the objected judgments name, under the meta-review rules — " +
+  "define_memory, fold_memory and propose_memory_change take only those. Anything else is refused.";
+
+/** 記憶の修理子の verb(ADR 0252 決定4 / ADR 0279 決定3 / ADR 0281): 運ぶ行の種類で組を登録する —— 同じ操作の verb は meta-review と
+ *  1つの tool で、対象の範囲と門は domain が呼び出し時に持つ。 */
 function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string): void {
-  const run = (verb: (repairer: { taskId: string; agent: string }, now: Date) => unknown) =>
+  const verbs = memoryRepairVerbs(deps.db, attributedTaskId);
+  const run: MetaReviewRun = (verb) =>
     runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+  const side = { activity: "worker_verb", reach: ` ${MEMORY_REPAIR_REACH}` } as const;
+  if (verbs.includes("list_memory_candidates")) {
+    registerPrecedentRead(server, deps, run);
+    registerMemoryEntriesRead(server, deps, run);
+    registerMemoryMetaReviewVerbs(server, deps, run, side);
+  } else registerMemoryMoves(server, deps, run, side);
+  if (!verbs.includes("restore_memory")) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
-
-  server.registerTool(
-    "invalidate_memory",
-    {
-      description:
-        "Repair only: drop an entry the objected memory write created as a new entry, with no successor. A copy that write moved is not dropped: move it back. " +
-        `reason is capability / environment / requirement_change. ${scope}`,
-      inputSchema: invalidationSchema.extend({ entry_id: z.number().int() }),
-    },
-    async (input) => run((repairer, now) => repairInvalidate(deps.db, repairer, input, now)),
-  );
 
   server.registerTool(
     "restore_memory",
@@ -1263,19 +1267,7 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
   );
 
   server.registerTool(
-    "move_memory",
-    {
-      description:
-        "Repair only: move an entry the objected memory write touched to path in scope (a registry workspace name, or null for the whole board). " +
-        "Moving it back to where that write moved it from always works; any other move stays in the entry's scope or widens it to the whole board. " +
-        scope,
-      inputSchema: { entry_id: z.number().int(), scope: requiredTextSchema.nullable(), path: requiredTextSchema },
-    },
-    async (input) => run((repairer, now) => repairMove(deps.db, repairer, { ...input, scope: registeredScope(deps, input.scope) }, now)),
-  );
-
-  server.registerTool(
-    "move_memory_branch",
+    "restore_memory_branch",
     {
       description:
         "Repair only: undo the objected memory write's branch move in one step. Every entry that write moved and that now lives at path or under it " +
@@ -1502,10 +1494,15 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
   );
 }
 
-/** 主題 memory の専用 verb(issue #619)。 */
-function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
-  const author = (reader: { agent: string }) => ({ activity: "meta_review" as const, name: reader.agent });
-  const scope = requiredTextSchema.nullable().describe("A registry workspace name, or null for the whole board.");
+/** 書き込み verb の書き手の側: meta-review か記憶の修理子(ADR 0281)。activity は書き込みの印、reach は修理子の射程の文。 */
+type MemoryWriteSide = { activity: "meta_review" | "worker_verb"; reach: string };
+const META_REVIEW_SIDE: MemoryWriteSide = { activity: "meta_review", reach: "" };
+const memoryScopeSchema = requiredTextSchema.nullable().describe("A registry workspace name, or null for the whole board.");
+
+/** 主題 memory の専用 verb(issue #619)。判断の行を運ぶ記憶の修理子も同じ組を持つ(ADR 0279 決定3)。 */
+function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: MetaReviewRun, side = META_REVIEW_SIDE): void {
+  const author = (reader: { agent: string }) => ({ activity: side.activity, name: reader.agent });
+  const scope = memoryScopeSchema;
 
   server.registerTool(
     "list_memory_candidates",
@@ -1588,7 +1585,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "be in the same scope or, when this definition is whole-board, in any scope. " +
         "A workspace definition is refused at a path that holds whole-board entries at or under it, and a whole-board entry is refused at or under a path a workspace defines. " +
         "To clear the way, write a whole-board definition at the workspace definition's path with supersedes, or rename the workspace branch with move_memory_branch. " +
-        BOARD_WRITE_LANGUAGE_RULE,
+        BOARD_WRITE_LANGUAGE_RULE + side.reach,
       inputSchema: { scope, path: requiredTextSchema, definition: requiredTextSchema, supersedes: z.array(z.number().int()).min(1).optional() },
     },
     async (input) =>
@@ -1618,7 +1615,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         "is the event id log_decision returned for your reasoning; it becomes the source, an inference); or successor_id, an existing " +
         "approved entry: Knowledge into Knowledge, Behavior and Exemplar candidates into an approved Behavior or Exemplar. The successor must cover every entry in replaces: its scope is whole-board or the same scope, and its addressee " +
         "is every agent or the same agent. An approved Behavior or Exemplar cannot be replaced here — propose a consolidate instead. " +
-        BOARD_WRITE_LANGUAGE_RULE,
+        BOARD_WRITE_LANGUAGE_RULE + side.reach,
       inputSchema: {
         replaces: z.array(z.number().int()),
         successor_id: z.number().int().optional(),
@@ -1633,56 +1630,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
       run((reader, now) => foldMemory(deps.db, reader.taskId, { ...input, scope: input.scope && registeredScope(deps, input.scope), author: author(reader) }, "worker", now)),
   );
 
-  server.registerTool(
-    "move_memory",
-    {
-      description:
-        "Move one entry to another path in its scope, or widen it to the whole board: the board copies it — title, text, " +
-        "source, author, state and approval included — into a new entry and invalidates the old one as path_moved. Any kind, " +
-        "approved or candidate. scope is the entry's own scope or null (whole-board). Refused: narrowing to a workspace or " +
-        "moving between workspaces; changing the scope of an approved Behavior or Exemplar, or of an entry an open proposal " +
-        "question names; changing a Definition's path (use move_memory_branch).",
-      inputSchema: { entry_id: z.number().int(), scope, path: requiredTextSchema },
-    },
-    async (input) =>
-      run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now, reader.taskId)),
-  );
-
-  server.registerTool(
-    "move_memory_branch",
-    {
-      description:
-        "Move a branch — every live entry at path or under it in scope — to to_path in to_scope, in one step. This is how " +
-        "a branch is renamed and how two branches are merged. to_scope is scope or null (whole-board); widening is refused " +
-        "as a whole when the branch holds an approved Behavior or Exemplar or an entry an open proposal question names. " +
-        "Moving a whole-board branch to another whole-board path also carries every workspace's entries under path, each " +
-        "staying in its own scope. When a moved Definition would land on a path already defined in its scope, the move is " +
-        "refused and names every such pair. To merge, pass merge: true: each of those Definitions is folded into the one " +
-        "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
-        "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved and folded (how " +
-        "many entries were moved and how many Definitions were folded) with to_scope and to_path.",
-      inputSchema: { scope, path: requiredTextSchema, to_scope: scope, to_path: requiredTextSchema, merge: z.boolean().optional() },
-    },
-    // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
-    async (input) =>
-      run((reader, now) => {
-        const { moved, folded, event_id } = moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now, reader.taskId);
-        return { moved: moved.length, folded: folded.length, to_scope: input.to_scope, to_path: input.to_path, event_id };
-      }),
-  );
-
-  server.registerTool(
-    "invalidate_memory",
-    {
-      description:
-        "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
-        "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
-        "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
-        "An approved Behavior or Exemplar cannot be invalidated here — propose it instead.",
-      inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
-    },
-    async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now, reader.taskId) })),
-  );
+  registerMemoryMoves(server, deps, run, side);
 
   server.registerTool(
     "propose_memory_change",
@@ -1703,7 +1651,7 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
         PROMOTION_RULE +
         " " +
         "The board applies the answer itself, so you can complete this task without waiting for it. Returns the question id. " +
-        BOARD_WRITE_LANGUAGE_RULE,
+        BOARD_WRITE_LANGUAGE_RULE + side.reach,
       inputSchema: {
         op: z.enum(["approve", "consolidate", "invalidate"]),
         candidate_id: z.number().int().optional(),
@@ -1745,6 +1693,64 @@ function registerMemoryMetaReviewVerbs(server: McpServer, deps: McpDeps, run: Me
           now,
         );
       }),
+  );
+}
+
+/** 同じ操作の書き込み verb(ADR 0281 決定1): meta-review と記憶の修理子のどの組でも1つの tool で、入力の形は meta-review 版。
+ *  どちらの規則で動くかは domain が対象で決める。 */
+function registerMemoryMoves(server: McpServer, deps: McpDeps, run: MetaReviewRun, side: MemoryWriteSide): void {
+  const author = (reader: { agent: string }) => ({ activity: side.activity, name: reader.agent });
+  const scope = memoryScopeSchema;
+
+  server.registerTool(
+    "move_memory",
+    {
+      description:
+        "Move one entry to another path in its scope, or widen it to the whole board: the board copies it — title, text, " +
+        "source, author, state and approval included — into a new entry and invalidates the old one as path_moved. Any kind, " +
+        "approved or candidate. scope is the entry's own scope or null (whole-board). Refused: narrowing to a workspace or " +
+        "moving between workspaces; changing the scope of an approved Behavior or Exemplar, or of an entry an open proposal " +
+        "question names; changing a Definition's path (use move_memory_branch)." + side.reach,
+      inputSchema: { entry_id: z.number().int(), scope, path: requiredTextSchema },
+    },
+    async (input) =>
+      run((reader, now) => moveMemoryByMetaReview(deps.db, { ...input, scope: registeredScope(deps, input.scope), mover: author(reader) }, "worker", now, reader.taskId)),
+  );
+
+  server.registerTool(
+    "move_memory_branch",
+    {
+      description:
+        "Move a branch — every live entry at path or under it in scope — to to_path in to_scope, in one step. This is how " +
+        "a branch is renamed and how two branches are merged. to_scope is scope or null (whole-board); widening is refused " +
+        "as a whole when the branch holds an approved Behavior or Exemplar or an entry an open proposal question names. " +
+        "Moving a whole-board branch to another whole-board path also carries every workspace's entries under path, each " +
+        "staying in its own scope. When a moved Definition would land on a path already defined in its scope, the move is " +
+        "refused and names every such pair. To merge, pass merge: true: each of those Definitions is folded into the one " +
+        "already there (superseded — the destination's wording stays; revise it in place with define_memory before or " +
+        "after) and everything else moves. merge: true is refused when no such pair exists. Returns moved and folded (how " +
+        "many entries were moved and how many Definitions were folded) with to_scope and to_path." + side.reach,
+      inputSchema: { scope, path: requiredTextSchema, to_scope: scope, to_path: requiredTextSchema, merge: z.boolean().optional() },
+    },
+    // 照合は行き先の scope だけ —— 移動元は行を引くだけ(人間の面の枝ごとの移動と同じ、ADR 0173 決定2)
+    async (input) =>
+      run((reader, now) => {
+        const { moved, folded, event_id } = moveMemoryBranchByMetaReview(deps.db, { ...input, to_scope: registeredScope(deps, input.to_scope), mover: author(reader) }, "worker", now, reader.taskId);
+        return { moved: moved.length, folded: folded.length, to_scope: input.to_scope, to_path: input.to_path, event_id };
+      }),
+  );
+
+  server.registerTool(
+    "invalidate_memory",
+    {
+      description:
+        "Drop a candidate (Behavior or Exemplar), Knowledge entry, or Definition with no successor. reason is " +
+        "capability / environment / requirement_change, or rejected — only for a candidate that will become neither a Behavior nor an Exemplar. " +
+        "To replace an entry, use fold_memory, define_memory's supersedes, move_memory or move_memory_branch. " +
+        "An approved Behavior or Exemplar cannot be invalidated here — propose it instead." + side.reach,
+      inputSchema: metaReviewInvalidationSchema.extend({ entry_id: z.number().int() }),
+    },
+    async (input) => run((reader, now) => ({ event_id: invalidateMemoryByMetaReview(deps.db, input, reader.agent, "worker", now, reader.taskId) })),
   );
 }
 

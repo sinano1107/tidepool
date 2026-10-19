@@ -296,7 +296,8 @@ function registerRcaReview(
 /** Repair tasks per objected task, split by row kind (ADR 0272 決定1・2, reading
  *  ADR 0268 決定3 as 「行の成果の帰り先」). Every direction comment raised against
  *  the task's decision rows this session lands in one work repair's purpose, and
- *  every one against its memory-write rows in one `memory_repair`'s purpose: a task
+ *  every one against its memory-write rows — and, on a memory meta-review, its typed
+ *  judgment rows, which name their object (ADR 0279 決定3) — in one `memory_repair`'s purpose: a task
  *  objected on both kinds gets two children, each carrying only its own group's
  *  objections. An Interview root (its probe is fixed by retry, not repair) and a
  *  task whose artifact is discarded — the task itself is cancelled, or a cancelled
@@ -412,15 +413,20 @@ function bundleObjections(
         origin,
       );
     };
-    // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)
-    const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written");
-    const decisionRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
+    // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)。memory meta-review の
+    // 型つきの判断の行は対象を名指すので、書き込みの行と同じ memory_repair 1本に束ねる(ADR 0279 決定3)
+    const judgesMemory = (pair: ObjectionPair) => pair.entry.payload.kind === "decision_logged" && pair.entry.payload.judgment?.kind === "memory";
+    const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written" || judgesMemory(pair));
+    const decisionRows = pairs.filter((pair) => !memoryRows.includes(pair));
     // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
     // 主題つきの task の判断の行も work の修理子を持たない —— 主題 verb は work に登録されない(ADR 0279 決定3・4)
     if (decisionRows.length > 0 && objected.type !== "interview" && !objected.meta_review_subject && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
-    if (memoryRows.length > 0) registerRepair("memory_repair", "memory repair", "memory writes", memoryRows);
+    if (memoryRows.length > 0) {
+      const kinds = [...(memoryRows.some((pair) => !judgesMemory(pair)) ? ["memory writes"] : []), ...(memoryRows.some(judgesMemory) ? ["memory judgments"] : [])];
+      registerRepair("memory_repair", "memory repair", kinds.join(" and "), memoryRows);
+    }
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {

@@ -37,10 +37,11 @@ import {
   buildMetaReviewMaterial,
   type InjectionQuery,
   memoryPromptSection,
+  memoryRepairVerbs,
   recordMemoryInjection,
   recordMetaReviewMaterial,
 } from "./memory.js";
-import { MEMORY_REPAIR_VERBS, META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
+import { META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -1232,12 +1233,12 @@ export class CodexWorker implements WorkerAdapter {
         memorySection: memoryPromptSection(memory, material),
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? MEMORY_REPAIR_VERBS : [])]
+          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : [])]
         ).filter((verb) => !withheld.includes(verb)),
         ...verbs.added,
       ],
