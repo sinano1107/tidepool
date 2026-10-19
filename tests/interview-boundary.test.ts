@@ -391,7 +391,8 @@ it("受験者の checkout が作れなかった pickup は面接室(root id)の 
   t.worker.exit(first);
 
   await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}/events`)).json.some((e: any) => e.kind === "pickup_stopped")).toBe(true));
-  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo"));
+  // 先頭への復帰と pickup_stopped は1つの transaction(ADR 0274 決定3)
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${second}`)).json.status).toBe("todo");
   expect(t.worker.started.map((s) => s.id)).not.toContain(second);
   const open = (await questions(t)).filter((q) => q.status !== "done");
   expect(open.map((q) => q.question_quarantine_kind)).not.toContain("failedTeardown");
