@@ -1270,7 +1270,7 @@ it("収束は open PR を持つ根を更新し、ローカル着地の question 
     ...HUMAN_WEBUI,
   );
 
-  completeTask(db, settled, undefined, "worker", clock.now(), "worker");
+  completeTask(db, settled, { outcome: "no findings" }, "worker", clock.now(), "worker");
 
   await expect(landing.converge()).resolves.toEqual([
     {

@@ -214,7 +214,7 @@ it("meta-review の畳みへの異議は、次の meta-review の材料の異議
   const transcriptPath = join(await tempDir("tidepool-write-record-"), `${first.id}.${spawned}.stream.jsonl`);
   writeFileSync(transcriptPath, [...toolCall(1, "mcp__tidepool__log_decision", decision), ...toolCall(2, "mcp__tidepool__fold_memory", fold.event_id)].join("\n"));
   projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
-  completeTask(db, first, undefined, "auditor", at, "worker");
+  completeTask(db, first, { outcome: "no findings" }, "auditor", at, "worker");
   bundledObjection(db, first.id, fold.event_id, at, "those two were different");
   registerMetaReview(db, "memory", at);
   const next = listBoard(db).find((t) => t.meta_review_subject === "memory" && t.id !== first.id)!;

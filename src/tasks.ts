@@ -1262,17 +1262,17 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
   })();
 }
 
-/** Work tasks may not complete without a full handoff doc; question/review
- *  tasks need none, but one supplied is stored, not dropped (nothing may
- *  degrade recording). The doc lands as markdown on the task row, written
- *  once. A `human`-assignee task is exempt regardless of type (issue #13):
- *  actionable follow-up belongs to a *new* task, not this doc, so a physical/
- *  approval task carries no agent session to hand off from — the doc stays
- *  fully optional, same as question/review.
+/** Work tasks may not complete without a full handoff doc; every other agent
+ *  task needs its outcome (ADR 0278 決定6), and the rest of a supplied doc is
+ *  stored, not dropped (nothing may degrade recording). The doc lands as
+ *  markdown on the task row, written once. A `human`-assignee task is exempt
+ *  regardless of type (issue #13): actionable follow-up belongs to a *new*
+ *  task, not this doc, so a physical/approval task carries no agent session to
+ *  hand off from — the doc stays fully optional.
  *
  *  ADR 0111: root work and risk children are mandatory integration points;
  *  ordinary children opt into individual review through review_flag.
- *  Human tasks, questions and reviews are outside this rule. */
+ *  Human tasks, questions and reviews are outside the integration-point rule. */
 export function completeTask(
   db: Db,
   task: Task,
@@ -1289,6 +1289,10 @@ export function completeTask(
   }
   // ADR 0278 決定1: 統合レビューも扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
+  // ADR 0278 決定6: agent の完了は判断を運ぶ —— work の全欄の要求は finishTask が持つ
+  if (task.type !== "work" && task.assignee !== HUMAN_WORKER_ID && whyBlank(handoff?.outcome ?? "")) {
+    throw new DomainError(`a ${task.type} task cannot complete without a handoff outcome`);
+  }
   return finishTask(db, task, handoff, workerId, now, origin);
 }
 

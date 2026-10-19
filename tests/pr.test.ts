@@ -123,7 +123,7 @@ it("review タスクの complete_task では PR が作られない", async () =>
   await t.clock.advance(HOUR);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
-  const res: any = await client.callTool({ name: "complete_task", arguments: {} });
+  const res: any = await client.callTool({ name: "complete_task", arguments: { handoff: { outcome: "no findings" } } });
   expect(res.isError ?? false).toBe(false);
   await client.close();
 
