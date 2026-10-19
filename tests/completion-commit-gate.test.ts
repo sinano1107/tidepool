@@ -98,7 +98,7 @@ it("review タスクの完了は dirty でも拒否されない", async () => {
 
   writeFileSync(join(ws.path, "scratch.txt"), "reviewer leavings\n");
   const client = await mcpClient(t.mcpBaseUrl, task.id);
-  const res: any = await client.callTool({ name: "complete_task", arguments: {} });
+  const res: any = await client.callTool({ name: "complete_task", arguments: { handoff: { outcome: "no findings" } } });
   await client.close();
 
   expect(res.isError ?? false).toBe(false);
