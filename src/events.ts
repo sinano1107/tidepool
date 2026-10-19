@@ -663,7 +663,8 @@ export type EventPayload =
   // watermark、計数したトークン数と計数器、部分ごとに載せた id —— memory は店の変更と candidate がエントリ、異議つき判断が
   // decision の event、提案が question、枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
   // list_memory_proposals が返すエントリの id も持つ(precedent_entries / proposal_entries —— Precedent の seen に
-  // 数える、issue #1230)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
+  // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
+  // ADR 0278 追記4)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
   // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
   // 提案の question。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[]; items: MemoryJudgmentItem[] })

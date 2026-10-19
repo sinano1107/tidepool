@@ -1100,7 +1100,8 @@ export const judgmentRows = (db: Db, taskId: string) =>
 
 /** memory meta-review を MCP の complete_memory_review で、材料を注入して記録し、注入した項目をすべて据え置いて完了させる(ADR 0278 決定5)。 */
 export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
-  return callAsTask(t, reviewId, "complete_memory_review", { judgments: injectMemoryMaterial(t.db, reviewId, t.worker.id, t.clock.now()) });
+  const judgments = injectMemoryMaterial(t.db, reviewId, t.worker.id, t.clock.now());
+  return callAsTask(t, reviewId, "complete_memory_review", { judgments });
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
@@ -1159,10 +1160,13 @@ export function settleReviews(db: Db, now: Date): void {
 }
 
 /** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory meta-review は
- *  complete_memory_review で項目をすべて据え置き、他は complete_task。 */
+ *  材料の注入を記録して complete_memory_review で項目をすべて据え置き、他は complete_task。 */
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
   if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
-  if (isMemoryReview(db, review.id)) return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
+  if (isMemoryReview(db, review.id)) {
+    const judgments = injectMemoryMaterial(db, review.id, workerId, now);
+    return completeMemoryReview(db, review, { judgments }, workerId, now, "worker");
+  }
   return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
 

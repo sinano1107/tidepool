@@ -2578,11 +2578,13 @@ function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
 }
 
 /** 完了の verb が読む項目の全体(ADR 0278 追記4): その task の最新の材料の記録が持つ、注入した「Items to judge」の一覧 —— 再 spawn
- *  なら agent が最後に読んだ表。記録が無ければ(spawn を通っていない)項目が読めないので拒む。 */
-function injectedItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
-  const payload = latestEventOfTask(db, reviewId, "meta_review_material_injected")?.payload;
-  if (payload?.subject !== "memory") throw new DomainError("material was not injected into this memory meta-review's session, so its items to judge cannot be read");
-  return payload.items;
+ *  なら agent が最後に読んだ表。actedSince は記録の後に誰であれ無効化したエントリ(引退・畳み・移動)—— 行為済み。記録が無ければ
+ *  (spawn を通っていない)項目が読めないので拒む。 */
+function injectedItems(db: Db, reviewId: string) {
+  const record = latestEventOfTask(db, reviewId, "meta_review_material_injected");
+  if (record?.payload.subject !== "memory") throw new DomainError("material was not injected into this memory meta-review's session, so its items to judge cannot be read");
+  const invalidated = new Set(listEventsOfKinds(db, ["memory_entry_invalidated"], { after: record.id }).map(({ payload }) => payload.entry_id));
+  return { items: record.payload.items, actedSince: (item: MemoryJudgmentItem) => "entry" in item && invalidated.has(item.entry) };
 }
 
 /** この review の行為が判断済みにする項目(ADR 0278 決定3): 記憶の書き込みの行が作った・無効化したエントリと、提案 question が
@@ -2605,9 +2607,9 @@ function actedOn(db: Db, reviewId: string) {
 
 const itemName = (item: MemoryJudgmentItem) => ("entry" in item ? `entry #${item.entry}` : `branch ${item.branch}`);
 
-/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目でこの review の行為が判断済みにしていないものに
- *  left_as_is が要る。足りない項目と、注入した一覧に無い id / path は名指して拒み、何も記録しない。注入済みでも開いていない項目への値は
- *  受け取って何もしない。据え置き1つが対象を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
+/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為も記録の後の誰かの無効化も
+ *  判断済みにしていないものに left_as_is が要る。足りない項目と、注入した一覧に無い id / path は名指して拒み、何も記録しない。注入済みでも
+ *  開いていない項目への値は受け取って何もしない。据え置き1つが対象を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
 export function completeMemoryReview(
   db: Db,
   review: Task,
@@ -2617,9 +2619,12 @@ export function completeMemoryReview(
   origin: EventOrigin,
 ): Task {
   if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
-  const injected = new Set(injectedItems(db, review.id).map(itemName));
+  const { items, actedSince } = injectedItems(db, review.id);
+  const injected = new Set(items.map(itemName));
   const covers = actedOn(db, review.id);
-  const open = new Map(memoryJudgmentItems(db, review.id).flatMap((item) => (injected.has(itemName(item)) && !covers(item) ? [[itemName(item), item] as const] : [])));
+  const open = new Map(
+    memoryJudgmentItems(db, review.id).flatMap((item) => (injected.has(itemName(item)) && !covers(item) && !actedSince(item) ? [[itemName(item), item] as const] : [])),
+  );
   const given = new Map(judgments.map((judgment) => [itemName(judgment), judgment]));
   const unknown = [...given.keys()].filter((name) => !injected.has(name));
   const unjudged = [...open.keys()].filter((name) => !given.has(name));
@@ -2641,7 +2646,8 @@ export function completeMemoryReview(
   })();
 }
 
-/** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、token 量。 */
+/** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、memory は注入した
+ *  Items to judge(verb の鍵の列)、token 量。 */
 export function recordMetaReviewMaterial(
   db: Db,
   taskId: string,

@@ -118,7 +118,11 @@ it("complete_memory_review の説明は、項目の全体がこの session の�
     const { tools } = await client.listTools();
     const description = tools.find((tool) => tool.name === "complete_memory_review")?.description;
     expect(description).toContain("That list, injected when this session started, is the whole set of items: anything added to the store since belongs to the next cycle.");
-    expect(description).toContain("Listing an item acted on since this session started, by you or by anyone else, is harmless: it is accepted and records nothing.");
+    expect(description).toContain(
+      "An item acted on since this session started is already judged: one you wrote, folded, moved, retired, defined or named in a proposal, " +
+        "or one anyone else has since folded, moved, retired or defined. Every other item goes in judgments",
+    );
+    expect(description).toContain("Listing an item already judged is harmless: it is accepted and records nothing.");
     expect(description).toContain("an entry or branch not on the injected list — even one you wrote in this session — is refused");
   } finally {
     await client.close();

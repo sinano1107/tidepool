@@ -5,6 +5,7 @@ import {
   completeMemoryReview,
   createBehaviorCandidate,
   defineMemoryByMetaReview,
+  foldMemoryEntries,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   moveMemoryByMetaReview,
@@ -128,6 +129,30 @@ it("注入の後に人間が引退させた candidate への left_as_is は受�
   expect(injected).toContainEqual({ entry: retired });
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([]);
+});
+
+it.each([
+  ["人間が無効化した", (db: Db, entry: number) => invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at)],
+  ["他の worker が畳んだ", (db: Db, entry: number) => foldMemoryEntries(db, { replaces: [entry], successor_id: knowledge(db, "notes"), author: deckhand }, "worker", at)],
+] as const)("注入の後に%s店の変更のエントリは行為済みで、注入した一覧どおりの完了は done になり、その行は書かれない", (_, act) => {
+  const { db, written, review, injected } = cycle();
+  act(db, written);
+
+  const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
+
+  expect(done.status).toBe("done");
+  expect(judgmentRows(db, review.id).map((row) => row.judgment)).not.toContainEqual(expect.objectContaining({ entry: written }));
+});
+
+it("注入の前(窓の中)に無効化された店の変更のエントリは行為済みでなく、値が無ければ unjudged で拒まれる", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const written = knowledge(db, "notes");
+  invalidateMemoryEntry(db, { entry_id: written, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  const { review, injected } = injectedReview(db);
+
+  expect(injected).toContainEqual({ entry: written });
+  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${written}`);
 });
 
 it("この review 自身が注入の後に書いたエントリへの値は注入した一覧に無いので名指して拒まれ、何も記録しない", () => {
