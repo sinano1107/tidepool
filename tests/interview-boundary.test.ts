@@ -444,6 +444,8 @@ it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup �
   await runNow(t, root.id);
 
   await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(root.id));
+  // 受理の検査は番地を作れることを確かめるだけで、在り処の記録は次の pickup が1度だけ書く
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "interview_room_opened").map((e: any) => e.payload.path)).toEqual([roomOf(root.id)]);
   expect(git(roomOf(root.id), "log", "--format=%s", "main")).toBe("Initial commit");
   expect(git(roomOf(root.id), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${root.id}`);
 });
