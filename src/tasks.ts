@@ -2128,7 +2128,7 @@ function withTargetQuestionSweep<T>(db: Db, now: Date, body: () => T): T {
  *  task が運ぶ鍵(root なら一覧の対象、受験者なら pin の対象)の question のうち、その対象を走らせうる未決着の Interview —— その対象を
  *  pin した未決着の子か、まだその対象の子を持たない未決着の root —— が残らないものを盤面名義に決着させる。観測はその鍵を運んだ
  *  cancel の event で、その鍵をまだ走らせえた root —— その鍵の対象行に受験者が無いか、受験者が transaction の始めに未決着だった
- *  root —— の cancel があればそれ、無ければ(root が残る、または root は一覧に鍵を持つだけ)その鍵の受験者の cancel の最後(issue
+ *  root —— の cancel があればそれ、無ければ(root が残る、またはその鍵の受験者が前に決着していて root は一覧に鍵を持つだけ)その鍵の受験者の cancel の最後(issue
  *  #2219)。cancel された task の運ばない鍵の question はこの掃除の観測ではないので触らない。 */
 function settleUnrunnableTargetQuestions(db: Db, sinceEventId: number, now: Date): void {
   const unrunnable = db
