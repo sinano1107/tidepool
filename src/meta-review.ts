@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventKind, type EventOrigin, type EventPayload, type Judgment, latestEventOfTask, listEventsOfKinds } from "./events.js";
+import { appendEvent, type EventKind, type EventOrigin, type EventPayload, getEvent, type Judgment, latestEventOfTask, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -216,6 +216,13 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
     ...parts.flatMap(([heading, note, rows, empty]) => ["", `### ${heading}`, "", note, ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row)))]),
   ].join("\n");
 }
+
+/** 異議つき判断の行のうち、主題 `kind` の完了の verb が書いた型つきの判断(ADR 0279 決定5): 次周期の Items to judge が名指す対象を読む。 */
+export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedents: readonly { decision_event_id: number }[], kind: K) =>
+  precedents.flatMap(({ decision_event_id }) => {
+    const payload = getEvent(db, decision_event_id)?.payload;
+    return payload?.kind === "decision_logged" && payload.judgment?.kind === kind ? [payload.judgment as Extract<Judgment, { kind: K }>] : [];
+  });
 
 /** 完了の verb が読む項目の全体(ADR 0278 追記4): その task の最新の材料の記録 —— 再 spawn なら agent が最後に読んだ表。記録が無ければ
  *  (spawn を通っていない)項目が読めないので拒む。 */

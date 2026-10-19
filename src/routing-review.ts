@@ -18,7 +18,7 @@ import {
   rowName,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
+import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, objectedJudgments, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
@@ -295,7 +295,8 @@ function actedSince(db: Db, recordId: number, injectedTiers: ReadonlyMap<TierId,
 
 /** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
  *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。段は id で同じ項目で、鍵は注入した名前 —— spawn 後の
- *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。`agents` は registry の agent 一覧(今の項目の agent の絞り込み)。 */
+ *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。`precedents` は読み手の窓の異議つき判断(memory.ts の routingPrecedents ——
+ *  import の循環を避けて呼び手が渡す)、`agents` は registry の agent 一覧(今の項目の agent の絞り込み)。 */
 export function completeRoutingReview(
   db: Db,
   review: Task,
@@ -303,6 +304,7 @@ export function completeRoutingReview(
   workerId: string,
   now: Date,
   origin: EventOrigin,
+  precedents: { decision_event_id: number }[],
   agents?: readonly RegistryAgent[],
 ): Task {
   if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
@@ -311,7 +313,7 @@ export function completeRoutingReview(
   const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
     itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
   const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
-  const open = routingMaterial(db, metaReviewWindow(db, review.id), [], agents).parts.items.filter((item) => !judged.has(key(item)));
+  const open = routingMaterial(db, metaReviewWindow(db, review.id), precedents, agents).parts.items.filter((item) => !judged.has(key(item)));
   return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
     review,
@@ -332,29 +334,41 @@ export function completeRoutingReview(
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5・追記5): 行は、session に辿り着いた乖離 shadow 行で走った行・人間が変えた行・
  *  初観測のセルの和集合で、今の表にある行だけ —— 行の無い対象には verb が届かない。agent は段の出所が agent の配分評価の集計の agent の
- *  うち agent_tier が届くもの(registry にあり、組み込みでなく、一番下の段でない)、段は出所が task の集計の生きている段、学習器は毎周期。 */
+ *  うち agent_tier が届くもの(registry にあり、組み込みでなく、一番下の段でない)、段は出所が task の集計の生きている段、学習器は毎周期。
+ *  異議つき判断のうち前の routing meta-review の判断の行が名指す対象も、同じ絞りで載る(ADR 0279 決定5)。 */
 function judgmentItems(
   db: Db,
-  parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows> } & ReturnType<typeof cellRows>,
+  parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows>; precedents: { decision_event_id: number }[] } & ReturnType<typeof cellRows>,
   registry: readonly RegistryAgent[] = [],
 ): RoutingJudgmentItem[] {
+  const objected = objectedJudgments(db, parts.precedents, "routing");
   const table = loadExecutionSettingTable(db);
   const rows = new Map<string, RoutingJudgmentItem>();
-  for (const key of [...parts.shadow.flatMap((s) => (s.worker_spawned_event_id === null ? [] : [s.actual])), ...parts.rows.map((r) => r.row), ...parts.cells.map((c) => c.cell)]) {
+  for (const key of [
+    ...parts.shadow.flatMap((s) => (s.worker_spawned_event_id === null ? [] : [s.actual])),
+    ...parts.rows.map((r) => r.row),
+    ...parts.cells.map((c) => c.cell),
+    ...objected.flatMap((o) => ("row" in o ? [o.row] : [])),
+  ]) {
     const row = table.find((r) => matchesRowKey(r, key));
     if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
   }
   const { groups } = parts.allocations;
   const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
-  const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" && lowerable(g.agent) ? [g.agent] : [])));
-  const tiers = new Set(groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])));
-  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
+  const agents = new Set([...groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])), ...objected.flatMap((o) => ("agent" in o ? [o.agent] : []))].filter(lowerable));
+  // 生きている段の行そのものを集めるので、集計(名前)と判断の行(id)の重なりは Set が畳む
+  const live = liveTierRows(db);
+  const tiers = new Set([
+    ...groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? live.filter((t) => t.name === g.tier) : [])),
+    ...objected.flatMap((o) => ("tier_id" in o ? live.filter((t) => t.id === o.tier_id) : [])),
+  ]);
+  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map(({ id, name }) => ({ tier_id: id, tier: name })), { learner: true }];
 }
 
 /** routing の材料の節の7つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
  *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、窓の中で
  *  決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断の行は memory.ts の list_precedents の行を呼び手が渡す(import の循環を避ける)。 */
-export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, precedents: P[], agents?: readonly RegistryAgent[]) {
+export function routingMaterial<P extends { decision_event_id: number }>(db: Db, window: Required<MetaReviewWindow>, precedents: P[], agents?: readonly RegistryAgent[]) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
@@ -399,7 +413,8 @@ export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, p
       "The objects this cycle needs a judgment on, keyed as complete_routing_review takes them: the rows that ran in the diverged shadow rows, the " +
         "rows humans changed and the rows of the new cells (a row is keyed by provider, model and effort; the tier beside it is the tier it is in, " +
         "for reading), the agents of the allocation reviews under an agent's default tier, the tiers of those under a task's requested tier, and " +
-        "the learner. A new cell with no row in the table is not an item. Act on each item with propose_routing_change, or pass it to " +
+        "the learner, and the rows, agents and tiers named by the judgments of the objected decisions, under the same conditions. A new cell " +
+        "with no row in the table is not an item. Act on each item with propose_routing_change, or pass it to " +
         "complete_routing_review as no_change.",
       parts.items.map(judgmentKey),
       "no items to judge",

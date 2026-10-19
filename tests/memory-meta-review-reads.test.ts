@@ -28,9 +28,9 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "../src/memory.js";
-import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
+import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -460,8 +460,7 @@ it("meta-review の枝の一覧も応答予算で切り、next を追うと木�
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
 function objectedDecision({ db, task }: Pick<ReturnType<typeof board>, "db" | "task">, i: number, padding = "") {
   const decision = logDecision(db, task, `decision ${i}${padding}`, "deckhand", at, "worker");
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
-  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+  episodeOfDecision(db, task.id, decision);
   const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
 }

@@ -22,12 +22,13 @@ import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventPayload, type EventRow, getEvent, latestEventOfTask, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
-import { buildMetaReviewMaterial, completeMemoryReview, recordKnowledge, recordMetaReviewMaterial } from "../src/memory.js";
+import { buildMetaReviewMaterial, completeMemoryReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
 import { metaReviewSubjectOf } from "../src/meta-review.js";
+import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -946,6 +947,22 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
+/** setup のみ: 判断の行の event を 1 marker = 1 episode の直挿しで episode に載せる(#356 の投影は使わない)。episode の id と
+ *  worker_spawned_event_id はその event id —— 呼び手ごとの採番が重ならない。 */
+export function episodeOfDecision(db: Db, taskId: string, decision: number, agent = "deckhand"): void {
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, ?, '{}')").run(decision, decision, EXTRACTOR_VERSION, taskId, agent);
+  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(decision, decision);
+}
+
+/** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置いて episode に載せ、その行に異議を立てる。
+ *  返り値は判断の行の event id。 */
+export function objectedJudgment(db: Db, taskId: string, judgment: Judgment, at: Date): number {
+  const decision = appendEvent(db, { taskId, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: judgment.kind, judgment } });
+  episodeOfDecision(db, taskId, decision, "auditor");
+  bundledObjection(db, taskId, decision, at);
+  return decision;
+}
+
 /** 直接適用の書き込みの記録が帰属する task(盤面ごとに1本)。書き込みの記録を読まない検査の setup が、書き手の task として渡す。 */
 const writers = new WeakMap<Db, string>();
 export function writerTask(db: Db): string {
@@ -1200,7 +1217,7 @@ export function settleReviews(db: Db, now: Date): void {
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
   if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
   if (review.meta_review_subject === "memory") return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
-  if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
+  if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, workerId, now) }, workerId, now, "worker", routingPrecedents(db, review.id));
   if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), workerId, now, "worker");
   return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
