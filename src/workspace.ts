@@ -252,7 +252,7 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
  *  root id、ref の基準の鍵だけ受験者の id)、他は task の workspace。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
  *  —— review の親をたどって Interview の root に着く review(監査、root や監査の行への異議の RCA、人間登録の review 子)は、実環境で
- *  走り root の面接室と開ける面接室を読みだけ開く。 */
+ *  走り root の面接室と開ける面接室を読みだけ開く。門の側の対(開く場所の名前)は tasks.ts の `openedPlaceNamesSql`。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
   if (rootId === undefined) {

@@ -588,6 +588,10 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   expect(names(again)).toEqual(["reef", again.id, evidence.id, root.id].sort());
   for (const review of [audit, nested]) expect(names(review)).toEqual(["reef", root.id, evidence.id].sort());
   expect(names(plain)).toEqual(["sandbox"]);
+  // review の鎖は review でない祖先で切れる(`taskRunPlace` と同じ辿り方)
+  const workUnderAudit = registerTask(db, { type: "work", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  const reviewUnderWork = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: workUnderAudit.id }, new Date(0), ...HUMAN_WEBUI);
+  for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
 
 /** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる —— 今日の盤面では受験者の決着で先に閉じる)。 */

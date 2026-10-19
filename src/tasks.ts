@@ -536,7 +536,8 @@ export function interviewFields(db: Db, taskId: string): InterviewFields | null 
   return { hypothesis: row.hypothesis, ...(row.measured_work !== null && { measured_work: row.measured_work }), evidence_task_ids: JSON.parse(row.evidence_task_ids) };
 }
 
-/** その task が走る面接室の root(ADR 0273 決定1・8): interview の root は自分、受験者は対象 → root。他は undefined。 */
+/** その task が走る面接室の root(ADR 0273 決定1・8): interview の root は自分、受験者は対象 → root。他は undefined。
+ *  門の側の対(同じ意味の名前の集合)は `openedPlaceNamesSql`。 */
 export function interviewRootIdOf(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id">): string | undefined {
   if (task.type === "interview") return task.id;
   if (task.interview_target_id === null) return undefined;
@@ -554,7 +555,7 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
 }
 
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。
- *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。 */
+ *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。門の側の対は `openedPlaceNamesSql`。 */
 export function readableInterviewRooms(db: Db, rootId: string): { name: string; path: string }[] {
   const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => ({ name: id, path: interviewRoomPath(db, id) }));
   const retried = latestEventOfTask(db, rootId, "interview_retried")?.payload;
@@ -3529,10 +3530,9 @@ export function typeAwareDefaultAgentSql(table: string): string {
 
 /** 「このタスクは資源単位の停止で止まっている」の唯一の SQL(ADR 0137 決定6)。
  *  `nextSlotTask` の pickup 述語と `listQueue` の skipped 表示が共有し、乖離させない。
- *  workspace は `task.workspace ?? 既定`(既定が無い盤面では門ごと効かない、ADR 0009)、
+ *  workspace の側は task が開く場所すべての名前(`openedPlaceNamesSql`。既定が無い盤面では門ごと効かない、ADR 0009)、
  *  assignee は `task.assignee ?? 型に応じた既定` を、呼び出し側が束ねた
- *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。
- *  workspace の側は task が開く場所すべての名前(`openedPlaceNamesSql`)と比べる。 */
+ *  `@stoppedWorkspaces` / `@stoppedAssignees` と比べる。EXISTS なので NULL は偽に落ちる。 */
 function stoppedSql(taskRef: string, fallback: string): string {
   return `((@defaultWorkspaceName IS NOT NULL AND EXISTS (SELECT 1 FROM json_each(@stoppedWorkspaces)
              WHERE value IN (${openedPlaceNamesSql(taskRef)})))

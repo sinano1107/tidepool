@@ -429,7 +429,8 @@ it("根拠の root の面接室・retry の旧い root の面接室の quarantin
   });
 
   expect(examinees).toHaveLength(2);
-  for (const id of examinees) expect(await queueStatus(id)).not.toBe("skipped");
+  // 受験者は監査の決着の後に拾える —— 面接室を止めた後に1人目が拾われて走り、2人目は todo のまま外れない
+  expect(await Promise.all(examinees.map(queueStatus))).toEqual(["in_progress", "todo"]);
   const reading = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46] })).json;
   expect(await queueStatus(reading.id)).toBe("skipped");
   const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
