@@ -372,8 +372,9 @@ it.each([
 it("止めた workspace の question が開いている間は、後始末の途中の直接 cancel を資源の門が拒む(issue #130 / issue #2257 の対照)", async () => {
   const f = await cancelledMidTeardown();
 
-  expect(() => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui")).toThrow(/quarantine confirmation/);
-  expect(() => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui")).toThrow(DomainError);
+  const cancel = () => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
+  expect(cancel).toThrow(DomainError);
+  expect(cancel).toThrow(/quarantine confirmation/);
 });
 
 it("準備が task ブランチへ checkout した後で spawn が落ちた pickup の後始末は、今日どおり退避して休止位置へ戻す(ADR 0274 決定3 / ADR 0052 決定7)", async () => {
