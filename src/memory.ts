@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, finishTask, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -2508,16 +2508,20 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
   })();
 }
 
-/** memory の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
+/** memory の読み口の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
  *  (readerHidden)を載せない(ADR 0264 決定2)。 */
+const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
+  store_changes: storeChanges(db, window, hidden),
+  candidates: memoryListRows(db, "list_memory_candidates", {}),
+  precedents: precedentRows(db, window),
+  proposals: memoryProposalRows(db, window),
+  branches: metaReviewBranches(db, hidden),
+});
+
+/** memory の6つの部分: 読み口の5つと、それらから導く判断を要する項目。 */
 function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) {
-  const parts = {
-    store_changes: storeChanges(db, window, hidden),
-    candidates: memoryListRows(db, "list_memory_candidates", {}),
-    precedents: precedentRows(db, window),
-    proposals: memoryProposalRows(db, window),
-    branches: metaReviewBranches(db, hidden),
-  };
+  const read = memoryReads(db, window, hidden);
+  const parts = { ...read, items: judgmentItems(db, window, read) };
   const section = materialSection("memory", window, [
     [
       "Store changes",
@@ -2530,8 +2534,103 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
     ["Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"],
     ["Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"],
     ["Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"],
+    [
+      "Items to judge",
+      "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
+        "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
+        "entries without a Definition in their scope or whole-board, and the paths two or more scopes define. Act on each item, or pass it to " +
+        "complete_memory_review as left as is.",
+      parts.items,
+      "no items to judge",
+    ],
   ]);
   return { subject: "memory" as const, section, parts };
+}
+
+/** memory meta-review の判断を要する項目(ADR 0278 決定5): エントリは id、枝は path で、complete_memory_review の鍵と同じ形。 */
+export type MemoryJudgmentItem = { entry: number } | { branch: string };
+
+/** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
+ *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
+ *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。 */
+function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
+  const restored = restoredAs(db);
+  const tail = (id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
+  const entries = new Set([
+    ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
+    ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
+    ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).map(tail) : [])),
+    ...parts.store_changes.map(({ id }) => id),
+  ]);
+  const branches = parts.branches.filter(
+    ({ definitions, scopes }) => scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1,
+  );
+  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches.map(({ path }) => ({ branch: path }))];
+}
+
+/** 読み手の窓の判断を要する項目 —— 材料の節に注入したのと同じ計算(完了の verb と harness が読む)。 */
+export function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
+  const window = metaReviewWindow(db, reviewId);
+  return judgmentItems(db, window, memoryReads(db, window, readerHidden(db, reviewId)));
+}
+
+/** この review の行為が判断済みにする項目(ADR 0278 決定3): 記憶の書き込みの行が作った・無効化したエントリと、提案 question が名指す
+ *  candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は、書き込んだ Definition の path と、移したエントリの
+ *  移動前後の path がその枝か配下にあるもの。 */
+function judgmentActs(db: Db, reviewId: string): (item: MemoryJudgmentItem) => boolean {
+  const restored = restoredAs(db);
+  const written = listEvents(db, reviewId).flatMap(({ payload }) => (payload.kind === "memory_written" ? [...payload.created, ...payload.invalidated] : []));
+  const proposed = (db.prepare("SELECT question_proposal FROM tasks WHERE parent_id = ? AND json_extract(question_proposal, '$.kind') = 'memory'").pluck().all(reviewId) as string[]).flatMap(
+    (proposal) => pinnedIds(JSON.parse(proposal) as MemoryProposal, false),
+  );
+  const entries = new Set([...written, ...proposed].flatMap((id) => [id, sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id]));
+  const rows = written.map((id) => requireEntry(db, id));
+  const defined = new Set(rows.filter((row) => row.kind === "definition").map((row) => row.path));
+  const moved = rows.filter((row) => row.invalidation_reason === "path_moved").flatMap((row) => [row.path, requireEntry(db, row.successor_id!).path]);
+  return (item) => ("entry" in item ? entries.has(item.entry) : defined.has(item.branch) || moved.some((path) => atOrUnder(path, item.branch)));
+}
+
+const itemName = (item: MemoryJudgmentItem) => ("entry" in item ? `entry #${item.entry}` : `branch ${item.branch}`);
+
+/** memory meta-review の完了(ADR 0278 決定2〜5): 判断を要する項目のうち、この review の行為が判断済みにしたものを除いた残りに
+ *  left_as_is が要る。足りない項目と、項目でも行為済みでもない id / path は名指して拒み、何も記録しない。行為済みの項目への値は
+ *  受け取って何もしない。据え置き1つが対象を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
+export function completeMemoryReview(
+  db: Db,
+  review: Task,
+  { judgments, handoff }: { judgments: Array<MemoryJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
+  const acted = judgmentActs(db, review.id);
+  const open = new Map(memoryJudgmentItems(db, review.id).flatMap((item) => (acted(item) ? [] : [[itemName(item), item] as const])));
+  const given = new Map(judgments.map((judgment) => [itemName(judgment), judgment]));
+  const unknown = [...given].flatMap(([name, judgment]) => (open.has(name) || acted(judgment) ? [] : [name]));
+  const unjudged = [...open.keys()].filter((name) => !given.has(name));
+  if (unknown.length > 0 || unjudged.length > 0) {
+    throw new DomainError(
+      [
+        ...(unknown.length > 0 ? [`not items to judge: ${unknown.join(", ")}`] : []),
+        ...(unjudged.length > 0 ? [`unjudged: ${unjudged.join(", ")} — act on each or pass it as left as is`] : []),
+      ].join("; "),
+    );
+  }
+  return db.transaction(() => {
+    for (const [name, item] of open) {
+      const { reason } = given.get(name)!;
+      const said = reason === undefined || whyBlank(reason) ? undefined : normalizeText(reason);
+      appendEvent(db, {
+        taskId: review.id,
+        workerId,
+        origin,
+        payload: { kind: "decision_logged", line: `left_as_is: ${name}${said ? ` — ${said}` : ""}`, judgment: { kind: "memory", ...item, value: "left_as_is", ...(said && { reason: said }) } },
+        at: now,
+      });
+    }
+    return finishTask(db, review, handoff, workerId, now, origin);
+  })();
 }
 
 /** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、token 量。 */

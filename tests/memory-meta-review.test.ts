@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { createBehaviorCandidate, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeMemoryReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -91,7 +91,7 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
 });
 
 async function finish(tp: Tidepool, taskId: string) {
-  expect((await completeViaMcp(tp, taskId, false)).isError).not.toBe(true);
+  expect((await completeMemoryReviewViaMcp(tp, taskId)).isError).not.toBe(true);
 }
 
 it("同主題の open な提案 question があれば、meta-review が完了していても登録しない —— 回答で決着すれば次の poll で登録される(issue #620)", async () => {

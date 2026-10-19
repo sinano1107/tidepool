@@ -560,7 +560,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(existsSync(f.appServer[0]!.spec.env.TMPDIR!)).toBe(false);
   });
 
-  it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、普通の task は変わらない(ADR 0122 決定2)", async () => {
+  it("主題 memory の meta-review の spawn では enabled_tools が worker の memory verb を専用 verb で置き換え、complete_task を complete_memory_review に替え、普通の task は変わらない(ADR 0122 決定2 / ADR 0278 決定1)", async () => {
     const f = await fixture();
     await f.start(task(f.db));
     await f.start(metaReviewTask(f.db));
@@ -568,7 +568,7 @@ describe("CodexWorker (ADR 0098)", () => {
     const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
     expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
     expect(enabledTools(f.process.calls[1]!.args)).toEqual([
-      ...base,
+      ...base.filter((verb) => verb !== "complete_task"),
       "propose_from_objection",
       "list_memory_candidates",
       "list_precedents",
@@ -583,6 +583,7 @@ describe("CodexWorker (ADR 0098)", () => {
       "move_memory_branch",
       "invalidate_memory",
       "propose_memory_change",
+      "complete_memory_review",
     ]);
   });
 

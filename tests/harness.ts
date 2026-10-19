@@ -26,7 +26,7 @@ import { appendEvent, type EventPayload, type EventRow } from "../src/events.js"
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
-import { recordKnowledge } from "../src/memory.js";
+import { completeMemoryReview, memoryJudgmentItems, recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -461,6 +461,7 @@ const RELEASING_VERBS = new Set([
   "pose_probe",
   "complete_interview",
   "complete_integration_review",
+  "complete_memory_review",
 ]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
@@ -1080,9 +1081,20 @@ export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: str
   return callAsTask(t, reviewId, "complete_integration_review", NO_FINDINGS);
 }
 
-/** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、他は complete_task(work だけ handoff 付き)。 */
-export async function completeIntegrationReviewOrTaskViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
-  return isIntegrationReview(t.db, task.id) ? completeIntegrationReviewViaMcp(t, task.id) : completeViaMcp(t, task.id, task.type === "work");
+/** memory meta-review か —— その完了の verb が足されているかで見る。 */
+const isMemoryReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_memory_review");
+
+/** memory meta-review を MCP の complete_memory_review で、盤面が計算した項目をすべて据え置いて完了させる(ADR 0278 決定5)。 */
+export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
+  return callAsTask(t, reviewId, "complete_memory_review", { judgments: memoryJudgmentItems(t.db, reviewId) });
+}
+
+/** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
+ *  他は complete_task(work だけ handoff 付き)。 */
+export async function completeByKindViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
+  if (isIntegrationReview(t.db, task.id)) return completeIntegrationReviewViaMcp(t, task.id);
+  if (isMemoryReview(t.db, task.id)) return completeMemoryReviewViaMcp(t, task.id);
+  return completeViaMcp(t, task.id, task.type === "work");
 }
 
 /** Finish only the reviews generated for this integration point, through the
@@ -1112,7 +1124,7 @@ export async function completeMetaReviews(tp: Tidepool) {
     );
     if (!review) break;
     await runNow(tp, review.id);
-    expect((await completeViaMcp(tp, review.id, false)).isError).not.toBe(true);
+    expect((await completeByKindViaMcp(tp, review)).isError).not.toBe(true);
   }
 }
 
@@ -1132,11 +1144,12 @@ export function settleReviews(db: Db, now: Date): void {
   for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) settleReview(db, getTask(db, review.id)!, "shako", now);
 }
 
-/** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、他は complete_task。 */
+/** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory meta-review は
+ *  complete_memory_review で項目をすべて据え置き、他は complete_task。 */
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
-  return isIntegrationReview(db, review.id)
-    ? completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker")
-    : completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
+  if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
+  if (isMemoryReview(db, review.id)) return completeMemoryReview(db, review, { judgments: memoryJudgmentItems(db, review.id) }, workerId, now, "worker");
+  return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
 
 /** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
@@ -1290,7 +1303,7 @@ export async function runNow(t: Tidepool, taskId: string) {
   for (;;) {
     const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
     if (!running || running.id === taskId) break;
-    const res = await completeIntegrationReviewOrTaskViaMcp(t, running);
+    const res = await completeByKindViaMcp(t, running);
     if (res.isError) throw new Error(`slot holder completion failed: ${JSON.stringify(res)}`);
   }
   const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });

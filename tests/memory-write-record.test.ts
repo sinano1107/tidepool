@@ -24,11 +24,11 @@ import {
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes, projectAndPersist } from "../src/precedent.js";
 import { attributeObjections, proposeFromObjection } from "../src/retrospective.js";
-import { completeTask, getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
+import { getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
-import { bundledObjection, HUMAN_WEBUI, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** AI の直接適用の書き込みの記録(issue #632 / ADR 0252 決定1〜3)のドメイン層。tool 結果と決定ログ API への写像はサーバ境界
@@ -214,7 +214,7 @@ it("meta-review の畳みへの異議は、次の meta-review の材料の異議
   const transcriptPath = join(await tempDir("tidepool-write-record-"), `${first.id}.${spawned}.stream.jsonl`);
   writeFileSync(transcriptPath, [...toolCall(1, "mcp__tidepool__log_decision", decision), ...toolCall(2, "mcp__tidepool__fold_memory", fold.event_id)].join("\n"));
   projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
-  completeTask(db, first, undefined, "auditor", at, "worker");
+  settleReview(db, first, "auditor", at);
   bundledObjection(db, first.id, fold.event_id, at, "those two were different");
   registerMetaReview(db, "memory", at);
   const next = listBoard(db).find((t) => t.meta_review_subject === "memory" && t.id !== first.id)!;
