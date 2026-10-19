@@ -524,6 +524,13 @@ it("list_precedents は行の主題(自身か最も近い祖先の meta_review_s
   expect(precedentIds(db, routing)).toEqual([rows.routing, rows.routingChild]);
 });
 
+it("memory meta-review の修理子の list_precedents は親の主題 memory で読む —— routing meta-review とその子の行は載らない(ADR 0279 決定6)", () => {
+  const { db, task, rows } = lineages();
+  const repair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: task.id }, at, ...HUMAN_WEBUI);
+
+  expect(precedentIds(db, repair.id)).toEqual([rows.memory, rows.memoryChild, rows.worker]);
+});
+
 it("主題の無い読み手(Interview の root)の list_precedents は両主題の系譜の行も worker の行も全件返す(ADR 0279 決定6)", () => {
   const { db, rows, register } = lineages();
 

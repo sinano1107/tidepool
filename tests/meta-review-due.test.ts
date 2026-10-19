@@ -11,7 +11,6 @@ import {
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   moveMemoryByMetaReview,
-  proposeMemoryChange,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -188,7 +187,10 @@ it("同主題の meta-review の子の下に open な提案 question があれ�
   const db = openDb(":memory:");
   const candidate = behavior(db, "split migrations");
   const repair = previousReviewWithRepair(db, "memory");
-  proposeMemoryChange(db, repair, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", at);
+  // 修理子の提案は判断の行が名指す対象に限られる(ADR 0281 決定4)—— ここでは open な提案 question だけが要るので直接立てる
+  const question = [{ title: "Approve", detail: "d", options: ["approve", "reject", "defer"], recommendation: "approve" }];
+  const proposal = { kind: "memory" as const, op: "approve" as const, candidate_id: candidate, replaces: [] };
+  registerTask(db, { type: "question", title: "Approve", purpose: "r", completion_criteria: "c", parent_id: repair, question, question_kind: { kind: "proposal", proposal } }, at, "auditor", "worker");
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair);
   knowledge(db, "after the review");
 

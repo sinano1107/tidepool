@@ -1130,7 +1130,7 @@ it.each([
   ["memory", "完了の行"],
   ["routing", "判断の行"],
   ["routing", "完了の行"],
-] as const)("%s の meta-review の%sへの異議の commit は work の修理子を立てず、帰責 event と RCA は立つ(ADR 0279 決定1・3・4)", (subject, rowKind) => {
+] as const)("%s の meta-review の%sへの異議の commit は work の修理子を立てず(対象を名指す memory の型つきの行は memory_repair)、帰責 event と RCA は立つ(ADR 0279 決定1・3・4)", (subject, rowKind) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-20T00:00:00.000Z");
   let review: Task;
@@ -1158,7 +1158,8 @@ it.each([
 
   commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
 
-  expect(listChildren(db, review.id).map((child) => child.title)).toEqual([`rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
+  const repair = rowKind === "型つきの判断の行" ? [`memory repair: ${review.title}`] : [];
+  expect(listChildren(db, review.id).map((child) => child.title)).toEqual([...repair, `rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
   expect(listEvents(db, review.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
 });
 

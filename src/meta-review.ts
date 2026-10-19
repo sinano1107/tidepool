@@ -12,9 +12,11 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
  *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
 export const WORKER_MEMORY_VERBS = ["record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"] as const;
-/** memory_repair の task にだけ足す記憶の修理 verb(ADR 0252 決定4 / ADR 0272 決定3)。 */
-export const MEMORY_REPAIR_VERBS = ["invalidate_memory", "restore_memory", "move_memory", "move_memory_branch", "replace_memory"] as const;
-/** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。 */
+/** memory_repair の書き込みの行の修理 verb(ADR 0252 決定4 / ADR 0272 決定3 / ADR 0281)。`invalidate_memory` / `move_memory` /
+ *  `move_memory_branch` は meta-review と同じ tool で、射程は門が対象で切り替える。 */
+export const MEMORY_REPAIR_VERBS = ["invalidate_memory", "restore_memory", "move_memory", "move_memory_branch", "restore_memory_branch", "replace_memory"] as const;
+/** 主題 memory の meta-review の接続で worker の memory verb を置き換える専用 verb(ADR 0122 決定2)。判断の行を運ぶ記憶の修理子も
+ *  持つ(ADR 0279 決定3、memoryRepairVerbs)。 */
 export const MEMORY_META_REVIEW_VERBS = [
   "list_memory_candidates",
   "list_precedents",

@@ -1,7 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { recordKnowledge } from "../src/memory.js";
-import { MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
-import { cancelTaskDirectly, registerTask } from "../src/tasks.js";
+import { memoryRepairVerbs, recordKnowledge } from "../src/memory.js";
+import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS } from "../src/meta-review.js";
+import { cancelTaskDirectly, listChildren, registerTask } from "../src/tasks.js";
+import { commitTriage, raiseObjection } from "../src/triage.js";
 import {
   api,
   bootTidepool,
@@ -13,6 +14,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   HOUR,
   HUMAN_WEBUI,
+  judgmentRepairTask,
   loggedEntry,
   makeWorkspace,
   managementMcpClient,
@@ -132,7 +134,7 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   expect(await writeRecords(write.repair.id)).toEqual([dropped.event_id]);
 });
 
-it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
+it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
   t = await bootTidepool();
   const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
   cancelTaskDirectly(t.db, objected, null, t.clock.now(), {}, "webui");
@@ -151,12 +153,33 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 5本を�
     expect(names.filter((name) => withheld.includes(name))).toEqual([]);
     const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
     expect(envelope.memory_repair).toBe(
-      "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.",
+      "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.",
     );
     expect(envelope.artifact_discarded).toBeUndefined();
   } finally {
     await client.close();
   }
+});
+
+it("memory_repair の tools/list の記憶の verb は、書き込みの行だけ・判断の行だけ・両方のどの組でも memoryRepairVerbs の集合(中身は domain の釘、ADR 0281 / ADR 0107 決定3)", async () => {
+  t = await bootTidepool();
+  const at = t.clock.now();
+  const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c", workspace: "charts" }, at, ...HUMAN_WEBUI);
+  const wrote = recordKnowledge(t.db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, objected.id);
+  raiseObjection(t.db, wrote.event_id, "undo it", at);
+  commitTriage(t.db, at);
+  const repairs = [listChildren(t.db, objected.id).find((c) => c.type === "memory_repair")!, judgmentRepairTask(t.db, at), judgmentRepairTask(t.db, at, { withWrite: true })];
+  const memoryVerbs = async (taskId: string) => {
+    const client = await mcpClient(t.mcpBaseUrl, taskId);
+    try {
+      const all: readonly string[] = [...MEMORY_REPAIR_VERBS, ...MEMORY_META_REVIEW_VERBS];
+      return (await client.listTools()).tools.map((tool) => tool.name).filter((name) => all.includes(name)).sort();
+    } finally {
+      await client.close();
+    }
+  };
+
+  for (const repair of repairs) expect(await memoryVerbs(repair.id)).toEqual(memoryRepairVerbs(t.db, repair.id).sort());
 });
 
 it("routing_repair の worker MCP は tools/list が基本の面(get_current_task / log_decision / escalate / complete_task)だけで、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {

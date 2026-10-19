@@ -3528,10 +3528,10 @@ export const ARTIFACT_DISCARDED_NOTICE =
 export const INTERVIEW_AUDIT_NOTICE =
   "This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.";
 
-/** memory_repair に盤面が注入する1行(ADR 0272 決定3): 伏せた verb の理由。`get_current_task` の envelope と spawn の文面が同じこれを
+/** memory_repair に盤面が注入する1行(ADR 0272 決定3 / ADR 0281): 伏せた verb の理由と、書き込みの行・判断の行の射程。`get_current_task` の envelope と spawn の文面が同じこれを
  *  運ぶ。spawn の文面では Authority 節の本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
 export const MEMORY_REPAIR_NOTICE =
-  "This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.";
+  "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.";
 
 /** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。 */
 export const ROUTING_REPAIR_NOTICE =
