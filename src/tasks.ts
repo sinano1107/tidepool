@@ -1265,10 +1265,10 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
 /** Work tasks may not complete without a full handoff doc; every other agent
  *  task needs its outcome (ADR 0278 決定6), and the rest of a supplied doc is
  *  stored, not dropped (nothing may degrade recording). The doc lands as
- *  markdown on the task row, written once. A `human`-assignee task is exempt regardless of type (issue #13):
- *  actionable follow-up belongs to a *new* task, not this doc, so a physical/
- *  approval task carries no agent session to hand off from — the doc stays
- *  fully optional.
+ *  markdown on the task row, written once. A `human`-assignee task is exempt
+ *  regardless of type (issue #13): actionable follow-up belongs to a *new*
+ *  task, not this doc, so a physical/approval task carries no agent session to
+ *  hand off from — the doc stays fully optional.
  *
  *  ADR 0111: root work and risk children are mandatory integration points;
  *  ordinary children opt into individual review through review_flag.
