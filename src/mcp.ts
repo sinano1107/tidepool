@@ -555,8 +555,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
   // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
-  // complete_memory_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
+  // complete_memory_review を、routing meta-review は complete_routing_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
+  /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
+  const completing =
+    <I>(complete: (db: Db, task: Task, input: I, workerId: string, now: Date, origin: "worker") => Task) =>
+    async (input: I) =>
+      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+        const done = complete(deps.db, task, input, workerId, now, "worker");
+        return { id: done.id, status: done.status };
+      }, resolveOnly);
 
   server.registerTool(
     "get_current_task",
@@ -787,11 +795,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: { verdict: z.enum(INTERVIEW_OUTCOMES), findings: requiredTextSchema },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeAudit(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeAudit),
     );
   }
 
@@ -808,11 +812,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: { findings: requiredTextSchema, no_findings: z.literal(true).optional() },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeIntegrationReview(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeIntegrationReview),
     );
   }
 
@@ -844,11 +844,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeMemoryReview(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeMemoryReview),
     );
   }
 
@@ -880,11 +876,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeRoutingReview(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeRoutingReview),
     );
   }
 
@@ -906,11 +898,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeRca(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeRca),
     );
   }
 
@@ -933,11 +921,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const done = completeInterview(deps.db, task, input, workerId, now, "worker");
-          return { id: done.id, status: done.status };
-        }, resolveOnly),
+      completing(completeInterview),
     );
   }
 
