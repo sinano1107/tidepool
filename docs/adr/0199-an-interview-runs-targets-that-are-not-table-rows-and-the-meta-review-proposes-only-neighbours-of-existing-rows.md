@@ -106,9 +106,12 @@ abandon / retry(#2132)は呼ばず、同じ model に model の鍵と effort の
 
 - **掃除の範囲は、その transaction で cancel された task が運ぶ鍵だけ。** 盤面に task の無い鍵の question は、無関係な cancel では
   閉じない(#1992 の線)。retry の新しい root は同じ transaction の内側で登録されるので、「retry の直後に閉じる」退けた案には当たらない。
-- **`observed_event_id` は、その鍵を走らせうる最後の Interview を消した cancel の event。** root が同じ transaction で cancel された
-  なら root の cancel の event(#1992 の文面どおり)、root が残るならその鍵の受験者の cancel の event。原因(人間の答え)は cancel の
-  event の `origin_question_id` から1手で辿れる —— 記録は直接の原因だけを指す盤面の他の記録と同じ形。
+- **`observed_event_id` は、その鍵を走らせうる最後の Interview を消した cancel の event。** その鍵をまだ走らせえた root ——
+  その鍵の対象行に受験者が無いか、受験者が transaction の始めに未決着だった root —— が同じ transaction で cancel されたなら root の
+  cancel の event(#1992 の文面どおり)。root が残る、またはその鍵の受験者が前に決着していて root は一覧に鍵を持つだけなら、その鍵の
+  受験者の cancel の event —— 一覧に鍵があるだけの root の cancel を優先すると、別の Interview の受験者の cancel が実際に最後の
+  Interview を消したのに観測がその root を指す(#2219 の実測)。原因(人間の答え)は cancel の event の `origin_question_id` から
+  1手で辿れる —— 記録は直接の原因だけを指す盤面の他の記録と同じ形。
 
 退けた案: **3経路目・4経路目に呼び出しを足し、引数を root id から鍵へ広げる** —— 次に cancel の経路が増えたときまた付け忘れる。
 **人間の答えの event を観測に付ける** —— #1992 の2経路は cancel の event を指しており、経路によって指す距離が変わる。
