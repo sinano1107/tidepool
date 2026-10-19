@@ -51,7 +51,7 @@ export interface TeardownStep {
    *  ときだけ)。 */
   ready?: (task: Task) => boolean;
   /** 完了経路(ADR 0109 決定1・3): 退避ではなく検査を走らせ、work タスクなら
-   *  merge-back まで進む。解決できない名前は quarantine しない(門が既に撃った。ADR 0274 決定3)。 */
+   *  merge-back まで進む。解決できない名前は quarantine しない(`done` へ決着させる verb はどれも完了の門を通り、門が既に撃った。ADR 0274 決定3)。 */
   completion?: boolean;
   /** process を1つも持たなかった session(ADR 0274 決定3): task ブランチに乗っていない checkout と解決できない名前には
    *  tree rule を当てない。 */
@@ -233,7 +233,7 @@ async function teardown(
 
 /** 後始末が tree rule を当てる走る場所(無ければ当てない)。解決できない名前(drift)を quarantine しないのは2種類だけである
  *  (ADR 0274 決定3)—— 他の決着(エスカレーション・分解・中断)は後始末が最初の観測者なので `resolveOrQuarantine` を通す。
- *  - 完了(`completion`): 完了の門が後始末より前に同じ名前を解決しており、解決できなければ門がそこで撃っている。再起動の
+ *  - 完了(`completion`): `done` へ決着させる verb はどれも完了の門を通る(`runReleasingVerb` が強制)ので、門が後始末より前に同じ名前を解決しており、解決できなければ門がそこで撃っている。再起動の
  *    復旧でも撃ち直さず当てない。解決できれば今日どおり走る場所へ当てる。
  *  - process を1つも持たなかった session(`neverRan`): worker が触った checkout を持たない —— drift は止めた Quarantine を
  *    撃ち直さず、task ブランチに乗っていない checkout は動いていないので、どちらも当てない。task ブランチに乗った

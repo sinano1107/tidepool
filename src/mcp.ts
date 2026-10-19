@@ -332,6 +332,9 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
   );
 }
 
+/** 検査を持たない完了の門: workspace を前倒しで解決するだけ(`done` へ決着させる verb は門を持つ —— ADR 0274 決定3)。 */
+const resolveOnly = (): void => {};
+
 /** Verbs that end the slot session (complete, decompose, escalate, and the other
  *  releasing verbs registered below): run the
  *  domain verb attributed to the slot worker, then hand the release to the
@@ -346,10 +349,11 @@ function assertWorkTreeCommitted(deps: McpDeps, task: Task, workspace: Workspace
  *  `gate` は verb の**前**に走る(ADR 0084 の完了の門、出題の面接室の写し —— ADR 0273 決定3)。workspace が解決できなければ
  *  門は飛ばす —— 出題の verb だけは head を記録できないので verb の側で拒む(追記5)。門を持つ verb だけが workspace を
  *  前倒しで解決するのは、解決自体が quarantine の副作用を持つため —— 前へ出すと、domain
- *  error で終わった escalate / decompose にまでその副作用が及ぶ。門が解決した結果は
- *  **解決できなかったとき(`null`)も含めて**そのまま後始末へ渡す —— `undefined` で渡すと
- *  後始末が「まだ解決していない」と読んで同じ観測をもう一度 quarantine する(1つの verb
- *  呼び出しで2度撃たない)。 */
+ *  error で終わった escalate / decompose にまでその副作用が及ぶ。`done` へ決着させる verb は
+ *  どれも門を持ち、持たずに `done` へ決着させれば記録ごと拒む(ADR 0274 決定3 —— 後始末は
+ *  `done` から「門が既に観測した」と導く)。門が解決した走る場所は**解決できなかったとき
+ *  (`null`)も含めて**そのまま後始末へ渡し、後始末は門が検査した場所を解放する(`null` なら
+ *  完了の後始末は解決し直さないので撃ち直さない)。 */
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
@@ -367,6 +371,11 @@ function runReleasingVerb(
     const result = deps.db.transaction(() => {
       const now = deps.clock.now();
       const recorded = record(attributedWorkerId(deps, task), now);
+      // ADR 0274 決定3: 後始末は `done` から「門が workspace を既に観測した」と導く —— 門を渡さずに `done` へ決着させた verb は
+      // その導出を偽にするので、記録ごと巻き戻す(門の callback が飛ばされたかではなく、解決が前倒しで走ったかを問う)
+      if (!gate && getTask(deps.db, task.id)?.status === "done") {
+        throw new Error(`task ${task.id}: a verb settled it done without the completion gate`);
+      }
       markTeardown(deps.db, task.id, now);
       return recorded;
     })();
@@ -778,7 +787,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeAudit(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
-        }),
+        }, resolveOnly),
     );
   }
 
@@ -805,7 +814,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeInterview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
-        }),
+        }, resolveOnly),
     );
   }
 
