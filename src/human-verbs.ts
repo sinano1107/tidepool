@@ -1,3 +1,5 @@
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
@@ -97,11 +99,12 @@ import type { SettledMark } from "./wire-contract.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  conventionCheckoutPath,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
-  recordedInterviewRoom,
   redoMergeBacks,
+  resolveWorkspacesBaseDir,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -557,6 +560,8 @@ export interface QuarantineCheckDeps {
   codexWorkspaceContainment?: CodexWorkspaceCheck;
   /** ADR 0266 決定3: 盤面の記録の器の dir —— 解放の検査はここへ一時ファイルを書いて消す。Absent → その確認への回答は拒まれる。 */
   recordDir?: string;
+  /** 面接室の在り処を導く規約の基点(ADR 0018)。Absent → `resolveWorkspacesBaseDir` 自身の既定(scheduler と同じ)。 */
+  workspacesDir?: string;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
@@ -590,6 +595,13 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
+      // repo がまだ無い面接室には検査する git が無い —— 確かめるのは次の pickup が作れること。event は次の pickup が書く
+      if (getTask(deps.db, value!)?.type === "interview" && !existsSync(join(target.path, ".git"))) {
+        await refuseOnError(() => {
+          mkdirSync(target.path, { recursive: true });
+        });
+        return;
+      }
       await refuseOnError(() => verifyWorkspaceClean(target));
       if (deps.boardState) {
         const overlap = boardStateOverlap(target.path, deps.boardState);
@@ -733,15 +745,17 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
 }
 
 function resolveWorkspaceForAnswer(
-  deps: Pick<SubmitAnswerDeps, "db" | "workspace" | "resolveWorkspace">,
+  deps: Pick<QuarantineCheckDeps, "db" | "workspace" | "resolveWorkspace" | "workspacesDir">,
   taskWorkspace: string | null,
   action: string,
   missingResource = "workspace",
 ): WorkspaceConfig {
   // 面接室は registry に無く、root の id の名前で止まる(ADR 0273 決定8)。resolver より先に引く —— registry の無い盤面の resolver は
-  // どの名前にも既定の workspace を返す
-  const room = taskWorkspace === null ? undefined : recordedInterviewRoom(deps.db, taskWorkspace);
-  if (room) return room;
+  // どの名前にも既定の workspace を返す。在り処は開いた event からではなく基点と root の id から導く —— 作れずに止まった面接室には
+  // event が無く、それでも検査する番地は同じである
+  if (taskWorkspace !== null && getTask(deps.db, taskWorkspace)?.type === "interview") {
+    return { name: taskWorkspace, path: conventionCheckoutPath(taskWorkspace, resolveWorkspacesBaseDir(deps.workspacesDir)) };
+  }
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) throw new DomainError(`no ${missingResource} configured — ${action}`);
   try {

@@ -5,13 +5,15 @@
  *  鍵は全種類 `(kind, value)` で、1鍵につき開いた確認型 question は最大1枚。盤面全体で
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
@@ -220,22 +222,34 @@ export const QUARANTINES = [
   {
     kind: "workspace",
     scope: "workspace",
-    // 再検査の各項: 2 は ADR 0146、4 は ADR 0040、5 は ADR 0067
-    prose: (name: string | null, reason: string): QuarantineProse => ({
-      title: `workspace ${name} needs human attention`,
-      purpose:
-        `${reason}. ` +
-        "Tasks in this workspace stay out of the slot until it is repaired. " +
-        "Answering confirms the repair — the board re-checks all of the following before " +
-        "it accepts the answer, and refuses it if any fails:\n\n" +
-        `1. a workspace named "${name}" is still configured (the board can resolve it).\n` +
-        "2. its `.git` is a directory — not a linked worktree or submodule.\n" +
-        "3. it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).\n" +
-        "4. the workspace path does not overlap the board's own state paths.\n" +
-        "5. if the workspace declares a GitHub repo, the board can still access it.\n\n" +
-        "Any answer text is kept as a repair note.",
-      completion_criteria: "the workspace is repaired by hand",
-    }),
+    // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
+    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである
+    prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
+      const room = getTask(db, name!)?.type === "interview";
+      // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
+      const roomPath = room ? interviewRoomPath(db, name!) : undefined;
+      const checks =
+        room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
+          ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
+          : [
+              ...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]),
+              "its `.git` is a directory — not a linked worktree or submodule.",
+              "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
+              "the workspace path does not overlap the board's own state paths.",
+              "if the workspace declares a GitHub repo, the board can still access it.",
+            ];
+      return {
+        title: `workspace ${name} needs human attention`,
+        purpose:
+          `${reason}. ` +
+          "Tasks in this workspace stay out of the slot until it is repaired. " +
+          "Answering confirms the repair — the board re-checks all of the following before " +
+          "it accepts the answer, and refuses it if any fails:\n\n" +
+          checks.map((check, i) => `${i + 1}. ${check}\n`).join("") +
+          "\nAny answer text is kept as a repair note.",
+        completion_criteria: "the workspace is repaired by hand",
+      };
+    },
   },
   {
     kind: "agent",
@@ -404,8 +418,8 @@ export const QUARANTINES = [
   /** entry 経路(ADR 0110 決定3)で値が外す Provider —— 「その Provider では走れない」
    *  種類だけが持つ。agent 名ではなく entry を外すので `QuarantineResolvers` とは別の写像。 */
   excludesProviders?: (values: string[]) => Provider[];
-  /** `cause` は `tableRow` だけが読む行の拒否の証拠の種類。 */
-  prose: (value: string | null, reason: string, cause?: RowRefusalCause) => QuarantineProse;
+  /** `cause` は `tableRow` だけが読む行の拒否の証拠の種類。`db` は workspace の行だけが読む(面接室か、その repo があるか)。 */
+  prose: (value: string | null, reason: string, cause: RowRefusalCause | undefined, db: Db) => QuarantineProse;
 }>;
 
 export type QuarantineKind = (typeof QUARANTINES)[number]["kind"];
@@ -515,7 +529,7 @@ export function registerQuarantine(
     return;
   }
   const row = QUARANTINES.find((r) => r.kind === kind)!;
-  const { question, ...prose } = row.prose(value, reason, cause);
+  const { question, ...prose } = row.prose(value, reason, cause, db);
   registerTask(
     db,
     {

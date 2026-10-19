@@ -132,6 +132,9 @@ export class UnknownWorkspaceError extends Error {
   }
 }
 
+/** An Interview task's place (its room, or an examinee's own checkout) has no opened event: the board never got as far as making it. */
+export class PlaceNotOpenError extends Error {}
+
 export class GitDirNotADirectoryError extends Error {
   constructor(path: string) {
     super(`${join(path, ".git")} is not a directory — linked worktrees and submodules cannot be workspaces`);
@@ -257,11 +260,11 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   if (task.type !== "interview") {
     const path = examineeCheckoutPath(db, task.id);
-    if (path === undefined) throw new Error(`the checkout of ${task.id} is not open`);
+    if (path === undefined) throw new PlaceNotOpenError(`the checkout of ${task.id} is not open`);
     return { name: rootId, path, read_paths: [], snapshot_key: task.id };
   }
   const room = recordedInterviewRoom(db, rootId);
-  if (!room) throw new Error(`the interview room of ${rootId} is not open`);
+  if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
   return { ...room, read_paths: [workspace.path, ...readableInterviewRooms(db, rootId)].map(safeRealpath) };
 }
 
