@@ -2406,13 +2406,13 @@ function metaReviewGuidance(db: Db, taskId: string, agent: string): MemoryInject
     const cap = readMemorySettings(db).injection_token_cap;
     let shown = rows;
     let section = render(shown);
-    while (shown.length > 0 && countTokens(section) > cap) section = render((shown = shown.slice(0, -1)));
-    const none = shown.length === 0;
+    let tokens = countTokens(section);
+    while (shown.length > 0 && tokens > cap) tokens = countTokens((section = render((shown = shown.slice(0, -1)))));
     return {
-      section: none ? null : section,
+      section: shown.length === 0 ? null : section,
       watermark,
       entries: shown.map((row) => ({ id: row.id, version: row.version! })),
-      tokens: none ? 0 : countTokens(section),
+      tokens: shown.length === 0 ? 0 : tokens,
       index_depth: 0,
       index_max_depth: 0,
       omitted: rows.length - shown.length,
