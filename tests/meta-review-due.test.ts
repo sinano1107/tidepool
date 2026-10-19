@@ -11,6 +11,7 @@ import {
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
   moveMemoryByMetaReview,
+  proposeMemoryChange,
   recordKnowledge,
   rejectMemoryProposal,
 } from "../src/memory.js";
@@ -159,4 +160,50 @@ it("周期 meta-review は盤面自身の判断の段(judgement_tier の設定)�
   registerMetaReview(db, "routing", at);
 
   expect(listBoard(db).find((task) => task.meta_review_subject === "routing")?.review_tier).toBe("standard");
+});
+
+/** 前回の meta-review を登録し、その子に memory_repair を1件立ててから meta-review を完了させる(子は open のまま)。 */
+function previousReviewWithRepair(db: Db, subject: MetaReviewSubject): string {
+  registerMetaReview(db, subject, at);
+  const review = listBoard(db).find((task) => task.meta_review_subject === subject)!;
+  const repair = registerTask(db, { type: "memory_repair", title: "memory repair: review", purpose: "p", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = ?").run(subject);
+  return repair.id;
+}
+
+it("同主題の meta-review の open な memory_repair の子がある間は、周期が過ぎ材料があっても登録しない —— 子が done になれば登録する(ADR 0279 決定7)", () => {
+  const db = openDb(":memory:");
+  const repair = previousReviewWithRepair(db, "memory");
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+  expect(registrations(db)).toBe(1);
+
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair);
+  registerDueMetaReviews(db, afterPeriod);
+  expect(registrations(db)).toBe(2);
+});
+
+it("同主題の meta-review の子の下に open な提案 question があれば、子が done でも登録しない(ADR 0279 決定7)", () => {
+  const db = openDb(":memory:");
+  const candidate = behavior(db, "split migrations");
+  const repair = previousReviewWithRepair(db, "memory");
+  proposeMemoryChange(db, repair, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", at);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair);
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(registrations(db)).toBe(1);
+});
+
+it("別主題の meta-review の open な子は数えない —— memory の修理子が open でも routing の meta-review は登録する(ADR 0279 決定7)", () => {
+  const db = openDb(":memory:");
+  previousReviewWithRepair(db, "memory");
+  previousReview(db, "routing");
+  applyExecutionSettingsChange(db, { setting: "row", row }, "mcp", at);
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(openMetaReviews(db, "routing")).toBe(1);
 });
