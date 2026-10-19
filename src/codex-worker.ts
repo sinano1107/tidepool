@@ -1204,7 +1204,7 @@ export class CodexWorker implements WorkerAdapter {
     }
     const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
     // ADR 0180 決定2・追記 #1239 / ADR 0279 決定2: meta-review は INDEX の代わりに指針の節を受け、主題の材料の節がその後ろに続く
-    const material = buildMetaReviewMaterial(this.options.db, task.id);
+    const material = buildMetaReviewMaterial(this.options.db, task.id, Object.values(registry.agents));
     // 実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
     const workspacePath = realpathSync(place.path);
     const hook = installBoardHook(this.options.codexHome);

@@ -2003,7 +2003,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
       const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
       // ADR 0180 決定2・追記 #1239 / ADR 0279 決定2: meta-review は INDEX の代わりに指針の節を受け、主題の材料の節がその後ろに続く
-      const material = buildMetaReviewMaterial(this.options.db, task.id);
+      const material = buildMetaReviewMaterial(this.options.db, task.id, Object.values(registry.agents));
       const verbs = taskVerbSwap(this.options.db, task.id);
       // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
       // 復帰・quarantine 復帰)がありうるため、`worker_spawned` の event id で

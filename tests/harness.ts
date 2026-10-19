@@ -27,6 +27,7 @@ import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { buildMetaReviewMaterial, completeMemoryReview, recordKnowledge, recordMetaReviewMaterial } from "../src/memory.js";
+import { metaReviewSubjectOf } from "../src/meta-review.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -38,6 +39,7 @@ import type {
   RosterAgent,
 } from "../src/registry.js";
 import { type AttributionClient, type BehaviorDraftClient, completeRca } from "../src/retrospective.js";
+import { completeRoutingReview, judgmentKey, type RegistryAgent } from "../src/routing-review.js";
 import { HOURLY, type TaskExecutionCandidates } from "../src/scheduler.js";
 import { startServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
@@ -463,6 +465,7 @@ const RELEASING_VERBS = new Set([
   "complete_interview",
   "complete_integration_review",
   "complete_memory_review",
+  "complete_routing_review",
   "complete_rca",
 ]);
 
@@ -1083,17 +1086,28 @@ export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: str
   return callAsTask(t, reviewId, "complete_integration_review", NO_FINDINGS);
 }
 
-/** memory meta-review か —— その完了の verb が足されているかで見る。 */
-const isMemoryReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_memory_review");
-
-/** memory meta-review の spawn の注入を記録し、注入した「Items to judge」の項目を返す(setup、ADR 0278 追記4): 記録を書くのは実
- *  adapter の spawn だけで ScriptedWorker は刻まないので、WORKER_SPAWNED の写しを刻み、その event id で材料の節を記録する。 */
-export function injectMemoryMaterial(db: Db, reviewId: string, workerId: string, at: Date) {
-  const material = buildMetaReviewMaterial(db, reviewId);
-  if (material?.subject !== "memory") throw new Error(`${reviewId} is not a memory meta-review`);
+/** meta-review の spawn の注入を記録し、材料を返す(setup、ADR 0278 追記4): 記録を書くのは実 adapter の spawn だけで ScriptedWorker は
+ *  刻まないので、WORKER_SPAWNED の写しを刻み、その event id で材料の節を記録する。 */
+function injectMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
+  const material = buildMetaReviewMaterial(db, reviewId, agents);
+  if (!material) throw new Error(`${reviewId} is not a meta-review`);
   const spawned = appendEvent(db, { taskId: reviewId, workerId, origin: "board", at, payload: WORKER_SPAWNED });
   recordMetaReviewMaterial(db, reviewId, workerId, spawned, material, at);
+  return material;
+}
+
+/** memory meta-review の注入を記録し、注入した「Items to judge」の項目を返す(setup)。 */
+export function injectMemoryMaterial(db: Db, reviewId: string, workerId: string, at: Date) {
+  const material = injectMaterial(db, reviewId, workerId, at);
+  if (material.subject !== "memory") throw new Error(`${reviewId} is not a memory meta-review`);
   return material.parts.items;
+}
+
+/** routing meta-review の注入を記録し、節の「Items to judge」が並べる判断の鍵(agent が写す形)を返す(setup)。 */
+export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
+  const material = injectMaterial(db, reviewId, workerId, at, agents);
+  if (material.subject !== "routing") throw new Error(`${reviewId} is not a routing meta-review`);
+  return material.parts.items.map(judgmentKey);
 }
 
 /** 判断ログのうち完了の verb が書いた型つきの行(ADR 0278 決定4)。 */
@@ -1104,6 +1118,12 @@ export const judgmentRows = (db: Db, taskId: string) =>
 export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
   const judgments = injectMemoryMaterial(t.db, reviewId, t.worker.id, t.clock.now());
   return callAsTask(t, reviewId, "complete_memory_review", { judgments });
+}
+
+/** routing meta-review を MCP の complete_routing_review で、材料を注入して記録し、注入した対象をすべて no_change にして完了させる(ADR 0278 決定5)。 */
+export async function completeRoutingReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
+  const judgments = injectRoutingMaterial(t.db, reviewId, t.worker.id, t.clock.now());
+  return callAsTask(t, reviewId, "complete_routing_review", { judgments });
 }
 
 /** harness の complete_rca の所見の根本原因の既定。 */
@@ -1118,10 +1138,11 @@ export function rcaFindings(db: Db, reviewId: string, root_cause = RCA_ROOT_CAUS
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
- *  RCA は材料を1つの所見に、他は complete_task(work だけ handoff 付き)。 */
+ *  routing meta-review は対象をすべて no_change、RCA は材料を1つの所見に、他は complete_task(work だけ handoff 付き)。 */
 export async function completeByKindViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
   if (isIntegrationReview(t.db, task.id)) return completeIntegrationReviewViaMcp(t, task.id);
-  if (isMemoryReview(t.db, task.id)) return completeMemoryReviewViaMcp(t, task.id);
+  const subject = metaReviewSubjectOf(t.db, task.id);
+  if (subject) return (subject === "memory" ? completeMemoryReviewViaMcp : completeRoutingReviewViaMcp)(t, task.id);
   if (isRca(t.db, task.id)) return callAsTask(t, task.id, "complete_rca", rcaFindings(t.db, task.id));
   return completeViaMcp(t, task.id, task.type === "work");
 }
@@ -1173,14 +1194,13 @@ export function settleReviews(db: Db, now: Date): void {
   for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) settleReview(db, getTask(db, review.id)!, "shako", now);
 }
 
-/** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory meta-review は
- *  材料の注入を記録して complete_memory_review で項目をすべて据え置き、RCA は complete_rca で材料を1つの所見に、他は complete_task。 */
+/** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory / routing meta-review は
+ *  材料の注入を記録して complete_memory_review で項目をすべて据え置き / complete_routing_review で対象をすべて no_change に、RCA は
+ *  complete_rca で材料を1つの所見に、他は complete_task。 */
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
   if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
-  if (isMemoryReview(db, review.id)) {
-    const judgments = injectMemoryMaterial(db, review.id, workerId, now);
-    return completeMemoryReview(db, review, { judgments }, workerId, now, "worker");
-  }
+  if (review.meta_review_subject === "memory") return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
+  if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
   if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), workerId, now, "worker");
   return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }

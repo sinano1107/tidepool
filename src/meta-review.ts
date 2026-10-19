@@ -1,10 +1,12 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
-import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from "./events.js";
+import { DomainError } from "./domain-error.js";
+import { appendEvent, type EventKind, type EventOrigin, type EventPayload, type Judgment, latestEventOfTask, listEventsOfKinds } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
+import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { ancestorsSql, registerTask } from "./tasks.js";
+import { ancestorsSql, finishTask, type HandoffDoc, registerTask, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -112,13 +114,15 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of how the board routes work to execution settings. This cycle's material is in your prompt, in the " +
         "Routing meta-review material section: the current table and settings, the shadow rows since the previous routing meta-review " +
         "where the learner's recommendation diverged from what ran, the allocation reviews since then, the cells first seen and the rows " +
-        "humans changed since then, the decisions objected to since then, and the routing proposals answered or settled since then. " +
+        "humans changed since then, the decisions objected to since then, the routing proposals answered or settled since then, and the items to judge. " +
+        "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, " +
+        "listing each item you leave unchanged as no_change (with a reason when it helps). " +
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
         "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
         "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
         "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), those under tier source task " +
         "also by the tier the task requested, and " +
-        "judged_by_same_model counts those whose judge ran on the worker's own model. Record each judgment with log_decision. " +
+        "judged_by_same_model counts those whose judge ran on the worker's own model. " +
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
         "When rows in the same tier split in their results and no existing tier fits the split, propose adding a tier and moving one " +
         "row into it (op add_tier); write the new tier's description as the work that the tier below is not enough for and this tier is. " +
@@ -136,7 +140,7 @@ export const META_REVIEW_SUBJECTS = {
         "earlier proposals on it, with their answers, amendments and comments, with read_routing_settings. Do not re-propose what was " +
         "amended. A rejected proposal always carries the human's reason in its comment: propose it again only when that reason no longer holds.",
       completion_criteria:
-        "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
+        "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
     },
     material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],
     verbs: ROUTING_META_REVIEW_VERBS,
@@ -211,6 +215,54 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
       `${window.upTo} — the registrations of the previous completed ${subject} meta-review and of this one. Each row is one JSON object with the fields of the read verb named under its heading.`,
     ...parts.flatMap(([heading, note, rows, empty]) => ["", `### ${heading}`, "", note, ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row)))]),
   ].join("\n");
+}
+
+/** 完了の verb が読む項目の全体(ADR 0278 追記4): その task の最新の材料の記録 —— 再 spawn なら agent が最後に読んだ表。記録が無ければ
+ *  (spawn を通っていない)項目が読めないので拒む。 */
+export function injectedMaterial<S extends MetaReviewSubject>(db: Db, reviewId: string, subject: S) {
+  const record = latestEventOfTask(db, reviewId, "meta_review_material_injected");
+  if (record?.payload.subject !== subject) throw new DomainError(`material was not injected into this ${subject} meta-review's session, so its items to judge cannot be read`);
+  return { id: record.id, items: record.payload.items as Extract<EventPayload, { kind: "meta_review_material_injected"; subject: S }>["items"] };
+}
+
+/** meta-review の完了の骨格(ADR 0278 決定2〜4・追記4、memory と routing が共有): 開いている項目 = 注入した一覧 ∩ `open`(今も項目で、
+ *  この review の行為も記録の後の誰かの行為も判断済みにしていないもの)。足りない項目と、注入した一覧に無い対象は名指して拒み、何も記録しない。
+ *  注入済みでも開いていない項目への値は受け取って何もしない。値1つが対象を名指す型つきの判断ログ1行で、文は盤面が「<値>: <対象> — <reason>」で
+ *  組み、完了と同じ transaction で書く。`items` は項目の一覧、`judging` は主題ごとの綴り —— 項目と判断を突き合わせる鍵、文の対象の綴り、
+ *  判断の型(kind と value)と、その行が名指す対象。 */
+export function completeMetaReview<I, J = I>(
+  db: Db,
+  review: Task,
+  { judgments, handoff }: { judgments: ReadonlyArray<J & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  items: { injected: readonly I[]; open: readonly I[] },
+  judging: { key: (item: I | J) => string; label: (item: I) => string; object: (item: I) => object } & ({ kind: "memory"; value: "left_as_is" } | { kind: "routing"; value: "no_change" }),
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  const injected = new Set(items.injected.map(judging.key));
+  const open = new Map(items.open.flatMap((item) => (injected.has(judging.key(item)) ? [[judging.key(item), item] as const] : [])));
+  const given = new Map(judgments.map((judgment) => [judging.key(judgment), judgment]));
+  const unknown = [...given.keys()].filter((key) => !injected.has(key));
+  const unjudged = [...open.keys()].filter((key) => !given.has(key));
+  const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as ${judging.value}`];
+  if (refusals.some(Boolean)) throw new DomainError(refusals.filter(Boolean).join("; "));
+  return db.transaction(() => {
+    for (const [key, item] of open) {
+      const { reason } = given.get(key)!;
+      const said = reason === undefined || whyBlank(reason) ? undefined : normalizeText(reason);
+      // 対象の形は主題の object が決める —— kind と value の組は judging の型が縛る
+      const judgment = { kind: judging.kind, ...judging.object(item), value: judging.value, ...(said && { reason: said }) } as Judgment;
+      appendEvent(db, {
+        taskId: review.id,
+        workerId,
+        origin,
+        payload: { kind: "decision_logged", line: `${judging.value}: ${judging.label(item)}${said ? ` — ${said}` : ""}`, judgment },
+        at: now,
+      });
+    }
+    return finishTask(db, review, handoff, workerId, now, origin);
+  })();
 }
 
 /** 窓の中の主題の材料の event(id 順)。同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、

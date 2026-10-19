@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -75,7 +75,7 @@ it("提案 question が open でも meta-review は完了できる", async () =>
   try {
     const questionId = await propose();
 
-    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await completeRoutingReviewViaMcp(t, review.id)).isError).not.toBe(true);
     expect(await task(review.id)).toMatchObject({ status: "done" });
     expect(await task(questionId)).toMatchObject({ status: "todo" });
   } finally {

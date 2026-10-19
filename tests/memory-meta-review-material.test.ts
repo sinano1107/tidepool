@@ -381,6 +381,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       precedents: [9005],
       precedent_entries: [routingShown],
       proposals: [],
+      items: [],
     },
     at,
   });

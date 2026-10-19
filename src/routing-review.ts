@@ -1,7 +1,7 @@
 import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
+import { type EventOrigin, type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
   assertPosition,
   assertRowFits,
@@ -13,24 +13,28 @@ import {
   loadExecutionSettingTable,
   matchesRowKey,
   parseRoutingRowChange,
+  type RowKey,
   readExecutionSettings,
   rowName,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
+import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
   assertInterviewFields,
+  type HandoffDoc,
   type InterviewProposal,
   type InterviewTarget,
+  listChildren,
   type RegistryProposal,
   type RoutingAddTierProposal,
   type RoutingProposal,
   registerTask,
+  type Task,
   type TierDescriptionProposal,
 } from "./tasks.js";
-import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
+import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNameOf, tierNames } from "./tier.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)。どれも既定の `since_watermark` は読み手と同主題の
  *  前回の登録の watermark(event id)で、応答予算と続き(next)で返す(ADR 0195)。 */
@@ -231,14 +235,130 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   });
 }
 
-/** routing の材料の節の6つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
+/** routing meta-review の評価の対象(ADR 0278 決定5・追記5): 行は (provider, model, effort) の3欄、段は盤面の中の照合なので id で名指す
+ *  (ADR 0200 決定2)。判断ログの行の `judgment` が持つ。 */
+export type RoutingObject = { row: RowKey } | { agent: string } | { tier_id: TierId } | { learner: true };
+/** 判断を要する項目(材料の部分と注入の記録): 対象に、盤面が読み物として行には今の表の段を、段にはその名前を添える。 */
+export type RoutingJudgmentItem = { row: RowKey; tier: Tier } | { agent: string } | { tier_id: TierId; tier: Tier } | { learner: true };
+/** complete_routing_review が受ける判断の鍵(節の Items to judge が並べる形): 段は名前で名指し、行に添えた段は省ける。 */
+export type RoutingJudgmentKey = { row: RowKey; tier?: Tier } | { agent: string } | { tier: Tier } | { learner: true };
+
+/** 項目を verb の鍵の形に(節の Items to judge が並べる形)。 */
+export const judgmentKey = (item: RoutingJudgmentItem): RoutingJudgmentKey => ("tier_id" in item ? { tier: item.tier } : item);
+
+/** 対象を文面で名指す綴り(拒否文と判断ログの文)。行は rowName、段は名前。 */
+const itemName = (item: { row: Parameters<typeof rowName>[0] } | { agent: string } | { tier: Tier } | { learner: true }) =>
+  "row" in item ? rowName(item.row) : "agent" in item ? `agent ${item.agent}` : "tier" in item ? `tier ${item.tier}` : "the learner";
+
+/** この review の提案 question が判断済みにする対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、
+ *  `tier_description` は段、`promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。 */
+function proposedObjects(db: Db, reviewId: string): RoutingObject[] {
+  return listChildren(db, reviewId).flatMap(({ question_proposal: proposal }): RoutingObject[] => {
+    if (proposal?.kind === "registry") return [{ agent: proposal.agent }];
+    if (proposal?.kind !== "routing") return [];
+    switch (proposal.op) {
+      case "row":
+      case "add_tier":
+        return [{ row: proposal.row }];
+      case "tier_description":
+        return [{ tier_id: proposal.tier }];
+      case "interview":
+        return proposal.pin.rows.map((row) => ({ row }));
+      case "promote":
+      case "demote":
+        return [{ learner: true }];
+      default:
+        return proposal satisfies never;
+    }
+  });
+}
+
+/** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
+ *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない)、学習器は昇格 / 降格。段の event は名前で名指すので、
+ *  注入した名前から改名をたどって id に引く。 */
+function actedSince(db: Db, recordId: number, injectedTiers: ReadonlyMap<TierId, Tier>): RoutingObject[] {
+  const tierIds = new Map([...injectedTiers].map(([id, name]) => [name, id]));
+  return listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
+    if (p.kind === "agent_tier_changed") return [{ agent: p.agent }];
+    if (p.setting === "row") return [{ row: p.row }, ...(p.key ? [{ row: p.key }] : [])];
+    if (p.setting === "delete_row") return [{ row: p }];
+    if (p.setting === "learner_promoted") return [{ learner: true }];
+    const id = "name" in p ? tierIds.get(p.name) : undefined;
+    if (id === undefined) return [];
+    if (p.setting === "rename_tier") {
+      tierIds.delete(p.name);
+      tierIds.set(p.to, id);
+    }
+    return p.setting === "edit_tier" && p.description !== undefined ? [{ tier_id: id }] : [];
+  });
+}
+
+/** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
+ *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。段は id で同じ項目で、鍵は注入した名前 —— spawn 後の
+ *  改名は行為ではない。文には行なら今の段を、段なら今の名前を書く。`agents` は registry の agent 一覧(今の項目の agent の絞り込み)。 */
+export function completeRoutingReview(
+  db: Db,
+  review: Task,
+  input: { judgments: Array<RoutingJudgmentKey & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+  agents?: readonly RegistryAgent[],
+): Task {
+  if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
+  const record = injectedMaterial(db, review.id, "routing");
+  const injectedTiers = new Map(record.items.flatMap((item) => ("tier_id" in item ? [[item.tier_id, item.tier] as const] : [])));
+  const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
+    itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
+  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
+  const open = routingMaterial(db, metaReviewWindow(db, review.id), [], agents).parts.items.filter((item) => !judged.has(key(item)));
+  return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
+    db,
+    review,
+    input,
+    { injected: record.items, open },
+    {
+      key,
+      label: (item) => ("row" in item ? `${itemName(item)} (${item.tier})` : itemName(item)),
+      kind: "routing",
+      value: "no_change",
+      object: (item): RoutingObject => ("row" in item ? { row: item.row } : "tier_id" in item ? { tier_id: item.tier_id } : item),
+    },
+    workerId,
+    now,
+    origin,
+  );
+}
+
+/** 判断を要する項目を材料の部分から導く(ADR 0278 決定5・追記5): 行は、session に辿り着いた乖離 shadow 行で走った行・人間が変えた行・
+ *  初観測のセルの和集合で、今の表にある行だけ —— 行の無い対象には verb が届かない。agent は段の出所が agent の配分評価の集計の agent の
+ *  うち agent_tier が届くもの(registry にあり、組み込みでなく、一番下の段でない)、段は出所が task の集計の生きている段、学習器は毎周期。 */
+function judgmentItems(
+  db: Db,
+  parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows> } & ReturnType<typeof cellRows>,
+  registry: readonly RegistryAgent[] = [],
+): RoutingJudgmentItem[] {
+  const table = loadExecutionSettingTable(db);
+  const rows = new Map<string, RoutingJudgmentItem>();
+  for (const key of [...parts.shadow.flatMap((s) => (s.worker_spawned_event_id === null ? [] : [s.actual])), ...parts.rows.map((r) => r.row), ...parts.cells.map((c) => c.cell)]) {
+    const row = table.find((r) => matchesRowKey(r, key));
+    if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
+  }
+  const { groups } = parts.allocations;
+  const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
+  const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" && lowerable(g.agent) ? [g.agent] : [])));
+  const tiers = new Set(groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])));
+  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
+}
+
+/** routing の材料の節の7つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
  *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、窓の中で
- *  決着した提案。行はそれぞれの読み口と同じ。異議つき判断の行は memory.ts の list_precedents の行を呼び手が渡す(import の循環を避ける)。 */
-export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, precedents: P[]) {
+ *  決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断の行は memory.ts の list_precedents の行を呼び手が渡す(import の循環を避ける)。 */
+export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, precedents: P[], agents?: readonly RegistryAgent[]) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
-  const parts = {
+  const read = {
     settings: readExecutionSettings(db),
     shadow: shadow.filter((row) => row.diverged),
     shadow_rows: shadow.length,
@@ -249,6 +369,7 @@ export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, p
     precedents,
     proposals: listRoutingProposals(db, window),
   };
+  const parts = { ...read, items: judgmentItems(db, read, agents) };
   const section = materialSection("routing", window, [
     [
       "Table and settings",
@@ -273,8 +394,29 @@ export function routingMaterial<P>(db: Db, window: Required<MetaReviewWindow>, p
     ],
     ["Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"],
     ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
+    [
+      "Items to judge",
+      "The objects this cycle needs a judgment on, keyed as complete_routing_review takes them: the rows that ran in the diverged shadow rows, the " +
+        "rows humans changed and the rows of the new cells (a row is keyed by provider, model and effort; the tier beside it is the tier it is in, " +
+        "for reading), the agents of the allocation reviews under an agent's default tier, the tiers of those under a task's requested tier, and " +
+        "the learner. A new cell with no row in the table is not an item. Act on each item with propose_routing_change, or pass it to " +
+        "complete_routing_review as no_change.",
+      parts.items.map(judgmentKey),
+      "no items to judge",
+    ],
   ]);
   return { subject: "routing" as const, section, parts };
+}
+
+/** registry の agent の、段の提案が読む欄(AgentView も registry の定義も持つ)。 */
+export type RegistryAgent = { name: string; tier?: string; builtin?: boolean };
+
+/** agent の今の段(書いていなければ盤面既定)と、その1段下(ADR 0150 決定5)。「1段下」は盤面の一覧の順序(ADR 0200 決定4)で、
+ *  一番下の段なら undefined —— agent_tier の門と Items to judge の agent が同じこの1本を読む。 */
+function tierStep(db: Db, agent: RegistryAgent): { from: Tier; below: Tier | undefined } {
+  const tiers = tierNames(db);
+  const from = agent.tier ?? boardDefaultTier(db);
+  return { from, below: tiers[tiers.indexOf(from) - 1] };
 }
 
 /** agent の tier の提案の門と pin(issue #920 / spec #916 B・C): 組み込みでない agent を、今の tier(省略は盤面既定)のちょうど
@@ -286,10 +428,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const agent = agents.find((a) => a.name === name);
   if (!agent) throw new DomainError(`unknown agent: ${name}`);
   if (agent.builtin) throw new DomainError(`agent ${name} is built-in; its definition is the board's code, not a registry file`);
-  // 「1段下」は盤面の一覧の順序(ADR 0200 決定4)
-  const tiers = tierNames(db);
-  const from = agent.tier ?? boardDefaultTier(db);
-  const below = tiers[tiers.indexOf(from) - 1];
+  const { from, below } = tierStep(db, agent);
   if (to !== below) throw new DomainError(`an agent's tier is lowered by exactly one step: ${name} is at ${from}, so the only target is ${below ?? "none (already the lowest tier)"}`);
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
