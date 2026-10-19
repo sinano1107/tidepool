@@ -854,7 +854,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       "complete_rca",
       {
         description:
-          "Complete this RCA, in one call. findings groups the objected entries your review was opened on (its material) by root cause: " +
+          "Complete this RCA, in one call. findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
           "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
           "repeated or non-material entry is refused, named by id, and nothing is recorded. The board records one decision line per finding " +
           "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries, and the repair " +

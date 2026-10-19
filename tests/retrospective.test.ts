@@ -131,11 +131,11 @@ it.each(["capability", "task_ambiguity", "missing_information"] as const)(
   );
   expect(kids.find((x: any) => x.title === "rca (self): mixed").purpose).toBe(
     'objections raised against decisions fake-worker made on "mixed":\n\n' +
-      "> skipped the fixtures\n- bring the fixtures back",
+      `> entry ${entries[1].id}: skipped the fixtures\n- bring the fixtures back`,
   );
   expect(kids.find((x: any) => x.title === "rca (auditor): mixed").purpose).toBe(
     'objections raised against decisions of "mixed":\n\n' +
-      "> skipped the fixtures\n- bring the fixtures back",
+      `> entry ${entries[1].id}: skipped the fixtures\n- bring the fixtures back`,
   );
   expect((await attributions(t, task.id)).map((e: any) => [e.payload.entry_id, e.payload.cause])).toEqual([
     [entries[0].id, "preference"],
