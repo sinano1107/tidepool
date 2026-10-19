@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { latestEventOfTask } from "../src/events.js";
+import { appendEvent, latestEventOfTask } from "../src/events.js";
 import { applyExecutionSettingsChange, loadExecutionSettingTable, matchesRowKey } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
 import { metaReviewWindow, registerDueMetaReviews } from "../src/meta-review.js";
@@ -34,7 +34,10 @@ it("routing meta-review の型つきの判断の行への異議は routing_repai
   expect(repairs.map((child) => child.type)).toEqual(["routing_repair"]);
   expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ objection_event_ids: objections });
 
+  // 自由文の log_decision の行(judgment を持たない)も対象を名指さない
+  const freeText = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "the table looks fine overall" } });
   raiseObjection(db, completed, "you should have proposed something", at);
+  raiseObjection(db, freeText, "it does not", at);
   commitTriage(db, at);
 
   expect(listChildren(db, review.id).filter((child) => child.type === "routing_repair" || child.type === "work")).toHaveLength(1);
@@ -136,6 +139,7 @@ it("修理子の下の提案 question は open な間は次の routing meta-revi
   const repair = listChildren(db, review.id).find((child) => child.type === "routing_repair")!;
   const { question_id } = proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, rationale: "r" }, "auditor", at);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair.id);
+  // 次の周期の材料(人間が変えた行)—— 材料が無ければ open な question が無くても登録されず、門の釘にならない
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "claude-opus-5", effort: "high", price_in: 5, price_out: 25 } }, "mcp", at);
   const afterPeriod = new Date(at.getTime() + 8 * 24 * 60 * 60 * 1000);
   const next = () => listBoard(db).find((task) => task.meta_review_subject === "routing" && task.status === "todo");

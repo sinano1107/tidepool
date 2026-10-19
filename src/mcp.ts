@@ -556,7 +556,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
   // 登録せず(ADR 0272 決定3)、routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の
-  // verb を登録しない(ADR 0279 決定4 —— routing の判断の行を運べば routing の読み口と提案 verb は下で足す)。統合レビューは complete_task の代わりに complete_integration_review を、memory meta-review は
+  // verb を登録しない(ADR 0279 決定4 —— routing の判断の行を運べば routing の読み口と提案 verb は下で足す)。統合レビューは
+  // complete_task の代わりに complete_integration_review を、memory meta-review は
   // complete_memory_review を、routing meta-review は complete_routing_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
@@ -1362,7 +1363,7 @@ function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaRe
   );
 }
 
-/** Precedent の読み口: 両主題の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
+/** Precedent の読み口: 両主題の meta-review・interview の root(ADR 0273 決定2)・両方の修理子(ADR 0279 決定3・4)が共有する。 */
 function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "list_precedents",
@@ -1391,7 +1392,7 @@ const since_watermark = z
   .optional()
   .describe("An event id; defaults to the previous completed routing meta-review's registration (for an Interview or a repair, the board's start).");
 
-/** shadow 行と配分の読み口: 主題 routing の meta-review と interview の root(ADR 0273 決定2)が共有する。 */
+/** shadow 行と配分の読み口: 主題 routing の meta-review・interview の root(ADR 0273 決定2)・routing_repair(ADR 0279 決定4)が共有する。 */
 function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "list_routing_shadow",

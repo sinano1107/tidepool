@@ -286,14 +286,15 @@ function proposalObjects(proposal: RoutingProposal | RegistryProposal): RoutingO
 const proposedObjects = (db: Db, reviewId: string): RoutingObject[] =>
   listChildren(db, reviewId).flatMap(({ question_proposal: p }) => (p?.kind === "routing" || p?.kind === "registry" ? proposalObjects(p) : []));
 
-/** routing_repair の提案の門(ADR 0279 決定4): 提案が写す対象(proposalObjects)は、修理子が運ぶ判断の行が名指す対象だけ。段は id で
- *  名指すので今の名前で突き合わせる。修理子でない提案者(routing meta-review —— 主題の門は MCP の登録が持つ)は門を持たない。 */
-function requireNamed(db: Db, proposer: string, proposal: RoutingProposal | RegistryProposal): void {
-  if (getTask(db, proposer)?.type !== "routing_repair") return;
-  const name = (object: RoutingObject) => itemName("tier_id" in object ? { tier: tierNameOf(db, object.tier_id) } : object);
-  const named = new Set(repairJudgments(db, proposer, "routing").map(name));
-  const outside = proposalObjects(proposal).find((object) => !named.has(name(object)));
-  if (outside) throw new DomainError(`${name(outside)} is not named by the objected judgment: a routing repair proposes only on what that judgment names`);
+/** routing_repair の提案の門(ADR 0279 決定4): 提案が写す対象(proposalObjects)は、修理子が運ぶ判断の行が名指す対象だけ。段は
+ *  名前でなく id で突き合わせる —— 名前は生きている段の中でだけ一意で、退役した段の名前は後から別の段が取れる。拒否文は今の名前で名指す。 */
+function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal | RegistryProposal): void {
+  const key = (object: RoutingObject) => ("tier_id" in object ? `tier_id ${object.tier_id}` : itemName(object));
+  const named = new Set(repairJudgments(db, repairId, "routing").map(key));
+  const outside = proposalObjects(proposal).find((object) => !named.has(key(object)));
+  if (!outside) return;
+  const name = itemName("tier_id" in outside ? { tier: tierNameOf(db, outside.tier_id) } : outside);
+  throw new DomainError(`${name} is not named by the objected judgment: a routing repair proposes only on what that judgment names`);
 }
 
 /** routing_repair の verb(ADR 0279 決定4): routing の判断の行を運べば routing meta-review の読み口と提案 verb —— 修理子に指針の節は
@@ -605,7 +606,7 @@ function interviewProposal(
 
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
  *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、段の追加と
- *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review(または routing_repair —— 門は requireNamed)の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
+ *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review(または routing_repair —— 門は requireRepairReach)の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
  *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段、interview なら根拠の行の全欄。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
  *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。`assertWorkspaceKnown` は interview の実環境が
@@ -646,7 +647,8 @@ export function proposeRoutingChange(
     throw new DomainError(`op ${input.op} takes no hypothesis, measured_work, targets or workspace`);
   }
   // 修理子の提案は修理子の名で人間に出す(ADR 0279 決定4)
-  const proposer = getTask(db, metaReviewId)?.type === "routing_repair" ? "The routing repair" : "The routing meta-review";
+  const byRepair = getTask(db, metaReviewId)?.type === "routing_repair";
+  const proposer = byRepair ? "The routing repair" : "The routing meta-review";
   let proposal: RoutingProposal | RegistryProposal;
   let title: string;
   let diff: string[];
@@ -751,7 +753,7 @@ export function proposeRoutingChange(
     ];
     purpose = `${proposer} proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
   }
-  requireNamed(db, metaReviewId, proposal);
+  if (byRepair) requireRepairReach(db, metaReviewId, proposal);
   const detail = [...diff, "", `Rationale: ${input.rationale}`, "", "While this question is open, the next routing meta-review is not registered."].join("\n");
   const question = registerTask(
     db,

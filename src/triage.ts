@@ -17,6 +17,7 @@ import {
   sessionSpawnOf,
   taskDecisionLog,
 } from "./events.js";
+import type { MetaReviewSubject } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
@@ -418,7 +419,7 @@ function bundleObjections(
     };
     // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)。meta-review の型つきの判断の行は
     // 対象を名指すので主題の修理子に束ねる —— memory は書き込みの行と同じ memory_repair 1本、routing は routing_repair(ADR 0279 決定3・4)
-    const judges = (pair: ObjectionPair, kind: "memory" | "routing") => pair.entry.payload.kind === "decision_logged" && pair.entry.payload.judgment?.kind === kind;
+    const judges = (pair: ObjectionPair, kind: MetaReviewSubject) => pair.entry.payload.kind === "decision_logged" && pair.entry.payload.judgment?.kind === kind;
     const judgesMemory = (pair: ObjectionPair) => judges(pair, "memory");
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written" || judgesMemory(pair));
     const routingRows = pairs.filter((pair) => judges(pair, "routing"));

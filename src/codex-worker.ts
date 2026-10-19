@@ -1239,7 +1239,7 @@ export class CodexWorker implements WorkerAdapter {
       enabledTools: [
         ...(subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : routingRepairVerbs(this.options.db, task.id))]
+          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : task.type === "routing_repair" ? routingRepairVerbs(this.options.db, task.id) : [])]
         ).filter((verb) => !withheld.includes(verb)),
         ...verbs.added,
       ],

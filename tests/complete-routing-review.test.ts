@@ -22,8 +22,6 @@ function register(db: Db, done = false): Task {
   return getTask(db, taskId)!;
 }
 
-const OPUS = OPUS_ROW;
-const deckhand = DECKHAND_AGENT;
 
 /** 前回の後に opus の行の session が2つ走った routing meta-review(setup、tests/harness.ts の routedOpusSessions)。項目は opus の行・
  *  agent deckhand・段 standard・学習器。 */
@@ -32,11 +30,11 @@ function cycle() {
   register(db, true);
   const evidence = routedOpusSessions(db, at);
   const review = register(db);
-  return { db, review, evidence, injected: injectRoutingMaterial(db, review.id, "auditor", at, [deckhand]) };
+  return { db, review, evidence, injected: injectRoutingMaterial(db, review.id, "auditor", at, [DECKHAND_AGENT]) };
 }
 
 const complete = (db: Db, review: Task, judgments: Parameters<typeof completeRoutingReview>[2]["judgments"]) =>
-  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", routingPrecedents(db, review.id), [deckhand]);
+  completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", routingPrecedents(db, review.id), [DECKHAND_AGENT]);
 
 it("routing meta-review の verb の差し替えは complete_task を伏せ complete_routing_review を足す", () => {
   const { db, review } = cycle();
@@ -60,9 +58,9 @@ it("注入の記録は評価の対象を運び、段は id で名指して注入
   const { db, review, injected } = cycle();
 
   expect(latestEventOfTask(db, review.id, "meta_review_material_injected")!.payload).toMatchObject({
-    items: [{ row: OPUS, tier: "standard" }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "standard"), tier: "standard" }, { learner: true }],
+    items: [{ row: OPUS_ROW, tier: "standard" }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "standard"), tier: "standard" }, { learner: true }],
   });
-  expect(injected).toEqual([{ row: OPUS, tier: "standard" }, { agent: "deckhand" }, { tier: "standard" }, { learner: true }]);
+  expect(injected).toEqual([{ row: OPUS_ROW, tier: "standard" }, { agent: "deckhand" }, { tier: "standard" }, { learner: true }]);
 });
 
 it("値も提案も無い対象があれば unjudged で名指して拒まれ、注入した一覧に無い対象も名指して拒まれ、どちらも何も記録しない", () => {
@@ -71,7 +69,7 @@ it("値も提案も無い対象があれば unjudged で名指して拒まれ、
 
   expect(() => complete(db, review, [])).toThrow("unjudged: anthropic / claude-opus-5-5 at effort high, agent deckhand, tier standard, the learner —");
   expect(() =>
-    complete(db, review, [{ row: OPUS }, { agent: "deckhand" }, { tier: "standard" }, { learner: true }, { row: { ...OPUS, effort: "max" } }, { agent: "kimi" }, { tier: "frontier" }]),
+    complete(db, review, [{ row: OPUS_ROW }, { agent: "deckhand" }, { tier: "standard" }, { learner: true }, { row: { ...OPUS_ROW, effort: "max" } }, { agent: "kimi" }, { tier: "frontier" }]),
   ).toThrow("not items to judge: anthropic / claude-opus-5-5 at effort max, agent kimi, tier frontier");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
@@ -83,7 +81,7 @@ it("窓で異議された前の判断の行が名指す行・agent・段は項�
   const sonnet = { provider: "anthropic" as const, model: "claude-sonnet-5-5", effort: "high" };
   for (const object of [{ row: sonnet }, { agent: "deckhand" }, { tier_id: tierIdOf(db, "frontier") }]) objectedJudgment(db, previous.id, { kind: "routing", value: "no_change", ...object }, at);
   const review = register(db);
-  injectRoutingMaterial(db, review.id, "auditor", at, [deckhand]);
+  injectRoutingMaterial(db, review.id, "auditor", at, [DECKHAND_AGENT]);
 
   expect(() => complete(db, review, [{ learner: true }])).toThrow("unjudged: anthropic / claude-sonnet-5-5 at effort high, agent deckhand, tier frontier —");
   expect(complete(db, review, [{ row: sonnet }, { agent: "deckhand" }, { tier: "frontier" }, { learner: true }]).status).toBe("done");
@@ -91,17 +89,17 @@ it("窓で異議された前の判断の行が名指す行・agent・段は項�
 
 /** 提案の op ごとに、その提案が覆う対象(ADR 0278 決定5)。 */
 const proposals: Array<[op: string, covers: object, propose: (db: Db, review: Task, evidence: number[]) => unknown]> = [
-  ["row", { row: OPUS }, (db, review) => proposeRoutingChange(db, review.id, { op: "row", row: OPUS, change: { tier: "frontier" }, rationale: "r" }, "auditor", at)],
+  ["row", { row: OPUS_ROW }, (db, review) => proposeRoutingChange(db, review.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, rationale: "r" }, "auditor", at)],
   [
     "add_tier",
-    { row: OPUS },
+    { row: OPUS_ROW },
     (db, review, evidence) =>
-      proposeRoutingChange(db, review.id, { op: "add_tier", tier: "careful", description: "Careful work.", position: 2, row: OPUS, evidence, rationale: "r" }, "auditor", at),
+      proposeRoutingChange(db, review.id, { op: "add_tier", tier: "careful", description: "Careful work.", position: 2, row: OPUS_ROW, evidence, rationale: "r" }, "auditor", at),
   ],
   [
     "agent_tier",
     { agent: "deckhand" },
-    (db, review, evidence) => proposeRoutingChange(db, review.id, { op: "agent_tier", agent: "deckhand", to: "economy", evidence: [evidence[0]!], rationale: "r" }, "auditor", at, () => [deckhand]),
+    (db, review, evidence) => proposeRoutingChange(db, review.id, { op: "agent_tier", agent: "deckhand", to: "economy", evidence: [evidence[0]!], rationale: "r" }, "auditor", at, () => [DECKHAND_AGENT]),
   ],
   [
     "tier_description",
@@ -120,12 +118,12 @@ const proposals: Array<[op: string, covers: object, propose: (db: Db, review: Ta
   ],
   [
     "interview",
-    { row: OPUS },
+    { row: OPUS_ROW },
     (db, review, evidence) =>
       proposeRoutingChange(
         db,
         review.id,
-        { op: "interview", hypothesis: "opus at effort max does the careful work", evidence: [evidence[0]!], tier: "standard", targets: [{ ...OPUS, effort: "max" }], workspace: "reef", rationale: "r" },
+        { op: "interview", hypothesis: "opus at effort max does the careful work", evidence: [evidence[0]!], tier: "standard", targets: [{ ...OPUS_ROW, effort: "max" }], workspace: "reef", rationale: "r" },
         "auditor",
         at,
       ),
@@ -145,7 +143,7 @@ it.each(proposals)("op %s の提案 question は %j を覆い、その対象に�
 });
 
 it.each([
-  ["人間が行を編集した", (db: Db) => applyExecutionSettingsChange(db, { setting: "row", key: OPUS, row: { ...OPUS, tier: "frontier", price_in: 5, price_out: 25 } }, "webui", at)],
+  ["人間が行を編集した", (db: Db) => applyExecutionSettingsChange(db, { setting: "row", key: OPUS_ROW, row: { ...OPUS_ROW, tier: "frontier", price_in: 5, price_out: 25 } }, "webui", at)],
   [
     "registry に agent の段が書かれた",
     (db: Db) =>
@@ -190,16 +188,16 @@ it("再 spawn で注入の記録が2つあれば最新の記録の項目を読�
   const db = openDb(":memory:");
   register(db, true);
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  const spawned = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null } });
+  const spawned = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null } });
   const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5, advisor: null, model_swaps: [], refusals: [], models: {} };
   appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
-  applyExecutionSettingsChange(db, { setting: "delete_row", ...OPUS }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "delete_row", ...OPUS_ROW }, "webui", at);
   const review = register(db);
   const first = injectRoutingMaterial(db, review.id, "auditor", at);
-  applyExecutionSettingsChange(db, { setting: "row", row: { ...OPUS, tier: "standard", price_in: 5, price_out: 25 } }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "row", row: { ...OPUS_ROW, tier: "standard", price_in: 5, price_out: 25 } }, "webui", at);
   const second = injectRoutingMaterial(db, review.id, "auditor", at);
 
-  expect([first, second]).toEqual([[{ learner: true }], [{ row: OPUS, tier: "standard" }, { learner: true }]]);
+  expect([first, second]).toEqual([[{ learner: true }], [{ row: OPUS_ROW, tier: "standard" }, { learner: true }]]);
   expect(() => complete(db, review, first)).toThrow("unjudged: anthropic / claude-opus-5-5 at effort high —");
 });
 
@@ -221,7 +219,7 @@ it("no_change の対象ごとに対象を名指す型つきの decision_logged �
 
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([
-    { kind: "decision_logged", line: "no_change: anthropic / claude-opus-5-5 at effort high (standard) — still fits", judgment: { kind: "routing", row: OPUS, value: "no_change", reason: "still fits" } },
+    { kind: "decision_logged", line: "no_change: anthropic / claude-opus-5-5 at effort high (standard) — still fits", judgment: { kind: "routing", row: OPUS_ROW, value: "no_change", reason: "still fits" } },
     { kind: "decision_logged", line: "no_change: agent deckhand", judgment: { kind: "routing", agent: "deckhand", value: "no_change" } },
     { kind: "decision_logged", line: "no_change: tier standard", judgment: { kind: "routing", tier_id: tierIdOf(db, "standard"), value: "no_change" } },
     { kind: "decision_logged", line: "no_change: the learner", judgment: { kind: "routing", learner: true, value: "no_change" } },
