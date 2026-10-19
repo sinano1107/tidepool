@@ -1,6 +1,6 @@
 # 後始末の起点は session の決着であり、上限到達による中断もその局面である
 
-**Status 追記: 決定3 の導出に2点目が加わった(2026-10-19、[ADR 0274](0274-a-pickup-that-a-resource-stop-keeps-from-ever-running-returns-to-the-queue-head-through-the-same-teardown-and-every-no-process-return-shares-one-handler.md) 決定3、issue #2229)—— process を1つも持たなかった session(ADR 0118 決定1)の後始末中の status は `todo` でエスカレーション・分解と同じ値になるので、その task の最後の pickup の後に盤面が刻んだ決着の event(`pickup_stopped` / `record_container_unwritable` / `spawn_failed`)から導く。status 以外の永続事実は足さない —— 読むのは既に残っている記録である。**
+**Status 追記: 決定3 の導出に2点目が加わった(2026-10-19、[ADR 0274](0274-a-pickup-that-a-resource-stop-keeps-from-ever-running-returns-to-the-queue-head-through-the-same-teardown-and-every-no-process-return-shares-one-handler.md) 決定3、issue #2229)—— process を1つも持たなかった session は status が `todo` でエスカレーション・分解と同じ値になるので、最後の pickup の後の決着の event から導く。永続事実は足さない。**
 
 2026-09-11 の grilling(issue #537)で決定。ADR 0109 決定5 が入れた後始末の backstop は「最終 verb は着地したのに root が exit しない」だけを見ており、上限到達による中断(ADR 0104)が回収済み観測を待つ区間はタスク種別の時間制限のまま残っていた。その梯子の底は failure question であり、ADR 0104 決定1 が消したはずの「retry 一択の問い」がそこから立つ。#531 の agent brief はこの拡張を項目に持っていたが、受け入れ基準が無く合意した seam の外の判断が要るため意図的に落とされた。現状調査と `file:line` は issue #537 のコメントに置く。
 
