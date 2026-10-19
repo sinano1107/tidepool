@@ -365,6 +365,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       cells: [9003],
       rows: [9004],
       proposals: [],
+      items: [],
     },
     at,
   });

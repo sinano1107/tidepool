@@ -579,6 +579,7 @@ export interface TaskVerbSwap {
     | "complete_audit"
     | "complete_integration_review"
     | "complete_memory_review"
+    | "complete_routing_review"
     | "complete_rca"
     | "pose_probe"
     | "complete_interview"
@@ -598,8 +599,8 @@ export interface TaskVerbSwap {
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
- *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。memory meta-review も同じ形で
- *  complete_memory_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
+ *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
+ *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
@@ -631,7 +632,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
-  if (task?.meta_review_subject === "memory") return { withheld: ["complete_task"], added: ["complete_memory_review"] };
+  if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [`complete_${task.meta_review_subject}_review`] };
   return { withheld: [], added: [] };
 }
 
@@ -1293,9 +1294,11 @@ export function completeTask(
       `an Interview root does not complete with complete_task: ${probeAccepted(db, task.id) ? POSED_INTERVIEW_EXITS : "pose its probe with pose_probe first"}`,
     );
   }
-  // ADR 0278 決定1: 統合レビューと memory meta-review も扉を問わず専用の verb でだけ終わる
+  // ADR 0278 決定1: 統合レビューと meta-review も扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
-  if (task.meta_review_subject === "memory") throw new DomainError("a memory meta-review does not complete with complete_task: complete it with complete_memory_review");
+  if (task.meta_review_subject) {
+    throw new DomainError(`a ${task.meta_review_subject} meta-review does not complete with complete_task: complete it with complete_${task.meta_review_subject}_review`);
+  }
   if (isRca(db, task.id)) throw new DomainError("an RCA does not complete with complete_task: complete it with complete_rca");
   // ADR 0278 決定6: agent の完了は判断を運ぶ —— work の全欄の要求は finishTask が持つ
   if (task.type !== "work" && task.assignee !== HUMAN_WORKER_ID && whyBlank(handoff?.outcome ?? "")) {

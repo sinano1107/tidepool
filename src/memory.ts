@@ -7,14 +7,24 @@ import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-langu
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, latestEventOfTask, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
-import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
+import {
+  completeMetaReview,
+  injectedMaterial,
+  inWindow,
+  type MetaReviewWindow,
+  materialEvents,
+  materialSection,
+  metaReviewSubjectOf,
+  metaReviewWindow,
+  previousMetaReviewWatermark,
+} from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, finishTask, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -2577,16 +2587,6 @@ function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
   return judgmentItems(db, window, memoryReads(db, window, readerHidden(db, reviewId)));
 }
 
-/** 完了の verb が読む項目の全体(ADR 0278 追記4): その task の最新の材料の記録が持つ、注入した「Items to judge」の一覧 —— 再 spawn
- *  なら agent が最後に読んだ表。actedSince は記録の後に誰であれ無効化したエントリ(引退・畳み・移動)—— 行為済み。記録が無ければ
- *  (spawn を通っていない)項目が読めないので拒む。 */
-function injectedItems(db: Db, reviewId: string) {
-  const record = latestEventOfTask(db, reviewId, "meta_review_material_injected");
-  if (record?.payload.subject !== "memory") throw new DomainError("material was not injected into this memory meta-review's session, so its items to judge cannot be read");
-  const invalidated = new Set(listEventsOfKinds(db, ["memory_entry_invalidated"], { after: record.id }).map(({ payload }) => payload.entry_id));
-  return { items: record.payload.items, actedSince: (item: MemoryJudgmentItem) => "entry" in item && invalidated.has(item.entry) };
-}
-
 /** この review の行為が判断済みにする項目(ADR 0278 決定3): 記憶の書き込みの行が作った・無効化したエントリと、提案 question が
  *  名指す candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は、作った Definition の path と、path を変えた移動の
  *  移動元・移動先の path(祖先や scope だけの移動は覆わない —— 枝の欠陥が残る)。 */
@@ -2607,43 +2607,30 @@ function actedOn(db: Db, reviewId: string) {
 
 const itemName = (item: MemoryJudgmentItem) => ("entry" in item ? `entry #${item.entry}` : `branch ${item.branch}`);
 
-/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為も記録の後の誰かの無効化も
- *  判断済みにしていないものに left_as_is が要る。足りない項目と、注入した一覧に無い id / path は名指して拒み、何も記録しない。注入済みでも
- *  開いていない項目への値は受け取って何もしない。据え置き1つが対象を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
+/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為も記録の後の誰かの無効化
+ *  (引退・畳み・移動)も判断済みにしていないものに left_as_is が要る(骨格は completeMetaReview)。 */
 export function completeMemoryReview(
   db: Db,
   review: Task,
-  { judgments, handoff }: { judgments: Array<MemoryJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  input: { judgments: Array<MemoryJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
   if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
-  const { items, actedSince } = injectedItems(db, review.id);
-  const injected = new Set(items.map(itemName));
+  const record = injectedMaterial(db, review.id, "memory");
+  const invalidated = new Set(listEventsOfKinds(db, ["memory_entry_invalidated"], { after: record.id }).map(({ payload }) => payload.entry_id));
   const covers = actedOn(db, review.id);
-  const open = new Map(
-    memoryJudgmentItems(db, review.id).flatMap((item) => (injected.has(itemName(item)) && !covers(item) && !actedSince(item) ? [[itemName(item), item] as const] : [])),
+  const open = memoryJudgmentItems(db, review.id).filter((item) => !covers(item) && !("entry" in item && invalidated.has(item.entry)));
+  return completeMetaReview(
+    db,
+    review,
+    input,
+    { injected: record.items, open, name: itemName, label: itemName, value: "left_as_is", judgment: (item, reason) => ({ kind: "memory", ...item, value: "left_as_is", ...(reason && { reason }) }) },
+    workerId,
+    now,
+    origin,
   );
-  const given = new Map(judgments.map((judgment) => [itemName(judgment), judgment]));
-  const unknown = [...given.keys()].filter((name) => !injected.has(name));
-  const unjudged = [...open.keys()].filter((name) => !given.has(name));
-  const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as left as is`];
-  if (refusals.some(Boolean)) throw new DomainError(refusals.filter(Boolean).join("; "));
-  return db.transaction(() => {
-    for (const [name, item] of open) {
-      const { reason } = given.get(name)!;
-      const said = reason === undefined || whyBlank(reason) ? undefined : normalizeText(reason);
-      appendEvent(db, {
-        taskId: review.id,
-        workerId,
-        origin,
-        payload: { kind: "decision_logged", line: `left_as_is: ${name}${said ? ` — ${said}` : ""}`, judgment: { kind: "memory", ...item, value: "left_as_is", ...(said && { reason: said }) } },
-        at: now,
-      });
-    }
-    return finishTask(db, review, handoff, workerId, now, origin);
-  })();
 }
 
 /** 材料の節の記録(task 帰属、memory_injected の直後に両 adapter が書く): 両端の watermark、部分ごとに載せた id、memory は注入した
@@ -2683,6 +2670,7 @@ export function recordMetaReviewMaterial(
             cells: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
             rows: material.parts.rows.map((r) => r.event_id),
             proposals: material.parts.proposals.map((p) => p.question_id),
+            items: material.parts.items,
           }
         : {
             ...common,

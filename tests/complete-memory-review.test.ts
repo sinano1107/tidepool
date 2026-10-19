@@ -49,11 +49,10 @@ function cycle(db = openDb(":memory:")) {
   return { db, written, ...injectedReview(db) };
 }
 
-it("memory meta-review の verb の差し替えは complete_task を伏せ complete_memory_review を足し、routing meta-review は差し替えない", () => {
+it("memory meta-review の verb の差し替えは complete_task を伏せ complete_memory_review を足す", () => {
   const { db, review } = cycle();
 
   expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["complete_task"], added: ["complete_memory_review"] });
-  expect(taskVerbSwap(db, register(db, "routing").id)).toEqual({ withheld: [], added: [] });
 });
 
 it.each([

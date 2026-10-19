@@ -28,7 +28,7 @@ function routingMaterialOf(db: Db, taskId: string) {
   return material;
 }
 
-it("材料の節は両端の watermark と5つの部分の見出しを持ち、材料の無い部分は空と書く", () => {
+it("材料の節は両端の watermark と6つの部分の見出しを持ち、材料の無い部分は空と書く —— 学習器は毎周期の項目", () => {
   const db = openDb(":memory:");
   register(db, true);
   const review = register(db);
@@ -49,6 +49,8 @@ it("材料の節は両端の watermark と5つの部分の見出しを持ち、�
     "(no new cells or changed rows)",
     "### Settled proposals",
     "(no settled proposals)",
+    "### Items to judge",
+    '{"learner":true}',
   ]) {
     expect(material.section).toContain(line);
   }
@@ -236,7 +238,7 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   expect(readRoutingSettings(db, {}).proposals.map((p) => p.question_id)).toEqual([early, rejected, stale, open, late, registry]);
 });
 
-it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、両端の watermark とトークン数を運ぶ", () => {
+it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、注入した Items to judge、両端の watermark とトークン数を運ぶ", () => {
   const { db, work, spawn, exit, allocate } = board();
   const previous = register(db, true);
   const task = work("t");
@@ -272,9 +274,72 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
       cells: [seen],
       rows: [rowEdit],
       proposals: [question],
+      items: material.parts.items,
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
     },
   });
   expect(material.tokens).toBeGreaterThan(0);
+});
+
+const haikuRow = { provider: "anthropic" as const, tier: "economy" as const, model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 };
+const haiku = { provider: haikuRow.provider, model: haikuRow.model, effort: haikuRow.effort };
+
+it("Items to judge は complete_routing_review の鍵で評価の対象を並べる —— session に辿り着いた乖離 shadow 行で走った行・人間が変えた行・初観測のセルの行(どれも今の表の段を添える)、出所が agent の集計の agent、出所が task の集計の段、学習器。配分評価の集計行そのものは項目にならない", () => {
+  const { db, work, spawn, exit, allocate } = board();
+  register(db, true);
+  const ran = work("ran");
+  recordShadow(db, ran, shadow(sol, executionSetting("anthropic", "claude-opus-5-5")), at);
+  allocate(ran, spawn(ran, "deckhand", executionSetting("anthropic", "claude-opus-5-5", { source: { tier: "agent", provider: "rank" } })), "overpowered");
+  // session に辿り着かなかった乖離 shadow 行は走っていない
+  recordShadow(db, work("never spawned"), shadow(opus, executionSetting("openai", "gpt-5.6-sol")), at);
+  applyExecutionSettingsChange(db, { setting: "row", row: haikuRow }, "webui", at);
+  const observed = work("observed");
+  const spawned = spawn(observed, "reef-crab", executionSetting("openai", "gpt-5.6-terra", { source: { tier: "task", provider: "rank" } }));
+  exit(observed, spawned);
+  allocate(observed, spawned, "appropriate");
+  const review = register(db);
+
+  const { parts, section } = routingMaterialOf(db, review);
+
+  expect(parts.items).toEqual([
+    { row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, tier: "standard" },
+    { row: haiku, tier: "economy" },
+    { row: { provider: "openai", model: "gpt-5.6-terra", effort: "high" }, tier: "economy" },
+    { agent: "deckhand" },
+    { tier: "economy" },
+    { learner: true },
+  ]);
+  expect(section).toContain("### Items to judge");
+  for (const item of parts.items) expect(section).toContain(JSON.stringify(item));
+});
+
+it("初観測のセルに今の表の行が無ければ(人間が行を消した)Items to judge に出ず、New cells には載る", () => {
+  const { db, work, spawn, exit } = board();
+  register(db, true);
+  const task = work("t");
+  exit(task, spawn(task, "deckhand", executionSetting("openai", "gpt-5.6-sol")));
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "gpt-5.6-sol", effort: "high" }, "webui", at);
+  const review = register(db);
+
+  const { parts } = routingMaterialOf(db, review);
+
+  expect(parts.cells.map((c) => c.cell.model)).toEqual(["gpt-5.6-sol"]);
+  expect(parts.items).toEqual([{ learner: true }]);
+});
+
+it("人間が足した行が同じ窓で走って初観測になれば、走った行・人間が変えた行・初観測の行が重なり、項目は1つ", () => {
+  const { db, work, spawn, exit } = board();
+  register(db, true);
+  applyExecutionSettingsChange(db, { setting: "row", row: haikuRow }, "webui", at);
+  const task = work("t");
+  const run = executionSetting("anthropic", "claude-haiku-5-5", { effort: "low" });
+  recordShadow(db, task, shadow(opus, run), at);
+  exit(task, spawn(task, "deckhand", run));
+  const review = register(db);
+
+  const { parts } = routingMaterialOf(db, review);
+
+  expect([parts.shadow.length, parts.rows.length, parts.cells.length]).toEqual([1, 1, 1]);
+  expect(parts.items).toEqual([{ row: haiku, tier: "economy" }, { learner: true }]);
 });

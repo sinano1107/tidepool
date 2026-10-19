@@ -9,7 +9,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { INTERVIEW_OUTCOMES } from "./events.js";
-import { PRIORITY_FIELD_DESCRIPTION, tierFieldDescriptions } from "./execution-setting.js";
+import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { assertMemoryReferencesKnown, assertReviewersKnown, assertWorkspaceKnown } from "./human-verbs.js";
@@ -55,7 +55,7 @@ import {
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
 import { completeRca, proposeFromObjection } from "./retrospective.js";
-import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
+import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
@@ -847,6 +847,42 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeMemoryReview(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }, resolveOnly),
+    );
+  }
+
+  if (added.includes("complete_routing_review")) {
+    server.registerTool(
+      "complete_routing_review",
+      {
+        description:
+          "Complete this routing meta-review, in one call. The Items to judge part of your material section lists the objects this cycle " +
+          "needs a judgment on: rows ({row: {provider, model, effort}}; the tier beside a row is for reading and may be left out) — the rows " +
+          "that ran in the diverged shadow rows, the rows humans changed and the rows of the new cells — agents ({agent: name}) and tiers " +
+          "({tier: name}) of the allocation reviews, and the learner ({learner: true}). That list, injected when this session started, is the " +
+          "whole set of items. An item is already judged when one of your proposals names it — op row or add_tier its row, agent_tier its " +
+          "agent, tier_description its tier, promote or demote the learner, interview the rows its evidence sessions ran on — or when anyone " +
+          "has changed it since this session started. Every other item goes in judgments, which means no_change, with an optional one-line " +
+          "reason; the board records one decision line per item. Listing an item already judged is harmless: it is accepted and records " +
+          "nothing. A missing item is refused as unjudged, and an object not on the injected list is refused; each is named, and nothing is " +
+          `recorded. The handoff takes the same fields as complete_task (${describeHandoffFields()}); none is required. ` +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: {
+          judgments: z.array(
+            z.union([
+              z.strictObject({ row: rowKeySchema.strict(), tier: z.string().optional(), reason: z.string().optional() }),
+              z.strictObject({ agent: z.string(), reason: z.string().optional() }),
+              z.strictObject({ tier: z.string(), reason: z.string().optional() }),
+              z.strictObject({ learner: z.literal(true), reason: z.string().optional() }),
+            ]),
+          ),
+          handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
+        },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const done = completeRoutingReview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
         }, resolveOnly),
     );

@@ -1,7 +1,7 @@
 import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
+import { type EventOrigin, type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
 import {
   assertPosition,
   assertRowFits,
@@ -13,21 +13,25 @@ import {
   loadExecutionSettingTable,
   matchesRowKey,
   parseRoutingRowChange,
+  type RowKey,
   readExecutionSettings,
   rowName,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { inWindow, type MetaReviewWindow, materialSection, previousMetaReviewWatermark } from "./meta-review.js";
+import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
   assertInterviewFields,
+  type HandoffDoc,
   type InterviewProposal,
   type InterviewTarget,
+  listChildren,
   type RegistryProposal,
   type RoutingAddTierProposal,
   type RoutingProposal,
   registerTask,
+  type Task,
   type TierDescriptionProposal,
 } from "./tasks.js";
 import { assertKnownTier, liveTierRows, proposalTierNames, type Tier, type TierId, tierIdOf, tierNames } from "./tier.js";
@@ -231,13 +235,104 @@ function listRoutingProposals(db: Db, window?: MetaReviewWindow) {
   });
 }
 
-/** routing の材料の節の5つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
- *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案。行はそれぞれの読み口と同じ。 */
+/** routing meta-review の評価の対象(ADR 0278 決定5・追記5): 行は (provider, model, effort) の3欄で名指す。判断ログの行の `judgment` が持つ。 */
+export type RoutingObject = { row: RowKey } | { agent: string } | { tier: Tier } | { learner: true };
+/** 判断を要する項目: complete_routing_review の鍵と同じ形で、行には盤面が今の表の段を読み物として添える(鍵ではなく、判断では省ける)。 */
+export type RoutingJudgmentItem = { row: RowKey; tier?: Tier } | Exclude<RoutingObject, { row: RowKey }>;
+
+/** 対象を文面で名指す綴り(拒否文と判断ログの文)。行は rowName。 */
+const itemName = (item: { row: Parameters<typeof rowName>[0] } | Exclude<RoutingObject, { row: RowKey }>) =>
+  "row" in item ? rowName(item.row) : "agent" in item ? `agent ${item.agent}` : "tier" in item ? `tier ${item.tier}` : "the learner";
+
+/** この review の提案 question が判断済みにする対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、
+ *  `tier_description` は段、`promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。 */
+function proposedObjects(db: Db, reviewId: string): Set<string> {
+  return new Set(
+    listChildren(db, reviewId).flatMap(({ question_proposal }) => {
+      if (question_proposal?.kind === "registry") return [itemName({ agent: question_proposal.agent })];
+      if (question_proposal?.kind !== "routing") return [];
+      const proposal = proposalTierNames(db, question_proposal) as RoutingProposal<Tier>;
+      if (proposal.op === "row" || proposal.op === "add_tier") return [itemName({ row: proposal.row })];
+      if (proposal.op === "tier_description") return [itemName({ tier: proposal.tier })];
+      if (proposal.op === "interview") return proposal.pin.rows.map((row) => itemName({ row }));
+      return [itemName({ learner: true })];
+    }),
+  );
+}
+
+/** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
+ *  への段の書き込み、段は説明の書き換え、学習器は昇格 / 降格。 */
+function actedSince(db: Db, recordId: number): Set<string> {
+  return new Set(
+    listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }) => {
+      if (p.kind === "agent_tier_changed") return [itemName({ agent: p.agent })];
+      if (p.setting === "row") return [itemName({ row: p.row }), ...(p.key ? [itemName({ row: p.key })] : [])];
+      if (p.setting === "delete_row") return [itemName({ row: p })];
+      if (p.setting === "edit_tier") return [itemName({ tier: p.name })];
+      return p.setting === "learner_promoted" ? [itemName({ learner: true })] : [];
+    }),
+  );
+}
+
+/** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
+ *  変更も判断済みにしていない対象に no_change が要る(骨格は completeMetaReview)。行の文には今の段を添える。 */
+export function completeRoutingReview(
+  db: Db,
+  review: Task,
+  input: { judgments: Array<RoutingJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
+  workerId: string,
+  now: Date,
+  origin: EventOrigin,
+): Task {
+  if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
+  const record = injectedMaterial(db, review.id, "routing");
+  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id)]);
+  const open = routingMaterial(db, metaReviewWindow(db, review.id)).parts.items.filter((item) => !judged.has(itemName(item)));
+  return completeMetaReview(
+    db,
+    review,
+    input,
+    {
+      injected: record.items,
+      open,
+      name: itemName,
+      label: (item) => ("row" in item ? `${itemName(item)} (${item.tier})` : itemName(item)),
+      value: "no_change",
+      judgment: (item, reason) => ({ kind: "routing", ...("row" in item ? { row: item.row } : item), value: "no_change", ...(reason && { reason }) }),
+    },
+    workerId,
+    now,
+    origin,
+  );
+}
+
+/** 判断を要する項目を材料の部分から導く(ADR 0278 決定5・追記5): 行は、session に辿り着いた乖離 shadow 行で走った行・人間が変えた行・
+ *  初観測のセルの和集合で、今の表にある行だけ —— 行の無い対象には verb が届かない。agent は段の出所が agent の配分評価の集計の agent、
+ *  段は出所が task の集計の生きている段、学習器は毎周期。 */
+function judgmentItems(
+  db: Db,
+  parts: { shadow: ReturnType<typeof shadowRows>; allocations: ReturnType<typeof allocationRows> } & ReturnType<typeof cellRows>,
+): RoutingJudgmentItem[] {
+  const table = loadExecutionSettingTable(db);
+  const rows = new Map<string, RoutingJudgmentItem>();
+  for (const key of [...parts.shadow.flatMap((s) => (s.worker_spawned_event_id === null ? [] : [s.actual])), ...parts.rows.map((r) => r.row), ...parts.cells.map((c) => c.cell)]) {
+    const row = table.find((r) => matchesRowKey(r, key));
+    if (row && !rows.has(rowName(row))) rows.set(rowName(row), { row: { provider: row.provider, model: row.model, effort: row.effort }, tier: row.tier });
+  }
+  const { groups } = parts.allocations;
+  const agents = new Set(groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])));
+  const tiers = new Set(groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])));
+  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier })), { learner: true }];
+}
+
+/** routing の材料の節の6つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
+ *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、窓の中で決着した提案、判断を要する項目。
+ *  行はそれぞれの読み口と同じ。 */
 export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
-  const parts = {
+  const read = {
     settings: readExecutionSettings(db),
     shadow: shadow.filter((row) => row.diverged),
     shadow_rows: shadow.length,
@@ -247,6 +342,7 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
     rows,
     proposals: listRoutingProposals(db, window),
   };
+  const parts = { ...read, items: judgmentItems(db, read) };
   const section = materialSection("routing", window, [
     [
       "Table and settings",
@@ -270,6 +366,16 @@ export function routingMaterial(db: Db, window: Required<MetaReviewWindow>) {
       "no new cells or changed rows",
     ],
     ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
+    [
+      "Items to judge",
+      "The objects this cycle needs a judgment on, keyed as complete_routing_review takes them: the rows that ran in the diverged shadow rows, the " +
+        "rows humans changed and the rows of the new cells (a row is keyed by provider, model and effort; the tier beside it is the tier it is in, " +
+        "for reading), the agents of the allocation reviews under an agent's default tier, the tiers of those under a task's requested tier, and " +
+        "the learner. A new cell with no row in the table is not an item. Act on each item with propose_routing_change, or pass it to " +
+        "complete_routing_review as no_change.",
+      parts.items,
+      "no items to judge",
+    ],
   ]);
   return { subject: "routing" as const, section, parts };
 }

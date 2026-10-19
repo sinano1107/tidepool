@@ -536,8 +536,8 @@ export function pinnedTargetRowQuarantined(db: Db, task: Pick<Task, "interview_t
 }
 
 /** 表の行の鍵 = 主キー (provider, model, effort)(ADR 0200 決定5)。行を名指す面はこの3欄で名指す。 */
-const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema.nullable() });
-type RowKey = z.infer<typeof rowKeySchema>;
+export const rowKeySchema = z.object({ provider: z.enum(PROVIDER_VALUES), model: requiredTextSchema, effort: requiredTextSchema.nullable() });
+export type RowKey = z.infer<typeof rowKeySchema>;
 
 /** 鍵として読める3欄(提案の行・spawn の記録も同じ3欄を持つ)。 */
 type RowKeyFields = { provider: string; model: string; effort: string | null };

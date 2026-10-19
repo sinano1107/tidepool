@@ -4,7 +4,7 @@ import { appendEvent } from "../src/events.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・2・5)のサーバ境界: 提案 verb、回答での registry への commit と修正値、
  *  push 失敗・前提の崩れ、due 判定時と表の編集での陳腐化。registry 書き込みは fake(`agentAdmin.changeTier`)、実 git の書き込みは
@@ -306,7 +306,7 @@ it("due 判定の直前に pin の古い tier の提案が観測で決着し、�
   try {
     expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
     const questionId = await proposeDeckhand(call);
-    expect((await completeViaMcp(t, review.id, false)).isError).not.toBe(true);
+    expect((await completeRoutingReviewViaMcp(t, review.id)).isError).not.toBe(true);
     expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "quality" })).status).toBe(200);
 
     // 別の agent の tier の変更では決着しない —— open な提案が周期を塞いだまま

@@ -10,7 +10,7 @@ import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
-  completeViaMcp,
+  completeRoutingReviewViaMcp,
   executionSetting,
   HOUR,
   HUMAN_WEBUI,
@@ -89,7 +89,7 @@ it("同主題の open な task があれば登録せず、完了後は前回 wat
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、同主題が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
-  expect((await completeViaMcp(t, first.id, false)).isError).not.toBe(true);
+  expect((await completeRoutingReviewViaMcp(t, first.id)).isError).not.toBe(true);
   await t.clock.advance(HOUR);
   expect(await openRoutingReviews(t)).toMatchObject([{ status: "in_progress" }]);
 });
@@ -108,7 +108,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
     t.clock.now(),
   ).entry_id;
   const { question_id } = proposeMemoryChange(t.db, first.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", t.clock.now());
-  expect((await completeViaMcp(t, first.id, false)).isError).not.toBe(true);
+  expect((await completeRoutingReviewViaMcp(t, first.id)).isError).not.toBe(true);
 
   await material(t, "quality");
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、親が routing の提案 question が open
@@ -134,7 +134,7 @@ async function boardWithRoutingReview() {
   return { review, client, call };
 }
 
-it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb を除き読み口4本と list_precedents と提案 verb を足したもの", async () => {
+it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb と complete_task を除き読み口4本と list_precedents と提案 verb と complete_routing_review を足したもの(Codex の enabled_tools との集合一致は tests/codex-worker.test.ts)", async () => {
   const { client } = await boardWithRoutingReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -143,8 +143,10 @@ it("主題 routing の task の接続は、普通の task の一覧から worker
     const routing = await names(client);
     const worker = await names(workClient);
     const memory: string[] = [...WORKER_MEMORY_VERBS];
-    expect(worker.filter((name) => [...ROUTING_READS, "list_precedents", "propose_routing_change"].includes(name))).toEqual([]);
-    expect(routing.sort()).toEqual([...worker.filter((name) => !memory.includes(name)), ...ROUTING_READS, "list_precedents", "propose_routing_change"].sort());
+    expect(worker.filter((name) => [...ROUTING_READS, "list_precedents", "propose_routing_change", "complete_routing_review"].includes(name))).toEqual([]);
+    expect(routing.sort()).toEqual(
+      [...worker.filter((name) => !memory.includes(name) && name !== "complete_task"), ...ROUTING_READS, "list_precedents", "propose_routing_change", "complete_routing_review"].sort(),
+    );
   } finally {
     await client.close();
     await workClient.close();
@@ -223,7 +225,7 @@ it("読み口4本と list_precedents は routing の task から引数ごと写�
   }
 });
 
-it("routing meta-review の purpose は材料の節とその5つの部分を名指し、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は節の各部分を判断したこと(ADR 0180 追記 #1239)", async () => {
+it("routing meta-review の purpose は材料の節とその6つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", async () => {
   t = await bootTidepool();
   await material(t);
   await t.clock.advance(HOUR);
@@ -233,8 +235,12 @@ it("routing meta-review の purpose は材料の節とその5つの部分を名�
   expect(review.purpose).toContain(
     "This cycle's material is in your prompt, in the Routing meta-review material section: the current table and settings, the shadow rows " +
       "since the previous routing meta-review where the learner's recommendation diverged from what ran, the allocation reviews since then, " +
-      "the cells first seen and the rows humans changed since then, and the routing proposals answered or settled since then.",
+      "the cells first seen and the rows humans changed since then, the routing proposals answered or settled since then, and the items to judge.",
   );
+  expect(review.purpose).toContain(
+    "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, listing each item you leave unchanged as no_change (with a reason when it helps).",
+  );
+  expect(review.purpose).not.toContain("log_decision");
   expect(review.purpose).toContain(
     "before you propose a change to a row, the learner flag, an agent's tier or a tier's description, read the earlier proposals on it, with their answers, amendments and comments, with read_routing_settings",
   );
@@ -252,6 +258,6 @@ it("routing meta-review の purpose は材料の節とその5つの部分を名�
     expect(review.purpose).toContain(meaning);
   }
   expect(review.completion_criteria).toBe(
-    "every part of this cycle's material is judged, each judgment is logged as a decision, and each row change the evidence supports is proposed",
+    "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
   );
 });

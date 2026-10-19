@@ -4,6 +4,7 @@ import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
 import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
+import type { RoutingJudgmentItem, RoutingObject } from "./routing-review.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
 import type { Tier, TierId } from "./tier.js";
@@ -669,9 +670,9 @@ export type EventPayload =
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
   // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
-  // 提案の question。表と設定は id を持たない。
+  // 提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[]; items: MemoryJudgmentItem[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }
@@ -710,6 +711,7 @@ export type Judgment =
       repairs: Array<{ id: string; status: TaskStatus }>;
     }
   | ({ kind: "memory"; value: "left_as_is"; reason?: string } & MemoryJudgmentItem)
+  | ({ kind: "routing"; value: "no_change"; reason?: string } & RoutingObject)
   | {
       kind: "rca";
       entries: number[];
