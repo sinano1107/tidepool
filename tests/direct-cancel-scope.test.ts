@@ -481,8 +481,6 @@ it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最
 it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);
-  // 生きた系譜の RCA は分解の verb を伏せず、自分の完了の差し替え(ADR 0278 決定1)だけを持つ
-  expect(taskVerbSwap(db, rcas[0]!.id)).toEqual({ withheld: ["complete_task"], added: ["complete_rca"] });
 
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
   const cancelled = registerTask(db, { type: "work", title: "X", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);

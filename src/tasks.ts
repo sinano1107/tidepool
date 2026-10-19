@@ -626,9 +626,9 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
       probeAccepted: probeAccepted(db, taskId),
     };
   }
-  const rca = isRca(db, taskId);
-  if (isArtifactDiscarded(db, taskId)) return { withheld: ["decompose", "redecompose", ...(rca ? (["complete_task"] as const) : [])], added: rca ? ["complete_rca"] : [] };
-  if (rca) return { withheld: ["complete_task"], added: ["complete_rca"] };
+  const discarded = isArtifactDiscarded(db, taskId);
+  if (isRca(db, taskId)) return { withheld: [...(discarded ? (["decompose", "redecompose"] as const) : []), "complete_task"], added: ["complete_rca"] };
+  if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
   if (task?.meta_review_subject === "memory") return { withheld: ["complete_task"], added: ["complete_memory_review"] };

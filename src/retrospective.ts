@@ -645,9 +645,10 @@ export function proposeFromObjection(
 /** RCA の材料のエントリ: 登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
 const rcaMaterial = (db: Db, reviewId: string) =>
   new Set(
-    (latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? []).map(
-      (id) => (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id,
-    ),
+    (latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? []).flatMap((id) => {
+      const objection = getEvent(db, id)?.payload;
+      return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
+    }),
   );
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
@@ -676,7 +677,10 @@ export function completeRca(
   const judged = findings.map(({ entries, root_cause, no_proposal }) => {
     const memories = drafted
       .filter((d) => entries.includes(d.entry_id))
-      .map(({ memory_event_id: id }) => ({ id, kind: (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "memory_entry_created" }>).entry.kind }));
+      .flatMap(({ memory_event_id: id }) => {
+        const created = getEvent(db, id)?.payload;
+        return created?.kind === "memory_entry_created" ? [{ id, kind: created.entry.kind }] : [];
+      });
     const acts = [...memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`), ...repairs.map(({ id }) => `repair ${id}`)];
     // 行為のある所見への no_proposal は受け取って載せない(ADR 0278 決定3)
     const judgment = { kind: "rca" as const, entries, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
@@ -687,7 +691,7 @@ export function completeRca(
   const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.entries : []));
   const refusals = [
     unknown.length > 0 && `not in this RCA's material: entries ${ids(unknown)}`,
-    repeated.length > 0 && `in more than one finding: entries ${ids(repeated)}`,
+    repeated.length > 0 && `named more than once: entries ${ids(repeated)}`,
     missing.length > 0 && `in no finding: entries ${ids(missing)}`,
     unjustified.length > 0 && `no act and no no_proposal: entries ${ids(unjustified)} — draft from them, file a repair, or pass no_proposal: true`,
   ].filter(Boolean);

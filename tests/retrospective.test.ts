@@ -1659,9 +1659,11 @@ function twoBundles(same: boolean) {
     });
   const a = objectAndCommit(x, "A's direction");
   const b = objectAndCommit(y, "B's direction");
+  for (const [objection, name] of [[a, "A"], [b, "B"]] as const) {
+    for (const r of rcasOf(objection)) logDecision(db, r, `${name}'s finding from ${r.title}`, "auditor", at, "worker");
+  }
   const settle = (objection: number) => {
-    const name = objection === a ? "A" : "B";
-    for (const r of rcasOf(objection)) completeRca(db, r, rcaFindings(db, r.id, `${name}'s finding from ${r.title}`), "auditor", at, "worker");
+    for (const r of rcasOf(objection)) completeRca(db, r, rcaFindings(db, r.id), "auditor", at, "worker");
   };
   const client = new FakeAttributionClient();
   const sweep = async (now = at) => {
@@ -1682,7 +1684,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
-    [s.x, ["A's direction"], [noProposal(s.x, "A's finding from rca (self): t"), RCA_OUTCOME, noProposal(s.x, "A's finding from rca (auditor): t"), RCA_OUTCOME]],
+    [s.x, ["A's direction"], ["A's finding from rca (self): t", noProposal(s.x), RCA_OUTCOME, "A's finding from rca (auditor): t", noProposal(s.x), RCA_OUTCOME]],
   ]);
 });
 
@@ -1696,7 +1698,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
-    [["B's direction"], [noProposal(s.y, "B's finding from rca (self): t"), RCA_OUTCOME, noProposal(s.y, "B's finding from rca (auditor): t"), RCA_OUTCOME]],
+    [["B's direction"], ["B's finding from rca (self): t", noProposal(s.y), RCA_OUTCOME, "B's finding from rca (auditor): t", noProposal(s.y), RCA_OUTCOME]],
   ]);
 });
 

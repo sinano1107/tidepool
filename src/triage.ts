@@ -213,13 +213,12 @@ export function objectionsById(db: Db, entryId: number, ids: number[]): Objectio
  * `judgments` is the repair's alone (ADR 0213 決定3): each judged pair gets a
  * `board judged:` line, except `uncertain` which tells the worker nothing. RCA
  * purposes never pass it — their findings are the second round's evidence.
- * `entryIds` is the RCA's alone: each quote names its entry, the ids
+ * `entryIds: true` is the RCA's alone: each quote names its entry, the ids
  * `complete_rca`'s findings must cover (ADR 0278 決定3 の項目の注入). */
 function renderObjectionPairs(
   purposeIntro: string,
   pairs: ObjectionPair[],
-  judgments?: Map<number, GatedJudgment>,
-  entryIds = false,
+  { judgments, entryIds = false }: { judgments?: Map<number, GatedJudgment>; entryIds?: boolean } = {},
 ): string {
   return (
     `${purposeIntro}:\n\n` +
@@ -279,7 +278,7 @@ function registerRcaReview(
     {
       type: "review",
       title: spec.title,
-      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs, undefined, true),
+      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs, { entryIds: true }),
       completion_criteria:
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
@@ -397,7 +396,7 @@ function bundleObjections(
           purpose: renderObjectionPairs(
             `objections raised against ${rows} of "${objected.title}"`,
             group,
-            judgments,
+            { judgments },
           ),
           completion_criteria: "every objection direction above is addressed",
           parent_id: taskId,

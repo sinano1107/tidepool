@@ -67,7 +67,7 @@ it("propose_from_objection は Behavior candidate でも Knowledge でも、呼�
   expect(taskDecisionLog(db, self.id).map((e) => e.kind)).not.toContain("proposed_from_objection");
 });
 
-it("店の書き込みが失敗する起草は記憶も記録も残さない —— 記録と店の書き込みは1つの transaction", () => {
+it("店の書き込みが拒まれる起草は記憶も記録も残さない", () => {
   const { db, entries, self } = objected(["capability"]);
 
   expect(() => proposeFromObjection(db, self.id, { ...draft, title: " ", entry_id: entries[0]! }, {}, "auditor", at)).toThrow("title and text must be non-empty");
@@ -89,7 +89,7 @@ it("材料のエントリが所見に無い・2つの所見に入る・材料に
       at,
       "worker",
     ),
-  ).toThrow(`not in this RCA's material: entries 9999; in more than one finding: entries ${a}; in no finding: entries ${b}, ${c}`);
+  ).toThrow(`not in this RCA's material: entries 9999; named more than once: entries ${a}; in no finding: entries ${b}, ${c}`);
   expect(listEvents(db, auditor.id)).toHaveLength(before);
   expect(getTask(db, auditor.id)!.status).toBe("todo");
 });
