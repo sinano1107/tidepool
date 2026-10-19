@@ -8,7 +8,7 @@ import { registerThroughHumanDoor } from "../src/human-verbs.js";
 import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../src/landing.js";
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
-import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
+import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
@@ -594,11 +594,11 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
 
-/** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる —— 今日の盤面では受験者の決着で先に閉じる)。 */
+/** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる)。断られた受験者は未決着のまま(#2132 の盤面)。 */
 function brokenWithRefusedTarget() {
   const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
   const { db, root } = registerInterview(undefined, [unrowed], { tier: "economy" });
-  for (const child of poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD)) completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
   const question = listBoard(db).find((task) => task.question_quarantine_kind === "interviewTarget")!;
   return { db, root, question, report: report(db, root) };
@@ -623,6 +623,31 @@ it("probe の破綻の報告への retry では、新しい root がその対象
 
   expect(getTask(db, question.id)!.status).toBe("todo");
   expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("quarantine_released");
+});
+
+it("鍵の受験者が前に決着した Interview の root が、model の鍵への「この対象は測らない」で空になって cancel されても、effort の鍵の question の観測はその鍵を走らせうる最後の Interview の受験者の cancel を指す(ADR 0199 追記、issue #2219)", () => {
+  const sonnet = (effort: string) => ({ provider: "anthropic", model: "claude-sonnet-5-5", effort });
+  const { db, root: a } = registerInterview(undefined, [sonnet("low"), sonnet("medium")], { tier: "economy" });
+  const [aLow, aMedium] = poseAccepted(db, a, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
+  // A.low は前の transaction で決着する
+  registerFailureQuestion(db, aLow!, "worker failed", "The worker ended without a report.", new Date(0));
+  answerQuestionViaWebui(db, listChildren(db, aLow!.id)[0]!, ["abandon"], new Date(0));
+  registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
+  registerQuarantine(db, "interviewTargetEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "low"), "another observation", new Date(0));
+  const [model, effort] = ["interviewTarget", "interviewTargetEffort"].map((kind) => getTask(db, listBoard(db).find((task) => task.question_quarantine_kind === kind)!.id)!);
+  const { root: b } = registerInterview(db, [sonnet("low"), opusHigh], { tier: "economy" });
+  const [bLow] = poseAccepted(db, b, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
+
+  answerQuestionViaWebui(db, model!, ["do not measure this target"], new Date(1));
+
+  expect([a, aMedium!, b, bLow!].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled", "todo", "cancelled"]);
+  const cancelledAt = (taskId: string) => listEvents(db, taskId).find((event) => event.kind === "task_cancelled")!.id;
+  // root の cancel が後に積まれても、一覧に鍵を持つだけの root は観測にならない
+  expect(cancelledAt(a.id)).toBeGreaterThan(cancelledAt(bLow!.id));
+  expect(getTask(db, effort!.id)).toMatchObject({ status: "done", question_answer: null });
+  expect(listEvents(db, effort!.id).filter((event) => event.kind === "quarantine_released").map((event) => event.payload)).toEqual([
+    { kind: "quarantine_released", quarantine: "interviewTargetEffort", value: "anthropic/claude-sonnet-5-5/low", observed_event_id: cancelledAt(bLow!.id) },
+  ]);
 });
 
 /** root に対象を1つ持たせ、それを pin した子を返す。 */
