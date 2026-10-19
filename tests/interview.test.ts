@@ -594,11 +594,11 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
 
-/** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる —— 今日の盤面では受験者の決着で先に閉じる)。 */
+/** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる)。断られた受験者は未決着のまま(#2132 の盤面)。 */
 function brokenWithRefusedTarget() {
   const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
   const { db, root } = registerInterview(undefined, [unrowed], { tier: "economy" });
-  for (const child of poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD)) completeTask(db, child, FULL_HANDOFF, "tako", new Date(0), "worker");
+  poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   registerQuarantine(db, "interviewTarget", tableRowValue("anthropic", "claude-sonnet-5-5"), "API error 404 for this model id", new Date(0));
   const question = listBoard(db).find((task) => task.question_quarantine_kind === "interviewTarget")!;
   return { db, root, question, report: report(db, root) };

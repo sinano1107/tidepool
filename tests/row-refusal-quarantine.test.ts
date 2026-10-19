@@ -921,6 +921,49 @@ it("root が別の対象で残っても、model の鍵への「この対象は�
   ]);
 });
 
+it("鍵の受験者が前に決着した Interview の root が、model の鍵への「この対象は測らない」で空になって cancel されても、effort の鍵の question の観測はその鍵を走らせうる最後の Interview の受験者の cancel を指す(ADR 0199 追記、issue #2219)", async () => {
+  const proc = await bootClaude({ watchdog: WATCHDOG });
+  // Interview A = [low, medium]。low が先に走り、報告なく終わって failure question を abandon する —— 前の transaction で決着
+  const a = await poseInterview(proc, [SONNET_LOW, SONNET_MEDIUM]);
+  const [aLow, aMedium] = a.childIds;
+  await t.clock.advance(HOUR);
+  expect([(await events(aLow!)).some((e) => e.kind === "worker_spawned"), (await events(aMedium!)).some((e) => e.kind === "worker_spawned")]).toEqual([true, false]);
+  proc.emitExitAt(proc.processes.length - 1, 1, null);
+  await settle();
+  const failure = (await questions(t)).find((q) => q.parent_id === aLow && q.status === "todo")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["abandon"] })).status).toBe(200);
+  // medium が走って 404 → model の鍵の question。effort の鍵の question は直接立てる
+  await t.clock.advance(HOUR);
+  expect((await events(aMedium!)).some((e) => e.kind === "worker_spawned")).toBe(true);
+  await refuseLatestSession(proc, REFUSED_404);
+  const qModel = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTarget")!;
+  registerQuarantine(t.db, "interviewTargetEffort", tableRowEffortValue("anthropic", "claude-sonnet-5-5", "low"), "another observation", t.clock.now());
+  const qEffort = (await questions(t)).find((q) => q.question_quarantine_kind === "interviewTargetEffort")!;
+  // 枠を空けて Interview B = [low, opus] を出題。B.low は skipped
+  proc.emitExitAt(proc.processes.length - 1, 0, null);
+  await settle();
+  await t.clock.advance(HOUR);
+  const b = await poseInterview(proc, [SONNET_LOW, OPUS_46]);
+  const [bLow] = b.childIds;
+  await t.clock.advance(HOUR);
+  expect(await queueStatus(bLow!)).toBe("skipped");
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${qModel.id}/answer`, { answers: ["do not measure this target"] })).status).toBe(200);
+
+  const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
+  // A は答案が残らず root も cancel、B は opus で残る
+  expect([await status(a.rootId), await status(aMedium!), await status(b.rootId), await status(bLow!)]).toEqual(["cancelled", "cancelled", "blocked", "cancelled"]);
+  const aRootCancelled = (await events(a.rootId)).find((e) => e.kind === "task_cancelled")!;
+  const bLowCancelled = (await events(bLow!)).find((e) => e.kind === "task_cancelled")!;
+  expect([aRootCancelled.payload.origin_question_id, bLowCancelled.payload.origin_question_id]).toEqual([qModel.id, qModel.id]);
+  // root の cancel が後に積まれても、一覧に鍵を持つだけの root は観測にならない
+  expect(aRootCancelled.id).toBeGreaterThan(bLowCancelled.id);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${qEffort.id}`)).json).toMatchObject({ status: "done", question_answer: null });
+  expect(await releases(qEffort.id)).toEqual([
+    ["tidepool", "board", { kind: "quarantine_released", quarantine: "interviewTargetEffort", value: "anthropic/claude-sonnet-5-5/low", observed_event_id: bLowCancelled.id }],
+  ]);
+});
+
 // ── 表の行と一致する Interview の対象(ADR 0184 決定2 を pin の子にも、issue #1994) ──
 
 /** 種の economy 行と3欄 + root の段が一致する対象 —— 断られると行の Quarantine になる。 */
