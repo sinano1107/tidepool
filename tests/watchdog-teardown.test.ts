@@ -322,6 +322,46 @@ it.each([
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
+it.each([
+  ["そのまま", false],
+  ["再起動を跨いで", true],
+])("完了の門が解決できない workspace を quarantine した完了の後始末は、同じ名前に Quarantine を撃ち直さずに枠を空ける —— %s(ADR 0274 決定3 / issue #2259)", async (_, restart) => {
+  const f = await stoppedBeforeSpawn("ghost");
+  expect(getTask(f.db, f.task.id)?.workspace).toBe("ghost");
+  // 完了の門(`resolveTaskWorkspace`)が drift を観測して撃つ
+  expect(resolveOrQuarantine(f.db, f.resolve, "ghost", f.clock.now())).toBeUndefined();
+  const question = openQuarantineQuestion(f.db, "workspace", "ghost")!;
+  completeTask(f.db, f.task, FULL_HANDOFF, "deckhand", f.clock.now(), "worker");
+  markTeardown(f.db, f.task.id, f.clock.now());
+  f.slot.enterTeardown();
+
+  const deps = { db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => f.triggered.push("pollNow") };
+  const slot = restart ? restartMidTeardown(f, f.resolve) : f.slot;
+  if (!restart) await runTeardown(deps, f.task.id, { ...teardownStep(f.db, f.task.id), workspace: null });
+  await settle();
+
+  expect(getTask(f.db, f.task.id)?.status).toBe("done");
+  expect(questions(f.db).map((q) => q.id)).toEqual([question.id]);
+  expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+  expect(slot.currentTaskId).toBeNull();
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(f.triggered).toEqual(["pollNow"]);
+});
+
+it("エスカレーションした session の後始末は門を持たない決着の最初の観測者なので、解決できない workspace を今日どおり quarantine する(ADR 0274 決定3 / issue #2259)", async () => {
+  const f = await stoppedBeforeSpawn("ghost");
+  escalateTask(f.db, f.task, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", f.clock.now(), "worker");
+  markTeardown(f.db, f.task.id, f.clock.now());
+  f.slot.enterTeardown();
+  expect(openQuarantineQuestion(f.db, "workspace", "ghost")).toBeUndefined();
+
+  await runTeardown({ db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.task.id, teardownStep(f.db, f.task.id));
+
+  expect(getTask(f.db, openQuarantineQuestion(f.db, "workspace", "ghost")!.id)?.purpose).toContain("unknown workspace: ghost");
+  expect(f.slot.currentTaskId).toBeNull();
+  expect(f.triggered).toEqual(["pollNow"]);
+});
+
 it("準備が checkout より前に落ちた pickup の後始末が再起動で途切れても、起動時の復旧は途切れなかった後始末と同じところへ着く(ADR 0274 決定3)", async () => {
   const f = await stoppedBeforeCheckout(true);
   f.runtime.hold(f.task.id);
