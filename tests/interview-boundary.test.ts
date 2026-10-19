@@ -252,7 +252,7 @@ const roomOf = (rootId: string) => realpathSync(join(t.dir, "workspaces", rootId
 /** 受験者の checkout: 同じ基点の下の受験者の id、実体の綴り(ADR 0276 決定1)。 */
 const examineeCheckoutOf = (examineeId: string) => realpathSync(join(t.dir, "workspaces", examineeId));
 
-it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者は同じ基点の下の自分の id の checkout で出題の head から走る —— 面接室にも実環境にも受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4)", async () => {
+it("root の pickup は面接室を盤面の規約の基点の下に root の id で作って root をそこで走らせ、受験者は同じ基点の下の自分の id の checkout で走る —— 実環境に受験者のブランチは立たず、受験者の workspace 列は実環境の名前で、受験者の詳細は checkout の在り処を運び、決着した後の実環境の削除の門は残った面接室を数えない(ADR 0273 決定1・8 / ADR 0276 決定1・4)", async () => {
   const deletions: WorkspaceDeletionReferences[] = [];
   t = await boot({ workspaceAdmin: { delete: async (_input, references) => (deletions.push(references), "/checkout") } });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
