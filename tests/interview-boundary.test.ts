@@ -391,10 +391,10 @@ it("面接室の quarantine が開いている間、root 配下の監査と root
   t.worker.exit(root.id);
   await completeMetaReviews(t);
 
-  for (const id of reviews) expect(await queueStatus(id)).toBe("skipped");
-  expect(t.worker.started.map((s) => s.id)).not.toContain(audit_id);
-  expect(t.worker.started.map((s) => s.id)).not.toContain(self.id);
-  expect(t.worker.started.map((s) => s.id)).not.toContain(auditor.id);
+  for (const id of reviews) {
+    expect(await queueStatus(id)).toBe("skipped");
+    expect(t.worker.started.map((s) => s.id)).not.toContain(id);
+  }
   const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
   await completeMetaReviews(t);

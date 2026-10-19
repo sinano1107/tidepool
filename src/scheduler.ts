@@ -113,7 +113,7 @@ function withoutStopped(
   db: Db,
   candidates: TaskExecutionCandidates,
   defaultWorkspaceName: string | undefined,
-): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => ExecutionSetting[] {
+): (task: ExecutionCandidateTarget) => ExecutionSetting[] {
   const pairs = (openQuarantineValues(db, "workspaceContainment") as string[]).map(parseWorkspaceContainmentValue);
   return (task) => {
     const target = unrowedTarget(db, task);
@@ -158,7 +158,7 @@ export function entryExclusionPredicate(
   db: Db,
   candidates: TaskExecutionCandidates,
   defaultWorkspaceName: string | undefined,
-): (task: ExecutionCandidateTarget & Pick<Task, "workspace">) => boolean {
+): (task: ExecutionCandidateTarget) => boolean {
   const excluded = pickupExclusions(db);
   const pairFiltered = withoutStopped(db, candidates, defaultWorkspaceName);
   return (task) => allEntriesExcluded(task, excluded, () => pairFiltered(task));
