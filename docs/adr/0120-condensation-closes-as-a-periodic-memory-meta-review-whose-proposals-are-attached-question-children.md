@@ -56,3 +56,9 @@
   繰り返しの有無を時刻で代替する。判断で見る線と重なる。
 - **workspace ごとに meta-review を1本** —— 盤面全体への統合を書ける task が無くなり、Auditor の session が workspace
   数だけ増える。1 session に収まらなくなったときの分割は issue #614。
+
+## 追記(2026-10-19 の grilling、issue #1915 / ADR 0279)
+
+決定2 の「主題ごとに未決着が1本でもあれば飛ばす」の未決着に、同主題の meta-review の open な子(修理子・RCA)と、その子の下の open な
+提案 question を足す。meta-review の判断の行への異議から立つ主題の修理子(ADR 0279 決定3・4)の結果は次の review が読む材料で、
+理由は ADR 0165 決定1 と同じ。

@@ -34,3 +34,8 @@
 ## 追記(2026-10-01 の triage / grilling、issue #1030)
 
 決定3 の defer の comment 検査は、reject と同じ回答の門へ移る(ADR 0179 決定4)。必須であることは変わらない。
+
+## 追記(2026-10-19 の grilling、issue #1915 / ADR 0279)
+
+決定1 の門が数える未決着に、同主題の meta-review の open な子(修理子・RCA)と、その子の下の open な提案 question を足す —— 修理子の
+書き込みと提案も「次の review の判断材料」で、読まずに次の判断を始めさせない。RCA は述語を1本にするために含める。

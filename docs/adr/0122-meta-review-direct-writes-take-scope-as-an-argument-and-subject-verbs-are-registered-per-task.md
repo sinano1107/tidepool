@@ -106,3 +106,10 @@ Precedent が名指す entry を「読め」と言い(ADR 0166 決定5)、`propo
   1呼び出しで読める。後継・置き換えた id・提案が名指す id も同じ口で読む。
 - **人間の面(管理MCP)には出さない。** 管理MCP の一覧は全件を1応答で返すので id の行は今も拾え、case は行の出所の event
   から preview で引ける(帰責 event も通る)。
+
+## 追記(2026-10-19 の grilling、issue #1915 / ADR 0279)
+
+決定2 の主題つき verb は、meta-review の task に加えて、その判断の行への異議から立つ主題の修理子(`memory_repair` / `routing_repair`)にも
+登録する —— 異議された行が名指す対象に限った形で(ADR 0279 決定3・4)。追記(#1225)の「meta-review が読む行は判断の材料であって従う
+指針ではない(meta-review は spawn 注入を受けない)」の括弧の前提は変わる: 主題つきの meta-review にも Behavior / Exemplar の節が
+注入され(ADR 0279 決定2)、その節に載った行を `read_memory_entries` で読んだときは `read` に数える。材料の節の行は `seen` のまま。

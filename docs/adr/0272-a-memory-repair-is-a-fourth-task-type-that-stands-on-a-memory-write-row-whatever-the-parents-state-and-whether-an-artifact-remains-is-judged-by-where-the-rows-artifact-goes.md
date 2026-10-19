@@ -94,3 +94,11 @@ prompt が見出し無しの1行で始まる。**組み込み × memory_repair �
 は work の文を着たまま。**profile の roster を残す** —— roster が伏せた verb の相手を指す(ADR 0056 が退けた「guidance が空の roster を
 指す」の逆向き)。
 
+
+## 追記4(2026-10-19 の grilling、issue #1915 / ADR 0279)
+
+決定1 の「判断の行の成果はブランチに帰る」は worker の行の話で、meta-review の判断の行の成果は主題の店・表に帰る —— 決定1 の述語
+「行の成果の帰り先」をそのまま当てると、修理の場は主題の修理子になる。決定2 の修理子の分け方に2つ足す: memory meta-review の判断の行は
+`memory_repair`(同じ task の書き込みの行と合わせて1本)、routing meta-review の判断の行は第5の type `routing_repair`(別 type の理由は
+決定2 そのもの —— 性質は同じで目的が違う。共有は関数で)。決定3 の verb は行の種類で登録し分ける: 書き込みの行には修理 verb 5本、
+memory meta-review の判断の行には meta-review の読み口と書き込み verb を対象に限ったもの(ADR 0279 決定3・4)。
