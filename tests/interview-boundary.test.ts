@@ -418,10 +418,10 @@ it.each(ROOM_ANSWER_BOARDS)("規約の基点に面接室が作れない pickup �
   writeFileSync(base, "not a directory\n");
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
 
-  await vi.waitFor(async () => expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.some((e: any) => e.kind === "pickup_stopped")).toBe(true));
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload)).toEqual([
-    { kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("mkdir") },
-  ]);
+  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
+
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
+  expect(await stops()).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining("mkdir") }]);
   // slot が空いて盤面は流れ続ける —— 落ちた後始末(盤面全体の停止)なら次の task は拾われない
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   await completeMetaReviews(t);
