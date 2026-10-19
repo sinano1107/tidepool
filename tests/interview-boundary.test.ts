@@ -11,7 +11,7 @@ import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "..
 import { getTask, INTERVIEW_AUDIT_NOTICE } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
-import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
+import { taskRunPlace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceDeletionReferences } from "../src/workspace-create.js";
 import {
   api,
@@ -264,17 +264,12 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   const [childId] = await pose(root.id);
   await completeMetaReviews(t);
 
-  // 受験者は出題の head(面接室の写しの commit)から分岐する(ADR 0273 決定3)
-  const posed = (await api(t.baseUrl, "GET", `/api/tasks/${root.id}/events`)).json.find((e: any) => e.kind === "decision_logged");
-  const checkout = examineeCheckoutOf(childId);
+  // checkout の中身(出題の head から分岐し、面接室にブランチを立てない)は interview-pin-branch.test.ts の domain 層で言う
   expect(t.worker.started.at(-1)!.id).toBe(childId);
-  expect(git(checkout, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${childId}`);
-  expect(git(checkout, "rev-parse", "HEAD")).toBe(posed.payload.head);
-  expect(git(room, "branch", "--list", `task/${childId}`)).toBe("");
   expect(git(workspacePath, "branch", "--list", `task/${root.id}`, `task/${childId}`)).toBe("");
   const detail = (await api(t.baseUrl, "GET", `/api/tasks/${childId}`)).json;
   expect(detail.workspace).toBe("reef");
-  expect(detail.examinee_checkout).toBe(checkout);
+  expect(detail.examinee_checkout).toBe(examineeCheckoutOf(childId));
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "DELETE", "/api/workspaces/reef", { confirm: true })).status).toBe(200);
@@ -791,9 +786,11 @@ async function lastExaminee() {
 
 it("最後の受験者が読む get_current_task の全ページ・tools/list の全説明文・記憶の pull(browse・search・read)の応答・記憶を書く verb の拒否・記憶の注入の節に、Interview と面接室の語・面接室の在り処・rubric・対象の model 名・兄弟の id・兄弟の答案と記憶の目印・採点者の印・親の欄・親の history の行・登録者の名前が出ず、記憶を書く verb の拒否は本番の未登録の verb と同じ(ADR 0263 決定7・10、ADR 0264 決定6、ADR 0267 決定7、ADR 0268 決定2、ADR 0273 決定1)", async () => {
   const { rootId, reader, siblings, pages, pulls, refusals, unregistered, injection, tools, production } = await lastExaminee();
-  // cwd は自分の checkout で、面接室の在り処はそこに入らない(ADR 0276 決定1)
-  expect(git(examineeCheckoutOf(reader), "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${reader}`);
-  expect(examineeCheckoutOf(reader)).not.toContain(roomOf(rootId));
+  // cwd は自分の checkout で、面接室の在り処はそこに入らない(ADR 0276 決定1)—— adapter が cwd を引くのと同じ taskRunPlace で、盤面の
+  // pickup が残した在り処を読む。その path が spawn の cwd になることは adapter の seam(claude-worker.test.ts)が言う
+  const cwd = taskRunPlace(t.db, getTask(t.db, reader)!, { name: "reef", path: workspacePath }).path;
+  expect(cwd).toBe(examineeCheckoutOf(reader));
+  expect(cwd).not.toContain(rootId);
   expect(pages.length).toBeGreaterThan(1);
   for (const page of pages) expect(page.parent ?? null).toBeNull();
   // 登録者は root の agent —— root の面には出ている名前で、受験者の面に出ないことを確かめる

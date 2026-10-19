@@ -229,7 +229,7 @@ export function queueReturnHandler(
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
     // drift だけは後始末に workspace 無し(null)を渡し、同じ観測で quarantine を撃ち直させない。解決できるときは
-    // 後始末自身が走る場所(interview は面接室、ADR 0273 決定8)を解決するので渡さない(undefined)
+    // 後始末自身が走る場所(interview の root は面接室、受験者は自分の checkout —— ADR 0273 決定8 / ADR 0276 決定1)を解決するので渡さない(undefined)
     let workspace: null | undefined;
     try {
       deps.resolve?.(task.workspace);

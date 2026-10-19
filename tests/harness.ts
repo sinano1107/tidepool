@@ -869,7 +869,7 @@ export function openTestExamineeCheckout(db: Db, examinee: Task): string {
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
-  appendEvent(db, { taskId: examinee.id, workerId: "tidepool", origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
   return path;
 }
 
@@ -913,7 +913,7 @@ export async function memoryAttributedObjection(t: Tidepool, taskId: string, ent
   await api(t.baseUrl, "POST", "/api/triage/close");
   appendEvent(t.db, {
     taskId,
-    workerId: "tidepool",
+    workerId: BOARD_WORKER_ID,
     origin: "board",
     at: t.clock.now(),
     payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence, entries, round: "after_rca" },

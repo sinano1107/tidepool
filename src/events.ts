@@ -206,7 +206,7 @@ export type EventPayload =
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
   // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
   | ({ kind: "row_refused" } & (RowRefusal | ListedRefusal))
-  // ADR 0266 決定3: pickup の準備が盤面の記録の器に書けず、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
+  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
   // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
   | { kind: "record_container_unwritable"; path: string; reason: string }
   // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに `todo` の先頭へ戻された。

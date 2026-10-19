@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
-import { completeTask, examineeCheckoutPath, interviewRoomPath, registerTask, type Task } from "../src/tasks.js";
+import { completeTask, examineeCheckoutPath, interviewRoomPath, interviewRootIdOf, registerTask, type Task } from "../src/tasks.js";
 import { commitRoomCopy, openExamineeCheckout, openInterviewRoom, prepareWorkspaceAtPickup, releaseWorkspace, taskRunPlace, type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
-import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { commitWork, FULL_HANDOFF, failGitCommits, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, openTestInterviewRoom, poseAccepted } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 // 出題の写しと面接室の開き方(ADR 0273 決定1・3)、受験者の checkout(ADR 0276)。
@@ -138,6 +138,9 @@ it("受験者の初回の pickup は面接室の外(規約の基点の下の受�
   expect(git(checkout, "status", "--porcelain")).toBe("");
   expect(readdirSync(checkout).sort()).toEqual([".git", "probe.txt"]);
   expect(taskRunPlace(db, root, workspace)).toEqual(rootPlace);
+  // 面接室の在り処(root の id を持つ)は受験者の `.git` のどのファイルにも残らない —— FETCH_HEAD・config・reflog・packed-refs も
+  const gitFiles = readdirSync(join(checkout, ".git"), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile());
+  for (const file of gitFiles) expect(readFileSync(join(file.parentPath, file.name), "latin1")).not.toContain(root.id);
   db.close();
 });
 
@@ -199,6 +202,15 @@ it("出題が記録した head を面接室で引けなければ、checkout を�
   );
   expect(existsSync(join(dirname(room), examinee.id, ".git"))).toBe(false);
   expect(git(room, "branch", "--list", `task/${examinee.id}`)).toBe("");
+  db.close();
+});
+
+it("面接室の在り処が無い Interview の受験者の checkout を開くことは、面接室が開いていないと名指して投げる(quarantine の理由になる)", async () => {
+  const db = openDb(":memory:");
+  const examinee = interviewExaminee(db, NOW);
+  const base = await tempDir("tidepool-no-room-");
+
+  expect(() => openExamineeCheckout(db, examinee, base, NOW)).toThrow(`the interview room of ${interviewRootIdOf(db, examinee)} is not open`);
   db.close();
 });
 

@@ -4159,8 +4159,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : void 0,
       landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : void 0,
-      // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は面接室 —— 列の値をそのまま見せない
-      interviewPlace: t.type === "interview" ? `real environment: ${t.workspace ?? "default workspace"}` : t.interview_root_id ? `interview room (reproduces ${t.workspace ?? "default workspace"})` : void 0,
+      // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は出題の head を fetch した自分の checkout(ADR 0276 決定1)—— 列の値をそのまま見せない
+      interviewPlace: t.type === "interview" ? `real environment: ${t.workspace ?? "default workspace"}` : t.interview_root_id ? "own checkout of the posed head" : void 0,
       interviewWaiting: t.interview_waiting && INTERVIEW_WAITING_COPY[t.interview_waiting]
     });
   }
@@ -4331,14 +4331,16 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
   const [interview, setInterview] = React.useState(null);
+  const [checkout, setCheckout] = React.useState(null);
   React.useEffect(() => {
     setInterview(null);
-    if (task.type !== "interview") return;
-    api("GET /api/tasks/:id", { params: { id: task.id } }).then((full) => setInterview({ room: full.interview_room ?? "not opened yet", head: full.posed_head ?? "not posed yet" })).catch(() => {
+    setCheckout(null);
+    if (task.type !== "interview" && task.interview_root_id == null) return;
+    api("GET /api/tasks/:id", { params: { id: task.id } }).then((full) => task.type === "interview" ? setInterview({ room: full.interview_room ?? "not opened yet", head: full.posed_head ?? "not posed yet" }) : setCheckout(full.examinee_checkout ?? "not opened yet")).catch(() => {
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;

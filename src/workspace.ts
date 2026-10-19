@@ -197,14 +197,7 @@ export function resolveExecutionWorkspace(
  *  `git init` と盤面名義の空コミットを置く。在り処が git の手順より先に残るので、途中で落ちた面接室も quarantine の回答と後始末が
  *  この名前で引け、次の pickup は残った repo の続きから作る。registry には載せない。消さない(消す扉も無い)。 */
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
-  let path = interviewRoomPath(db, root.id);
-  if (path === undefined) {
-    const at = conventionCheckoutPath(root.id, workspacesBaseDir);
-    mkdirSync(at, { recursive: true });
-    // 実体の綴りで残す —— cwd・sandbox の読み・root に渡す在り処が同じ綴りになる(issue #1954)
-    path = realpathSync(at);
-    appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path }, at: now });
-  }
+  const path = interviewRoomPath(db, root.id) ?? recordOpened(db, root.id, "interview_room_opened", workspacesBaseDir, now);
   // 既存の repo への init は何も変えない(HEAD も残る)
   git(path, "init", "--quiet", "--initial-branch=main");
   // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
@@ -216,21 +209,30 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
  *  面接室からその head だけを fetch し `main` にする(`clone` は root のブランチごと運ぶ)。タスクブランチは準備が `main` から切る。
  *  再開(タスクブランチがある)は何もしない —— 自分の WIP も ignored の生成物も残る。消さない(面接室と同じ、ADR 0276 決定4)。 */
 export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: string, now: Date): void {
-  const room = recordedInterviewRoom(db, interviewRootIdOf(db, examinee)!)!;
-  let path = examineeCheckoutPath(db, examinee.id);
+  const rootId = interviewRootIdOf(db, examinee);
+  if (rootId === undefined) throw new Error(`${examinee.id} is not an examinee of an Interview`);
+  const room = recordedInterviewRoom(db, rootId);
+  if (!room) throw new Error(`the interview room of ${rootId} is not open`);
+  const opened = examineeCheckoutPath(db, examinee.id);
   // repo の無い在り処(前の pickup が init の前に落ちた)で rev-parse を撃つと「無い」ではなく失敗になる
-  if (path !== undefined && existsSync(join(path, ".git")) && taskBranchExists({ ...room, path }, examinee.id)) return;
-  if (path === undefined) {
-    const at = conventionCheckoutPath(examinee.id, workspacesBaseDir);
-    mkdirSync(at, { recursive: true });
-    path = realpathSync(at);
-    appendEvent(db, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: now });
-  }
+  if (opened !== undefined && existsSync(join(opened, ".git")) && taskBranchExists({ ...room, path: opened }, examinee.id)) return;
+  const path = opened ?? recordOpened(db, examinee.id, "examinee_checkout_opened", workspacesBaseDir, now);
   const head = resolvablePosedHead(db, room, examinee);
   git(path, "init", "--quiet", "--initial-branch=main");
-  git(path, "fetch", "--quiet", room.path, head);
+  // FETCH_HEAD は fetch 元(面接室の在り処 = root の id)を書くので書かせない —— 受験者の `.git` に面接室を残さない(ADR 0276 決定1)
+  git(path, "fetch", "--quiet", "--no-write-fetch-head", room.path, head);
   // 未生の `main` に ref だけ書くと index が空のまま残る —— checkout で作業ツリーごと置く
-  git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, "FETCH_HEAD");
+  git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
+}
+
+/** 面接室・受験者の checkout の在り処を規約の基点の下の task の id に作り、実体の綴りで task の event に残す —— cwd・sandbox の読み・
+ *  root に渡す在り処が同じ綴りになる(issue #1954)。git の手順より先に残すので、途中で落ちても後始末と次の pickup がこの在り処で引ける。 */
+function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "examinee_checkout_opened", workspacesBaseDir: string, now: Date): string {
+  const at = conventionCheckoutPath(taskId, workspacesBaseDir);
+  mkdirSync(at, { recursive: true });
+  const path = realpathSync(at);
+  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind, path }, at: now });
+  return path;
 }
 
 /** 在り処が残った面接室を走る場所として(ADR 0273 決定1・8)。名前は root の id で、quarantine・封じ込めの組・ref の基準はこの名前で立つ。
@@ -697,7 +699,9 @@ function currentRefs(workspace: WorkspaceConfig): string {
   );
 }
 
-/** 基準の行の鍵: 走る場所の名前。受験者の checkout だけは名前(面接室の root id)を兄弟と共有するので受験者の id(ADR 0276 決定3)。 */
+/** 基準の行の鍵: 走る場所の名前。受験者の checkout だけは名前(面接室の root id)を兄弟と共有するので受験者の id(ADR 0276 決定3)。
+ *  鍵は型で強いていない —— 受験者の走る場所は `taskRunPlace` だけが作る。準備・解放・盤面の ref の口を `RunPlace` に締めると、
+ *  受験者でない WorkspaceConfig の呼び手(テストの約40箇所と後始末・MCP の型)が全部変わる。 */
 function snapshotKey(workspace: WorkspaceConfig): string {
   return (workspace as RunPlace).snapshot_key ?? workspace.name;
 }
