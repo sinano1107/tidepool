@@ -14,7 +14,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, finishTask, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, finishTask, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -2571,26 +2571,33 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches.map(({ path }) => ({ branch: path }))];
 }
 
-/** 読み手の窓の判断を要する項目 —— 材料の節に注入したのと同じ計算(完了の verb と harness が読む)。 */
-export function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
+/** 読み手の窓の判断を要する項目 —— 材料の節に注入したのと同じ計算(完了の verb が読む)。 */
+function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
   const window = metaReviewWindow(db, reviewId);
   return judgmentItems(db, window, memoryReads(db, window, readerHidden(db, reviewId)));
 }
 
-/** この review の行為が判断済みにする項目(ADR 0278 決定3): 記憶の書き込みの行が作った・無効化したエントリと、提案 question が名指す
- *  candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は、書き込んだ Definition の path と、移したエントリの
- *  移動前後の path がその枝か配下にあるもの。 */
-function judgmentActs(db: Db, reviewId: string): (item: MemoryJudgmentItem) => boolean {
+/** この review の行為(ADR 0278 決定3)。covers は判断済みにする項目: 記憶の書き込みの行が作った・無効化したエントリと、提案 question が
+ *  名指す candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は、作った Definition の path と、path を変えた移動の
+ *  移動元・移動先の path(祖先や scope だけの移動は覆わない —— 枝の欠陥が残る)。touches はそれに加え、移したエントリの移動前後の path が
+ *  その枝か配下にある枝 —— 注入された一覧を写した値を受け取るためだけに読む。 */
+function actedOn(db: Db, reviewId: string) {
   const restored = restoredAs(db);
-  const written = listEvents(db, reviewId).flatMap(({ payload }) => (payload.kind === "memory_written" ? [...payload.created, ...payload.invalidated] : []));
-  const proposed = (db.prepare("SELECT question_proposal FROM tasks WHERE parent_id = ? AND json_extract(question_proposal, '$.kind') = 'memory'").pluck().all(reviewId) as string[]).flatMap(
-    (proposal) => pinnedIds(JSON.parse(proposal) as MemoryProposal, false),
-  );
-  const entries = new Set([...written, ...proposed].flatMap((id) => [id, bodyTail(db, restored, id)]));
-  const rows = written.map((id) => requireEntry(db, id));
-  const defined = new Set(rows.filter((row) => row.kind === "definition").map((row) => row.path));
-  const moved = rows.filter((row) => row.invalidation_reason === "path_moved").flatMap((row) => [row.path, requireEntry(db, row.successor_id!).path]);
-  return (item) => ("entry" in item ? entries.has(item.entry) : defined.has(item.branch) || moved.some((path) => atOrUnder(path, item.branch)));
+  const writes = listEvents(db, reviewId).flatMap(({ payload }) => (payload.kind === "memory_written" ? [payload] : []));
+  const proposed = listChildren(db, reviewId).flatMap(({ question_proposal }) => (question_proposal?.kind === "memory" ? pinnedIds(question_proposal, false) : []));
+  const entries = new Set([...writes.flatMap((w) => [...w.created, ...w.invalidated]), ...proposed].flatMap((id) => [id, bodyTail(db, restored, id)]));
+  const defined = new Set(writes.flatMap((w) => w.created).map((id) => requireEntry(db, id)).filter((row) => row.kind === "definition").map((row) => row.path));
+  const moves = writes
+    .flatMap((w) => w.invalidated)
+    .map((id) => requireEntry(db, id))
+    .filter((row) => row.invalidation_reason === "path_moved")
+    .map((row) => [row.path, requireEntry(db, row.successor_id!).path] as const);
+  const renamed = new Set(moves.flatMap(([from, to]) => (from === to ? [] : [from, to])));
+  const covers = (item: MemoryJudgmentItem) => ("entry" in item ? entries.has(item.entry) : defined.has(item.branch) || renamed.has(item.branch));
+  return {
+    covers,
+    touches: (item: MemoryJudgmentItem) => covers(item) || ("branch" in item && moves.some((paths) => paths.some((path) => atOrUnder(path, item.branch)))),
+  };
 }
 
 const itemName = (item: MemoryJudgmentItem) => ("entry" in item ? `entry #${item.entry}` : `branch ${item.branch}`);
@@ -2607,10 +2614,10 @@ export function completeMemoryReview(
   origin: EventOrigin,
 ): Task {
   if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
-  const acted = judgmentActs(db, review.id);
-  const open = new Map(memoryJudgmentItems(db, review.id).flatMap((item) => (acted(item) ? [] : [[itemName(item), item] as const])));
+  const { covers, touches } = actedOn(db, review.id);
+  const open = new Map(memoryJudgmentItems(db, review.id).flatMap((item) => (covers(item) ? [] : [[itemName(item), item] as const])));
   const given = new Map(judgments.map((judgment) => [itemName(judgment), judgment]));
-  const unknown = [...given].flatMap(([name, judgment]) => (open.has(name) || acted(judgment) ? [] : [name]));
+  const unknown = [...given].flatMap(([name, judgment]) => (open.has(name) || touches(judgment) ? [] : [name]));
   const unjudged = [...open.keys()].filter((name) => !given.has(name));
   const refusals = [unknown.length > 0 && `not items to judge: ${unknown.join(", ")}`, unjudged.length > 0 && `unjudged: ${unjudged.join(", ")} — act on each or pass it as left as is`];
   if (refusals.some(Boolean)) throw new DomainError(refusals.filter(Boolean).join("; "));

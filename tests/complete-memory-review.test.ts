@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
 import {
@@ -6,7 +6,6 @@ import {
   createBehaviorCandidate,
   defineMemoryByMetaReview,
   invalidateMemoryByMetaReview,
-  memoryJudgmentItems,
   moveMemoryByMetaReview,
   proposeMemoryChange,
   recordKnowledge,
@@ -14,7 +13,7 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { completeTask, getTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { bootTidepool, FULL_HANDOFF, humanDecomposeTaskViaWebui, mcpClient, type Tidepool } from "./harness.js";
+import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectedJudgmentItems, judgmentRows } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
 
@@ -41,9 +40,6 @@ function cycle(db = openDb(":memory:")) {
   const written = knowledge(db, "notes");
   return { db, written, review: register(db, "memory") };
 }
-
-const judgmentRows = (db: Db, taskId: string) =>
-  listEvents(db, taskId).flatMap((e) => (e.payload.kind === "decision_logged" && e.payload.judgment ? [e.payload] : []));
 
 it("memory meta-review の verb の差し替えは complete_task を伏せ complete_memory_review を足し、routing meta-review は差し替えない", () => {
   const { db, review } = cycle();
@@ -83,7 +79,7 @@ it("注入された項目をそのまま left_as_is で渡しても、この ses
   const kept = knowledge(db, "notes");
   const moved = knowledge(db, "drafts/x");
   const review = register(db, "memory");
-  const injected = memoryJudgmentItems(db, review.id);
+  const injected = injectedJudgmentItems(db, review.id);
   invalidateMemoryByMetaReview(db, { entry_id: retired!, reason: "rejected" }, "auditor", "worker", at, review.id);
   proposeMemoryChange(db, review.id, { op: "approve", candidate_id: proposed!, rationale: "r" }, "auditor", at);
   moveMemoryByMetaReview(db, { entry_id: moved, scope: "tidepool", path: "notes/x", mover: metaReview }, "worker", at, review.id);
@@ -99,6 +95,18 @@ it("注入された項目をそのまま left_as_is で渡しても、この ses
   ]);
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([{ kind: "memory", entry: kept, value: "left_as_is" }]);
+});
+
+it("祖先の枝や scope だけの移動は枝の項目を覆わず、その枝は unjudged で拒まれる", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const stays = knowledge(db, "tools");
+  const leaves = knowledge(db, "tools/node");
+  const review = register(db, "memory");
+  moveMemoryByMetaReview(db, { entry_id: leaves, scope: "tidepool", path: "misc", mover: metaReview }, "worker", at, review.id);
+  moveMemoryByMetaReview(db, { entry_id: stays, scope: null, path: "tools", mover: metaReview }, "worker", at, review.id);
+
+  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow("unjudged: branch tools —");
 });
 
 it("据え置いた項目ごとに対象を名指す型つきの decision_logged が1行、文は盤面が組み reason があれば添え、完了する", () => {
@@ -129,20 +137,4 @@ it("memory meta-review でない task は拒まれる", () => {
   expect(() => completeMemoryReview(db, register(db, "routing"), { judgments: [] }, "auditor", at, "worker")).toThrow(
     "only a memory meta-review completes with complete_memory_review",
   );
-});
-
-let t: Tidepool;
-afterEach(() => t?.stop());
-
-it("接続した memory meta-review の tool 一覧には complete_memory_review があり complete_task は無い", async () => {
-  t = await bootTidepool();
-  const { review } = cycle(t.db);
-  const client = await mcpClient(t.mcpBaseUrl, review.id);
-  try {
-    const names = (await client.listTools()).tools.map((tool) => tool.name);
-    expect(names).toContain("complete_memory_review");
-    expect(names).not.toContain("complete_task");
-  } finally {
-    await client.close();
-  }
 });

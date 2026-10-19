@@ -22,11 +22,11 @@ import type { CliAuthCheck, ModelProbe } from "../src/cli-auth.js";
 import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
-import { appendEvent, type EventPayload, type EventRow } from "../src/events.js";
+import { appendEvent, type EventPayload, type EventRow, listEvents } from "../src/events.js";
 import type { ExecutionSetting } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
-import { completeMemoryReview, memoryJudgmentItems, recordKnowledge } from "../src/memory.js";
+import { buildMetaReviewMaterial, completeMemoryReview, recordKnowledge } from "../src/memory.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -1084,9 +1084,20 @@ export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: str
 /** memory meta-review か —— その完了の verb が足されているかで見る。 */
 const isMemoryReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_memory_review");
 
+/** memory meta-review の材料の節に注入される「Items to judge」の項目(ADR 0278 決定3・5)。 */
+export function injectedJudgmentItems(db: Db, reviewId: string) {
+  const material = buildMetaReviewMaterial(db, reviewId);
+  if (material?.subject !== "memory") throw new Error(`${reviewId} is not a memory meta-review`);
+  return material.parts.items;
+}
+
+/** 判断ログのうち完了の verb が書いた型つきの行(ADR 0278 決定4)。 */
+export const judgmentRows = (db: Db, taskId: string) =>
+  listEvents(db, taskId).flatMap((e) => (e.payload.kind === "decision_logged" && e.payload.judgment ? [e.payload] : []));
+
 /** memory meta-review を MCP の complete_memory_review で、盤面が計算した項目をすべて据え置いて完了させる(ADR 0278 決定5)。 */
 export async function completeMemoryReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
-  return callAsTask(t, reviewId, "complete_memory_review", { judgments: memoryJudgmentItems(t.db, reviewId) });
+  return callAsTask(t, reviewId, "complete_memory_review", { judgments: injectedJudgmentItems(t.db, reviewId) });
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
@@ -1148,7 +1159,7 @@ export function settleReviews(db: Db, now: Date): void {
  *  complete_memory_review で項目をすべて据え置き、他は complete_task。 */
 export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
   if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
-  if (isMemoryReview(db, review.id)) return completeMemoryReview(db, review, { judgments: memoryJudgmentItems(db, review.id) }, workerId, now, "worker");
+  if (isMemoryReview(db, review.id)) return completeMemoryReview(db, review, { judgments: injectedJudgmentItems(db, review.id) }, workerId, now, "worker");
   return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
 }
 

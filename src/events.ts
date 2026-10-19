@@ -2,7 +2,7 @@ import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import type { ExecutionSetting, ExecutionSettingRow, ExecutionSettingsChange, registryPinChanges, routingPinChanges } from "./execution-setting.js";
-import type { InvalidationReason, MemoryDropReason, MemoryEntryFields } from "./memory.js";
+import type { InvalidationReason, MemoryDropReason, MemoryEntryFields, MemoryJudgmentItem } from "./memory.js";
 import type { Provider } from "./provider.js";
 import type { TaskStatus } from "./task-status.js";
 import type { MemoryProposal, ProposalAmendment, TaskType } from "./tasks.js";
@@ -704,7 +704,7 @@ export type Judgment =
       findings: string;
       repairs: Array<{ id: string; status: TaskStatus }>;
     }
-  | ({ kind: "memory"; value: "left_as_is"; reason?: string } & ({ entry: number } | { branch: string }));
+  | ({ kind: "memory"; value: "left_as_is"; reason?: string } & MemoryJudgmentItem);
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
 export interface AuditVerdict {

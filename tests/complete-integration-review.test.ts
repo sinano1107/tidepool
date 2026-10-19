@@ -12,7 +12,7 @@ import {
   taskVerbSwap,
 } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { bootTidepool, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, mcpClient, NO_FINDINGS, type Tidepool } from "./harness.js";
+import { bootTidepool, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, mcpClient, NO_FINDINGS, type Tidepool } from "./harness.js";
 
 /** 統合レビューは complete_integration_review で終わる(ADR 0278 決定1〜5 の統合レビュー、issue #2281)。 */
 
@@ -37,9 +37,6 @@ function repairs(db: ReturnType<typeof openDb>, review: Task, count: number): Ta
     NOW,
   );
 }
-
-const judgmentRows = (db: ReturnType<typeof openDb>, taskId: string) =>
-  listEvents(db, taskId).flatMap((e) => (e.payload.kind === "decision_logged" && e.payload.judgment ? [e.payload] : []));
 
 it("統合レビューの verb の差し替えは complete_task を伏せ complete_integration_review を足し、人間が立てた review 子は差し替えない", () => {
   const { db, review, humanReview } = reviewed();
