@@ -458,7 +458,7 @@ it("meta-review の枝の一覧も応答予算で切り、next を追うと木�
 });
 
 /** setup のみ: 1 marker = 1 episode の直挿しで異議つき decision を安く並べる(#356 の投影は使わない)。異議の event id と decision を返す。 */
-function objectedDecision({ db, task }: ReturnType<typeof board>, i: number, padding = "") {
+function objectedDecision({ db, task }: Pick<ReturnType<typeof board>, "db" | "task">, i: number, padding = "") {
   const decision = logDecision(db, task, `decision ${i}${padding}`, "deckhand", at, "worker");
   db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, task.id);
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
@@ -504,13 +504,7 @@ function lineages() {
   const { db, task } = b;
   const register = (input: { meta_review_subject?: "routing"; parent_id?: string }) =>
     registerTask(db, { type: input.meta_review_subject ? "review" : "work", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI).id;
-  const objected = (taskId: string, i: number) => {
-    const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
-    db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, taskId);
-    db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
-    bundledObjection(db, taskId, decision, at);
-    return decision;
-  };
+  const objected = (taskId: string, i: number) => objectedDecision({ db, task: getTask(db, taskId)! }, i).decision;
   const routing = register({ meta_review_subject: "routing" });
   const rows = {
     memory: objected(task.id, 1),

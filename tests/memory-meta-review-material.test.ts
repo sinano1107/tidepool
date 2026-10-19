@@ -190,8 +190,11 @@ it("異議つき判断は行の主題(自身か最も近い祖先)が memory の
   const previous = register(db, "memory", true);
   const routing = register(db, "routing", true);
   const work = (parent_id?: string) => registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
-  const [memory, memoryChild, routingRow, routingChild, worker] = [previous, work(previous), routing, work(routing), work()].map((taskId, i) => objectedDecision(db, taskId, i + 1));
-  for (const decision of [memory, memoryChild, routingRow, routingChild, worker]) bundledObjection(db, getEvent(db, decision!)!.task_id!, decision!, at);
+  const [memory, memoryChild, , , worker] = [previous, work(previous), routing, work(routing), work()].map((taskId, i) => {
+    const decision = objectedDecision(db, taskId, i + 1);
+    bundledObjection(db, taskId, decision, at);
+    return decision;
+  });
   const review = register(db, "memory");
 
   const { parts } = memoryMaterialOf(db, review);
