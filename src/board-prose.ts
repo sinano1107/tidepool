@@ -369,7 +369,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
  *  定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory。
  *  doctrine は adapter が自分の語彙で組んで渡す(決定2)。review task は registry の
  *  profile でなく reviewer の authority と、被レビュー task の executor 1名の roster を
- *  持つ(ADR 0056)。当事者レビュー(self RCA)は当時版の定義を証拠として持つ(ADR 0020 part 4)。 */
+ *  持つ(ADR 0056)。memory_repair は Authority 節が MEMORY_REPAIR_NOTICE だけで roster を持たない(ADR 0272 追記3)。当事者レビュー(self RCA)は当時版の定義を証拠として持つ(ADR 0020 part 4)。 */
 export function boardProse(input: {
   db: Db;
   registryDir: string;
@@ -385,15 +385,16 @@ export function boardProse(input: {
 }): string {
   const { db, task } = input;
   const review = task.type === "review" || task.type === "interview";
-  const guidance = review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
-  const rosterAssignableTo = review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
-  // ADR 0272 決定3 / ADR 0271 決定2 / ADR 0273 決定4: guidance の文は変えず、その直後に盤面が1行足す。memory_repair は祖先の cancel の下でも修理の1行
-  const notice =
-    task.type === "memory_repair"
-      ? MEMORY_REPAIR_NOTICE
-      : auditedPosedEventId(db, task.id) !== undefined
-        ? INTERVIEW_AUDIT_NOTICE
-        : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+  const repair = task.type === "memory_repair";
+  // ADR 0272 追記3: memory_repair の Authority 節は type の定数そのもので、Roster 節は無い(review と同じく type が profile を上書きする)
+  const guidance = repair ? MEMORY_REPAIR_NOTICE : review ? REVIEWER_AUTHORITY_PROFILE.guidance : input.profile.guidance;
+  const rosterAssignableTo = repair ? undefined : review ? reviewAssignableTo(db, task) : input.profile.assignable_to;
+  // ADR 0271 決定2 / ADR 0273 決定4: reviewer の guidance の文は変えず、その直後に盤面が1行足す
+  const notice = repair
+    ? undefined
+    : auditedPosedEventId(db, task.id) !== undefined
+      ? INTERVIEW_AUDIT_NOTICE
+      : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
   const injected = notice ? `\n\n${notice}` : "";
   return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }
