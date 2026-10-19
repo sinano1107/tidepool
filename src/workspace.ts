@@ -265,7 +265,6 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
-  // 実環境は path でなく WorkspaceConfig のまま —— pickup の鮮度の段が remote へ追従させる(issue #2223)
   return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(real) };
 }
 
@@ -671,7 +670,7 @@ function assertRegistryRoleAgrees(
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
 export async function freshenPlaceAtPickup(
   place: WorkspaceConfig,
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource } = {},
+  board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
 ): Promise<void> {
   assertOwnGitDirectory(place.path);
   assertRegistryRoleAgrees(place, board.registry);
