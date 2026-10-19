@@ -2402,15 +2402,14 @@ export function completeIntegrationReview(
   if (!repairs.length && !no_findings) {
     throw new DomainError("this review filed no repair task: pass no_findings: true if the deliverable has nothing to repair, or file the findings as repair tasks with decompose first");
   }
-  const line = repairs.length
-    ? `repaired: the deliverable (${repairs.map(({ id, status }) => `${id} ${status}`).join(", ")}) — ${findings}`
-    : `no_findings: the deliverable — ${findings}`;
+  const value = repairs.length ? "repaired" : "no_findings";
+  const line = `${value}: the deliverable${repairs.length ? ` (${repairs.map(({ id, status }) => `${id} ${status}`).join(", ")})` : ""} — ${findings}`;
   return db.transaction(() => {
     appendEvent(db, {
       taskId: review.id,
       workerId,
       origin,
-      payload: { kind: "decision_logged", line, judgment: { kind: "integration_review", value: repairs.length ? "repaired" : "no_findings", findings, repairs } },
+      payload: { kind: "decision_logged", line, judgment: { kind: "integration_review", value, findings, repairs } },
       at: now,
     });
     return finishTask(db, review, { outcome: findings }, workerId, now, origin);
