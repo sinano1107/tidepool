@@ -6,10 +6,10 @@ import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, listPrecedents, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
-import { listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
+import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, bundledObjection, executionSetting, HUMAN_WEBUI, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -383,6 +383,43 @@ it("人間が足した行が同じ窓で走って初観測になれば、走っ�
 
   expect([parts.shadow.length, parts.rows.length, parts.cells.length]).toEqual([1, 1, 1]);
   expect(parts.items).toEqual([{ row: haiku, tier: "economy" }, { learner: true }]);
+});
+
+it("窓で異議された前の routing meta-review の判断の行が名指す行・agent・段は、今も評価の対象なら Items to judge に1度だけ載る —— 表から消えた行・agent_tier の届かない agent・引退した段・窓の外の異議は載らない(ADR 0279 決定5)", () => {
+  const { db } = board();
+  const judged = (object: RoutingObject) => ({ kind: "routing" as const, value: "no_change" as const, ...object });
+  const older = register(db, true);
+  objectedJudgment(db, older, judged({ tier_id: tierIdOf(db, "frontier") }), at);
+  applyExecutionSettingsChange(db, { setting: "insert_tier", name: "careful", description: "Careful work.", position: 1 }, "webui", at);
+  const careful = tierIdOf(db, "careful");
+  const previous = register(db, true);
+  applyExecutionSettingsChange(db, { setting: "row", row: haikuRow }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "gpt-5.6-sol", effort: "high" }, "webui", at);
+  applyExecutionSettingsChange(db, { setting: "delete_tier", name: "careful" }, "webui", at);
+  const opusRow = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
+  for (const object of [
+    { row: opusRow },
+    { row: haiku },
+    { row: { provider: "openai" as const, model: "gpt-5.6-sol", effort: "high" } },
+    { agent: "deckhand" },
+    { agent: "gone" },
+    { tier_id: tierIdOf(db, "standard") },
+    { tier_id: careful },
+    { learner: true as const },
+  ])
+    objectedJudgment(db, previous, judged(object), at);
+  const review = register(db);
+
+  const { parts, section } = routingMaterialOf(db, review);
+
+  expect(parts.items).toEqual([
+    { row: haiku, tier: "economy" },
+    { row: opusRow, tier: "standard" },
+    { agent: "deckhand" },
+    { tier_id: tierIdOf(db, "standard"), tier: "standard" },
+    { learner: true },
+  ]);
+  expect(section).toContain("the rows, agents and tiers named by the judgments of the objected decisions");
 });
 
 it("routing meta-review の purpose は材料の節とその7つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", () => {

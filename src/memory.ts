@@ -2591,6 +2591,9 @@ export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonl
   })();
 }
 
+/** routing meta-review の読み手の窓の異議つき判断 —— 完了の verb が項目を計算し直すときに渡す(routing-review.ts は memory.ts を import しない)。 */
+export const routingPrecedents = (db: Db, reviewId: string) => precedentRows(db, metaReviewWindow(db, reviewId), "routing");
+
 /** memory の読み口の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
  *  (readerHidden)を載せない(ADR 0264 決定2)。 */
 const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
@@ -2621,7 +2624,8 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
       "Items to judge",
       "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
         "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
-        "entries without a Definition in their scope or whole-board, and the paths two or more scopes define. Act on each item, or pass it to " +
+        "entries without a Definition in their scope or whole-board, the paths two or more scopes define, and the entries and branches named " +
+        "by the judgments of the objected decisions, if still live. Act on each item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
       "no items to judge",
@@ -2638,18 +2642,26 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
- *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。 */
+ *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。異議つき判断のうち
+ *  前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と枝(今の木にあるもの)も載る(ADR 0279 決定5)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const tail = (id: number) => bodyTail(db, restored, id);
+  const objected = parts.precedents.flatMap(({ decision_event_id }) => {
+    const payload = getEvent(db, decision_event_id)?.payload;
+    return payload?.kind === "decision_logged" && payload.judgment?.kind === "memory" ? [payload.judgment] : [];
+  });
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
     ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).map(tail) : [])),
     ...parts.store_changes.map(({ id }) => id),
+    ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
   ]);
+  const objectedBranches = new Set(objected.flatMap((j) => ("branch" in j ? [j.branch] : [])));
   const branches = parts.branches.filter(
-    ({ definitions, scopes }) => scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1,
+    ({ path, definitions, scopes }) =>
+      scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1 || objectedBranches.has(path),
   );
   return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches.map(({ path }) => ({ branch: path }))];
 }

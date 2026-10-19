@@ -26,7 +26,7 @@ import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.j
 import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, objectedJudgment, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
@@ -271,6 +271,25 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
   expect(ids(parts.candidates)).toContain(older);
   expect(section).toContain("### Items to judge");
   for (const item of parts.items) expect(section).toContain(JSON.stringify(item));
+});
+
+it("窓で異議された前の memory meta-review の判断の行が名指すエントリ(本文が同じ鎖の末尾)と枝が、生きていれば項目に1度だけ載る —— 無効化済みのエントリ・木に無い枝・窓の外の異議は載らない(ADR 0279 決定5)", () => {
+  const db = openDb(":memory:");
+  defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
+  const [kept, dropped, outside] = ["notes", "notes", "notes"].map((path) => knowledge(db, path));
+  invalidateMemoryEntry(db, { entry_id: dropped!, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { entry } : { branch: entry }) });
+  const older = register(db, "memory", true);
+  objectedJudgment(db, older, judged(outside!), at);
+  const previous = register(db, "memory", true);
+  const written = knowledge(db, "notes");
+  for (const object of [kept!, dropped!, written, "notes", "gone"]) objectedJudgment(db, previous, judged(object), at);
+  const review = register(db, "memory");
+
+  const { parts, section } = memoryMaterialOf(db, review);
+
+  expect(parts.items).toEqual([{ entry: kept }, { entry: written }, { branch: "notes" }]);
+  expect(section).toContain("the entries and branches named by the judgments of the objected decisions");
 });
 
 it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・注入した Items to judge と同じ並び・同じ鍵の items・トークン数と計数器を持つ", () => {

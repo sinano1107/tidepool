@@ -15,7 +15,7 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { completeTask, getTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows } from "./harness.js";
+import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows, objectedJudgment } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
 
@@ -152,6 +152,19 @@ it("注入の前(窓の中)に無効化された店の変更のエントリは�
 
   expect(injected).toContainEqual({ entry: written });
   expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${written}`);
+});
+
+it("窓で異議された前の判断の行が名指すエントリと枝は項目で、値も行為も無ければ unjudged で拒まれ、left_as_is を渡せば完了する(ADR 0279 決定5)", () => {
+  const db = openDb(":memory:");
+  defineMemoryByMetaReview(db, { scope: "tidepool", path: "notes", text: "Notes.", author: metaReview }, "worker", at, register(db, "memory", true).id);
+  const kept = knowledge(db, "notes");
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous.id, { kind: "memory", entry: kept, value: "left_as_is" }, at);
+  objectedJudgment(db, previous.id, { kind: "memory", branch: "notes", value: "left_as_is" }, at);
+  const { review } = injectedReview(db);
+
+  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${kept}, branch notes —`);
+  expect(completeMemoryReview(db, review, { judgments: [{ entry: kept }, { branch: "notes" }] }, "auditor", at, "worker").status).toBe("done");
 });
 
 it("この review 自身が注入の後に書いたエントリへの値は注入した一覧に無いので名指して拒まれ、何も記録しない", () => {
