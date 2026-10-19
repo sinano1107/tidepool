@@ -553,11 +553,13 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
   return latestEventOfTask(db, examineeId, "examinee_checkout_opened")?.payload.path;
 }
 
-/** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。 */
-export function readableInterviewRooms(db: Db, rootId: string): string[] {
-  const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => interviewRoomPath(db, id));
-  rooms.push(latestEventOfTask(db, rootId, "interview_retried")?.payload.interview_room);
-  return rooms.filter((path) => path !== undefined);
+/** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。
+ *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。 */
+export function readableInterviewRooms(db: Db, rootId: string): { name: string; path: string }[] {
+  const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => ({ name: id, path: interviewRoomPath(db, id) }));
+  const retried = latestEventOfTask(db, rootId, "interview_retried")?.payload;
+  if (retried) rooms.push({ name: retried.previous_root_id, path: retried.interview_room });
+  return rooms.filter((room): room is { name: string; path: string } => room.path !== undefined);
 }
 
 export interface TaskVerbSwap {

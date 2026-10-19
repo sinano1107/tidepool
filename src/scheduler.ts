@@ -84,6 +84,8 @@ import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
+  freshenPlaceAtPickup,
+  isRemoteBacked,
   openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -406,7 +408,7 @@ export function startScheduler(deps: {
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
-   *  `prepareWorkspaceAtPickup` が落ちた瞬間に**1回だけ**、その repo の token を
+   *  pickup の準備(`freshenPlaceAtPickup` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
    *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
    *
    *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
@@ -502,7 +504,17 @@ export function startScheduler(deps: {
           return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
         }
       }
+      // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
+      // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
+      // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
       const place = taskRunPlace(db, picked, resolved);
+      for (const read of place.reads.filter(isRemoteBacked)) {
+        try {
+          await freshenPlaceAtPickup(read, { githubAuth, registry });
+        } catch (err) {
+          return stopped(await quarantineWithRepoAccessGuidance(read, err));
+        }
+      }
       try {
         await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
       } catch (err) {

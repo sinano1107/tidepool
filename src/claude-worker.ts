@@ -2078,7 +2078,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             allowedDomains: workspace.allowed_domains,
             taskTemp,
             lib64: existsSync("/lib64"),
-            readPaths: place.read_paths,
+            readPaths: place.reads.map((read) => read.path),
           }),
         ),
       );

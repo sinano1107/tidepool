@@ -1242,7 +1242,7 @@ export class CodexWorker implements WorkerAdapter {
       ],
       workspace: workspacePath,
       allowedDomains: workspace.allowed_domains ?? [],
-      readPaths: place.read_paths,
+      readPaths: place.reads.map((read) => read.path),
       executable: this.options.executable,
       hook,
     };

@@ -1,6 +1,9 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { openDb } from "../src/db.js";
+import { registerTask } from "../src/tasks.js";
+import { prepareWorkspaceAtPickup } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -9,6 +12,7 @@ import {
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
+  HUMAN_WEBUI,
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
@@ -79,7 +83,8 @@ it("remote 正本を宣言した workspace では、休止位置がリモート�
 
 // ff できない = 帯域外の手作業でローカルの保護ブランチが分岐している。盤面はそれを
 // 黙って捨てない(`checkout -B` で上書きすれば人間の作業が消える)—— quarantine に
-// 落として人間に見せる。
+// 落として人間に見せる。休止位置への追従は pickup の鮮度の段にもあるので(issue #2223)、
+// 落ちるのは走る前である。
 it("ローカルの保護ブランチが分岐していて ff できなければ quarantine に落ちる", async () => {
   const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
   // 帯域外の手作業: ホスト上でローカル main に直接コミットした
@@ -90,10 +95,10 @@ it("ローカルの保護ブランチが分岐していて ff できなければ
   publish("merged.txt", "landed on the remote\n", "merge on the remote");
 
   t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "runs on a diverged clone");
+  await registerWork(t, "runs on a diverged clone");
   await t.clock.advance(HOUR);
-  await complete(t, task.id);
 
+  expect(t.worker.started).toEqual([]);
   const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
   expect(question?.title).toContain("workspace sandbox needs human attention");
   // 人間の帯域外コミットは消えていない
@@ -104,21 +109,22 @@ it("ローカルの保護ブランチが分岐していて ff できなければ
 // として通ってしまうが、休止位置としては嘘である —— そこに載っているのは push されて
 // いないローカル専用のコミットで、リモートを見ている人間の理解と食い違う。決定7 が
 // 求めているのは「ff コマンドが成功したこと」ではなく「リモートへ追従していること」
-// なので、検査は位置の一致で行う(/code-review Spec 軸の指摘)。
-it("ローカルの保護ブランチがリモートより先行しているだけでも quarantine に落ちる", async () => {
+// なので、検査は位置の一致で行う(/code-review Spec 軸の指摘)。休止位置への追従は
+// pickup の鮮度の段にもあるので(issue #2223)、走る前に後始末と同じ理由の文で落ちる。
+it("ローカルの保護ブランチがリモートより先行しているだけでも、pickup の準備が後始末の休止位置と同じ理由で拒む", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
   // 帯域外の手作業: ホスト上でローカル main に直接コミットしたが push していない。
   // リモートは動いていないので、ff は「もう最新」として黙って成功する
   writeFileSync(join(workspace.path, "by-hand.txt"), "committed on the host\n");
   git(workspace.path, "add", "-A");
   git(workspace.path, "commit", "-m", "out-of-band local work, never pushed");
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "pick up an ahead checkout", completion_criteria: "never runs" }, new Date("2026-10-19T00:00:00.000Z"), ...HUMAN_WEBUI);
 
-  t = await bootTidepool({ workspace });
-  const task = await registerWork(t, "runs on a clone that is ahead");
-  await t.clock.advance(HOUR);
-  await complete(t, task.id);
-
-  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
-  expect(question?.title).toContain("workspace sandbox needs human attention");
+  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
+    "workspace sandbox: local 'main' is ahead of refs/remotes/origin/main — out-of-band local commits were never pushed",
+  );
   expect(git(workspace.path, "show", "main:by-hand.txt")).toBe("committed on the host");
+  expect(git(workspace.path, "branch", "--list", `task/${task.id}`)).toBe("");
+  db.close();
 });
