@@ -441,9 +441,10 @@ export function startScheduler(deps: {
    *
    *  戻り値は worker が1度も走らなかった pickup の後始末の一撃で、呼び手が poll の外で撃つ —— 資源の Quarantine の停止
    *  (registry drift・準備の失敗、ADR 0274)、記録の器が書けない pickup(ADR 0266 決定3)、`start` の同期 throw(ADR 0118)。
-   *  poll の外で撃つのは後始末を pickup の制御の流れから切る形であって、契機を守る規則ではない —— adapter の同期の枝は
-   *  `start()` の中から同じ一撃を撃ち、その契機は `inFlight` の間に届く。失われないのは収束が走っている poll の終わりを
-   *  待つからで(ADR 0241 決定5、`pollNow`)、`inFlight` の捨てが契機を失わせる経路は無い(#2252)。 */
+   *  thunk で poll の外へ出す形は #570 のもので、記録された理由は「poll の中で解放すれば契機は捨てられる(ADR 0119 決定5)」
+   *  だけである。その理由は ADR 0241 の後では成り立たない —— adapter の同期の枝は `start()` の中から同じ一撃を撃ち、その契機は
+   *  `inFlight` の間に届くが、収束が走っている poll の終わりを待つので失われない(ADR 0241 決定5、`pollNow`)。形はそのまま
+   *  残している(#2252)。 */
   async function pickup(
     task: Task,
     setting: ExecutionSetting,
