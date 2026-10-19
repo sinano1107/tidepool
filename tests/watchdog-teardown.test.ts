@@ -336,8 +336,8 @@ it("準備が checkout より前に落ちた pickup の後始末が再起動で�
   expectUntouchedReturn(f, slot);
 });
 
-/** 後始末が容器で止まっている間に、人間が止めた workspace の question を回答してから task を直接 cancel する(issue #2257)。 */
-async function cancelledMidTeardown() {
+/** 準備が checkout より前に落ちた pickup の後始末を、容器で止めたままにする(issue #2257)。 */
+async function heldMidTeardown() {
   const f = await stoppedBeforeCheckout(true);
   f.runtime.hold(f.task.id);
   f.handler(f.task.id, { kind: "pickup_stopped", ...f.stop });
@@ -352,7 +352,7 @@ it.each([
   ["回収済み観測で", false],
   ["再起動を跨いで", true],
 ])("準備が checkout より前に落ちた pickup が後始末の途中で直接 cancel されても、修理したばかりの workspace に偽の Quarantine を立てずに枠を空ける —— %s(ADR 0274 決定3 / issue #2257)", async (_, restart) => {
-  const f = await cancelledMidTeardown();
+  const f = await heldMidTeardown();
   answerQuestionViaWebui(f.db, getTask(f.db, openQuarantineQuestion(f.db, "workspace", f.ws.name)!.id)!, ["repaired by hand"], f.clock.now());
   cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
 
@@ -369,8 +369,8 @@ it.each([
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
-it("止めた workspace の question が開いている間は、後始末の途中の直接 cancel を資源の門が拒む(issue #130 / issue #2257 の対照)", async () => {
-  const f = await cancelledMidTeardown();
+it("issue #2257 の対照: 止めた workspace の question を回答する前は、後始末の途中の直接 cancel そのものが資源の門で拒まれる(issue #130)", async () => {
+  const f = await heldMidTeardown();
 
   const cancel = () => cancelTaskDirectly(f.db, getTask(f.db, f.task.id)!, null, f.clock.now(), cancelDefaults(f), "webui");
   expect(cancel).toThrow(DomainError);
