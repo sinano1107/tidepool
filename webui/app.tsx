@@ -412,7 +412,7 @@ function mapData(
     completed: "waiting for this session's processes to exit",
     interrupted: 'usage limit hit · task returns to the queue once processes exit',
     released: "task released · waiting for this session's processes to exit",
-    never_ran: 'worker never ran · task is back at the queue head',
+    never_ran: 'worker never ran · freeing the slot',
   };
   // taskId (real deployments only) is a full UUID — the Queue screen renders
   // it as its own truncated chip (title tooltip carries the full value), so

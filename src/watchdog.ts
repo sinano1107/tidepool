@@ -259,8 +259,8 @@ export function recordContainerHaltHandler(
  *  失敗と skill 列挙の失敗(issue #770)—— で、`spawn_failed` event はそれぞれの観測点が書く。
  *
  *  上限到達による中断と違い、記録(failure question)を回収済み観測の**前**に置く ——
- *  escalate verb と同じ順で、後始末中の status が `todo` になるので経路は
- *  エスカレーションの step に読まれる(ADR 0113 決定3)。process を1つも持たない session
+ *  escalate verb と同じ順で、後始末中の status は `todo` になり、経路は `spawn_failed` の event から
+ *  process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)。process を1つも持たない session
  *  なので、容器は空のまま強制回収を撃つ。 */
 export function spawnFailureHandler(
   deps: TeardownDeps,

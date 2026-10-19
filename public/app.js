@@ -4214,7 +4214,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     completed: "waiting for this session's processes to exit",
     interrupted: "usage limit hit \xB7 task returns to the queue once processes exit",
     released: "task released \xB7 waiting for this session's processes to exit",
-    never_ran: "worker never ran \xB7 task is back at the queue head"
+    never_ran: "worker never ran \xB7 freeing the slot"
   };
   const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
     // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
