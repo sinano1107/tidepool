@@ -68,7 +68,7 @@ async function sessionInTeardown(
   );
   const picked = pickupTask(db, registered, "deckhand", clock.now())!;
   slot.occupy(picked.id);
-  await prepareWorkspaceAtPickup(db, ws, picked, { now: new Date(0) });
+  await prepareWorkspaceAtPickup(db, ws, picked);
   // 盤面は pickup 時に session の容器を作る。このホストでは force だけでは空にならない
   containers.open(picked.id);
   runtime.hold(picked.id);
@@ -198,7 +198,7 @@ async function stoppedBeforeSpawn(taskWorkspace?: string) {
   const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand", workspace: ws.name })!;
   slot.occupy(task.id);
   containers.open(task.id);
-  if (!taskWorkspace) await prepareWorkspaceAtPickup(db, ws, task, { now: clock.now() });
+  if (!taskWorkspace) await prepareWorkspaceAtPickup(db, ws, task);
   moveTask(db, registerTask(db, { type: "work", title: "queued after", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), null, clock.now(), ...HUMAN_WEBUI);
   const triggered: string[] = [];
   const resolve = (name: string | null) => {
@@ -250,7 +250,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   if (prior) {
     const earlier = pickupTask(db, registerTask(db, { type: "work", title: "earlier", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now())!;
     slot.occupy(earlier.id);
-    await prepareWorkspaceAtPickup(db, ws, earlier, { now: clock.now() });
+    await prepareWorkspaceAtPickup(db, ws, earlier);
     escalateTask(db, earlier, { context: "need a decision", questions: [{ title: "which?", options: ["a", "b"], recommendation: "a" }] }, "deckhand", clock.now(), "worker");
     markTeardown(db, earlier.id, clock.now());
     slot.enterTeardown();
@@ -261,7 +261,7 @@ async function stoppedBeforeCheckout(prior: boolean) {
   const task = pickupTask(db, registerTask(db, { type: "work", title: "stopped", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI), "deckhand", clock.now(), { assignee: "deckhand", workspace: ws.name })!;
   slot.occupy(task.id);
   containers.open(task.id);
-  const failure = await prepareWorkspaceAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task, { now: clock.now() }).then(() => undefined, (err: unknown) => err);
+  const failure = await prepareWorkspaceAtPickup(db, { ...ws, repo: "https://github.com/acme/elsewhere.git" }, task).then(() => undefined, (err: unknown) => err);
   expect(failure).toBeInstanceOf(Error);
   const stop = quarantineWorkspace(db, ws.name, failure, clock.now());
   const handler = queueReturnHandler(deps, containers);
@@ -361,7 +361,7 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
   const picked = pickupTask(f.db, getTask(f.db, f.task.id)!, "deckhand", f.clock.now())!;
   f.slot.occupy(picked.id);
   f.containers.open(picked.id);
-  await prepareWorkspaceAtPickup(f.db, f.ws, picked, { now: f.clock.now() });
+  await prepareWorkspaceAtPickup(f.db, f.ws, picked);
   // 走った worker が自分のブランチを離れ、成果を main の上に残した
   git(f.ws.path, "checkout", "main");
   await writeFile(`${f.ws.path}/wip.txt`, "work left on main\n");

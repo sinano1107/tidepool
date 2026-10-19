@@ -315,7 +315,7 @@ function resolveTaskWorkspace(deps: McpDeps, task: Task): WorkspaceConfig | unde
   const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
   if (!resolve) return undefined;
   const workspace = resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-  // 門と後始末は走る場所に効く —— interview の root と受験者は面接室(ADR 0273 決定1・8)
+  // 門と後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)
   return workspace && taskRunPlace(deps.db, task, workspace);
 }
 

@@ -613,8 +613,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     cliAuth: options.cliAuth,
     githubAuth: options.githubAuth,
     registry: options.registry,
-    // ADR 0266 決定2: 決着した pin の子の答案の写しは transcript と同じ器に置く
-    recordDir: options.transcripts.dir,
     agents: agentAdmin?.list,
     retrospectiveCalls,
     translationClient: options.translationClient,

@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
-import { withoutAutoGc } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -238,7 +237,7 @@ function runAuthedGit(
   const authenticated = auth !== undefined && repo !== undefined;
   return execFileSync("git", authenticated ? [...GIT_CREDENTIAL_ARGS, ...args] : args, {
     cwd,
-    env: withoutAutoGc(authenticated ? auth.env(repo) : process.env),
+    env: authenticated ? auth.env(repo) : undefined,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: timeoutMs,
   })

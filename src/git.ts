@@ -22,14 +22,6 @@ const TIDEPOOL_GIT_IDENTITY_ENV = {
   GIT_COMMITTER_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
 } as const;
 
-/** ADR 0266 決定1: 盤面の git は background の `gc --auto` を起こさない —— pin の子の pickup の準備の repack / prune と競合する。
- *  引数でなく env の config に足すのは、コマンド行(失敗の本文に載る)を変えないため。ambient な `GIT_CONFIG_*` の後ろに足す。
- *  ponytail: registry clone のように盤面しか触らない clone は自動の gc を失う。loose object の溜まりが観測されたら明示の gc を */
-export function withoutAutoGc(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const n = Number(env.GIT_CONFIG_COUNT ?? 0);
-  return { ...env, GIT_CONFIG_COUNT: String(n + 1), [`GIT_CONFIG_KEY_${n}`]: "gc.auto", [`GIT_CONFIG_VALUE_${n}`]: "0" };
-}
-
 /** Shared by every board-driven git call (workspace.ts and workspace-create.ts).
  *  stderr captured, not inherited: git narrates checkouts on stderr and the
  *  board's console is not the place for it. */
@@ -39,19 +31,13 @@ export function git(cwd: string, ...args: string[]): string {
 
 /** `git` に env を足したもの(一時 index の `GIT_INDEX_FILE` 用)。 */
 export function gitWithEnv(env: NodeJS.ProcessEnv, cwd: string, ...args: string[]): string {
-  return run(cwd, args, undefined, env).toString().trim();
+  return run(cwd, args, env).toString().trim();
 }
 
-/** `git` の生の stdout(`bundle create -` のような binary の出力用)。大きさは答案次第なので上限を外す。 */
-export function gitBytes(cwd: string, ...args: string[]): Buffer {
-  return run(cwd, args, Infinity);
-}
-
-function run(cwd: string, args: string[], maxBuffer?: number, env?: NodeJS.ProcessEnv): Buffer {
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
   return execFileSync("git", args, {
     cwd,
-    env: withoutAutoGc({ ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env }),
+    env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env },
     stdio: ["ignore", "pipe", "pipe"],
-    ...(maxBuffer !== undefined && { maxBuffer }),
   });
 }

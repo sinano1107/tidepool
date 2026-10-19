@@ -225,6 +225,8 @@ export interface WireContract {
     /** Interview の root だけ: 面接室のホスト上の在り処(まだ開いていなければ null)と最新の出題の head(出題前は null)(ADR 0273 決定1・3)。 */
     interview_room?: string | null;
     posed_head?: string | null;
+    /** 受験者だけ: 自分の checkout のホスト上の在り処(まだ開いていなければ null)(ADR 0276 決定4)。 */
+    examinee_checkout?: string | null;
   };
   "GET /api/your-tasks": Array<Pick<QueueTask, "id" | "title" | "issue_live_state"> & { blocking: string | null }>;
   "GET /api/pause": {

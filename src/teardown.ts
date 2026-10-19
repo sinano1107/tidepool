@@ -194,7 +194,7 @@ async function teardown(
   const task = getTask(db, taskId);
   if (!task) return;
   if (step.ready && !step.ready(task)) return;
-  // 後始末は走る場所に効く —— interview の root と受験者は面接室(ADR 0273 決定1・8)。門が渡した workspace は解決済みの走る場所
+  // 後始末は走る場所に効く —— interview の root は面接室、受験者は自分の checkout(ADR 0273 決定1・8 / ADR 0276 決定1)。門が渡した workspace は解決済みの走る場所
   let workspace = step.workspace;
   if (workspace === undefined) workspace = deps.resolve && runPlaceToRelease(deps, deps.resolve, task, step);
   const mergeBack = Boolean(step.completion) && task.type === "work";

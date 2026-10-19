@@ -365,9 +365,9 @@ function mapData(
       githubIssueNumber: t.github_issue_number,
       settledByObservation: t.settled_by_observation ? SETTLED_BY_OBSERVATION_COPY[t.settled_by_observation] : undefined,
       landingState: t.landing_state ? LANDING_STATE_COPY[t.landing_state] : undefined,
-      // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は面接室 —— 列の値をそのまま見せない
+      // ADR 0273 決定8: 受験者の workspace 列は実環境の名前で、走る場所は出題の head を fetch した自分の checkout(ADR 0276 決定1)—— 列の値をそのまま見せない
       interviewPlace: t.type === 'interview' ? `real environment: ${t.workspace ?? 'default workspace'}`
-        : t.interview_root_id ? `interview room (reproduces ${t.workspace ?? 'default workspace'})` : undefined,
+        : t.interview_root_id ? 'own checkout of the posed head' : undefined,
       interviewWaiting: t.interview_waiting && INTERVIEW_WAITING_COPY[t.interview_waiting],
     });
   }
@@ -612,13 +612,17 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
 }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
-  // Interview の root の面接室の在り処と出題の head は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0082)
+  // Interview の root の面接室の在り処と出題の head、受験者の checkout の在り処は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0276 決定1 / ADR 0082)
   const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
+  const [checkout, setCheckout] = React.useState<string | null>(null);
   React.useEffect(() => {
     setInterview(null);
-    if (task.type !== 'interview') return;
+    setCheckout(null);
+    if (task.type !== 'interview' && task.interview_root_id == null) return;
     api('GET /api/tasks/:id', { params: { id: task.id } })
-      .then((full) => setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' }))
+      .then((full) => task.type === 'interview'
+        ? setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' })
+        : setCheckout(full.examinee_checkout ?? 'not opened yet'))
       .catch(() => {});
   }, [task.id]);
   const meta = { fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px', overflowWrap: 'anywhere' } as const;
@@ -628,6 +632,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
       <p style={meta}>{task.id} · {task.type}</p>
       {review && <p style={meta}>{review}</p>}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
+      {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
       <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
       <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
       <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
