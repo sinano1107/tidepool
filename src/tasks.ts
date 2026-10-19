@@ -595,7 +595,8 @@ export interface TaskVerbSwap {
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは RCA と memory_repair で、memory_repair は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
- *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。 */
+ *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
+ *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
@@ -2384,9 +2385,10 @@ export function logDecision(
   });
 }
 
-/** 統合レビューの完了(ADR 0278 決定2〜5): findings は必須。修理子(review が分解した work)が無ければ no_findings の印が要り、
- *  あれば値は盤面が repaired と導いて行に修理子の id と status を書く —— そのとき no_findings は受け取って何もしない。判断は型つきの
- *  判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。未決着の修理子は finishTask が拒み、行ごと巻き戻る。 */
+/** 統合レビューの完了(ADR 0278 決定2〜5): findings は必須。修理子(review が分解した work —— 完了が待つ子と同じ鍵、`awaitedChildSql`)が
+ *  無ければ no_findings の印が要り、あれば値は盤面が repaired と導いて行に修理子の id と status を書く —— そのとき no_findings は受け取って
+ *  何もしない。判断は成果物(被レビュー task)を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。未決着の修理子は
+ *  finishTask が拒み、行ごと巻き戻る。 */
 export function completeIntegrationReview(
   db: Db,
   review: Task,
@@ -2398,18 +2400,21 @@ export function completeIntegrationReview(
   if (!isIntegrationReview(db, review.id)) throw new DomainError("only an integration review completes with complete_integration_review");
   if (whyBlank(findings)) throw new DomainError("complete_integration_review requires findings");
   findings = normalizeText(findings);
-  const repairs = listChildren(db, review.id).filter((child) => child.type === "work").map(({ id, status }) => ({ id, status }));
+  const repairs = listChildren(db, review.id)
+    .filter((child) => child.type === "work" && child.based_on_decision !== null)
+    .map(({ id, status }) => ({ id, status }));
   if (!repairs.length && !no_findings) {
     throw new DomainError("this review filed no repair task: pass no_findings: true if the deliverable has nothing to repair, or file the findings as repair tasks with decompose first");
   }
   const value = repairs.length ? "repaired" : "no_findings";
-  const line = `${value}: the deliverable${repairs.length ? ` (${repairs.map(({ id, status }) => `${id} ${status}`).join(", ")})` : ""} — ${findings}`;
+  const deliverable = review.parent_id!;
+  const line = `${value}: deliverable ${deliverable}${repairs.length ? ` (${repairs.map(({ id, status }) => `${id} ${status}`).join(", ")})` : ""} — ${findings}`;
   return db.transaction(() => {
     appendEvent(db, {
       taskId: review.id,
       workerId,
       origin,
-      payload: { kind: "decision_logged", line, judgment: { kind: "integration_review", value, findings, repairs } },
+      payload: { kind: "decision_logged", line, judgment: { kind: "integration_review", deliverable, value, findings, repairs } },
       at: now,
     });
     return finishTask(db, review, { outcome: findings }, workerId, now, origin);
@@ -3817,7 +3822,7 @@ export function acceptedSql(taskId: string): string {
 }
 
 /** 統合レビューか(ADR 0278 決定1): 受理の導出(`acceptedSql`)と同じ印を読む。 */
-export function isIntegrationReview(db: Db, taskId: string): boolean {
+function isIntegrationReview(db: Db, taskId: string): boolean {
   return db.prepare(`SELECT EXISTS (SELECT 1 FROM ${INTEGRATION_REVIEW_FROM} WHERE review.id = ? AND ${INTEGRATION_REVIEW_MARK})`).pluck().get(taskId) === 1;
 }
 

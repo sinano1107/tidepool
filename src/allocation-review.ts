@@ -1,6 +1,6 @@
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, getEvent, latestEventOfTask, listEvents } from "./events.js";
+import { type EventPayload, getEvent, listEvents } from "./events.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { type Tier, tierNameOf } from "./tier.js";
@@ -111,7 +111,9 @@ export function allocationInput(db: Db, target: AllocationTarget): AllocationRev
       (p): p is Extract<EventPayload, { kind: "worker_exited" }> =>
         p.kind === "worker_exited" && p.worker_spawned_event_id === target.spawned_event_id,
     );
-  const judgment = latestEventOfTask(db, target.review_task_id, "decision_logged")?.payload.judgment;
+  const judgment = listEvents(db, target.review_task_id)
+    .flatMap(({ payload }) => (payload.kind === "decision_logged" && payload.judgment ? [payload.judgment] : []))
+    .at(-1);
   return buildAllocationReviewInput({
     verdict: judgment?.value ?? null,
     findings: judgment?.findings ?? null,

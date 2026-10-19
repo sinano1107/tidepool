@@ -49,7 +49,6 @@ import {
   decomposeTask,
   getTask,
   humanDecomposeTask,
-  isIntegrationReview,
   listBoard,
   listChildren,
   listExaminees,
@@ -61,6 +60,7 @@ import {
   registerTask,
   type Task,
   type TaskType,
+  taskVerbSwap,
 } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
@@ -1072,13 +1072,16 @@ export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true
 /** 修理子の無い統合レビューを閉じる complete_integration_review の引数(ADR 0278 決定2)。 */
 export const NO_FINDINGS = { findings: "the deliverable meets its completion criteria", no_findings: true } as const;
 
+/** 統合レビューか —— その完了の verb が足されているかで見る(述語そのものは production の内側)。 */
+const isIntegrationReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_integration_review");
+
 /** 統合レビューを MCP の complete_integration_review の「指摘なし」で完了させる。 */
 export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
   return callAsTask(t, reviewId, "complete_integration_review", NO_FINDINGS);
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、他は complete_task(work だけ handoff 付き)。 */
-export async function completeOwnVerbViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
+export async function completeIntegrationReviewOrTaskViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
   return isIntegrationReview(t.db, task.id) ? completeIntegrationReviewViaMcp(t, task.id) : completeViaMcp(t, task.id, task.type === "work");
 }
 
@@ -1287,7 +1290,7 @@ export async function runNow(t: Tidepool, taskId: string) {
   for (;;) {
     const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
     if (!running || running.id === taskId) break;
-    const res = await completeOwnVerbViaMcp(t, running);
+    const res = await completeIntegrationReviewOrTaskViaMcp(t, running);
     if (res.isError) throw new Error(`slot holder completion failed: ${JSON.stringify(res)}`);
   }
   const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });

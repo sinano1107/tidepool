@@ -694,9 +694,11 @@ export type EventKind = EventPayload["kind"];
 export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
 export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
 
-/** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの値は no_findings か、修理子から導いた repaired。 */
+/** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
+ *  修理子から導いた repaired。 */
 export interface Judgment {
   kind: "integration_review";
+  deliverable: string;
   value: "no_findings" | "repaired";
   findings: string;
   repairs: Array<{ id: string; status: TaskStatus }>;

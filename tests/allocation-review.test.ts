@@ -120,7 +120,7 @@ it("対象 session の段を論理削除しても、入力は消したときの�
   expect(input.tier).toBe("retired");
 });
 
-it("verdict と findings は統合レビューの判断の行から読む(ADR 0278 決定5)", () => {
+it("verdict と findings は統合レビューの判断の行から読み、後の判断でない行には引きずられない(ADR 0278 決定5)", () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-19T00:00:00.000Z");
   const work = registerTask(db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
@@ -128,6 +128,7 @@ it("verdict と findings は統合レビューの判断の行から読む(ADR 02
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
   completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
+  appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "a later plain decision" } });
 
   const [target] = allocationTargets(db);
 
@@ -260,7 +261,6 @@ it("人間が完了した統合点レビューも評価される —— 完了�
   await nextPoll(t);
 
   expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([{ review_task_id: review.id, worker_spawned_event_id: spawnedId }]);
-  expect(allocationClient.calls.map(({ input: { verdict, findings } }) => ({ verdict, findings }))).toEqual([{ verdict: "no_findings", findings: "accepted by hand" }]);
 });
 
 it("撃って失敗すると review の完了 event を鍵にした失敗 event だけが残り、注釈は無く、完了は倒れない", async () => {
