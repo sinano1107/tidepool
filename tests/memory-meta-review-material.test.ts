@@ -260,7 +260,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
   for (const item of parts.items) expect(section).toContain(JSON.stringify(item));
 });
 
-it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・トークン数と計数器を持つ", () => {
+it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・注入した Items to judge と同じ並び・同じ鍵の items・トークン数と計数器を持つ", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const objected = objectedDecision(db, work, 1);
@@ -295,6 +295,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
       proposals: [question],
       proposal_entries: [rejected],
       branches: [definition],
+      items: [...[written, definition, drafted, rejected].map((entry) => ({ entry })), { branch: "tools/node" }],
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
       tokenizer_version: expect.stringMatching(/^\d+\.\d+\.\d+$/),

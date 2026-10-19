@@ -649,6 +649,8 @@ const MATERIAL_PARTS = {
   proposals: false,
   proposal_entries: true,
   branches: true,
+  // 項目は verb の鍵の列で、seen は5部分のエントリで数える(entriesSeenBefore)
+  items: false,
 } as const satisfies Record<MaterialPart, boolean>;
 type EntryPart = { [K in MaterialPart]: (typeof MATERIAL_PARTS)[K] extends true ? K : never }[MaterialPart];
 const MATERIAL_ENTRY_PARTS = (Object.keys(MATERIAL_PARTS) as MaterialPart[]).filter((part): part is EntryPart => MATERIAL_PARTS[part]);
