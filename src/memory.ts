@@ -2656,7 +2656,21 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
     ...parts.store_changes.map(({ id }) => id),
     ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
   ]);
-  const objectedBranches = new Set(objected.flatMap((j) => ("branch" in j ? [j.branch] : [])));
+  // 木に無い枝は、配下だったエントリの移動の鎖の末尾から今の path を引く(エントリが鎖の末尾で名指されるのと同じ)
+  const inTree = new Set(parts.branches.map(({ path }) => path));
+  const moved = db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason = 'path_moved'").all() as EntryRow[];
+  const objectedBranches = new Set(
+    objected.flatMap((j) => {
+      if (!("branch" in j)) return [];
+      if (inTree.has(j.branch)) return [j.branch];
+      return moved.flatMap((row) => {
+        if (!atOrUnder(row.path, j.branch)) return [];
+        const rest = row.path.slice(j.branch.length);
+        const now = sameBodyChain(db, row, restored).at(-1)!.path;
+        return now.endsWith(rest) ? [now.slice(0, now.length - rest.length)] : [];
+      });
+    }),
+  );
   const branches = parts.branches.filter(
     ({ path, definitions, scopes }) =>
       scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1 || objectedBranches.has(path),

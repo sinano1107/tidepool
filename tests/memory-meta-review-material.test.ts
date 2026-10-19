@@ -13,6 +13,7 @@ import {
   invalidateMemoryEntry,
   listPrecedents,
   moveMemory,
+  moveMemoryBranch,
   moveMemoryByMetaReview,
   proposeMemoryChange,
   pullMemoryBranches,
@@ -23,10 +24,10 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
-import { EXTRACTOR_VERSION, entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
+import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, bundledObjection, failureQuestion, HUMAN_WEBUI, objectedJudgment, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, failureQuestion, HUMAN_WEBUI, objectedJudgment, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** memory meta-review の材料の節(ADR 0180 決定1・2)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
@@ -159,8 +160,7 @@ it("店の変更に candidate は載らない —— 前回より後に起草さ
 /** setup のみ: 1 marker = 1 episode の直挿しで、異議つき decision を置く(memory-meta-review-reads.test.ts と同じ形)。 */
 function objectedDecision(db: Db, taskId: string, i: number): number {
   const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, taskId);
-  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+  episodeOfDecision(db, taskId, decision);
   return decision;
 }
 
@@ -292,6 +292,22 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
   expect(section).toContain("the entries and branches named by the judgments of the objected decisions");
 });
 
+it("窓の中に枝ごと移された枝を名指す異議つき判断の行は、エントリの移動をたどった今の path の枝で項目に載る —— 旧の path は木に無い(ADR 0279 決定5)", () => {
+  const db = openDb(":memory:");
+  defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
+  knowledge(db, "notes/today");
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous, { kind: "memory", branch: "notes", value: "left_as_is" }, at);
+  defineMemoryBranch(db, { scope: "tidepool", path: "memo/today", text: "Today.", author: deckhand }, "worker", at);
+  moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: "tidepool", to_path: "memo", mover: human }, "webui", at);
+  const review = register(db, "memory");
+
+  const { parts } = memoryMaterialOf(db, review);
+
+  expect(parts.branches.map((b) => b.path)).not.toContain("notes");
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([{ branch: "memo" }]);
+});
+
 it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・注入した Items to judge と同じ並び・同じ鍵の items・トークン数と計数器を持つ", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
@@ -355,9 +371,9 @@ it("決着した提案の部分の行も pin した本文の今の居場所 relo
 it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は異議つき判断の部分のエントリだけ数える(ADR 0279 決定6)", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  // objectedDecision の直挿しは Episode の id を worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
-  const workSession = 1;
-  const objected = objectedDecision(db, work, workSession);
+  // objectedDecision の直挿し(episodeOfDecision)は decision の event id を Episode の id と worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
+  const objected = objectedDecision(db, work, 1);
+  const workSession = objected;
   const followed = knowledge(db, "followed");
   appendEvent(db, {
     taskId: work,

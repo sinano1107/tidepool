@@ -5,11 +5,10 @@ import { applyExecutionSettingsChange, type ExecutionSetting, readExecutionSetti
 import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, listPrecedents, recordMetaReviewMaterial } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, bundledObjection, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -460,8 +459,7 @@ it("routing meta-review の purpose は材料の節とその7つの部分を名�
 /** setup のみ: 1 marker = 1 episode の直挿しで、task に異議つき decision を置く(memory-meta-review-material.test.ts と同じ形)。 */
 function objectedDecision(db: Db, taskId: string, i: number): number {
   const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'deckhand', '{}')").run(i, i, EXTRACTOR_VERSION, taskId);
-  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(i, decision);
+  episodeOfDecision(db, taskId, decision);
   bundledObjection(db, taskId, decision, at);
   return decision;
 }

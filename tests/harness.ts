@@ -947,12 +947,18 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
-/** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置き(1 marker = 1 episode の直挿し)、その行に異議を立てる。
+/** setup のみ: 判断の行の event を 1 marker = 1 episode の直挿しで episode に載せる(#356 の投影は使わない)。episode の id と
+ *  worker_spawned_event_id はその event id —— 呼び手ごとの採番が重ならない。 */
+export function episodeOfDecision(db: Db, taskId: string, decision: number, agent = "deckhand"): void {
+  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, ?, '{}')").run(decision, decision, EXTRACTOR_VERSION, taskId, agent);
+  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(decision, decision);
+}
+
+/** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置いて episode に載せ、その行に異議を立てる。
  *  返り値は判断の行の event id。 */
 export function objectedJudgment(db: Db, taskId: string, judgment: Judgment, at: Date): number {
   const decision = appendEvent(db, { taskId, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: judgment.kind, judgment } });
-  db.prepare("INSERT INTO episodes (id, worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, ?, 'auditor', '{}')").run(decision, decision, EXTRACTOR_VERSION, taskId);
-  db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(decision, decision);
+  episodeOfDecision(db, taskId, decision, "auditor");
   bundledObjection(db, taskId, decision, at);
   return decision;
 }

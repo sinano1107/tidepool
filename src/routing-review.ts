@@ -356,11 +356,13 @@ function judgmentItems(
   const { groups } = parts.allocations;
   const lowerable = (name: string) => registry.some((agent) => agent.name === name && !agent.builtin && tierStep(db, agent).below !== undefined);
   const agents = new Set([...groups.flatMap((g) => (g.source_tier === "agent" ? [g.agent] : [])), ...objected.flatMap((o) => ("agent" in o ? [o.agent] : []))].filter(lowerable));
+  // 生きている段の行そのものを集めるので、集計(名前)と判断の行(id)の重なりは Set が畳む
+  const live = liveTierRows(db);
   const tiers = new Set([
-    ...groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? [g.tier] : [])),
-    ...objected.flatMap((o) => ("tier_id" in o ? liveTierRows(db).filter((t) => t.id === o.tier_id).map((t) => t.name) : [])),
+    ...groups.flatMap((g) => (g.source_tier === "task" && !g.tier_retired ? live.filter((t) => t.name === g.tier) : [])),
+    ...objected.flatMap((o) => ("tier_id" in o ? live.filter((t) => t.id === o.tier_id) : [])),
   ]);
-  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map((tier) => ({ tier_id: tierIdOf(db, tier), tier })), { learner: true }];
+  return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map(({ id, name }) => ({ tier_id: id, tier: name })), { learner: true }];
 }
 
 /** routing の材料の節の7つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
