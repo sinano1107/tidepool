@@ -22,7 +22,9 @@ import {
   taskDecisionLog,
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
-import { buildMemoryInjection, createBehaviorCandidate, listMemoryEntries, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
+import { createBehaviorCandidate, listMemoryEntries, memoryIndex, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
+import { metaReviewSubjectOf } from "./meta-review.js";
+import { readPulls } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
@@ -445,17 +447,15 @@ function objectionInput(db: Db, attribution: SecondRoundSource, before: number):
   };
 }
 
-/** 異議された entry を含む worker session で、その entry より前に read_memory が返した記憶(ADR 0166 決定2)。
+/** 異議された entry を含む worker session で、その entry より前の pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)。
  *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
 function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_read"] {
   const events = listEvents(db, entry.task_id);
   const spawned = sessionSpawnOf(events, entry);
   if (!spawned) return [];
   const { inSession } = sessionWindow(events, spawned);
-  const ids = new Set(
-    events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.payload.verb === "read_memory" && e.id < entry.id && inSession(e) ? e.payload.returned_ids : [])),
-  );
-  return memoryBodies(db, [...ids]);
+  const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < entry.id && inSession(e) ? [e.payload] : []));
+  return memoryBodies(db, [...new Set(readPulls(events, spawned.id, pulls))]);
 }
 
 /** 記憶の書き込みの行(memory_written)が作った・無効化したエントリの本文。他の行は欄を持たない。 */
@@ -475,9 +475,10 @@ function memoryBodies(db: Db, ids: number[]): AttributionInput["memory_read"] {
 /** 帰責が起草に向くエントリから Board call で Behavior candidate を起草する(ADR 0120 決定1(b)(c) /
  *  issue #617): 初回は `preference` だけ、第2回は学習向きの cause すべて(入力に RCA の findings を足す)。
  *  人間エントリ・起草 client の無い盤面・宛先の agent がいない起草(文面の書き手が人間か盤面の
- *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。宛先は cause から導出し
+ *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。主題つきの task の行は scope null
+ *  (盤面全体)に起草し、INDEX もその視界で組む(ADR 0279 決定1)。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
+ *  撃って失敗したら —— 書き込みが一木の門(ADR 0178)に当たったときも —— `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
  *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
 async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: Date): Promise<void> {
   const { cause, round, entry_id } = attribution;
@@ -499,11 +500,13 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
-  let scope: string;
-  try {
-    scope = memoryScope(deps, task);
-  } catch {
-    return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
+  let scope: string | null = null;
+  if (metaReviewSubjectOf(db, taskId) === null) {
+    try {
+      scope = memoryScope(deps, task);
+    } catch {
+      return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
+    }
   }
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
@@ -513,10 +516,21 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     if ("unavailable" in call) return;
     // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
     const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
-    const index = buildMemoryInjection(db, task, scope, entry.worker_id, query).section;
-    let draft: BehaviorDraft;
+    const index = memoryIndex(db, task, scope, entry.worker_id, query).section;
     try {
-      draft = await call.client.draft({ ...input, index }, call.setting);
+      const { addressee, ...fields } = await call.client.draft({ ...input, index }, call.setting);
+      createBehaviorCandidate(
+        db,
+        {
+          ...fields,
+          scope,
+          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
+          source: { event_id: attribution.id },
+          author: { activity: "board", name: BOARD_WORKER_ID },
+        },
+        "board",
+        now,
+      );
     } catch (err) {
       if (quarantineBoardCallRefusal(db, err, "memory draft", taskId, now)) return;
       appendEvent(db, {
@@ -526,21 +540,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
         payload: { kind: "memory_draft_failed", entry_id, round, attribution_event_id: attribution.id, reason: message(err) },
         at: now,
       });
-      return;
     }
-    const { addressee, ...fields } = draft;
-    createBehaviorCandidate(
-      db,
-      {
-        ...fields,
-        scope,
-        addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
-        source: { event_id: attribution.id },
-        author: { activity: "board", name: BOARD_WORKER_ID },
-      },
-      "board",
-      now,
-    );
   });
 }
 
@@ -626,7 +626,8 @@ export function proposeFromObjection(
   }
   const entryInput = {
     ...fields,
-    scope: memoryScope(board, getTask(db, task.parent_id)!),
+    // 主題つきの親(meta-review)の行は盤面全体に置く(ADR 0279 決定1)
+    scope: metaReviewSubjectOf(db, task.parent_id) === null ? memoryScope(board, getTask(db, task.parent_id)!) : null,
     source: { event_id: based_on_decision === undefined ? attribution!.id : requireDecision(db, based_on_decision, reviewId) },
     author: { activity: "rca" as const, name: author },
   };

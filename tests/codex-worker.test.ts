@@ -10,7 +10,7 @@ import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSki
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
@@ -717,6 +717,26 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Routing meta-review material");
     expect(developerInstructions(f.process.calls[2]!.args)).not.toContain("meta-review material");
     expect(listEvents(f.db, work.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+  });
+
+  it("主題つきの meta-review の spawn は指針の節を材料の節と別に、その直前に置き、memory_injected は指針の節の id と token 量を持つ(Claude と同じ —— ADR 0279 決定2)", async () => {
+    const f = await fixture();
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const { entry_id } = recordBehavior(f.db, humanEntryInput(f.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "x", addressee: "codex-agent" }), "webui", at);
+    // setup のみ: 盤面名義で登録し、codex-agent に割り当てる
+    registerMetaReview(f.db, "memory", at);
+    f.db.prepare("UPDATE tasks SET assignee = 'codex-agent' WHERE meta_review_subject = 'memory'").run();
+    const review = getTask(f.db, listBoard(f.db).find((value) => value.meta_review_subject === "memory")!.id)!;
+    await f.start(review);
+
+    const guidance = buildMemoryInjection(f.db, review, "work", "codex-agent");
+    const { section } = buildMetaReviewMaterial(f.db, review.id)!;
+    expect(guidance.section).toContain(`#${entry_id} behavior Fold duplicates first`);
+    expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${guidance.section}\n\n${section}\n\n`)).toBe(true);
+    expect(listEvents(f.db, review.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
+      entries: [{ id: entry_id, version: entry_id }],
+      tokens: guidance.tokens,
+    });
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(Claude と同じ —— ADR 0175)", async () => {

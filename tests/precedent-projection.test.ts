@@ -367,6 +367,28 @@ it("「D の前に読んだ記憶」(read)は read_memory が返した id だけ
   expect(entriesSeenBefore(episode, events, 9)).toEqual([1, 2, 3]);
 });
 
+it("read_memory_entries が返した id は、その session の memory_injected(指針の節)に載っていたものだけ read に入り、材料の節の id は seen にとどまる(ADR 0279 決定2)", () => {
+  const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
+  const at = "2026-08-20T06:30:00.000Z";
+  const events: EventRow[] = [
+    ...fixtureEvents().filter((e) => e.id === 5),
+    {
+      id: 6, task_id: task, worker_id: "tako", origin: "board", kind: "memory_injected",
+      payload: { kind: "memory_injected", worker_spawned_event_id: 5, watermark: 3, entries: [{ id: 4, version: 4 }], tokens: 10, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
+      created_at: at,
+    },
+    { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: {}, returned_ids: [2, 4], watermark: 3 }, created_at: at },
+    { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+  ];
+  const episode = project({
+    events,
+    transcriptLines: [...toolCall(1, "mcp__tidepool__read_memory_entries", 8), ...toolCall(2, "mcp__tidepool__log_decision", 9)],
+  });
+
+  expect(entriesReadBefore(episode, events, 9)).toEqual([4]);
+  expect(entriesSeenBefore(episode, events, 9)).toEqual([2, 4]);
+});
+
 /** run A(#1231 の測定): 盤面と同じ argv の `codex exec --json` が書いた stdout と、それを挟む合成の events。 */
 const codexTranscriptLines = () =>
   readFileSync(join(import.meta.dirname, "fixtures", "worker-session-codex-0.147.0.stream.jsonl"), "utf8").split("\n");
