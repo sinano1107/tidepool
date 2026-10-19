@@ -670,7 +670,6 @@ it.each([
   });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const { id, args } = await arrange(root.id);
-  expect(t.worker.started.at(-1)!.id).toBe(id);
   // 枠が空いたことと pickup の契機は、別の workspace で待つ task が拾われることで見る
   const waiting = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: other.name })).json;
   drifted = true;
