@@ -1,5 +1,7 @@
 # task type の override は authority の散文と roster にも及ぶ
 
+**Status 追記: 同じ線は `memory_repair` にも及ぶ(ADR 0272 追記3)** —— Authority 節は type の定数、Roster 節は無し(合法な委譲先が無い)。registry の profile の散文は memory_repair にも現れない(2026-10-19 の triage、issue #2217)。
+
 issue #218 のグリリングで決定。ADR 0013 の「read-only は review という**行為**の性質であって行為者の性質ではない」という override は、MCP verb 層(`attributedAuthority`)と CLI ツール層(`reviewToolDenials` / `spawnTools`)には届いていたが、**system prompt の組み立てには届いていなかった** — `claude-worker.ts` の `## Authority` は `resolveExecutionAgent` が agent 名から引いた registry の profile をそのまま注入し、`task.type` を一切見ていなかった。
 
 結果、`REVIEWER_AUTHORITY_PROFILE.guidance`(「You are reviewing read-only. Never fix directly — findings become repair tasks.」)は**エージェントに読ませるつもりで書かれ、読み手が1人もいない文字列**だった。同時に、review タスクのレビュアーは system prompt では registry profile の `assignable_to` から作られた roster を渡され「この人たちに委譲できる」と告げられながら、MCP 層では(ADR 0013 の免除に当たる1人を除いて)全員が承認 question に落ちていた。同じ盤面の2つの roster 面が食い違っていた。

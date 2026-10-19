@@ -71,3 +71,26 @@ memory_repair が組み込みへ落ちても走るので `work` だけに戻る(
 Executor(ADR 0275 決定2)。#2175 の grilling で決まった分も記す: 親の無い memory_repair は `registerTask` が拒む(退けた形「親の無い
 work」と同じ理由)、登録名義は work の修理子と同じ HUMAN 名義 + commit の origin(ADR 0194 決定3)、root の列は参照で写すものが無い
 (→ Executor)。
+
+## 追記3(2026-10-19 の triage / grilling、issue #2217)
+
+決定3 の権限面は deny と verb を type で持たせたが、spawn の文面の **Authority 節と Roster 節の持ち主を書いていなかった**。実装は
+ADR 0271 決定2(cancel 下の review)の「guidance は変えず直後に盤面が1行足す」を写し、assignee の profile の guidance の直後に修理の
+1行(`MEMORY_REPAIR_NOTICE`)を置いていた。ADR 0275 決定1 で組み込み agent が memory_repair を取れるようになると、組み込みの
+profile は reviewer 定数なので、Authority 節が「直すな、roster の worker に修理を振れ」(review の文)になり、直後の1行「`replace_memory`
+で直せ」と食い違う。roster は空。授権は type から決まるので広がっておらず、食い違うのは文だけだった(実測は #2217 のコメント)。
+
+**memory_repair の Authority 節と Roster 節は type が持つ —— review と同じ線(ADR 0013 / ADR 0056)。** Authority 節の文は盤面の定数1つ
+(今の修理の1行そのもの)で実行者を問わず、registry の profile の散文は memory_repair には現れない。`get_current_task` の envelope は
+同じ定数を運び続ける(1本のまま)。Roster 節は無い —— 分解の verb を type で伏せている task に合法な委譲先は無く、ADR 0056 が roster を
+置いた理由(唯一の委譲先を知らせる)が当たらない。理由は3つ: read-only は行為の性質で行為者の性質ではない(ADR 0013)のは CONTEXT.md
+「read-only 保証は review と memory_repair が運ぶ」のとおり memory_repair にも当たり、deny と verb は既に type で持っている;
+memory_repair で profile から読まれるのは文だけ(`assignable_to` は分解が伏せられ、`allowed_workspaces` / `merge` は着地が無い)で、
+profile の guidance は repo の行為(可逆性・merge)の文だから repo に書けない task には当たらない; 組み込みだけ例外にする形は agent の
+身元で分岐する。
+
+退けた形: **解決された profile が reviewer 定数なら guidance を空にする** —— 分岐の軸が type でなく身元で、組み込みは本文も空なので
+prompt が見出し無しの1行で始まる。**組み込み × memory_repair 用の第2の profile 定数を解決で返す** —— 定数が2つになり、registry の agent
+は work の文を着たまま。**profile の roster を残す** —— roster が伏せた verb の相手を指す(ADR 0056 が退けた「guidance が空の roster を
+指す」の逆向き)。
+
