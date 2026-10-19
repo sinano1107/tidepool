@@ -381,9 +381,12 @@ export function startScheduler(deps: {
 
   async function pickupBlocked(): Promise<boolean> {
     // **順序の不変条件(ADR 0119 決定5)**: slot は最初の await より前に読み、候補(`nextSlotTask`)
-    // は await の後に読む。poll 中に届いた契機は `inFlight` で捨てるが、これで取りこぼさない ——
-    // poll が slot を通過した時点で slot は空いているので解放は poll 中に起きず、登録は後ろの
-    // 候補の読み取りに間に合う。順序を入れ替えると tests/scheduler-poll-order.test.ts が赤くなる。
+    // は await の後に読む。poll 中に届いた契機は `inFlight` で捨てるが、登録は後ろの候補の読み取りに
+    // 間に合うので取りこぼさない。順序を入れ替えると tests/scheduler-poll-order.test.ts が赤くなる。
+    // 解放のほうは poll 中にも起きる —— 資源の停止で1度も走らなかった pickup(ADR 0274)は adapter の
+    // `start()` の中から同期に後始末へ入り、空の容器の回収済み観測は即届くので、`slot.release()` と
+    // その契機はこの poll の `inFlight` の間に撃たれる(#2230 / #2252 の観測)。それでも契機が失われないのは
+    // `pollNow` の判定が収束の後ろにあり、収束が走っている poll の終わり(`idle`)を待つから(ADR 0241 決定5)。
     if (slot.currentTaskId !== null) return true;
     // ADR 0068 決定5: 同期の短絡は列挙から導出する — triage セッション (issue #6)・
     // Pause (issue #34)・封じ込め能力とレジストリ到達性の**開いている確認
@@ -438,7 +441,9 @@ export function startScheduler(deps: {
    *
    *  戻り値は worker が1度も走らなかった pickup の後始末の一撃で、呼び手が poll の外で撃つ —— 資源の Quarantine の停止
    *  (registry drift・準備の失敗、ADR 0274)、記録の器が書けない pickup(ADR 0266 決定3)、`start` の同期 throw(ADR 0118)。
-   *  pickup の中で slot を解放してはならない —— 解放が撃つ pickup の契機は `inFlight` の間捨てられる(ADR 0119 決定5)。 */
+   *  poll の外で撃つのは後始末を pickup の制御の流れから切る形であって、契機を守る規則ではない —— adapter の同期の枝は
+   *  `start()` の中から同じ一撃を撃ち、その契機は `inFlight` の間に届く。失われないのは収束が走っている poll の終わりを
+   *  待つからで(ADR 0241 決定5、`pollNow`)、`inFlight` の捨てが契機を失わせる経路は無い(#2252)。 */
   async function pickup(
     task: Task,
     setting: ExecutionSetting,

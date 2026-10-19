@@ -122,7 +122,10 @@ it.each([
     const next = work("次の task", { workspace: "B", assignee: "codex-agent" });
     const scheduler = startScheduler({
       retrospectiveCalls: noRetrospectiveCalls,
-      converge: async () => [],
+      // server.ts と同じ配線: 収束は走っている poll の終わりを待つ(ADR 0241 決定5)。start の中で撃たれた後始末の契機は
+      // この poll の inFlight の間に届くので、契機を守っているのはこの待ちである(#2252)。即解決の converge だと
+      // microtask の順序で偶然通る
+      converge: () => scheduler.idle().then(() => []),
       db,
       clock,
       slot,
