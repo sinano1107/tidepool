@@ -36,6 +36,7 @@ import {
   HOUR,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
+  settleReview,
 } from "./harness.js";
 
 /** 直接 cancel と Edit の範囲(ADR 0198 / 0211)のドメイン層。直接 cancel は「文面の書き手が人間の task、または盤面が登録した
@@ -395,7 +396,7 @@ it("倒れる完了時レビューが使う資源の quarantine は祖先の直�
 it("決着済みの完了時レビューが使う資源の quarantine は祖先の直接 cancel を塞がない —— cascade が触らないものは塞がない(ADR 0271 決定3)", () => {
   db = openDb(":memory:");
   const { parent, done, review } = doneSiblingOfFailed(db);
-  completeTask(db, review, undefined, "fugu", NOW, "worker");
+  settleReview(db, review, "fugu", NOW);
 
   cancelTaskDirectly(db, parent, null, NOW, { auditorName: "fugu", quarantined: { workspaces: [], assignees: ["fugu"] } }, "webui");
 
@@ -494,7 +495,9 @@ it("task ごとの verb の差し替えは、cancelled の work の祖先を挟�
   expect(underCancel.map((task) => task.title)).toEqual(["rca (self): B", "rca (auditor): B", "rca (self): X", "rca (auditor): X"]);
   for (const rca of underCancel) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
   const { parent, done, review } = doneSiblingOfFailed(db);
-  for (const task of [target, cancelled, parent, done, review]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
+  for (const task of [target, cancelled, parent, done]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
+  // 生きた系譜の統合レビューは分解の verb を伏せず、自分の完了の差し替え(ADR 0278 決定1)だけを持つ
+  expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["complete_task"], added: ["complete_integration_review"] });
 });
 
 it("task ごとの verb の差し替えは、memory_repair で分解の verb と新規の記憶の書き込みの verb を伏せ、祖先の cancel の下でも同じ6本 —— 修理の射程は異議された書き込みが触ったエントリに限る(ADR 0272 決定3)", () => {

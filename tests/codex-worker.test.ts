@@ -127,6 +127,13 @@ function discardedRca(db: ReturnType<typeof openDb>) {
   return listChildren(db, child!.id).find((c) => c.title.startsWith("rca (self)"))!;
 }
 
+/** 完了時に盤面が立てた統合レビュー(review_by で codex-agent が担う)—— complete_task の代わりに complete_integration_review を持つ(ADR 0278 決定1)。 */
+function integrationReview(db: ReturnType<typeof openDb>) {
+  const work = registerTask(db, { type: "work", assignee: "codex-agent", workspace: "work", title: "reviewed", purpose: "p", completion_criteria: "c", review_by: ["codex-agent"] }, new Date("2026-08-24T00:00:00.000Z"), ...HUMAN_WEBUI);
+  completeTask(db, work, FULL_HANDOFF, "codex-agent", new Date("2026-08-24T00:00:00.000Z"), "worker");
+  return listChildren(db, work.id).find((child) => child.type === "review")!;
+}
+
 /** `-c <prefix>…` の引数をそのまま返す。 */
 const configEntry = (args: string[], prefix: string) => args.find((arg, i) => args[i - 1] === "-c" && arg.startsWith(prefix))!;
 
@@ -622,6 +629,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
     ["祖先の cancel の下の RCA", discardedRca],
+    ["統合レビュー", integrationReview],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {
     const f = await fixture();
     await f.start(register(f.db));

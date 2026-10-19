@@ -59,6 +59,7 @@ import {
   makeWorkspace,
   quarantineQuestion,
   queuedForAutoMerge,
+  settleReview,
   settleReviews,
   squashTaskIntoOrigin,
 } from "./harness.js";
@@ -5041,7 +5042,7 @@ async function abandonedPromotion(name: string, { stampHead = true } = {}) {
   completeTask(db, work, FULL_HANDOFF, "tako", clock.now(), "worker");
   // 完了時レビューを決着させてから着地する
   for (const review of listBoard(db).filter((t) => t.parent_id === work.id)) {
-    completeTask(db, getTask(db, review.id)!, FULL_HANDOFF, "shako", clock.now(), "worker");
+    settleReview(db, getTask(db, review.id)!, "shako", clock.now());
   }
   github.scriptFailure(new Error("token expired"));
   await landing.converge();
@@ -5320,7 +5321,7 @@ function pickedUpAndCompleted(board: Db, clock: FakeClock, agent: string, worksp
   const picked = pickupTask(board, landingWork(board, clock), agent, clock.now(), { assignee: agent, workspace: workspace?.name })!;
   const done = completeTask(board, picked, FULL_HANDOFF, agent, clock.now(), "worker");
   for (const review of listBoard(board).filter((t) => t.parent_id === done.id)) {
-    completeTask(board, getTask(board, review.id)!, FULL_HANDOFF, "shako", clock.now(), "worker");
+    settleReview(board, getTask(board, review.id)!, "shako", clock.now());
   }
   return getTask(board, done.id)!;
 }

@@ -1,9 +1,10 @@
 import { afterEach, expect, it } from "vitest";
-import { type AllocationTarget, allocationInput, buildAllocationReviewInput } from "../src/allocation-review.js";
+import { type AllocationTarget, allocationInput, allocationTargets, buildAllocationReviewInput } from "../src/allocation-review.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
+import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { changeExecutionSettings } from "../src/execution-setting.js";
-import { completeTask, getTask, registerTask } from "../src/tasks.js";
+import { completeIntegrationReview, completeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -119,6 +120,21 @@ it("対象 session の段を論理削除しても、入力は消したときの�
   expect(input.tier).toBe("retired");
 });
 
+it("verdict と findings は統合レビューの判断の行から読み、後の判断でない行には引きずられない(ADR 0278 決定5)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-19T00:00:00.000Z");
+  const work = registerTask(db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  appendEvent(db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: spawned });
+  completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
+  const review = listChildren(db, work.id).find((child) => child.type === "review")!;
+  completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
+  appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "a later plain decision" } });
+
+  const [target] = allocationTargets(db);
+
+  expect(allocationInput(db, target!)).toMatchObject({ verdict: "no_findings", findings: "the deliverable holds up" });
+});
+
 /** A root work task with one recorded worker session (spawn + exit), completed
  *  so its integration review exists. Returns the ids the annotation must name. */
 async function reviewedWork(t: Tidepool, options: { session: boolean } = { session: true }) {
@@ -165,13 +181,13 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
   return { task, review, spawnedId };
 }
 
-/** worker が MCP の complete_task で review を完了する —— 後始末が poll を促す。 */
+/** worker が MCP の complete_integration_review で review を完了する —— 後始末が poll を促す。 */
 async function completeReview(t: Tidepool, reviewId: string) {
   await t.clock.advance(HOUR);
   const client = await mcpClient(t.mcpBaseUrl, reviewId);
   await client.callTool({
-    name: "complete_task",
-    arguments: { handoff: { ...FULL_HANDOFF, outcome: "accepted with one nit" } },
+    name: "complete_integration_review",
+    arguments: { findings: "accepted with one nit", no_findings: true },
   });
   await client.close();
 }
@@ -179,7 +195,7 @@ async function completeReview(t: Tidepool, reviewId: string) {
 /** 人間が書き手の完了(worker_id human の task_completed)を置く —— poll は促さない。統合点レビューは盤面が agent 名義で
  *  登録し review_by も human を拒むので、人間の扉で完了できる公開の経路が今は無く、完了の verb を直に呼ぶ。 */
 function completeReviewByHand(t: Tidepool, reviewId: string) {
-  completeTask(t.db, getTask(t.db, reviewId)!, { ...FULL_HANDOFF, outcome: "accepted by hand" }, HUMAN_WORKER_ID, t.clock.now(), "webui");
+  completeIntegrationReview(t.db, getTask(t.db, reviewId)!, { findings: "accepted by hand", no_findings: true }, HUMAN_WORKER_ID, t.clock.now(), "webui");
 }
 
 const events = async (t: Tidepool, taskId: string, kind: string) =>
@@ -245,7 +261,6 @@ it("人間が完了した統合点レビューも評価される —— 完了�
   await nextPoll(t);
 
   expect((await annotations(t, task.id)).map((e: any) => e.payload)).toMatchObject([{ review_task_id: review.id, worker_spawned_event_id: spawnedId }]);
-  expect(allocationClient.calls.map((c) => c.input.verdict)).toEqual(["accepted by hand"]);
 });
 
 it("撃って失敗すると review の完了 event を鍵にした失敗 event だけが残り、注釈は無く、完了は倒れない", async () => {

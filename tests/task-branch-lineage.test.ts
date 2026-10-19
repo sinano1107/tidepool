@@ -9,6 +9,7 @@ import {
   api,
   bootTidepool,
   commitWork,
+  completeIntegrationReviewViaMcp,
   FULL_HANDOFF,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
@@ -210,7 +211,7 @@ it("review の修理は元 PR が未 merge なら被レビュー work へ戻り�
   expect(t.github.requests).toEqual([]);
   await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
   await t.clock.advance(HOUR);
-  await complete(review.id);
+  await completeIntegrationReviewViaMcp(t, review.id);
 
   expect(t.github.requests).toHaveLength(1);
   expect(t.github.requests[0]?.branch).toBe(`task/${reviewed.id}`);

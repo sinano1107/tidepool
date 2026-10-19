@@ -65,6 +65,7 @@ import {
   assigneeNeedsApproval,
   auditedPosedEventId,
   completeAudit,
+  completeIntegrationReview,
   completeInterview,
   completeTask,
   contentSourceFor,
@@ -552,7 +553,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
-  // 登録しない(ADR 0272 決定3)
+  // 登録しない(ADR 0272 決定3)。統合レビューは complete_task の代わりに complete_integration_review を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
 
   server.registerTool(
@@ -786,6 +787,27 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       async (input) =>
         runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
           const done = completeAudit(deps.db, task, input, workerId, now, "worker");
+          return { id: done.id, status: done.status };
+        }, resolveOnly),
+    );
+  }
+
+  if (added.includes("complete_integration_review")) {
+    server.registerTool(
+      "complete_integration_review",
+      {
+        description:
+          "Complete this integration review of the parent task's deliverable, in one call. findings is your assessment and " +
+          "is always required. If you filed what you found as repair tasks with decompose, the board records the review as " +
+          "repaired, naming those repair tasks and their statuses: call this once every repair task has settled (an unsettled " +
+          "one is refused), and no_findings is then not needed — passing it is harmless. If you filed no repair task, pass " +
+          "no_findings: true to say the deliverable has nothing to repair; without it the call is refused and nothing is recorded. " +
+          BOARD_WRITE_LANGUAGE_RULE,
+        inputSchema: { findings: requiredTextSchema, no_findings: z.literal(true).optional() },
+      },
+      async (input) =>
+        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
+          const done = completeIntegrationReview(deps.db, task, input, workerId, now, "worker");
           return { id: done.id, status: done.status };
         }, resolveOnly),
     );

@@ -44,6 +44,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import {
   answerQuestion,
   completeAudit,
+  completeIntegrationReview,
   completeTask,
   decomposeTask,
   getTask,
@@ -59,6 +60,7 @@ import {
   registerTask,
   type Task,
   type TaskType,
+  taskVerbSwap,
 } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient } from "../src/translate.js";
@@ -458,6 +460,7 @@ const RELEASING_VERBS = new Set([
   "redecompose",
   "pose_probe",
   "complete_interview",
+  "complete_integration_review",
 ]);
 
 /** Real MCP client over streamable HTTP, attributed to a task via ?task=. */
@@ -1066,6 +1069,22 @@ export async function completeViaMcp(t: Tidepool, taskId: string, handoff = true
   return callAsTask(t, taskId, "complete_task", handoff ? { handoff: FULL_HANDOFF } : {});
 }
 
+/** 修理子の無い統合レビューを閉じる complete_integration_review の引数(ADR 0278 決定2)。 */
+export const NO_FINDINGS = { findings: "the deliverable meets its completion criteria", no_findings: true } as const;
+
+/** 統合レビューか —— その完了の verb が足されているかで見る(述語そのものは production の内側)。 */
+const isIntegrationReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_integration_review");
+
+/** 統合レビューを MCP の complete_integration_review の「指摘なし」で完了させる。 */
+export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
+  return callAsTask(t, reviewId, "complete_integration_review", NO_FINDINGS);
+}
+
+/** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、他は complete_task(work だけ handoff 付き)。 */
+export async function completeIntegrationReviewOrTaskViaMcp(t: Tidepool, task: { id: string; type: string }): Promise<any> {
+  return isIntegrationReview(t.db, task.id) ? completeIntegrationReviewViaMcp(t, task.id) : completeViaMcp(t, task.id, task.type === "work");
+}
+
 /** Finish only the reviews generated for this integration point, through the
  *  public worker verbs, so landing fixtures include the mandatory review gate.
  *  A todo review is started with `runNow`, which first completes whichever task holds the slot
@@ -1075,10 +1094,9 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
     (task: any) => task.parent_id === taskId && task.type === "review" && ["todo", "in_progress"].includes(task.status),
   );
   for (const review of children) {
-    const events = (await api(t.baseUrl, "GET", `/api/tasks/${review.id}/events`)).json;
-    if (!events.some((e: any) => e.kind === "task_registered" && e.payload.integration_review)) continue;
+    if (!isIntegrationReview(t.db, review.id)) continue;
     if (review.status === "todo") await runNow(t, review.id);
-    const result = await completeViaMcp(t, review.id, false);
+    const result = await completeIntegrationReviewViaMcp(t, review.id);
     if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
   }
 }
@@ -1109,14 +1127,19 @@ export const FULL_HANDOFF = {
   known_issues: "n/a",
 };
 
-/** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
 /** 盤面の完了時レビューをすべて決着させる —— 着地の門を、fixture の子だけが閉じる形にする。 */
 export function settleReviews(db: Db, now: Date): void {
-  for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) {
-    completeTask(db, getTask(db, review.id)!, FULL_HANDOFF, "shako", now, "worker");
-  }
+  for (const review of listBoard(db).filter((t) => t.type === "review" && t.status === "todo")) settleReview(db, getTask(db, review.id)!, "shako", now);
 }
 
+/** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、他は complete_task。 */
+export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
+  return isIntegrationReview(db, review.id)
+    ? completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker")
+    : completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
+}
+
+/** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
 export function completedWork(db: Db, now: Date, assignee: string, parentId?: string, workspace?: string): Task {
   const task = registerTask(
     db,
@@ -1267,7 +1290,7 @@ export async function runNow(t: Tidepool, taskId: string) {
   for (;;) {
     const running = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((x: any) => x.status === "in_progress");
     if (!running || running.id === taskId) break;
-    const res = await completeViaMcp(t, running.id, running.type === "work");
+    const res = await completeIntegrationReviewOrTaskViaMcp(t, running);
     if (res.isError) throw new Error(`slot holder completion failed: ${JSON.stringify(res)}`);
   }
   const moved = await api(t.baseUrl, "POST", `/api/tasks/${taskId}/move`, { after: null });
