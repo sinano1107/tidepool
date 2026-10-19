@@ -474,7 +474,6 @@ export interface InterviewTarget {
   effort: string | null;
 }
 
-/** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 /** 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)。 */
 function assertRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (isRepairType(input.type) && input.parent_id === undefined) {
@@ -482,6 +481,7 @@ function assertRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_i
   }
 }
 
+/** ADR 0268 決定5: 受験者の下には question 以外何も生えない(扉を問わず)。 */
 function assertNoExamineeChild(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (input.parent_id !== undefined && input.type !== "question" && getTask(db, input.parent_id)?.interview_target_id != null) {
     throw new DomainError("an Interview's answer task takes no children other than a question");
