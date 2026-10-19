@@ -301,7 +301,9 @@ function registerRcaReview(
  *  objections. An Interview root (its probe is fixed by retry, not repair) and a
  *  task whose artifact is discarded — the task itself is cancelled, or a cancelled
  *  work ancestor sits between it and its root (ADR 0271 決定1・2) — get no work
- *  repair: it is skipped, never left to the registration floor's refusal. The
+ *  repair: it is skipped, never left to the registration floor's refusal. A
+ *  subject task's (memory / routing meta-review) decision rows have no work
+ *  repair either: the work type lacks the subject's verbs (ADR 0279 決定3・4). The
  *  `memory_repair` stands whatever the parent's state. Attribution and the RCAs
  *  below stand by cause either way, never split by group.
  *
@@ -414,7 +416,8 @@ function bundleObjections(
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written");
     const decisionRows = pairs.filter((pair) => pair.entry.kind !== "memory_written");
     // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
-    if (decisionRows.length > 0 && objected.type !== "interview" && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+    // 主題つきの task の判断の行も work の修理子を持たない —— 主題 verb は work に登録されない(ADR 0279 決定3・4)
+    if (decisionRows.length > 0 && objected.type !== "interview" && !objected.meta_review_subject && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
     if (memoryRows.length > 0) registerRepair("memory_repair", "memory repair", "memory writes", memoryRows);

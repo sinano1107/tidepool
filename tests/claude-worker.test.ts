@@ -22,7 +22,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordKnowledge } from "../src/memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
@@ -777,6 +777,28 @@ describe("ClaudeCodeWorker", () => {
     const work = spawn(null);
     expect(work.systemPrompt).not.toContain("meta-review material");
     expect(listEvents(db, work.task.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
+  });
+
+  it("主題つきの meta-review の spawn は指針の節を材料の節と別に、その直前に置き、memory_injected は指針の節の id と token 量を持つ(ADR 0279 決定2)", async () => {
+    const { worker, setting, slot, calls, db } = await makeWorker();
+    const at = new FakeClock().now();
+    const { entry_id } = recordBehavior(db, humanEntryInput(db, { workspace: null, path: "review", title: "Fold duplicates first", text: "x", addressee: "deckhand" }), "webui", at);
+    // setup のみ: 盤面名義の登録を deckhand に割り当てる
+    registerMetaReview(db, "memory", at);
+    db.prepare("UPDATE tasks SET assignee = 'deckhand' WHERE meta_review_subject = 'memory'").run();
+    const task = getTask(db, listBoard(db).find((t) => t.meta_review_subject === "memory")!.id)!;
+    slot.release();
+    slot.occupy(task.id);
+    worker.start(task, setting(task));
+
+    const args = calls.at(-1)!.args;
+    const guidance = buildMemoryInjection(db, task, "work", "deckhand");
+    const { section } = buildMetaReviewMaterial(db, task.id)!;
+    expect(args[args.indexOf("--append-system-prompt") + 1]!.endsWith(`\n\n${guidance.section}\n\n${section}`)).toBe(true);
+    expect(listEvents(db, task.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
+      entries: [{ id: entry_id, version: entry_id }],
+      tokens: guidance.tokens,
+    });
   });
 
   it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {

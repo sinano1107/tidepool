@@ -229,12 +229,55 @@ it("title / purpose / completion criteria が stopword だけの task は、関�
   expect(injection.section).not.toContain("### Relevant entries");
 });
 
-it("主題 memory の meta-review には、見える approved があっても節を出さない(ADR 0122 決定2)", () => {
+it("主題つきの meta-review には INDEX の代わりに指針の節が付き、走る agent 宛てか全員宛ての盤面全体の approved な Behavior と Exemplar だけが id・種別・title・path の行で載る —— 他の宛先・workspace scope・Knowledge は載らない(ADR 0279 決定2)", () => {
   const { db, task, record } = board();
-  record({ path: "tide", title: "fix tide chart" });
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).not.toBeNull();
-  const review = registerTask(db, { type: "review", title: "fix tide chart", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
-  expect(buildMemoryInjection(db, review, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
+  const behavior = (workspace: string | null, addressee: string | null, title: string) =>
+    recordBehavior(db, humanEntryInput(db, { workspace, path: "review", title, text: `${title}.`, addressee }), "webui", at).entry_id;
+  const mine = behavior(null, "deckhand", "Fold duplicates first");
+  const everyone = behavior(null, null, "Cite the precedent");
+  const annotations = [{ anchor: "whole", polarity: "imitate", text: "Fold like this." }];
+  const source_event_id = logDecision(db, task, "folded 12 into 5", "deckhand", at, "worker");
+  const exemplar = recordExemplar(db, humanEntryInput(db, { workspace: null, path: "review", title: "Fold case", addressee: null, source_event_id, annotations }), "webui", at).entry_id;
+  behavior(null, "someone-else", "Not for this agent");
+  behavior("tidepool", "deckhand", "Workspace scoped");
+  record({ path: "review", title: "Board-wide knowledge", scope: null });
+  for (const subject of ["memory", "routing"] as const) {
+    const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+
+    const guidance = buildMemoryInjection(db, review, "tidepool", "deckhand");
+
+    expect(guidance.section).toBe(
+      [
+        "## Guidance",
+        "",
+        "Approved board-wide behaviors and exemplars addressed to you. Read the ones that bear on your judgments with " +
+          "read_memory_entries before acting on them.",
+        "",
+        `- #${mine} behavior Fold duplicates first (path: review)`,
+        `- #${everyone} behavior Cite the precedent (path: review)`,
+        `- #${exemplar} exemplar Fold case (path: review)`,
+      ].join("\n"),
+    );
+    expect(guidance).toMatchObject({ entries: [mine, everyone, exemplar].map((id) => ({ id, version: id })), omitted: 0, index_depth: 0 });
+    expect(guidance.tokens).toBeGreaterThan(0);
+  }
+});
+
+it("指針の節は worker の注入と同じ盤面の上限で、行を下から落として落とした件数を末尾に出す。載る行が無ければ節を出さない", () => {
+  const { db } = board();
+  const review = registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  expect(buildMemoryInjection(db, review, "tidepool", "deckhand")).toMatchObject({ section: null, entries: [], tokens: 0 });
+  const ids = [0, 1, 2].map(
+    (i) => recordBehavior(db, humanEntryInput(db, { workspace: null, path: "review", title: `Rule ${i}`, text: "x", addressee: null }), "webui", at).entry_id,
+  );
+  const full = buildMemoryInjection(db, review, "tidepool", "deckhand");
+  changeMemorySettings(db, { injection_token_cap: full.tokens - 1 }, "webui", at);
+
+  const capped = buildMemoryInjection(db, review, "tidepool", "deckhand");
+
+  expect(capped).toMatchObject({ entries: ids.slice(0, 2).map((id) => ({ id, version: id })), omitted: 1 });
+  expect(capped.section).toMatch(/\n\n1 entry omitted$/);
+  expect(capped.tokens).toBeLessThanOrEqual(full.tokens - 1);
 });
 
 it("routing_repair には、見える approved があっても節を出さない —— 主題 routing の修理子で、案内する pull verb はその面に無い。memory_repair には今どおり出す(ADR 0279 決定4・6 / ADR 0122 決定2)", () => {
