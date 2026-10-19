@@ -398,7 +398,7 @@ export function resolveTaskBranchLineage(
   workspace: WorkspaceConfig,
   task: Pick<Task, "type" | "parent_id">,
 ): { branch: string | undefined; outlivedForkSource: boolean } {
-  // memory_repair は review と同じく lineage に透明(ADR 0272 決定6)
+  // 修理子の type は review と同じく lineage に透明(ADR 0272 決定6 / ADR 0279 決定4)
   // interview の root もブランチを持たない —— 書けるのは面接室だけ(ADR 0273 決定2)
   if (carriesReadOnly(task.type) || task.type === "interview") {
     return {

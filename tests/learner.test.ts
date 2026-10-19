@@ -338,11 +338,12 @@ function accept(b: Board, taskId: string) {
   for (const review of listChildren(b.db, taskId).filter((r) => r.type === "review" && r.status === "todo")) completeReview(b, review.id);
 }
 
-/** 受理済みの work を親に memory_repair を立てる(ADR 0272)。親はドメインで pickup するので slot は取らない。 */
-function queueMemoryRepair(b: Board) {
+const REPAIR_TYPES = ["memory_repair", "routing_repair"] as const;
+/** 受理済みの work を親に修理子(memory_repair / routing_repair、ADR 0272 / ADR 0279 決定4)を立てる。親はドメインで pickup するので slot は取らない。 */
+function queueMemoryRepair(b: Board, type: "memory_repair" | "routing_repair") {
   const parent = pickupTask(b.db, queueWork(b, "parent"), WORKER, b.clock.now())!;
   accept(b, parent.id);
-  return registerTask(b.db, { type: "memory_repair", title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), ...HUMAN_WEBUI);
+  return registerTask(b.db, { type, title: "memory repair: parent", purpose: "p", completion_criteria: "c", parent_id: parent.id }, b.clock.now(), ...HUMAN_WEBUI);
 }
 
 /** scheduler が pickup した work を受理させ、slot を空ける。poll が登録した meta-review は slot を取るので、後続の pickup を
@@ -571,23 +572,23 @@ it("昇格中の work task は学習器の選択で走り出所は learner、sha
   expect(b.worker.startedSettings.at(-1)).toEqual(opus);
 });
 
-it("memory_repair の pickup も work と同じく shadow 行を1件残す —— 判定者ではないので学習器の work 側(ADR 0272 決定4 の追記)", async () => {
+it.each(REPAIR_TYPES)("%s の pickup も work と同じく shadow 行を1件残す —— 判定者ではないので学習器の work 側(ADR 0272 決定4 の追記 / ADR 0279 決定4)", async (type) => {
   const b = scheduledBoard({ candidates: () => [opus, sol] });
-  const repair = queueMemoryRepair(b);
+  const repair = queueMemoryRepair(b, type);
   await b.clock.advance(HOUR);
 
   expect(b.worker.started.map((task) => task.id)).toEqual([repair.id]);
   expect(shadowRows(b)).toEqual([{ task_id: repair.id, recommended: cellOf(opus), actual: cellOf(opus), source: opus.source, basis: "prior", candidates: 2 }]);
 });
 
-it("昇格中の memory_repair は work と同じく学習器の選択で走り出所は learner、shadow 行を1件残す(ADR 0272 決定4 の追記)", async () => {
+it.each(REPAIR_TYPES)("昇格中の %s は work と同じく学習器の選択で走り出所は learner、shadow 行を1件残す(ADR 0272 決定4 の追記 / ADR 0279 決定4)", async (type) => {
   const b = scheduledBoard({ openaiUsage: healthyOpenai, candidates: () => [opus, sol] });
   promote(b);
   await settledSession(b, opus, ["capability"]);
   await settledSession(b, sol);
   const before = shadowRows(b).length;
 
-  const repair = queueMemoryRepair(b);
+  const repair = queueMemoryRepair(b, type);
   await b.clock.advance(HOUR);
 
   expect(settingsOf(b, repair.id)).toEqual(byLearner(sol));
@@ -657,9 +658,9 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
 });
 
-it("spawn を持つ memory_repair は episode になり、完了しても完了時レビューが無いので excluded、capability の帰責があれば rejected(ADR 0272 決定4 の追記・決定5 / ADR 0115 決定5、loadEpisodes)", () => {
+it.each(REPAIR_TYPES)("spawn を持つ %s は episode になり、完了しても完了時レビューが無いので excluded、capability の帰責があれば rejected(ADR 0272 決定4 の追記・決定5 / ADR 0115 決定5 / ADR 0279 決定4、loadEpisodes)", (type) => {
   const b = bareBoard();
-  const repair = pickupTask(b.db, queueMemoryRepair(b), WORKER, b.clock.now())!;
+  const repair = pickupTask(b.db, queueMemoryRepair(b, type), WORKER, b.clock.now())!;
   const spawnedId = recordSpawn(b, repair.id);
   complete(b, repair.id);
   const outcome = () => loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;

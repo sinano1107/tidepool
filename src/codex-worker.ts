@@ -1231,7 +1231,7 @@ export class CodexWorker implements WorkerAdapter {
         memorySection: memory.section ?? material?.section ?? null,
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject

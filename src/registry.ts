@@ -134,8 +134,8 @@ export interface AuthorityProfile {
  *  property of the `review` (and `interview`) task type, not of whoever
  *  executes it, so this code constant overrides whatever authority profile the
  *  executing agent would otherwise carry — task type overriding profile
- *  (memory_repair does the same with its own constant: its `## Authority` is
- *  `MEMORY_REPAIR_NOTICE` with no roster, ADR 0272 追記3). A code constant,
+ *  (the repair types do the same with their own constants: their `## Authority` is
+ *  their `REPAIR_NOTICES` line with no roster, ADR 0272 追記3 / ADR 0279 決定4). A code constant,
  *  not a registry entry, so the enforcement floor itself sits outside what
  *  Condensation's registry-edit loop could ever propose a diff against. `allowed_workspaces: []` blocks
  *  every explicit workspace target; `assignable_to: []` blocks every

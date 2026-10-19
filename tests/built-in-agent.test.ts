@@ -177,17 +177,17 @@ it("suzumedai に解決される work の実行解決も失敗し、agent 名の
   expect(agentNeedsHuman(db, "suzumedai")).toBe(true);
   // 未知の名前としてではなく、組み込みの検査で落ちる
   expect(() => resolveExecutionAgent(registry, "deckhand", "suzumedai", seedTierNames, "work")).toThrow(
-    /runs only reviews, Interviews and memory repairs/,
+    /runs only reviews, Interviews, memory repairs and routing repairs/,
   );
 });
 
-it("suzumedai に解決される memory_repair は reviewer 定数の profile で解決し、agent 名の quarantine に落ちない(ADR 0275 決定1)", async () => {
+it.each(["memory_repair", "routing_repair"] as const)("suzumedai に解決される %s は reviewer 定数の profile で解決し、agent 名の quarantine に落ちない(ADR 0275 決定1 / ADR 0279 決定4)", async (type) => {
   const registry = loadRegistry(await makeRegistry(), "purely-local");
   const db = openDb(":memory:");
 
   const resolved = resolveAgentOrQuarantine(
     db,
-    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, "memory_repair"),
+    (assignee) => resolveExecutionAgent(registry, "deckhand", assignee, seedTierNames, type),
     "suzumedai",
     new Date(0),
   );

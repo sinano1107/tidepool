@@ -41,7 +41,7 @@ it("a review task may attach a handoff, and it is stored rather than dropped", a
 });
 
 // ADR 0278 決定6: agent の完了は判断を運ぶ —— work 以外の type も handoff の outcome が無ければ拒み、何も記録しない
-for (const type of ["review", "memory_repair"] as const) {
+for (const type of ["review", "memory_repair", "routing_repair"] as const) {
   it(`an agent ${type} task cannot complete without a handoff outcome`, () => {
     const db = openDb(":memory:");
     const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);

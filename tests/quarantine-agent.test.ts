@@ -143,10 +143,10 @@ describe("verifyAgentRepaired", () => {
     expect(verify).not.toThrow();
   });
 
-  it("名前が組み込みに解決される間、その名前宛ての memory_repair は解除を止めない —— 組み込みが走らせられる(ADR 0275 決定1 / ADR 0228 決定4)", () => {
+  it.each(["memory_repair", "routing_repair"] as const)("名前が組み込みに解決される間、その名前宛ての %s は解除を止めない —— 組み込みが走らせられる(ADR 0275 決定1 / ADR 0228 決定4 / ADR 0279 決定4)", (type) => {
     const db = openDb(":memory:");
     const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", assignee: "tako" }, NOW, ...HUMAN_WEBUI);
-    registerTask(db, { type: "memory_repair", title: "pending", purpose: "p", completion_criteria: "c", assignee: "fugu", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+    registerTask(db, { type, title: "pending", purpose: "p", completion_criteria: "c", assignee: "fugu", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
 
     expect(() => verifyAgentRepaired(db, "fugu", "built-in", "tako", "fugu")).not.toThrow();
   });

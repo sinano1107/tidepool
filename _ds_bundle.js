@@ -397,6 +397,7 @@ const typeStyles = {
   question: { color: "var(--type-question-fg)", symbol: "?" },
   review: { color: "var(--type-review-fg)", symbol: "\u25CD" },
   memory_repair: { color: "var(--type-work-fg)", symbol: "\u25D0" },
+  routing_repair: { color: "var(--type-work-fg)", symbol: "\u25D1" },
   interview: { color: "var(--type-review-fg)", symbol: "\u25C7" }
 };
 function TypeBadge({ type = "work", showLabel = true, style }) {

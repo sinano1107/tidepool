@@ -157,8 +157,8 @@ const REVIEW_BASH_WRITE_DENIALS = [
   "Bash(chown*)",
 ];
 
-/** read-only 保証を運ぶ type(review と memory_repair、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
- *  ADR 0272 決定3): read-only は task type の性質であって実行エージェントの性質ではない
+/** read-only 保証を運ぶ type(review と修理子の type、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
+ *  ADR 0272 決定3 / ADR 0279 決定4): read-only は task type の性質であって実行エージェントの性質ではない
  *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
@@ -241,7 +241,7 @@ const REVIEW_REMOVED_TOOLS: readonly string[] = ["Write", "Edit", "NotebookEdit"
  *  ツールの全量。`spawnAllowedTools` / `reviewToolDenials` と同じ「組み立ては
  *  純関数、配線は `launch()`」の分離。
  *
- *  read-only 保証を運ぶ type(review / memory_repair)以外はすべて
+ *  read-only 保証を運ぶ type(review / memory_repair / routing_repair)以外はすべて
  *  work と同じ面である — read-only は task type の性質であって実行エージェントの性質
  *  ではない(ADR 0013 / ADR 0272 決定3)。
  *  `slashCommandsDisabled` は skill 許可リストが空の形(`--disable-slash-commands`)
@@ -392,7 +392,7 @@ const MCP_SERVER_NAME = "tidepool";
  *
  *  review 部分は `reviewToolDenials` と同じく `task.type` だけを見る — read-only
  *  は task type の性質であって実行エージェントの性質ではない(ADR 0013)。
- *  memory_repair も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
+ *  修理子の type も read-only を運ぶが、この許可リストは ADR 0035 決定2 のとおり review 専用で、修理子は repo の
  *  コマンドを要らないので開けない。deny は allow に常勝する(ADR 0033 実験2、manual 下でも実測で
  *  確認)ので、registry が `git commit` や `rm` を開くことはできない —— ただし
  *  天井が覆うのは `REVIEW_BASH_WRITE_DENIALS` が名指しした分だけである(そこの

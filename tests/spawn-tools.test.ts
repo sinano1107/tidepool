@@ -99,9 +99,9 @@ describe("spawnTools", () => {
     ]);
   });
 
-  it("memory_repair は review と同じ面 —— read-only 保証を運ぶ type(ADR 0272 決定3)", () => {
+  it.each(["memory_repair", "routing_repair"] as const)("%s は review と同じ面 —— read-only 保証を運ぶ type(ADR 0272 決定3 / ADR 0279 決定4)", (type) => {
     for (const slashCommandsDisabled of [false, true]) {
-      expect(spawnTools("memory_repair", slashCommandsDisabled)).toEqual(spawnTools("review", slashCommandsDisabled));
+      expect(spawnTools(type, slashCommandsDisabled)).toEqual(spawnTools("review", slashCommandsDisabled));
     }
   });
 

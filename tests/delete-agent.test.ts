@@ -270,11 +270,11 @@ describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(
     db.close();
   });
 
-  it("未決着の memory_repair と review は数えない —— どちらも組み込みへ落ちても走る(ADR 0275 決定1)", () => {
+  it("未決着の memory_repair / routing_repair と review は数えない —— どれも組み込みへ落ちても走る(ADR 0275 決定1 / ADR 0279 決定4)", () => {
     const db = openDb(":memory:");
     const at = new Date("2026-08-05T00:00:00.000Z");
     const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-    for (const type of ["memory_repair", "review"] as const) {
+    for (const type of ["memory_repair", "routing_repair", "review"] as const) {
       registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand", parent_id: parent.id }, at, ...HUMAN_WEBUI);
     }
 

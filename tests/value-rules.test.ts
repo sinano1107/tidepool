@@ -57,7 +57,7 @@ import { whyAssigneeCannotTake } from "../src/webui-rules.js";
 
 it("組み込み agent に解決される名前は work / question の assignee に取れず、review なら取れる(ADR 0228 決定1 / ADR 0235 決定3)", () => {
   for (const type of ["work", "question"]) {
-    expect(whyAssigneeCannotTake("fugu", type, true)).toBe("agent fugu is the built-in agent, which runs only reviews, Interviews and memory repairs");
+    expect(whyAssigneeCannotTake("fugu", type, true)).toBe("agent fugu is the built-in agent, which runs only reviews, Interviews, memory repairs and routing repairs");
   }
   expect(whyAssigneeCannotTake("fugu", "review", true)).toBeUndefined();
 });
@@ -68,12 +68,12 @@ it("組み込みに解決されない名前はどの type の assignee にも取
 
 import { whyExecutionRequestIsInert, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 
-it("memory_repair は組み込みに解決される名前も assignee に取れ、tier / priority の要求は効き、review_by / review_flag は効かない(ADR 0275 決定1 / ADR 0272 決定4・5)", () => {
-  expect(whyAssigneeCannotTake("fugu", "memory_repair", true)).toBeUndefined();
-  expect(whyAssigneeCannotTake("fugu", "memory_repair", false)).toBeUndefined();
-  expect(whyExecutionRequestIsInert({ type: "memory_repair" }, "priority")).toBeUndefined();
+it.each(["memory_repair", "routing_repair"])("%s は組み込みに解決される名前も assignee に取れ、tier / priority の要求は効き、review_by / review_flag は効かない(ADR 0275 決定1 / ADR 0272 決定4・5 / ADR 0279 決定4)", (type) => {
+  expect(whyAssigneeCannotTake("fugu", type, true)).toBeUndefined();
+  expect(whyAssigneeCannotTake("fugu", type, false)).toBeUndefined();
+  expect(whyExecutionRequestIsInert({ type }, "priority")).toBeUndefined();
   for (const parent_id of [null, "parent"]) {
-    expect(whyNoCompletionReview({ type: "memory_repair", parent_id, risk_flag: true })).toBe("completion review fires for work tasks only");
-    expect(whyReviewFlagIsInert({ type: "memory_repair", parent_id })).toBe("completion review fires for work tasks only");
+    expect(whyNoCompletionReview({ type, parent_id, risk_flag: true })).toBe("completion review fires for work tasks only");
+    expect(whyReviewFlagIsInert({ type, parent_id })).toBe("completion review fires for work tasks only");
   }
 });

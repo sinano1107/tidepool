@@ -990,9 +990,9 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 
-  it("memory_repair タスクの spawn も --permission-mode manual で走る —— read-only 保証を運ぶ type(ADR 0272 決定3)", async () => {
+  it.each(["memory_repair", "routing_repair"] as const)("%s タスクの spawn も --permission-mode manual で走る —— read-only 保証を運ぶ type(ADR 0272 決定3 / ADR 0279 決定4)", async (type) => {
     const { start, calls } = await makeWorker();
-    start("task-memory-repair-manual", null, "deckhand", "memory_repair");
+    start("task-memory-repair-manual", null, "deckhand", type);
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 

@@ -85,12 +85,13 @@ import {
   interviewRoomPath,
   interviewTargets,
   isArtifactDiscarded,
+  isRepairType,
   joinHistory,
   listExaminees,
   logDecision,
-  MEMORY_REPAIR_NOTICE,
   posedProbe,
   poseProbe,
+  REPAIR_NOTICES,
   redecompose,
   reportBrokenProbe,
   resolveTaskAgent,
@@ -592,9 +593,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
             ...auditedProbeEnvelope(deps, task),
-            // ADR 0272 決定3 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。memory_repair は祖先の cancel の下でも修理の1行
-            ...(task.type === "memory_repair"
-              ? { memory_repair: MEMORY_REPAIR_NOTICE }
+            // ADR 0272 決定3 / ADR 0279 決定4 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。修理子は祖先の cancel の下でも修理の1行
+            ...(isRepairType(task.type)
+              ? { [task.type]: REPAIR_NOTICES[task.type] }
               : isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
@@ -644,7 +645,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete the current task. Work tasks require the full handoff doc (" +
           describeHandoffFields() +
           ") and a committed work tree — commit your changes before calling this. " +
-          "Every other type (review and memory_repair tasks) requires outcome: the findings or judgment you reached. " +
+          "Every other type requires outcome: the findings or judgment you reached. " +
           "resume_context is what the next session needs to pick the work back up — " +
           "do not describe landing state (push / PR / merge): the board lands the " +
           "branch after you complete, and you cannot observe that. " +
@@ -1157,7 +1158,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // (Precedent の memory マーカーの結合キー)。
   const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
 
-  server.registerTool(
+  if (!withheld.includes("browse_memory")) server.registerTool(
     "browse_memory",
     {
       description:
@@ -1172,7 +1173,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) => runVerb(deps, attributedTaskId, (task) => browseMemory(deps.db, reader(task), input, deps.clock.now())),
   );
 
-  server.registerTool(
+  if (!withheld.includes("search_memory")) server.registerTool(
     "search_memory",
     {
       description:
@@ -1186,7 +1187,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     async (input) => runVerb(deps, attributedTaskId, (task) => searchMemory(deps.db, reader(task), input, deps.clock.now())),
   );
 
-  server.registerTool(
+  if (!withheld.includes("read_memory")) server.registerTool(
     "read_memory",
     {
       description:

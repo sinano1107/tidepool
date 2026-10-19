@@ -235,10 +235,10 @@ describe("buildSandboxSettings の autoAllowBashIfSandboxed(ADR 0035)", () => {
     ).toBe(false);
   });
 
-  it("memory_repair は review と同じプロファイル —— read-only 保証を運ぶ type(ADR 0272 決定3)", () => {
-    const settingsOf = (taskType: "review" | "memory_repair") =>
+  it.each(["memory_repair", "routing_repair"] as const)("%s は review と同じプロファイル —— read-only 保証を運ぶ type(ADR 0272 決定3 / ADR 0279 決定4)", (type) => {
+    const settingsOf = (taskType: "review" | typeof type) =>
       buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", permittedSkills: "all", ...HOST });
-    expect(settingsOf("memory_repair")).toEqual(settingsOf("review"));
+    expect(settingsOf(type)).toEqual(settingsOf("review"));
   });
 
   it("work プロファイルには載せない — work は acceptEdits で走り、Bash のリダイレクトは「編集」ではないので、切ると書き込みが全部承認待ちで headless では静かに死ぬ", () => {
