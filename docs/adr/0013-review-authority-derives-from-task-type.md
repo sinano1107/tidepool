@@ -12,6 +12,9 @@ reviewer profile は registry の YAML ではなく**コード定数**とする�
 
 追記(2026-08-09): task-type override を system prompt の authority 散文と roster にも届ける決定は ADR 0056 を参照。
 
+追記(2026-10-19、issue #2217): 冒頭の「task 型が profile を上書きする、権限モデルで唯一の場所」はもう唯一ではない。memory_repair も
+spawn の文面の Authority 節と Roster 節を type が持つ(ADR 0272 追記3)。
+
 Considered options:
 
 - **専用 reviewer エージェントを registry に立て、review タスクを全部そこへ割り当てる** — read-only の保証が割当の正しさに依存する。致命的なのは self RCA: self の実行者は定義上元のエージェントであり、この案では self review を read-only にする手段が存在しない。

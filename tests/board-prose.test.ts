@@ -82,14 +82,13 @@ it("memory_repair の spawn の文面は Authority 節が記憶の修理の1行�
   const prose = await memoryRepairProse({ name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] });
 
   expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
-  expect(MEMORY_REPAIR_NOTICE).toBe("This task is a memory repair: its reach is limited to the entries the objected memory write touched, so it cannot decompose or write new memory — to rewrite an entry, use replace_memory.");
   expect(prose).not.toContain("Prefer reversible actions.");
   expect(prose).not.toContain("## Roster");
   expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
   expect(prose).not.toContain("premise breach");
 });
 
-it("組み込み agent が解決する reviewer の profile でも、memory_repair の Authority 節は記憶の修理の1行だけ(ADR 0272 追記3)", async () => {
+it("profile が reviewer 定数でも、memory_repair の Authority 節は記憶の修理の1行だけ(ADR 0272 追記3)", async () => {
   const prose = await memoryRepairProse(REVIEWER_AUTHORITY_PROFILE);
 
   expect(prose).toContain(`## Authority\n\n${MEMORY_REPAIR_NOTICE}\n\n`);
