@@ -4,7 +4,7 @@ import { appendEvent, type EventKind, type EventOrigin, listEventsOfKinds } from
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { unsettledSql } from "./task-status.js";
-import { registerTask } from "./tasks.js";
+import { ancestorsSql, registerTask } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -110,7 +110,7 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of how the board routes work to execution settings. This cycle's material is in your prompt, in the " +
         "Routing meta-review material section: the current table and settings, the shadow rows since the previous routing meta-review " +
         "where the learner's recommendation diverged from what ran, the allocation reviews since then, the cells first seen and the rows " +
-        "humans changed since then, and the routing proposals answered or settled since then. " +
+        "humans changed since then, the decisions objected to since then, and the routing proposals answered or settled since then. " +
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
         "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
         "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
@@ -146,6 +146,18 @@ export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
 export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
   return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").get(taskId) as { meta_review_subject: MetaReviewSubject | null } | undefined)
     ?.meta_review_subject ?? null;
+}
+
+/** 行の主題(ADR 0279 決定6): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA は親の主題に載る。
+ *  祖先にも無ければ null。材料の Objected decisions と list_precedents が共有する precedentRows の絞りが読む。 */
+export function lineageSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
+  return (
+    metaReviewSubjectOf(db, taskId) ??
+    ((db
+      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
+      .pluck()
+      .get(taskId) as MetaReviewSubject | undefined) ?? null)
+  );
 }
 
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。

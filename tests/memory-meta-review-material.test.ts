@@ -185,6 +185,19 @@ it("abandon で取り消された登録は窓の起点にならない: 次の回
   expect(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents.map((p) => p.decision_event_id)).toEqual([beforeCancelled, afterCancelled]);
 });
 
+it("異議つき判断は読み手 memory の list_precedents の行と同じ —— 窓に routing meta-review とその子の行があっても(ADR 0279 決定6)", () => {
+  const db = openDb(":memory:");
+  const previous = register(db, "memory", true);
+  const routing = register(db, "routing", true);
+  const work = (parent_id?: string) => registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
+  [previous, work(previous), routing, work(routing), work()].forEach((taskId, i) => bundledObjection(db, taskId, objectedDecision(db, taskId, i + 1), at));
+  const review = register(db, "memory");
+
+  const { parts } = memoryMaterialOf(db, review);
+
+  expect(parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
+});
+
 it("異議つき判断は窓の中に異議のある decision だけを list_precedents の行で、決着した提案は窓の中に回答か陳腐化のあるものだけを list_memory_proposals の行で、枝の一覧は list_memory_branches の行で載せる", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
@@ -320,7 +333,7 @@ it("決着した提案の部分の行も pin した本文の今の居場所 relo
   expect(getEvent(db, eventId)).toMatchObject({ payload: { proposals: [question], proposal_entries: [copy] } });
 });
 
-it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は数えない", () => {
+it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は異議つき判断の部分のエントリだけ数える(ADR 0279 決定6)", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   // objectedDecision の直挿しは Episode の id を worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
@@ -343,6 +356,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
   answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "No." });
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   const review = register(db, "memory");
+  const routingShown = knowledge(db, "routing-shown");
   const spawned = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   recordMetaReviewMaterial(db, review, "auditor", spawned, memoryMaterialOf(db, review), at);
   appendEvent(db, {
@@ -364,6 +378,8 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       allocations: [9002],
       cells: [9003],
       rows: [9004],
+      precedents: [9005],
+      precedent_entries: [routingShown],
       proposals: [],
     },
     at,
@@ -378,7 +394,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
     extractorVersion: "test",
   });
 
-  expect(entriesSeenBefore(episode, events, decision)).toEqual([followed, written, definition, drafted!, rejected!].sort((a, b) => a - b));
+  expect(entriesSeenBefore(episode, events, decision)).toEqual([followed, written, definition, drafted!, rejected!, routingShown].sort((a, b) => a - b));
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
 

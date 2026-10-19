@@ -7,7 +7,17 @@ import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-langu
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, latestEventOfTask, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
-import { inWindow, type MetaReviewWindow, materialEvents, materialSection, metaReviewSubjectOf, metaReviewWindow, previousMetaReviewWatermark } from "./meta-review.js";
+import {
+  inWindow,
+  lineageSubjectOf,
+  type MetaReviewSubject,
+  type MetaReviewWindow,
+  materialEvents,
+  materialSection,
+  metaReviewSubjectOf,
+  metaReviewWindow,
+  previousMetaReviewWatermark,
+} from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -2114,7 +2124,7 @@ export function listPrecedents(
   const read = readPosition("list_precedents", input);
   return db.transaction(() => {
     const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
-    const rows = precedentRows(db, { after: since });
+    const rows = precedentRows(db, { after: since }, metaReviewSubjectOf(db, reader.taskId));
     // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
     const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids: precedentEntryIds(packed.precedents) }, packed, at);
@@ -2125,15 +2135,23 @@ export function listPrecedents(
 const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
 
 /** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
- *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。 */
-function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+ *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と同じものだけ ——
+ *  主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件(ADR 0279 決定6)。 */
+function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
   const objectedIn = db.prepare(
     `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
   );
+  // 祖先にも主題の無い行(worker・work の修理子)は memory の行
+  const subjects = new Map<string, MetaReviewSubject>();
+  const rowSubject = (taskId: string) => {
+    if (!subjects.has(taskId)) subjects.set(taskId, lineageSubjectOf(db, taskId) ?? "memory");
+    return subjects.get(taskId)!;
+  };
   return listEpisodes(db, {}).flatMap((episode) => {
     // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
     const objected = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objectedIn.get(m.eventId, after, upTo) !== undefined);
-    const events = objected.length === 0 ? [] : listEvents(db, episode.taskId);
+    if (objected.length === 0 || (readerSubject !== null && rowSubject(episode.taskId) !== readerSubject)) return [];
+    const events = listEvents(db, episode.taskId);
     return objected.map((m) => ({
       task_id: episode.taskId,
       workspace: episode.workspace,
@@ -2503,7 +2521,7 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
-    const material = subject === "routing" ? routingMaterial(db, window) : memoryMaterial(db, window, readerHidden(db, taskId));
+    const material = subject === "routing" ? routingMaterial(db, window, precedentRows(db, window, "routing")) : memoryMaterial(db, window, readerHidden(db, taskId));
     return { ...material, previous_watermark: window.after, material_watermark: window.upTo, tokens: countTokens(material.section) };
   })();
 }
@@ -2513,7 +2531,7 @@ export function buildMetaReviewMaterial(db: Db, taskId: string) {
 const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
   store_changes: storeChanges(db, window, hidden),
   candidates: memoryListRows(db, "list_memory_candidates", {}),
-  precedents: precedentRows(db, window),
+  precedents: precedentRows(db, window, "memory"),
   proposals: memoryProposalRows(db, window),
   branches: metaReviewBranches(db, hidden),
 });
@@ -2682,6 +2700,8 @@ export function recordMetaReviewMaterial(
             // 本番の session の無い種のセルは種の event で名指す
             cells: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
             rows: material.parts.rows.map((r) => r.event_id),
+            precedents: material.parts.precedents.map((p) => p.decision_event_id),
+            precedent_entries: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),
           }
         : {

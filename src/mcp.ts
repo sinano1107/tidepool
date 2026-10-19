@@ -1315,6 +1315,8 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
         "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
         "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
         "When the cause is memory, entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
+        "Rows are limited to your subject: a routing meta-review sees the decisions of routing meta-reviews and their children, a memory meta-review " +
+        "every other decision, and an Interview all of them. " +
         "Defaults to objections since the previous completed meta-review of your subject (for an Interview, the board's start); pass since_watermark (an event id) to look further back. " +
         nextDescription("list_precedents", "precedents"),
       inputSchema: { since_watermark: z.number().int().min(0).optional(), next },
