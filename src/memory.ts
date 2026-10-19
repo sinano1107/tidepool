@@ -2141,8 +2141,12 @@ function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRe
   const objectedIn = db.prepare(
     `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
   );
+  // 祖先にも主題の無い行(worker・work の修理子)は memory の行
   const subjects = new Map<string, MetaReviewSubject>();
-  const rowSubject = (taskId: string) => subjects.get(taskId) ?? subjects.set(taskId, lineageSubjectOf(db, taskId) ?? "memory").get(taskId)!;
+  const rowSubject = (taskId: string) => {
+    if (!subjects.has(taskId)) subjects.set(taskId, lineageSubjectOf(db, taskId) ?? "memory");
+    return subjects.get(taskId)!;
+  };
   return listEpisodes(db, {}).flatMap((episode) => {
     // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
     const objected = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objectedIn.get(m.eventId, after, upTo) !== undefined);

@@ -149,7 +149,7 @@ export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject |
 }
 
 /** 行の主題(ADR 0279 決定6): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA は親の主題に載る。
- *  祖先にも無ければ null。Objected decisions と list_precedents の絞りが共有する。 */
+ *  祖先にも無ければ null。材料の Objected decisions と list_precedents が共有する precedentRows の絞りが読む。 */
 export function lineageSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
   return (
     metaReviewSubjectOf(db, taskId) ??

@@ -291,19 +291,18 @@ function objectedDecision(db: Db, taskId: string, i: number): number {
   return decision;
 }
 
-it("Objected decisions は窓で異議された decision のうち、行の主題(自身か最も近い祖先)が routing の行を list_precedents の行で載せ、記録はその decision の event id と行のエントリを運ぶ —— memory meta-review とその子の行と worker の行は載らない(ADR 0279 決定6)", () => {
+it("Objected decisions は読み手 routing の list_precedents の行を載せ、記録はその decision の event id と行のエントリを運ぶ —— 窓に memory meta-review とその子の行と worker の行があっても(ADR 0279 決定6)", () => {
   const { db, work } = board();
   const memory = register(db, true, "memory");
   const previous = register(db, true);
   const child = (parent_id: string) => registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
-  const [, , routingRow, routingChild] = [memory, child(memory), previous, child(previous), work("w")].map((taskId, i) => objectedDecision(db, taskId, i + 1));
+  [memory, child(memory), previous, child(previous), work("w")].forEach((taskId, i) => objectedDecision(db, taskId, i + 1));
   const review = register(db);
   const material = routingMaterialOf(db, review);
 
   const record = getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload;
 
-  expect(material.parts.precedents.map((p) => p.decision_event_id)).toEqual([routingRow, routingChild]);
   expect(material.parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
   expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the objections raised in this window.\n${JSON.stringify(material.parts.precedents[0])}`);
-  expect(record).toMatchObject({ precedents: [routingRow, routingChild], precedent_entries: [] });
+  expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_entries: [] });
 });
