@@ -14,7 +14,7 @@ import { answerQuestionViaWebui, bundledObjection, executionSetting, HUMAN_WEBUI
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
 
-/** routing の meta-review を登録し、その task の id を返す。done にすれば次の登録の「前回」になる(setup のみ)。 */
+/** 主題(既定 routing)の meta-review を登録し、その task の id を返す。done にすれば次の登録の「前回」になる(setup のみ)。 */
 function register(db: Db, done = false, subject: "routing" | "memory" = "routing"): string {
   registerMetaReview(db, subject, at);
   const taskId = listEventsOfKinds(db, ["meta_review_registered"]).at(-1)!.task_id!;
