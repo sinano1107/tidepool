@@ -964,6 +964,15 @@ function assertOnTaskBranch(workspace: WorkspaceConfig, taskId: string): void {
   }
 }
 
+/** HEAD がこの task のブランチに乗っているか(ADR 0274 決定3)。読めない checkout は乗っていない —— 盤面がそこへ checkout できていない。 */
+export function onTaskBranch(workspace: WorkspaceConfig, taskId: string): boolean {
+  try {
+    return git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD") === taskBranch(taskId);
+  } catch {
+    return false;
+  }
+}
+
 /** ADR 0084 の完了の門が掛かる述語(work タスクかつ workspace が needs-human でない)。
  *  ADR 0109 決定3 が「退避しない」範囲も**同じ述語**である —— 門が verb の手前で clean を
  *  要求している範囲でだけ、後始末時の汚れは成果ではなく残存プロセスの露見だと言える。 */

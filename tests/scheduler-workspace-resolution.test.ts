@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { openQuarantineQuestion } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { getTask, listBoard, registerTask } from "../src/tasks.js";
+import { sessionInTeardown } from "../src/teardown.js";
 import { queueReturnHandler } from "../src/watchdog.js";
 import { type WorkspaceConfig, workspaceNeedsHuman } from "../src/workspace.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
@@ -65,6 +67,27 @@ describe("scheduler の pickup が task.workspace を解決する", () => {
     expect(workspaceNeedsHuman(db, "known-workspace")).toBe(true);
     expectReturnedToHead(db, task.id, { quarantine: "workspace", value: "known-workspace", reason: expect.any(String) });
     expect(worker.started.map((t) => t.id)).toEqual([next.id]);
+    expect(slot.currentTaskId).toBe(next.id);
+    scheduler.stop();
+  });
+
+  it("準備が task ブランチへの checkout より前に落ちて先頭へ戻った task の後始末は、checkout を休止位置のまま残し、止めた Quarantine に偽の理由を積まない(ADR 0274 決定3)", async () => {
+    // remote 正本の宣言が clone とずれている —— git は動き、準備は checkout の前に投げる
+    const sandbox = await makeWorkspace("sandbox");
+    const declared = { ...sandbox, repo: "https://github.com/acme/elsewhere.git" };
+    const prod = await makeWorkspace("prod");
+    const { db, clock, worker, slot, scheduler } = stoppingBoard(declared, defaultingTo(declared, prod));
+    const task = registerTask(db, { type: "work", title: "unpreparable", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+    const next = registerTask(db, { type: "work", title: "next in line", purpose: "p", completion_criteria: "c", workspace: "prod" }, clock.now(), ...HUMAN_WEBUI);
+
+    await clock.advance(HOURLY);
+    await vi.waitFor(() => expect(worker.started.map((t) => t.id)).toEqual([next.id]));
+
+    expectReturnedToHead(db, task.id, { quarantine: "workspace", value: "sandbox", reason: expect.stringContaining("no 'origin' remote") });
+    const question = openQuarantineQuestion(db, "workspace", "sandbox")!;
+    expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+    expect(git(sandbox.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+    expect(sessionInTeardown(db)).toBeUndefined();
     expect(slot.currentTaskId).toBe(next.id);
     scheduler.stop();
   });

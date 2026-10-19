@@ -68,7 +68,7 @@ async function brokenContainer(name: string) {
 }
 
 it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepool 名義の question 1枚で止まり、踏んだ受験者は失敗にならず後始末を通って todo の先頭へ戻り slot が空く", async () => {
-  const { workspace, recordDir, db, clock, worker, slot, scheduler, done, picked } = await brokenContainer("record-container-halts");
+  const { workspace, room, recordDir, db, clock, worker, slot, scheduler, done, picked } = await brokenContainer("record-container-halts");
   const path = join(recordDir, `${done.id}.bundle`);
 
   await clock.advance(HOURLY);
@@ -78,6 +78,8 @@ it("器が書けずに pickup の準備が落ちると、盤面全体が Tidepoo
   expect(boardHalts(db)).toEqual([{ kind: "recordContainer" }]);
   // 後始末の tree rule が checkout を休止位置へ戻している(ADR 0274 決定3・4)
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  // 受験者が走る面接室は準備が task ブランチへ checkout した後で止まった —— そこを休止位置へ戻す(ADR 0052 決定7)
+  expect(git(room.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(sessionInTeardown(db)).toBeUndefined();
   const questions = listBoard(db).filter((t) => t.type === "question");
   expect(questions.map((q) => q.id)).toEqual([openQuarantineQuestion(db, "recordContainer", null)!.id]);

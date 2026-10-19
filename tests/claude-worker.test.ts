@@ -34,11 +34,11 @@ import {
   registryRef,
 } from "../src/registry.js";
 import { Slot } from "../src/slot.js";
-import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask, pickupTask, poseProbe, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { capInterruptionHandler, RECLAIM_TIMEOUT } from "../src/watchdog.js";
+import { capInterruptionHandler, RECLAIM_TIMEOUT, spawnFailureHandler } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -4709,6 +4709,26 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
     expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("half-done work");
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
+  });
+
+  it("spawn が落ちた pickup の後始末は、読み口に process を1つも持たなかった session として報される(ADR 0274 決定3 / #651)", async () => {
+    let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
+    const { worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
+      onSpawnFailed: (taskId, failure) => onSpawnFailed(taskId, failure),
+    });
+    onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
+    const registered = registerTask(db, { type: "work", title: "never ran", purpose: "why", completion_criteria: "done" }, clock.now(), ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
+    slot.occupy(task.id);
+    worker.start(task, setting(task));
+
+    emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
+
+    expect(sessionInTeardown(db)).toEqual({
+      taskId: task.id,
+      startedAt: clock.now().toISOString(),
+      settlement: "never_ran",
+    });
   });
 });
 
