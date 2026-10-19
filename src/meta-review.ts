@@ -28,8 +28,10 @@ export const MEMORY_META_REVIEW_VERBS = [
   "invalidate_memory",
   "propose_memory_change",
 ] as const;
-/** 主題 routing の読み口と提案 verb、両主題が共有する Precedent の読み口(issue #917・#918)。 */
+/** 主題 routing の読み口と提案 verb、両主題が共有する Precedent の読み口(issue #917・#918)と指針の節の id 読み(ADR 0279 決定2)。 */
 export const ROUTING_META_REVIEW_VERBS = [
+  // 指針の節の本文の読み口(ADR 0279 決定2)
+  "read_memory_entries",
   "list_routing_shadow",
   "list_allocations",
   "list_routing_cells",

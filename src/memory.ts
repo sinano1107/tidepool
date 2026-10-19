@@ -2384,13 +2384,67 @@ type MemoryInjection = {
   omitted: number;
 };
 
+/** spawn 注入の節(provider 非依存): 主題つきの meta-review には指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf
+ *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。 */
+export function buildMemoryInjection(
+  db: Db,
+  task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
+  scope: string | null,
+  agent: string,
+  query?: InjectionQuery,
+): MemoryInjection {
+  return metaReviewSubjectOf(db, task.id) === null ? memoryIndex(db, task, scope, agent, query) : metaReviewGuidance(db, task.id, agent);
+}
+
+const GUIDANCE_PREAMBLE =
+  "Approved board-wide behaviors and exemplars addressed to you. Read the ones that bear on your judgments with " +
+  "read_memory_entries before acting on them.";
+
+/** 主題つきの meta-review の指針の節(ADR 0279 決定2): 盤面全体(scope null)の読み手の視界の3段目にある approved な Behavior /
+ *  Exemplar(走る agent 宛てか全員宛て)を id 順に、本文なしの行で。上限は worker の注入と同じ盤面設定で、行を下から落とす。 */
+function metaReviewGuidance(db: Db, taskId: string, agent: string): MemoryInjection {
+  return db.transaction(() => {
+    const watermark = memoryWatermark(db);
+    const rows = visibleEntries(db, readerSight(db, { taskId, scope: null, agent })).filter((row) => row.kind === "behavior" || row.kind === "exemplar");
+    const render = (shown: EntryRow[]) => {
+      const omitted = rows.length - shown.length;
+      return [
+        "## Guidance",
+        "",
+        GUIDANCE_PREAMBLE,
+        "",
+        ...shown.map((row) => `- #${row.id} ${row.kind} ${row.title} (path: ${row.path})`),
+        ...(omitted > 0 ? ["", `${omitted} ${omitted === 1 ? "entry" : "entries"} omitted`] : []),
+      ].join("\n");
+    };
+    const cap = readMemorySettings(db).injection_token_cap;
+    let shown = rows;
+    let section = render(shown);
+    let tokens = countTokens(section);
+    while (shown.length > 0 && tokens > cap) {
+      shown = shown.slice(0, -1);
+      section = render(shown);
+      tokens = countTokens(section);
+    }
+    return {
+      section: shown.length === 0 ? null : section,
+      watermark,
+      entries: shown.map((row) => ({ id: row.id, version: row.version! })),
+      tokens: shown.length === 0 ? 0 : tokens,
+      index_depth: 0,
+      index_max_depth: 0,
+      omitted: rows.length - shown.length,
+    };
+  })();
+}
+
 /** spawn 注入の節(spec #586 C / #600 C、provider 非依存): 全階層の定義つき INDEX + 関連 leaf の
  *  ポインタ(title・path・出所の種別、本文は運ばない —— 読むのは read_memory だけ、#604)を上限内に
  *  組む。関連度の query は渡された英語の view(ADR 0175)、無ければ task の title + purpose + completion criteria
  *  の語の OR で、順位は search と同じ FTS の rank。削り順は固定 —— 関連 leaf を順位の下から1件ずつ → INDEX を深い階層から1段ずつ。
- *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。meta-review(どの主題も)には組まない ——
- *  節は scope を task から解決し、案内する pull verb はその接続に無い(ADR 0122 決定2)。 */
-export function buildMemoryInjection(
+ *  最上位 INDEX はそれだけで上限を超えても残す(枝が無いと pull で降りられない)。Board call の起草も INDEX を
+ *  ここから組む —— 主題つきの task の行なら scope null の視界で(ADR 0279 決定1)。 */
+export function memoryIndex(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
   scope: string | null,
@@ -2400,7 +2454,6 @@ export function buildMemoryInjection(
   return db.transaction(() => {
     const watermark = memoryWatermark(db);
     const none = { query, section: null, watermark, entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
-    if (metaReviewSubjectOf(db, task.id) !== null) return none;
     const sight = readerSight(db, { taskId: task.id, scope, agent });
     const visible = visibleEntries(db, sight);
     if (visible.length === 0) return none;
@@ -2467,6 +2520,11 @@ export function buildMemoryInjection(
       omitted: relevant.length - leaves.length,
     };
   })();
+}
+
+/** spawn 文面の記憶の枠(両 adapter が共有): 注入の節(指針の節か INDEX)の後ろに主題の材料の節が続く(ADR 0180 決定2・ADR 0279 決定2)。 */
+export function memoryPromptSection(injection: Pick<MemoryInjection, "section">, material: { section: string } | null): string | null {
+  return [injection.section, material?.section].filter(Boolean).join("\n\n") || null;
 }
 
 /** spawn 直後の注入記録(task 帰属、worker_spawned の直後に両 adapter が書く)。 */

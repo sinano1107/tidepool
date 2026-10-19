@@ -21,7 +21,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, memoryPromptSection, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -2002,7 +2002,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         ? this.options.cliVersion()
         : (this.options.cliVersion ?? CLAUDE_CLI_VERSION);
       const memory = buildMemoryInjection(this.options.db, task, workspace.name, agent.name, query);
-      // ADR 0180 決定2・追記 #1239: meta-review は worker の記憶の節の代わりに主題の材料の節を同じ枠で受ける
+      // ADR 0180 決定2・追記 #1239 / ADR 0279 決定2: meta-review は INDEX の代わりに指針の節を受け、主題の材料の節がその後ろに続く
       const material = buildMetaReviewMaterial(this.options.db, task.id);
       const verbs = taskVerbSwap(this.options.db, task.id);
       // issue #379: 1タスクに複数の worker session(retry・decompose からの統合
@@ -2195,7 +2195,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
             verbs,
             allowedDomains: workspace.allowed_domains,
-            memorySection: memory.section ?? material?.section ?? null,
+            memorySection: memoryPromptSection(memory, material),
           }),
         ],
         // the agent's own commits are stamped with the agent's identity (issue
