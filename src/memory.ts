@@ -775,13 +775,9 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
   });
 }
 
-/** 異議された memory meta-review の型つきの判断の行が名指す対象(ADR 0279 決定3)。 */
-const memoryRepairJudgments = (db: Db, taskId: string): MemoryJudgmentItem[] =>
-  repairJudgments(db, taskId, "memory").map((j) => ("entry" in j ? { entry: j.entry } : { branch: j.branch }));
-
 /** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
 export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
-  const judgments = memoryRepairJudgments(db, taskId).length > 0;
+  const judgments = repairJudgments(db, taskId, "memory").length > 0;
   return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
 }
 
@@ -822,7 +818,7 @@ const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", n
 
 /** 異議された判断の行が名指すエントリ(と、その後に移された複製)と枝。 */
 function namedObjects(db: Db, taskId: string) {
-  const judged = memoryRepairJudgments(db, taskId);
+  const judged = repairJudgments(db, taskId, "memory");
   return {
     entries: withMovedCopies(db, judged.flatMap((item) => ("entry" in item ? [item.entry] : []))),
     branches: judged.flatMap((item) => ("branch" in item ? [item.branch] : [])),

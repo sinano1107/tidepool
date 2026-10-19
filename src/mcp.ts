@@ -1115,7 +1115,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
 
   // ADR 0273 決定2・9: interview の root は routing の読み口と、根拠があれば根拠の history の読み口を持つ
   if (added.includes("list_routing_shadow")) {
-    const run: MetaReviewRun = (verb) => runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+    const run = slotRun(deps, attributedTaskId);
     registerPrecedentRead(server, deps, run);
     registerRoutingReads(server, deps, run);
   }
@@ -1150,7 +1150,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   if (attributedTaskId !== null && getTask(deps.db, attributedTaskId)?.type === "memory_repair") registerMemoryRepairVerbs(server, deps, attributedTaskId);
   // ADR 0279 決定4: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb を足す(対象の門は domain が持つ)
   if (attributedTaskId !== null && routingRepairVerbs(deps.db, attributedTaskId).length > 0) {
-    const run: MetaReviewRun = (verb) => runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+    const run = slotRun(deps, attributedTaskId);
     registerPrecedentRead(server, deps, run);
     registerRoutingMetaReviewVerbs(server, deps, run);
   }
@@ -1259,8 +1259,7 @@ function memoryRepairReach({ writes, judgments }: { writes: boolean; judgments: 
  *  1つの tool で、対象の範囲と門は domain が呼び出し時に持つ。 */
 function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string): void {
   const kinds = memoryRepairKinds(deps.db, attributedTaskId);
-  const run: MetaReviewRun = (verb) =>
-    runVerb(deps, attributedTaskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+  const run = slotRun(deps, attributedTaskId);
   const side: MemoryWriteSide = { activity: "worker_verb", reach: memoryRepairReach(kinds), judges: kinds.judgments };
   if (kinds.judgments) {
     registerPrecedentRead(server, deps, run);
@@ -1324,6 +1323,11 @@ function registeredScope(deps: McpDeps, scope: string | null): string | null {
 }
 
 type MetaReviewRun = (verb: (reader: { taskId: string; agent: string }, now: Date) => unknown) => ReturnType<typeof runVerb>;
+/** 主題の門を持たない読み手(interview の root・修理子)の run: slot の task と走る agent で verb を呼ぶ。 */
+const slotRun =
+  (deps: McpDeps, taskId: string | null): MetaReviewRun =>
+  (verb) =>
+    runVerb(deps, taskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
 
 /** meta-review の主題の専用 verb(issue #619・#917 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
  *  呼び出し時の門も持つ。Precedent の読み口は両主題で共有する。 */
