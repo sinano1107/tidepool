@@ -2,7 +2,7 @@
  *  その Harness に実在する機構の名前だけである。 */
 
 import type { Db } from "./db.js";
-import { type EventPayload, listEvents } from "./events.js";
+import { type EventPayload, type EventRow, listEvents } from "./events.js";
 import {
   type AgentAtCommit,
   type AuthorityProfile,
@@ -149,7 +149,16 @@ function buildRoster(
   registryAgents: Record<string, RosterAgent & { builtin?: true }>,
   assignableTo: string[] | undefined,
 ): string | undefined {
-  if (assignableTo === undefined || assignableTo.length === 0) return undefined;
+  const agents = rosterAgents(registryAgents, assignableTo);
+  return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
+}
+
+/** The roster's agents, before they become lines (see `buildRoster`). */
+function rosterAgents(
+  registryAgents: Record<string, RosterAgent & { builtin?: true }>,
+  assignableTo: string[] | undefined,
+): RosterAgent[] {
+  if (assignableTo === undefined || assignableTo.length === 0) return [];
   const wildcard = assignableTo.includes(AUTHORITY_WILDCARD);
   const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
   const agentNames = wildcard ? Object.keys(registryAgents) : explicitNames;
@@ -157,7 +166,7 @@ function buildRoster(
     .map((name) => ownEntry(registryAgents, name))
     .filter((agent): agent is RosterAgent => agent !== undefined && agent.builtin !== true);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
-  return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
+  return agents;
 }
 
 /** Wraps a built roster (or nothing) as a Roster section — by default the
@@ -192,14 +201,14 @@ function reviewAssignableTo(db: Db, review: Task): string[] {
 function versionEvidence(
   level: string,
   assignee: string,
-  agent: AgentAtCommit,
+  agent: AgentAtCommit & { body: string },
   registry: RegistryAtCommit,
   parentReviewAssignableTo: string[] | undefined,
 ): string {
   const body =
     agent.builtin && agent.body === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
-      : agent.body!;
+      : agent.body;
   let then: { label: string; guidance: string; assignable_to: string[] };
   if (parentReviewAssignableTo !== undefined) {
     then = {
@@ -223,18 +232,67 @@ function versionEvidence(
     }
     then = { label: `profile ${agent.authority}`, ...profile };
   }
-  // a name whose description is unreadable stays listed: dropping it would read as "not in your roster"
-  const rosterAgents = Object.fromEntries(
+  return (
+    body +
+    authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
+    rosterSection(buildRoster(rosterSourceAt(registry), then.assignable_to), `${level} Roster as it stood then (${then.label})`)
+  );
+}
+
+/** The 当時版 Roster's source: the registry's agents at that commit. A name whose description is
+ *  unreadable stays listed: dropping it would read as "not in your roster". */
+function rosterSourceAt(registry: RegistryAtCommit): Record<string, RosterAgent> {
+  return Object.fromEntries(
     Object.entries(registry.agents).map(([name, { description }]) => [
       name,
       { name, description: description ?? "(description could not be read at that commit)" },
     ]),
   );
-  return (
-    body +
-    authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
-    rosterSection(buildRoster(rosterAgents, then.assignable_to), `${level} Roster as it stood then (${then.label})`)
-  );
+}
+
+/** One 当時版 version (ADR 0020 part 4): the registry at the spawn's commit and the agent's entry in it —
+ *  a built-in's body is not in the registry commit and is read by the recorded content hash from the
+ *  board's history (ADR 0270 決定3). undefined when the commit is unreachable, the agent is absent, or
+ *  its body cannot be read. */
+function versionAt(
+  registryDir: string,
+  assignee: string,
+  commit: string,
+  version: string,
+): { agent: AgentAtCommit & { body: string }; registry: RegistryAtCommit } | undefined {
+  const registry = registryAtCommit(registryDir, commit);
+  const atCommit = registry && ownEntry(registry.agents, assignee);
+  const body = atCommit?.builtin ? builtInBodyAt(assignee, version) : atCommit?.body;
+  return registry && atCommit && body !== undefined ? { agent: { ...atCommit, body }, registry } : undefined;
+}
+
+/** 帰責の judge に渡す当時版の束(ADR 0291 決定1・2): self RCA の注入と同じ読み口で spawn の (registry_commit,
+ *  definition_version) から引く本文と、spawn が描いた Authority の散文・Roster の行(session の task の type で選ぶ ——
+ *  `authorityByType` と同じ。profile はその commit のもの)、それに組み込みかどうか。 */
+export interface AgentDefinitionThen {
+  registry_commit: string;
+  builtin: boolean;
+  body: string;
+  authority: { guidance: string; assignable_to: string[] };
+  roster: RosterAgent[];
+}
+
+/** `spawned` の session の当時版の束。本文か、要る profile が引けなければ null。 */
+export function agentDefinitionThen(db: Db, registryDir: string, spawned: EventRow): AgentDefinitionThen | null {
+  const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
+  const at = versionAt(registryDir, spawned.worker_id, registry_commit, definition_version);
+  if (!at) return null;
+  const profile = at.agent.authority === undefined ? undefined : ownEntry(at.registry.authority, at.agent.authority);
+  const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile);
+  if (!then) return null;
+  const assignable_to = then.rosterAssignableTo ?? [];
+  return {
+    registry_commit,
+    builtin: at.agent.builtin === true,
+    body: at.agent.body,
+    authority: { guidance: then.guidance, assignable_to },
+    roster: rosterAgents(rosterSourceAt(at.registry), assignable_to),
+  };
 }
 
 /** "entry #3" / "entries #3, #5" — decision-log event ids, the same id space
@@ -308,16 +366,12 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   }
   const parent = getTask(db, task.parent_id);
   const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
-  const resolved: Array<{ entryIds: number[]; agent: AgentAtCommit; registry: RegistryAtCommit }> = [];
+  const resolved: Array<{ entryIds: number[] } & NonNullable<ReturnType<typeof versionAt>>> = [];
   for (const [key, entryIds] of byVersion) {
     const [commit, version]: [string, string] = JSON.parse(key);
-    const registry = registryAtCommit(registryDir, commit);
-    const atCommit = registry && ownEntry(registry.agents, task.assignee);
-    // 組み込みの本文は registry commit に無く、記録の内容 hash で盤面の履歴表から引く(ADR 0270 決定3)
-    const agent = atCommit?.builtin ? { ...atCommit, body: builtInBodyAt(task.assignee, version) } : atCommit;
-    if (registry === undefined || agent === undefined || agent.body === undefined) {
-      unresolved.push(...entryIds);
-    } else resolved.push({ entryIds, agent, registry });
+    const at = versionAt(registryDir, task.assignee, commit, version);
+    if (at === undefined) unresolved.push(...entryIds);
+    else resolved.push({ entryIds, ...at });
   }
   if (resolved.length === 0) return "";
   const evidence = (level: string, { agent, registry }: (typeof resolved)[number]) =>
@@ -375,14 +429,24 @@ function authorityByType(
   task: Task,
   profile: AuthorityProfile,
 ): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
-  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined, notice: undefined };
   const notice =
-    auditedPosedEventId(db, task.id) !== undefined
-      ? INTERVIEW_AUDIT_NOTICE
-      : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+    isRepairType(task.type) ? undefined
+    : auditedPosedEventId(db, task.id) !== undefined ? INTERVIEW_AUDIT_NOTICE
+    : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+  return { ...guidanceByType(db, task, profile)!, notice };
+}
+
+/** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。profile を読むのは
+ *  修理子の type でも review / interview でもない task だけで、そこで profile が無ければ undefined。 */
+function guidanceByType(
+  db: Db,
+  task: Task,
+  profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
+): { guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
+  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
-    return { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task), notice };
-  return { guidance: profile.guidance, rosterAssignableTo: profile.assignable_to, notice };
+    return { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task) };
+  return profile && { guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
 /** 盤面が書いた文面の全体(ADR 0157 決定1)。節の順序は Harness を問わず

@@ -8,6 +8,7 @@ const input: BehaviorDraftInput = {
   steering: ["always spell it --dry-run"],
   decision_log: ["named the flag --dry"],
   memory_read: [],
+  agent_definition: null,
   index: "- cli/ — how command-line flags are named",
 };
 

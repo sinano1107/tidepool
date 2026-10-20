@@ -21,7 +21,7 @@ export interface LogEntryProps {
     bundledObjection?: string;
     /** Latest attribution beside the objection annotation. `uncertain` is
      *  rendered as explicitly not yet determined. Read-only. */
-    cause?: 'capability' | 'task_ambiguity' | 'missing_information' | 'environment' | 'preference' | 'requirement_change' | 'memory' | 'uncertain';
+    cause?: 'capability' | 'task_ambiguity' | 'missing_information' | 'environment' | 'preference' | 'requirement_change' | 'memory' | 'agent_definition' | 'workspace_document' | 'uncertain';
     /** With cause `memory`: the ids of the memory entries the attribution
      *  named, each rendered as a link beside the cause. */
     causeEntries?: number[];

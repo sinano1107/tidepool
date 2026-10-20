@@ -98,6 +98,7 @@ export const noRetrospectiveCalls: RetrospectiveCallDeps = {
   workspace: undefined,
   containers: undefined,
   agentRegistered: undefined,
+  registryDir: undefined,
 };
 
 /** A reading well under the default threshold — the harness default so tests

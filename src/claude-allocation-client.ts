@@ -18,8 +18,9 @@ const judgmentSchema = z.object({
   evidence: z.string().min(1),
 });
 
-// memory は読んだ記憶を入力に持つ帰責だけが判定できる(ADR 0166 決定1)ので、配分評価の prompt には載せない
-const ALLOCATION_CAUSES = CAUSES.filter((cause) => cause !== "memory");
+// memory / agent_definition / workspace_document は読んだ記憶・当時版・decision log を入力に持つ帰責だけが判定できる
+// (ADR 0166 決定1 / ADR 0291 決定5)ので、配分評価の prompt には載せない
+const ALLOCATION_CAUSES = CAUSES.filter((cause) => !["memory", "agent_definition", "workspace_document"].includes(cause));
 
 /** The question the board asks after quality is fixed (ADR 0111 決定4): the
  *  review has already said whether the deliverable is acceptable; this call
