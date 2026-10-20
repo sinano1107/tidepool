@@ -63,3 +63,8 @@ routing の「初観測のセル」の項目は行に畳まれ、セルを名指
 決定3 の「同じ task に両方の行の異議があれば修理子は1本で、verb は和」の「和」は verb の集合の和であって射程の融合ではなく、同じ操作で
 射程だけが違う verb(`invalidate_memory` / `move_memory` / `move_memory_branch`)はどの組でも1つの tool で門が対象で切り替わる。書き込みの行の修理の枝の
 移し戻しは meta-review の `move_memory_branch` と操作が違うので `restore_memory_branch` と別名(ADR 0281)。
+
+## 追記3(2026-10-20 の grilling、issue #2326 / ADR 0282)
+
+決定5 の memory の「枝」の鍵は (path, scope)。決定3 の修理子が `define_memory` / `move_memory_branch` で届くのは、名指された (path, scope)
+と同じ path の盤面全体だけ。
