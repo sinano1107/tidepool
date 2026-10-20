@@ -217,7 +217,7 @@ it("routing_repair の worker MCP の tools/list は基本の面(get_current_tas
     }
     const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
     expect(envelope.routing_repair).toBe(
-      "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.",
+      "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or write memory.",
     );
     expect(envelope.memory_repair).toBeUndefined();
     expect(envelope.artifact_discarded).toBeUndefined();

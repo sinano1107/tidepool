@@ -1151,10 +1151,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   }
   // ADR 0252 決定4 / ADR 0272 決定3: 記憶の修理 verb は memory_repair の type で足す
   if (attributedTaskId !== null && getTask(deps.db, attributedTaskId)?.type === "memory_repair") registerMemoryRepairVerbs(server, deps, attributedTaskId);
-  // ADR 0279 決定4: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb を足す(対象の門は domain が持つ)
+  // ADR 0279 決定4 / ADR 0283 決定3: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb と指針の節の id 読みを足す
+  // (対象の門は domain が持つ)
   if (attributedTaskId !== null && routingRepairVerbs(deps.db, attributedTaskId).length > 0) {
     const run = slotRun(deps, attributedTaskId);
     registerPrecedentRead(server, deps, run);
+    registerMemoryEntriesRead(server, deps, run);
     registerRoutingMetaReviewVerbs(server, deps, run);
   }
 

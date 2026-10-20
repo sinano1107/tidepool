@@ -3554,9 +3554,10 @@ export const INTERVIEW_AUDIT_NOTICE =
 export const MEMORY_REPAIR_NOTICE =
   "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.";
 
-/** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。 */
+/** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。記憶は
+ *  書けないが、指針の節の id 読みは持つ(ADR 0283 決定3)ので「記憶の verb を使えない」とは言わない。 */
 export const ROUTING_REPAIR_NOTICE =
-  "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.";
+  "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or write memory.";
 
 /** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
 export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };

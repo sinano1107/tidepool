@@ -1442,11 +1442,14 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
 });
 
-it("meta-review の下の memory_repair の帰責の入力の読んだ記憶は、spawn の注入(worker と同じく既定 workspace を渡す)の指針の節に載っていて read_memory_entries で読んだ entry(ADR 0283 決定3 / ADR 0279 決定2)", async () => {
+it.each([
+  ["memory", "memory_repair"],
+  ["routing", "routing_repair"],
+] as const)("主題 %s の meta-review の下の %s の帰責の入力の読んだ記憶は、spawn の注入(worker と同じく既定 workspace を渡す)の指針の節に載っていて read_memory_entries で読んだ entry(ADR 0283 決定3 / ADR 0279 決定2)", async (subject, type) => {
   const b = memoryBoard();
   const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
-  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
-  const repair = registerTask(b.db, { type: "memory_repair", title: "memory repair", purpose: "undo it", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
+  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+  const repair = registerTask(b.db, { type, title: `${subject} repair`, purpose: "undo it", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
   const spawned = appendEvent(b.db, { taskId: repair.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordMemoryInjection(b.db, repair.id, "deckhand", spawned, buildMemoryInjection(b.db, repair, "charts", "deckhand"), at);
   readMemoryEntries(b.db, { taskId: repair.id, agent: "deckhand" }, { ids: [guidance] }, at);

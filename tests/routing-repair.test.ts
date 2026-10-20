@@ -54,12 +54,12 @@ it("routing_repair の purpose と get_current_task の親の history は親の�
   expect(taskHistoryRows(db, review.id, repair.id).map((r) => r.entry)).toEqual(expect.arrayContaining([expect.objectContaining({ decision: "no_change: the learner" })]));
 });
 
-it("routing_repair の verb は、routing の判断の行を運べば routing の読み口5本と propose_routing_change で read_memory_entries は無く、型つきの行を運ばなければ無い(ADR 0279 決定4)", () => {
+it("routing_repair の verb は、routing の判断の行を運べば routing の読み口5本と propose_routing_change と指針の節の id 読み(read_memory_entries)、型つきの行を運ばなければ無い(ADR 0279 決定4 / ADR 0283 決定3)", () => {
   const db = openDb(":memory:");
   const judged = routingJudgmentRepairTask(db, at);
   const bare = registerTask(db, { type: "routing_repair", title: "routing repair", purpose: "redo it", completion_criteria: "c", parent_id: judged.parent_id! }, at, ...HUMAN_WEBUI);
 
-  expect(routingRepairVerbs(db, judged.id).sort()).toEqual(["list_allocations", "list_precedents", "list_routing_cells", "list_routing_shadow", "propose_routing_change", "read_routing_settings"]);
+  expect(routingRepairVerbs(db, judged.id).sort()).toEqual(["list_allocations", "list_precedents", "list_routing_cells", "list_routing_shadow", "propose_routing_change", "read_memory_entries", "read_routing_settings"]);
   expect(routingRepairVerbs(db, bare.id)).toEqual([]);
 });
 

@@ -297,11 +297,10 @@ function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal 
   throw new DomainError(`${name} is not named by the objected judgment: a routing repair proposes only on what that judgment names`);
 }
 
-/** routing_repair の verb(ADR 0279 決定4): routing の判断の行を運べば routing meta-review の読み口と提案 verb —— 修理子に指針の節は
- *  注入されないので read_memory_entries は持たない。型つきの行を運ばなければ無い(基本の面だけ)。Codex の `enabled_tools` が読み、
- *  MCP の登録も同じこの判定で登録する。 */
-export const routingRepairVerbs = (db: Db, taskId: string): string[] =>
-  repairJudgments(db, taskId, "routing").length === 0 ? [] : ROUTING_META_REVIEW_VERBS.filter((verb) => verb !== "read_memory_entries");
+/** routing_repair の verb(ADR 0279 決定4): routing の判断の行を運べば routing meta-review の読み口と提案 verb —— 親の主題の読み手として
+ *  指針の節を受けるので、その id 読み(read_memory_entries)も持つ(ADR 0283 決定3)。型つきの行を運ばなければ無い(基本の面だけ)。
+ *  Codex の `enabled_tools` が読み、MCP の登録も同じこの判定で登録する。 */
+export const routingRepairVerbs = (db: Db, taskId: string): string[] => (repairJudgments(db, taskId, "routing").length === 0 ? [] : [...ROUTING_META_REVIEW_VERBS]);
 
 /** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
  *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない)、学習器は昇格 / 降格。段の event は名前で名指すので、
