@@ -11,7 +11,7 @@ import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
-import { appendEvent, type EventOrigin, getEvent } from "./events.js";
+import { appendEvent, type EventOrigin, getEvent, type TaskScopedPayload } from "./events.js";
 import {
   type AddTierAmendment,
   applyExecutionSettingsChange,
@@ -34,7 +34,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -97,7 +97,7 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   conventionCheckoutPath,
@@ -1069,8 +1069,9 @@ export async function submitAnswer(
   }
 
   let release: (() => void) | null = null;
-  // merge の回答が merge した PR の根 —— 決着はここに、回答と同じトランザクションで刻む(ADR 0265 決定1)
-  let mergeRecord: { root: string; pr: number } | undefined;
+  // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
+  // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
+  let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
     switch (kind.kind) {
@@ -1103,7 +1104,8 @@ export async function submitAnswer(
           }
           if (left.length > 0) throw leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`);
           try {
-            mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id);
+            const sha = mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id);
+            rootRecord = { root: kind.task_id, payload: { kind: "local_merge_executed", sha } };
           } catch (err) {
             // ADR 0103 決定4: 隔離するのは帯域外の書き込みの証拠だけである。コンフリクトも
             // 汚れたツリーも git の不調も、着地が失敗しただけでは資源が実行不能だと証明
@@ -1113,6 +1115,10 @@ export async function submitAnswer(
             }
             throw new DomainError(err instanceof Error ? err.message : String(err));
           }
+        } else {
+          // ADR 0289 決定3: hold が断るのはこの時点の内容。読めなくても hold は拒まない(null は「変わった」と読まれる)
+          const head = taskBranchHeadOrNull(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task.workspace, kind.task_id);
+          rootRecord = { root: kind.task_id, payload: { kind: "local_merge_held", head }, byBoard: true };
         }
         break;
       case "pr_merge": {
@@ -1187,7 +1193,7 @@ export async function submitAnswer(
           } catch (err) {
             throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
           }
-          mergeRecord = { root: landingTaskId, pr: mergePr };
+          rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };
         }
         break;
       }
@@ -1248,12 +1254,11 @@ export async function submitAnswer(
         origin,
         deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName },
       );
-      if (mergeRecord) {
+      if (rootRecord) {
         appendEvent(deps.db, {
-          taskId: mergeRecord.root,
-          workerId: HUMAN_WORKER_ID,
-          origin,
-          payload: { kind: "pr_merged", pr_number: mergeRecord.pr },
+          taskId: rootRecord.root,
+          ...(rootRecord.byBoard ? { workerId: BOARD_WORKER_ID, origin: "board" as const } : { workerId: HUMAN_WORKER_ID, origin }),
+          payload: rootRecord.payload,
           at: now(),
         });
       }

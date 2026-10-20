@@ -270,6 +270,11 @@ export type EventPayload =
   // タスクブランチの head。断念という人間の判断は question の decision log に、断念した内容はこの事実として
   // タスクの側に残る(ADR 0073 決定2)。head を読めなかったときは null(「変わった」と扱う)
   | { kind: "pr_promotion_abandoned"; head: string | null }
+  // ADR 0289 決定1: ローカル着地の merge 回答が保護ブランチに置いた commit(ff ならタスクブランチの tip、追いつきなら
+  // 盤面名義の merge commit)。回答と同じ transaction で根に刻み、収束はこれで根を終わらせる。`pr_merged` のローカルの対
+  | { kind: "local_merge_executed"; sha: string }
+  // ADR 0289 決定3: ローカル着地の hold が断った内容 —— 回答の時点のタスクブランチの tip。読めなければ null(「変わった」と扱う)
+  | { kind: "local_merge_held"; head: string | null }
   // issue #11: a risk-approval question's "approve" answer raised the
   // parent's risk_flag (upward propagation) — origin_question_id is that
   // question, so the audit trail for the flag flip never needs a join

@@ -895,12 +895,19 @@ export function countUnsettledTasksReferencing(
   return row.n;
 }
 
-/** 完了タスクが一度着地した(PR を開いた、local merge question が立った、着地する内容が無かった)SQL 述語。
- *  着地を待つ完了タスクの数えと、workspace の削除の扉が数える線は、これを共有する。 */
+/** ローカル着地が人間の手にある(未決着の local merge question がある)か、merge を執行した(`local_merge_executed`)
+ *  SQL 述語(ADR 0289 決定1)。収束の候補の除外と、削除の扉の「一度着地した」が共有する —— hold した根はどちらでもない。 */
+export function localLandingOpenOrExecutedSql(taskRef: string): string {
+  return `(EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = ${taskRef} AND ${unsettledSql("q.status")})
+           OR EXISTS (SELECT 1 FROM events e WHERE e.task_id = ${taskRef} AND e.kind = 'local_merge_executed'))`;
+}
+
+/** 完了タスクが一度着地した(PR を開いた、ローカル着地が人間の手にあるか執行した、着地する内容が無かった)SQL 述語。
+ *  workspace の削除の扉が数える線はこれを読む。 */
 function taskHasLandedSql(taskRef: string): string {
   return `(EXISTS (SELECT 1 FROM events
                     WHERE task_id = ${taskRef} AND kind IN ('pr_opened', 'nothing_to_land'))
-           OR EXISTS (SELECT 1 FROM tasks WHERE question_pending_local_merge_task_id = ${taskRef}))`;
+           OR ${localLandingOpenOrExecutedSql(taskRef)})`;
 }
 
 /** ADR 0234 決定1: 未決着タスクは自身の workspace に加えて、決着したときに着地し直す(収束 —— ADR 0241)
