@@ -223,7 +223,7 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
   }
 });
 
-it("memory meta-review の purpose は材料の節とその6つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、判断を要する項目を行為か complete_memory_review の据え置きで閉じると言い、completion_criteria は項目を名指す(ADR 0180 / ADR 0278 決定3)", async () => {
+it("memory meta-review の purpose は材料の節とその6つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、判断を要する項目を行為か complete_memory_review の据え置きで閉じ、項目でないエントリの scope の据え置きは log_decision で言うと言い、completion_criteria は項目を名指す(ADR 0180 / ADR 0278 決定3)", async () => {
   const { review, client } = await boardWithMetaReview();
   try {
     expect(review.purpose).toContain(
@@ -236,6 +236,10 @@ it("memory meta-review の purpose は材料の節とその6つの部分を名�
     expect(review.purpose).not.toContain("First read the past memory proposals");
     expect(review.purpose).toContain("End the session with complete_memory_review, listing each item you leave as is");
     expect(review.purpose).not.toContain("log_decision and leave the entry in place");
+    // 項目でない対象の据え置きは log_decision(ADR 0176 決定8、ADR 0278 追記8 / issue #2335)
+    expect(review.purpose).toContain(
+      "leave the entry in place and say so — in its reason in complete_memory_review when the entry is an item to judge, otherwise in one log_decision line naming the entry id, or the branch path and scope, and the scope you judged right",
+    );
     expect(review.completion_criteria).toBe(
       "every item to judge in this cycle's material is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or listed as left as is in complete_memory_review",
     );

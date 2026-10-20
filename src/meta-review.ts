@@ -90,7 +90,9 @@ export const META_REVIEW_SUBJECTS = {
         "merge: true (move_memory_branch), and widen an entry every workspace needs to the whole board — " +
         "widen a candidate before you propose it, so the question shows the human the scope it will have. You cannot narrow " +
         "an entry to a workspace, move it between workspaces, or change the scope of an approved Behavior or Exemplar: when " +
-        "you judge one of those right, leave the entry in place and say so in its reason in complete_memory_review. " +
+        "you judge one of those right, leave the entry in place and say so — in its reason in complete_memory_review when the entry " +
+        "is an item to judge, otherwise in one log_decision line naming the entry id, or the branch path and scope, and the scope you judged right (complete_memory_review " +
+        "refuses an entry not on the injected list). " +
         "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
         "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
