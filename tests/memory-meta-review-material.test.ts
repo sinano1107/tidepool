@@ -500,12 +500,13 @@ it("reject で決着した consolidate の提案の replaces が名指す approv
 
   const { items, seen, read } = seenOfMaterial(db, register(db, "memory"));
 
+  expect(db.prepare("SELECT invalidation_reason FROM memory_entries WHERE id = ?").get(replaced)).toEqual({ invalidation_reason: null });
   expect(items).toContainEqual({ entry: replaced });
   expect(seen).toContain(replaced);
   expect(read).toEqual([]);
 });
 
-it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5つの部分のどこにも載らなくても項目に載り、その session の decision の entries_seen に入り entries_read に入らない", () => {
+it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5部分のどこにも載らなくても項目に載り、その session の decision の entries_seen に入り entries_read に入らない", () => {
   const db = openDb(":memory:");
   const outside = knowledge(db, "outside");
   const previous = register(db, "memory", true);
