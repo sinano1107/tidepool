@@ -4225,6 +4225,24 @@ describe("advisor capability (issue #33)", () => {
     });
   });
 
+  // ── main の pin を上書きする host env(issue #2351)──────────────
+  describe("main の pin を上書きする host env(issue #2351)", () => {
+    const PIN_OVERRIDE_ENVS = ["CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"];
+
+    // 2.1.286 実測: CLAUDE_CODE_EFFORT_LEVEL は --effort に勝ち、ANTHROPIC_DEFAULT_*_MODEL は --advisor の alias を差し替える。
+    // worker_spawned は pin を書くので、host の値が残ると記録と実走が食い違う(ADR 0005)
+    it("ホストが立てた effort / alias の env 4つを spawn env から消す", async () => {
+      for (const name of PIN_OVERRIDE_ENVS) vi.stubEnv(name, "low");
+      try {
+        const { start, calls } = await makeWorker();
+        start();
+        for (const name of PIN_OVERRIDE_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   // ── 差し替え(issue #1523 / ADR 0215)────────────────────────────
 
   describe("差し替え(issue #1523 / ADR 0215)", () => {

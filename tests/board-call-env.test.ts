@@ -72,6 +72,22 @@ describe("Board call の env", () => {
     }
   });
 
+  // issue #2351: Board call も --model / --effort をフラグで pin するが、翻訳と probe の --model は
+  // `haiku` の alias で、CLAUDE_CODE_EFFORT_LEVEL は --effort に勝つ(2.1.286 実測)。host の値は
+  // ここでも消す —— 盤面側の値は入れず「無い」を固定する(ADR 0005)。
+  it("Board call の env からは main の pin を上書きする host env(effort / alias 差し替え)が除去される", () => {
+    const names = ["CLAUDE_CODE_EFFORT_LEVEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"];
+    for (const name of names) vi.stubEnv(name, "low");
+    try {
+      const env = boardCallEnv();
+      for (const name of names) expect(env[name]).toBeUndefined();
+      const noThinking = boardCallEnvWithoutThinking();
+      for (const name of names) expect(noThinking[name]).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   // ADR 0062 決定2: 「推論しない」は全 Board call について真ではないので
   // `boardCallEnv()` には畳み込まず、上に重ねる形で綴る。重ねる側が advisor の
   // 宣言を落とせば ADR 0044 が黙って失効するので、そこをここで見張る。
