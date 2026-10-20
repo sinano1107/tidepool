@@ -507,7 +507,7 @@ const SUBAGENT_MODEL_ENVS = [
  *  effort null の行にも env の値が載る)ので、`worker_spawned.effort` が pin を書く記録と実走が食い違う。
  *  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` は alias を差し替える —— 行の `--model` は concrete id
  *  (ADR 0182)なので無傷だが、`--advisor opus` と Board call の `--model haiku` は alias で、黙って別 model
- *  になる(同実測)。盤面側の値は入れず、worker spawn と Board call の両方で消して「無い」を固定する。 */
+ *  になる(opus / haiku は同実測、sonnet は binary の同じ alias 表の読み)。盤面側の値は入れず、worker spawn と Board call の両方で消して「無い」を固定する。 */
 const PIN_OVERRIDE_ENVS = [
   "CLAUDE_CODE_EFFORT_LEVEL",
   "ANTHROPIC_DEFAULT_OPUS_MODEL",
@@ -626,7 +626,10 @@ function readMoonshotApiKey(keyFile: string): string {
  *  and probes haiku), and the one flag-less call, the `/usage` TUI scrape,
  *  raises no model turn at all. The scrubbed list is the same
  *  `MOONSHOT_ROUTING_ENV` the moonshot spawn injects, so the symmetry is
- *  structural, not a discipline. */
+ *  structural, not a discipline. `PIN_OVERRIDE_ENVS` is scrubbed here too
+ *  (#2351): translation and the probes pin `--model haiku` by alias, which the
+ *  host's `ANTHROPIC_DEFAULT_HAIKU_MODEL` remaps, and every `--effort` these
+ *  calls pass loses to the host's `CLAUDE_CODE_EFFORT_LEVEL`. */
 export function boardCallEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
@@ -665,7 +668,7 @@ export interface ProviderRouting extends ExecutionSetting {
 }
 
 /** The env-tier CLI knobs a worker spawn pins (ADR 0005), beside the git
- *  identity vars. Five **independent** concerns, deliberately not named for the
+ *  identity vars. Seven **independent** concerns, deliberately not named for the
  *  advisor as a whole — only the first is advisor-scoped:
  *
  *  1. `CLAUDE_CODE_DISABLE_ADVISOR_TOOL` — the explicit no described on
@@ -701,6 +704,12 @@ export interface ProviderRouting extends ExecutionSetting {
  *     0257 決定2). The CLI process's own `TMPDIR` is what moves its proxy socket
  *     out of the closed `/tmp`; `CLAUDE_CODE_TMPDIR` alone left allowed domains
  *     unreachable (#1950).
+ *  6. `SUBAGENT_MODEL_ENVS` — always deleted (ADR 0287 決定3): a subagent's
+ *     model is the parent's call plus the pinned CLI's defaults, never the
+ *     host's blanket override.
+ *  7. `PIN_OVERRIDE_ENVS` — always deleted (#2351): the host's effort env beats
+ *     `--effort` and its alias remaps beat `--advisor <alias>`, so leaving them
+ *     would put a pin in `worker_spawned` that the session did not run under.
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -715,7 +724,7 @@ export interface ProviderRouting extends ExecutionSetting {
  *  closed — it is exactly the injection set — while the set to pass through
  *  (PATH, proxies, SSH, locale) is host-dependent, open, and silently fatal
  *  when a need goes missing. Enumerate the side you can enumerate.
- *  Nothing more is pinned: effort mapping and context-window knobs are #447's
+ *  Beyond these, effort mapping and context-window knobs are #447's
  *  measurements, not guesses to bake in here. */
 export function workerSpawnEnv(
   advisor: string | undefined,
