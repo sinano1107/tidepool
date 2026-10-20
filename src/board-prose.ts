@@ -232,25 +232,21 @@ function versionEvidence(
     }
     then = { label: `profile ${agent.authority}`, ...profile };
   }
-  const roster = rosterAt(registry, then.assignable_to);
   return (
     body +
     authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
-    rosterSection(roster.length > 0 ? roster.map(rosterLine).join("\n") : undefined, `${level} Roster as it stood then (${then.label})`)
+    rosterSection(buildRoster(rosterSourceAt(registry), then.assignable_to), `${level} Roster as it stood then (${then.label})`)
   );
 }
 
-/** The 当時版 Roster's agents, rebuilt from the registry at that commit. A name whose description is
+/** The 当時版 Roster's source: the registry's agents at that commit. A name whose description is
  *  unreadable stays listed: dropping it would read as "not in your roster". */
-function rosterAt(registry: RegistryAtCommit, assignableTo: string[]): RosterAgent[] {
-  return rosterAgents(
-    Object.fromEntries(
-      Object.entries(registry.agents).map(([name, { description }]) => [
-        name,
-        { name, description: description ?? "(description could not be read at that commit)" },
-      ]),
-    ),
-    assignableTo,
+function rosterSourceAt(registry: RegistryAtCommit): Record<string, RosterAgent> {
+  return Object.fromEntries(
+    Object.entries(registry.agents).map(([name, { description }]) => [
+      name,
+      { name, description: description ?? "(description could not be read at that commit)" },
+    ]),
   );
 }
 
@@ -291,7 +287,7 @@ export function definitionThen(registryDir: string, spawned: EventRow): Definiti
     builtin: at.agent.builtin === true,
     body: at.agent.body,
     authority,
-    roster: authority ? rosterAt(at.registry, authority.assignable_to) : [],
+    roster: authority ? rosterAgents(rosterSourceAt(at.registry), authority.assignable_to) : [],
   };
 }
 
