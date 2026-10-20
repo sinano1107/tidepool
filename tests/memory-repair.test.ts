@@ -9,6 +9,7 @@ import {
   foldMemory,
   HUMAN_AUTHOR,
   invalidateMemoryByMetaReview,
+  invalidateMemoryEntry,
   listMemoryEntries,
   memoryRepairVerbs,
   moveMemoryBranchByMetaReview,
@@ -23,6 +24,7 @@ import {
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { listChildren, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection } from "../src/triage.js";
+import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI, judgedMemoryReview } from "./harness.js";
 
 /** 修理子から同じ操作の verb を呼ぶ —— meta-review と1つの関数で、射程は門が対象で切り替える(ADR 0281 決定1)。 */
@@ -110,13 +112,13 @@ it("修理 verb は異議された書き込みが触ったエントリ(path_move
   expect(invalidateAsRepairer(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: later, reason: "capability" }, at)).toMatchObject({ event_id: expect.any(Number) });
 });
 
-it("移動: 異議された書き込みが移す前の置き場への移し戻しは門を掛けず、それ以外は meta-review と同じ門(scope は盤面全体へ広げる向きだけ)", () => {
+it("移動: 異議された書き込みが移す前の置き場への移し戻しは門を掛けず、それ以外は scope を変えない(ADR 0285 決定2)", () => {
   const { db, reviewed, knowledge, repairOf, entry } = board();
   const widened = moveMemoryByMetaReview(db, { entry_id: knowledge("Node 22"), scope: null, path: "toolchain", mover: metaReview }, "worker", at, reviewed.id);
   const repair = repairOf(widened.event_id, reviewed.id);
   const repairer = { taskId: repair.id, agent: "deckhand" };
 
-  expect(() => moveAsRepairer(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "elsewhere" }, at)).toThrow("only within it or to the whole board");
+  expect(() => moveAsRepairer(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "elsewhere" }, at)).toThrow("a memory repair keeps entries in their scope: moving from the whole board to scope charts");
   const back = moveAsRepairer(db, repairer, { entry_id: widened.entry_id, scope: "charts", path: "build" }, at);
 
   expect(entry(back.entry_id)).toMatchObject({ scope: "charts", path: "build", title: "Node 22", invalidation_reason: null });
@@ -270,7 +272,7 @@ function unionRepair() {
   return { ...b, repair, o, c, k, behavior, widened, defined, mover: { activity: "worker_verb" as const, name: "deckhand" } };
 }
 
-it("両方の行の修理子の invalidate_memory / move_memory / move_memory_branch は対象で門が切り替わる —— (i) 書き込みの射程には修理の規則(移し戻しは scope の門なし)、(ii) 判断の行が名指す対象には meta-review の規則、(iii) どちらにも無い対象は名指して拒む(ADR 0281 決定1)", () => {
+it("両方の行の修理子の invalidate_memory / move_memory / move_memory_branch は対象で門が切り替わる —— (i) 書き込みの射程には修理の規則(移し戻しは scope の門なし)、(ii) 判断の行が名指す対象には meta-review の規則を対象の scope の中で(ADR 0285 決定2)、(iii) どちらにも無い対象は名指して拒む(ADR 0281 決定1)", () => {
   const { db, repair, o, c, k, behavior, widened, defined, mover, entry } = unionRepair();
   const invalidate = (entry_id: number, reason: "capability" | "rejected" = "capability") => invalidateMemoryByMetaReview(db, { entry_id, reason }, "deckhand", "worker", at, repair.id);
   const move = (entry_id: number, scope: string | null, path: string) => moveMemoryByMetaReview(db, { entry_id, scope, path, mover }, "worker", at, repair.id);
@@ -278,11 +280,12 @@ it("両方の行の修理子の invalidate_memory / move_memory / move_memory_br
   // (i) 盤面全体へ広げた移動の移し戻しは狭める向きでも通り、書き込みが作った定義は落とせる
   const back = move(widened.entry_id, "charts", "misc");
   invalidate(defined.entry_id);
-  // (ii) 判断の行が名指す candidate は rejected で引退でき、Knowledge は盤面全体へ広げられ、approved の Behavior は拒む
+  // (ii) 判断の行が名指す candidate は rejected で引退でき、Knowledge は同じ scope の中で移せて盤面全体へは広げられず、approved の Behavior は拒む
   invalidate(c, "rejected");
-  const wide = move(k, null, "build");
+  expect(() => move(k, null, "build")).toThrow("a memory repair keeps entries in their scope: moving from scope charts to the whole board");
+  const kept = move(k, "charts", "build/squash");
   expect(() => invalidate(behavior)).toThrow(`memory entry ${behavior} is an approved behavior: propose it instead`);
-  expect(() => move(behavior, null, "habits")).toThrow(`cannot change the scope of memory entry ${behavior}`);
+  expect(() => move(behavior, null, "habits")).toThrow("a memory repair keeps entries in their scope: moving from scope charts to the whole board");
   // 拒否文は規則と対象だけを言い、判断をどの verb で言うかは worker 共通の規則に任せる(#2293)
   const scopeRefusal = (() => { try { move(behavior, null, "habits"); } catch (err) { return (err as Error).message; } })()!;
   expect(scopeRefusal).not.toContain("log_decision");
@@ -293,11 +296,11 @@ it("両方の行の修理子の invalidate_memory / move_memory / move_memory_br
     "branch misc in scope charts was neither defined nor moved into by the objected memory write, nor named by the objected judgment",
   );
 
-  expect([entry(back.entry_id), entry(defined.entry_id), entry(c), entry(wide.entry_id), entry(o)]).toMatchObject([
+  expect([entry(back.entry_id), entry(defined.entry_id), entry(c), entry(kept.entry_id), entry(o)]).toMatchObject([
     { scope: "charts", path: "misc", invalidation_reason: null },
     { invalidation_reason: "capability", invalidated_by: { activity: "worker_verb" } },
     { invalidation_reason: "rejected", invalidated_by: { activity: "worker_verb" } },
-    { scope: null, path: "build", invalidation_reason: null },
+    { scope: "charts", path: "build/squash", invalidation_reason: null },
     { invalidation_reason: null },
   ]);
 });
@@ -309,7 +312,7 @@ it("rejected は対象がどちらの射程にあっても candidate だけ —�
   );
 });
 
-it("書き込みの行だけの修理子の move_memory_branch は、書き込みが定義を作った枝と、エントリを移し入れた枝(配下)を触っていない leaf ごと動かし、触っていない枝は名指して拒む(ADR 0281 決定2)", () => {
+it("書き込みの行だけの修理子の move_memory_branch は、書き込みが定義を作った枝と、エントリを移し入れた枝(配下)を触っていない leaf ごと動かし、触っていない枝は名指して拒み、scope は変えない(ADR 0281 決定2 / ADR 0285 決定2)", () => {
   const { db, reviewed, knowledge, repairOf, entry } = board();
   const leaf = knowledge("Old leaf", "charts", "build/old");
   const untouched = knowledge("Untouched", "charts", "misc");
@@ -320,6 +323,9 @@ it("書き込みの行だけの修理子の move_memory_branch は、書き込�
   const mover = { activity: "worker_verb" as const, name: "deckhand" };
   const moveBranch = (path: string, to_path: string) => moveMemoryBranchByMetaReview(db, { scope: "charts", path, to_scope: "charts", to_path, mover }, "worker", at, repair.id);
 
+  expect(() => moveMemoryBranchByMetaReview(db, { scope: "charts", path: "build", to_scope: null, to_path: "build", mover }, "worker", at, repair.id)).toThrow(
+    "a memory repair keeps entries in their scope: moving from scope charts to the whole board",
+  );
   expect(moveBranch("build", "make")).toMatchObject({ moved: [{ entry_id: leaf }, { entry_id: defined.entry_id }] });
   expect(moveBranch("tides", "sea")).toMatchObject({ moved: [{ entry_id: moved.entry_id }] });
   expect(() => moveBranch("misc", "other")).toThrow("branch misc in scope charts was neither defined nor moved into by the objected memory write");
@@ -393,8 +399,8 @@ it("判断の行の修理子の get_current_task は親の判断の行・異議�
   expect(listEvents(db, review.id)).toHaveLength(before);
 });
 
-it("判断の行の修理子の define_memory / move_memory_branch は名指された (path, scope) と同じ path の盤面全体にだけ届き、別 workspace の同名の枝は path と scope を名指して拒む —— charts と docks が未定義の tides を持ち、charts の据え置きに異議(#2326 の実測、ADR 0282 決定4)", () => {
-  const { db, knowledge, repairChild, judged, entry } = board();
+it("判断の行の修理子の define_memory / move_memory_branch は名指された (path, scope) そのものにだけ届き、別 workspace の同名の枝も同じ path の盤面全体の枝も (path, scope) を名指して拒み、枝を盤面全体へ広げない —— charts と docks が未定義の tides を持ち、charts の据え置きに異議(#2326 / #2330 の実測、ADR 0285 決定1・2)", () => {
+  const { db, knowledge, repairChild, judged } = board();
   const { review, row } = judged(() => {
     for (const scope of ["charts", "docks"]) knowledge("High tide", scope, "tides");
   });
@@ -403,12 +409,100 @@ it("判断の行の修理子の define_memory / move_memory_branch は名指さ�
   const repair = repairChild(review.id);
   const mover = { activity: "worker_verb" as const, name: "deckhand" };
   const define = (scope: string | null) => defineMemoryByMetaReview(db, { scope, path: "tides", text: "Tides.", author: mover }, "worker", at, repair.id);
-  const moveBranch = (scope: string) => moveMemoryBranchByMetaReview(db, { scope, path: "tides", to_scope: scope, to_path: "sea", mover }, "worker", at, repair.id);
+  const moveBranch = (scope: string | null, to_scope = scope) => moveMemoryBranchByMetaReview(db, { scope, path: "tides", to_scope, to_path: "sea", mover }, "worker", at, repair.id);
 
   expect(() => define("docks")).toThrow("branch tides in scope docks is not named by the objected judgment");
   expect(() => moveBranch("docks")).toThrow("branch tides in scope docks was neither defined nor moved into by the objected memory write, nor named by the objected judgment");
+  expect(() => define(null)).toThrow("branch tides in the whole board is not named by the objected judgment");
+  expect(() => moveBranch(null)).toThrow("branch tides in the whole board was neither defined nor moved into by the objected memory write, nor named by the objected judgment");
+  expect(() => moveBranch("charts", null)).toThrow("a memory repair keeps entries in their scope: moving from scope charts to the whole board");
   const charts = define("charts");
   expect(moveBranch("charts").moved).toContainEqual(expect.objectContaining({ entry_id: charts.entry_id }));
-  expect(entry(define(null).entry_id)).toMatchObject({ kind: "definition", scope: null, path: "tides" });
   expect(listMemoryEntries(db, { state: "approved" }).filter((e) => e.scope === "docks" && e.invalidation_reason === null).map((e) => [e.kind, e.path])).toEqual([["knowledge", "tides"]]);
+});
+
+it("判断の行が (path, 盤面全体) を名指す修理子は盤面全体の枝を定義して改名でき、改名は全 workspace の配下を連れて行く(ADR 0285 決定1 / ADR 0177 決定5)", () => {
+  const { db, knowledge, repairChild, judged } = board();
+  const { review, row } = judged(() => {
+    knowledge("High tide", null, "tides");
+    for (const scope of ["charts", "docks"]) knowledge("Low tide", scope, "tides");
+  });
+  raiseObjection(db, row({ branch: "tides", scope: null }), "define it", at);
+  commitTriage(db, at);
+  const repair = repairChild(review.id);
+  const mover = { activity: "worker_verb" as const, name: "deckhand" };
+
+  defineMemoryByMetaReview(db, { scope: null, path: "tides", text: "Tides.", author: mover }, "worker", at, repair.id);
+  moveMemoryBranchByMetaReview(db, { scope: null, path: "tides", to_scope: null, to_path: "sea", mover }, "worker", at, repair.id);
+
+  const live = listMemoryEntries(db, { state: "approved" }).filter((e) => e.invalidation_reason === null).map((e) => [e.kind, e.scope, e.path]);
+  expect(live).toEqual(expect.arrayContaining([["definition", null, "sea"], ["knowledge", null, "sea"], ["knowledge", "charts", "sea"], ["knowledge", "docks", "sea"]]));
+  expect(live.filter(([, , path]) => path === "tides")).toEqual([]);
+});
+
+it("判断の行の修理子の fold_memory は後継を畳まれるエントリと同じ scope に限る —— 盤面全体の新しい Knowledge にも既存の盤面全体の後継にも畳まず、同じ scope には畳める(ADR 0285 決定2)", () => {
+  const { db, knowledge, repairChild, judged, entry } = board();
+  let named = [0, 0];
+  const { review, row } = judged(() => (named = [knowledge("Squash"), knowledge("Squash it")]));
+  for (const id of named) raiseObjection(db, row(id), "fold them", at);
+  commitTriage(db, at);
+  const repair = repairChild(review.id);
+  const general = knowledge("Squash everywhere", null, "build");
+  const decision = logDecision(db, repair, "the two say the same", "deckhand", at, "worker");
+  const fold = (successor: { scope: string | null } | { successor_id: number }) =>
+    foldMemory(
+      db,
+      repair.id,
+      { ...("successor_id" in successor ? successor : { ...successor, path: "build", title: "Squash", text: "Always squash.", based_on_decision: decision }), replaces: named, author: worker },
+      "worker",
+      at,
+    );
+  const refusal = `a memory repair keeps entries in their scope: replacing memory entry ${named[0]} in scope charts with a successor in the whole board`;
+
+  expect(() => fold({ scope: null })).toThrow(refusal);
+  expect(listMemoryEntries(db, {}).filter((e) => e.scope === null).map((e) => e.id)).toEqual([general]);
+  expect(() => fold({ successor_id: general })).toThrow(refusal);
+  const folded = fold({ scope: "charts" });
+
+  expect(entry(folded.entry_id)).toMatchObject({ kind: "knowledge", scope: "charts", path: "build" });
+  expect(named.map((id) => entry(id))).toMatchObject([{ successor_id: folded.entry_id }, { successor_id: folded.entry_id }]);
+});
+
+it("判断の行の修理子の define_memory の supersedes は別 workspace の定義を盤面全体の定義で畳まない —— (tides, charts) の修理子には盤面全体が射程の外、(tides, 盤面全体) の修理子には後継の scope の門(#2330 の Q2、ADR 0285 決定1・2)", () => {
+  const mover = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (db: Db, repairId: string, supersedes: number[]) =>
+    defineMemoryByMetaReview(db, { scope: null, path: "tides", text: "Tides.", supersedes, author: mover }, "worker", at, repairId);
+  const docksDefinition = (db: Db) => defineMemoryBranch(db, { scope: "docks", path: "tides", text: "Docks tides.", author: HUMAN_AUTHOR }, "webui", at).entry_id;
+  const reason = (db: Db, id: number) => listMemoryEntries(db, {}).find((e) => e.id === id)!.invalidation_reason;
+
+  // (tides, charts) の修理子 —— 盤面全体の定義そのものが射程の外
+  {
+    const { db, knowledge, repairChild, judged } = board();
+    let docks = 0;
+    const { review, row } = judged(() => {
+      knowledge("High tide", "charts", "tides");
+      docks = docksDefinition(db);
+    });
+    raiseObjection(db, row({ branch: "tides", scope: "charts" }), "define it", at);
+    commitTriage(db, at);
+    expect(() => define(db, repairChild(review.id).id, [docks])).toThrow("branch tides in the whole board is not named by the objected judgment");
+    expect(reason(db, docks)).toBeNull();
+  }
+  // (tides, 盤面全体) の修理子 —— 名指しは通るが、docks の定義を盤面全体の後継で畳まない(盤面全体の Knowledge が引退した後に人間が docks を定義した盤面)
+  {
+    const { db, knowledge, repairChild, judged } = board();
+    let wide = 0;
+    const { review, row } = judged(() => {
+      wide = knowledge("High tide", null, "tides");
+      knowledge("Low tide", "charts", "tides");
+    });
+    raiseObjection(db, row({ branch: "tides", scope: null }), "define it", at);
+    commitTriage(db, at);
+    invalidateMemoryEntry(db, { entry_id: wide, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+    const docks = docksDefinition(db);
+    expect(() => define(db, repairChild(review.id).id, [docks])).toThrow(
+      `a memory repair keeps entries in their scope: replacing memory entry ${docks} in scope docks with a successor in the whole board`,
+    );
+    expect(reason(db, docks)).toBeNull();
+  }
 });

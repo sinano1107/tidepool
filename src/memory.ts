@@ -425,7 +425,7 @@ export function defineMemoryByMetaReview(
   writer: string,
 ): { entry_id: number; event_id: number } {
   requireNamed(db, writer, [{ branch: checkedPath(input.path), scope: input.scope }]);
-  requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
+  requireCovers(db, writer, { scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
   return defineMemoryBranch(db, input, origin, at, writer);
 }
 
@@ -459,8 +459,9 @@ export function foldMemoryEntries(
 
 /** 覆いの門(ADR 0161 決定6・追記7): meta-review の直接の畳みは、後継の scope が盤面全体か各 replaces と同じで、宛先が全員か
  *  各 replaces と同じときだけ。scope を変える畳みは移動の側で、狭める置き換えは人間の判断。 */
-function requireCovers(successor: { scope: string | null; addressee: string | null }, replaced: EntryRow[]): void {
+function requireCovers(db: Db, writer: string, successor: { scope: string | null; addressee: string | null }, replaced: EntryRow[]): void {
   for (const row of replaced) {
+    requireRepairKeepsScope(db, writer, row.scope, successor.scope, `replacing memory entry ${row.id} in ${scopeText(row.scope)} with a successor in ${scopeText(successor.scope)}`);
     if (successor.scope !== null && successor.scope !== row.scope) {
       throw new DomainError(`the successor in scope ${successor.scope} does not cover memory entry ${row.id} in scope ${row.scope ?? "whole board"}: the successor must be whole-board or in the same scope`);
     }
@@ -500,7 +501,7 @@ export function foldMemory(
       }
       successor = recordKnowledge(db, { scope, path, title, text, author, source: { event_id: requireDecision(db, based_on_decision, metaReviewId) } }, origin, at).entry_id;
     }
-    requireCovers(requireEntry(db, successor), replaced);
+    requireCovers(db, metaReviewId, requireEntry(db, successor), replaced);
     return foldMemoryEntries(db, { replaces, successor_id: successor, author }, origin, at);
   });
 }
@@ -691,7 +692,8 @@ function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; p
 
 /** meta-review の `move_memory`(ADR 0176 決定1〜4): 4種別の approved / candidate を同じ scope の中で直接移せ、scope を跨ぐのは
  *  盤面全体へ広げる向きだけ(requireWidening)。書き手は継ぎ、移した meta-review は activity に載るので自身の移動は次の周期の
- *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。記憶の修理子も同じ関数で、門は対象で切り替わる(entryReach、ADR 0281)。 */
+ *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。記憶の修理子も同じ関数で、門は対象で切り替わる(entryReach、ADR 0281)が、
+ *  修理子は逆操作を除き scope を変えない(requireRepairKeepsScope、ADR 0285 決定2)。 */
 export function moveMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof moveMemory>[1],
@@ -708,7 +710,7 @@ export function moveMemoryByMetaReview(
         objectedWrites(db, writer)
           .flatMap((w) => w.moved.map((id) => requireEntry(db, id)))
           .some((prev) => prev.scope === input.scope && prev.path === checkedPath(input.path) && movedTail(db, prev.id).id === old.id);
-      if (!back) requireWidening(db, [old], old.scope, input.scope);
+      if (!back) requireWidening(db, writer, [old], old.scope, input.scope);
       return moveMemory(db, input, origin, at);
     })(),
   );
@@ -727,7 +729,7 @@ export function moveMemoryBranchByMetaReview(
   return withWriteRecord(db, { taskId: writer, agent: input.mover.name }, at, () =>
     db.transaction(() => {
       requireBranchReach(db, writer, input.scope, checkedPath(input.path));
-      requireWidening(db, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
+      requireWidening(db, writer, branchRows(db, { ...input, path: checkedPath(input.path) }), input.scope, input.to_scope);
       return moveMemoryBranch(db, input, origin, at);
     })(),
   );
@@ -735,11 +737,12 @@ export function moveMemoryBranchByMetaReview(
 
 /** meta-review の scope の門(ADR 0176 決定2〜5): 行き先の scope は移動元と同じか盤面全体だけ。scope が変わるなら、approved の
  *  Behavior / Exemplar と open な提案 question が名指すエントリ(既存の後継も数える)を1件でも含めば全体を拒み、すべて名指す。 */
-function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: string | null): void {
+function requireWidening(db: Db, writer: string, rows: EntryRow[], from: string | null, to: string | null): void {
+  requireRepairKeepsScope(db, writer, from, to, `moving from ${scopeText(from)} to ${scopeText(to)}`);
   if (to === from) return;
   if (to !== null) {
     throw new DomainError(
-      `a meta-review or a repair moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's`,
+      `a meta-review moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's`,
     );
   }
   const blocked = rows.flatMap((row) => {
@@ -749,9 +752,20 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
     return [];
   });
   if (blocked.length > 0) {
-    throw new DomainError(`a meta-review or a repair cannot change the scope of ${blocked.join(", ")}`);
+    throw new DomainError(`a meta-review cannot change the scope of ${blocked.join(", ")}`);
   }
 }
+
+/** 記憶の修理子の書き込みは対象の scope に留まる(ADR 0285 決定2): memory_repair の書き手なら、scope を変える移動・畳み・supersedes
+ *  を、盤面全体へ広げる向きも含めて拒む。requireWidening / requireCovers が meta-review の規則より先に見るので、修理子はそちらの拒否文に届かない。
+ *  修理子でない書き手(meta-review)は門を持たない。 */
+function requireRepairKeepsScope(db: Db, writer: string, from: string | null, to: string | null, act: string): void {
+  if (from !== to && getTask(db, writer)?.type === "memory_repair") {
+    throw new DomainError(`a memory repair keeps entries in their scope: ${act} is the human's or the meta-review's`);
+  }
+}
+
+const scopeText = (scope: string | null) => (scope === null ? "the whole board" : `scope ${scope}`);
 
 /** 修理 task の書き手(ADR 0252 決定4): 修理 task の id と agent 名。修理の書き込みも書き込みの記録になる(書き手は worker_verb)。 */
 type Repairer = { taskId: string; agent: string };
@@ -830,9 +844,9 @@ function namedObjects(db: Db, taskId: string) {
   };
 }
 
-/** 判断の行が名指す枝の射程(ADR 0282 決定4): 名指された (path, scope) と、同じ path の盤面全体。 */
+/** 判断の行が名指す枝の射程(ADR 0285 決定1): 名指された (path, scope) そのもの —— 盤面全体の枝は (path, 盤面全体) が名指されたときだけ。 */
 const namesBranch = (named: ReturnType<typeof namedObjects>, path: string, scope: string | null) =>
-  named.branches.some((b) => b.branch === path && (scope === null || b.scope === scope));
+  named.branches.some((b) => b.branch === path && b.scope === scope);
 
 /** 同じ操作の verb の門が掛ける規則(ADR 0281 決定1): memory_repair の書き手なら、対象が異議された書き込みの射程にあれば修理の規則
  *  (write)、異議された判断の行が名指せば meta-review の規則(judgment)、どちらにも無ければ対象を名指して拒む。2つの射程は互いに素
@@ -856,7 +870,7 @@ function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void
 }
 
 /** 枝の射程の門(ADR 0281 決定2): memory_repair の書き手なら、書き込みが path に Definition を作った、または path かその下へエントリを
- *  移した(同じ scope)枝か、判断の行が名指す (path, scope) と同じ path の盤面全体の枝(namesBranch、ADR 0282 決定4)だけを通す ——
+ *  移した(同じ scope)枝か、判断の行が名指す (path, scope) そのものの枝(namesBranch、ADR 0285 決定1)だけを通す ——
  *  配下に触っていない leaf があっても枝ごと動く。どちらの射程でも規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない
  *  書き手(meta-review)は門を持たない。 */
 function requireBranchReach(db: Db, writer: string, scope: string | null, path: string): void {
