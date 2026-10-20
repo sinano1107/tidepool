@@ -5129,19 +5129,21 @@ function rerunnableWorkInReef(board: Db, now: Date, shape: "abandoned" | "pr_ope
   return getTask(board, work.id)!;
 }
 
-/** 人間の門で、`parentId` の下に未決着の review を足す。 */
-function attachReview(board: Db, now: Date, parentId: string, workspace?: string): Task {
+/** 人間の門で、`parentId` の下に未決着の review を足す —— workspace は最も近い固定済みの祖先から導かれる(ADR 0290 決定1)。 */
+function attachReview(board: Db, now: Date, parentId: string): Task {
   return registerTask(
     board,
-    {
-      type: "review",
-      title: "second opinion",
-      purpose: "p",
-      completion_criteria: "c",
-      assignee: "squid",
-      parent_id: parentId,
-      workspace,
-    },
+    { type: "review", title: "second opinion", purpose: "p", completion_criteria: "c", assignee: "squid", parent_id: parentId },
+    now,
+    ...HUMAN_WEBUI,
+  );
+}
+
+/** 人間の門で、`parentId` の下に workspace を明示した未決着の work を足す(ADR 0031 —— 付帯子の review は違う workspace を持てない)。 */
+function attachWorkIn(board: Db, now: Date, parentId: string, workspace: string): Task {
+  return registerTask(
+    board,
+    { type: "work", title: "follow-up", purpose: "p", completion_criteria: "c", assignee: "squid", parent_id: parentId, workspace },
     now,
     ...HUMAN_WEBUI,
   );
@@ -5157,9 +5159,9 @@ it.each(["abandoned", "pr_opened"] as const)(
     // PR を開き終えた形では merge の question が reef を参照している
     const before = countUnsettledTasksReferencing(db, "workspace", "reef");
 
-    attachReview(db, now, work.id, "lagoon");
+    attachWorkIn(db, now, work.id, "lagoon");
     attachReview(db, now, work.id);
-    attachReview(db, now, work.id, "reef");
+    attachWorkIn(db, now, work.id, "reef");
 
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 3);
     expect(countUnsettledTasksReferencing(db, "workspace", "lagoon")).toBe(1);
@@ -5183,7 +5185,7 @@ function landWithoutPr(board: Db, now: Date, work: Task, form: "nothing_to_land"
 }
 
 it.each(["nothing_to_land", "local_merge_question"] as const)(
-  "PR を持たずに着地した(%s)完了 work の下の未決着タスクは数えず、その上の着地し直す祖先の workspace の参照には数える",
+  "PR を持たずに着地した(%s)完了 work の下の別 workspace の未決着タスクは数えず、導出で着く付帯子の review は数え(ADR 0290 決定5)、その上の着地し直す祖先の workspace の参照には数える",
   (form) => {
     db = openDb(":memory:");
     const now = new Date("2026-10-10T00:00:00.000Z");
@@ -5191,8 +5193,10 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
     landWithoutPr(db, now, landed, form);
     settleReviews(db, now);
     const before = countUnsettledTasksReferencing(db, "workspace", "reef");
-    attachReview(db, now, landed.id, "lagoon");
+    attachWorkIn(db, now, landed.id, "lagoon");
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before);
+    attachReview(db, now, landed.id);
+    expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 1);
 
     // reef の祖先 G の下で、lagoon の P が PR を持たずに着地した —— 収束は P を撃たず、G が着地し直す
     const grand = registerTask(
@@ -5208,7 +5212,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
     });
     settleReviews(db, now);
     const beforeGrand = countUnsettledTasksReferencing(db, "workspace", "reef");
-    attachReview(db, now, parent.id, "lagoon");
+    attachReview(db, now, parent.id);
 
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(beforeGrand + 1);
   },

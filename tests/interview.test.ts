@@ -858,7 +858,8 @@ it("出題は監査 review を root の付帯子として盤面名義で立て(a
 
   const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
 
-  expect(audit).toMatchObject({ type: "review", parent_id: root.id, assignee: null, workspace: "reef", status: "todo", based_on_decision: null });
+  expect(audit).toMatchObject({ type: "review", parent_id: root.id, assignee: null, status: "todo", based_on_decision: null });
+  expect(presentTask(db, getTask(db, audit.id)!).workspace).toBe("reef");
   expect(getRegistrant(db, audit.id)).toBe(BOARD_WORKER_ID);
   expect(presentTask(db, getTask(db, root.id)!)).toMatchObject({ status: "blocked", interview_waiting: "audit" });
   expect(nextSlotTask(db)?.id).toBe(audit.id);
