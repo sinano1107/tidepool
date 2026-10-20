@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { DomainError } from "./domain-error.js";
+import { DomainError, QuestionClosedError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
 
 import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
@@ -1960,9 +1960,11 @@ export function answerQuestion(
   const items = question.question_items!;
   const answer = answers[0]!;
   withTargetQuestionSweep(db, now, () => {
-    db.prepare(
-      "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ?",
+    // 書き込みの時点で開いているときだけ(ADR 0288 決定1)—— 観測決着と同じ綴り。閉じていれば transaction ごと止まる
+    const { changes } = db.prepare(
+      "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ? AND status = 'todo'",
     ).run(JSON.stringify(answers), comment ?? null, question.id);
+    if (changes === 0) throw new QuestionClosedError();
     // the recommender is whoever registered the question — carried on the
     // answer event so per-agent acceptance rates need no join
     appendEvent(db, {

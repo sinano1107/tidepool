@@ -24,6 +24,7 @@ import {
   presentTask,
   recordPrOpened,
   registerTask,
+  settleQuestionAsObserved,
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
@@ -579,6 +580,29 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
   });
 });
 
+// ADR 0288 決定1・4: retry の収束を待つ間に、走っていた収束の回が着地させて question を観測で閉じる
+it("PR promotion の retry の収束の await の間に観測で閉じた question は、回答を残さず観測で閉じた印を返す", async () => {
+  db = openDb(":memory:");
+  const completedTask = registerTask(db, { type: "work", title: "ship", purpose: "deliver", completion_criteria: "a PR" }, NOW, ...HUMAN_WEBUI);
+  registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
+  const question = onlyQuestion(db);
+  const gate = awaitWindow();
+  const landing = {
+    ...unusedLanding,
+    async converge() {
+      await gate.hold();
+      return [{ taskId: completedTask.id, verdict: { kind: "landed" as const, form: "pull_request_opened" as const, prNumber: 7 } }];
+    },
+  };
+  const first = submitAnswer({ db, pollNow: () => {}, landing }, question, ["retry"], undefined, () => NOW, "webui");
+  await gate.entered;
+  settleQuestionAsObserved(db, question.id, { kind: "pr_promotion_observed" }, NOW);
+  gate.open();
+
+  await expect(first).resolves.toMatchObject({ status: "done", settled_by_observation: "pr_promotion_observed" });
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("question_answered");
+});
+
 it("PR promotion の abandon を decision log に残す", async () => {
   db = openDb(":memory:");
   const completedTask = registerTask(
@@ -1121,7 +1145,7 @@ it.each([
 function escalatedMergeQuestion() {
   const github = new FakeGitHubClient();
   const { work, question, landing, answer } = escalatedMergeQuestionWith(github);
-  return { work, question, github, landing, answer: () => answer("merge") };
+  return { work, question, github, landing, answer: (value = "merge") => answer(value) };
 }
 
 /** 上の question に「merge」と答え、GitHub が merge を受け付けた後、応答が盤面に返る前で止める。 */
@@ -1163,6 +1187,58 @@ it("merge 回答が merge 中の PR への2つ目の merge 回答は拒まれ、
   await expect(first).resolves.toMatchObject({ status: "done" });
   expect(mergeCalls()).toBe(1);
   expect(prOutcomes()).toEqual([{ task_id: work.id, payload: { kind: "pr_merged", pr_number: 42 } }]);
+});
+
+// ADR 0288 決定2(印の後): 進行中の merge は止められないので、hold を受けると merge した回答が残せなくなる
+it("merge 回答が merge 中の PR の merge question への「hold」は拒まれ、question は開いたまま残り、merge した回答と pr_merged が残る", async () => {
+  const { work, question, answer, first, open } = await mergeAnswerInFlight();
+
+  await expect(answer("hold")).rejects.toThrow(
+    new DomainError("PR #42 is being merged by the board right now — answer again in a moment"),
+  );
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done" });
+  expect(listEvents(db, question.id).filter((event) => event.kind === "question_answered").map((event) => event.payload)).toEqual([
+    expect.objectContaining({ answers: [expect.objectContaining({ answer: "merge" })] }),
+  ]);
+  expect(prOutcomes()).toEqual([{ task_id: work.id, payload: { kind: "pr_merged", pr_number: 42 } }]);
+});
+
+/** 上の question に「merge」と答え、印を取る前の PR の読み取りの応答が盤面に返る前で止める(ADR 0288 決定2 の印の前)。 */
+async function mergeAnswerBeforeMark() {
+  const { work, question, github, answer } = escalatedMergeQuestion();
+  const gate = awaitWindow();
+  afterCiRead(github, gate.hold);
+  const first = answer();
+  await gate.entered;
+  return { work, question, github, answer, first, open: gate.open };
+}
+
+it("merge 回答の PR の読み取りの await の間に「hold」が通った merge question への merge 回答は、merge せずに拒まれる", async () => {
+  const { work, question, github, answer, first, open } = await mergeAnswerBeforeMark();
+
+  await answer("hold");
+  open();
+
+  await expect(first).rejects.toThrow(DomainError);
+  expect(github.merged).toEqual([]);
+  expect(listEvents(db, question.id).filter((event) => event.kind === "question_answered").map((event) => event.payload)).toEqual([
+    expect.objectContaining({ answers: [expect.objectContaining({ answer: "hold" })] }),
+  ]);
+  expect(listEvents(db, work.id).map((event) => event.kind)).not.toContain("pr_merged");
+});
+
+it("merge 回答の PR の読み取りの await の間に走査が観測で閉じた merge question への merge 回答は、merge せずに観測で閉じた印を返す", async () => {
+  const { work, question, github, first, open } = await mergeAnswerBeforeMark();
+
+  settleQuestionAsObserved(db, question.id, { kind: "pr_merge_observed", pr_number: 42 }, NOW, work.id);
+  open();
+
+  await expect(first).resolves.toMatchObject({ status: "done", settled_by_observation: "pr_merge_observed" });
+  expect(github.merged).toEqual([]);
+  expect(listEvents(db, question.id).map((event) => event.kind)).not.toContain("question_answered");
 });
 
 it("merge 回答の merge が失敗したら印は放され、次の merge 回答は merge まで進む", async () => {
