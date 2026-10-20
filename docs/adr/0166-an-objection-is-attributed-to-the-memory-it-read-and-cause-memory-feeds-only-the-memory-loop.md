@@ -51,3 +51,9 @@
 
 Definition は注入で本文が INDEX に乗り、`read_memory` を経ないので読んだ集合に入らず、誤った Definition は `memory` を受けられない。
 Definition は枝の担当範囲の宣言で、それに従って外れた decision の形がまだ観測されていないので、線は置かない(派生 issue)。
+
+## 追記(2026-10-21 の grilling、issue #1601 / ADR 0291)
+
+「既知の穴」は閉じた —— 注入された Definition(`memory_injected` の kind definition)も決定2 の読んだ集合と決定3 の門の集合に入る
+(ADR 0291 決定6、issue #1069)。退けた案「帰責の Board call が置き換えの candidate も起草する」の根拠のうち「起草 client に本文が無い」は
+agent 定義については ADR 0291 決定2 で消えたが、「起草経路が2本になる」は残り、`agent_definition` からも起草しない(ADR 0291 決定7)。

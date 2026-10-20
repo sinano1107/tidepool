@@ -78,3 +78,9 @@ decision = 推論)に event 種別の例外が入り、同じ帰責 event を出
 
 決定3 の「commit 時に立つもの」は cause に加えて異議された task で決まる —— 直す成果が盤面に残らない task(cancelled の task、Interview の
 root の出題・採点)には修理子を立てず、帰責と RCA(と起草)だけが立つ。受験者のエントリには異議そのものを受け付けない(ADR 0268 決定1・3)。
+
+## 追記(2026-10-21 の grilling、issue #1601 / ADR 0291)
+
+決定1 の語彙に `agent_definition`(従った registry の当時版が誤っていた)と `workspace_document`(仕事の対象に置かれた skill・文書が
+誤っていた)が加わる。どちらも異議でしか現れず、決定3・4・5 では `memory` と同じ列 —— 修理だけ、candidate 無し、負の信号に数えない。
+盤面の protocol 文と `@host` の skill の誤りは `environment` の読みの中(ADR 0213 決定1)。
