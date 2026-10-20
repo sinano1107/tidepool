@@ -741,7 +741,7 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
   if (to === from) return;
   if (to !== null) {
     throw new DomainError(
-      `a meta-review or a repair moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's — say so with log_decision and leave the entries in place`,
+      `a meta-review or a repair moves entries in scope ${from ?? "whole board"} only within it or to the whole board: narrowing to a workspace or moving between workspaces is the human's`,
     );
   }
   const blocked = rows.flatMap((row) => {
@@ -751,7 +751,7 @@ function requireWidening(db: Db, rows: EntryRow[], from: string | null, to: stri
     return [];
   });
   if (blocked.length > 0) {
-    throw new DomainError(`a meta-review or a repair cannot change the scope of ${blocked.join(", ")}: say so with log_decision and leave the entries in place`);
+    throw new DomainError(`a meta-review or a repair cannot change the scope of ${blocked.join(", ")}`);
   }
 }
 

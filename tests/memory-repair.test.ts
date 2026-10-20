@@ -273,6 +273,9 @@ it("両方の行の修理子の invalidate_memory / move_memory / move_memory_br
   const wide = move(k, null, "build");
   expect(() => invalidate(behavior)).toThrow(`memory entry ${behavior} is an approved behavior: propose it instead`);
   expect(() => move(behavior, null, "habits")).toThrow(`cannot change the scope of memory entry ${behavior}`);
+  // 拒否文は規則と対象だけを言い、判断をどの verb で言うかは worker 共通の規則に任せる(#2293)
+  const scopeRefusal = (() => { try { move(behavior, null, "habits"); } catch (err) { return (err as Error).message; } })()!;
+  expect(scopeRefusal).not.toContain("log_decision");
   // (iii) どちらの射程にも無いエントリと枝は名指して拒む
   expect(() => invalidate(o)).toThrow(`memory entry ${o} was neither touched by the objected memory write nor named by the objected judgment`);
   expect(() => move(o, "charts", "misc/other")).toThrow(`memory entry ${o} was neither touched by the objected memory write nor named by the objected judgment`);

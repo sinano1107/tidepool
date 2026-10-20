@@ -331,6 +331,9 @@ it("meta-review の move_memory_branch は Knowledge だけの枝でも、別 wo
   expect(() => moveBranch(db, "tidepool", "charts")).toThrow("only within it or to the whole board");
   expect(() => moveBranch(db, null, "tidepool")).toThrow("only within it or to the whole board");
   expect(listMemoryEntries(db, {})).toEqual(before);
+  // 拒否文は規則と対象だけを言い、判断をどの verb で言うかは purpose に任せる(#2293)
+  const refusal = (() => { try { moveBranch(db, null, "tidepool"); } catch (err) { return (err as Error).message; } })()!;
+  expect(refusal).not.toContain("log_decision");
 });
 
 it("meta-review の無効化は candidate・Knowledge・Definition に効き、approved の Behavior と後継つきの理由(superseded / path_moved)は domain error で拒む(ADR 0161 決定2)", () => {
