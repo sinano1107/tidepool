@@ -39,3 +39,9 @@ CI を読んで merge しうる。ダイヤルも新しい既定 agent の profi
 ## 追記2(2026-10-18 の grilling、issue #2184 / ADR 0273)
 
 追記1 の「Interview の root の空の assignee は Interviewer」は、root が type `interview` になったので type で引ける。受験者の `workspace` 列は root の workspace(実環境)の名前で、層と許可ドメインの出所であって走る場所(面接室)ではない(ADR 0273 決定8)—— 決定2 の「列は走った先」の唯一の例外。
+
+## 追記3(2026-10-21 の grilling、issue #1737 / ADR 0290)
+
+付帯子の review に例外が2つ。決定2 の「写しは列を読むだけ」は pickup 前には当たらず、付帯子の review の列は pickup まで NULL で、
+pickup 前の読み手は最も近い固定済みの祖先から導く(ADR 0290 決定1・5)。決定5 の「`""` で空に戻せる」は付帯子の review では拒む
+(ADR 0290 決定3)—— 既定への参照を持たないので、戻す先が無い。
