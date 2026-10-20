@@ -204,7 +204,8 @@ it("meta-review の下の RCA の worker MCP は read_memory_entries を出し�
   try {
     const names = (await client.listTools()).tools.map((tool) => tool.name);
     expect(names).toContain("read_memory_entries");
-    expect(names.filter((name) => ["browse_memory", "search_memory", "read_memory", "record_knowledge", "define_memory_branch"].includes(name))).toEqual([]);
+    const withheld: readonly string[] = taskVerbSwap(t.db, rca.id).withheld;
+    expect(names.filter((name) => withheld.includes(name))).toEqual([]);
 
     expect(body(await client.callTool({ name: "read_memory_entries", arguments: { ids: [entry] } })).entries).toEqual([expect.objectContaining({ id: entry })]);
     const pulls = ((await api(t.baseUrl, "GET", `/api/tasks/${rca.id}/events`)).json as any[]).filter((e) => e.kind === "memory_pulled");
