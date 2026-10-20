@@ -458,8 +458,7 @@ export function foldMemoryEntries(
 }
 
 /** 覆いの門(ADR 0161 決定6・追記7): meta-review の直接の畳みは、後継の scope が盤面全体か各 replaces と同じで、宛先が全員か
- *  各 replaces と同じときだけ。scope を変える畳みは移動の側で、狭める置き換えは人間の判断。記憶の修理子は後継の scope が各 replaces と
- *  同じときだけ(requireRepairKeepsScope)。 */
+ *  各 replaces と同じときだけ。scope を変える畳みは移動の側で、狭める置き換えは人間の判断。 */
 function requireCovers(db: Db, writer: string, successor: { scope: string | null; addressee: string | null }, replaced: EntryRow[]): void {
   for (const row of replaced) {
     requireRepairKeepsScope(db, writer, row.scope, successor.scope, `replacing memory entry ${row.id} in ${scopeText(row.scope)} with a successor in ${scopeText(successor.scope)}`);
@@ -736,8 +735,7 @@ export function moveMemoryBranchByMetaReview(
 }
 
 /** meta-review の scope の門(ADR 0176 決定2〜5): 行き先の scope は移動元と同じか盤面全体だけ。scope が変わるなら、approved の
- *  Behavior / Exemplar と open な提案 question が名指すエントリ(既存の後継も数える)を1件でも含めば全体を拒み、すべて名指す。記憶の
- *  修理子は移動元と同じ scope だけ(requireRepairKeepsScope)。 */
+ *  Behavior / Exemplar と open な提案 question が名指すエントリ(既存の後継も数える)を1件でも含めば全体を拒み、すべて名指す。 */
 function requireWidening(db: Db, writer: string, rows: EntryRow[], from: string | null, to: string | null): void {
   requireRepairKeepsScope(db, writer, from, to, `moving from ${scopeText(from)} to ${scopeText(to)}`);
   if (to === from) return;
