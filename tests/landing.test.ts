@@ -34,7 +34,7 @@ import {
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
@@ -2021,7 +2021,7 @@ it("追いつき merge をまたいで走るセッションは、盤面が動か
 
 // landingAnnotation は DB の状態だけで決まる — blocked_by の規則はここ(domain 層)で1度だけ述べる(ADR 0107)。
 // サーバ境界のテストは「読み口が注釈を写す」ことだけを述べる。
-function landingWork(db: Db, clock: FakeClock) {
+function landingWork(db: Db, clock: FakeClock, workspace?: string) {
   return registerTask(
     db,
     {
@@ -2029,6 +2029,7 @@ function landingWork(db: Db, clock: FakeClock) {
       title: "ship",
       purpose: "ship an agreed change",
       completion_criteria: "the change is ready",
+      workspace,
     },
     clock.now(),
     ...HUMAN_WEBUI,
@@ -4173,20 +4174,31 @@ async function landLocally(name: string) {
   const workspace = await makeWorkspace(name);
   const { db, clock } = await openBoard();
   const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
-  const work = landingWork(db, clock);
+  const work = landingWork(db, clock, workspace.name);
   await prepareWorkspaceAtPickup(db, workspace, work);
   commitWork(workspace.path, "feature.txt", "ready\n");
   finish(db, clock, work);
   await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
-  const question = listBoard(db).find((q) => q.question_pending_local_merge_task_id === work.id)!;
-  return { workspace, db, clock, work, question };
+  const question = localMergeQuestions(db, work.id)[0]!;
+  return { workspace, db, clock, landing, work, question };
 }
 
-function answerLocalMerge({ db, clock, workspace, question }: Awaited<ReturnType<typeof landLocally>>) {
+/** `workId` の local merge question —— 決着したものも含め、立った順に。 */
+function localMergeQuestions(board: Db, workId: string): Task[] {
+  return (
+    board.prepare("SELECT id FROM tasks WHERE question_pending_local_merge_task_id = ? ORDER BY rowid").pluck().all(workId) as string[]
+  ).map((id) => getTask(board, id)!);
+}
+
+function answerLocalMerge(
+  { db, clock, workspace, question }: Awaited<ReturnType<typeof landLocally>>,
+  answer: "merge" | "hold" = "merge",
+  answering: { id: string } = question,
+) {
   return submitAnswer(
     { db, pollNow: () => {}, landing: unusedLanding, workspace },
-    getTask(db, question.id)!,
-    ["merge"],
+    getTask(db, answering.id)!,
+    [answer],
     undefined,
     () => clock.now(),
     "webui",
@@ -4243,6 +4255,113 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   await answerLocalMerge(local);
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed and conflicting");
+});
+
+// ADR 0289 決定1: ローカル着地も merge の執行を根に刻み、収束はその記録で根を終わらせる
+it("ローカル着地の merge 回答が受理されると、保護ブランチの新しい tip を local_merge_executed として根に刻み、以後の収束はその根を撃たず question も増やさない", async () => {
+  const local = await landLocally("local-merge-executed");
+  const { workspace, db, landing, work } = local;
+
+  await answerLocalMerge(local);
+
+  expect(boardEvents(db, work.id, "local_merge_executed")).toEqual([
+    {
+      worker_id: HUMAN_WORKER_ID,
+      origin: "webui",
+      payload: { kind: "local_merge_executed", sha: git(workspace.path, "rev-parse", "main") },
+    },
+  ]);
+  await expect(convergeOn(landing, work.id)).resolves.toBeUndefined();
+  expect(localMergeQuestions(db, work.id)).toHaveLength(1);
+});
+
+// ADR 0289 決定3: hold が断るのはその時点の内容 —— 回答の時点のタスクブランチの tip を根に刻む
+it("ローカル着地の hold 回答が受理されると、その時点のタスクブランチの tip を local_merge_held として根に刻む", async () => {
+  const local = await landLocally("local-merge-held");
+  const { workspace, db, work } = local;
+
+  await answerLocalMerge(local, "hold");
+
+  expect(boardEvents(db, work.id, "local_merge_held")).toEqual([
+    {
+      worker_id: HUMAN_WORKER_ID,
+      origin: "webui",
+      payload: { kind: "local_merge_held", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+    },
+  ]);
+});
+
+/** 根 W の付帯子として修理 F を pickup(lineage で W から fork)して commit し、完了して後始末の merge back で W へ届ける。 */
+async function mergeBackRepair({ db, clock, workspace, work }: Awaited<ReturnType<typeof landLocally>>) {
+  const repair = attachUnsettledChild(db, clock, work.id);
+  await prepareWorkspaceAtPickup(db, workspace, repair);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, repair);
+  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  return repair;
+}
+
+it("hold の後に修理の後始末が merge back してタスクブランチの内容が変わると、根は着地を待つ完了タスクに戻り、次の収束が local merge question を1枚立て直す", async () => {
+  const local = await landLocally("local-hold-reasked");
+  const { workspace, db, landing, work } = local;
+  await answerLocalMerge(local, "hold");
+
+  const repair = await mergeBackRepair(local);
+  expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([work.id]);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "local_merge_question" });
+  const [held, reasked] = localMergeQuestions(db, work.id);
+  expect(held!.status).toBe("done");
+  expect(reasked).toMatchObject({ status: "todo", purpose: expect.stringContaining("was held") });
+  expect(reasked!.purpose).toContain(`the content of task/${repair.id} has reached it since`);
+  expect(localMergeQuestions(db, work.id)).toHaveLength(2);
+});
+
+it("hold の後に内容が変わっていなければ、収束を2回撃っても local merge question を立て直さず、根は着地を待つ完了タスクに数えない", async () => {
+  const local = await landLocally("local-hold-unchanged");
+  const { workspace, db, landing, work } = local;
+  await answerLocalMerge(local, "hold");
+
+  await expect(convergeOn(landing, work.id)).resolves.toBeUndefined();
+  await expect(convergeOn(landing, work.id)).resolves.toBeUndefined();
+
+  expect(localMergeQuestions(db, work.id)).toHaveLength(1);
+  expect(taskIdsAwaitingLandingInWorkspace(db, () => workspace, workspace.name)).toEqual([]);
+});
+
+it("立て直した local merge question に hold と答えるとその時点の head が刻まれ、以後の収束はその head を基準に立て直さない", async () => {
+  const local = await landLocally("local-hold-again");
+  const { workspace, db, landing, work } = local;
+  await answerLocalMerge(local, "hold");
+  await mergeBackRepair(local);
+  await convergeOn(landing, work.id);
+  const reasked = localMergeQuestions(db, work.id)[1]!;
+
+  await answerLocalMerge(local, "hold", reasked);
+
+  expect(boardEvents(db, work.id, "local_merge_held").map(({ payload }) => payload)).toEqual([
+    { kind: "local_merge_held", head: expect.any(String) },
+    { kind: "local_merge_held", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
+  ]);
+  await expect(convergeOn(landing, work.id)).resolves.toBeUndefined();
+  expect(localMergeQuestions(db, work.id)).toHaveLength(2);
+});
+
+it("hold の後に内容が変わっても、別の付帯子が未決着の間は門で待ち(待った記録は刻まず)question を立て直さず、門が開いた次の収束で立て直す", async () => {
+  const local = await landLocally("local-hold-gate");
+  const { db, clock, landing, work } = local;
+  await answerLocalMerge(local, "hold");
+  const pending = attachUnsettledChild(db, clock, work.id);
+  await mergeBackRepair(local);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "deferred", reason: "attached_children", count: 1 });
+  expect(localMergeQuestions(db, work.id)).toHaveLength(1);
+  expect(boardEvents(db, work.id, "landing_deferred")).toEqual([]);
+
+  finish(db, clock, pending);
+
+  await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "landed", form: "local_merge_question" });
+  expect(localMergeQuestions(db, work.id)).toHaveLength(2);
 });
 
 it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {

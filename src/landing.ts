@@ -17,6 +17,7 @@ import {
   countUnsettledAttachedChildren,
   getTask,
   landingSurface,
+  localLandingOpenOrExecutedSql,
   logDecision,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -124,17 +125,33 @@ export function taskIdsAwaitingLandingInWorkspace(db: Db, resolve: WorkspaceReso
 /** 着地を待つ完了タスク(ADR 0217 決定4 / ADR 0226 / ADR 0241 決定6): 収束の導出を1回走らせ、PR をまだ開いていない
  *  未着地の根と、無人 merge キューにいるものを返す。何も書かない。profile を読むのは面を開くとき(PR の作成)と無人
  *  merge の瞬間だけなので(ADR 0217 決定3・4)、この2つに絞る —— 開いている PR への push は profile を読まない。
- *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)は除く。立て直した
+ *  根は、門・quarantine・開いた失敗 question で止まっているものを含み、断念が効いている根(ADR 0225)と、ローカル着地を
+ *  hold した内容のままの根(ADR 0289 決定3)は除く。立て直した
  *  昇格の question が開いていれば、その retry が profile を読むので数える。 */
 function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): Task[] {
   const roots = landingCandidateIds(db)
     .flatMap((id) => landingRootOf(db, resolve, id)?.task ?? [])
-    .filter(
-      (task) =>
+    .filter((task) => {
+      const held = latestEventOfTask(db, task.id, "local_merge_held");
+      return (
         task.pr_number === null &&
-        (!abandonEventInForce(db, task.id) || openPrPromotionQuestionIds(db, task.id).length > 0),
-    );
+        (!abandonEventInForce(db, task.id) || openPrPromotionQuestionIds(db, task.id).length > 0) &&
+        // ADR 0289 決定3: hold した内容のままの根は着地を待たない。変わった根は立て直しを待つ
+        !(held && !contentChangedSince(resolve, task, held.payload.head))
+      );
+    });
   return [...roots, ...listPendingAutoMerges(db).map(({ task_id }) => getTask(db, task_id)!)];
+}
+
+/** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
+ *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3。ローカル着地の hold も同じ比較で読む(ADR 0289 決定3) */
+function contentChangedSince(resolve: WorkspaceResolver | undefined, task: Task, head: string | null): boolean {
+  if (head === null || !resolve) return true;
+  try {
+    return branchMergeEffect(resolve(task.workspace), head, taskBranch(task.id)).changesCandidate;
+  } catch {
+    return true;
+  }
 }
 
 /** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
@@ -390,7 +407,8 @@ const LANDING_ENDED_KINDS = "('landing_finished', 'nothing_to_land')";
 /** 収束の根の候補の id を rowid の順(祖先が子孫より先)に返す —— SQL だけで、git は読まない。候補を SQL で先に絞り、
  *  lineage は候補にだけ解く(`landingRootOf`)ので、1回の git の呼び出しの数は着地の終わっていない木の大きさに比例し、
  *  盤面の歴史の長さには比例しない。外すのは、着地が終わった根(merge の記録か内容で終わった PR の根の `landing_finished`
- *  (ADR 0265 決定3) / `nothing_to_land`)とローカル着地の question を持つ根である。人間が担当した work は盤面の
+ *  (ADR 0265 決定3) / `nothing_to_land`)と、ローカル着地が人間の手にあるか執行した根(ADR 0289 決定1)である。hold した根は
+ *  候補に残り、撃つ側が hold の head と比べる(`landRoot`)。人間が担当した work は盤面の
  *  タスクブランチに内容を持たないので、根にしない(人間の完了は祖先の着地の契機である)。Interview の子(pin を持つ
  *  work)は使い捨てブランチで走り、ブランチを残すだけで着地しない(ADR 0199)。 */
 function landingCandidateIds(db: Db): string[] {
@@ -400,7 +418,7 @@ function landingCandidateIds(db: Db): string[] {
         WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
           AND t.interview_target_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
-          AND NOT EXISTS (SELECT 1 FROM tasks q WHERE q.question_pending_local_merge_task_id = t.id)
+          AND NOT ${localLandingOpenOrExecutedSql("t.id")}
         ORDER BY t.rowid`,
     )
     .pluck()
@@ -605,19 +623,25 @@ export function recordPrPromotionAbandoned(
   taskId: string,
   now: Date,
 ): void {
-  let head: string | null = null;
-  try {
-    if (resolve) {
-      head = git(resolve(taskWorkspace).path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
-    }
-  } catch {}
   appendEvent(db, {
     taskId,
     workerId: BOARD_WORKER_ID,
     origin: "board",
-    payload: { kind: "pr_promotion_abandoned", head },
+    payload: { kind: "pr_promotion_abandoned", head: taskBranchHeadOrNull(resolve, taskWorkspace, taskId) },
     at: now,
   });
+}
+
+/** 断った内容として刻むタスクブランチの今の tip(ADR 0225 決定1 / ADR 0289 決定3)。workspace もブランチも読めなければ null。 */
+export function taskBranchHeadOrNull(
+  resolve: ((taskWorkspace: string | null) => WorkspaceConfig) | undefined,
+  taskWorkspace: string | null,
+  taskId: string,
+): string | null {
+  try {
+    if (resolve) return git(resolve(taskWorkspace).path, "rev-parse", "--verify", "--quiet", `refs/heads/${taskBranch(taskId)}`);
+  } catch {}
+  return null;
 }
 
 /** ADR 0079 決定3/4 / ADR 0229 決定4: retires a merge question whose PR turned out to be
@@ -661,7 +685,8 @@ function settlePrPromotionQuestionsAsObserved(
 
 /** ADR 0053 decision 3: a purely-local root completion cannot be promoted to a PR, so
  *  the board asks whether to fast-forward its task branch onto the protected
- *  branch or leave it there permanently. The task id is deliberately stored
+ *  branch or hold it there — a hold declines only the content of that moment, and
+ *  the question is asked again once the content changes (ADR 0289 決定3). The task id is deliberately stored
  *  separately from question_pending_merge_pr: one names a local branch while
  *  the other names a GitHub PR. */
 export function registerLocalMergeQuestion(
@@ -685,6 +710,22 @@ export function registerLocalMergeQuestion(
     now,
     BOARD_WORKER_ID,
     "board",
+  );
+}
+
+/** ADR 0289 決定3: hold の後に内容が変わった根の立て直しの purpose —— hold の head に無い子孫のブランチ(届いた修理)を名指す。
+ *  head が無いか比べられなければ、届いたものは名指さない。 */
+function reaskedLocalMergePurpose(db: Db, workspace: WorkspaceConfig, task: Task, head: string | null): string {
+  let arrived: string[] = [];
+  try {
+    if (head !== null) arrived = contentLeftBehindLocally(db, workspace, task.id, head).filter((id) => id !== task.id);
+  } catch {}
+  const root = taskBranch(task.id);
+  return (
+    `Landing of completed task "${task.title}" was held, but ${root} no longer matches (or could not be compared with) ` +
+    "the content held then" +
+    (arrived.length > 0 ? ` — the content of ${arrived.map(taskBranch).join(", ")} has reached it since` : "") +
+    ". Land its task branch on the protected branch now?"
   );
 }
 
@@ -892,17 +933,8 @@ export function createLanding(deps: LandingDeps): Landing {
         ? `workspace "${name}" is quarantined and needs human attention before landing; answer its quarantine question`
         : `agent "${name}" is quarantined: its authority profile cannot be resolved for landing; repair the registry and answer its quarantine question`,
   });
-  /** ADR 0225 決定1: 刻んだ head から内容が変わったか(ADR 0105 と同じ比較)。読めなければ「変わった」—— 修理を捨てない側。
-   *  workspace を解決できない場合も「変わった」と読むのは ADR 0234 決定3 */
-  const changedSince = (task: Task, head: string | null): boolean => {
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    if (head === null || !resolve) return true;
-    try {
-      return branchMergeEffect(resolve(task.workspace), head, taskBranch(task.id)).changesCandidate;
-    } catch {
-      return true;
-    }
-  };
+  const changedSince = (task: Task, head: string | null) =>
+    contentChangedSince(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task, head);
   /** 閉じた観測を根に刻んだ直後(ADR 0265 決定6): 閉じた根に塞がれて走らない子があれば、盤面名義の判断行を1行流す。
    *  観測は根に1回だけ刻まれるので、行も1つの観測に1回。子が無ければ流さない。 */
   const announceClosed = (rootId: string, prNumber: number, now: Date) => {
@@ -1018,6 +1050,14 @@ export function createLanding(deps: LandingDeps): Landing {
         error: `the content of ${taskBranch(task.id)} changed after PR promotion was abandoned`,
       };
     }
+    // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
+    // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
+    const held = ctx.answered ? undefined : latestEventOfTask(deps.db, task.id, "local_merge_held");
+    if (held) {
+      const block = landingBlock(deps.db, task.id);
+      if (block) return { kind: "deferred", reason: block.kind, count: block.count };
+      if (!changedSince(task, held.payload.head)) return undefined;
+    }
     let resolvedWorkspace: string | undefined;
     try {
       const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
@@ -1080,8 +1120,9 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!isRemoteBacked(workspace)) {
         const resolved = readAuthority(task, deps.clock.now());
         if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
-        const purpose =
-          resolved.profile?.merge === "auto_if_ci_green"
+        const purpose = held
+          ? reaskedLocalMergePurpose(deps.db, workspace, task, held.payload.head)
+          : resolved.profile?.merge === "auto_if_ci_green"
             ? `Workspace "${workspace.name}" is purely-local, so CI cannot be observed and ` +
               `auto_if_ci_green cannot auto-merge "${task.title}". Land its task branch on the ` +
               `protected branch now?`

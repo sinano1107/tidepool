@@ -1437,8 +1437,10 @@ function landingMergeCommit(workspace: WorkspaceConfig, branch: string, protecte
  *
  *  記録と一致していれば、非 ff は同一 workspace の正当な直列進行である(決定2):
  *  盤面が Tidepool 名義の真の merge commit で追いつかせる。タスクブランチは**決して
- *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。 */
-export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string): void {
+ *  書き換えない** —— 差分の恒久記録であり系譜判定の土台である(ADR 0053 根拠1)。
+ *
+ *  保護ブランチに置いた commit を返す —— 回答はこれを執行の記録として根に刻む(ADR 0289 決定1)。 */
+export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId: string): string {
   if (isRemoteBacked(workspace)) {
     throw new Error(`workspace ${workspace.name} is remote-backed, not purely-local`);
   }
@@ -1474,4 +1476,5 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
         : git(workspace.path, "update-ref", ref, landed, protectedSha),
     );
   } else write(ref, landed, () => git(workspace.path, "merge", "--ff-only", landed));
+  return landed;
 }
