@@ -492,6 +492,16 @@ const SWAP_DISABLE_ENVS = [
   "CLAUDE_CODE_DISABLE_REFUSAL_RETRY",
 ] as const;
 
+/** subagent の model を host が一律に差し替える env(ADR 0287 決定3)。subagent の model は親の采配で、
+ *  固定版の CLI の既定(Explore の上限)はそのまま掛ける —— 盤面側の値は入れず、host が立てていても
+ *  worker の spawn env から消して「無い」を固定する(ADR 0005)。`CLAUDE_CODE_SUBAGENT_MODEL` は
+ *  `_FORCE` の下でも効く(#1887 の VM 実測)ので、3つとも消す。 */
+const SUBAGENT_MODEL_ENVS = [
+  "CLAUDE_CODE_SUBAGENT_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL_FORCE",
+  "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP",
+] as const;
+
 /** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
  *  Bearer token envs a `provider: moonshot` spawn carries — and that an
  *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
@@ -709,6 +719,7 @@ export function workerSpawnEnv(
   if (advisor === undefined) env[ADVISOR_DISABLE_ENV] = "1";
   else delete env[ADVISOR_DISABLE_ENV];
   for (const name of SWAP_DISABLE_ENVS) delete env[name];
+  for (const name of SUBAGENT_MODEL_ENVS) delete env[name];
   if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without

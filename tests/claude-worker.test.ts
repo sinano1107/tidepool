@@ -4208,6 +4208,23 @@ describe("advisor capability (issue #33)", () => {
     });
   });
 
+  // ── subagent の model(issue #1887 / ADR 0287)────────────────────
+  describe("subagent の model(issue #1887 / ADR 0287)", () => {
+    const SUBAGENT_ENVS = ["CLAUDE_CODE_SUBAGENT_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL_FORCE", "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP"];
+
+    // 決定3: host が立てた subagent の model の env 3つは spawn には渡らない(ADR 0005)。親の采配と固定版の既定だけが残る
+    it("ホストが立てた subagent の model の env 3つを spawn env から消す", async () => {
+      for (const name of SUBAGENT_ENVS) vi.stubEnv(name, "1");
+      try {
+        const { start, calls } = await makeWorker();
+        start();
+        for (const name of SUBAGENT_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    });
+  });
+
   // ── 差し替え(issue #1523 / ADR 0215)────────────────────────────
 
   describe("差し替え(issue #1523 / ADR 0215)", () => {
