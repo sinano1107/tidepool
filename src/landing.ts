@@ -184,21 +184,40 @@ export async function contentLeftBehind(
   candidate: string | undefined,
   fetchMissing?: { auth: GitHubAuth | undefined },
 ): Promise<string[]> {
-  const targets = (
+  const targets = leftBehindTargets(db, workspace, taskId);
+  if (fetchMissing && candidate !== undefined && targets.length > 0) {
+    await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
+  }
+  return targetsLeftBehind(workspace, taskId, targets, candidate);
+}
+
+/** `contentLeftBehind` の fetch 無しの経路 —— 同期で、I/O の await を挟まない(ADR 0289 決定2 / ADR 0288 決定2)。 */
+export function contentLeftBehindLocally(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  candidate: string | undefined,
+): string[] {
+  return targetsLeftBehind(workspace, taskId, leftBehindTargets(db, workspace, taskId), candidate);
+}
+
+function targetsLeftBehind(workspace: WorkspaceConfig, taskId: string, targets: string[], candidate: string | undefined): string[] {
+  if (targets.length === 0) return [];
+  if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
+  return targets.filter((id) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate);
+}
+
+function leftBehindTargets(db: Db, workspace: WorkspaceConfig, taskId: string): string[] {
+  return (
     db
       .prepare(
         `${subtreeSql("@root", "c.status <> 'cancelled'")}
        SELECT id FROM tasks
         WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
       )
-      .all({ root: taskId }) as Array<{ id: string }>
-  ).filter(({ id }) => taskBranchExists(workspace, id));
-  if (targets.length === 0) return [];
-  if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
-  if (fetchMissing) await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
-  return targets
-    .filter(({ id }) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate)
-    .map(({ id }) => id);
+      .pluck()
+      .all({ root: taskId }) as string[]
+  ).filter((id) => taskBranchExists(workspace, id));
 }
 
 /** ADR 0242 決定2: 盤面が最後に push した head(`pr_opened` / `pr_branch_pushed` の sha)—— 収束が積み残しを比べる相手 */
