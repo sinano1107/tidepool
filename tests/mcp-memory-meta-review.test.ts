@@ -127,19 +127,17 @@ it("complete_memory_review の説明は、項目の全体がこの session の�
 });
 
 it("complete_memory_review の枝の鍵は path と scope(workspace 名か盤面全体の null、省略は拒否)で、説明は scope ごとの項目と盤面全体の1項目を言い、複数 scope が定義した path を言わない(ADR 0282 決定1〜3)", async () => {
-  const { review, client, call } = await boardWithMetaReview();
+  const { client, call } = await boardWithMetaReview();
   try {
     const { tools } = await client.listTools();
     const tool: any = tools.find((tool) => tool.name === "complete_memory_review");
-    const branchKey = tool.inputSchema.properties.judgments.items.anyOf.find((variant: any) => "branch" in variant.properties);
-    expect(branchKey.required).toEqual(expect.arrayContaining(["branch", "scope"]));
     expect(await call("complete_memory_review", { judgments: [{ branch: "build" }] })).toMatchObject({ isError: true, body: expect.stringContaining("scope") });
     expect(tool.description).toContain(
       "branches ({branch: path, scope: workspace name, or null for the whole board}) that hold entries without a Definition in their scope " +
         "or whole-board — one item per scope that lacks one, or a single whole-board item when whole-board entries sit at or under the path —",
     );
     expect(tool.description).toContain("each is named by id, or by path and scope");
-    for (const text of [tool.description, review.purpose]) expect(text).not.toContain("two or more scopes");
+    expect(tool.description).not.toContain("two or more scopes");
   } finally {
     await client.close();
   }

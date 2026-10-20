@@ -2744,7 +2744,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   const branches = parts.branches.flatMap(({ path, definitions, scopes }) => {
     const undefinedIn = scopes.filter((scope) => !definitions.some((d) => d.scope === null || d.scope === scope));
     const structural = undefinedIn.length > 0 && wholeBoard.some((p) => atOrUnder(p, path)) ? [null] : undefinedIn;
-    const again = objectedBranches.flatMap((o) => (o.branch === path && live(path, o.scope) ? [o.scope] : []));
+    const again = objectedBranches.flatMap((o) => (o.branch === path && scopes.includes(o.scope) ? [o.scope] : []));
     return [...new Set([...structural, ...again])].map((scope) => ({ branch: path, scope }));
   });
   return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches];
