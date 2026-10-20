@@ -20,6 +20,7 @@ import { isSettled, type TaskStatus, unsettledSql } from "./task-status.js";
 import { assertKnownTier, liveTierId, PRIORITIES, type Priority, proposalTierNames, type Tier, type TierId, tierNames } from "./tier.js";
 import {
   completionReviewFires,
+  followsAncestorWorkspace,
   type ReviewSubject,
   whyExecutionRequestIsInert,
   whyNoCompletionReview,
@@ -916,7 +917,7 @@ function taskHasLandedSql(taskRef: string): string {
 
 /** 導出した workspace の唯一の SQL(ADR 0290 決定1・5): 列、列が NULL の付帯子の review は列が非 NULL の最も近い祖先
  *  (途中の type を問わず辿る)。どちらも無ければ NULL —— 既定への参照で、呼び手が既定を当てる。 */
-function derivedWorkspaceSql(taskRef: string): string {
+export function derivedWorkspaceSql(taskRef: string): string {
   return `COALESCE(${taskRef}.workspace, CASE WHEN ${taskRef}.type = 'review' THEN (
             WITH RECURSIVE up(parent_id, workspace) AS (
               SELECT a.parent_id, a.workspace FROM tasks a WHERE a.id = ${taskRef}.parent_id
@@ -925,7 +926,7 @@ function derivedWorkspaceSql(taskRef: string): string {
 }
 
 /** `derivedWorkspaceSql` の TS の対 —— 行の値で引くので、まだ登録していない task にも当てられる。null は既定への参照。 */
-function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "type" | "parent_id">): string | null {
+export function derivedWorkspace(db: Db, task: Pick<Task, "workspace" | "type" | "parent_id">): string | null {
   return db
     .prepare(`SELECT ${derivedWorkspaceSql("t")} FROM (SELECT ? AS workspace, ? AS type, ? AS parent_id) t`)
     .pluck()
@@ -1123,11 +1124,11 @@ export function registerTask(
   assertArtifactNotDiscarded(db, input);
   assertRepairHasParent(input);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
-  if (input.type === "review" && input.parent_id !== undefined && input.workspace !== undefined) {
-    const ancestor = derivedWorkspace(db, { workspace: null, type: "review", parent_id: input.parent_id });
-    if (input.workspace !== ancestor) {
+  if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
+    const ancestorWorkspace = derivedWorkspace(db, { workspace: null, type: input.type, parent_id: input.parent_id! });
+    if (input.workspace !== ancestorWorkspace) {
       throw new DomainError(
-        `a review child runs in its nearest ancestor's workspace (${ancestor ?? "none fixed yet"}) — omit workspace; ` +
+        `a review child runs in its nearest ancestor's workspace (${ancestorWorkspace ?? "none fixed yet"}) — omit workspace; ` +
           "to review in another workspace, register a root review (no parent)",
       );
     }
@@ -1322,15 +1323,15 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
       .run({ id: task.id, human: HUMAN_WORKER_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
     // ADR 0290 決定4: 付帯子の review の空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
-    const ancestor = derivedWorkspace(db, { ...task, workspace: null });
+    const ancestorWorkspace = derivedWorkspace(db, { ...task, workspace: null });
     const filled: ResolvedFromDefault = {};
     for (const column of ["assignee", "workspace"] as const) {
-      const name = column === "workspace" ? (ancestor ?? fill.workspace) : fill.assignee;
+      const name = column === "workspace" ? (ancestorWorkspace ?? fill.workspace) : fill.assignee;
       if (name && db.prepare(`UPDATE tasks SET ${column} = ? WHERE id = ? AND ${column} IS NULL`).run(name, task.id).changes) {
         filled[column] = name;
       }
     }
-    const fromAncestor = ancestor !== null ? filled.workspace : undefined;
+    const fromAncestor = ancestorWorkspace !== null ? filled.workspace : undefined;
     if (fromAncestor) delete filled.workspace;
     appendEvent(db, {
       taskId: task.id,
@@ -1442,8 +1443,6 @@ export function finishTask(
             completion_criteria:
               "findings are read-only — issues land as repair tasks for the original assignee",
             parent_id: task.id,
-            // Inherit the subject's workspace so the review runs where its deliverable lives.
-            workspace: task.workspace ?? undefined,
           },
           now,
           // 盤面の規則が立てる(ADR 0194 決定3)—— 完了させた agent の名義ではない
@@ -2567,7 +2566,6 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
           "the tier below it would not satisfy.",
         completion_criteria: "the probe is accepted or rejected with findings through complete_audit",
         parent_id: root.id,
-        workspace: root.workspace ?? undefined,
         audited_probe: posed,
       },
       now,
@@ -3450,7 +3448,7 @@ export function editTask(
     }
   }
   // ADR 0290 決定3: 付帯子の review は祖先の workspace に従い、既定への参照も持たない —— 空に戻す先も無い
-  if (task.type === "review" && task.parent_id !== null && input.workspace !== undefined) {
+  if (followsAncestorWorkspace(task) && input.workspace !== undefined) {
     throw new DomainError("a review child's workspace is not editable — it runs in its nearest ancestor's workspace");
   }
   // ADR 0273 決定9: Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない
@@ -4062,7 +4060,8 @@ export function listBoard(
  *  display-only and queue-view-only (CONTEXT.md's Quarantine) — it never
  *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
  *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
- *  gate (issue #26 / ADR 0009: `task.workspace ?? the board's default`) —
+ *  gate (every place the task opens, `openedPlaceNamesSql`, whose own workspace is
+ *  the derived one falling back to the board's default — ADR 0009 / ADR 0290) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
  *  `defaultAgentName`/`auditorName` resolve an unset assignee the same
  *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / CONTEXT.md's
@@ -4410,8 +4409,9 @@ export function listExaminees(db: Db, rootId: string): Task[] {
  *  takes the same slot — `human` is the one assignee that always sits outside
  *  it (issue #13's your tasks), never resolved against the registry at all.
  *
- *  `stopped.workspaces` is matched against the task's own execution workspace
- *  (issue #26 / ADR 0009: `task.workspace ?? defaultWorkspaceName`) — a
+ *  `stopped.workspaces` is matched against every place the task opens
+ *  (`openedPlaceNamesSql`: its derived workspace falling back to
+ *  `defaultWorkspaceName` — ADR 0009 / ADR 0290 — plus Interview rooms) — a
  *  quarantined todo is skipped in favor of the next runnable one, so
  *  quarantine halts only the workspace it's on, never the whole board.
  *  Absent `defaultWorkspaceName` (a workspaceless board) skips the workspace

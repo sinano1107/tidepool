@@ -23,6 +23,7 @@ import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
   auditedPosedEventId,
   type BoardTask,
+  derivedWorkspaceSql,
   getTask,
   isArtifactDiscarded,
   isAuditSql,
@@ -33,7 +34,6 @@ import {
   type RegisterTaskInput,
   type RepairType,
   registerTask,
-  type Task,
 } from "./tasks.js";
 import {
   BOARD_WORKER_ID,
@@ -263,15 +263,14 @@ export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] 
  *  `uncertain` と同じくこちら側(ADR 0168 決定3)。 */
 const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
 
-/** One RCA review, always a child of `objected` sharing its workspace
- *  (CONTEXT.md: children inherit workspace), with the shared RCA discipline
+/** One RCA review, always a child of the objected task `taskId`, following its nearest fixed
+ *  ancestor's workspace (ADR 0290), with the shared RCA discipline
  *  baked into `completion_criteria` (issue #15 layer 2 grilling notes: output
  *  is a diff, prose reflection is forbidden). The entry/comment pairs land
  *  verbatim in `purpose` — the RCA's only supplied context beyond what
  *  get_current_task (issue #29) already carries. */
 function registerRcaReview(
   db: Db,
-  objected: Task,
   taskId: string,
   spec: { title: string; purposeIntro: string; pairs: ObjectionPair[]; assignee?: string },
   now: Date,
@@ -286,7 +285,6 @@ function registerRcaReview(
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
       assignee: spec.assignee,
-      workspace: objected.workspace ?? undefined,
       objection_event_ids: spec.pairs.flatMap((p) => p.objection_event_ids),
     },
     now,
@@ -445,7 +443,6 @@ function bundleObjections(
     for (const [workerId, workerPairs] of byWorker) {
       registerRcaReview(
         db,
-        objected,
         taskId,
         {
           title: `rca (self): ${objected.title}`,
@@ -458,7 +455,6 @@ function bundleObjections(
     }
     registerRcaReview(
       db,
-      objected,
       taskId,
       {
         title: `rca (auditor): ${objected.title}`,
@@ -733,7 +729,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   // silently drop one. 受験者の行は流し読みに出さない —— root の history と task の面では読める(ADR 0268 決定1)
   const rows = db
     .prepare(
-      `SELECT events.*, COALESCE(tasks.workspace, ?) AS workspace,
+      `SELECT events.*, COALESCE(${derivedWorkspaceSql("tasks")}, ?) AS workspace,
               CASE WHEN tasks.type = 'interview' THEN tasks.id
                    WHEN ${isAuditSql("tasks.id")} THEN tasks.parent_id END AS interview_root_id
          FROM events JOIN tasks ON tasks.id = events.task_id

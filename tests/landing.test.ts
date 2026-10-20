@@ -5139,8 +5139,8 @@ function attachReview(board: Db, now: Date, parentId: string): Task {
   );
 }
 
-/** 人間の門で、`parentId` の下に workspace を明示した未決着の work を足す(ADR 0031 —— 付帯子の review は違う workspace を持てない)。 */
-function attachWorkIn(board: Db, now: Date, parentId: string, workspace: string): Task {
+/** 人間の門で、`parentId` の下に workspace を明示した未決着の work を足す —— 分解子は workspace を明示できる(ADR 0031)。 */
+function registerWorkChildIn(board: Db, now: Date, parentId: string, workspace: string): Task {
   return registerTask(
     board,
     { type: "work", title: "follow-up", purpose: "p", completion_criteria: "c", assignee: "squid", parent_id: parentId, workspace },
@@ -5159,9 +5159,9 @@ it.each(["abandoned", "pr_opened"] as const)(
     // PR を開き終えた形では merge の question が reef を参照している
     const before = countUnsettledTasksReferencing(db, "workspace", "reef");
 
-    attachWorkIn(db, now, work.id, "lagoon");
+    registerWorkChildIn(db, now, work.id, "lagoon");
     attachReview(db, now, work.id);
-    attachWorkIn(db, now, work.id, "reef");
+    registerWorkChildIn(db, now, work.id, "reef");
 
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 3);
     expect(countUnsettledTasksReferencing(db, "workspace", "lagoon")).toBe(1);
@@ -5193,7 +5193,7 @@ it.each(["nothing_to_land", "local_merge_question"] as const)(
     landWithoutPr(db, now, landed, form);
     settleReviews(db, now);
     const before = countUnsettledTasksReferencing(db, "workspace", "reef");
-    attachWorkIn(db, now, landed.id, "lagoon");
+    registerWorkChildIn(db, now, landed.id, "lagoon");
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before);
     attachReview(db, now, landed.id);
     expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 1);

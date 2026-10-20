@@ -685,7 +685,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   }
   const issueBacked = full.github_issue_number != null;
   // 付帯子の review は最も近い固定済みの祖先の workspace に従い、Edit では変えられない(ADR 0290 決定3)
-  const reviewChild = full.type === 'review' && full.parent_id != null;
+  const reviewChild = TidepoolRules.followsAncestorWorkspace(full);
   const showWorkspace = !issueBacked && !reviewChild;
   // Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない(ADR 0273 決定9)
   const composedContent = full.type === 'interview';
@@ -746,7 +746,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
         {issueBacked
           ? 'issue-backed — content and workspace stay on GitHub, only board-side fields are editable'
           : reviewChild
-            ? 'unconsumed fields only — type and parent link are not editable; a review child runs in its nearest ancestor’s workspace'
+            ? "unconsumed fields only — type and parent link are not editable; a review child runs in its nearest ancestor's workspace"
             : 'unconsumed fields only — type and parent link are not editable'}
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>

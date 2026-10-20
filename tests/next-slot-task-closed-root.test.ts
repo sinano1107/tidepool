@@ -1,8 +1,10 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { Db } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
+import { appendEvent } from "../src/events.js";
 import { closedRootOf } from "../src/landing.js";
-import { listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { closedRootTree, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI } from "./harness.js";
+import { completeTask, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { closedRootTree, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, settleReviews } from "./harness.js";
 
 /** 盤面の外で閉じられた PR の根に塞がれた子(ADR 0265 決定6)は pickup が飛ばし、キューでは skipped に見える。
  *  根の内容が保護ブランチに届けば(ADR 0250 決定1)、同じ子は拾われる。 */
@@ -59,4 +61,21 @@ it("閉じた根の分解子に出た異議の修理と RCA review も、分解�
   for (const repair of tree.repairs) {
     expect(rows.find((row) => row.id === repair.id)).toMatchObject({ status: "skipped", closed_root: { task_id: tree.root.id, pr_number: 1 } });
   }
+});
+
+it("付帯子の review は、列が NULL でも導出した祖先の workspace の checkout で閉じた根を見る —— 既定の checkout では見ない(ADR 0290 決定5)", async () => {
+  const now = new Date("2026-10-16T00:00:00.000Z");
+  const reef = await makeWorkspace("reef");
+  const other = await makeWorkspace("closed-root-default");
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c", workspace: "reef" }, now, ...HUMAN_WEBUI);
+  git(reef.path, "checkout", "-b", `task/${root.id}`);
+  commitWork(reef.path, "feature.txt", "ready\n");
+  git(reef.path, "checkout", "main");
+  completeTask(db, root, FULL_HANDOFF, "deckhand", now, "worker");
+  settleReviews(db, now);
+  appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
+  const review = registerTask(db, { type: "review", title: "second opinion", purpose: "p", completion_criteria: "c", parent_id: root.id }, now, ...HUMAN_WEBUI);
+
+  expect(closedRootOf(db, (name) => (name === "reef" ? reef : other))(review)?.task_id).toBe(root.id);
 });

@@ -1,19 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEvents } from "../src/events.js";
-import {
-  cancelTaskDirectly,
-  countUnsettledTasksReferencing,
-  editTask,
-  pickupTask,
-  presentTask,
-  type RegisterTaskInput,
-  registerTask,
-  type Task,
-} from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { completedWork, HUMAN_WEBUI, settleReviews } from "./harness.js";
+import { listEvents } from "../src/events.js";
+import { cancelTaskDirectly, editTask, logDecision, pickupTask, presentTask, type RegisterTaskInput, registerTask, type Task } from "../src/tasks.js";
+import { listLog } from "../src/triage.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 // ADR 0290: 付帯子の review は自分の workspace を持たず、列が非 NULL の最も近い祖先に従う(無ければ既定)
 const at = new Date(0);
@@ -81,18 +72,6 @@ describe("付帯子の review の pickup の埋め(ADR 0290 決定4)", () => {
 });
 
 describe("pickup 前の読み手は導出した workspace で読む(ADR 0290 決定5)", () => {
-  it("PR を持たずに着地した reef の完了 work の下の、列が NULL の未決着の付帯子の review は、reef の削除の扉に数えられる", () => {
-    const db = openDb(":memory:");
-    const landed = completedWork(db, at, "tako", undefined, "reef");
-    appendEvent(db, { taskId: landed.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "nothing_to_land", base: "main" }, at });
-    settleReviews(db, at);
-    const before = countUnsettledTasksReferencing(db, "workspace", "reef");
-
-    register(db, { type: "review", parent_id: landed.id });
-
-    expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(before + 1);
-  });
-
   it("直接 cancel の quarantine の門は、付帯子の review が導出で着く workspace の quarantine で止まる", () => {
     const db = openDb(":memory:");
     const root = register(db, { type: "work", workspace: "reef" });
@@ -111,6 +90,15 @@ describe("pickup 前の読み手は導出した workspace で読む(ADR 0290 決
 
     expect(presentTask(db, register(db, { type: "review", parent_id: fixed.id })).workspace).toBe("reef");
     expect(presentTask(db, register(db, { type: "review", parent_id: unfixed.id })).workspace).toBeNull();
+  });
+
+  it("判断ログの一覧は、付帯子の review の行に導出した名前を見せる", () => {
+    const db = openDb(":memory:");
+    const parent = register(db, { type: "work", workspace: "reef" });
+    const review = register(db, { type: "review", parent_id: parent.id });
+    const entry = logDecision(db, review, "looked", "fugu", at, "worker");
+
+    expect(listLog(db, "sandbox").find((e) => e.id === entry)?.workspace).toBe("reef");
   });
 });
 
