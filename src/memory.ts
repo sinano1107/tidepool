@@ -2733,8 +2733,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   // 再掲の生死は approved の木でなく、その scope の無効化されていないエントリ(candidate も)が path かその下にあるか(ADR 0284 決定1)。
   // その scope にエントリの無い枝は、その scope の配下だったエントリの移動の鎖の末尾から今の (path, scope) を引く(エントリが鎖の末尾で
   // 名指されるのと同じ)—— 盤面全体へ広げられていれば盤面全体
-  const unretired = db.prepare("SELECT path, scope FROM memory_entries WHERE invalidation_reason IS NULL").all() as Array<{ path: string; scope: string | null }>;
-  const live = (path: string, scope: string | null) => unretired.some((row) => row.scope === scope && atOrUnder(row.path, path));
+  const live = (path: string, scope: string | null) => branchRows(db, { scope, path, to_scope: scope }).length > 0;
   const moved = db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason = 'path_moved'").all() as EntryRow[];
   const objectedBranches = objected.flatMap((j) => {
     if (!("branch" in j)) return [];
@@ -2747,7 +2746,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
       return now.path.endsWith(rest) && live(branch, now.scope) ? [{ branch, scope: now.scope }] : [];
     });
   });
-  const wholeBoard = unretired.flatMap((row) => (row.scope === null ? [row.path] : []));
+  const wholeBoard = (db.prepare("SELECT path FROM memory_entries WHERE scope IS NULL AND invalidation_reason IS NULL").all() as Array<{ path: string }>).map((row) => row.path);
   const tree = parts.branches.map(({ path }) => path);
   const branches = parts.branches.flatMap(({ path, definitions, scopes }) => {
     const undefinedIn = scopes.filter((scope) => !definitions.some((d) => d.scope === null || d.scope === scope));
@@ -2756,7 +2755,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
     return [...new Set([...structural, ...again])].map((scope) => ({ branch: path, scope }));
   });
   // 木に無い path(配下が candidate だけ)の再掲は木の後に
-  const offTree = new Map(objectedBranches.filter((o) => !tree.includes(o.branch)).map((o) => [`${o.scope}\0${o.branch}`, { branch: o.branch, scope: o.scope }]));
+  const offTree = new Map(objectedBranches.filter((o) => !tree.includes(o.branch)).map((o) => [itemName(o), { branch: o.branch, scope: o.scope }]));
   return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches, ...offTree.values()];
 }
 
