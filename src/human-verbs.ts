@@ -9,7 +9,7 @@ import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarant
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
-import { DomainError, QuestionClosedError } from "./domain-error.js";
+import { DomainError } from "./domain-error.js";
 import type { DraftClient } from "./draft.js";
 import { appendEvent, type EventOrigin, getEvent } from "./events.js";
 import {
@@ -82,6 +82,7 @@ import {
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
   presentTask,
+  QuestionClosedError,
   type RegisterTaskInput,
   type RegistryProposal,
   registerTask,
@@ -1093,10 +1094,8 @@ export async function submitAnswer(
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
         if (await deps.landing.observePullRequestOutcome(task)) return presentAnswered(deps, task);
         const beingMerged = `PR #${mergePr} is being merged by the board right now — answer again in a moment`;
-        // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む —— 印は覗くだけで放す
-        const probe = deps.landing.takeInFlightMark(task.workspace, mergePr);
-        if (!probe) throw new DomainError(beingMerged);
-        probe();
+        // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
+        if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
         if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
           const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
           assertLandingAllowed(deps.db, landingTaskId);

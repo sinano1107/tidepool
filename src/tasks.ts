@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { DomainError, QuestionClosedError } from "./domain-error.js";
+import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
 
 import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
@@ -1935,6 +1935,13 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
  *  refused the answer if it failed (see human-verbs.ts). The open question is
  *  the quarantine's only state, so settling it is the release; every kind
  *  records the same `quarantine_released`. */
+/** 回答の書き込みの時点で question がもう開いていなかった(ADR 0288 決定1)。submitAnswer は閉じた理由で応答を分ける(決定4)。 */
+export class QuestionClosedError extends DomainError {
+  constructor() {
+    super("this question was settled while the answer was being checked — read it again");
+  }
+}
+
 export function answerQuestion(
   db: Db,
   question: Task,

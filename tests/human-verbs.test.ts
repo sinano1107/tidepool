@@ -22,6 +22,7 @@ import {
   getTask,
   listBoard,
   presentTask,
+  QuestionClosedError,
   recordPrOpened,
   registerTask,
   settleQuestionAsObserved,
@@ -581,7 +582,7 @@ it("PR promotion の retry が失敗したら question を未決着のまま残�
 });
 
 // ADR 0288 決定1・4: retry の収束を待つ間に、走っていた収束の回が着地させて question を観測で閉じる
-it("PR promotion の retry の収束の await の間に観測で閉じた question は、回答を残さず観測で閉じた印を返す", async () => {
+it("PR 昇格の retry の収束の await の間に観測で閉じた question は、回答を残さず観測で閉じた印を返す", async () => {
   db = openDb(":memory:");
   const completedTask = registerTask(db, { type: "work", title: "ship", purpose: "deliver", completion_criteria: "a PR" }, NOW, ...HUMAN_WEBUI);
   registerPrPromotionFailureQuestion(db, completedTask, "token expired", NOW);
@@ -1208,22 +1209,24 @@ it("merge 回答が merge 中の PR の merge question への「hold」は拒ま
 
 /** 上の question に「merge」と答え、印を取る前の PR の読み取りの応答が盤面に返る前で止める(ADR 0288 決定2 の印の前)。 */
 async function mergeAnswerBeforeMark() {
-  const { work, question, github, answer } = escalatedMergeQuestion();
+  const { work, question, github, landing, answer } = escalatedMergeQuestion();
   const gate = awaitWindow();
   afterCiRead(github, gate.hold);
   const first = answer();
   await gate.entered;
-  return { work, question, github, answer, first, open: gate.open };
+  return { work, question, github, landing, answer, first, open: gate.open };
 }
 
 it("merge 回答の PR の読み取りの await の間に「hold」が通った merge question への merge 回答は、merge せずに拒まれる", async () => {
-  const { work, question, github, answer, first, open } = await mergeAnswerBeforeMark();
+  const { work, question, github, landing, answer, first, open } = await mergeAnswerBeforeMark();
 
   await answer("hold");
   open();
 
-  await expect(first).rejects.toThrow(DomainError);
+  await expect(first).rejects.toThrow(new QuestionClosedError());
   expect(github.merged).toEqual([]);
+  // 止まった回答は印を放している —— 次の執行が印を取れる
+  expect(landing.takeInFlightMark(question.workspace, 42)).not.toBeNull();
   expect(listEvents(db, question.id).filter((event) => event.kind === "question_answered").map((event) => event.payload)).toEqual([
     expect.objectContaining({ answers: [expect.objectContaining({ answer: "hold" })] }),
   ]);
