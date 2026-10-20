@@ -113,3 +113,9 @@ Precedent が名指す entry を「読め」と言い(ADR 0166 決定5)、`propo
 登録する —— 異議された行が名指す対象に限った形で(ADR 0279 決定3・4)。追記(#1225)の「meta-review が読む行は判断の材料であって従う
 指針ではない(meta-review は spawn 注入を受けない)」の括弧の前提は変わる: 主題つきの meta-review にも Behavior / Exemplar の節が
 注入され(ADR 0279 決定2)、その節に載った行を `read_memory_entries` で読んだときは `read` に数える。材料の節の行は `seen` のまま。
+
+## 追記2(2026-10-20 の grilling、issue #2339 / ADR 0283)
+
+決定2 の「worker の memory verb を登録しない」は主題の修理子(meta-review の下の `memory_repair` / `routing_repair`)にも当たる ——
+worker の pull verb(`browse_memory` / `search_memory` / `read_memory`)は登録せず、`read_memory_entries` を両方の行の修理子に登録する
+(ADR 0283 決定3)。祖先に meta-review の無い `memory_repair` は worker のまま。
