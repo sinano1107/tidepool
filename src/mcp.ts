@@ -826,23 +826,24 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
           "judgment on: entries ({entry: id}) — the candidates drafted in this window, the candidates and entries named by the settled " +
-          "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path}) that hold " +
-          "entries without a Definition in their scope or whole-board, or whose path two or more scopes define — plus the live entries and " +
-          "branches named by the judgments of the objected decisions. That list, injected when " +
+          "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path, scope: workspace " +
+          "name, or null for the whole board}) that hold entries without a Definition in their scope or whole-board — one item per scope that " +
+          "lacks one, or a single whole-board item when whole-board entries sit at or under the path — plus the live entries and branches named " +
+          "by the judgments of the objected decisions. That list, injected when " +
           "this session started, is the whole set of items: anything added to the store since belongs to the next cycle. An item acted on " +
           "since this session started is already judged: one you wrote, folded, moved, retired, defined or named in a proposal, or one " +
           "anyone else has since folded, moved, retired or defined. Every other item goes in judgments, which means you left it as is, " +
           "with an optional one-line reason; the board records one decision line per item. Listing an item already judged is harmless: " +
           "it is accepted and records nothing. " +
           "A missing item is refused as unjudged, and an entry or branch not on the injected list — even one you wrote in this session — " +
-          "is refused; each is named by id or path, and nothing is recorded. The handoff takes the same " +
+          "is refused; each is named by id, or by path and scope, and nothing is recorded. The handoff takes the same " +
           `fields as complete_task (${describeHandoffFields()}); none is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
           judgments: z.array(
             z.union([
               z.strictObject({ entry: z.number().int(), reason: z.string().optional() }),
-              z.strictObject({ branch: z.string(), reason: z.string().optional() }),
+              z.strictObject({ branch: z.string(), scope: z.string().nullable(), reason: z.string().optional() }),
             ]),
           ),
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),

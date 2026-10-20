@@ -79,7 +79,7 @@ it("主題 memory の task の接続の tool 一覧は、普通の task の一�
   }
 });
 
-it("define_memory は重ねた木の門と畳み方・改名を言い、list_memory_entries は影に触れず path の意味を言い、list_memory_branches は枝の一覧を言い、memory meta-review の purpose は枝の一覧と path の読み方と、複数の workspace が同じ path を定義したときの畳み方と改名を言う(ADR 0178 / #1209)", async () => {
+it("define_memory は重ねた木の門と畳み方・改名を言い、list_memory_entries は影に触れず path の意味を言い、list_memory_branches は枝の一覧を言い、memory meta-review の purpose は枝の一覧と path の読み方を言い、複数の workspace が同じ path を定義したときの対処は言わない(ADR 0178 / #1209 / ADR 0282 決定1)", async () => {
   const { review, client } = await boardWithMetaReview();
   try {
     const { tools } = await client.listTools();
@@ -103,10 +103,7 @@ it("define_memory は重ねた木の門と畳み方・改名を言い、list_mem
         "The branch list shows every branch with the Definitions at its path and the scopes that hold entries under it. " +
         "For a Definition, ask whether it holds true whatever leaf sits under its branch.",
     );
-    expect(review.purpose).toContain(
-      "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
-        "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch).",
-    );
+    expect(review.purpose).not.toContain("two or more workspaces define the same path");
   } finally {
     await client.close();
   }
@@ -124,6 +121,25 @@ it("complete_memory_review の説明は、項目の全体がこの session の�
     );
     expect(description).toContain("Listing an item already judged is harmless: it is accepted and records nothing.");
     expect(description).toContain("an entry or branch not on the injected list — even one you wrote in this session — is refused");
+  } finally {
+    await client.close();
+  }
+});
+
+it("complete_memory_review の枝の鍵は path と scope(workspace 名か盤面全体の null、省略は拒否)で、説明は scope ごとの項目と盤面全体の1項目を言い、複数 scope が定義した path を言わない(ADR 0282 決定1〜3)", async () => {
+  const { review, client, call } = await boardWithMetaReview();
+  try {
+    const { tools } = await client.listTools();
+    const tool: any = tools.find((tool) => tool.name === "complete_memory_review");
+    const branchKey = tool.inputSchema.properties.judgments.items.anyOf.find((variant: any) => "branch" in variant.properties);
+    expect(branchKey.required).toEqual(expect.arrayContaining(["branch", "scope"]));
+    expect(await call("complete_memory_review", { judgments: [{ branch: "build" }] })).toMatchObject({ isError: true, body: expect.stringContaining("scope") });
+    expect(tool.description).toContain(
+      "branches ({branch: path, scope: workspace name, or null for the whole board}) that hold entries without a Definition in their scope " +
+        "or whole-board — one item per scope that lacks one, or a single whole-board item when whole-board entries sit at or under the path —",
+    );
+    expect(tool.description).toContain("each is named by id, or by path and scope");
+    for (const text of [tool.description, review.purpose]) expect(text).not.toContain("two or more scopes");
   } finally {
     await client.close();
   }

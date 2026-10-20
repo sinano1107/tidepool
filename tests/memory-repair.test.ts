@@ -222,7 +222,7 @@ it("修理子の記憶の verb は運ぶ行の種類で決まる —— 書き�
     (review) => (moved = moveMemoryByMetaReview(db, { entry_id: note, scope: "charts", path: "build/squash", mover: metaReview }, "worker", at, review.id).event_id),
   );
   raiseObjection(db, first.row(note), "fold it", at);
-  raiseObjection(db, second.row("tides"), "define it", at);
+  raiseObjection(db, second.row({ branch: "tides", scope: "charts" }), "define it", at);
   raiseObjection(db, moved, "move it back", at);
   commitTriage(db, at);
 
@@ -327,7 +327,7 @@ it("片側の verb の射程は広げない —— define_memory / fold_memory /
     named = { c: candidate("Small commits"), k: knowledge("Squash"), k2: knowledge("Squash it"), b: approved("Merge often"), b2: approved("Tag releases") };
     knowledge("High tide", "charts", "tides");
   });
-  for (const id of [row(named.c), row(named.k), row(named.k2), row(named.b), row(named.b2), row("tides")]) raiseObjection(db, id, "redo it", at);
+  for (const id of [row(named.c), row(named.k), row(named.k2), row(named.b), row(named.b2), row({ branch: "tides", scope: "charts" })]) raiseObjection(db, id, "redo it", at);
   commitTriage(db, at);
   const repair = repairChild(review.id);
   const author = { activity: "worker_verb" as const, name: "deckhand" };
@@ -338,7 +338,7 @@ it("片側の verb の射程は広げない —— define_memory / fold_memory /
   const repairer = { taskId: repair.id, agent: "deckhand" };
 
   expect(entry(define("tides").entry_id)).toMatchObject({ kind: "definition", path: "tides", author });
-  expect(() => define("misc")).toThrow("branch misc is not named by the objected judgment");
+  expect(() => define("misc")).toThrow("branch misc in scope charts is not named by the objected judgment");
   expect(() => fold([named.k, other])).toThrow(`entry #${other} is not named by the objected judgment`);
   fold([named.k, named.k2]);
   expect(approve(named.c)).toMatchObject({ question_id: expect.any(String) });
@@ -378,4 +378,24 @@ it("判断の行の修理子の get_current_task は親の判断の行・異議�
 
   expect(latestEventOfTask(db, repair.id, "memory_written")).toMatchObject({ id: fold.event_id, payload: { created: [fold.entry_id], invalidated: named } });
   expect(listEvents(db, review.id)).toHaveLength(before);
+});
+
+it("判断の行の修理子の define_memory / move_memory_branch は名指された (path, scope) と同じ path の盤面全体にだけ届き、別 workspace の同名の枝は path と scope を名指して拒む —— charts と docks が未定義の tides を持ち、charts の据え置きに異議(#2326 の実測、ADR 0282 決定4)", () => {
+  const { db, knowledge, repairChild, judged, entry } = board();
+  const { review, row } = judged(() => {
+    for (const scope of ["charts", "docks"]) knowledge("High tide", scope, "tides");
+  });
+  raiseObjection(db, row({ branch: "tides", scope: "charts" }), "define it", at);
+  commitTriage(db, at);
+  const repair = repairChild(review.id);
+  const mover = { activity: "worker_verb" as const, name: "deckhand" };
+  const define = (scope: string | null) => defineMemoryByMetaReview(db, { scope, path: "tides", text: "Tides.", author: mover }, "worker", at, repair.id);
+  const moveBranch = (scope: string) => moveMemoryBranchByMetaReview(db, { scope, path: "tides", to_scope: scope, to_path: "sea", mover }, "worker", at, repair.id);
+
+  expect(() => define("docks")).toThrow("branch tides in scope docks is not named by the objected judgment");
+  expect(() => moveBranch("docks")).toThrow("branch tides in scope docks was neither defined nor moved into by the objected memory write, nor named by the objected judgment");
+  const charts = define("charts");
+  expect(moveBranch("charts").moved).toContainEqual(expect.objectContaining({ entry_id: charts.entry_id }));
+  expect(entry(define(null).entry_id)).toMatchObject({ kind: "definition", scope: null, path: "tides" });
+  expect(listMemoryEntries(db, { state: "approved" }).filter((e) => e.scope === "docks" && e.invalidation_reason === null).map((e) => [e.kind, e.path])).toEqual([["knowledge", "tides"]]);
 });
