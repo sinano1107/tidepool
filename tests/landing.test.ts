@@ -4166,6 +4166,85 @@ it.each<[string, (pr: Awaited<ReturnType<typeof openPushedPr>>) => string]>([
   },
 );
 
+// ADR 0289 決定2: ローカル着地の merge 回答も同じ述語で拒み、比べる相手はローカルのタスクブランチ
+/** purely-local の workspace で W を pickup して commit し、完了して収束が local merge question を立てた盤面。
+ *  checkout は W のタスクブランチに残る。 */
+async function landLocally(name: string) {
+  const workspace = await makeWorkspace(name);
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github: null });
+  const work = landingWork(db, clock);
+  await prepareWorkspaceAtPickup(db, workspace, work);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  await expect(convergeOn(landing, work.id)).resolves.toMatchObject({ form: "local_merge_question" });
+  const question = listBoard(db).find((q) => q.question_pending_local_merge_task_id === work.id)!;
+  return { workspace, db, clock, work, question };
+}
+
+function answerLocalMerge({ db, clock, workspace, question }: Awaited<ReturnType<typeof landLocally>>) {
+  return submitAnswer(
+    { db, pollNow: () => {}, landing: unusedLanding, workspace },
+    getTask(db, question.id)!,
+    ["merge"],
+    undefined,
+    () => clock.now(),
+    "webui",
+  );
+}
+
+const localLeftBehind = (workId: string, carrier: string) =>
+  new DomainError(`cannot merge yet: the task branch task/${workId} does not carry all of the task's content yet — ${carrier}`);
+
+it("修理が done で後始末が merge back する前のローカル着地の merge 回答は、盤面がまだ運んでいるとして拒まれ、merge back の後の回答で修理ごと載る", async () => {
+  const local = await landLocally("local-left-behind-teardown");
+  const { workspace, db, clock, work, question } = local;
+  const repair = attachUnsettledChild(db, clock, work.id);
+  await prepareWorkspaceAtPickup(db, workspace, repair);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  finish(db, clock, repair);
+  markTeardown(db, repair.id, clock.now());
+  const protectedHead = git(workspace.path, "rev-parse", "main");
+
+  await expect(answerLocalMerge(local)).rejects.toThrow(localLeftBehind(work.id, STILL_CARRYING));
+  expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+
+  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  await answerLocalMerge(local);
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed");
+});
+
+it("修理の merge back が conflict して quarantine に落ちた間のローカル着地の merge 回答は、その quarantine question を名指して拒まれ、conflict を解いた受理の後の回答で修理ごと載る", async () => {
+  const local = await landLocally("local-left-behind-conflict");
+  const { workspace, db, clock, work, question } = local;
+  const repair = attachUnsettledChild(db, clock, work.id);
+  git(workspace.path, "checkout", "-b", `task/${repair.id}`, `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "fixed\n");
+  git(workspace.path, "checkout", `task/${work.id}`);
+  commitWork(workspace.path, "repair.txt", "conflicting\n");
+  await prepareWorkspaceAtPickup(db, workspace, repair);
+  finish(db, clock, repair);
+  releaseWorkspace(db, workspace, getTask(db, repair.id)!, clock.now(), true);
+  const quarantine = quarantineQuestion(db, "workspace", workspace.name)!;
+  const protectedHead = git(workspace.path, "rev-parse", "main");
+
+  await expect(answerLocalMerge(local)).rejects.toThrow(
+    localLeftBehind(work.id, carriedBy("workspace quarantine", quarantine.id)),
+  );
+  expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
+  expect(getTask(db, question.id)!.status).toBe("todo");
+
+  git(workspace.path, "merge", "--abort");
+  expect(() => git(workspace.path, "merge", `task/${repair.id}`)).toThrow();
+  commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
+  await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantine);
+  await answerLocalMerge(local);
+  expect(getTask(db, question.id)!.status).toBe("done");
+  expect(git(workspace.path, "show", "main:repair.txt")).toBe("fixed and conflicting");
+});
+
 it("escalate で開いた PR の後にダイヤルを auto_if_ci_green へ緩めても、何も無人 merge キューに入らない", async () => {
   const workspace = await makeWorkspace("landing-loosened-dial");
   const { db, clock } = await openBoard();

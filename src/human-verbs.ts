@@ -34,7 +34,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { closedRootOf, contentLeftBehind, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -106,6 +106,7 @@ import {
   quarantineWorkspace,
   redoMergeBacks,
   resolveWorkspacesBaseDir,
+  taskBranch,
   UnknownWorkspaceError,
   verifyWorkspaceClean,
   type WorkspaceConfig,
@@ -794,6 +795,22 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
   );
 }
 
+/** 積み残しの拒否(ADR 0240 決定5): 運ぶ面を名指しする —— workspace の quarantine question、PR 昇格失敗 question、
+ *  どちらも無ければ盤面が運んでいる途中。PR とローカル着地の merge 回答が共有する(ADR 0289 決定2)。 */
+function leftBehindRefusal(db: Db, workspaceName: string, landingTaskId: string, head: string): DomainError {
+  const quarantineQuestionId = openQuarantineQuestion(db, "workspace", workspaceName)?.id;
+  const promotionQuestionId = openPrPromotionQuestionIds(db, landingTaskId)[0];
+  const carrier = quarantineQuestionId
+    ? `the open workspace quarantine question (${quarantineQuestionId})`
+    : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
+  return new DomainError(
+    `cannot merge yet: ${head} does not carry all of the task's content yet — ` +
+      (carrier
+        ? `${carrier} carries it; answer that question first, then answer again`
+        : "the board is still carrying it; answer again later"),
+  );
+}
+
 /** retry の受理・拒否(ADR 0241 決定5)。verdict が無いのは、候補の読み取りそのものが失敗した回だけである。 */
 function promotionRetryError(verdict: LandingVerdict | undefined): string | undefined {
   if (!verdict) return "the board could not read its landing roots; answer again";
@@ -1072,6 +1089,19 @@ export async function submitAnswer(
             task.workspace,
             "cannot land the task branch",
           );
+          // ADR 0289 決定2: 積み残しは PR の回答と同じ述語で、比べる相手はローカルのタスクブランチ。同期で読み、
+          // merge の実行まで await を挟まない(ADR 0288 決定2)。比べられなければ積み残し
+          const branch = taskBranch(kind.task_id);
+          let left: string[];
+          try {
+            left = contentLeftBehindLocally(deps.db, mergeWorkspace, kind.task_id, branch);
+          } catch (err) {
+            throw new DomainError(
+              `cannot merge: could not compare the task branch ${branch} with the task's content — ` +
+                (err instanceof Error ? err.message : String(err)),
+            );
+          }
+          if (left.length > 0) throw leftBehindRefusal(deps.db, mergeWorkspace.name, kind.task_id, `the task branch ${branch}`);
           try {
             mergeTaskToProtected(deps.db, mergeWorkspace, kind.task_id);
           } catch (err) {
@@ -1130,18 +1160,7 @@ export async function submitAnswer(
             // ADR 0242 決定4: 盤面の外の push が落とした内容は盤面が運べない —— その事実と直す手段を言う
             const dropped = await outsidePushDropNotice(deps.db, mergeWorkspace, landingTaskId, left, { number: mergePr, head: pr.head });
             if (dropped) throw new DomainError(`cannot merge: ${dropped}; then answer again`);
-            // ADR 0240 決定5: 運ぶ面を名指しする
-            const quarantineQuestionId = openQuarantineQuestion(deps.db, "workspace", mergeWorkspace.name)?.id;
-            const promotionQuestionId = openPrPromotionQuestionIds(deps.db, landingTaskId)[0];
-            const carrier = quarantineQuestionId
-              ? `the open workspace quarantine question (${quarantineQuestionId})`
-              : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
-            throw new DomainError(
-              `cannot merge yet: PR #${mergePr} does not carry all of the task's content yet — ` +
-                (carrier
-                  ? `${carrier} carries it; answer that question first, then answer again`
-                  : "the board is still carrying it; answer again later"),
-            );
+            throw leftBehindRefusal(deps.db, mergeWorkspace.name, landingTaskId, `PR #${mergePr}`);
           }
           // ADR 0227 決定2・3: check 未報告は猶予の間だけ pending と同じに拒み、過ぎれば回答の中の人間の判断で通す
           if (pr.ci === "unreported" && !unreportedCiGraceElapsed(deps.db, landingTaskId, pr.head, now())) {

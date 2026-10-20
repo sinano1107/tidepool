@@ -184,7 +184,27 @@ export async function contentLeftBehind(
   candidate: string | undefined,
   fetchMissing?: { auth: GitHubAuth | undefined },
 ): Promise<string[]> {
-  const targets = (
+  if (fetchMissing && candidate !== undefined && leftBehindTargets(db, workspace, taskId).length > 0) {
+    await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
+  }
+  return contentLeftBehindLocally(db, workspace, taskId, candidate);
+}
+
+/** `contentLeftBehind` の fetch 無しの経路 —— 同期で、I/O の await を挟まない(ADR 0289 決定2 / ADR 0288 決定2)。 */
+export function contentLeftBehindLocally(
+  db: Db,
+  workspace: WorkspaceConfig,
+  taskId: string,
+  candidate: string | undefined,
+): string[] {
+  const targets = leftBehindTargets(db, workspace, taskId);
+  if (targets.length === 0) return [];
+  if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
+  return targets.filter((id) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate);
+}
+
+function leftBehindTargets(db: Db, workspace: WorkspaceConfig, taskId: string): string[] {
+  return (
     db
       .prepare(
         `${subtreeSql("@root", "c.status <> 'cancelled'")}
@@ -192,13 +212,9 @@ export async function contentLeftBehind(
         WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
       )
       .all({ root: taskId }) as Array<{ id: string }>
-  ).filter(({ id }) => taskBranchExists(workspace, id));
-  if (targets.length === 0) return [];
-  if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
-  if (fetchMissing) await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
-  return targets
-    .filter(({ id }) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate)
-    .map(({ id }) => id);
+  )
+    .map(({ id }) => id)
+    .filter((id) => taskBranchExists(workspace, id));
 }
 
 /** ADR 0242 決定2: 盤面が最後に push した head(`pr_opened` / `pr_branch_pushed` の sha)—— 収束が積み残しを比べる相手 */
