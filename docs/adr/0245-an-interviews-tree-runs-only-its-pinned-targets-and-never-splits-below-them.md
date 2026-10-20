@@ -63,3 +63,8 @@ Interview の root は `decompose` / `redecompose` を持たず、出題の verb
 
 決定2・4・5 は ADR 0267 で置き換わった —— 受験者は root の子でも分解判断に乗る task でもなくなり、前提の破綻を持たず、
 abandon が倒すのは規則どおり自分のサブツリーだけになる(例外ではなくなる)。決定1(分けない)と決定3(root は作り直さない)は残る。
+
+## 追記4(2026-10-20 の grilling、issue #1887 / ADR 0287)
+
+帰結の「Agent tool の subagent が残る経路」は閉じないと決めた —— subagent の model / effort は親(受験者自身)の采配で、その仕事は対象の
+行の実績に数える。盤面が消すのは host の env による一律の差し替えだけで、Explore の上限など固定版の CLI の既定は残す。
