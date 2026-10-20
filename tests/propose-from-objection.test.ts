@@ -34,7 +34,7 @@ const material = (db: Db, parentId: string): number[] =>
   [...objectionBundles(db).values()].flatMap((bundles) => (bundles.at(-1)!.task_id === parentId ? bundles.at(-1)!.objection_event_ids : []));
 /** 親のいまの異議群を材料にした RCA 子。 */
 const rca = (db: Db, title: string, parent: Task): Task =>
-  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id: parent.id, objection_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID, "webui");
+  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", parent_id: parent.id, objection_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID, "webui");
 
 it("学習に向かない cause・異議済みで未帰責のエントリ・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
@@ -103,7 +103,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const capabilityEntry = objected(db, mixed, "capability");
   const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 後の異議群の帰責 —— 出所は最後の異議群の帰責を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
-  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", workspace: "elsewhere", parent_id: mixed.id, objection_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID, "webui").id;
+  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", parent_id: mixed.id, objection_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID, "webui").id;
 
   const capabilityResult = proposeFromObjection(db, self, { ...draft, entry_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromObjection(db, self, { ...draft, entry_id: preferenceEntry }, {}, "auditor", at);
