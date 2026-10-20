@@ -502,6 +502,19 @@ const SUBAGENT_MODEL_ENVS = [
   "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP",
 ] as const;
 
+/** host が main の pin を上書きする env(issue #2351、ADR 0005 の線)。`CLAUDE_CODE_EFFORT_LEVEL` は
+ *  `--effort` に勝つ(2.1.286 の VM 実測: env=low + `--effort high` → low、env=high + `--effort low` → high、
+ *  effort null の行にも env の値が載る)ので、`worker_spawned.effort` が pin を書く記録と実走が食い違う。
+ *  `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` は alias を差し替える —— 行の `--model` は concrete id
+ *  (ADR 0182)なので無傷だが、`--advisor opus` と Board call の `--model haiku` は alias で、黙って別 model
+ *  になる(同実測)。盤面側の値は入れず、worker spawn と Board call の両方で消して「無い」を固定する。 */
+const PIN_OVERRIDE_ENVS = [
+  "CLAUDE_CODE_EFFORT_LEVEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+] as const;
+
 /** The Moonshot routing pair (ADR 0096 / issue #445): the endpoint and the
  *  Bearer token envs a `provider: moonshot` spawn carries — and that an
  *  anthropic spawn must never inherit (ADR 0097 決定4 の双方向 scrub)。env 名は
@@ -617,6 +630,7 @@ function readMoonshotApiKey(keyFile: string): string {
 export function boardCallEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
+  for (const name of PIN_OVERRIDE_ENVS) delete env[name];
   return env;
 }
 
@@ -720,6 +734,7 @@ export function workerSpawnEnv(
   else delete env[ADVISOR_DISABLE_ENV];
   for (const name of SWAP_DISABLE_ENVS) delete env[name];
   for (const name of SUBAGENT_MODEL_ENVS) delete env[name];
+  for (const name of PIN_OVERRIDE_ENVS) delete env[name];
   if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
