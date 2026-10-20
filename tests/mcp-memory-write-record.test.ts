@@ -155,7 +155,7 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を�
     expect(names.filter((name) => withheld.includes(name))).toEqual([]);
     const envelope = body(await client.callTool({ name: "get_current_task", arguments: {} }));
     expect(envelope.memory_repair).toBe(
-      "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.",
+      "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them, and every write it makes stays in its object's scope: widening to the whole board is the human's or the meta-review's. To rewrite an entry a write touched, use replace_memory.",
     );
     expect(envelope.artifact_discarded).toBeUndefined();
   } finally {

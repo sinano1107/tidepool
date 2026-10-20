@@ -3568,10 +3568,11 @@ export const ARTIFACT_DISCARDED_NOTICE =
 export const INTERVIEW_AUDIT_NOTICE =
   "This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.";
 
-/** memory_repair に盤面が注入する1行(ADR 0272 決定3 / ADR 0281): 伏せた verb の理由と、書き込みの行・判断の行の射程。`get_current_task` の envelope と spawn の文面が同じこれを
- *  運ぶ。spawn の文面では Authority 節の本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
+/** memory_repair に盤面が注入する1行(ADR 0272 決定3 / ADR 0281): 伏せた verb の理由と、書き込みの行・判断の行の射程と、書き込みが対象の
+ *  scope に留まること(ADR 0285 決定2)。`get_current_task` の envelope と spawn の文面が同じこれを運ぶ。spawn の文面では Authority 節の
+ *  本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
 export const MEMORY_REPAIR_NOTICE =
-  "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.";
+  "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them, and every write it makes stays in its object's scope: widening to the whole board is the human's or the meta-review's. To rewrite an entry a write touched, use replace_memory.";
 
 /** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。記憶は
  *  書けないが、指針の節の id 読みは持つ(ADR 0283 決定3)ので「記憶の verb を使えない」とは言わない。 */
