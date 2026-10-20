@@ -2737,7 +2737,6 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
  *  candidate も含め path かその下にあるもの —— 枝の一覧に無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
-  // 鎖の末尾が無効化済みのエントリには届く verb が無いので、項目にしない(ADR 0286 決定1)
   const liveTail = (id: number) => {
     const tail = bodyTail(db, restored, id);
     return requireEntry(db, tail).invalidation_reason === null ? [tail] : [];
