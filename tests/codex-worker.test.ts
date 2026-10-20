@@ -44,6 +44,7 @@ import {
   POSED_HEAD,
   poseAccepted,
   quarantineQuestion,
+  routingJudgmentRepairTask,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -656,7 +657,8 @@ describe("CodexWorker (ADR 0098)", () => {
     ["書き込みの行への異議の修理", writeRepairTask],
     ["memory meta-review の判断の行への異議の修理", (db: ReturnType<typeof openDb>) => judgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { executor: "codex-agent" })],
     ["memory meta-review の書き込みの行と判断の行への異議の修理", (db: ReturnType<typeof openDb>) => judgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { withWrite: true, executor: "codex-agent" })],
-    ["routing meta-review の判断の行への異議の修理", routingRepairTask],
+    ["型つきの行を運ばない routing の修理", routingRepairTask],
+    ["routing meta-review の判断の行への異議の修理", (db: ReturnType<typeof openDb>) => routingJudgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { executor: "codex-agent" })],
     ["self RCA", rca("self")],
     ["auditor RCA", rca("auditor")],
     ["祖先の cancel の下の RCA", discardedRca],

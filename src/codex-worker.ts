@@ -46,6 +46,7 @@ import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
+import { routingRepairVerbs } from "./routing-review.js";
 
 
 import { carriesReadOnly, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
@@ -1238,7 +1239,7 @@ export class CodexWorker implements WorkerAdapter {
       enabledTools: [
         ...(subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : [])]
+          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : task.type === "routing_repair" ? routingRepairVerbs(this.options.db, task.id) : [])]
         ).filter((verb) => !withheld.includes(verb)),
         ...verbs.added,
       ],

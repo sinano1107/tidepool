@@ -612,7 +612,8 @@ export interface TaskVerbSwap {
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
- *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せる(ADR 0279 決定4)。
+ *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の verb を伏せる(ADR 0279 決定4 ——
+ *  routing の判断の行を運ぶ修理子の読み口と提案 verb は routingRepairVerbs が足す)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
  *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {

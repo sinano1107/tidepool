@@ -18,11 +18,23 @@ import {
   rowName,
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
-import { completeMetaReview, injectedMaterial, inWindow, type MetaReviewWindow, materialSection, metaReviewWindow, objectedJudgments, previousMetaReviewWatermark } from "./meta-review.js";
+import {
+  completeMetaReview,
+  injectedMaterial,
+  inWindow,
+  type MetaReviewWindow,
+  materialSection,
+  metaReviewWindow,
+  objectedJudgments,
+  previousMetaReviewWatermark,
+  ROUTING_META_REVIEW_VERBS,
+  repairJudgments,
+} from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
   assertInterviewFields,
+  getTask,
   type HandoffDoc,
   type InterviewProposal,
   type InterviewTarget,
@@ -250,28 +262,46 @@ export const judgmentKey = (item: RoutingJudgmentItem): RoutingJudgmentKey => ("
 const itemName = (item: { row: Parameters<typeof rowName>[0] } | { agent: string } | { tier: Tier } | { learner: true }) =>
   "row" in item ? rowName(item.row) : "agent" in item ? `agent ${item.agent}` : "tier" in item ? `tier ${item.tier}` : "the learner";
 
-/** この review の提案 question が判断済みにする対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、
- *  `tier_description` は段、`promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。 */
-function proposedObjects(db: Db, reviewId: string): RoutingObject[] {
-  return listChildren(db, reviewId).flatMap(({ question_proposal: proposal }): RoutingObject[] => {
-    if (proposal?.kind === "registry") return [{ agent: proposal.agent }];
-    if (proposal?.kind !== "routing") return [];
-    switch (proposal.op) {
-      case "row":
-      case "add_tier":
-        return [{ row: proposal.row }];
-      case "tier_description":
-        return [{ tier_id: proposal.tier }];
-      case "interview":
-        return proposal.pin.rows.map((row) => ({ row }));
-      case "promote":
-      case "demote":
-        return [{ learner: true }];
-      default:
-        return proposal satisfies never;
-    }
-  });
+/** 提案が写す対象(ADR 0278 決定5): op で写す —— `row` / `add_tier` は動かす行、`agent_tier` は agent、`tier_description` は段、
+ *  `promote` / `demote` は学習器、`interview` は根拠 session が走った行(pin の行)。完了の被覆と修理子の対象の門が共有する。 */
+function proposalObjects(proposal: RoutingProposal | RegistryProposal): RoutingObject[] {
+  if (proposal.kind === "registry") return [{ agent: proposal.agent }];
+  switch (proposal.op) {
+    case "row":
+    case "add_tier":
+      return [{ row: proposal.row }];
+    case "tier_description":
+      return [{ tier_id: proposal.tier }];
+    case "interview":
+      return proposal.pin.rows.map((row) => ({ row }));
+    case "promote":
+    case "demote":
+      return [{ learner: true }];
+    default:
+      return proposal satisfies never;
+  }
 }
+
+/** この review の提案 question が判断済みにする対象。 */
+const proposedObjects = (db: Db, reviewId: string): RoutingObject[] =>
+  listChildren(db, reviewId).flatMap(({ question_proposal: p }) => (p?.kind === "routing" || p?.kind === "registry" ? proposalObjects(p) : []));
+
+/** routing_repair の提案の門(ADR 0279 決定4): 提案が写す対象(proposalObjects)は、修理子が運ぶ判断の行が名指す対象だけ。段は
+ *  名前でなく id で突き合わせる —— 名前は生きている段の中でだけ一意で、退役した段の名前は後から別の段が取れる。拒否文は今の名前で名指す。 */
+function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal | RegistryProposal): void {
+  const key = (object: RoutingObject) => ("tier_id" in object ? `tier_id ${object.tier_id}` : itemName(object));
+  const named = new Set(repairJudgments(db, repairId, "routing").map(key));
+  const outside = proposalObjects(proposal).find((object) => !named.has(key(object)));
+  if (!outside) return;
+  const name = itemName("tier_id" in outside ? { tier: tierNameOf(db, outside.tier_id) } : outside);
+  throw new DomainError(`${name} is not named by the objected judgment: a routing repair proposes only on what that judgment names`);
+}
+
+/** routing_repair の verb(ADR 0279 決定4): routing の判断の行を運べば routing meta-review の読み口と提案 verb —— 修理子に指針の節は
+ *  注入されないので read_memory_entries は持たない。型つきの行を運ばなければ無い(基本の面だけ)。Codex の `enabled_tools` が読み、
+ *  MCP の登録も同じこの判定で登録する。 */
+export const routingRepairVerbs = (db: Db, taskId: string): string[] =>
+  repairJudgments(db, taskId, "routing").length === 0 ? [] : ROUTING_META_REVIEW_VERBS.filter((verb) => verb !== "read_memory_entries");
 
 /** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
  *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない)、学習器は昇格 / 降格。段の event は名前で名指すので、
@@ -576,7 +606,7 @@ function interviewProposal(
 
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
  *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、段の追加と
- *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
+ *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review(または routing_repair —— 門は requireRepairReach)の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
  *  agent_tier なら (agent, tier) と根拠の行、tier_description なら説明のいまの文面、add_tier なら移す行の全欄と隣の段、interview なら根拠の行の全欄。
  *  同じ行への提案は重ねてよい —— 片方の承認が表を変えれば、もう片方は陳腐化の hook で決着する。
  *  `agents` は registry の agent 一覧(registry の無い盤面では無く、agent_tier は断る)。`assertWorkspaceKnown` は interview の実環境が
@@ -616,6 +646,9 @@ export function proposeRoutingChange(
   if (input.op !== "interview" && [input.hypothesis, input.measured_work, input.targets, input.workspace].some((field) => field !== undefined)) {
     throw new DomainError(`op ${input.op} takes no hypothesis, measured_work, targets or workspace`);
   }
+  // 修理子の提案は修理子の名で人間に出す(ADR 0279 決定4)
+  const byRepair = getTask(db, metaReviewId)?.type === "routing_repair";
+  const proposer = byRepair ? "The routing repair" : "The routing meta-review";
   let proposal: RoutingProposal | RegistryProposal;
   let title: string;
   let diff: string[];
@@ -641,7 +674,7 @@ export function proposeRoutingChange(
       `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
     ];
     purpose =
-      "The routing meta-review proposes an Interview: measuring targets that are not rows of the execution-setting table, in one tier, before any row changes. " +
+      `${proposer} proposes an Interview: measuring targets that are not rows of the execution-setting table, in one tier, before any row changes. ` +
       "Approve registers the Interview in your name, with your amendment of the hypothesis, the work to measure, the targets' efforts or the workspace if you give one; reject registers nothing.";
   } else if (input.op === "tier_description") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op tier_description takes no row and no change");
@@ -655,7 +688,7 @@ export function proposeRoutingChange(
       `Evidence: ${proposal.evidence.length} worker session(s) whose floor the task's requested tier set`,
     ];
     purpose =
-      "The routing meta-review proposes rewriting one tier's description, which defines the tier for everyone who requests it. " +
+      `${proposer} proposes rewriting one tier's description, which defines the tier for everyone who requests it. ` +
       "Approve writes the new description, with your amendment (one line) if you give one; reject leaves the description as it is.";
   } else if (input.op === "agent_tier") {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError("op agent_tier takes no row and no change");
@@ -668,7 +701,7 @@ export function proposeRoutingChange(
       `Evidence: ${proposal.evidence.length} worker session(s) on ${pin.rows.map((r) => `${rowName(r)} (${r.tier})`).join(", ")}`,
     ];
     purpose =
-      "The routing meta-review proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, " +
+      `${proposer} proposes lowering an agent's default tier by one step. Approve commits the new tier to the registry, ` +
       "with your amendment (any lower tier) if you give one; reject leaves the agent as it is.";
   } else if (input.op === "add_tier") {
     if (input.change !== undefined) throw new DomainError("op add_tier takes no change");
@@ -682,7 +715,7 @@ export function proposeRoutingChange(
       `Evidence: ${proposal.evidence.length} worker session(s)`,
     ];
     purpose =
-      "The routing meta-review proposes adding a tier to the board's list and moving one row into it. Approve does both at once, " +
+      `${proposer} proposes adding a tier to the board's list and moving one row into it. Approve does both at once, ` +
       "with your amendment of the tier's name, description or position if you give one; reject leaves the tiers and the table as they are.";
   } else if (input.op === "row") {
     const key = input.row;
@@ -705,7 +738,7 @@ export function proposeRoutingChange(
       `Execution-setting row ${rowName(pin)} (price ${pin.price_in} / ${pin.price_out} USD per MTok):`,
       ...Object.entries(change).map(([field, to]) => `${field}: ${pin[field as keyof typeof change]} -> ${to}`),
     ];
-    purpose = "The routing meta-review proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.";
+    purpose = `${proposer} proposes changing one row of the execution-setting table. Approve applies it, with your amendment if you give one; reject leaves the table as is.`;
   } else {
     if (input.row !== undefined || input.change !== undefined) throw new DomainError(`op ${input.op} takes no row and no change`);
     const promoted = readExecutionSettings(db).learnerPromoted;
@@ -718,8 +751,9 @@ export function proposeRoutingChange(
         ? "Work tasks would run on the learner's recommendation instead of the execution-setting table's first choice. The shadow keeps what the table would have chosen."
         : "Work tasks would run on the execution-setting table's first choice again. The shadow keeps what the learner would have recommended.",
     ];
-    purpose = `The routing meta-review proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
+    purpose = `${proposer} proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
   }
+  if (byRepair) requireRepairReach(db, metaReviewId, proposal);
   const detail = [...diff, "", `Rationale: ${input.rationale}`, "", "While this question is open, the next routing meta-review is not registered."].join("\n");
   const question = registerTask(
     db,

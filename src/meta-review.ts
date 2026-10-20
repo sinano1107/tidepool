@@ -6,7 +6,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { ancestorsSql, finishTask, type HandoffDoc, registerTask, type Task } from "./tasks.js";
+import { ancestorsSql, finishTask, getTask, type HandoffDoc, isRepairType, registerTask, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -225,6 +225,21 @@ export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedent
     const payload = getEvent(db, decision_event_id)?.payload;
     return payload?.kind === "decision_logged" && payload.judgment?.kind === kind ? [payload.judgment as Extract<Judgment, { kind: K }>] : [];
   });
+
+/** 修理子(memory_repair / routing_repair)の束が異議した行の id(task_registered の objection_event_ids → 異議の entry_id)。修理子でなければ
+ *  空(ADR 0272 決定3)—— work の修理子と RCA の review 子も同じ欄を持つ。 */
+export function objectedRowIds(db: Db, taskId: string): number[] {
+  const task = getTask(db, taskId);
+  if (!task || !isRepairType(task.type)) return [];
+  return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
+    const objection = getEvent(db, id)?.payload;
+    return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
+  });
+}
+
+/** 修理子が運ぶ、主題 `kind` の型つきの判断の行(ADR 0279 決定3・4): 行の種類で盤面が登録する verb と、対象の門が名指す対象を読む。 */
+export const repairJudgments = <K extends MetaReviewSubject>(db: Db, taskId: string, kind: K) =>
+  objectedJudgments(db, objectedRowIds(db, taskId).map((decision_event_id) => ({ decision_event_id })), kind);
 
 /** 完了の verb が読む項目の全体(ADR 0278 追記4): その task の最新の材料の記録 —— 再 spawn なら agent が最後に読んだ表。記録が無ければ
  *  (spawn を通っていない)項目が読めないので拒む。 */

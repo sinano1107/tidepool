@@ -17,6 +17,7 @@ import {
   sessionSpawnOf,
   taskDecisionLog,
 } from "./events.js";
+import type { MetaReviewSubject } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
@@ -29,6 +30,7 @@ import {
   listBoard,
   moveTask,
   type RegisterTaskInput,
+  type RepairType,
   registerTask,
   type Task,
 } from "./tasks.js";
@@ -297,15 +299,17 @@ function registerRcaReview(
  *  ADR 0268 決定3 as 「行の成果の帰り先」). Every direction comment raised against
  *  the task's decision rows this session lands in one work repair's purpose, and
  *  every one against its memory-write rows — and, on a memory meta-review, its typed
- *  judgment rows, which name their object (ADR 0279 決定3) — in one `memory_repair`'s purpose: a task
+ *  judgment rows, which name their object (ADR 0279 決定3) — in one `memory_repair`'s purpose, and every
+ *  one against a routing meta-review's typed judgment rows in one `routing_repair`'s (ADR 0279 決定4): a task
  *  objected on both kinds gets two children, each carrying only its own group's
  *  objections. An Interview root (its probe is fixed by retry, not repair) and a
  *  task whose artifact is discarded — the task itself is cancelled, or a cancelled
  *  work ancestor sits between it and its root (ADR 0271 決定1・2) — get no work
  *  repair: it is skipped, never left to the registration floor's refusal. A
  *  subject task's (memory / routing meta-review) decision rows have no work
- *  repair either: the work type lacks the subject's verbs (ADR 0279 決定3・4). The
- *  `memory_repair` stands whatever the parent's state. Attribution and the RCAs
+ *  repair either: the work type lacks the subject's verbs (ADR 0279 決定3・4), and a
+ *  row naming no object (the completion row, a free-text log_decision row) gets no repair at all. The
+ *  subject repairs stand whatever the parent's state. Attribution and the RCAs
  *  below stand by cause either way, never split by group.
  *
  *  Before anything is registered, every objected entry the Board call judged
@@ -380,7 +384,7 @@ function bundleObjections(
         at: now,
       });
     }
-    const registerRepair = (type: "work" | "memory_repair", titlePrefix: string, rows: string, group: ObjectionPair[]): void => {
+    const registerRepair = (type: "work" | RepairType, titlePrefix: string, rows: string, group: ObjectionPair[]): void => {
       // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)
       let assignee = objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id;
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
@@ -413,11 +417,13 @@ function bundleObjections(
         origin,
       );
     };
-    // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)。memory meta-review の
-    // 型つきの判断の行は対象を名指すので、書き込みの行と同じ memory_repair 1本に束ねる(ADR 0279 決定3)
-    const judgesMemory = (pair: ObjectionPair) => pair.entry.payload.kind === "decision_logged" && pair.entry.payload.judgment?.kind === "memory";
+    // 判断の行の成果はブランチに帰り、記憶の書き込みの行の成果は記憶の店に残る(ADR 0272 決定1・2)。meta-review の型つきの判断の行は
+    // 対象を名指すので主題の修理子に束ねる —— memory は書き込みの行と同じ memory_repair 1本、routing は routing_repair(ADR 0279 決定3・4)
+    const judges = (pair: ObjectionPair, kind: MetaReviewSubject) => pair.entry.payload.kind === "decision_logged" && pair.entry.payload.judgment?.kind === kind;
+    const judgesMemory = (pair: ObjectionPair) => judges(pair, "memory");
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written" || judgesMemory(pair));
-    const decisionRows = pairs.filter((pair) => !memoryRows.includes(pair));
+    const routingRows = pairs.filter((pair) => judges(pair, "routing"));
+    const decisionRows = pairs.filter((pair) => !memoryRows.includes(pair) && !routingRows.includes(pair));
     // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
     // 主題つきの task の判断の行も work の修理子を持たない —— 主題 verb は work に登録されない(ADR 0279 決定3・4)
     if (decisionRows.length > 0 && objected.type !== "interview" && !objected.meta_review_subject && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
@@ -427,6 +433,7 @@ function bundleObjections(
       const kinds = [...(memoryRows.some((pair) => !judgesMemory(pair)) ? ["memory writes"] : []), ...(memoryRows.some(judgesMemory) ? ["memory judgments"] : [])];
       registerRepair("memory_repair", "memory repair", kinds.join(" and "), memoryRows);
     }
+    if (routingRows.length > 0) registerRepair("routing_repair", "routing repair", "routing judgments", routingRows);
     if (rcaPairs.length === 0) continue;
     const byWorker = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {
