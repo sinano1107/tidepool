@@ -2710,8 +2710,9 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
         "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
         "entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and scope (null = the " +
         "whole board), or a single whole-board item when whole-board entries sit at or under the path — and the entries and branches named " +
-        "by the judgments of the objected decisions — an entry if still live, a branch if an entry of its scope that is not invalidated " +
-        "(candidates included) sits at or under the path, even a path not in Branches. Act on each item, or pass it to " +
+        "by the judgments of the objected decisions — a branch if an entry of its scope that is not invalidated (candidates included) sits " +
+        "at or under the path, even a path not in Branches. Every entry is listed only while its latest copy is still live. Act on each " +
+        "item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
       "no items to judge",
@@ -2728,21 +2729,25 @@ export type MemoryJudgmentItem = { entry: number } | { branch: string; scope: st
 const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
- *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
- *  配下にエントリを持ち、その scope の Definition も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に
- *  盤面全体のエントリ(一木の門と同じ集合)があれば (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory
- *  meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と (path, scope)(その scope の無効化されていないエントリが
- *  candidate も含め path かその下にあるもの —— 枝の一覧に無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
+ *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ、店の変更(どれも本文が同じ鎖の末尾で、それが
+ *  無効化されていないものだけ —— 無効化済みには届く verb が無い、ADR 0286 決定1)。枝は配下にエントリを持ち、その scope の Definition
+ *  も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に盤面全体のエントリ(一木の門と同じ集合)があれば
+ *  (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が
+ *  生きているもの)と (path, scope)(その scope の無効化されていないエントリが candidate も含め path かその下にあるもの —— 枝の一覧に
+ *  無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
-  const tail = (id: number) => bodyTail(db, restored, id);
+  const liveTail = (id: number) => {
+    const tail = bodyTail(db, restored, id);
+    return requireEntry(db, tail).invalidation_reason === null ? [tail] : [];
+  };
   const objected = objectedJudgments(db, parts.precedents, "memory");
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
-    ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).map(tail)),
-    ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).map(tail) : [])),
-    ...parts.store_changes.map(({ id }) => id),
-    ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
+    ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).flatMap(liveTail)),
+    ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).flatMap(liveTail) : [])),
+    ...parts.store_changes.flatMap(({ id }) => liveTail(id)),
+    ...objected.flatMap((j) => ("entry" in j ? liveTail(j.entry) : [])),
   ]);
   // 再掲の生死は approved の木でなく、その scope の無効化されていないエントリ(candidate も)が path かその下にあるか(ADR 0284 決定1)。
   // その scope にエントリの無い枝は、その scope の配下だったエントリの移動の鎖の末尾から今の (path, scope) を引く(エントリが鎖の末尾で
@@ -2804,8 +2809,9 @@ function actedOn(db: Db, reviewId: string) {
 const itemName = (item: MemoryJudgmentItem) =>
   "entry" in item ? `entry #${item.entry}` : `branch ${item.branch} ${item.scope === null ? "in the whole board" : `in scope ${item.scope}`}`;
 
-/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為も記録の後の誰かの無効化
- *  (引退・畳み・移動)も判断済みにしていないものに left_as_is が要る(骨格は completeMetaReview)。 */
+/** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為が判断済みにしていない
+ *  ものに left_as_is が要る(骨格は completeMetaReview)。誰かが無効化したエントリは、いつ無効化されたかを問わず今の計算が項目から
+ *  落とす(ADR 0286 決定2)。 */
 export function completeMemoryReview(
   db: Db,
   review: Task,
@@ -2817,9 +2823,8 @@ export function completeMemoryReview(
   // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
   const record = injectedMaterial(db, review.id, "memory");
-  const invalidated = new Set(listEventsOfKinds(db, ["memory_entry_invalidated"], { after: record.id }).map(({ payload }) => payload.entry_id));
   const covers = actedOn(db, review.id);
-  const open = memoryJudgmentItems(db, review.id).filter((item) => !covers(item) && !("entry" in item && invalidated.has(item.entry)));
+  const open = memoryJudgmentItems(db, review.id).filter((item) => !covers(item));
   return completeMetaReview(
     db,
     review,
