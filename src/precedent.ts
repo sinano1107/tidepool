@@ -655,23 +655,21 @@ export function readPulls(
 
 type MemoryMaterial = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: "memory" }>;
 type MaterialPart = { [K in keyof MemoryMaterial]: MemoryMaterial[K] extends unknown[] ? K : never }[keyof MemoryMaterial];
-/** 材料の節(主題 memory)の部分ごとに、エントリの id を持つか。部分を足すと `satisfies` がここでの判断を型で強いる。 */
-const MATERIAL_PARTS = {
-  store_changes: true,
-  candidates: true,
-  precedents: false,
-  precedent_entries: true,
-  proposals: false,
-  proposal_entries: true,
-  branches: true,
-  // 項目は verb の鍵の列で、seen は5部分のエントリで数える(entriesSeenBefore)
-  items: false,
-} as const satisfies Record<MaterialPart, boolean>;
-type EntryPart = { [K in MaterialPart]: (typeof MATERIAL_PARTS)[K] extends true ? K : never }[MaterialPart];
-const MATERIAL_ENTRY_PARTS = (Object.keys(MATERIAL_PARTS) as MaterialPart[]).filter((part): part is EntryPart => MATERIAL_PARTS[part]);
+/** 材料の節(主題 memory)の部分ごとに、seen に数えるエントリの id。部分を足すと `satisfies` がここでの判断を型で強いる。 */
+const MATERIAL_ENTRY_IDS = {
+  store_changes: (m) => m.store_changes,
+  candidates: (m) => m.candidates,
+  precedents: () => [],
+  precedent_entries: (m) => m.precedent_entries,
+  proposals: () => [],
+  proposal_entries: (m) => m.proposal_entries,
+  branches: (m) => m.branches,
+  // 項目は verb の鍵の列で、id を持つのはエントリの項目だけ(枝の項目は持たない)
+  items: (m) => m.items.flatMap((item) => ("entry" in item ? [item.entry] : [])),
+} satisfies Record<MaterialPart, (material: MemoryMaterial) => readonly number[]>;
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
- *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は5部分、主題 routing は異議つき判断の部分 ——
+ *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は5部分と項目のうちエントリの項目、主題 routing は異議つき判断の部分 ——
  *  worker_spawned の event id で結ぶ)の id と、D より前の全 verb の pull が返した id の和集合(昇順)。
  *  D がこの Episode で位置を持たなければ null。 */
 export function entriesSeenBefore(
@@ -687,7 +685,7 @@ export function entriesSeenBefore(
       ? p.entries.map((entry) => entry.id)
       : p.kind === "meta_review_material_injected" && p.worker_spawned_event_id === spawned
         ? p.subject === "memory"
-          ? MATERIAL_ENTRY_PARTS.flatMap((part) => p[part])
+          ? Object.values(MATERIAL_ENTRY_IDS).flatMap((ids) => ids(p))
           : p.precedent_entries
         : [],
   );
