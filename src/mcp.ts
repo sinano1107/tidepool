@@ -1268,8 +1268,8 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
     registerPrecedentRead(server, deps, run);
     registerMemoryMetaReviewVerbs(server, deps, run, side);
   } else registerMemoryMoves(server, deps, run, side);
-  // 行の主題を持つ修理子は運ぶ行を問わず親の主題の読み手(ADR 0283 決定3)
-  if (kinds.judgments || lineageSubjectOf(deps.db, attributedTaskId) !== null) registerMemoryEntriesRead(server, deps, run);
+  // 行の主題を持つ修理子は運ぶ行を問わず親の主題の読み手(ADR 0283 決定3)—— 判断の行を運ぶ修理子は必ず主題の系譜にいる
+  if (lineageSubjectOf(deps.db, attributedTaskId) !== null) registerMemoryEntriesRead(server, deps, run);
   if (!kinds.writes) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
