@@ -85,6 +85,8 @@ const metaReview = { activity: "meta_review" as const, name: "auditor" };
 const human = { activity: "human" as const, name: HUMAN_WORKER_ID };
 const knowledge = (db: Db, path: string, author: { activity: "worker_verb" | "human"; name: string } = deckhand) =>
   recordKnowledge(db, { scope: "tidepool", path, title: path, text: `${path}.`, ...(author === deckhand ? { source: { commit: "0a46a46" } } : {}), author }, "worker", at).entry_id;
+const knowledgeIn = (db: Db, scope: string, path: string) =>
+  recordKnowledge(db, { scope, path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at);
 const candidate = (db: Db, title: string) =>
   createBehaviorCandidate(db, { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at).entry_id;
 const ids = (rows: Array<{ id: number }>) => rows.map((row) => row.id);
@@ -236,7 +238,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   expect(parts.branches.flatMap((b) => b.definitions)).toEqual([expect.not.objectContaining({ original: expect.anything() })]);
 });
 
-it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草された candidate・窓で決着した提案が名指す candidate・cause memory の異議つき判断が名指すエントリ・店の変更、定義の無い枝と複数 scope が定義した path —— 窓の外の candidate と定義のある枝は載らない(ADR 0278 決定5)", () => {
+it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草された candidate・窓で決着した提案が名指す candidate・cause memory の異議つき判断が名指すエントリ・店の変更、定義の無い枝の (path, scope) —— 窓の外の candidate と定義のある枝は載らず、2つの workspace が同じ path を定義していても載らない(ADR 0278 決定5 / ADR 0282 決定1・2)", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const decision = objectedDecision(db, work, 1);
@@ -265,8 +267,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
 
   expect(parts.items).toEqual([
     ...[followed, answered, drafted, written].sort((a, b) => a - b).map((entry) => ({ entry })),
-    { branch: "tools" },
-    { branch: "tools/node" },
+    { branch: "tools/node", scope: "tidepool" },
   ]);
   expect(ids(parts.candidates)).toContain(older);
   expect(section).toContain("### Items to judge");
@@ -278,7 +279,7 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
   defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
   const [kept, dropped, outside] = ["notes", "notes", "notes"].map((path) => knowledge(db, path));
   invalidateMemoryEntry(db, { entry_id: dropped!, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
-  const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { entry } : { branch: entry }) });
+  const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { entry } : { branch: entry, scope: "tidepool" }) });
   const older = register(db, "memory", true);
   objectedJudgment(db, older, judged(outside!), at);
   const previous = register(db, "memory", true);
@@ -288,7 +289,7 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
 
   const { parts, section } = memoryMaterialOf(db, review);
 
-  expect(parts.items).toEqual([{ entry: kept }, { entry: written }, { branch: "notes" }]);
+  expect(parts.items).toEqual([{ entry: kept }, { entry: written }, { branch: "notes", scope: "tidepool" }]);
   expect(section).toContain("the entries and branches named by the judgments of the objected decisions");
 });
 
@@ -297,7 +298,7 @@ it("窓の中に枝ごと移された枝を名指す異議つき判断の行は�
   defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
   knowledge(db, "notes/today");
   const previous = register(db, "memory", true);
-  objectedJudgment(db, previous, { kind: "memory", branch: "notes", value: "left_as_is" }, at);
+  objectedJudgment(db, previous, { kind: "memory", branch: "notes", scope: "tidepool", value: "left_as_is" }, at);
   defineMemoryBranch(db, { scope: "tidepool", path: "memo/today", text: "Today.", author: deckhand }, "worker", at);
   moveMemoryBranch(db, { scope: "tidepool", path: "notes", to_scope: "tidepool", to_path: "memo", mover: human }, "webui", at);
   const review = register(db, "memory");
@@ -305,7 +306,49 @@ it("窓の中に枝ごと移された枝を名指す異議つき判断の行は�
   const { parts } = memoryMaterialOf(db, review);
 
   expect(parts.branches.map((b) => b.path)).not.toContain("notes");
-  expect(parts.items.filter((item) => "branch" in item)).toEqual([{ branch: "memo" }]);
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([{ branch: "memo", scope: "tidepool" }]);
+});
+
+it("異議された枝の再掲は (path, scope) の鍵 —— その scope にエントリが無ければ載らず、別 scope の同じ path の枝は載らない。scope の配下が移されていれば今の (path, scope) で、盤面全体へ広げられていれば盤面全体で載る(ADR 0282 決定2 / ADR 0279 決定5)", () => {
+  const db = openDb(":memory:");
+  const define = (scope: string | null, path: string) => defineMemoryBranch(db, { scope, path, text: `${path}.`, author: deckhand }, "worker", at);
+  for (const scope of ["charts", "docks"]) define(scope, "tides");
+  define("reef", "tides");
+  for (const scope of ["charts", "docks", "reef"]) knowledgeIn(db, scope, "tides");
+  const previous = register(db, "memory", true);
+  for (const scope of ["charts", "docks", "reef", "sand"]) objectedJudgment(db, previous, { kind: "memory", branch: "tides", scope, value: "left_as_is" }, at);
+  moveMemoryBranch(db, { scope: "docks", path: "tides", to_scope: null, to_path: "sea", mover: human }, "webui", at);
+  moveMemoryBranch(db, { scope: "reef", path: "tides", to_scope: "reef", to_path: "shore", mover: human }, "webui", at);
+  const review = register(db, "memory");
+
+  const { parts } = memoryMaterialOf(db, review);
+
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([
+    { branch: "sea", scope: null },
+    { branch: "shore", scope: "reef" },
+    { branch: "tides", scope: "charts" },
+  ]);
+});
+
+it("盤面全体のエントリ(candidate も)がその path かその下にある定義の無い枝は (path, 盤面全体) の1項目だけで、無ければ欠けている workspace ごとに1項目(ADR 0282 決定2・3)", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  for (const scope of ["charts", "docks"]) for (const path of ["tides", "reefs"]) knowledgeIn(db, scope, path);
+  createBehaviorCandidate(db, { scope: null, path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at);
+  const review = register(db, "memory");
+
+  const { parts, section } = memoryMaterialOf(db, review);
+
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([
+    { branch: "reefs", scope: "charts" },
+    { branch: "reefs", scope: "docks" },
+    { branch: "tides", scope: null },
+  ]);
+  expect(section).toContain(
+    "the branches that hold entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and " +
+      "scope (null = the whole board), or a single whole-board item when whole-board entries sit at or under the path —",
+  );
+  expect(section).not.toContain("two or more scopes");
 });
 
 it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_injected で、主題・worker_spawned の event id・両端の watermark・部分ごとの id(エントリ・decision の event・question・Definition)・注入した Items to judge と同じ並び・同じ鍵の items・トークン数と計数器を持つ", () => {
@@ -343,7 +386,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
       proposals: [question],
       proposal_entries: [rejected],
       branches: [definition],
-      items: [...[written, definition, drafted, rejected].map((entry) => ({ entry })), { branch: "tools/node" }],
+      items: [...[written, definition, drafted, rejected].map((entry) => ({ entry })), { branch: "tools/node", scope: "tidepool" }],
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
       tokenizer_version: expect.stringMatching(/^\d+\.\d+\.\d+$/),

@@ -1131,7 +1131,7 @@ export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string
 }
 
 /** 型つきの判断の行(ADR 0278 決定4)を書いた memory meta-review(setup は domain): 前の周期を閉じてから stock() で窓の中に店を作り、
- *  周期を登録して材料を注入し、act(review) の後に注入した項目をすべて left_as_is で完了する。row は項目(エントリの id か枝の path)の
+ *  周期を登録して材料を注入し、act(review) の後に注入した項目をすべて left_as_is で完了する。row は項目(エントリの id か枝の (path, scope))の
  *  判断の行の id。executor は review を走らせた agent。 */
 export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (review: Task) => void = () => {}, executor = "fugu") {
   registerMetaReview(db, "memory", at);
@@ -1142,8 +1142,12 @@ export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (re
   const items = injectMemoryMaterial(db, review.id, executor, at);
   act(review);
   completeMemoryReview(db, getTask(db, review.id)!, { judgments: items }, executor, at, "worker");
-  const row = (object: number | string) =>
-    listEvents(db, review.id).find(({ payload: p }) => p.kind === "decision_logged" && p.judgment?.kind === "memory" && ("entry" in p.judgment ? p.judgment.entry : p.judgment.branch) === object)!.id;
+  const row = (object: number | { branch: string; scope: string | null }) =>
+    listEvents(db, review.id).find(({ payload: p }) => {
+      const j = p.kind === "decision_logged" ? p.judgment : undefined;
+      if (j?.kind !== "memory") return false;
+      return "entry" in j ? j.entry === object : typeof object === "object" && j.branch === object.branch && j.scope === object.scope;
+    })!.id;
   return { review, row };
 }
 

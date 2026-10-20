@@ -426,7 +426,7 @@ export function defineMemoryByMetaReview(
   at: Date,
   writer: string,
 ): { entry_id: number; event_id: number } {
-  requireNamed(db, writer, [{ branch: checkedPath(input.path) }]);
+  requireNamed(db, writer, [{ branch: checkedPath(input.path), scope: input.scope }]);
   requireCovers({ scope: input.scope, addressee: null }, (input.supersedes ?? []).map((id) => requireLive(db, id, undefined, "approved")));
   return defineMemoryBranch(db, input, origin, at, writer);
 }
@@ -821,9 +821,13 @@ function namedObjects(db: Db, taskId: string) {
   const judged = repairJudgments(db, taskId, "memory");
   return {
     entries: withMovedCopies(db, judged.flatMap((item) => ("entry" in item ? [item.entry] : []))),
-    branches: judged.flatMap((item) => ("branch" in item ? [item.branch] : [])),
+    branches: judged.flatMap((item) => ("branch" in item ? [item] : [])),
   };
 }
+
+/** 判断の行が名指す枝の射程(ADR 0282 決定4): 名指された (path, scope) と、同じ path の盤面全体。 */
+const namesBranch = (named: ReturnType<typeof namedObjects>, path: string, scope: string | null) =>
+  named.branches.some((b) => b.branch === path && (scope === null || b.scope === scope));
 
 /** 同じ操作の verb の門が掛ける規則(ADR 0281 決定1): memory_repair の書き手なら、対象が異議された書き込みの射程にあれば修理の規則
  *  (write)、異議された判断の行が名指せば meta-review の規則(judgment)、どちらにも無ければ対象を名指して拒む。2つの射程は互いに素
@@ -842,13 +846,14 @@ function entryReach(db: Db, writer: string, entryId: number): Reach {
 function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void {
   if (getTask(db, writer)?.type !== "memory_repair") return;
   const named = namedObjects(db, writer);
-  const outside = items.find((item) => ("entry" in item ? !named.entries.includes(item.entry) : !named.branches.includes(item.branch)));
+  const outside = items.find((item) => ("entry" in item ? !named.entries.includes(item.entry) : !namesBranch(named, item.branch, item.scope)));
   if (outside) throw new DomainError(`${itemName(outside)} is not named by the objected judgment: a memory repair defines, folds and proposes only what that judgment names`);
 }
 
 /** 枝の射程の門(ADR 0281 決定2): memory_repair の書き手なら、書き込みが path に Definition を作った、または path かその下へエントリを
- *  移した(同じ scope)枝か、判断の行が path で名指す枝だけを通す —— 配下に触っていない leaf があっても枝ごと動く。どちらの射程でも
- *  規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない書き手(meta-review)は門を持たない。 */
+ *  移した(同じ scope)枝か、判断の行が名指す (path, scope) と同じ path の盤面全体の枝(namesBranch、ADR 0282 決定4)だけを通す ——
+ *  配下に触っていない leaf があっても枝ごと動く。どちらの射程でも規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない
+ *  書き手(meta-review)は門を持たない。 */
 function requireBranchReach(db: Db, writer: string, scope: string | null, path: string): void {
   if (getTask(db, writer)?.type !== "memory_repair") return;
   const writes = objectedWrites(db, writer);
@@ -856,9 +861,9 @@ function requireBranchReach(db: Db, writer: string, scope: string | null, path: 
     ...writes.flatMap((w) => w.created.map((id) => requireEntry(db, id))).filter((row) => row.kind === "definition" && row.path === path),
     ...writes.flatMap((w) => w.moved.map((id) => requireEntry(db, requireEntry(db, id).successor_id!))).filter((row) => atOrUnder(row.path, path)),
   ];
-  if (into.some((row) => row.scope === scope) || namedObjects(db, writer).branches.includes(path)) return;
+  if (into.some((row) => row.scope === scope) || namesBranch(namedObjects(db, writer), path, scope)) return;
   throw new DomainError(
-    `branch ${path} in scope ${scope ?? "whole board"} was neither defined nor moved into by the objected memory write, nor named by the objected judgment: a memory repair moves only those branches`,
+    `${itemName({ branch: path, scope })} was neither defined nor moved into by the objected memory write, nor named by the objected judgment: a memory repair moves only those branches`,
   );
 }
 
@@ -2687,7 +2692,8 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
       "Items to judge",
       "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
         "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
-        "entries without a Definition in their scope or whole-board, the paths two or more scopes define, and the entries and branches named " +
+        "entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and scope (null = the " +
+        "whole board), or a single whole-board item when whole-board entries sit at or under the path — and the entries and branches named " +
         "by the judgments of the objected decisions, if still live. Act on each item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
@@ -2697,16 +2703,19 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
   return { subject: "memory" as const, section, parts };
 }
 
-/** memory meta-review の判断を要する項目(ADR 0278 決定5): エントリは id、枝は path で、complete_memory_review の鍵と同じ形。 */
-export type MemoryJudgmentItem = { entry: number } | { branch: string };
+/** memory meta-review の判断を要する項目(ADR 0278 決定5): エントリは id、枝は path と scope(null は盤面全体、ADR 0282 決定2)で、
+ *  complete_memory_review の鍵と同じ形。 */
+export type MemoryJudgmentItem = { entry: number } | { branch: string; scope: string | null };
 
 /** id の本文が同じ鎖の末尾の id(移動・復元の複製をたどる)。 */
 const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
- *  配下のエントリの scope に、その scope か盤面全体の Definition が無いものと、2つ以上の scope が定義した path。異議つき判断のうち
- *  前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と枝(今の木にあるもの)も載る(ADR 0279 決定5)。 */
+ *  配下にエントリを持ち、その scope の Definition も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に
+ *  盤面全体のエントリ(一木の門と同じ集合)があれば (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory
+ *  meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と (path, scope)(その scope に今エントリがあるもの)も載る
+ *  (ADR 0279 決定5)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const tail = (id: number) => bodyTail(db, restored, id);
@@ -2718,26 +2727,28 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
     ...parts.store_changes.map(({ id }) => id),
     ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
   ]);
-  // 木に無い枝は、配下だったエントリの移動の鎖の末尾から今の path を引く(エントリが鎖の末尾で名指されるのと同じ)
-  const inTree = new Set(parts.branches.map(({ path }) => path));
+  // その scope にエントリの無い枝は、その scope の配下だったエントリの移動の鎖の末尾から今の (path, scope) を引く(エントリが鎖の末尾で
+  // 名指されるのと同じ)—— 盤面全体へ広げられていれば盤面全体
+  const live = (path: string, scope: string | null) => parts.branches.some((row) => row.path === path && row.scopes.includes(scope));
   const moved = db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason = 'path_moved'").all() as EntryRow[];
-  const objectedBranches = new Set(
-    objected.flatMap((j) => {
-      if (!("branch" in j)) return [];
-      if (inTree.has(j.branch)) return [j.branch];
-      return moved.flatMap((row) => {
-        if (!atOrUnder(row.path, j.branch)) return [];
-        const rest = row.path.slice(j.branch.length);
-        const now = sameBodyChain(db, row, restored).at(-1)!.path;
-        return now.endsWith(rest) ? [now.slice(0, now.length - rest.length)] : [];
-      });
-    }),
-  );
-  const branches = parts.branches.filter(
-    ({ path, definitions, scopes }) =>
-      scopes.some((scope) => !definitions.some((d) => d.scope === null || d.scope === scope)) || new Set(definitions.map((d) => d.scope)).size > 1 || objectedBranches.has(path),
-  );
-  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches.map(({ path }) => ({ branch: path }))];
+  const objectedBranches = objected.flatMap((j) => {
+    if (!("branch" in j)) return [];
+    if (live(j.branch, j.scope)) return [j];
+    return moved.flatMap((row) => {
+      if (row.scope !== j.scope || !atOrUnder(row.path, j.branch)) return [];
+      const rest = row.path.slice(j.branch.length);
+      const now = sameBodyChain(db, row, restored).at(-1)!;
+      return now.path.endsWith(rest) ? [{ branch: now.path.slice(0, now.path.length - rest.length), scope: now.scope }] : [];
+    });
+  });
+  const wholeBoard = (db.prepare("SELECT path FROM memory_entries WHERE scope IS NULL AND invalidation_reason IS NULL").all() as Array<{ path: string }>).map((row) => row.path);
+  const branches = parts.branches.flatMap(({ path, definitions, scopes }) => {
+    const undefinedIn = scopes.filter((scope) => !definitions.some((d) => d.scope === null || d.scope === scope));
+    const structural = undefinedIn.length > 0 && wholeBoard.some((p) => atOrUnder(p, path)) ? [null] : undefinedIn;
+    const again = objectedBranches.flatMap((o) => (o.branch === path && scopes.includes(o.scope) ? [o.scope] : []));
+    return [...new Set([...structural, ...again])].map((scope) => ({ branch: path, scope }));
+  });
+  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches];
 }
 
 /** 読み手の窓の判断を要する項目を今の店で計算し直す —— 完了の verb は注入した一覧の絞り込みにだけ使う(ADR 0278 追記4)。 */
@@ -2747,24 +2758,29 @@ function memoryJudgmentItems(db: Db, reviewId: string): MemoryJudgmentItem[] {
 }
 
 /** この review の行為が判断済みにする項目(ADR 0278 決定3): 記憶の書き込みの行が作った・無効化したエントリと、提案 question が
- *  名指す candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は、作った Definition の path と、path を変えた移動の
- *  移動元・移動先の path(祖先や scope だけの移動は覆わない —— 枝の欠陥が残る)。 */
+ *  名指す candidate / 置き換え / 失効の対象(どれも元の id と本文が同じ鎖の末尾)。枝は (path, scope) で(ADR 0282 決定4)、作った
+ *  Definition の (path, scope) —— 盤面全体の Definition は同じ path のどの scope も覆う —— と、動いた行の移動元・移動先の (path, scope)
+ *  (盤面全体の改名が連れて行った workspace の行も、ADR 0177 決定5)。祖先の枝の移動は覆わない —— 枝の欠陥が残る。 */
 function actedOn(db: Db, reviewId: string) {
   const restored = restoredAs(db);
   const writes = listEvents(db, reviewId).flatMap(({ payload }) => (payload.kind === "memory_written" ? [payload] : []));
   const proposed = listChildren(db, reviewId).flatMap(({ question_proposal }) => (question_proposal?.kind === "memory" ? pinnedIds(question_proposal, false) : []));
   const entries = new Set([...writes.flatMap((w) => [...w.created, ...w.invalidated]), ...proposed].flatMap((id) => [id, bodyTail(db, restored, id)]));
-  const defined = new Set(writes.flatMap((w) => w.created).map((id) => requireEntry(db, id)).filter((row) => row.kind === "definition").map((row) => row.path));
-  const moves = writes
-    .flatMap((w) => w.invalidated)
-    .map((id) => requireEntry(db, id))
-    .filter((row) => row.invalidation_reason === "path_moved")
-    .map((row) => [row.path, requireEntry(db, row.successor_id!).path] as const);
-  const renamed = new Set(moves.flatMap(([from, to]) => (from === to ? [] : [from, to])));
-  return (item: MemoryJudgmentItem) => ("entry" in item ? entries.has(item.entry) : defined.has(item.branch) || renamed.has(item.branch));
+  const branch = (row: EntryRow) => itemName({ branch: row.path, scope: row.scope });
+  const defined = new Set(writes.flatMap((w) => w.created).map((id) => requireEntry(db, id)).filter((row) => row.kind === "definition").map(branch));
+  const moved = new Set(
+    writes
+      .flatMap((w) => w.invalidated)
+      .map((id) => requireEntry(db, id))
+      .filter((row) => row.invalidation_reason === "path_moved")
+      .flatMap((row) => [branch(row), branch(requireEntry(db, row.successor_id!))]),
+  );
+  return (item: MemoryJudgmentItem) =>
+    "entry" in item ? entries.has(item.entry) : [itemName(item), itemName({ ...item, scope: null })].some((name) => defined.has(name)) || moved.has(itemName(item));
 }
 
-const itemName = (item: MemoryJudgmentItem) => ("entry" in item ? `entry #${item.entry}` : `branch ${item.branch}`);
+const itemName = (item: MemoryJudgmentItem) =>
+  "entry" in item ? `entry #${item.entry}` : `branch ${item.branch} ${item.scope === null ? "in the whole board" : `in scope ${item.scope}`}`;
 
 /** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為も記録の後の誰かの無効化
  *  (引退・畳み・移動)も判断済みにしていないものに left_as_is が要る(骨格は completeMetaReview)。 */

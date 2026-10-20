@@ -78,8 +78,6 @@ export const META_REVIEW_SUBJECTS = {
         "For a Definition, ask whether it holds true whatever leaf sits under its branch. " +
         "Where a branch holds entries but has no Definition in their scope or whole-board, write one that passes the same test " +
         "(define_memory) — in the workspace when the entries are all in one, whole-board otherwise. " +
-        "When two or more workspaces define the same path, read the definitions: fold them into one whole-board definition when they mean the same " +
-        "(define_memory with scope null and supersedes), and rename one branch when they do not (move_memory_branch). " +
         PROMOTION_RULE +
         " " +
         TIER_DEFINITION_RULE +
