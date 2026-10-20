@@ -184,10 +184,11 @@ export async function contentLeftBehind(
   candidate: string | undefined,
   fetchMissing?: { auth: GitHubAuth | undefined },
 ): Promise<string[]> {
-  if (fetchMissing && candidate !== undefined && leftBehindTargets(db, workspace, taskId).length > 0) {
+  const targets = leftBehindTargets(db, workspace, taskId);
+  if (fetchMissing && candidate !== undefined && targets.length > 0) {
     await fetchCommitIfMissing(workspace, candidate, fetchMissing.auth);
   }
-  return contentLeftBehindLocally(db, workspace, taskId, candidate);
+  return targetsLeftBehind(workspace, taskId, targets, candidate);
 }
 
 /** `contentLeftBehind` の fetch 無しの経路 —— 同期で、I/O の await を挟まない(ADR 0289 決定2 / ADR 0288 決定2)。 */
@@ -197,7 +198,10 @@ export function contentLeftBehindLocally(
   taskId: string,
   candidate: string | undefined,
 ): string[] {
-  const targets = leftBehindTargets(db, workspace, taskId);
+  return targetsLeftBehind(workspace, taskId, leftBehindTargets(db, workspace, taskId), candidate);
+}
+
+function targetsLeftBehind(workspace: WorkspaceConfig, taskId: string, targets: string[], candidate: string | undefined): string[] {
   if (targets.length === 0) return [];
   if (candidate === undefined) throw new Error(`the board has no record of pushing ${taskBranch(taskId)}`);
   return targets.filter((id) => branchMergeEffect(workspace, candidate, taskBranch(id)).changesCandidate);

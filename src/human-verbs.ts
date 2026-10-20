@@ -797,14 +797,14 @@ function assertLandingAllowed(db: Db, landingTaskId: string): void {
 
 /** 積み残しの拒否(ADR 0240 決定5): 運ぶ面を名指しする —— workspace の quarantine question、PR 昇格失敗 question、
  *  どちらも無ければ盤面が運んでいる途中。PR とローカル着地の merge 回答が共有する(ADR 0289 決定2)。 */
-function leftBehindRefusal(db: Db, workspaceName: string, landingTaskId: string, head: string): DomainError {
+function leftBehindRefusal(db: Db, workspaceName: string, landingTaskId: string, subject: string): DomainError {
   const quarantineQuestionId = openQuarantineQuestion(db, "workspace", workspaceName)?.id;
   const promotionQuestionId = openPrPromotionQuestionIds(db, landingTaskId)[0];
   const carrier = quarantineQuestionId
     ? `the open workspace quarantine question (${quarantineQuestionId})`
     : promotionQuestionId && `the open PR promotion failure question (${promotionQuestionId})`;
   return new DomainError(
-    `cannot merge yet: ${head} does not carry all of the task's content yet — ` +
+    `cannot merge yet: ${subject} does not carry all of the task's content yet — ` +
       (carrier
         ? `${carrier} carries it; answer that question first, then answer again`
         : "the board is still carrying it; answer again later"),
