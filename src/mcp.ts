@@ -1260,7 +1260,7 @@ function memoryRepairReach({ writes, judgments }: { writes: boolean; judgments: 
       : []),
     ...(judgments ? ["the entries and branches the objected judgments name, under the meta-review rules — define_memory, fold_memory and propose_memory_change take only those"] : []),
   ];
-  // 修理子の書き込みは対象の scope に留まる(ADR 0285 決定2)—— meta-review の規則が許す盤面全体へ広げる向きを、修理子の側でここが上書きする
+  // 修理子の書き込みは対象の scope に留まる(ADR 0285 決定2)—— meta-review の規則が許す盤面全体へ広げる向きは修理子には開かない。門は requireRepairKeepsScope(memory.ts)で、ここはそれを伝える文
   return (
     ` This repair changes only what the objected rows in your purpose reach: ${reaches.join("; and ")}. Anything else is refused.` +
     ` ${writes ? "Apart from moving back, every" : "Every"} write stays in its object's own scope: a repair never widens to the whole board, nor supersedes or folds into a successor in another scope.`

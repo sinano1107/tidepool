@@ -692,7 +692,8 @@ function branchRows(db: Db, { scope, path, to_scope }: { scope: string | null; p
 
 /** meta-review の `move_memory`(ADR 0176 決定1〜4): 4種別の approved / candidate を同じ scope の中で直接移せ、scope を跨ぐのは
  *  盤面全体へ広げる向きだけ(requireWidening)。書き手は継ぎ、移した meta-review は activity に載るので自身の移動は次の周期の
- *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。記憶の修理子も同じ関数で、門は対象で切り替わる(entryReach、ADR 0281)。 */
+ *  材料にならない(ADR 0151)。人間の面は moveMemory を直接呼ぶ。記憶の修理子も同じ関数で、門は対象で切り替わる(entryReach、ADR 0281)が、
+ *  修理子は逆操作を除き scope を変えない(requireRepairKeepsScope、ADR 0285 決定2)。 */
 export function moveMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof moveMemory>[1],
@@ -751,7 +752,7 @@ function requireWidening(db: Db, writer: string, rows: EntryRow[], from: string 
     return [];
   });
   if (blocked.length > 0) {
-    throw new DomainError(`a meta-review or a repair cannot change the scope of ${blocked.join(", ")}`);
+    throw new DomainError(`a meta-review cannot change the scope of ${blocked.join(", ")}`);
   }
 }
 
