@@ -15,6 +15,7 @@ import {
   type ClosedRootOf,
   contentSourceFor,
   countUnsettledAttachedChildren,
+  derivedWorkspace,
   getTask,
   landingSurface,
   localLandingOpenOrExecutedSql,
@@ -351,7 +352,7 @@ export function closedRootOf(db: Db, resolve: WorkspaceResolver | undefined): Cl
     }
     if (task.type === "question" || !resolve || !ancestors.some((a) => rootPrOutcome(db, a.id)?.state === "CLOSED")) return null;
     try {
-      const workspace = resolve(task.workspace);
+      const workspace = resolve(derivedWorkspace(db, task));
       for (let current: Pick<Task, "type" | "parent_id"> = task; ; ) {
         const branch = lineageTaskBranch(db, workspace, current);
         const target = ancestors.find((a) => taskBranch(a.id) === branch);

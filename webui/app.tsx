@@ -684,6 +684,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
     return <div style={{ padding: '24px 16px', color: 'var(--text-muted)' }}>loading…</div>;
   }
   const issueBacked = full.github_issue_number != null;
+  // 付帯子の review は最も近い固定済みの祖先の workspace に従い、Edit では変えられない(ADR 0290 決定3)
+  const reviewChild = TidepoolRules.followsAncestorWorkspace(full);
+  const showWorkspace = !issueBacked && !reviewChild;
   // Interview の purpose と完了基準は盤面が登録の欄から組んだ文で、人間は書かない(ADR 0273 決定9)
   const composedContent = full.type === 'interview';
   const set = (k: keyof EditTaskFields, v: string | boolean | string[]) => setFields((f) => ({ ...f!, [k]: v }) as EditTaskFields);
@@ -705,7 +708,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
       if (fields.title !== (full.title ?? '')) out.title = TidepoolRules.normalizeText(fields.title);
       if (!composedContent && fields.purpose !== (full.purpose ?? '')) out.purpose = TidepoolRules.normalizeText(fields.purpose);
       if (!composedContent && fields.completion_criteria !== (full.completion_criteria ?? '')) out.completion_criteria = TidepoolRules.normalizeText(fields.completion_criteria);
-      if (fields.workspace !== (full.workspace ?? '')) out.workspace = fields.workspace;
+      if (showWorkspace && fields.workspace !== (full.workspace ?? '')) out.workspace = fields.workspace;
     }
     if (fields.assignee !== (full.raw_assignee ?? '')) out.assignee = fields.assignee;
     if (fields.risk_flag !== !!full.risk_flag) out.risk_flag = fields.risk_flag;
@@ -742,7 +745,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
       <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', margin: '0 0 16px' }}>
         {issueBacked
           ? 'issue-backed — content and workspace stay on GitHub, only board-side fields are editable'
-          : 'unconsumed fields only — type and parent link are not editable'}
+          : reviewChild
+            ? "unconsumed fields only — type and parent link are not editable; a review child runs in its nearest ancestor's workspace"
+            : 'unconsumed fields only — type and parent link are not editable'}
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         {!issueBacked && (
@@ -756,9 +761,9 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
             )}
           </React.Fragment>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: issueBacked ? '1fr' : '1fr 1fr', gap: 12 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: showWorkspace ? '1fr 1fr' : '1fr', gap: 12 }}>
           <Select label="Assignee" options={withPlaceholder('(default agent)', assigneeNames)} value={fields.assignee} onChange={(e) => set('assignee', e.target.value)} />
-          {!issueBacked && (
+          {showWorkspace && (
             <Select label="Workspace" options={withPlaceholder('(default workspace)', candidates.workspaces)} value={fields.workspace} onChange={(e) => set('workspace', e.target.value)} />
           )}
         </div>

@@ -1006,7 +1006,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         purpose: z.string().optional(),
         completion_criteria: z.string().optional(),
         assignee: z.string().optional(),
-        workspace: z.string().optional(),
+        workspace: z.string().optional()
+          .describe("A review child's workspace cannot be edited — it follows its nearest ancestor's."),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(`${REVIEW_FLAG_ONLY_ON_WORK_CHILDREN}\n${JUDGED_AFTER_THE_EDIT}`),
         review_by: z.array(requiredTextSchema).optional()
@@ -1130,7 +1131,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         }).optional(),
         parent_id: z.string().optional(),
         assignee: z.string().optional(),
-        workspace: z.string().optional(),
+        workspace: z.string().optional()
+          .describe("A review child's workspace is its nearest ancestor's — omit it; a different name is refused."),
         risk_flag: z.boolean().optional(),
         review_flag: z.boolean().optional().describe(REVIEW_FLAG_ONLY_ON_WORK_CHILDREN),
         tier: z

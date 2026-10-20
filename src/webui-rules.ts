@@ -77,5 +77,9 @@ export function whyAssigneeCannotTake(name: string, type: string, resolvesToBuil
     : undefined;
 }
 
-export const completionReviewFires = (t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
+/** 付帯子の review(親を持つ review)は自分の workspace を持たず、最も近い固定済みの祖先に従う(ADR 0290 決定1)。
+ *  登録と Edit の門と、WebUI の Edit 画面の Workspace 欄の出し分けが同じ関数を呼ぶ。 */
+export const followsAncestorWorkspace = (t: Pick<ReviewSubject, "type" | "parent_id">): boolean => t.type === "review" && !!t.parent_id;
+
+export const completionReviewFires =(t: ReviewSubject): boolean => whyNoCompletionReview(t) === undefined;
 export const reviewFlagCarriesMeaning = (t: ReviewSubject): boolean => whyReviewFlagIsInert(t) === undefined;

@@ -594,6 +594,14 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
 
+it("workspace を指定しない付帯子の review が開く場所の名前は、既定でなく最も近い固定済みの祖先の名前(ADR 0290 決定5)", () => {
+  const db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", ...PLAIN, workspace: "reef" }, new Date(0), ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", ...PLAIN, parent_id: parent.id }, new Date(0), ...HUMAN_WEBUI);
+
+  expect(openedPlaceNames(db, review.id, "sandbox")).toEqual(["reef"]);
+});
+
 /** 断られた対象の question が開いたまま probe の破綻を報告した root(question は直接立てる)。断られた受験者は未決着のまま(#2132 の盤面)。 */
 function brokenWithRefusedTarget() {
   const unrowed = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "medium" };
@@ -850,7 +858,8 @@ it("出題は監査 review を root の付帯子として盤面名義で立て(a
 
   const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
 
-  expect(audit).toMatchObject({ type: "review", parent_id: root.id, assignee: null, workspace: "reef", status: "todo", based_on_decision: null });
+  expect(audit).toMatchObject({ type: "review", parent_id: root.id, assignee: null, status: "todo", based_on_decision: null });
+  expect(presentTask(db, getTask(db, audit.id)!).workspace).toBe("reef");
   expect(getRegistrant(db, audit.id)).toBe(BOARD_WORKER_ID);
   expect(presentTask(db, getTask(db, root.id)!)).toMatchObject({ status: "blocked", interview_waiting: "audit" });
   expect(nextSlotTask(db)?.id).toBe(audit.id);
