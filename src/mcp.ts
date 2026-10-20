@@ -828,7 +828,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
           "judgment on. Entries ({entry: id}) are the candidates drafted in this window, the candidates and entries named by the settled " +
-          "proposals and by the objected decisions with cause memory, and the store changes, each only while its latest copy is still live. Branches ({branch: path, scope: workspace " +
+          "proposals and by the objected decisions with cause memory, and the store changes; every entry is listed only while its latest " +
+          "copy is still live. Branches ({branch: path, scope: workspace " +
           "name, or null for the whole board}) are those holding entries without a Definition in their scope or whole-board: one item per " +
           "scope that lacks one, or a single whole-board item when whole-board entries sit at or under the path. The live entries and " +
           "branches named by the judgments of the objected decisions are listed too. That list, injected when " +

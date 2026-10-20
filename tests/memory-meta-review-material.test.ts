@@ -12,6 +12,7 @@ import {
   humanEntryInput,
   invalidateMemoryByMetaReview,
   invalidateMemoryEntry,
+  listMemoryEntries,
   listPrecedents,
   moveMemory,
   moveMemoryBranch,
@@ -239,7 +240,7 @@ it("異議つき判断は窓の中に異議のある decision だけを list_pre
   expect(parts.branches.flatMap((b) => b.definitions)).toEqual([expect.not.objectContaining({ original: expect.anything() })]);
 });
 
-it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草された candidate・窓で決着した提案が名指す candidate・cause memory の異議つき判断が名指すエントリ・店の変更、定義の無い枝の (path, scope) —— 窓の外の candidate と定義のある枝は載らず、2つの workspace が同じ path を定義していても載らない(ADR 0278 決定5 / ADR 0282 決定1・2)", () => {
+it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草された candidate・窓で決着した提案が名指す candidate(reject で無効化済みのものは載らない)・cause memory の異議つき判断が名指すエントリ・店の変更、定義の無い枝の (path, scope) —— 窓の外の candidate と定義のある枝は載らず、2つの workspace が同じ path を定義していても載らない(ADR 0278 決定5 / ADR 0282 決定1・2)", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const decision = objectedDecision(db, work, 1);
@@ -612,7 +613,9 @@ it("窓で承認された既存の後継への consolidate の replaces は supe
 
   const { parts } = memoryMaterialOf(db, register(db, "memory"));
 
-  expect(db.prepare("SELECT invalidation_reason FROM memory_entries WHERE id = ?").get(replaced)).toEqual({ invalidation_reason: "superseded" });
+  expect(listMemoryEntries(db, { state: "invalidated" }).map(({ id, invalidation_reason }) => ({ id, invalidation_reason }))).toEqual([
+    { id: replaced, invalidation_reason: "superseded" },
+  ]);
   expect(parts.proposals.map((row) => row.question_id)).toEqual([question]);
   expect(parts.items).toEqual([{ branch: "habits", scope: null }]);
 });

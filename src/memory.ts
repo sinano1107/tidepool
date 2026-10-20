@@ -2707,12 +2707,12 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
     [
       "Items to judge",
       "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
-        "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes (each of these " +
-        "entries only while its latest copy is still live), the branches that hold " +
+        "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
         "entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and scope (null = the " +
         "whole board), or a single whole-board item when whole-board entries sit at or under the path — and the entries and branches named " +
-        "by the judgments of the objected decisions — an entry if still live, a branch if an entry of its scope that is not invalidated " +
-        "(candidates included) sits at or under the path, even a path not in Branches. Act on each item, or pass it to " +
+        "by the judgments of the objected decisions — a branch if an entry of its scope that is not invalidated (candidates included) sits " +
+        "at or under the path, even a path not in Branches. Every entry is listed only while its latest copy is still live. Act on each " +
+        "item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
       "no items to judge",
@@ -2730,11 +2730,11 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ、店の変更(どれも本文が同じ鎖の末尾で、それが
- *  無効化されていないものだけ —— 無効化済みには届く verb が無い、ADR 0286 決定1)。枝は
- *  配下にエントリを持ち、その scope の Definition も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に
- *  盤面全体のエントリ(一木の門と同じ集合)があれば (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory
- *  meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と (path, scope)(その scope の無効化されていないエントリが
- *  candidate も含め path かその下にあるもの —— 枝の一覧に無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
+ *  無効化されていないものだけ —— 無効化済みには届く verb が無い、ADR 0286 決定1)。枝は配下にエントリを持ち、その scope の Definition
+ *  も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に盤面全体のエントリ(一木の門と同じ集合)があれば
+ *  (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が
+ *  生きているもの)と (path, scope)(その scope の無効化されていないエントリが candidate も含め path かその下にあるもの —— 枝の一覧に
+ *  無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const liveTail = (id: number) => {
