@@ -5,9 +5,9 @@ import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { openQuarantineQuestion, QUARANTINES, type QuarantineChecks, quarantineAgent, quarantineStops, registerQuarantine } from "../src/quarantine.js";
-import { getTask, nextSlotTask, registerTask } from "../src/tasks.js";
+import { answerQuestion, getTask, nextSlotTask, registerTask, settleQuestionAsObserved } from "../src/tasks.js";
 import { quarantineWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
-import { FakeClock, unusedLanding } from "./fakes.js";
+import { awaitWindow, FakeClock, unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 /** 解除の門と受理後は表から引く(ADR 0137 決定4・5)。表を総なめするので、1行足せば
@@ -118,4 +118,45 @@ describe("question が回答済みなら、その資源のタスクは pickup �
     expect(agentNeedsHuman(db, "navigator")).toBe(false);
     expect(nextSlotTask(db, undefined, "deckhand", undefined, quarantineStops(db))?.id).toBe(task.id);
   });
+});
+
+// ADR 0288 決定1: 回答は書き込みの時点で question がまだ開いているときだけ書く —— 呼び手が読んだ時点では開いていても、閉じていれば回答ごと止まる
+it.each(["done", "cancelled"])("読んだ後に %s になった Quarantine の確認 question への回答は拒まれ、回答も解除も残らない", (status) => {
+  const { db, question } = quarantined("workspace", "x");
+  db.prepare("UPDATE tasks SET status = ? WHERE id = ?").run(status, question.id);
+
+  expect(() => answerQuestion(db, question, ["repaired by hand"], now(), undefined, undefined, undefined, "webui")).toThrow(DomainError);
+
+  const kinds = listEvents(db, question.id).map((event) => event.kind);
+  expect(kinds).not.toContain("question_answered");
+  expect(kinds).not.toContain("quarantine_released");
+});
+
+// ADR 0288 決定4: 検査の await の間に閉じた question への回答は、閉じた理由で応答が分かれる
+it("検査の await の間に盤面が観測で閉じた確認 question への回答は、回答を残さず観測で閉じた印を返し、解除は1件だけ残る", async () => {
+  const q = quarantined("workspace", "x");
+  const gate = awaitWindow();
+  const first = q.answer({ workspace: gate.hold });
+  await gate.entered;
+  settleQuestionAsObserved(q.db, q.question.id, { kind: "quarantine_released", quarantine: "workspace", value: "x" }, now());
+  gate.open();
+
+  await expect(first).resolves.toMatchObject({ status: "done", settled_by_observation: "quarantine_released" });
+  const kinds = listEvents(q.db, q.question.id).map((event) => event.kind);
+  expect(kinds).not.toContain("question_answered");
+  expect(kinds.filter((kind) => kind === "quarantine_released")).toHaveLength(1);
+});
+
+it("検査の await の間に別の回答が通った確認 question への回答は拒まれ、回答は1件だけ残る", async () => {
+  const q = quarantined("workspace", "x");
+  const gate = awaitWindow();
+  // 窓は1回だけ止まる —— 2本目の回答の検査はすぐ通る
+  const checks = { workspace: gate.hold };
+  const first = q.answer(checks);
+  await gate.entered;
+  await q.answer(checks);
+  gate.open();
+
+  await expect(first).rejects.toThrow(DomainError);
+  expect(listEvents(q.db, q.question.id).filter((event) => event.kind === "question_answered")).toHaveLength(1);
 });

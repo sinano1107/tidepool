@@ -1,9 +1,10 @@
 import { expect, it, vi } from "vitest";
+import type { AgentView } from "../src/agent-create.js";
 import { type AdvisorCeiling, isClaudeModelAlias } from "../src/claude-model-alias.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { whyInvalidEffort } from "../src/effort.js";
-import { listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   applyExecutionSettingsChange,
   assertTierRunnableFor,
@@ -35,11 +36,11 @@ import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/q
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, metaReviewSubjectOf, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, metaReviewSubjectOf, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, settleQuestionAsObserved, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
-import { unusedLanding } from "./fakes.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { awaitWindow, unusedLanding } from "./fakes.js";
+import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 /** 種の盤面の段の名前(順序どおり)。 */
@@ -1150,6 +1151,37 @@ it("承認に添える修正値も、effort を捨てる id の行の5値とほ�
   expect(getTask(db, sonnet.question_id)).toMatchObject({ status: "todo" });
   expect(readExecutionSettings(db).table.filter((row) => row.model === "claude-sonnet-5-5")).toEqual([
     { provider: "anthropic", tier: "economy", model: "claude-sonnet-5-5", effort: "high", price_in: 2, price_out: 10 },
+  ]);
+});
+
+// ADR 0288 決定3: registry への commit が返った後に question が閉じていても、commit の事実は回答と切り離して残る
+it("tier の提案の approve の registry への commit の await の間に観測で閉じた question は、回答を残さず、commit の agent_tier_changed は残る", async () => {
+  const now = new Date();
+  const db = openDb(":memory:");
+  const review = routingReviewOf(db, now);
+  const evidence = appendEvent(db, {
+    taskId: review,
+    workerId: "deckhand",
+    origin: "board",
+    at: now,
+    payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", source: { tier: "agent", provider: "only" }, harness: "codex" },
+  });
+  const deckhand = { name: "deckhand", provider: "openai", tier: "frontier" } as AgentView;
+  const { question_id } = proposeRoutingChange(db, review, { op: "agent_tier", agent: "deckhand", to: "standard", evidence: [evidence], rationale: "r" }, "auditor", now, () => [deckhand]);
+  const gate = awaitWindow();
+  const changeTier = async () => {
+    await gate.hold();
+    return "c0ffee";
+  };
+  const first = submitAnswer({ db, pollNow() {}, landing: unusedLanding, agentAdmin: { list: () => [deckhand], changeTier } }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui");
+  await gate.entered;
+  settleQuestionAsObserved(db, question_id, { kind: "routing_proposal_stale", question_id, proposal_kind: "registry", changed: ["agent_tier"], observed_event_id: null }, now);
+  gate.open();
+
+  await expect(first).resolves.toMatchObject({ status: "done", settled_by_observation: "routing_proposal_stale" });
+  expect(listEvents(db, question_id).map((event) => event.kind)).not.toContain("question_answered");
+  expect(listEventsOfKinds(db, ["agent_tier_changed"]).map((event) => event.payload)).toEqual([
+    expect.objectContaining({ question_id, registry_commit: "c0ffee" }),
   ]);
 });
 

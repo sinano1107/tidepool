@@ -476,6 +476,8 @@ export interface Landing {
   /** ADR 0236 決定2・3: 執行する経路が PR に処理中の印を取り、印を放す関数を返す。既に印が付いていれば取らずに
    *  null を返す。`workspace` はタスクの `workspace` 列の値(未解決のまま)。 */
   takeInFlightMark(workspace: string | null, prNumber: number): (() => void) | null;
+  /** 印が付いているかを読むだけ —— 執行しない回答が印の付いた PR を拒むための口(ADR 0288 決定2)。 */
+  isMarked(workspace: string | null, prNumber: number): boolean;
 }
 
 export interface LandingDeps {
@@ -1401,6 +1403,7 @@ export function createLanding(deps: LandingDeps): Landing {
         }
       }
     },
+    isMarked,
     takeInFlightMark(workspace, prNumber) {
       const key = markKey(workspace, prNumber);
       if (inFlight.has(key)) return null;

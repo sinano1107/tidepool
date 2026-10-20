@@ -85,6 +85,9 @@ export const unusedLanding: Landing = {
   takeInFlightMark() {
     return () => {};
   },
+  isMarked() {
+    return false;
+  },
 };
 
 /** Board call を持たない盤面の束(帰責も起草も配分評価も撃たない)。 */

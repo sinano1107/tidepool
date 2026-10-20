@@ -82,6 +82,7 @@ import {
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
   presentTask,
+  QuestionClosedError,
   type RegisterTaskInput,
   type RegistryProposal,
   registerTask,
@@ -1051,8 +1052,6 @@ export async function submitAnswer(
   }
 
   let release: (() => void) | null = null;
-  let tierTarget: Tier | undefined;
-  let registryCommit: string | null | undefined;
   // merge の回答が merge した PR の根 —— 決着はここに、回答と同じトランザクションで刻む(ADR 0265 決定1)
   let mergeRecord: { root: string; pr: number } | undefined;
   try {
@@ -1094,6 +1093,9 @@ export async function submitAnswer(
         // 網が届かないなど PR を読めなければ、merge も hold も拒む(ADR 0265 決定4)。観測決着の書き込みの
         // 失敗も落とさず投げる —— どちらも回答は失敗し question は開いたまま。
         if (await deps.landing.observePullRequestOutcome(task)) return presentAnswered(deps, task);
+        const beingMerged = `PR #${mergePr} is being merged by the board right now — answer again in a moment`;
+        // ADR 0288 決定2(印の後): 盤面が merge 中の PR の merge question は、値に依らずどの回答も拒む
+        if (deps.landing.isMarked(task.workspace, mergePr)) throw new DomainError(beingMerged);
         if (answers[0] === MERGE_QUESTION_OPTIONS[0]) {
           const landingTaskId = taskIdForPr(deps.db, mergePr, task.workspace);
           assertLandingAllowed(deps.db, landingTaskId);
@@ -1154,9 +1156,9 @@ export async function submitAnswer(
           // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
           // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
           release = deps.landing.takeInFlightMark(task.workspace, mergePr);
-          if (!release) {
-            throw new DomainError(`PR #${mergePr} is being merged by the board right now — answer again in a moment`);
-          }
+          if (!release) throw new DomainError(beingMerged);
+          // ADR 0288 決定2(印の前): 上の await の間に閉じていれば merge を呼ばない —— 印を取るのと同じ同期の区間で読み直す。印は finally が放す
+          if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
           // External merge precedes the persisted answer. If it fails, the question
           // stays open and the human can retry instead of being stranded as done.
           // CI を読んだ head に固定する(ADR 0231 決定1)
@@ -1184,10 +1186,18 @@ export async function submitAnswer(
       case "proposal":
         // tier の提案の approve は registry への commit が先(issue #920 / ADR 0150 決定5)—— merge と同じく、着地しなければ question は open のまま
         if (proposal?.kind === "registry" && answers[0] === "approve") {
-          tierTarget = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
-          registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, tierTarget, now);
+          const to = (amended as { to: Tier } | undefined)?.to ?? proposal.to;
+          const registryCommit = await landAgentTier(deps, task.id, kind.proposal as RegistryProposal, to, now);
           // 前提が崩れていれば question は観測で閉じた —— merge の観測決着と同じ 200 + 印で返す(ADR 0265 決定7)
           if (registryCommit === null) return presentAnswered(deps, task);
+          // registry が変わった事実は回答が残るかに依らず真 —— 回答の transaction の外で、commit の直後に刻む(ADR 0288 決定3)
+          appendEvent(deps.db, {
+            taskId: null,
+            workerId: HUMAN_WORKER_ID,
+            origin,
+            payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to, question_id: task.id, registry_commit: registryCommit },
+            at: now(),
+          });
         }
         break;
       case "escalation":
@@ -1248,14 +1258,6 @@ export async function submitAnswer(
                 : { setting: "learner_promoted", value: proposal.op === "promote" };
           applyExecutionSettingsChange(deps.db, change, origin, now(), task.id);
         }
-      } else if (proposal?.kind === "registry" && registryCommit) {
-        appendEvent(deps.db, {
-          taskId: null,
-          workerId: HUMAN_WORKER_ID,
-          origin,
-          payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to: tierTarget!, question_id: task.id, registry_commit: registryCommit },
-          at: now(),
-        });
       }
       return answered;
     })();
@@ -1292,6 +1294,10 @@ export async function submitAnswer(
     // (ADR 0119 決定1)。triage 中は盤面が止まっていて、session の commit が poll を撃つ(ADR 0065 決定9)
     if (!session) deps.pollNow();
     return presentAnswered(deps, task);
+  } catch (err) {
+    // 待つ間に question が閉じていた(ADR 0288 決定4): 観測で閉じていれば 200 + 印、別の回答か cancel なら拒否
+    if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
+    throw err;
   } finally {
     release?.();
   }

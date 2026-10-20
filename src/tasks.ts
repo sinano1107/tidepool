@@ -1935,6 +1935,13 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
  *  refused the answer if it failed (see human-verbs.ts). The open question is
  *  the quarantine's only state, so settling it is the release; every kind
  *  records the same `quarantine_released`. */
+/** 回答の書き込みの時点で question がもう開いていなかった(ADR 0288 決定1)。submitAnswer は閉じた理由で応答を分ける(決定4)。 */
+export class QuestionClosedError extends DomainError {
+  constructor() {
+    super("this question was settled while the answer was being checked — read it again");
+  }
+}
+
 export function answerQuestion(
   db: Db,
   question: Task,
@@ -1960,9 +1967,11 @@ export function answerQuestion(
   const items = question.question_items!;
   const answer = answers[0]!;
   withTargetQuestionSweep(db, now, () => {
-    db.prepare(
-      "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ?",
+    // 書き込みの時点で開いているときだけ(ADR 0288 決定1)—— 観測決着と同じ綴り。閉じていれば transaction ごと止まる
+    const { changes } = db.prepare(
+      "UPDATE tasks SET status = 'done', question_answer = ?, question_answer_comment = ? WHERE id = ? AND status = 'todo'",
     ).run(JSON.stringify(answers), comment ?? null, question.id);
+    if (changes === 0) throw new QuestionClosedError();
     // the recommender is whoever registered the question — carried on the
     // answer event so per-agent acceptance rates need no join
     appendEvent(db, {
