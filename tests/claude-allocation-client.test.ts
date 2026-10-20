@@ -54,6 +54,21 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   );
 });
 
+it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定6)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAllocationClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).not.toContain("agent_definition");
+  expect(prompts[0]).not.toContain("workspace_document");
+});
+
 it("語彙の外の allocation / cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {
   const outOfVocabulary = new ClaudeAllocationClient({
     exec: async () =>

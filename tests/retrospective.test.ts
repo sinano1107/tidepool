@@ -1,7 +1,11 @@
+import { execFileSync } from "node:child_process";
+import { writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
+import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
@@ -42,6 +46,7 @@ import {
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -308,6 +313,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         steering: ["plan A was the agreed plan", "and plan B breaks the fixtures"],
         decision_log: ["chose plan B", "dropped the cache layer", "completion report: shipped plan B"],
         memory_read: [],
+        agent_definition: null,
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
       setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -460,6 +466,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     steering: ["bring the fixtures back"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
+    agent_definition: null,
     rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
   });
 });
@@ -549,6 +556,7 @@ it.each([
           steering: ["always keep the fixtures"],
           decision_log: ["skipped the fixtures", "completion report: done as specified"],
           memory_read: [],
+          agent_definition: null,
           index: expect.stringContaining("testing/ — how tests are run"),
         },
         setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -1145,6 +1153,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     steering: ["always keep the fixtures"],
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
+    agent_definition: null,
     rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
@@ -1804,4 +1813,166 @@ it("打ち切りの一覧も同じ照合で読む —— B の RCA が未決着�
   for (const hours of [0, 1, 2]) await s.sweep(new Date(at.getTime() + hours * HOUR));
 
   expect(listHaltedRefires(s.db).map((r) => [r.refire, r.target])).toEqual([["second_round", s.a]]);
+});
+
+// 従った agent 定義と workspace の文書への帰責(ADR 0291 / #2364)—— ドメイン層
+
+const registryGit = (cwd: string) => (...args: string[]) =>
+  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+
+/** 当時版の束を引ける盤面: registry の main の commit から spawn した session で decision を書き、異議を打つ。
+ *  `spawnAs` は spawn の worker と definition_version(組み込みは本文の内容 hash)。 */
+async function definitionBoard(spawnAs: { worker: string; version: string } = { worker: "deckhand", version: "1" }) {
+  const registryDir = await makeRegistry();
+  const git = registryGit(registryDir);
+  const commit = git("rev-parse", "main");
+  const b = memoryBoard();
+  appendEvent(b.db, { taskId: b.task.id, workerId: spawnAs.worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: spawnAs.version } });
+  const decision = logDecision(b.db, b.task, "kept the v1 endpoint", spawnAs.worker, at, "worker");
+  const deps = { ...noRetrospectiveCalls, registryDir };
+  return { ...b, registryDir, git, commit, decision, deps, sessionId: b.objectTo(decision) };
+}
+
+const DECKHAND_THEN = (commit: string) => ({
+  registry_commit: commit,
+  builtin: false,
+  body: "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
+  authority: { guidance: "Prefer reversible actions. Anything irreversible is outside your authority.\n", assignable_to: ["*"] },
+  // 当時版の `*` は上書きの無かった組み込みにも展開される(self RCA の注入と同じ、issue #1741)
+  roster: [
+    { name: "deckhand", description: "General work agent for the tidepool board" },
+    { name: DEFAULT_AUDITOR_NAME, description: "Reviews work independently against its completion criteria." },
+    { name: DEFAULT_INTERVIEWER_NAME, description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers." },
+  ],
+});
+
+const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: number[]) =>
+  appendEvent(b.db, {
+    taskId: b.task.id,
+    workerId: "deckhand",
+    origin: "board",
+    at,
+    payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: spawned, entries: ids.map((id) => ({ id, version: 1 })), tokens: 1, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" },
+  });
+
+const defineBranch = (b: ReturnType<typeof memoryBoard>, path: string, text: string) =>
+  defineMemoryBranch(b.db, { scope: null, path, text, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+
+it("帰責の入力の当時版は、異議された entry の session の spawn の registry commit 時点の本文・profile の散文・roster の description で、後で定義を変えても当時の値", async () => {
+  const b = await definitionBoard();
+  await writeFile(join(b.registryDir, "agents", "deckhand.md"), "---\nname: deckhand\ndescription: Edited later\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills: []\n---\nYou are someone else NOW.\n");
+  b.git("commit", "-qam", "edit deckhand");
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([DECKHAND_THEN(b.commit)]);
+});
+
+it.each([
+  ["本文が空の組み込み Auditor", DEFAULT_AUDITOR_NAME, "e3b0c44298fc1c14", ""],
+  ["本文を持つ組み込み Interviewer", DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f", expect.stringMatching(/^You run Interviews/)],
+])("%s の session では当時版の builtin が真で、本文は内容 hash で引いた当時の本文", async (_, worker, version, body) => {
+  const b = await definitionBoard({ worker, version });
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([expect.objectContaining({ registry_commit: b.commit, builtin: true, body })]);
+});
+
+it("当時版が引けない session(registry の無い盤面・その commit が読めない)では帰責の入力の当時版の欄は null", async () => {
+  const unreachable = await definitionBoard();
+  const noRegistry = objectedAfterReading();
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(unreachable.db, { ...unreachable.deps, registryDir: await makeRegistry({ "agents/deckhand.md": "---\nname: deckhand\n---\nOther history.\n" }), attributionClient: client }, unreachable.sessionId, at);
+  await attributeObjections(noRegistry.db, { ...noRetrospectiveCalls, attributionClient: client }, noRegistry.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([null, null]);
+});
+
+it("帰責の入力の読んだ記憶に、同じ spawn で注入された Definition が入る —— 注入された他の leaf・前の session の注入は入らず、pull と重なれば1つ", async () => {
+  const b = memoryBoard();
+  const previous = defineBranch(b, "old", "Old notes.");
+  const injected = defineBranch(b, "build", "Build notes.");
+  const pulledToo = defineBranch(b, "deploy", "Deploy notes.");
+  const leaf = b.knowledge("Squash before merge");
+  injectMemory(b, b.spawn(), [previous]);
+  injectMemory(b, b.spawn(), [injected, pulledToo, leaf]);
+  b.read(pulledToo);
+  const decision = b.decide("squashed the branch");
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+
+  expect(client.calls.map((c) => c.input.memory_read.map((m) => [m.id, m.kind, m.text]))).toEqual([
+    [
+      [injected, "definition", "Build notes."],
+      [pulledToo, "definition", "Deploy notes."],
+    ],
+  ]);
+});
+
+it("初回: memory で注入された Definition を名指すと門を通って entries に載る", async () => {
+  const b = memoryBoard();
+  const definition = defineBranch(b, "build", "Build notes.");
+  injectMemory(b, b.spawn(), [definition]);
+  const decision = b.decide("built from the notes");
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(decision, { cause: "memory", evidence: "followed the build notes", entries: [definition] });
+
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at));
+
+  expect(attributed(b.db, b.task.id)).toEqual([expect.objectContaining({ cause: "memory", entries: [definition] })]);
+});
+
+it("初回: agent_definition は当時版の欄が null なら uncertain に倒れ、欄があれば agent_definition のまま載る", async () => {
+  const resolved = await definitionBoard();
+  const unresolved = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  for (const decision of [resolved.decision, unresolved.decision]) client.scriptJudgment(decision, { cause: "agent_definition", evidence: "the body said to keep v1" });
+
+  commitTriage(resolved.db, at, [], await attributeObjections(resolved.db, { ...resolved.deps, attributionClient: client }, resolved.sessionId, at));
+  commitTriage(unresolved.db, at, [], await attributeObjections(unresolved.db, { ...noRetrospectiveCalls, attributionClient: client }, unresolved.sessionId, at));
+
+  expect(attributed(resolved.db, resolved.task.id)).toEqual([expect.objectContaining({ cause: "agent_definition", evidence: "the body said to keep v1", entries: null })]);
+  expect(attributed(unresolved.db, unresolved.task.id)).toEqual([
+    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining("agent_definition attribution rejected"), entries: null }),
+  ]);
+});
+
+it("agent_definition / workspace_document だけの異議群の commit では修理子だけが立ち、RCA も candidate の起草も無い", async () => {
+  const b = await definitionBoard();
+  const second = logDecision(b.db, b.task, "followed the README's deploy steps", "deckhand", at, "worker");
+  raiseObjection(b.db, second, "the README is stale", at);
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause: "agent_definition", evidence: "the body said to keep v1" });
+  client.scriptJudgment(second, { cause: "workspace_document", evidence: "the decision log cites README's deploy steps" });
+  const drafter = new FakeBehaviorDraftClient();
+  const deps = { ...b.deps, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(attributed(b.db, b.task.id).map((p) => p.cause)).toEqual(["agent_definition", "workspace_document"]);
+  expect(listChildren(b.db, b.task.id).map((c) => c.title)).toEqual(["repair: t"]);
+  expect(drafter.calls).toEqual([]);
+});
+
+it("第2回の入力にも当時版の欄が組まれる", async () => {
+  const b = await definitionBoard();
+  const client = new FakeAttributionClient();
+  const deps = { ...b.deps, attributionClient: client };
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
+
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(client.calls.map((c) => [c.input.rca_findings !== undefined, c.input.agent_definition])).toEqual([
+    [false, DECKHAND_THEN(b.commit)],
+    [true, DECKHAND_THEN(b.commit)],
+  ]);
 });

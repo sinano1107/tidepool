@@ -31,10 +31,16 @@ function buildPrompt(input: AttributionInput): string {
     "for the objected reading or omitting a fact the worker needed; environment is the worker's " +
     "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
     "worker's judgment was sound given what it had (working around or guessing past such trouble " +
-    "instead of escalating is capability); preference is the human's taste where the " +
+    "instead of escalating is capability; following the board's own protocol text injected into every session, " +
+    "or a skill bundled with the harness, is environment); preference is the human's taste where the " +
     "worker's choice was equally valid; requirement_change is a requirement the human changed " +
     "or introduced after the fact; memory is when a memory entry the worker read before the decision, and followed, " +
-    "was itself wrong — the shortfall is the entry's, not the worker's; use uncertain when the evidence does " +
+    "was itself wrong — the shortfall is the entry's, not the worker's; agent_definition is when the worker's agent " +
+    "definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and the decision " +
+    "was sound against it — but when agent_definition.builtin is true the body is board code: that is environment; " +
+    "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
+    "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
+    "it — name it only when the decision log cites that document; use uncertain when the evidence does " +
     'not decide it), "evidence" (string — the concrete observations your judgment rests on), and "entries" ' +
     "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
     "read before the decision; never answer memory when memory_read is empty). When the input carries " +

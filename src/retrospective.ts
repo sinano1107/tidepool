@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
+import { type DefinitionThen, definitionThen } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
@@ -38,13 +39,15 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-i
  *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
  *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
  *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
- *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。 */
+ *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。
+ *  `agent_definition` は異議された entry の session の agent 定義の当時版の束で、引けなければ null(ADR 0291 決定3)。 */
 export interface AttributionInput {
   entry_id: number;
   entry: string;
   steering: string[];
   decision_log: string[];
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
+  agent_definition: DefinitionThen | null;
   written?: AttributionInput["memory_read"];
   rca_findings?: string[];
 }
@@ -106,18 +109,24 @@ export interface RetrospectiveCallDeps {
   containers: Pick<ProcessContainers, "preflight"> | undefined;
   /** 起草の宛先の agent が registry にいるか(ADR 0173 決定4)。undefined → registry の無い盤面で、照合せずに起草する。 */
   agentRegistered: ((name: string) => boolean) | undefined;
+  /** 帰責の入力の当時版を引く registry clone(ADR 0291 決定3)。undefined → registry の無い盤面で、当時版の欄は null。 */
+  registryDir: string | undefined;
 }
 
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
 
 /** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は entries を
- *  持たないときだけ通す。通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
-function gate({ entries, ...judgment }: AttributionJudgment, read: AttributionInput["memory_read"]): GatedJudgment {
+ *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定3)。
+ *  通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
+function gate({ entries, ...judgment }: AttributionJudgment, input: AttributionInput): GatedJudgment {
+  if (judgment.cause === "agent_definition" && input.agent_definition === null) {
+    return uncertain("agent_definition attribution rejected: no definition version was resolved for the session");
+  }
   if (judgment.cause !== "memory") {
     return entries === undefined ? { ...judgment, entries: null } : uncertain(`${judgment.cause} attribution rejected: entries are only for cause memory`);
   }
   if (!entries?.length) return uncertain("memory attribution rejected: it names no entry");
-  const unread = entries.filter((id) => !read.some((r) => r.id === id));
+  const unread = entries.filter((id) => !input.memory_read.some((r) => r.id === id));
   if (unread.length > 0) return uncertain(`memory attribution rejected: entry ${unread.join(", ")} was not read before the decision`);
   return { ...judgment, entries };
 }
@@ -219,12 +228,12 @@ export async function attributeObjections(
         entry: objectedEntryText(o.entry),
         steering: o.comments,
         decision_log: decisionLogText(db, o.entry.task_id),
-        memory_read: memoryRead(db, o.entry),
+        ...sessionReads(db, deps.registryDir, o.entry),
         ...writtenBodies(db, o.entry),
       };
       const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
-        judgments.set(o.entry.id, { ...gate(await call.client.judge(input, call.setting), input.memory_read), decision_log_through: through });
+        judgments.set(o.entry.id, { ...gate(await call.client.judge(input, call.setting), input), decision_log_through: through });
       } catch (err) {
         if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
         const payload = {
@@ -285,10 +294,10 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = secondRoundInput(db, objectedId, source);
+    const input = secondRoundInput(db, deps.registryDir, objectedId, source);
     let judgment: GatedJudgment;
     try {
-      judgment = gate(await call.client.judge(input, call.setting), input.memory_read);
+      judgment = gate(await call.client.judge(input, call.setting), input);
     } catch (err) {
       if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
       const payload = {
@@ -315,13 +324,13 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
 
 /** 第2回の入力: 当時の decision log は異議群の初回の判定が読んだ範囲(未帰責なら覆う子の登録より前)で切り、
  *  覆う RCA 子の decision log と完了 result を足す。起草の撃ち直しも同じ出所から組む。 */
-function secondRoundInput(db: Db, objectedId: string, attribution: SecondRoundSource): AttributionInput {
+function secondRoundInput(db: Db, registryDir: string | undefined, objectedId: string, attribution: SecondRoundSource): AttributionInput {
   const [initial] = listEvents(db, objectedId).flatMap((e) =>
     e.payload.kind === "objection_attributed" && e.payload.round === "initial" &&
     e.payload.entry_id === attribution.entry_id && bundleName(e.payload) === bundleName(attribution) ? [{ ...e.payload, id: e.id }] : [],
   );
   return {
-    ...objectionInput(db, attribution, initial ? readCut(initial) : bundleRegistered(db, objectedId, bundleName(attribution))),
+    ...objectionInput(db, registryDir, attribution, initial ? readCut(initial) : bundleRegistered(db, objectedId, bundleName(attribution))),
     rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
   };
 }
@@ -434,27 +443,33 @@ export function markHaltedRefire(db: Db, kind: "refire_retried" | "refire_dismis
 }
 
 /** 帰責の入力を異議群から組む: 異議エントリ本文・steering 列・`before`(event id)より前の decision log。 */
-function objectionInput(db: Db, attribution: SecondRoundSource, before: number): AttributionInput {
+function objectionInput(db: Db, registryDir: string | undefined, attribution: SecondRoundSource, before: number): AttributionInput {
   const entry = requireLogEntry(db, attribution.entry_id);
   return {
     entry_id: entry.id,
     entry: objectedEntryText(entry),
     steering: objectionsById(db, entry.id, attribution.objection_event_ids).map((o) => o.comment),
     decision_log: decisionLogText(db, entry.task_id, before),
-    memory_read: memoryRead(db, entry),
+    ...sessionReads(db, registryDir, entry),
     ...writtenBodies(db, entry),
   };
 }
 
-/** 異議された entry を含む worker session で、その entry より前の pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)。
+/** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定3)と読んだ記憶。読んだ記憶は、その entry より前の
+ *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
  *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
-function memoryRead(db: Db, entry: DecisionLogEntry): AttributionInput["memory_read"] {
+function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition"> {
   const events = listEvents(db, entry.task_id);
   const spawned = sessionSpawnOf(events, entry);
-  if (!spawned) return [];
+  if (!spawned) return { memory_read: [], agent_definition: null };
   const { inSession } = sessionWindow(events, spawned);
   const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < entry.id && inSession(e) ? [e.payload] : []));
-  return memoryBodies(db, [...new Set(readPulls(events, spawned.id, pulls))]);
+  const pulled = readPulls(events, spawned.id, pulls);
+  const injected = events.flatMap(({ payload: p }) => (p.kind === "memory_injected" && p.worker_spawned_event_id === spawned.id ? p.entries.map((e) => e.id) : []));
+  return {
+    memory_read: memoryBodies(db, [...new Set([...injected, ...pulled])]).filter((m) => m.kind === "definition" || pulled.includes(m.id)),
+    agent_definition: registryDir === undefined ? null : definitionThen(registryDir, spawned),
+  };
 }
 
 /** 記憶の書き込みの行(memory_written)が作った・無効化したエントリの本文。他の行は欄を持たない。 */
@@ -508,7 +523,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
     // 入力が組めない帰責(出所の異議が壊れている)は撃って失敗したのではないので、失敗 event に畳まず投げる
-    const input = round === "initial" ? objectionInput(db, attribution, readCut(attribution)) : secondRoundInput(db, taskId, attribution);
+    const input = round === "initial" ? objectionInput(db, deps.registryDir, attribution, readCut(attribution)) : secondRoundInput(db, deps.registryDir, taskId, attribution);
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
     // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)

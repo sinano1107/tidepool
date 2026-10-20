@@ -8,6 +8,7 @@ const input: AttributionInput = {
   steering: ["plan A was the agreed plan"],
   decision_log: ["chose plan B", "completion report: shipped plan B"],
   memory_read: [],
+  agent_definition: null,
 };
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
@@ -89,4 +90,32 @@ it("prompt は environment を worker の外側の事情として判断の妥当
     "environment is the worker's surroundings — board tooling, network or sandbox trouble, or an upstream change — when the worker's judgment was sound given what it had",
   );
   expect(prompts[0]).toContain("working around or guessing past such trouble instead of escalating is capability");
+});
+
+it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙の内側として届く(ADR 0291 決定2・4)", async (cause) => {
+  const client = new ClaudeAttributionClient({
+    exec: async () => JSON.stringify({ result: JSON.stringify({ cause, evidence: "e" }) }),
+  });
+
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual({ cause, evidence: "e" });
+});
+
+it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・盤面の protocol 文・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定2〜5)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  const prompt = prompts[0]!;
+  expect(prompt).toContain("agent_definition is when the worker's agent definition as it stood then (agent_definition: its body, authority and roster) was itself wrong");
+  expect(prompt).toContain("when agent_definition.builtin is true the body is board code: that is environment");
+  expect(prompt).toContain("never answer agent_definition when agent_definition is null");
+  expect(prompt).toContain("workspace_document is when a skill or document placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong");
+  expect(prompt).toContain("only when the decision log cites that document");
+  expect(prompt).toContain("following the board's own protocol text injected into every session, or a skill bundled with the harness, is environment");
 });

@@ -589,6 +589,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     workspace: options.workspace,
     containers,
     agentRegistered: options.agentRegistered,
+    registryDir: options.registry?.dir,
   };
   const scheduler = startScheduler({
     db,
