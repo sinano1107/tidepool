@@ -611,14 +611,19 @@ export interface TaskVerbSwap {
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
- *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
+ *  memory_repair は分解の verb と新規の記憶の書き込みを伏せ(ADR 0272 決定3)、行の主題を持てば worker の pull verb も伏せる(ADR 0283 決定3)
+ *  —— 祖先の cancel の下でも同じなので先に見る。
  *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の verb を伏せる(ADR 0279 決定4 ——
  *  routing の判断の行を運ぶ修理子の読み口と提案 verb は routingRepairVerbs が足す)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
  *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
-  if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
+  if (task?.type === "memory_repair") {
+    // 行の主題を持つ修理子は親の主題の読み手で、worker の pull verb も持たない(ADR 0283 決定3)
+    const pulls = lineageSubjectOf(db, taskId) === null ? [] : (["browse_memory", "search_memory", "read_memory"] as const);
+    return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", ...pulls], added: [] };
+  }
   if (task?.type === "routing_repair") return { withheld: ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   // Interview の監査(ADR 0273 決定3・4): review の読み系と、受理 / 却下の専用の完了 verb
@@ -648,6 +653,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
   return { withheld: [], added: [] };
 }
@@ -1312,6 +1318,7 @@ export function completeTask(
   }
   // ADR 0278 決定1: 統合レビューと meta-review も扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (task.meta_review_subject) {
     throw new DomainError(`a ${task.meta_review_subject} meta-review does not complete with complete_task: complete it with ${META_REVIEW_COMPLETION[task.meta_review_subject]}`);
   }
@@ -3503,6 +3510,19 @@ function rcaSql(rowRef: string): string {
 /** RCA か(ADR 0278 決定1): 親の cancel を生き延びる付帯子の判定(`survivesParentCancelSql`)と同じ印を読む。 */
 export function isRca(db: Db, taskId: string): boolean {
   return db.prepare(`SELECT ${rcaSql("t")} FROM tasks t WHERE t.id = ?`).pluck().get(taskId) === 1;
+}
+
+/** 行の主題(ADR 0279 決定6 / ADR 0283 決定1): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA とその子孫は
+ *  親の主題に載る。祖先にも無ければ null。「この行はどの主題に載るか / この task は誰の読み手か」を問う箇所はすべてこれで読む
+ *  (起草の置き場・束ねの門・注入の分岐と読み口・未決着の門・Precedent の絞り)。「この task は meta-review か」は自身の列。 */
+export function lineageSubjectOf(db: Db, taskId: string): Task["meta_review_subject"] {
+  return (
+    (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").pluck().get(taskId) as Task["meta_review_subject"] | undefined) ??
+    ((db
+      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
+      .pluck()
+      .get(taskId) as Task["meta_review_subject"] | undefined) ?? null)
+  );
 }
 
 /** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。

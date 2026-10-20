@@ -4,7 +4,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import type { GatedJudgment } from "../src/retrospective.js";
+import { completeRca, type GatedJudgment } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -23,6 +23,7 @@ import {
   loggedEntry,
   mcpClient,
   queueWork,
+  rcaFindings,
   registerWork,
   seedFixtureBoard,
   type Tidepool,
@@ -1173,6 +1174,75 @@ it("memory の meta-review の記憶の書き込みの行への異議は今ど�
   commitTriage(db, at);
 
   expect(listChildren(db, review.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["memory_repair"]);
+});
+
+/** meta-review(`subject` が null なら work)の下の系譜の task: 主題の修理子(worker の下では memory_repair)か、root の行への異議で立った auditor RCA。 */
+function lineageTask(db: Db, at: Date, subject: "memory" | "routing" | null, kind: "修理子" | "RCA"): Task {
+  const root =
+    subject === null
+      ? registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", workspace: "charts" }, at, ...HUMAN_WEBUI)
+      : registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+  spawnedAs(db, root, "fugu", at);
+  if (kind === "修理子") {
+    const type = subject === "routing" ? "routing_repair" : "memory_repair";
+    return registerTask(db, { type, title: `${type}: t`, purpose: "p", completion_criteria: "c", parent_id: root.id }, at, ...HUMAN_WEBUI);
+  }
+  startTriage(db, at);
+  const row = logDecision(db, root, "fugu's call", "fugu", at, "worker");
+  raiseObjection(db, row, "redo it", at);
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  return listChildren(db, root.id).find((child) => child.title.startsWith("rca (auditor)"))!;
+}
+
+it.each([
+  ["memory", "修理子", "自由文の行"],
+  ["memory", "修理子", "完了の行"],
+  ["routing", "修理子", "自由文の行"],
+  ["routing", "修理子", "完了の行"],
+  ["memory", "RCA", "自由文の行"],
+  ["memory", "RCA", "完了の行"],
+  ["memory", "RCA", "型つきの所見の行(RCA は done)"],
+  ["routing", "RCA", "自由文の行"],
+  ["routing", "RCA", "型つきの所見の行(RCA は done)"],
+] as const)("%s の meta-review の下の%sの%sへの異議の commit は work の修理子を立てず、帰責 event と RCA は立つ(ADR 0283 決定2)", (subject, kind, rowKind) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-20T00:00:00.000Z");
+  const objected = lineageTask(db, at, subject, kind);
+  spawnedAs(db, objected, "auditor", at);
+  let row: number;
+  if (rowKind === "自由文の行") row = logDecision(db, objected, "auditor's call", "auditor", at, "worker");
+  else if (rowKind === "完了の行") {
+    finishTask(db, pickupTask(db, objected, "auditor", at)!, { outcome: "done" }, "auditor", at, "worker");
+    row = listEvents(db, objected.id).find((event) => event.kind === "task_completed")!.id;
+  } else {
+    completeRca(db, objected, rcaFindings(db, objected.id), "auditor", at, "worker");
+    expect(getTask(db, objected.id)!.status).toBe("done");
+    row = listEvents(db, objected.id).find(({ payload }) => payload.kind === "decision_logged" && payload.judgment?.kind === "rca")!.id;
+  }
+  startTriage(db, at);
+  raiseObjection(db, row, "redo it", at);
+
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, objected.id).map((child) => child.title)).toEqual([`rca (self): ${objected.title}`, `rca (auditor): ${objected.title}`]);
+  expect(listEvents(db, objected.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
+});
+
+it("meta-review の下の memory_repair の記憶の書き込みの行への異議は今どおり memory_repair 1本、worker の task の下の memory_repair / RCA の自由文の行への異議は今どおり work の修理子(ADR 0272 決定1・2 / ADR 0283 決定2)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-20T00:00:00.000Z");
+  const subjectRepair = lineageTask(db, at, "memory", "修理子");
+  const workerRepair = lineageTask(db, at, null, "修理子");
+  const workerRca = lineageTask(db, at, null, "RCA");
+  startTriage(db, at);
+  raiseObjection(db, recordNote(db, at, subjectRepair.id).event_id, "drop the note", at);
+  const rows = [workerRepair, workerRca].map((task) => logDecision(db, task, "auditor's call", "auditor", at, "worker"));
+  for (const row of rows) raiseObjection(db, row, "redo it", at);
+
+  commitTriage(db, at, [], new Map(rows.map((row) => [row, { cause: "capability", evidence: "e", entries: null }])));
+
+  expect(listChildren(db, subjectRepair.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["memory_repair"]);
+  for (const task of [workerRepair, workerRca]) expect(listChildren(db, task.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["work"]);
 });
 
 const interviewRoot = (db: Db, at: Date, assignee?: string) =>

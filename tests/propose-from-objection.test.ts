@@ -126,6 +126,36 @@ it("主題つきの親(meta-review)の行からの Behavior candidate は、盤�
   expect(listMemoryEntries(db, {})).toEqual([expect.objectContaining({ id: entry_id, kind: "behavior", state: "candidate", scope: null, addressee: "deckhand" })]);
 });
 
+it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の子の RCA の行)からの Behavior candidate は、盤面に既定 workspace があっても scope null —— 祖先に meta-review の無い修理子の行からは今どおり task の workspace(ADR 0283 決定1)", () => {
+  const db = openDb(":memory:");
+  const board = { workspace: { name: "charts" } };
+  const child = (type: TaskType, title: string, parent: Task, workspace?: string) =>
+    registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace }, at, HUMAN_WORKER_ID, "webui");
+  const proposeOn = (objectedTask: Task) => {
+    const entry = objected(db, objectedTask, "capability");
+    return proposeFromObjection(db, rca(db, `rca (auditor): ${objectedTask.title}`, objectedTask).id, { ...draft, entry_id: entry }, board, "auditor", at).entry_id;
+  };
+  const memoryReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_WORKER_ID, "webui");
+  const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, HUMAN_WORKER_ID, "webui");
+  objected(db, memoryReview, "capability");
+  const reviewRca = rca(db, "rca (auditor): memory meta-review", memoryReview);
+  const work = task(db, "work", "index the tide charts");
+
+  const ids = [
+    proposeOn(child("memory_repair", "memory repair: memory meta-review", memoryReview)),
+    proposeOn(child("routing_repair", "routing repair: routing meta-review", routingReview)),
+    proposeOn(reviewRca),
+    proposeOn(child("memory_repair", "memory repair: index the tide charts", work, "reef")),
+  ];
+
+  expect(listMemoryEntries(db, {}).map((m) => [m.id, m.scope])).toEqual([
+    [ids[0], null],
+    [ids[1], null],
+    [ids[2], null],
+    [ids[3], "reef"],
+  ]);
+});
+
 it("agent 登録の task では task_ambiguity と missing_information(as: behavior)は登録者宛て、missing_information(as: knowledge)は宛先なしで即 approved・出所は RCA 自身の decision・cause は null", () => {
   const db = openDb(":memory:");
   const delegated = task(db, "work", "delegated", "tako");

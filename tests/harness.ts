@@ -1152,8 +1152,9 @@ export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (re
 }
 
 /** memory meta-review の型つきの判断の行への異議で束ねた memory_repair(ADR 0279 決定3)。withWrite なら同じ review の書き込みの行
- *  (エントリの移動)への異議も同じ commit に入り、両方の行を運ぶ修理子になる(ADR 0281)。修理子は executor の名前を写す。 */
-export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, executor = "fugu" } = {}): Task {
+ *  (エントリの移動)への異議も同じ commit に入り、両方の行を運ぶ修理子になる(ADR 0281)。withJudgment: false なら書き込みの行だけを運ぶ。
+ *  修理子は executor の名前を写す。 */
+export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, withJudgment = true, executor = "fugu" } = {}): Task {
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const note = (title: string, path: string) => recordKnowledge(db, { scope: null, path, title, text: `${title}.`, source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
   const moving = note("Moving note", "misc");
@@ -1168,7 +1169,7 @@ export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, execut
     },
     executor,
   );
-  raiseObjection(db, row(judged), "fold it into the build notes", at);
+  if (withJudgment) raiseObjection(db, row(judged), "fold it into the build notes", at);
   if (moved !== undefined) raiseObjection(db, moved, "move it back", at);
   commitTriage(db, at);
   return listChildren(db, review.id).find((child) => child.type === "memory_repair")!;

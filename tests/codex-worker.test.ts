@@ -655,6 +655,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["Interview の pin の子", pinnedChild],
     ["出題済みの Interview の root", posedInterviewRoot],
     ["書き込みの行への異議の修理", writeRepairTask],
+    ["memory meta-review の書き込みの行だけへの異議の修理(主題の修理子、ADR 0283 決定3)", (db: ReturnType<typeof openDb>) => judgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { withWrite: true, withJudgment: false, executor: "codex-agent" })],
     ["memory meta-review の判断の行への異議の修理", (db: ReturnType<typeof openDb>) => judgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { executor: "codex-agent" })],
     ["memory meta-review の書き込みの行と判断の行への異議の修理", (db: ReturnType<typeof openDb>) => judgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { withWrite: true, executor: "codex-agent" })],
     ["型つきの行を運ばない routing の修理", routingRepairTask],

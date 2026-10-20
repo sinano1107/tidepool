@@ -184,6 +184,33 @@ it("memory_repair の tools/list の記憶の verb は、書き込みの行だ�
   for (const repair of repairs) expect(await memoryVerbs(repair.id)).toEqual(memoryRepairVerbs(t.db, repair.id).sort());
 });
 
+it("meta-review の下の memory_repair の tools/list は、書き込みの行だけ・判断の行だけ・両方のどの組でも worker の pull verb を持たず read_memory_entries を持ち、worker の task の下の memory_repair は今どおり pull verb を持つ(ADR 0283 決定3)", async () => {
+  t = await bootTidepool();
+  const at = t.clock.now();
+  const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c", workspace: "charts" }, at, ...HUMAN_WEBUI);
+  const wrote = recordKnowledge(t.db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at, objected.id);
+  raiseObjection(t.db, wrote.event_id, "undo it", at);
+  commitTriage(t.db, at);
+  const workerRepair = listChildren(t.db, objected.id).find((c) => c.type === "memory_repair")!;
+  const subjectRepairs = [
+    judgmentRepairTask(t.db, at, { withWrite: true, withJudgment: false }),
+    judgmentRepairTask(t.db, at),
+    judgmentRepairTask(t.db, at, { withWrite: true }),
+  ];
+  const reads = async (taskId: string) => {
+    const client = await mcpClient(t.mcpBaseUrl, taskId);
+    try {
+      const reads = ["browse_memory", "search_memory", "read_memory", "read_memory_entries"];
+      return (await client.listTools()).tools.map((tool) => tool.name).filter((name) => reads.includes(name)).sort();
+    } finally {
+      await client.close();
+    }
+  };
+
+  for (const repair of subjectRepairs) expect(await reads(repair.id)).toEqual(["read_memory_entries"]);
+  expect(await reads(workerRepair.id)).toEqual(["browse_memory", "read_memory", "search_memory"]);
+});
+
 it("routing_repair の worker MCP の tools/list は基本の面(get_current_task / log_decision / escalate / complete_task)と routingRepairVerbs の集合 —— 型つきの行を運ばなければ基本の面だけ(中身は domain の釘、ADR 0107 決定3)で、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {
   t = await bootTidepool();
   const objected = registerTask(t.db, { type: "work", title: "judge the routing table", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);

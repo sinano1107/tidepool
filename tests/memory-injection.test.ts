@@ -280,15 +280,24 @@ it("指針の節は worker の注入と同じ盤面の上限で、行を下か�
   expect(capped.tokens).toBeLessThanOrEqual(full.tokens - 1);
 });
 
-it("routing_repair には、見える approved があっても節を出さない —— 主題 routing の修理子で、案内する pull verb はその面に無い。memory_repair には今どおり出す(ADR 0279 決定4・6 / ADR 0122 決定2)", () => {
+it("meta-review の下の主題の修理子(memory_repair / routing_repair)には meta-review と同じ指針の節が付き、盤面全体の宛先つき Behavior が行で載って既定 workspace のエントリは載らない —— 祖先に meta-review の無い memory_repair は今どおり worker の INDEX(ADR 0283 決定3)", () => {
   const { db, task, record } = board();
   record({ path: "tide", title: "fix tide chart" });
-  const review = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, ...HUMAN_WEBUI);
-  const repair = (type: "memory_repair" | "routing_repair") =>
-    registerTask(db, { type, title: "fix tide chart", purpose: "p", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
-  expect(buildMemoryInjection(db, repair("routing_repair"), "tidepool", "deckhand")).toMatchObject({ section: null, entries: [] });
-  expect(buildMemoryInjection(db, repair("memory_repair"), "tidepool", "deckhand").section).not.toBeNull();
-  expect(buildMemoryInjection(db, task, "tidepool", "deckhand").section).not.toBeNull();
+  const habit = recordBehavior(db, humanEntryInput(db, { workspace: null, path: "habits", title: "Cite the precedent", text: "Cite the precedent.", addressee: "deckhand" }), "webui", at).entry_id;
+  const repairUnder = (parent: { id: string }, type: "memory_repair" | "routing_repair") =>
+    registerTask(db, { type, title: "fix tide chart", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
+  const review = (subject: "memory" | "routing") =>
+    registerTask(db, { type: "review", title: `${subject} meta-review`, purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+
+  for (const repair of [repairUnder(review("memory"), "memory_repair"), repairUnder(review("routing"), "routing_repair")]) {
+    const guidance = buildMemoryInjection(db, repair, "tidepool", "deckhand");
+    expect(guidance.section).toMatch(/^## Guidance\n/);
+    expect(guidance.section).toContain(`- #${habit} behavior Cite the precedent (path: habits)`);
+    expect(guidance.entries).toEqual([{ id: habit, version: habit }]);
+  }
+  const workerRepair = buildMemoryInjection(db, repairUnder(task, "memory_repair"), "tidepool", "deckhand");
+  expect(workerRepair.section).toMatch(/^## Memory\n/);
+  expect(workerRepair.section).toContain("fix tide chart");
 });
 
 it("approved が1つも見えなければ節を出さず、entries は空", () => {

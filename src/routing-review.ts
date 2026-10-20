@@ -337,6 +337,7 @@ export function completeRoutingReview(
   precedents: { decision_event_id: number }[],
   agents?: readonly RegistryAgent[],
 ): Task {
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (review.meta_review_subject !== "routing") throw new DomainError("only a routing meta-review completes with complete_routing_review");
   const record = injectedMaterial(db, review.id, "routing");
   const injectedTiers = new Map(record.items.flatMap((item) => ("tier_id" in item ? [[item.tier_id, item.tier] as const] : [])));

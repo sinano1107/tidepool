@@ -87,6 +87,7 @@ import {
   isArtifactDiscarded,
   isRepairType,
   joinHistory,
+  lineageSubjectOf,
   listExaminees,
   logDecision,
   posedProbe,
@@ -551,7 +552,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     taskId: attributedTaskId,
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
-  const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
+  const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
@@ -1265,9 +1266,10 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
   const side: MemoryWriteSide = { activity: "worker_verb", reach: memoryRepairReach(kinds), judges: kinds.judgments };
   if (kinds.judgments) {
     registerPrecedentRead(server, deps, run);
-    registerMemoryEntriesRead(server, deps, run);
     registerMemoryMetaReviewVerbs(server, deps, run, side);
   } else registerMemoryMoves(server, deps, run, side);
+  // 行の主題を持つ修理子は運ぶ行を問わず親の主題の読み手(ADR 0283 決定3)
+  if (kinds.judgments || lineageSubjectOf(deps.db, attributedTaskId) !== null) registerMemoryEntriesRead(server, deps, run);
   if (!kinds.writes) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
@@ -1336,6 +1338,7 @@ const slotRun =
 function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string | null, subject: MetaReviewSubject): void {
   const run: MetaReviewRun = (verb) =>
     runVerb(deps, attributedTaskId, (task) => {
+      // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
       if (metaReviewSubjectOf(deps.db, task.id) !== subject) throw new DomainError(`${subject} meta-review verbs are only for a ${subject} meta-review task`);
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });

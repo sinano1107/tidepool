@@ -15,7 +15,8 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { getTask, listBoard, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI, writerTask } from "./harness.js";
 
@@ -208,4 +209,50 @@ it("別主題の meta-review の open な子は数えない —— memory の修
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "routing")).toBe(1);
+});
+
+/** `taskId` の task の判断の行への異議を commit し、立った auditor RCA(open)の id を返す。 */
+function openRcaUnder(db: Db, taskId: string): string {
+  startTriage(db, at);
+  const row = logDecision(db, getTask(db, taskId)!, "auditor's call", "auditor", at, "worker");
+  raiseObjection(db, row, "redo it", at);
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  return listChildren(db, taskId).find((child) => child.title.startsWith("rca (auditor)"))!.id;
+}
+const markDone = (db: Db, ...ids: string[]) => {
+  for (const id of ids) db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(id);
+};
+
+it.each([
+  ["done の修理子の下の open な RCA", (db: Db, repair: string) => {
+    openRcaUnder(db, repair);
+    markDone(db, repair);
+  }],
+  ["meta-review の done の RCA の下の open な RCA", (db: Db, repair: string) => {
+    markDone(db, repair);
+    const review = getTask(db, repair)!.parent_id!;
+    const rca = openRcaUnder(db, review);
+    openRcaUnder(db, rca);
+    markDone(db, rca, ...listChildren(db, review).filter((child) => child.id !== rca).map((child) => child.id));
+  }],
+] as const)("同主題の meta-review の系譜の孫(%s)がある間は、周期が過ぎ材料があっても次の周期を登録しない(ADR 0283 決定1)", (_, grandchild) => {
+  const db = openDb(":memory:");
+  const repair = previousReviewWithRepair(db, "memory");
+  grandchild(db, repair);
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(registrations(db)).toBe(1);
+});
+
+it("祖先に meta-review の無い open な RCA は次の周期を止めない(ADR 0283 決定1)", () => {
+  const db = openDb(":memory:");
+  previousReview(db, "memory");
+  openRcaUnder(db, registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id);
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(registrations(db)).toBe(2);
 });
