@@ -15,8 +15,9 @@ opus に下がる上限)、**host の env**(`CLAUDE_CODE_SUBAGENT_MODEL` 等 —
    決定2 が subagent だけの差し替え(`scope: local`)を「session の model は変わらない」と読んで episode を数えているのと同じ線。
    ADR 0245 決定1 の「分けない」は decompose(説明責任の分割)の話で、Agent tool は ADR 0010 が労力の側に置いたものなので触れない。
 2. **盤面は CLI の schema から `model` を消さず、Explore の上限も外さない。** どちらも固定版の CLI の既定で、本番と Interview に同じ
-   spawn env で同じに掛かるので乖離は起きない。挙動が変わるのは pin を上げたときだけで、それは版上げの門(ADR 0135 決定5 の読み直し)が
-   見る —— 新しい版の Agent tool には `effort` 引数もあるが、決定1 では親の選択なので対応は要らない。
+   spawn env で同じに掛かるので乖離は起きない。挙動が変わるのは pin を上げたときだけで、それは版上げの門(Claude は ADR 0186 の版の固定、Codex は
+   ADR 0135 決定5 の読み直し)が見る —— この Mac に入っている 2.1.304 の Agent tool には `effort` 引数もあるが、決定1 では親の選択なので
+   対応は要らない。
 3. **host の env 3つ —— `CLAUDE_CODE_SUBAGENT_MODEL` / `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` / `CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP` ——
    は worker の spawn env から消す。** 理由は Interview と本番の乖離ではなく、host が盤面の決定を上書きしない線(ADR 0005 / ADR 0208 /
    ADR 0215 決定1)である。消す形は refusal の env 3つと同じで、盤面側の値を入れず「無い」を固定する。user tier の settings は
