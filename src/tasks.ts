@@ -1324,15 +1324,14 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
     // ADR 0290 決定4: 付帯子の review の空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
     const ancestor = derivedWorkspace(db, { ...task, workspace: null });
     const filled: ResolvedFromDefault = {};
-    let fromAncestor: string | undefined;
     for (const column of ["assignee", "workspace"] as const) {
-      const fromParent = column === "workspace" && ancestor !== null;
-      const name = fromParent ? ancestor : fill[column];
+      const name = column === "workspace" ? (ancestor ?? fill.workspace) : fill.assignee;
       if (name && db.prepare(`UPDATE tasks SET ${column} = ? WHERE id = ? AND ${column} IS NULL`).run(name, task.id).changes) {
-        if (fromParent) fromAncestor = name;
-        else filled[column] = name;
+        filled[column] = name;
       }
     }
+    const fromAncestor = ancestor !== null ? filled.workspace : undefined;
+    if (fromAncestor) delete filled.workspace;
     appendEvent(db, {
       taskId: task.id,
       workerId,
