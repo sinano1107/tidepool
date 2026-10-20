@@ -330,6 +330,98 @@ it("異議された枝の再掲は (path, scope) の鍵 —— その scope に�
   ]);
 });
 
+/** charts の `tides` に Knowledge → 前の review の (tides, charts) の left_as_is に異議 → 人間がその Knowledge を引退 → charts の
+ *  `tides/high` に candidate(#2331 の実測1の盤面)。approved の木は空。 */
+function candidateOnlyBranch() {
+  const db = openDb(":memory:");
+  const retired = knowledgeIn(db, "charts", "tides").entry_id;
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  const drafted = createBehaviorCandidate(
+    db,
+    { scope: "charts", path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    "worker",
+    at,
+  ).entry_id;
+  return { db, drafted };
+}
+
+it("異議された枝の配下にその scope の candidate だけが残っていても、枝の一覧に無い (path, scope) のまま再掲される(ADR 0284 決定1)", () => {
+  const { db } = candidateOnlyBranch();
+
+  const { parts, section } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(parts.branches).toEqual([]);
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([{ branch: "tides", scope: "charts" }]);
+  expect(section).toContain("a branch if an entry of its scope that is not invalidated (candidates included) sits at or under the path, even a path not in Branches");
+});
+
+it("candidate だけが残る異議された枝が枝ごと移されていれば、candidate の移動の鎖をたどった今の (path, scope) で再掲され、その candidate も無効化されていれば載らない(ADR 0284 決定1 / ADR 0279 決定5)", () => {
+  const moved = candidateOnlyBranch();
+  moveMemoryBranch(moved.db, { scope: "charts", path: "tides", to_scope: "charts", to_path: "memo", mover: human }, "webui", at);
+  const rejected = candidateOnlyBranch();
+  invalidateMemoryEntry(rejected.db, { entry_id: rejected.drafted, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+
+  const afterMove = memoryMaterialOf(moved.db, register(moved.db, "memory")).parts;
+  const afterReject = memoryMaterialOf(rejected.db, register(rejected.db, "memory")).parts;
+
+  expect(afterMove.candidates.map(({ path, scope }) => ({ path, scope }))).toEqual([{ path: "memo/high", scope: "charts" }]);
+  expect(afterMove.items.filter((item) => "branch" in item)).toEqual([{ branch: "memo", scope: "charts" }]);
+  expect(afterReject.items.filter((item) => "branch" in item)).toEqual([]);
+});
+
+it("枝ごと移された candidate の複製も無効化されていれば、移動先の (path, scope) でも再掲されない(ADR 0284 決定1)", () => {
+  const { db } = candidateOnlyBranch();
+  moveMemoryBranch(db, { scope: "charts", path: "tides", to_scope: "charts", to_path: "memo", mover: human }, "webui", at);
+  const copy = memoryMaterialOf(db, register(db, "memory")).parts.candidates[0]!.id;
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+
+  const { parts } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([]);
+});
+
+it("枝の一覧にある path でも、異議された scope の配下が candidate だけなら再掲される —— 木の scope に無くてよい(ADR 0284 決定1)", () => {
+  const { db } = candidateOnlyBranch();
+  knowledgeIn(db, "reef", "tides");
+
+  const { parts } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(parts.branches.map(({ path, scopes }) => ({ path, scopes }))).toEqual([{ path: "tides", scopes: ["reef"] }]);
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([
+    { branch: "tides", scope: "reef" },
+    { branch: "tides", scope: "charts" },
+  ]);
+});
+
+it("異議の無い path に workspace の candidate だけがあっても、構造の項目「定義の無い枝」は立たない —— 木は approved だけ(ADR 0284 決定2)", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  createBehaviorCandidate(db, { scope: "charts", path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at);
+
+  const { parts } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([]);
+});
+
+it("異議された workspace の枝の下に盤面全体のエントリがあっても、再掲は人間が名指した (path, scope) のままで、構造の (path, 盤面全体) と並ぶ(ADR 0284 決定3)", () => {
+  const db = openDb(":memory:");
+  knowledgeIn(db, "charts", "tides/low");
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
+  recordKnowledge(db, { scope: null, path: "tides/deep", title: "Deep", text: "Deep.", source: { commit: "0a46a46" }, author: deckhand }, "worker", at);
+
+  const { parts } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(parts.items.filter((item) => "branch" in item)).toEqual([
+    { branch: "tides", scope: null },
+    { branch: "tides", scope: "charts" },
+    { branch: "tides/deep", scope: null },
+    { branch: "tides/low", scope: "charts" },
+  ]);
+});
+
 it("盤面全体のエントリ(candidate も)がその path かその下にある定義の無い枝は (path, 盤面全体) の1項目だけで、無ければ欠けている workspace ごとに1項目(ADR 0282 決定2・3)", () => {
   const db = openDb(":memory:");
   register(db, "memory", true);

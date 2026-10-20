@@ -289,6 +289,53 @@ it("注入した一覧に無い (path, scope) は path と scope を名指して
   });
 });
 
+/** 前の review の (tides, charts) の left_as_is に異議があり、charts の `tides` の Knowledge は人間が引退させ、charts の `tides/high` に
+ *  candidate だけが残る周期(#2331 の実測1の盤面)。stored は店の変更と起草された candidate の項目(据え置きとして渡す)。 */
+function candidateOnlyCycle() {
+  const db = openDb(":memory:");
+  const retired = knowledge(db, "tides", "charts");
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous.id, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  const drafted = createBehaviorCandidate(
+    db,
+    { scope: "charts", path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
+    "worker",
+    at,
+  ).entry_id;
+  return { db, stored: [{ entry: retired }, { entry: drafted }], ...injectedReview(db) };
+}
+
+it("candidate だけが残る異議された枝の再掲は、値も行為も無ければ unjudged で拒まれ、left_as_is なら判断の行が書かれ、その scope の定義の後は値なしで完了する(ADR 0284 決定1)", () => {
+  const left = candidateOnlyCycle();
+  expect(left.injected).toEqual([...left.stored, { branch: "tides", scope: "charts" }]);
+  expect(() => completeMemoryReview(left.db, left.review, { judgments: left.stored }, "auditor", at, "worker")).toThrow(/^unjudged: branch tides in scope charts —/);
+  completeMemoryReview(left.db, left.review, { judgments: [...left.stored, { branch: "tides", scope: "charts" }] }, "auditor", at, "worker");
+  expect(judgmentRows(left.db, left.review.id)).toContainEqual({
+    kind: "decision_logged",
+    line: "left_as_is: branch tides in scope charts",
+    judgment: { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" },
+  });
+
+  const defined = candidateOnlyCycle();
+  defineMemoryByMetaReview(defined.db, { scope: "charts", path: "tides", text: "Tides.", author: metaReview }, "worker", at, defined.review.id);
+  expect(completeMemoryReview(defined.db, defined.review, { judgments: defined.stored }, "auditor", at, "worker").status).toBe("done");
+});
+
+it("再掲の (path, workspace) と構造の (path, 盤面全体) が並んでも、盤面全体の定義1手で両方が覆われる(ADR 0284 決定3 / ADR 0282 決定4)", () => {
+  const db = openDb(":memory:");
+  knowledge(db, "tides/low", "charts");
+  const previous = register(db, "memory", true);
+  objectedJudgment(db, previous.id, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
+  const deep = knowledge(db, "tides/deep", null);
+  const { review, injected } = injectedReview(db);
+  const rest = [{ entry: deep }, { branch: "tides/deep", scope: null }, { branch: "tides/low", scope: "charts" }];
+  defineMemoryByMetaReview(db, { scope: null, path: "tides", text: "Tides.", author: metaReview }, "worker", at, review.id);
+
+  expect(injected).toEqual([{ entry: deep }, { branch: "tides", scope: null }, { branch: "tides", scope: "charts" }, ...rest.slice(1)]);
+  expect(completeMemoryReview(db, review, { judgments: rest }, "auditor", at, "worker").status).toBe("done");
+});
+
 it("据え置いた項目ごとに対象を名指す型つきの decision_logged が1行、文は盤面が組み reason があれば添え、完了する", () => {
   const { db, written, review } = cycle();
 
