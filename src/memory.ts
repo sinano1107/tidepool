@@ -2696,7 +2696,8 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
         "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
         "entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and scope (null = the " +
         "whole board), or a single whole-board item when whole-board entries sit at or under the path — and the entries and branches named " +
-        "by the judgments of the objected decisions, if still live. Act on each item, or pass it to " +
+        "by the judgments of the objected decisions — an entry if still live, a branch if an entry of its scope that is not invalidated " +
+        "(candidates included) sits at or under the path, even a path not in Branches. Act on each item, or pass it to " +
         "complete_memory_review as left as is.",
       parts.items,
       "no items to judge",
@@ -2716,8 +2717,8 @@ const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBody
  *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ(どれも本文が同じ鎖の末尾)、店の変更。枝は
  *  配下にエントリを持ち、その scope の Definition も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に
  *  盤面全体のエントリ(一木の門と同じ集合)があれば (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory
- *  meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と (path, scope)(その scope に今エントリがあるもの)も載る
- *  (ADR 0279 決定5)。 */
+ *  meta-review の判断の行が名指すエントリ(鎖の末尾が生きているもの)と (path, scope)(その scope の無効化されていないエントリが
+ *  candidate も含め path かその下にあるもの —— 枝の一覧に無い path でも、鍵は名指されたまま)も載る(ADR 0279 決定5 / ADR 0284)。 */
 function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: ReturnType<typeof memoryReads>): MemoryJudgmentItem[] {
   const restored = restoredAs(db);
   const tail = (id: number) => bodyTail(db, restored, id);
@@ -2729,9 +2730,11 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
     ...parts.store_changes.map(({ id }) => id),
     ...objected.flatMap((j) => ("entry" in j && requireEntry(db, tail(j.entry)).invalidation_reason === null ? [tail(j.entry)] : [])),
   ]);
+  // 再掲の生死は approved の木でなく、その scope の無効化されていないエントリ(candidate も)が path かその下にあるか(ADR 0284 決定1)。
   // その scope にエントリの無い枝は、その scope の配下だったエントリの移動の鎖の末尾から今の (path, scope) を引く(エントリが鎖の末尾で
   // 名指されるのと同じ)—— 盤面全体へ広げられていれば盤面全体
-  const live = (path: string, scope: string | null) => parts.branches.some((row) => row.path === path && row.scopes.includes(scope));
+  const unretired = db.prepare("SELECT path, scope FROM memory_entries WHERE invalidation_reason IS NULL").all() as Array<{ path: string; scope: string | null }>;
+  const live = (path: string, scope: string | null) => unretired.some((row) => row.scope === scope && atOrUnder(row.path, path));
   const moved = db.prepare("SELECT * FROM memory_entries WHERE invalidation_reason = 'path_moved'").all() as EntryRow[];
   const objectedBranches = objected.flatMap((j) => {
     if (!("branch" in j)) return [];
@@ -2740,17 +2743,21 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
       if (row.scope !== j.scope || !atOrUnder(row.path, j.branch)) return [];
       const rest = row.path.slice(j.branch.length);
       const now = sameBodyChain(db, row, restored).at(-1)!;
-      return now.path.endsWith(rest) ? [{ branch: now.path.slice(0, now.path.length - rest.length), scope: now.scope }] : [];
+      const branch = now.path.slice(0, now.path.length - rest.length);
+      return now.path.endsWith(rest) && live(branch, now.scope) ? [{ branch, scope: now.scope }] : [];
     });
   });
-  const wholeBoard = (db.prepare("SELECT path FROM memory_entries WHERE scope IS NULL AND invalidation_reason IS NULL").all() as Array<{ path: string }>).map((row) => row.path);
+  const wholeBoard = unretired.flatMap((row) => (row.scope === null ? [row.path] : []));
+  const tree = parts.branches.map(({ path }) => path);
   const branches = parts.branches.flatMap(({ path, definitions, scopes }) => {
     const undefinedIn = scopes.filter((scope) => !definitions.some((d) => d.scope === null || d.scope === scope));
     const structural = undefinedIn.length > 0 && wholeBoard.some((p) => atOrUnder(p, path)) ? [null] : undefinedIn;
-    const again = objectedBranches.flatMap((o) => (o.branch === path && scopes.includes(o.scope) ? [o.scope] : []));
+    const again = objectedBranches.flatMap((o) => (o.branch === path ? [o.scope] : []));
     return [...new Set([...structural, ...again])].map((scope) => ({ branch: path, scope }));
   });
-  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches];
+  // 木に無い path(配下が candidate だけ)の再掲は木の後に
+  const offTree = new Map(objectedBranches.filter((o) => !tree.includes(o.branch)).map((o) => [`${o.scope}\0${o.branch}`, { branch: o.branch, scope: o.scope }]));
+  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches, ...offTree.values()];
 }
 
 /** 読み手の窓の判断を要する項目を今の店で計算し直す —— 完了の verb は注入した一覧の絞り込みにだけ使う(ADR 0278 追記4)。 */
