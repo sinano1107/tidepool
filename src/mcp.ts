@@ -86,6 +86,7 @@ import {
   interviewTargets,
   isArtifactDiscarded,
   isRepairType,
+  isSubjectReaderRca,
   joinHistory,
   listExaminees,
   logDecision,
@@ -1159,6 +1160,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     registerMemoryEntriesRead(server, deps, run);
     registerRoutingMetaReviewVerbs(server, deps, run);
   }
+  // ADR 0283 追記1: 行の主題を持つ RCA も親の主題の読み手で、指針の節の id 読みを持つ
+  if (attributedTaskId !== null && isSubjectReaderRca(deps.db, attributedTaskId)) registerMemoryEntriesRead(server, deps, slotRun(deps, attributedTaskId));
 
   if (!withheld.includes("define_memory_branch")) {
     server.registerTool(
@@ -1349,8 +1352,8 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
   else registerRoutingMetaReviewVerbs(server, deps, run);
 }
 
-/** 指針の節の id 読み: 両主題の meta-review と、親の主題の読み手である主題の修理子(memory_repair / routing_repair)が持つ(ADR 0279 決定2 /
- *  ADR 0283 決定3 —— 指針の節はどちらにも注入され、その本文はこれで読む)。 */
+/** 指針の節の id 読み: 両主題の meta-review と、親の主題の読み手である主題の修理子(memory_repair / routing_repair)と行の主題を持つ RCA が持つ
+ *  (ADR 0279 決定2 / ADR 0283 決定3・追記1 —— 指針の節はどれにも注入され、その本文はこれで読む)。 */
 function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "read_memory_entries",

@@ -193,6 +193,28 @@ it("memory_repair の tools/list の記憶の verb は memoryRepairVerbs の集�
   }
 });
 
+it("meta-review の下の RCA の worker MCP は read_memory_entries を出し、worker の pull verb と record_knowledge を出さない —— read_memory_entries の読みは memory_pulled の verb read_memory_entries で残る(中身は domain の釘、ADR 0283 追記1 / ADR 0107 決定3)", async () => {
+  t = await bootTidepool();
+  const at = t.clock.now();
+  const repair = judgmentRepairTask(t.db, at);
+  const rca = listChildren(t.db, repair.parent_id!).find((child) => child.title.startsWith("rca (auditor)"))!;
+  const entry = recordKnowledge(t.db, { scope: null, path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
+  await runNow(t, rca.id);
+  const client = await mcpClient(t.mcpBaseUrl, rca.id);
+  try {
+    const names = (await client.listTools()).tools.map((tool) => tool.name);
+    expect(names).toContain("read_memory_entries");
+    const withheld: readonly string[] = taskVerbSwap(t.db, rca.id).withheld;
+    expect(names.filter((name) => withheld.includes(name))).toEqual([]);
+
+    expect(body(await client.callTool({ name: "read_memory_entries", arguments: { ids: [entry] } })).entries).toEqual([expect.objectContaining({ id: entry })]);
+    const pulls = ((await api(t.baseUrl, "GET", `/api/tasks/${rca.id}/events`)).json as any[]).filter((e) => e.kind === "memory_pulled");
+    expect(pulls.map((e) => e.payload.verb)).toEqual(["read_memory_entries"]);
+  } finally {
+    await client.close();
+  }
+});
+
 it("routing_repair の worker MCP の tools/list は基本の面(get_current_task / log_decision / escalate / complete_task)と routingRepairVerbs の集合 —— 型つきの行を運ばなければ基本の面だけ(中身は domain の釘、ADR 0107 決定3)で、get_current_task は祖先の cancel の下でも routing の修理の1行を運ぶ(ADR 0279 決定4)", async () => {
   t = await bootTidepool();
   const objected = registerTask(t.db, { type: "work", title: "judge the routing table", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);

@@ -49,7 +49,7 @@ import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 
 
-import { carriesReadOnly, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
@@ -1234,12 +1234,21 @@ export class CodexWorker implements WorkerAdapter {
         memorySection: memoryPromptSection(memory, material),
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281 / ADR 0283 決定3: MCP の登録と同じ差を写す(主題の修理子の pull verb の伏せと read_memory_entries は taskVerbSwap と memoryRepairVerbs から来る)。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281 / ADR 0283 決定3・追記1: MCP の登録と同じ差を写す(主題の修理子と行の主題を持つ RCA の pull verb の伏せは taskVerbSwap、read_memory_entries は memoryRepairVerbs / routingRepairVerbs / isSubjectReaderRca から来る)。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject
           ? [...BOARD_VERBS.filter((verb) => !(WORKER_MEMORY_VERBS as readonly string[]).includes(verb)), ...META_REVIEW_SUBJECTS[subject].verbs]
-          : [...BOARD_VERBS, ...(task.type === "memory_repair" ? memoryRepairVerbs(this.options.db, task.id) : task.type === "routing_repair" ? routingRepairVerbs(this.options.db, task.id) : [])]
+          : [
+              ...BOARD_VERBS,
+              ...(task.type === "memory_repair"
+                ? memoryRepairVerbs(this.options.db, task.id)
+                : task.type === "routing_repair"
+                  ? routingRepairVerbs(this.options.db, task.id)
+                  : isSubjectReaderRca(this.options.db, task.id)
+                    ? ["read_memory_entries"]
+                    : []),
+            ]
         ).filter((verb) => !withheld.includes(verb)),
         ...verbs.added,
       ],

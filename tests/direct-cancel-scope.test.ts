@@ -27,6 +27,7 @@ import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerQuestionViaWebui,
+  auditorRcaOn,
   closedRootTree,
   decomposedChild,
   decomposeTaskViaWorker,
@@ -36,6 +37,7 @@ import {
   HOUR,
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
+  judgmentRepairTask,
   settleReview,
 } from "./harness.js";
 
@@ -523,6 +525,22 @@ it("task ごとの verb の差し替えは、meta-review の下の memory_repair
     withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"],
     added: [],
   });
+});
+
+it("task ごとの verb の差し替えは、meta-review の下の RCA(self / auditor)とその子孫の RCA では worker の pull verb と新規の記憶の書き込みも伏せる —— 両主題とも親の主題の読み手(ADR 0283 追記1)", () => {
+  db = openDb(":memory:");
+  const memoryRepair = judgmentRepairTask(db, NOW);
+  const memoryRcas = listChildren(db, memoryRepair.parent_id!).filter((child) => child.title.startsWith("rca ("));
+  const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, NOW, ...HUMAN_WEBUI);
+  const rcas = [...memoryRcas, auditorRcaOn(db, memoryRcas[1]!, NOW, "fugu"), auditorRcaOn(db, routingReview, NOW, "fugu")];
+
+  expect(memoryRcas.map((rca) => rca.title)).toEqual([expect.stringMatching(/^rca \(self\)/), expect.stringMatching(/^rca \(auditor\)/)]);
+  for (const rca of rcas) {
+    expect(taskVerbSwap(db, rca.id)).toEqual({
+      withheld: ["complete_task", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"],
+      added: ["complete_rca"],
+    });
+  }
 });
 
 it("task ごとの verb の差し替えは、routing_repair で基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せ、祖先の cancel の下でも同じ —— routing の verb は後続(ADR 0279 決定4)", () => {
