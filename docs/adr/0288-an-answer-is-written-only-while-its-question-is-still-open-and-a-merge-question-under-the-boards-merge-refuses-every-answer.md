@@ -12,11 +12,15 @@ await している間に観測が question を閉じ、閉じた question の上
 
 1. **回答は、書き込みの時点で question がまだ開いているときだけ書く。** 閉じていれば回答の transaction ごと止める。
    条件は書き込みの1か所に置き、観測決着と同じ綴りにする。閉じる経路がどこにあっても効き、経路が増えても漏れない。
-2. **印の付いた PR の merge question は、値に依らずどの回答も拒む(ADR 0236 決定3 の拡張)。** 印の付いた merge
-   question を閉じうる経路は、別の人間面からの `hold` 回答だけである(merge question は親を持たず、question の直接
-   cancel は門が拒む)。進行中の merge は止められないので、hold を受理すると merge を執行した回答が決定1 で止まり、
-   `pr_merged` が残らず ADR 0236 決定1 が破れる。拒めば merge question を閉じる経路は無くなり、`merge` 回答の
-   `question_answered` と `pr_merged` は同じ transaction のまま残る(ADR 0265 決定1)。
+2. **merge question の窓は印の前後で分けて塞ぐ。** merge question を閉じうる経路は、観測(印を見て飛ばす)のほかは
+   別の人間面からの `hold` 回答だけである(merge question は親を持たず、question の直接 cancel は門が拒む)。進行中の
+   merge は止められないので、merge を執行した回答が決定1 で止まると `pr_merged` が残らず ADR 0236 決定1 が破れる。
+   **印の後**: 印の付いた PR の merge question は、値に依らずどの回答も拒む(ADR 0236 決定3 の拡張)。**印の前**:
+   `merge` 回答は印を取るのと同じ同期の区間で question がまだ開いているかを読み直し、閉じていれば印を放して merge を
+   呼ばずに拒む —— 同期の読みと merge の await の始まりの間には何も割り込めない。この2つで merge の執行と書き込みの間に
+   question を閉じる経路は無くなり、`merge` 回答の `question_answered` と `pr_merged` は同じ transaction のまま残る
+   (ADR 0265 決定1)。印の前の読み直しが要るのは merge question だけである —— ローカル着地の merge は同期で、registry の
+   commit は await が執行そのもので(決定3)、執行の前に await を持つ種類は他に無い。
 3. **書き込みより先に済んだ外への効果の記録は、回答と切り離して残す。** registry の提案の approve は commit が着地
    してから回答を書く(ADR 0150 決定5 —— 順だけを決め、transaction は縛っていない)。commit が返った直後に自分の
    transaction で `agent_tier_changed` を刻み、回答はその後に試みる。question が閉じていて回答が止まっても registry が
