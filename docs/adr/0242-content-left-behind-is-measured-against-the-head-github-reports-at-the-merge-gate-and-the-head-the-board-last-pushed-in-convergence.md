@@ -1,5 +1,7 @@
 # 積み残しは、merge の門では GitHub が報告した head と、収束では盤面が最後に push した head と比べる
 
+**Status: 決定1 はローカル着地の merge 回答にも及ぶ(ADR 0289)—— 比べる head は着地の面が merge する head で、ローカルではローカルのタスクブランチ**
+
 2026-10-13 の grilling(issue #1837、発端は #1766 の grilling)で決定。ADR 0239 決定1 は candidate を「merge される
 head」とし、実装はそれを盤面の手元の remote-tracking ref(写し)で読んでいた。写しは盤面自身の push と同じ checkout の
 fetch でしか動かないので、別の clone からの force-push(#1831)や refspec を絞った checkout(#1778)のたびに判定を誤る。
