@@ -101,6 +101,6 @@ routing の「セル」は、セルを名指す判断の行が無くなるので
 
 決定3・追記4 の「注入した一覧に無い id は拒む」は、窓の前に起草された candidate や窓で変わっていない approved の Behavior / Exemplar
 —— 読み手が残高で読み行為できるが項目でない対象 —— にも当たる。それらへの scope の変更(狭める・workspace 間・approved の scope)を
-正しいと判断した据え置きは `complete_memory_review` の reason では言えず、ADR 0176 決定8 のまま `log_decision` で、エントリ id と判断した
+正しいと判断した据え置きは `complete_memory_review` の reason では言えず、ADR 0176 決定8 のまま `log_decision` で、エントリ id(枝なら path と scope)と判断した
 scope を名指す1行に残す(#1186 の観測が数える語彙)。#2283 の purpose の差し替えは項目の場合だけで、項目でない場合を言い落としていた
 (domain 層で再現)。型なしの行は異議されても次の周期の項目に戻らない —— op を作るかは #1186 の観測待ちのまま。
