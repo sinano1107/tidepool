@@ -70,3 +70,8 @@ Behavior / Exemplar の節が注入される。材料(Objected decisions)に載�
 `replace_memory`。移動は meta-review と同じく枝ごとの移動(`move_memory_branch`)を含み、枝は「その書き込みが定義を作った・そこへ
 エントリを移した」で射程に入る —— code はエントリ1件の移動しか写していなかった。同じ操作の verb は meta-review 版と1つの tool で、射程は
 門に付く(ADR 0281)。
+
+## 追記(2026-10-20 の grilling、issue #2330 / ADR 0285)
+
+決定4 の「移動 —— meta-review の直接の移動と同じ門(scope は広げる向きだけ)」のうち、盤面全体へ広げる向きは修理子には開かない。修理子の
+書き込みはすべて対象の scope に留まり、移し戻し(逆操作)だけが門を持たない。
