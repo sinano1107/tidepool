@@ -4,6 +4,7 @@ import { appendEvent, getEvent, listEvents, listEventsOfKinds } from "../src/eve
 import {
   approveMemoryProposal,
   buildMetaReviewMaterial,
+  completeMemoryReview,
   createBehaviorCandidate,
   defineMemoryBranch,
   defineMemoryByMetaReview,
@@ -266,7 +267,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
   const { parts, section } = memoryMaterialOf(db, review);
 
   expect(parts.items).toEqual([
-    ...[followed, answered, drafted, written].sort((a, b) => a - b).map((entry) => ({ entry })),
+    ...[followed, drafted, written].sort((a, b) => a - b).map((entry) => ({ entry })),
     { branch: "tools/node", scope: "tidepool" },
   ]);
   expect(ids(parts.candidates)).toContain(older);
@@ -478,7 +479,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
       proposals: [question],
       proposal_entries: [rejected],
       branches: [definition],
-      items: [...[written, definition, drafted, rejected].map((entry) => ({ entry })), { branch: "tools/node", scope: "tidepool" }],
+      items: [...[written, definition, drafted].map((entry) => ({ entry })), { branch: "tools/node", scope: "tidepool" }],
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
       tokenizer_version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
@@ -596,6 +597,53 @@ it("reject で決着した consolidate の提案の replaces が名指す approv
   expect(items).toContainEqual({ entry: replaced });
   expect(seen).toContain(replaced);
   expect(read).toEqual([]);
+});
+
+it("窓で承認された既存の後継への consolidate の replaces は superseded で鎖の末尾が無効化済みなので項目に載らず、後継も項目に載らない(ADR 0286 決定1)", () => {
+  const db = openDb(":memory:");
+  const [successor, replaced] = ["Short notes", "Brief notes"].map((title) => candidate(db, title));
+  for (const [id, name] of [[successor!, "question-successor"], [replaced!, "question-replaced"]] as const) {
+    approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: id, replaces: [] }, name, "webui", at);
+  }
+  const previous = register(db, "memory", true);
+  const question = proposeMemoryChange(db, previous, { op: "consolidate", successor_id: successor!, replaces: [replaced!], rationale: "r" }, "auditor", at).question_id;
+  answerQuestionViaWebui(db, getTask(db, question)!, ["approve"], at);
+  approveMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
+
+  const { parts } = memoryMaterialOf(db, register(db, "memory"));
+
+  expect(db.prepare("SELECT invalidation_reason FROM memory_entries WHERE id = ?").get(replaced)).toEqual({ invalidation_reason: "superseded" });
+  expect(parts.proposals.map((row) => row.question_id)).toEqual([question]);
+  expect(parts.items).toEqual([{ branch: "habits", scope: null }]);
+});
+
+it("窓で reject された candidate と、cause memory の異議つき判断が名指し窓で人間が引退させた Knowledge は項目に載らず、値なしで完了する —— 回答と無効化は Settled proposals と Store changes の部分で読まれる(ADR 0286 決定1)", () => {
+  const db = openDb(":memory:");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
+  const decision = objectedDecision(db, work, 1);
+  const followed = knowledge(db, "tools/node");
+  defineMemoryBranch(db, { scope: "tidepool", path: "tools", text: "Tools.", author: deckhand }, "worker", at);
+  const answered = candidate(db, "Answered");
+  const previous = register(db, "memory", true);
+  const question = proposeMemoryChange(db, previous, { op: "approve", candidate_id: answered, rationale: "r" }, "auditor", at).question_id;
+  answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "No." });
+  rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
+  appendEvent(db, {
+    taskId: work,
+    workerId: "tidepool",
+    origin: "board",
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", entries: [followed], round: "initial" },
+    at,
+  });
+  invalidateMemoryEntry(db, { entry_id: followed, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  const review = register(db, "memory");
+  const material = memoryMaterialOf(db, review);
+  recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
+
+  expect(material.parts.items).toEqual([]);
+  expect(material.parts.proposals.map((row) => row.question_id)).toEqual([question]);
+  expect(ids(material.parts.store_changes)).toEqual([followed]);
+  expect(completeMemoryReview(db, getTask(db, review)!, { judgments: [] }, "auditor", at, "worker").status).toBe("done");
 });
 
 it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5部分のどこにも載らなくても項目に載り、その session の decision の entries_seen に入り entries_read に入らない", () => {

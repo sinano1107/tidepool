@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, listEventsOfKinds } from "../src/events.js";
 import {
+  buildMetaReviewMaterial,
   completeMemoryReview,
   createBehaviorCandidate,
   defineMemoryByMetaReview,
@@ -12,6 +13,7 @@ import {
   moveMemoryByMetaReview,
   proposeMemoryChange,
   recordKnowledge,
+  recordMetaReviewMaterial,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { completeTask, getTask, type Task, taskVerbSwap } from "../src/tasks.js";
@@ -144,15 +146,33 @@ it.each([
   expect(judgmentRows(db, review.id).map((row) => row.judgment)).not.toContainEqual(expect.objectContaining({ entry: written }));
 });
 
-it("注入の前(窓の中)に無効化された店の変更のエントリは行為済みでなく、値が無ければ unjudged で拒まれる", () => {
+it("注入の前(窓の中)に無効化された店の変更のエントリは項目に載らず、値なしで完了し、行は書かれない(ADR 0286 決定1)", () => {
   const db = openDb(":memory:");
   register(db, "memory", true);
   const written = knowledge(db, "notes");
   invalidateMemoryEntry(db, { entry_id: written, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
   const { review, injected } = injectedReview(db);
 
-  expect(injected).toContainEqual({ entry: written });
-  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${written}`);
+  expect(injected).toEqual([]);
+  expect(completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker").status).toBe("done");
+  expect(judgmentRows(db, review.id)).toEqual([]);
+});
+
+it("材料を組んでから記録するまでの間に人間が引退させたエントリへの left_as_is は受け取られ、行を書かずに done になる(#2311 / ADR 0286 決定2)", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const retired = knowledge(db, "notes");
+  const review = register(db, "memory");
+  const material = buildMetaReviewMaterial(db, review.id);
+  if (material?.subject !== "memory") throw new Error("no memory material");
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  recordMetaReviewMaterial(db, review.id, "auditor", 42, material, at);
+
+  const done = completeMemoryReview(db, review, { judgments: material.parts.items }, "auditor", at, "worker");
+
+  expect(material.parts.items).toContainEqual({ entry: retired });
+  expect(done.status).toBe("done");
+  expect(judgmentRows(db, review.id)).toEqual([]);
 });
 
 it("窓で異議された前の判断の行が名指すエントリと枝は項目で、値も行為も無ければ unjudged で拒まれ、left_as_is を渡せば完了する(ADR 0279 決定5)", () => {
@@ -290,7 +310,7 @@ it("注入した一覧に無い (path, scope) は path と scope を名指して
 });
 
 /** 前の review の (tides, charts) の left_as_is に異議があり、charts の `tides` の Knowledge は人間が引退させ、charts の `tides/high` に
- *  candidate だけが残る周期(#2331 の実測1の盤面)。stored は店の変更と起草された candidate の項目(据え置きとして渡す)。 */
+ *  candidate だけが残る周期(#2331 の実測1の盤面)。stored は起草された candidate の項目(据え置きとして渡す)—— 引退した Knowledge は項目でない(ADR 0286)。 */
 function candidateOnlyCycle() {
   const db = openDb(":memory:");
   const retired = knowledge(db, "tides", "charts");
@@ -303,7 +323,7 @@ function candidateOnlyCycle() {
     "worker",
     at,
   ).entry_id;
-  return { db, stored: [{ entry: retired }, { entry: drafted }], ...injectedReview(db) };
+  return { db, stored: [{ entry: drafted }], ...injectedReview(db) };
 }
 
 it("candidate だけが残る異議された枝の再掲は、値も行為も無ければ unjudged で拒まれ、left_as_is なら判断の行が書かれ、その scope の定義の後は値なしで完了する(ADR 0284 決定1)", () => {
