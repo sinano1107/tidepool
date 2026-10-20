@@ -119,3 +119,8 @@ Precedent が名指す entry を「読め」と言い(ADR 0166 決定5)、`propo
 決定2 の「worker の memory verb を登録しない」は主題の修理子(meta-review の下の `memory_repair` / `routing_repair`)にも当たる ——
 worker の pull verb(`browse_memory` / `search_memory` / `read_memory`)は登録せず、`read_memory_entries` を両方の行の修理子に登録する
 (ADR 0283 決定3)。祖先に meta-review の無い `memory_repair` は worker のまま。
+
+## 追記3(2026-10-20 の triage、issue #2342 / ADR 0283 追記1)
+
+追記2 の面は meta-review の下の RCA(とその子孫の RCA)にも当たる —— worker の pull verb と `record_knowledge` / `define_memory_branch` を
+登録せず、`read_memory_entries` を登録する。祖先に meta-review の無い RCA は worker のまま。

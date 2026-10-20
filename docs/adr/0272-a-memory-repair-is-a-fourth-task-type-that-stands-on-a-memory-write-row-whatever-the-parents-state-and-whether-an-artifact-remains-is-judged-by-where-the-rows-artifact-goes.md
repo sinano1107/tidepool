@@ -108,3 +108,8 @@ memory meta-review の判断の行には meta-review の読み口と書き込み
 決定3 の「work の面から分解系と新規書き込みを外す」は worker の系譜の修理子の文。meta-review の下の主題の修理子は worker の pull verb
 (`browse_memory` / `search_memory` / `read_memory`)を持たず、meta-review の読み口(`read_memory_entries`、判断の行を運べば一覧・検索も)を
 持つ —— 親の主題の読み手(ADR 0283 決定3)。
+
+## 追記6(2026-10-20 の triage、issue #2342 / ADR 0283 追記1)
+
+追記5 の面は meta-review の下の RCA にも当たる —— worker の pull verb と新規書き込み(`record_knowledge` / `define_memory_branch`)を
+持たず、`read_memory_entries` を持つ。RCA の学びの書き込みは `propose_from_objection`(ADR 0280)。

@@ -40,3 +40,18 @@
 - 追記する ADR: 0279 決定1・2・3・7・帰結、0272 決定3、0122 決定2。Codex の `enabledTools` の宣言(MCP の登録と集合で一致する)は同じ差を写す。
 - pickup は workspace の空の列に既定名を焼く(review は実測、修理子型は読んだだけ)が、主題つきの系譜では置き場も読み口もその列を読まなくなる。
 - #2317 / #2314 / #2333 は #2339 の spec 1本で着地する。
+
+## 追記1(2026-10-20 の triage、issue #2342)
+
+決定3 の「親の主題の読み手」は主題の修理子だけを名指していたが、決定1 で spawn 注入の分岐を行の主題で読んだ時点で、meta-review の下の
+RCA(とその子孫の RCA)も指針の節を受けている。その読み口が worker の面のままだった: 前文が名指す `read_memory_entries` を持たず、
+worker の pull verb が既定 workspace に解決し、`record_knowledge` / `define_memory_branch` が既定 workspace に書く(同じ RCA の
+`propose_from_objection` は決定1 で盤面全体に書く)。実測は #2342 のコメント。
+
+決定3 を **行の主題を持つ meta-review の子孫 —— 主題の修理子と RCA —— に広げる。** 行の主題を持つ RCA は `read_memory_entries` を持ち、
+worker の pull verb と worker の新規書き込み(`record_knowledge` / `define_memory_branch`)を持たない。学びの書き込みは
+`propose_from_objection` が決定1 の置き場(盤面全体)に、RCA に帰属する記録つきで書く(ADR 0280)ので、worker の書き込み verb を
+残す理由が無い。伏せる根拠は RCA 自身のもの(workspace を持たない仕事の子で、学びの置き場を既に持つ)であって、ADR 0272 決定3 の
+「修理の射程」ではない。退けた案は決定3 と同じ(scope null に解決する第3の形は `memoryScope` に worker でも meta-review でもない道を
+足す。domain の `recordKnowledge` 自体は worker_verb 名義の scope null を拒まないが、worker の経路は #623 で null を拒む)。
+祖先に meta-review の無い RCA は今どおり worker の面。
