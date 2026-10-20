@@ -102,3 +102,9 @@ prompt が見出し無しの1行で始まる。**組み込み × memory_repair �
 `memory_repair`(同じ task の書き込みの行と合わせて1本)、routing meta-review の判断の行は第5の type `routing_repair`(別 type の理由は
 決定2 そのもの —— 性質は同じで目的が違う。共有は関数で)。決定3 の verb は行の種類で登録し分ける: 書き込みの行には修理 verb 5本、
 memory meta-review の判断の行には meta-review の読み口と書き込み verb を対象に限ったもの(ADR 0279 決定3・4)。
+
+## 追記5(2026-10-20 の grilling、issue #2339 / ADR 0283)
+
+決定3 の「work の面から分解系と新規書き込みを外す」は worker の系譜の修理子の文。meta-review の下の主題の修理子は worker の pull verb
+(`browse_memory` / `search_memory` / `read_memory`)を持たず、meta-review の読み口(`read_memory_entries`、判断の行を運べば一覧・検索も)を
+持つ —— 親の主題の読み手(ADR 0283 決定3)。
