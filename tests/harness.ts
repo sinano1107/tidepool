@@ -29,7 +29,7 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
-import { metaReviewSubjectOf, registerMetaReview } from "../src/meta-review.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
@@ -59,6 +59,7 @@ import {
   listChildren,
   listExaminees,
   logDecision,
+  metaReviewSubjectOf,
   poseProbe,
   presentTask,
   type RegisterTaskInput,

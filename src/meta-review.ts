@@ -6,7 +6,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, registerTask, type Task } from "./tasks.js";
+import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -147,13 +147,6 @@ export const META_REVIEW_SUBJECTS = {
   },
 } as const;
 export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
-
-/** この task が meta-review ならその主題、そうでなければ null(専用 verb の登録と門が読む、ADR 0122 決定2)。自身の列だけを読む ——
- *  「この行はどの主題に載るか / この task は誰の読み手か」は lineageSubjectOf(ADR 0283 決定1)。 */
-export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
-  return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").get(taskId) as { meta_review_subject: MetaReviewSubject | null } | undefined)
-    ?.meta_review_subject ?? null;
-}
 
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。
  *  `excludeTaskId` は読み手自身 —— その登録の watermark は「今」なので除く。 */

@@ -43,7 +43,7 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
-import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
+import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -87,9 +87,9 @@ import {
   isArtifactDiscarded,
   isRepairType,
   joinHistory,
-  lineageSubjectOf,
   listExaminees,
   logDecision,
+  metaReviewSubjectOf,
   posedProbe,
   poseProbe,
   REPAIR_NOTICES,
@@ -1270,8 +1270,7 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
     registerPrecedentRead(server, deps, run);
     registerMemoryMetaReviewVerbs(server, deps, run, side);
   } else registerMemoryMoves(server, deps, run, side);
-  // 行の主題を持つ修理子は運ぶ行を問わず親の主題の読み手(ADR 0283 決定3)—— 判断の行を運ぶ修理子は必ず主題の系譜にいる
-  if (lineageSubjectOf(deps.db, attributedTaskId) !== null) registerMemoryEntriesRead(server, deps, run);
+  if (kinds.reads) registerMemoryEntriesRead(server, deps, run);
   if (!kinds.writes) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
@@ -1350,7 +1349,8 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
   else registerRoutingMetaReviewVerbs(server, deps, run);
 }
 
-/** 指針の節の id 読み: 両主題の meta-review が持つ(ADR 0279 決定2 —— 指針の節は両主題に注入され、その本文はこれで読む)。 */
+/** 指針の節の id 読み: 両主題の meta-review と、親の主題の読み手である主題の修理子(memory_repair / routing_repair)が持つ(ADR 0279 決定2 /
+ *  ADR 0283 決定3 —— 指針の節はどちらにも注入され、その本文はこれで読む)。 */
 function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "read_memory_entries",

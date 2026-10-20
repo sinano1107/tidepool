@@ -29,13 +29,13 @@ import {
   tierFieldDescriptions,
 } from "../src/execution-setting.js";
 import { submitAnswer } from "../src/human-verbs.js";
-import { metaReviewSubjectOf, registerMetaReview } from "../src/meta-review.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { PROVIDER_VALUES, type Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { assertValidAgentDefinition } from "../src/registry.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
-import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, metaReviewSubjectOf, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { unusedLanding } from "./fakes.js";

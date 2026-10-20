@@ -17,7 +17,6 @@ import {
   type MetaReviewWindow,
   materialEvents,
   materialSection,
-  metaReviewSubjectOf,
   metaReviewWindow,
   objectedJudgments,
   objectedRowIds,
@@ -30,7 +29,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryAgent, routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -774,19 +773,24 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
   });
 }
 
-/** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
-export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
+/** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。
+ *  `reads` は meta-review の id 読み(read_memory_entries)を持つか —— 判断の行を運ぶか、行の主題を持つ(親の主題の読み手、ADR 0283 決定3)。
+ *  MCP の登録と memoryRepairVerbs(Codex の宣言)はどちらもこの組から引く。 */
+export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean; reads: boolean } {
   const judgments = repairJudgments(db, taskId, "memory").length > 0;
-  return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
+  return {
+    writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"),
+    judgments,
+    reads: judgments || lineageSubjectOf(db, taskId) !== null,
+  };
 }
 
 /** memory_repair の記憶の verb(ADR 0281): 書き込みの行の修理 verb、判断の行の memory meta-review の verb、両方なら名前の集合の和。
  *  行の主題を持つ修理子は運ぶ行を問わず meta-review の id 読みを持つ(ADR 0283 決定3)。
  *  Codex の `enabled_tools` が読み、MCP の登録は memoryRepairKinds で同じ組を登録する。 */
 export function memoryRepairVerbs(db: Db, taskId: string): string[] {
-  const { writes, judgments } = memoryRepairKinds(db, taskId);
-  const subjectReads = lineageSubjectOf(db, taskId) === null ? [] : ["read_memory_entries"];
-  return [...new Set([...(writes ? MEMORY_REPAIR_VERBS : []), ...(judgments ? MEMORY_META_REVIEW_VERBS : []), ...subjectReads])];
+  const { writes, judgments, reads } = memoryRepairKinds(db, taskId);
+  return [...new Set([...(writes ? MEMORY_REPAIR_VERBS : []), ...(judgments ? MEMORY_META_REVIEW_VERBS : []), ...(reads ? ["read_memory_entries"] : [])])];
 }
 
 /** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */

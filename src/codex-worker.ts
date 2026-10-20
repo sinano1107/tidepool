@@ -41,7 +41,7 @@ import {
   recordMemoryInjection,
   recordMetaReviewMaterial,
 } from "./memory.js";
-import { META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
+import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -49,7 +49,7 @@ import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 
 
-import { carriesReadOnly, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
