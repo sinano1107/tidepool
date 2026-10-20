@@ -137,11 +137,11 @@ function discardedRca(db: ReturnType<typeof openDb>) {
 }
 
 /** 異議の commit が立てた RCA(self は異議された行の書き手 codex-agent、auditor は Auditor の pointer)—— complete_task の代わりに
- *  complete_rca を持つ(ADR 0278 決定1)。 */
-function rca(kind: "self" | "auditor") {
+ *  complete_rca を持つ(ADR 0278 決定1)。異議された task が meta-review なら行の主題を持つ RCA(ADR 0283 追記1)。 */
+function rca(kind: "self" | "auditor", objectedTask: (db: ReturnType<typeof openDb>) => Task = (db) => task(db, `objected for ${kind}`)) {
   return (db: ReturnType<typeof openDb>) => {
     const at = new Date("2026-08-24T00:00:00.000Z");
-    const objected = task(db, `objected for ${kind}`);
+    const objected = objectedTask(db);
     const entry = logDecision(db, objected, "codex-agent's call", "codex-agent", at, "worker");
     startTriage(db, at);
     raiseObjection(db, entry, "redo it", at);
@@ -662,6 +662,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["routing meta-review の判断の行への異議の修理", (db: ReturnType<typeof openDb>) => routingJudgmentRepairTask(db, new Date("2026-08-24T00:00:00.000Z"), { executor: "codex-agent" })],
     ["self RCA", rca("self")],
     ["auditor RCA", rca("auditor")],
+    ["meta-review の下の RCA(行の主題を持つ RCA、ADR 0283 追記1)", rca("self", metaReviewTask)],
     ["祖先の cancel の下の RCA", discardedRca],
     ["統合レビュー", integrationReview],
   ] as const)("%s task では、spawn が Codex に宣言する enabled_tools と盤面の server が出す verb が集合として一致する(ADR 0125 決定2)", async (_, register) => {

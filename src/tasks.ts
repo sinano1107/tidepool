@@ -619,7 +619,8 @@ const WORKER_PULL_VERBS = ["browse_memory", "search_memory", "read_memory"] as c
  *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の verb を伏せる(ADR 0279 決定4 ——
  *  routing の判断の行を運ぶ修理子の読み口と提案 verb は routingRepairVerbs が足す)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
- *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
+ *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。
+ *  行の主題を持つ RCA は worker の pull verb と新規の記憶の書き込みも伏せる(ADR 0283 追記1 —— 指針の節の id 読みは isSubjectReaderRca で別に登録する)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
   if (task?.type === "memory_repair") {
@@ -652,7 +653,11 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
     };
   }
   const discarded = isArtifactDiscarded(db, taskId);
-  if (isRca(db, taskId)) return { withheld: [...(discarded ? (["decompose", "redecompose"] as const) : []), "complete_task"], added: ["complete_rca"] };
+  if (isRca(db, taskId)) {
+    // 行の主題を持つ RCA は親の主題の読み手で、worker の pull verb と新規の記憶の書き込みを持たない(ADR 0283 追記1)
+    const reader = lineageSubjectOf(db, taskId) === null ? [] : (["record_knowledge", "define_memory_branch", ...WORKER_PULL_VERBS] as const);
+    return { withheld: [...(discarded ? (["decompose", "redecompose"] as const) : []), "complete_task", ...reader], added: ["complete_rca"] };
+  }
   if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
@@ -3513,6 +3518,11 @@ function rcaSql(rowRef: string): string {
 /** RCA か(ADR 0278 決定1): 親の cancel を生き延びる付帯子の判定(`survivesParentCancelSql`)と同じ印を読む。 */
 export function isRca(db: Db, taskId: string): boolean {
   return db.prepare(`SELECT ${rcaSql("t")} FROM tasks t WHERE t.id = ?`).pluck().get(taskId) === 1;
+}
+
+/** 行の主題を持つ RCA か(ADR 0283 追記1): 親の主題の読み手で、指針の節の id 読み(read_memory_entries)を持つ —— worker MCP の登録と Codex の宣言が読む。 */
+export function isSubjectReaderRca(db: Db, taskId: string): boolean {
+  return isRca(db, taskId) && lineageSubjectOf(db, taskId) !== null;
 }
 
 /** この task が meta-review ならその主題、そうでなければ null(専用 verb の登録と門が読む、ADR 0122 決定2)。自身の列だけを読む ——
