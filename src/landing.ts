@@ -211,10 +211,9 @@ function leftBehindTargets(db: Db, workspace: WorkspaceConfig, taskId: string): 
        SELECT id FROM tasks
         WHERE id IN (SELECT id FROM subtree) AND (id = @root OR (type = 'work' AND status = 'done'))`,
       )
-      .all({ root: taskId }) as Array<{ id: string }>
-  )
-    .map(({ id }) => id)
-    .filter((id) => taskBranchExists(workspace, id));
+      .pluck()
+      .all({ root: taskId }) as string[]
+  ).filter((id) => taskBranchExists(workspace, id));
 }
 
 /** ADR 0242 決定2: 盤面が最後に push した head(`pr_opened` / `pr_branch_pushed` の sha)—— 収束が積み残しを比べる相手 */
