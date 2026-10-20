@@ -266,28 +266,32 @@ function versionAt(
   return registry && atCommit && body !== undefined ? { agent: { ...atCommit, body }, registry } : undefined;
 }
 
-/** 帰責の judge に渡す当時版の束(ADR 0291 決定2・3): self RCA の注入と同じ読み口で spawn の (registry_commit,
- *  definition_version) から引く本文・その commit の authority profile の散文・Roster の行と、組み込みかどうか。 */
-export interface DefinitionThen {
+/** 帰責の judge に渡す当時版の束(ADR 0291 決定1・2): self RCA の注入と同じ読み口で spawn の (registry_commit,
+ *  definition_version) から引く本文と、spawn が描いた Authority の散文・Roster の行(session の task の type で選ぶ ——
+ *  `authorityByType` と同じ。profile はその commit のもの)、それに組み込みかどうか。 */
+export interface AgentDefinitionThen {
   registry_commit: string;
   builtin: boolean;
   body: string;
-  authority: { guidance: string; assignable_to: string[] } | null;
+  authority: { guidance: string; assignable_to: string[] };
   roster: RosterAgent[];
 }
 
-/** `spawned` の session の当時版の束。引けなければ null。 */
-export function definitionThen(registryDir: string, spawned: EventRow): DefinitionThen | null {
+/** `spawned` の session の当時版の束。本文か、要る profile が引けなければ null。 */
+export function agentDefinitionThen(db: Db, registryDir: string, spawned: EventRow): AgentDefinitionThen | null {
   const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
   const at = versionAt(registryDir, spawned.worker_id, registry_commit, definition_version);
   if (!at) return null;
-  const authority = (at.agent.authority !== undefined && ownEntry(at.registry.authority, at.agent.authority)) || null;
+  const profile = at.agent.authority === undefined ? undefined : ownEntry(at.registry.authority, at.agent.authority);
+  const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile);
+  if (!then) return null;
+  const assignable_to = then.rosterAssignableTo ?? [];
   return {
     registry_commit,
     builtin: at.agent.builtin === true,
     body: at.agent.body,
-    authority,
-    roster: authority ? rosterAgents(rosterSourceAt(at.registry), authority.assignable_to) : [],
+    authority: { guidance: then.guidance, assignable_to },
+    roster: rosterAgents(rosterSourceAt(at.registry), assignable_to),
   };
 }
 
@@ -425,14 +429,24 @@ function authorityByType(
   task: Task,
   profile: AuthorityProfile,
 ): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
-  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined, notice: undefined };
   const notice =
-    auditedPosedEventId(db, task.id) !== undefined
-      ? INTERVIEW_AUDIT_NOTICE
-      : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+    isRepairType(task.type) ? undefined
+    : auditedPosedEventId(db, task.id) !== undefined ? INTERVIEW_AUDIT_NOTICE
+    : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
+  return { ...guidanceByType(db, task, profile)!, notice };
+}
+
+/** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。profile を読むのは
+ *  修理子の type でも review / interview でもない task だけで、そこで profile が無ければ undefined。 */
+function guidanceByType(
+  db: Db,
+  task: Task,
+  profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
+): { guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
+  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
-    return { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task), notice };
-  return { guidance: profile.guidance, rosterAssignableTo: profile.assignable_to, notice };
+    return { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task) };
+  return profile && { guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
 /** 盤面が書いた文面の全体(ADR 0157 決定1)。節の順序は Harness を問わず

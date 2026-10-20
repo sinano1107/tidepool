@@ -8,8 +8,9 @@ import { openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
+import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, REPAIR_NOTICES, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
@@ -1821,16 +1822,23 @@ const registryGit = (cwd: string) => (...args: string[]) =>
   execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
 
 /** 当時版の束を引ける盤面: registry の main の commit から spawn した session で decision を書き、異議を打つ。
- *  `spawnAs` は spawn の worker と definition_version(組み込みは本文の内容 hash)。 */
-async function definitionBoard(spawnAs: { worker: string; version: string } = { worker: "deckhand", version: "1" }) {
-  const registryDir = await makeRegistry();
+ *  `worker` / `version` は spawn の worker と definition_version(組み込みは本文の内容 hash)、`registryFiles` は registry の上書き、
+ *  `sessionTask` は session の task を組む(既定は memoryBoard の work task)。 */
+async function definitionBoard({
+  worker = "deckhand",
+  version = "1",
+  registryFiles = {},
+  sessionTask,
+}: { worker?: string; version?: string; registryFiles?: Record<string, string>; sessionTask?: (db: ReturnType<typeof openDb>) => Task } = {}) {
+  const registryDir = await makeRegistry(registryFiles);
   const git = registryGit(registryDir);
   const commit = git("rev-parse", "main");
   const b = memoryBoard();
-  appendEvent(b.db, { taskId: b.task.id, workerId: spawnAs.worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: spawnAs.version } });
-  const decision = logDecision(b.db, b.task, "kept the v1 endpoint", spawnAs.worker, at, "worker");
+  const task = sessionTask?.(b.db) ?? b.task;
+  appendEvent(b.db, { taskId: task.id, workerId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: version } });
+  const decision = logDecision(b.db, task, "kept the v1 endpoint", worker, at, "worker");
   const deps = { ...noRetrospectiveCalls, registryDir };
-  return { ...b, registryDir, git, commit, decision, deps, sessionId: b.objectTo(decision) };
+  return { ...b, task, registryDir, git, commit, decision, deps, sessionId: b.objectTo(decision) };
 }
 
 const DECKHAND_THEN = (commit: string) => ({
@@ -1869,11 +1877,17 @@ it("帰責の入力の当時版は、異議された entry の session の spawn
   expect(client.calls.map((c) => c.input.agent_definition)).toEqual([DECKHAND_THEN(b.commit)]);
 });
 
+/** deckhand が実行した work を被レビュー task に持つ review の task(組み込みの Auditor が走る形)。 */
+const reviewSession = (db: ReturnType<typeof openDb>) => {
+  const reviewed = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, ...HUMAN_WEBUI);
+};
+
 it.each([
   ["本文が空の組み込み Auditor", DEFAULT_AUDITOR_NAME, "e3b0c44298fc1c14", ""],
   ["本文を持つ組み込み Interviewer", DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f", expect.stringMatching(/^You run Interviews/)],
 ])("%s の session では当時版の builtin が真で、本文は内容 hash で引いた当時の本文", async (_, worker, version, body) => {
-  const b = await definitionBoard({ worker, version });
+  const b = await definitionBoard({ worker, version, sessionTask: reviewSession });
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
@@ -1890,6 +1904,42 @@ it("当時版が引けない session(registry の無い盤面・その commit �
   await attributeObjections(noRegistry.db, { ...noRetrospectiveCalls, attributionClient: client }, noRegistry.sessionId, at);
 
   expect(client.calls.map((c) => c.input.agent_definition)).toEqual([null, null]);
+});
+
+it("agent が名指す authority profile がその commit で読めない session でも、帰責の入力の当時版の欄は丸ごと null", async () => {
+  const b = await definitionBoard({
+    registryFiles: { "agents/deckhand.md": "---\nname: deckhand\ndescription: d\nversion: 1.0.0\nauthority: ghost\nprovider: anthropic\nskills: []\n---\nYou are Deckhand.\n" },
+  });
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([null]);
+});
+
+it.each([
+  [
+    "review の task",
+    reviewSession,
+    { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, assignable_to: ["deckhand"] },
+    [{ name: "deckhand", description: "General work agent for the tidepool board" }],
+  ],
+  [
+    "修理子の type(memory_repair)の task",
+    (db: ReturnType<typeof openDb>) => {
+      const review = registerTask(db, { type: "review", title: "m", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+      return registerTask(db, { type: "memory_repair", title: "mr", purpose: "p", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
+    },
+    { guidance: REPAIR_NOTICES.memory_repair, assignable_to: [] },
+    [],
+  ],
+])("%s の session の当時版の Authority と Roster は spawn が描いたもの —— worker の registry profile ではない", async (_, sessionTask, authority, roster) => {
+  const b = await definitionBoard({ sessionTask });
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([expect.objectContaining({ builtin: false, authority, roster })]);
 });
 
 it("帰責の入力の読んだ記憶に、同じ spawn で注入された Definition が入る —— 注入された他の leaf・前の session の注入は入らず、pull と重なれば1つ", async () => {
@@ -1974,5 +2024,22 @@ it("第2回の入力にも当時版の欄が組まれる", async () => {
   expect(client.calls.map((c) => [c.input.rca_findings !== undefined, c.input.agent_definition])).toEqual([
     [false, DECKHAND_THEN(b.commit)],
     [true, DECKHAND_THEN(b.commit)],
+  ]);
+});
+
+it.each(["agent_definition", "workspace_document"] as const)("第2回: 初回 uncertain の異議群が %s と判定されると after_rca にそのまま載る", async (cause) => {
+  const b = await definitionBoard();
+  const client = new FakeAttributionClient();
+  const deps = { ...b.deps, attributionClient: client };
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  client.scriptJudgment(b.decision, { cause, evidence: "the RCA traced it" });
+  for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
+
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(attributed(b.db, b.task.id).map((p) => [p.round, p.cause])).toEqual([
+    ["initial", "uncertain"],
+    ["after_rca", cause],
   ]);
 });

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
-import { type DefinitionThen, definitionThen } from "./board-prose.js";
+import { type AgentDefinitionThen, agentDefinitionThen } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
@@ -40,14 +40,14 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-i
  *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
  *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
  *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。
- *  `agent_definition` は異議された entry の session の agent 定義の当時版の束で、引けなければ null(ADR 0291 決定3)。 */
+ *  `agent_definition` は異議された entry の session の agent 定義の当時版の束で、引けなければ null(ADR 0291 決定2)。 */
 export interface AttributionInput {
   entry_id: number;
   entry: string;
   steering: string[];
   decision_log: string[];
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
-  agent_definition: DefinitionThen | null;
+  agent_definition: AgentDefinitionThen | null;
   written?: AttributionInput["memory_read"];
   rca_findings?: string[];
 }
@@ -109,14 +109,14 @@ export interface RetrospectiveCallDeps {
   containers: Pick<ProcessContainers, "preflight"> | undefined;
   /** 起草の宛先の agent が registry にいるか(ADR 0173 決定4)。undefined → registry の無い盤面で、照合せずに起草する。 */
   agentRegistered: ((name: string) => boolean) | undefined;
-  /** 帰責の入力の当時版を引く registry clone(ADR 0291 決定3)。undefined → registry の無い盤面で、当時版の欄は null。 */
+  /** 帰責の入力の当時版を引く registry clone(ADR 0291 決定2)。undefined → registry の無い盤面で、当時版の欄は null。 */
   registryDir: string | undefined;
 }
 
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
 
 /** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は entries を
- *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定3)。
+ *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定2)。
  *  通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
 function gate({ entries, ...judgment }: AttributionJudgment, input: AttributionInput): GatedJudgment {
   if (judgment.cause === "agent_definition" && input.agent_definition === null) {
@@ -455,7 +455,7 @@ function objectionInput(db: Db, registryDir: string | undefined, attribution: Se
   };
 }
 
-/** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定3)と読んだ記憶。読んだ記憶は、その entry より前の
+/** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、その entry より前の
  *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
  *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
 function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition"> {
@@ -468,7 +468,7 @@ function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLo
   const injected = events.flatMap(({ payload: p }) => (p.kind === "memory_injected" && p.worker_spawned_event_id === spawned.id ? p.entries.map((e) => e.id) : []));
   return {
     memory_read: memoryBodies(db, [...new Set([...injected, ...pulled])]).filter((m) => m.kind === "definition" || pulled.includes(m.id)),
-    agent_definition: registryDir === undefined ? null : definitionThen(registryDir, spawned),
+    agent_definition: registryDir === undefined ? null : agentDefinitionThen(db, registryDir, spawned),
   };
 }
 

@@ -253,7 +253,7 @@ it("outcome は受理 = 統合点レビューがすべて完了、負 = capabili
   ).toBe("rejected");
 });
 
-it("agent_definition / workspace_document の帰責は outcome を負にしない(ADR 0291 決定6)", () => {
+it("agent_definition / workspace_document の帰責は outcome を負にしない(ADR 0291 決定5)", () => {
   const facts = { accepted: true, causes: ["agent_definition", "workspace_document"] as const, allocations: [] as const, swapped: false };
   expect(episodeOutcome(facts)).toBe("accepted");
   expect(episodeOutcome({ ...facts, accepted: false })).toBe("excluded");

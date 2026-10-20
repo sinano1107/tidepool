@@ -19,7 +19,7 @@ const judgmentSchema = z.object({
 });
 
 // memory / agent_definition / workspace_document は読んだ記憶・当時版・decision log を入力に持つ帰責だけが判定できる
-// (ADR 0166 決定1 / ADR 0291 決定6)ので、配分評価の prompt には載せない
+// (ADR 0166 決定1 / ADR 0291 決定5)ので、配分評価の prompt には載せない
 const ALLOCATION_CAUSES = CAUSES.filter((cause) => !["memory", "agent_definition", "workspace_document"].includes(cause));
 
 /** The question the board asks after quality is fixed (ADR 0111 決定4): the

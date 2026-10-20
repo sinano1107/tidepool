@@ -4,7 +4,7 @@
  *  `requirement_change` は異議でしか現れないが、値域は1本である。`uncertain` は
  *  帰責では最終値にならない(決定2)が、配分評価では判定そのものの値。`memory`(読んだ記憶が誤っていた)も
  *  異議でしか現れず、配分評価の prompt には載せない(ADR 0166 決定1)。`agent_definition`(従った registry の当時版が誤っていた)と
- *  `workspace_document`(仕事の対象に置かれた skill・文書が誤っていた)も同じ扱い(ADR 0291 決定2・4・6)。 */
+ *  `workspace_document`(仕事の対象に置かれた skill・文書が誤っていた)も同じ扱い(ADR 0291 決定1・3・5)。 */
 export const CAUSES = [
   "capability",
   "task_ambiguity",

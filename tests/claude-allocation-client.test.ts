@@ -54,7 +54,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   );
 });
 
-it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定6)", async () => {
+it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定5)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAllocationClient({
     exec: async (_command, args) => {

@@ -92,7 +92,7 @@ it("prompt は environment を worker の外側の事情として判断の妥当
   expect(prompts[0]).toContain("working around or guessing past such trouble instead of escalating is capability");
 });
 
-it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙の内側として届く(ADR 0291 決定2・4)", async (cause) => {
+it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙の内側として届く(ADR 0291 決定1・3)", async (cause) => {
   const client = new ClaudeAttributionClient({
     exec: async () => JSON.stringify({ result: JSON.stringify({ cause, evidence: "e" }) }),
   });
@@ -100,7 +100,7 @@ it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual({ cause, evidence: "e" });
 });
 
-it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・盤面の protocol 文・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定2〜5)", async () => {
+it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・盤面の protocol 文・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
