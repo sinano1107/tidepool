@@ -10,6 +10,7 @@ import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
+  auditorRcaOn,
   bootTidepool,
   decomposeTaskViaWorker,
   examineeRootId,
@@ -1187,11 +1188,7 @@ function lineageTask(db: Db, at: Date, subject: "memory" | "routing" | null, kin
     const type = subject === "routing" ? "routing_repair" : "memory_repair";
     return registerTask(db, { type, title: `${type}: t`, purpose: "p", completion_criteria: "c", parent_id: root.id }, at, ...HUMAN_WEBUI);
   }
-  startTriage(db, at);
-  const row = logDecision(db, root, "fugu's call", "fugu", at, "worker");
-  raiseObjection(db, row, "redo it", at);
-  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
-  return listChildren(db, root.id).find((child) => child.title.startsWith("rca (auditor)"))!;
+  return auditorRcaOn(db, root, at, "fugu");
 }
 
 it.each([

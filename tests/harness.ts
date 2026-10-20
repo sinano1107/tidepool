@@ -1151,10 +1151,9 @@ export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (re
   return { review, row };
 }
 
-/** memory meta-review の型つきの判断の行への異議で束ねた memory_repair(ADR 0279 決定3)。withWrite なら同じ review の書き込みの行
- *  (エントリの移動)への異議も同じ commit に入り、両方の行を運ぶ修理子になる(ADR 0281)。withJudgment: false なら書き込みの行だけを運ぶ。
- *  修理子は executor の名前を写す。 */
-export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, withJudgment = true, executor = "fugu" } = {}): Task {
+/** memory meta-review の行への異議で束ねた memory_repair。rows は異議を打つ行: judgment は型つきの判断の行(ADR 0279 決定3)、write は
+ *  同じ review の書き込みの行(エントリの移動)、both は両方を同じ commit で —— 両方の行を運ぶ修理子になる(ADR 0281)。修理子は executor の名前を写す。 */
+export function judgmentRepairTask(db: Db, at: Date, { rows = "judgment", executor = "fugu" }: { rows?: "judgment" | "write" | "both"; executor?: string } = {}): Task {
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   const note = (title: string, path: string) => recordKnowledge(db, { scope: null, path, title, text: `${title}.`, source: { commit: "0a46a46" }, author }, "worker", at).entry_id;
   const moving = note("Moving note", "misc");
@@ -1165,14 +1164,23 @@ export function judgmentRepairTask(db: Db, at: Date, { withWrite = false, withJu
     at,
     () => (judged = note("Squash", "build")),
     (review) => {
-      if (withWrite) moved = moveMemoryByMetaReview(db, { entry_id: moving, scope: null, path: "misc/old", mover: { activity: "meta_review", name: executor } }, "worker", at, review.id).event_id;
+      if (rows !== "judgment") moved = moveMemoryByMetaReview(db, { entry_id: moving, scope: null, path: "misc/old", mover: { activity: "meta_review", name: executor } }, "worker", at, review.id).event_id;
     },
     executor,
   );
-  if (withJudgment) raiseObjection(db, row(judged), "fold it into the build notes", at);
+  if (rows !== "write") raiseObjection(db, row(judged), "fold it into the build notes", at);
   if (moved !== undefined) raiseObjection(db, moved, "move it back", at);
   commitTriage(db, at);
   return listChildren(db, review.id).find((child) => child.type === "memory_repair")!;
+}
+
+/** `task` に `worker` の判断の行を書き、capability と帰責した異議を commit して、立った auditor RCA(open)を返す。 */
+export function auditorRcaOn(db: Db, task: Task, at: Date, worker = "auditor"): Task {
+  startTriage(db, at);
+  const row = logDecision(db, task, `${worker}'s call`, worker, at, "worker");
+  raiseObjection(db, row, "redo it", at);
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  return listChildren(db, task.id).find((child) => child.title.startsWith("rca (auditor)"))!;
 }
 
 /** routing の材料の setup で走る行(段 standard)。 */

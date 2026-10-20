@@ -514,6 +514,17 @@ it("task ごとの verb の差し替えは、memory_repair で分解の verb と
   expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
 });
 
+it("task ごとの verb の差し替えは、meta-review の下の memory_repair では worker の pull verb も伏せる —— 親の主題の読み手(ADR 0283 決定3)", () => {
+  db = openDb(":memory:");
+  const review = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, NOW, ...HUMAN_WEBUI);
+  const memoryRepair = registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: review.id }, NOW, ...HUMAN_WEBUI);
+
+  expect(taskVerbSwap(db, memoryRepair.id)).toEqual({
+    withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"],
+    added: [],
+  });
+});
+
 it("task ごとの verb の差し替えは、routing_repair で基本の面(get_current_task / log_decision / escalate / complete_task)の外を伏せ、祖先の cancel の下でも同じ —— routing の verb は後続(ADR 0279 決定4)", () => {
   db = openDb(":memory:");
   const { target, child } = doneChildrenWithAttachments(db);
