@@ -664,14 +664,14 @@ const MATERIAL_PARTS = {
   proposals: false,
   proposal_entries: true,
   branches: true,
-  // 項目は verb の鍵の列で、seen は5部分のエントリで数える(entriesSeenBefore)
+  // 項目は id でなく verb の鍵の列 —— エントリの項目の id は entriesSeenBefore が取り出して seen に数える(枝の項目は id を持たない)
   items: false,
 } as const satisfies Record<MaterialPart, boolean>;
 type EntryPart = { [K in MaterialPart]: (typeof MATERIAL_PARTS)[K] extends true ? K : never }[MaterialPart];
 const MATERIAL_ENTRY_PARTS = (Object.keys(MATERIAL_PARTS) as MaterialPart[]).filter((part): part is EntryPart => MATERIAL_PARTS[part]);
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
- *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は5部分、主題 routing は異議つき判断の部分 ——
+ *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は5部分と項目のうちエントリの項目、主題 routing は異議つき判断の部分 ——
  *  worker_spawned の event id で結ぶ)の id と、D より前の全 verb の pull が返した id の和集合(昇順)。
  *  D がこの Episode で位置を持たなければ null。 */
 export function entriesSeenBefore(
@@ -687,7 +687,7 @@ export function entriesSeenBefore(
       ? p.entries.map((entry) => entry.id)
       : p.kind === "meta_review_material_injected" && p.worker_spawned_event_id === spawned
         ? p.subject === "memory"
-          ? MATERIAL_ENTRY_PARTS.flatMap((part) => p[part])
+          ? [...MATERIAL_ENTRY_PARTS.flatMap((part) => p[part]), ...p.items.flatMap((item) => ("entry" in item ? [item.entry] : []))]
           : p.precedent_entries
         : [],
   );
