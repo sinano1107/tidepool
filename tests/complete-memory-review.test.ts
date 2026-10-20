@@ -213,6 +213,17 @@ it("祖先の枝の移動は枝の項目を覆わず、その枝は unjudged で
   expect(() => completeMemoryReview(db, review, { judgments: [{ entry: stays }] }, "auditor", at, "worker")).toThrow("unjudged: branch tools in scope tidepool —");
 });
 
+it("scope だけを変える移動(workspace → 盤面全体)は移動先の (path, 盤面全体) の項目を覆い、行を求めない(ADR 0282 決定4)", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const stored = [knowledge(db, "notes", null), knowledge(db, "notes")].map((entry) => ({ entry }));
+  const { review, injected } = injectedReview(db);
+  moveMemoryBranchByMetaReview(db, { scope: "tidepool", path: "notes", to_scope: null, to_path: "notes", mover: metaReview }, "worker", at, review.id);
+
+  expect(injected).toEqual([...stored, { branch: "notes", scope: null }]);
+  expect(completeMemoryReview(db, review, { judgments: stored }, "auditor", at, "worker").status).toBe("done");
+});
+
 /** charts と docks がそれぞれ定義の無い `tides` に Knowledge を持つ周期(#2326 の実測の盤面): 枝の項目は (tides, charts) と (tides, docks)。
  *  stored は店の変更の2つのエントリの項目(据え置きとして渡す)。 */
 function twoScopeCycle() {

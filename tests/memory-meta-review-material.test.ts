@@ -85,6 +85,8 @@ const metaReview = { activity: "meta_review" as const, name: "auditor" };
 const human = { activity: "human" as const, name: HUMAN_WORKER_ID };
 const knowledge = (db: Db, path: string, author: { activity: "worker_verb" | "human"; name: string } = deckhand) =>
   recordKnowledge(db, { scope: "tidepool", path, title: path, text: `${path}.`, ...(author === deckhand ? { source: { commit: "0a46a46" } } : {}), author }, "worker", at).entry_id;
+const knowledgeIn = (db: Db, scope: string, path: string) =>
+  recordKnowledge(db, { scope, path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at);
 const candidate = (db: Db, title: string) =>
   createBehaviorCandidate(db, { scope: null, path: "habits", title, text: `${title}.`, addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at).entry_id;
 const ids = (rows: Array<{ id: number }>) => rows.map((row) => row.id);
@@ -310,10 +312,9 @@ it("窓の中に枝ごと移された枝を名指す異議つき判断の行は�
 it("異議された枝の再掲は (path, scope) の鍵 —— その scope にエントリが無ければ載らず、別 scope の同じ path の枝は載らない。scope の配下が移されていれば今の (path, scope) で、盤面全体へ広げられていれば盤面全体で載る(ADR 0282 決定2 / ADR 0279 決定5)", () => {
   const db = openDb(":memory:");
   const define = (scope: string | null, path: string) => defineMemoryBranch(db, { scope, path, text: `${path}.`, author: deckhand }, "worker", at);
-  const note = (scope: string, path: string) => recordKnowledge(db, { scope, path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at);
   for (const scope of ["charts", "docks"]) define(scope, "tides");
   define("reef", "tides");
-  for (const scope of ["charts", "docks", "reef"]) note(scope, "tides");
+  for (const scope of ["charts", "docks", "reef"]) knowledgeIn(db, scope, "tides");
   const previous = register(db, "memory", true);
   for (const scope of ["charts", "docks", "reef", "sand"]) objectedJudgment(db, previous, { kind: "memory", branch: "tides", scope, value: "left_as_is" }, at);
   moveMemoryBranch(db, { scope: "docks", path: "tides", to_scope: null, to_path: "sea", mover: human }, "webui", at);
@@ -331,9 +332,8 @@ it("異議された枝の再掲は (path, scope) の鍵 —— その scope に�
 
 it("盤面全体のエントリ(candidate も)がその path かその下にある定義の無い枝は (path, 盤面全体) の1項目だけで、無ければ欠けている workspace ごとに1項目(ADR 0282 決定2・3)", () => {
   const db = openDb(":memory:");
-  const note = (scope: string, path: string) => recordKnowledge(db, { scope, path, title: path, text: `${path}.`, source: { commit: "0a46a46" }, author: deckhand }, "worker", at);
   register(db, "memory", true);
-  for (const scope of ["charts", "docks"]) for (const path of ["tides", "reefs"]) note(scope, path);
+  for (const scope of ["charts", "docks"]) for (const path of ["tides", "reefs"]) knowledgeIn(db, scope, path);
   createBehaviorCandidate(db, { scope: null, path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } }, "worker", at);
   const review = register(db, "memory");
 

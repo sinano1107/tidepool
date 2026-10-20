@@ -825,11 +825,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
-          "judgment on: entries ({entry: id}) — the candidates drafted in this window, the candidates and entries named by the settled " +
-          "proposals and by the objected decisions with cause memory, and the store changes — and branches ({branch: path, scope: workspace " +
-          "name, or null for the whole board}) that hold entries without a Definition in their scope or whole-board — one item per scope that " +
-          "lacks one, or a single whole-board item when whole-board entries sit at or under the path — plus the live entries and branches named " +
-          "by the judgments of the objected decisions. That list, injected when " +
+          "judgment on. Entries ({entry: id}) are the candidates drafted in this window, the candidates and entries named by the settled " +
+          "proposals and by the objected decisions with cause memory, and the store changes. Branches ({branch: path, scope: workspace " +
+          "name, or null for the whole board}) are those holding entries without a Definition in their scope or whole-board: one item per " +
+          "scope that lacks one, or a single whole-board item when whole-board entries sit at or under the path. The live entries and " +
+          "branches named by the judgments of the objected decisions are listed too. That list, injected when " +
           "this session started, is the whole set of items: anything added to the store since belongs to the next cycle. An item acted on " +
           "since this session started is already judged: one you wrote, folded, moved, retired, defined or named in a proposal, or one " +
           "anyone else has since folded, moved, retired or defined. Every other item goes in judgments, which means you left it as is, " +

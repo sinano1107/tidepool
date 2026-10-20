@@ -851,8 +851,9 @@ function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void
 }
 
 /** 枝の射程の門(ADR 0281 決定2): memory_repair の書き手なら、書き込みが path に Definition を作った、または path かその下へエントリを
- *  移した(同じ scope)枝か、判断の行が名指す (path, scope) と同じ path の盤面全体の枝(namesBranch、ADR 0282 決定4)だけを通す —— 配下に触っていない leaf があっても枝ごと動く。どちらの射程でも
- *  規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない書き手(meta-review)は門を持たない。 */
+ *  移した(同じ scope)枝か、判断の行が名指す (path, scope) と同じ path の盤面全体の枝(namesBranch、ADR 0282 決定4)だけを通す ——
+ *  配下に触っていない leaf があっても枝ごと動く。どちらの射程でも規則は同じ(scope の門)なので、どちらかだけを確かめる。修理子でない
+ *  書き手(meta-review)は門を持たない。 */
 function requireBranchReach(db: Db, writer: string, scope: string | null, path: string): void {
   if (getTask(db, writer)?.type !== "memory_repair") return;
   const writes = objectedWrites(db, writer);
@@ -862,7 +863,7 @@ function requireBranchReach(db: Db, writer: string, scope: string | null, path: 
   ];
   if (into.some((row) => row.scope === scope) || namesBranch(namedObjects(db, writer), path, scope)) return;
   throw new DomainError(
-    `branch ${path} in scope ${scope ?? "whole board"} was neither defined nor moved into by the objected memory write, nor named by the objected judgment: a memory repair moves only those branches`,
+    `${itemName({ branch: path, scope })} was neither defined nor moved into by the objected memory write, nor named by the objected judgment: a memory repair moves only those branches`,
   );
 }
 
