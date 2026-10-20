@@ -131,7 +131,7 @@ it("complete_memory_review の枝の鍵は path と scope(workspace 名か盤面
   try {
     const { tools } = await client.listTools();
     const tool: any = tools.find((tool) => tool.name === "complete_memory_review");
-    expect(await call("complete_memory_review", { judgments: [{ branch: "build" }] })).toMatchObject({ isError: true, body: expect.stringContaining("scope") });
+    expect(await call("complete_memory_review", { judgments: [{ branch: "build" }] })).toMatchObject({ isError: true, body: expect.stringContaining("Input validation error") });
     expect(tool.description).toContain(
       "Branches ({branch: path, scope: workspace name, or null for the whole board}) are those holding entries without a Definition in their " +
         "scope or whole-board: one item per scope that lacks one, or a single whole-board item when whole-board entries sit at or under the path.",
