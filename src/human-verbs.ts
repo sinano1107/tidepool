@@ -97,7 +97,7 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   conventionCheckoutPath,
@@ -1070,7 +1070,8 @@ export async function submitAnswer(
 
   let release: (() => void) | null = null;
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
-  let rootRecord: { root: string; payload: TaskScopedPayload } | undefined;
+  // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
+  let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
   try {
     // 回答を記録する前に済ませる種類ごとの副作用。種類は1つなので順は互いに独立
     switch (kind.kind) {
@@ -1117,7 +1118,7 @@ export async function submitAnswer(
         } else {
           // ADR 0289 決定3: hold が断るのはこの時点の内容。読めなくても hold は拒まない(null は「変わった」と読まれる)
           const head = taskBranchHeadOrNull(buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace), task.workspace, kind.task_id);
-          rootRecord = { root: kind.task_id, payload: { kind: "local_merge_held", head } };
+          rootRecord = { root: kind.task_id, payload: { kind: "local_merge_held", head }, byBoard: true };
         }
         break;
       case "pr_merge": {
@@ -1254,7 +1255,12 @@ export async function submitAnswer(
         deps.taskExecutionCandidates && { candidates: deps.taskExecutionCandidates, agentName: deps.defaultAgentName },
       );
       if (rootRecord) {
-        appendEvent(deps.db, { taskId: rootRecord.root, workerId: HUMAN_WORKER_ID, origin, payload: rootRecord.payload, at: now() });
+        appendEvent(deps.db, {
+          taskId: rootRecord.root,
+          ...(rootRecord.byBoard ? { workerId: BOARD_WORKER_ID, origin: "board" as const } : { workerId: HUMAN_WORKER_ID, origin }),
+          payload: rootRecord.payload,
+          at: now(),
+        });
       }
       if (proposal?.kind === "memory") {
         if (answers[0] === "approve") approveMemoryProposal(deps.db, proposal, task.id, origin, now(), amended as MemoryAmendment | undefined);

@@ -132,12 +132,12 @@ function tasksAwaitingLanding(db: Db, resolve: WorkspaceResolver | undefined): T
   const roots = landingCandidateIds(db)
     .flatMap((id) => landingRootOf(db, resolve, id)?.task ?? [])
     .filter((task) => {
-      const held = latestEventOfTask(db, task.id, "local_merge_held");
+      const held = holdEventInForce(db, task.id);
       return (
         task.pr_number === null &&
-        (!abandonEventInForce(db, task.id) || openPrPromotionQuestionIds(db, task.id).length > 0) &&
-        // ADR 0289 決定3: hold した内容のままの根は着地を待たない。変わった根は立て直しを待つ
-        !(held && !contentChangedSince(resolve, task, held.payload.head))
+        // ADR 0289 決定3: hold した内容のままの根は、断念の根と同じく着地を待たない。変わった根は立て直しを待つ
+        ((!abandonEventInForce(db, task.id) && !(held && !contentChangedSince(resolve, task, held.payload.head))) ||
+          openPrPromotionQuestionIds(db, task.id).length > 0)
       );
     });
   return [...roots, ...listPendingAutoMerges(db).map(({ task_id }) => getTask(db, task_id)!)];
@@ -152,6 +152,13 @@ function contentChangedSince(resolve: WorkspaceResolver | undefined, task: Task,
   } catch {
     return true;
   }
+}
+
+/** ADR 0289 決定1・3: ローカル着地の hold は、merge を執行していない間、最新のものが効く —— 立て直した question への
+ *  hold は head を刻み直し、merge は執行の記録で根を終わらせる */
+function holdEventInForce(db: Db, taskId: string) {
+  if (latestEventOfTask(db, taskId, "local_merge_executed")) return undefined;
+  return latestEventOfTask(db, taskId, "local_merge_held");
 }
 
 /** ADR 0225 決定2: 断念は人間の最新の明示の判断である間だけ効く。その間は断念の event を返す —— 後の retry が
@@ -684,8 +691,8 @@ function settlePrPromotionQuestionsAsObserved(
 }
 
 /** ADR 0053 decision 3: a purely-local root completion cannot be promoted to a PR, so
- *  the board asks whether to fast-forward its task branch onto the protected
- *  branch or hold it there — a hold declines only the content of that moment, and
+ *  the board asks whether to land its task branch on the protected branch (a fast-forward,
+ *  or a catch-up merge commit — ADR 0103) or hold it there — a hold declines only the content of that moment, and
  *  the question is asked again once the content changes (ADR 0289 決定3). The task id is deliberately stored
  *  separately from question_pending_merge_pr: one names a local branch while
  *  the other names a GitHub PR. */
@@ -713,12 +720,15 @@ export function registerLocalMergeQuestion(
   );
 }
 
-/** ADR 0289 決定3: hold の後に内容が変わった根の立て直しの purpose —— hold の head に無い子孫のブランチ(届いた修理)を名指す。
- *  head が無いか比べられなければ、届いたものは名指さない。 */
+/** ADR 0289 決定3: hold の後に内容が変わった根の立て直しの purpose —— hold の head に無く、今のタスクブランチには届いた
+ *  子孫のブランチ(届いた修理)を名指す。head が無いか比べられなければ、届いたものは名指さない。 */
 function reaskedLocalMergePurpose(db: Db, workspace: WorkspaceConfig, task: Task, head: string | null): string {
   let arrived: string[] = [];
   try {
-    if (head !== null) arrived = contentLeftBehindLocally(db, workspace, task.id, head).filter((id) => id !== task.id);
+    if (head !== null) {
+      const notYet = new Set(contentLeftBehindLocally(db, workspace, task.id, taskBranch(task.id)));
+      arrived = contentLeftBehindLocally(db, workspace, task.id, head).filter((id) => id !== task.id && !notYet.has(id));
+    }
   } catch {}
   const root = taskBranch(task.id);
   return (
@@ -1052,7 +1062,7 @@ export function createLanding(deps: LandingDeps): Landing {
     }
     // ADR 0289 決定3: ローカル着地の hold は断念と同じ形で読む —— 門が閉じていれば待ち(記録は刻まない)、hold した内容のままなら
     // 撃たず、変わっていれば通常の経路を進んで local merge question を立て直す。merge を執行した根は候補に入らない
-    const held = ctx.answered ? undefined : latestEventOfTask(deps.db, task.id, "local_merge_held");
+    const held = ctx.answered ? undefined : holdEventInForce(deps.db, task.id);
     if (held) {
       const block = landingBlock(deps.db, task.id);
       if (block) return { kind: "deferred", reason: block.kind, count: block.count };
