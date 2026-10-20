@@ -606,20 +606,28 @@ export interface TaskVerbSwap {
   probeAccepted?: boolean;
 }
 
+/** worker の記憶の pull verb(meta-review.ts の WORKER_MEMORY_VERBS の読み側。あちら → こちらの依存なので綴りで持つ)。 */
+const WORKER_PULL_VERBS = ["browse_memory", "search_memory", "read_memory"] as const;
+
 /** task ごとの verb の差し替え(ADR 0122 決定2): 登録しない verb と足す verb。worker MCP の登録・Codex の宣言・doctrine が同じここを引く。
  *  受験者は分解の verb と記憶を書く verb を伏せる(ADR 0245 決定1 / ADR 0268 決定2)。interview の root の一覧は type で決まり(ADR 0273
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
  *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
- *  memory_repair は分解の verb と新規の記憶の書き込みを伏せる(ADR 0272 決定3)—— 祖先の cancel の下でも同じなので先に見る。
+ *  memory_repair は分解の verb と新規の記憶の書き込みを伏せ(ADR 0272 決定3)、行の主題を持てば worker の pull verb も伏せる(ADR 0283 決定3)
+ *  —— 祖先の cancel の下でも同じなので先に見る。
  *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の verb を伏せる(ADR 0279 決定4 ——
  *  routing の判断の行を運ぶ修理子の読み口と提案 verb は routingRepairVerbs が足す)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
  *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
-  if (task?.type === "memory_repair") return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch"], added: [] };
-  if (task?.type === "routing_repair") return { withheld: ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"], added: [] };
+  if (task?.type === "memory_repair") {
+    // 行の主題を持つ修理子は親の主題の読み手で、worker の pull verb も持たない(ADR 0283 決定3)
+    const pulls = lineageSubjectOf(db, taskId) === null ? [] : WORKER_PULL_VERBS;
+    return { withheld: ["decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", ...pulls], added: [] };
+  }
+  if (task?.type === "routing_repair") return { withheld: ["list_agents", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", ...WORKER_PULL_VERBS, "propose_from_objection"], added: [] };
   if (task?.interview_target_id != null) return { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] };
   // Interview の監査(ADR 0273 決定3・4): review の読み系と、受理 / 却下の専用の完了 verb
   if (task && auditedPosedEventId(db, task.id) !== undefined) {
@@ -648,6 +656,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
   if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
   return { withheld: [], added: [] };
 }
@@ -1312,6 +1321,7 @@ export function completeTask(
   }
   // ADR 0278 決定1: 統合レビューと meta-review も扉を問わず専用の verb でだけ終わる
   if (isIntegrationReview(db, task.id)) throw new DomainError("an integration review does not complete with complete_task: complete it with complete_integration_review");
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (task.meta_review_subject) {
     throw new DomainError(`a ${task.meta_review_subject} meta-review does not complete with complete_task: complete it with ${META_REVIEW_COMPLETION[task.meta_review_subject]}`);
   }
@@ -3505,6 +3515,25 @@ export function isRca(db: Db, taskId: string): boolean {
   return db.prepare(`SELECT ${rcaSql("t")} FROM tasks t WHERE t.id = ?`).pluck().get(taskId) === 1;
 }
 
+/** この task が meta-review ならその主題、そうでなければ null(専用 verb の登録と門が読む、ADR 0122 決定2)。自身の列だけを読む ——
+ *  「この行はどの主題に載るか / この task は誰の読み手か」は lineageSubjectOf(ADR 0283 決定1)。 */
+export function metaReviewSubjectOf(db: Db, taskId: string): Task["meta_review_subject"] {
+  return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").pluck().get(taskId) as Task["meta_review_subject"] | undefined) ?? null;
+}
+
+/** 行の主題(ADR 0279 決定6 / ADR 0283 決定1): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA とその子孫は
+ *  親の主題に載る。祖先にも無ければ null。「この行はどの主題に載るか / この task は誰の読み手か」を問う箇所はすべてこれで読む
+ *  (起草の置き場・束ねの門・注入の分岐と読み口・未決着の門・Precedent の絞り)。「この task は meta-review か」は自身の列。 */
+export function lineageSubjectOf(db: Db, taskId: string): Task["meta_review_subject"] {
+  return (
+    metaReviewSubjectOf(db, taskId) ??
+    ((db
+      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
+      .pluck()
+      .get(taskId) as Task["meta_review_subject"] | undefined) ?? null)
+  );
+}
+
 /** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。
  *  `depth` は起点からの段数(親が 1)。 */
 export function ancestorsSql(taskRef: string): string {
@@ -3534,9 +3563,10 @@ export const INTERVIEW_AUDIT_NOTICE =
 export const MEMORY_REPAIR_NOTICE =
   "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them — to rewrite an entry a write touched, use replace_memory.";
 
-/** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。 */
+/** routing_repair に盤面が注入する1行(ADR 0279 決定4、MEMORY_REPAIR_NOTICE と同じ持ち方): 修理の相手と伏せた verb の理由。記憶は
+ *  書けないが、指針の節の id 読みは持つ(ADR 0283 決定3)ので「記憶の verb を使えない」とは言わない。 */
 export const ROUTING_REPAIR_NOTICE =
-  "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or use memory verbs.";
+  "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or write memory.";
 
 /** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
 export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };

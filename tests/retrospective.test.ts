@@ -1442,6 +1442,25 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
   expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
 });
 
+it.each([
+  ["memory", "memory_repair"],
+  ["routing", "routing_repair"],
+] as const)("主題 %s の meta-review の下の %s の帰責の入力の読んだ記憶は、spawn の注入(worker と同じく既定 workspace を渡す)の指針の節に載っていて read_memory_entries で読んだ entry(ADR 0283 決定3 / ADR 0279 決定2)", async (subject, type) => {
+  const b = memoryBoard();
+  const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
+  const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
+  const repair = registerTask(b.db, { type, title: `${subject} repair`, purpose: "undo it", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
+  const spawned = appendEvent(b.db, { taskId: repair.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  recordMemoryInjection(b.db, repair.id, "deckhand", spawned, buildMemoryInjection(b.db, repair, "charts", "deckhand"), at);
+  readMemoryEntries(b.db, { taskId: repair.id, agent: "deckhand" }, { ids: [guidance] }, at);
+  const decision = logDecision(b.db, repair, "kept the note", "deckhand", at, "worker");
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at);
+
+  expect(client.calls.map((c) => c.input.memory_read)).toEqual([[{ id: guidance, kind: "behavior", title: "Fold duplicates first", text: "Fold duplicates first." }]]);
+});
+
 /** 同じ session で `read` を読んでから decision を書き、異議を打つ(`unread` は読まずに店にあるだけの entry)。 */
 function objectedAfterReading() {
   const b = memoryBoard();
@@ -1507,14 +1526,16 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   expect(drafter.calls).toEqual([]);
 });
 
-/** 主題 memory の meta-review の判断の行に preference の異議を帰責し、起草の Board call を撃つ(盤面には既定 workspace がある)。 */
-async function draftOnMetaReviewRow(draftPath: string) {
+/** 主題 memory の meta-review の判断の行(`onRepair` ならその下の memory_repair の判断の行)に preference の異議を帰責し、起草の Board call を
+ *  撃つ(盤面には既定 workspace がある)。 */
+async function draftOnMetaReviewRow(draftPath: string, onRepair = false) {
   const db = openDb(":memory:");
   const author = { activity: "worker_verb" as const, name: "deckhand" };
   defineMemoryBranch(db, { scope: null, path: "review", text: "How meta-reviews judge.", author }, "worker", at);
   defineMemoryBranch(db, { scope: "charts", path: "charts-only", text: "Charts workspace notes.", author }, "worker", at);
   const registered = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
-  const review = pickupTask(db, registered, "deckhand", at)!;
+  const parent = onRepair ? registerTask(db, { type: "memory_repair", title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: registered.id }, at, ...HUMAN_WEBUI) : registered;
+  const review = pickupTask(db, parent, "deckhand", at)!;
   const entry = logDecision(db, review, "kept candidate 12", "deckhand", at, "worker");
   const session = startTriage(db, at);
   raiseObjection(db, entry, "fold it into 5", at);
@@ -1529,8 +1550,11 @@ async function draftOnMetaReviewRow(draftPath: string) {
   return { db, review, drafter };
 }
 
-it("主題つきの task の行への Board call の起草は、盤面に既定 workspace があっても scope null の candidate を作り、INDEX は盤面全体の木で組む(ADR 0279 決定1)", async () => {
-  const { db, drafter } = await draftOnMetaReviewRow("review");
+it.each([
+  ["主題つきの task(meta-review)", false],
+  ["meta-review の下の memory_repair", true],
+] as const)("%s の行への Board call の起草は、盤面に既定 workspace があっても scope null の candidate を作り、INDEX は盤面全体の木で組む(ADR 0279 決定1 / ADR 0283 決定1)", async (_, onRepair) => {
+  const { db, drafter } = await draftOnMetaReviewRow("review", onRepair);
 
   expect(listMemoryEntries(db, {}).filter((m) => m.kind === "behavior")).toEqual([
     expect.objectContaining({ title: "Fold near-duplicates", state: "candidate", scope: null, addressee: "deckhand" }),

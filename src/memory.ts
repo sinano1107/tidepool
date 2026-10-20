@@ -11,14 +11,12 @@ import {
   completeMetaReview,
   injectedMaterial,
   inWindow,
-  lineageSubjectOf,
   MEMORY_META_REVIEW_VERBS,
   MEMORY_REPAIR_VERBS,
   type MetaReviewSubject,
   type MetaReviewWindow,
   materialEvents,
   materialSection,
-  metaReviewSubjectOf,
   metaReviewWindow,
   objectedJudgments,
   objectedRowIds,
@@ -31,7 +29,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryAgent, routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, listChildren, type MemoryProposal, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -775,17 +773,24 @@ function objectedWrites(db: Db, taskId: string): WriteTouch[] {
   });
 }
 
-/** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。 */
-export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean } {
+/** memory_repair が運ぶ行の種類(ADR 0281): 書き込みの行と判断の行。判断の行が無ければ書き込みの側(行の無い修理子も今どおり)。
+ *  `reads` は meta-review の id 読み(read_memory_entries)を持つか —— 判断の行を運ぶか、行の主題を持つ(親の主題の読み手、ADR 0283 決定3)。
+ *  MCP の登録と memoryRepairVerbs(Codex の宣言)はどちらもこの組から引く。 */
+export function memoryRepairKinds(db: Db, taskId: string): { writes: boolean; judgments: boolean; reads: boolean } {
   const judgments = repairJudgments(db, taskId, "memory").length > 0;
-  return { writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"), judgments };
+  return {
+    writes: !judgments || objectedRows(db, taskId).some((row) => row.kind === "memory_written"),
+    judgments,
+    reads: judgments || lineageSubjectOf(db, taskId) !== null,
+  };
 }
 
 /** memory_repair の記憶の verb(ADR 0281): 書き込みの行の修理 verb、判断の行の memory meta-review の verb、両方なら名前の集合の和。
+ *  行の主題を持つ修理子は運ぶ行を問わず meta-review の id 読みを持つ(ADR 0283 決定3)。
  *  Codex の `enabled_tools` が読み、MCP の登録は memoryRepairKinds で同じ組を登録する。 */
 export function memoryRepairVerbs(db: Db, taskId: string): string[] {
-  const { writes, judgments } = memoryRepairKinds(db, taskId);
-  return [...new Set([...(writes ? MEMORY_REPAIR_VERBS : []), ...(judgments ? MEMORY_META_REVIEW_VERBS : [])])];
+  const { writes, judgments, reads } = memoryRepairKinds(db, taskId);
+  return [...new Set([...(writes ? MEMORY_REPAIR_VERBS : []), ...(judgments ? MEMORY_META_REVIEW_VERBS : []), ...(reads ? ["read_memory_entries"] : [])])];
 }
 
 /** ids と、そこから後に移された複製(`path_moved` の鎖の先)。 */
@@ -2454,9 +2459,9 @@ type MemoryInjection = {
   omitted: number;
 };
 
-/** spawn 注入の節(provider 非依存): 主題つきの meta-review には指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf
- *  (memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2)。
- *  routing_repair(主題 routing の修理子、ADR 0279 決定4・6)にも同じ理由で INDEX を組まず、節は空。 */
+/** spawn 注入の節(provider 非依存): 行の主題を持つ task(meta-review と、親の主題の読み手である主題の修理子・RCA とその子孫)には
+ *  指針の節(metaReviewGuidance)、他の task には INDEX と関連 leaf(memoryIndex)。meta-review に INDEX を組まないのは、INDEX が案内する
+ *  pull verb がその接続に無いから(ADR 0122 決定2、ADR 0279 決定2 / ADR 0283 決定1・3)。 */
 export function buildMemoryInjection(
   db: Db,
   task: Pick<Task, "id" | "title" | "purpose" | "completion_criteria">,
@@ -2464,10 +2469,7 @@ export function buildMemoryInjection(
   agent: string,
   query?: InjectionQuery,
 ): MemoryInjection {
-  if (getTask(db, task.id)?.type === "routing_repair") {
-    return { query, section: null, watermark: memoryWatermark(db), entries: [], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0 };
-  }
-  return metaReviewSubjectOf(db, task.id) === null ? memoryIndex(db, task, scope, agent, query) : metaReviewGuidance(db, task.id, agent);
+  return lineageSubjectOf(db, task.id) === null ? memoryIndex(db, task, scope, agent, query) : metaReviewGuidance(db, task.id, agent);
 }
 
 const GUIDANCE_PREAMBLE =
@@ -2650,7 +2652,7 @@ function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
  *  それぞれの読み口と同じ行で組む。上限は置かない。meta-review でなければ null。`agents` は registry の agent 一覧(routing の agent の項目を
  *  agent_tier が届くものに絞る)。 */
 export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonly RegistryAgent[]) {
-  const subject = metaReviewSubjectOf(db, taskId);
+  const subject = metaReviewSubjectOf(db, taskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (subject === null) return null;
   return db.transaction(() => {
     const window = metaReviewWindow(db, taskId);
@@ -2792,6 +2794,7 @@ export function completeMemoryReview(
   now: Date,
   origin: EventOrigin,
 ): Task {
+  // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (review.meta_review_subject !== "memory") throw new DomainError("only a memory meta-review completes with complete_memory_review");
   const record = injectedMaterial(db, review.id, "memory");
   const invalidated = new Set(listEventsOfKinds(db, ["memory_entry_invalidated"], { after: record.id }).map(({ payload }) => payload.entry_id));

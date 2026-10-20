@@ -6,7 +6,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { ancestorsSql, finishTask, getTask, type HandoffDoc, isRepairType, registerTask, type Task } from "./tasks.js";
+import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
@@ -148,24 +148,6 @@ export const META_REVIEW_SUBJECTS = {
 } as const;
 export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
 
-/** この task が meta-review ならその主題、そうでなければ null(専用 verb の登録と門が読む、ADR 0122 決定2)。 */
-export function metaReviewSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
-  return (db.prepare("SELECT meta_review_subject FROM tasks WHERE id = ?").get(taskId) as { meta_review_subject: MetaReviewSubject | null } | undefined)
-    ?.meta_review_subject ?? null;
-}
-
-/** 行の主題(ADR 0279 決定6): task 自身の主題、無ければ最も近い主題つきの祖先の主題 —— 主題の修理子・RCA は親の主題に載る。
- *  祖先にも無ければ null。材料の Objected decisions と list_precedents が共有する precedentRows の絞りが読む。 */
-export function lineageSubjectOf(db: Db, taskId: string): MetaReviewSubject | null {
-  return (
-    metaReviewSubjectOf(db, taskId) ??
-    ((db
-      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
-      .pluck()
-      .get(taskId) as MetaReviewSubject | undefined) ?? null)
-  );
-}
-
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。
  *  `excludeTaskId` は読み手自身 —— その登録の watermark は「今」なので除く。 */
 function lastDoneWatermark(db: Db, subject: MetaReviewSubject | null, excludeTaskId: string | null): number {
@@ -183,7 +165,7 @@ function lastDoneWatermark(db: Db, subject: MetaReviewSubject | null, excludeTas
 /** 読み手の task より前の、同主題で完了した最新の登録の watermark(読み口の既定、無ければ 0)。meta-review でない読み手
  *  (interview の root、ADR 0273 決定2)は盤面の始まりから。 */
 export const previousMetaReviewWatermark = (db: Db, readerTaskId: string): number => {
-  const subject = metaReviewSubjectOf(db, readerTaskId);
+  const subject = metaReviewSubjectOf(db, readerTaskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   return subject === null ? 0 : lastDoneWatermark(db, subject, readerTaskId);
 };
 
@@ -346,7 +328,7 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
 }
 
 /** scheduler の poll が毎回呼ぶ: due な主題の meta-review を登録する(`agents` は registry の agent 一覧、無ければ registry の無い盤面)。due = 前回登録から周期が経ち
- *  (取り消された登録も周期の起点、ADR 0193 決定2)、同主題の open な task・meta-review の子・その下の提案 question が無く、完了した前回の watermark より後に主題の材料がある
+ *  (取り消された登録も周期の起点、ADR 0193 決定2)、行の主題が同じ未決着の task(meta-review 自身・その系譜の子孫と提案 question)が無く、完了した前回の watermark より後に主題の材料がある
  *  (前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
  *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTiers): void {
@@ -361,19 +343,12 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
     if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
     // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
     if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
-    // 未決着 = 同主題の open な task、同主題の meta-review の open な子(提案 question・修理子・RCA)、
-    // その子の下の open な提案 question(子の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7)。
+    // 未決着 = 行の主題が同じ未決着の task —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
+    // question(親の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7 / ADR 0283 決定1)。
     // 提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)
-    const open = db
-      .prepare(
-        `WITH reviews AS (SELECT id FROM tasks WHERE meta_review_subject = @subject)
-         SELECT 1 FROM tasks WHERE ${unsettledSql("status")}
-           AND (meta_review_subject = @subject
-             OR parent_id IN (SELECT id FROM reviews)
-             OR (question_proposal IS NOT NULL AND parent_id IN (SELECT id FROM tasks WHERE parent_id IN (SELECT id FROM reviews))))`,
-      )
-      .get({ subject });
-    if (open) continue;
+    // ponytail: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
+    const unsettled = db.prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")}`).pluck().all() as string[];
+    if (unsettled.some((id) => lineageSubjectOf(db, id) === subject)) continue;
     if (materialEvents(db, material, { after: lastDoneWatermark(db, subject, null) }).length > 0) registerMetaReview(db, subject, now);
   }
 }

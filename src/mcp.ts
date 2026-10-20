@@ -43,7 +43,7 @@ import {
   searchMemory,
   searchMemoryEntries,
 } from "./memory.js";
-import { type MetaReviewSubject, metaReviewSubjectOf, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
+import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -89,6 +89,7 @@ import {
   joinHistory,
   listExaminees,
   logDecision,
+  metaReviewSubjectOf,
   posedProbe,
   poseProbe,
   REPAIR_NOTICES,
@@ -551,7 +552,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     taskId: attributedTaskId,
   });
   // ADR 0122 決定2: meta-review には worker の memory verb を登録せず、主題の専用 verb で置き換える
-  const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId);
+  const subject = attributedTaskId === null ? null : metaReviewSubjectOf(deps.db, attributedTaskId); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   // ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2: Interview の木では分解の verb を登録せず、受験者には記憶を書く verb も
   // 登録せず、root には complete_task の代わりに出題前は出題の、出題済みは採点完了の verb を登録する(同じ task ごとの差し替え)。
   // 成果が捨てられた task にも分解の verb を登録しない(ADR 0271 決定2)。memory_repair は分解の verb と新規の記憶の書き込みの verb を
@@ -1150,10 +1151,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   }
   // ADR 0252 決定4 / ADR 0272 決定3: 記憶の修理 verb は memory_repair の type で足す
   if (attributedTaskId !== null && getTask(deps.db, attributedTaskId)?.type === "memory_repair") registerMemoryRepairVerbs(server, deps, attributedTaskId);
-  // ADR 0279 決定4: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb を足す(対象の門は domain が持つ)
+  // ADR 0279 決定4 / ADR 0283 決定3: routing の判断の行を運ぶ routing_repair は routing の読み口と提案 verb と指針の節の id 読みを足す
+  // (対象の門は domain が持つ)
   if (attributedTaskId !== null && routingRepairVerbs(deps.db, attributedTaskId).length > 0) {
     const run = slotRun(deps, attributedTaskId);
     registerPrecedentRead(server, deps, run);
+    registerMemoryEntriesRead(server, deps, run);
     registerRoutingMetaReviewVerbs(server, deps, run);
   }
 
@@ -1265,9 +1268,9 @@ function registerMemoryRepairVerbs(server: McpServer, deps: McpDeps, attributedT
   const side: MemoryWriteSide = { activity: "worker_verb", reach: memoryRepairReach(kinds), judges: kinds.judgments };
   if (kinds.judgments) {
     registerPrecedentRead(server, deps, run);
-    registerMemoryEntriesRead(server, deps, run);
     registerMemoryMetaReviewVerbs(server, deps, run, side);
   } else registerMemoryMoves(server, deps, run, side);
+  if (kinds.reads) registerMemoryEntriesRead(server, deps, run);
   if (!kinds.writes) return;
   const scope =
     "These repair verbs take only the entries the objected memory writes in your purpose created, invalidated or moved, and the copies those were moved to since. ";
@@ -1336,6 +1339,7 @@ const slotRun =
 function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTaskId: string | null, subject: MetaReviewSubject): void {
   const run: MetaReviewRun = (verb) =>
     runVerb(deps, attributedTaskId, (task) => {
+      // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
       if (metaReviewSubjectOf(deps.db, task.id) !== subject) throw new DomainError(`${subject} meta-review verbs are only for a ${subject} meta-review task`);
       return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
     });
@@ -1345,7 +1349,8 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
   else registerRoutingMetaReviewVerbs(server, deps, run);
 }
 
-/** 指針の節の id 読み: 両主題の meta-review が持つ(ADR 0279 決定2 —— 指針の節は両主題に注入され、その本文はこれで読む)。 */
+/** 指針の節の id 読み: 両主題の meta-review と、親の主題の読み手である主題の修理子(memory_repair / routing_repair)が持つ(ADR 0279 決定2 /
+ *  ADR 0283 決定3 —— 指針の節はどちらにも注入され、その本文はこれで読む)。 */
 function registerMemoryEntriesRead(server: McpServer, deps: McpDeps, run: MetaReviewRun): void {
   server.registerTool(
     "read_memory_entries",

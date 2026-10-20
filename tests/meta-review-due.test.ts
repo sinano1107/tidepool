@@ -15,9 +15,9 @@ import {
   rejectMemoryProposal,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
+import { getTask, listBoard, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, failureQuestion, HUMAN_WEBUI, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, auditorRcaOn, failureQuestion, HUMAN_WEBUI, writerTask } from "./harness.js";
 
 
 /** 周期の due 判定(ADR 0120 決定2・ADR 0151)のドメイン層: 同じ主題の meta-review 自身の産物は材料に数えない。 */
@@ -208,4 +208,42 @@ it("別主題の meta-review の open な子は数えない —— memory の修
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "routing")).toBe(1);
+});
+
+const markDone = (db: Db, ...ids: string[]) => {
+  for (const id of ids) db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(id);
+};
+
+it.each([
+  ["done の修理子の下の open な RCA", (db: Db, repair: string) => {
+    auditorRcaOn(db, getTask(db, repair)!, at);
+    markDone(db, repair);
+  }],
+  ["meta-review の done の RCA の下の open な RCA", (db: Db, repair: string) => {
+    markDone(db, repair);
+    const review = getTask(db, repair)!.parent_id!;
+    const rca = auditorRcaOn(db, getTask(db, review)!, at);
+    auditorRcaOn(db, rca, at);
+    markDone(db, rca.id, ...listChildren(db, review).filter((child) => child.id !== rca.id).map((child) => child.id));
+  }],
+] as const)("同主題の meta-review の系譜の孫(%s)がある間は、周期が過ぎ材料があっても次の周期を登録しない(ADR 0283 決定1)", (_, grandchild) => {
+  const db = openDb(":memory:");
+  const repair = previousReviewWithRepair(db, "memory");
+  grandchild(db, repair);
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(registrations(db)).toBe(1);
+});
+
+it("祖先に meta-review の無い open な RCA は次の周期を止めない(ADR 0283 決定1)", () => {
+  const db = openDb(":memory:");
+  previousReview(db, "memory");
+  auditorRcaOn(db, registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), at);
+  knowledge(db, "after the review");
+
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(registrations(db)).toBe(2);
 });

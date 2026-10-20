@@ -41,7 +41,7 @@ import {
   recordMemoryInjection,
   recordMetaReviewMaterial,
 } from "./memory.js";
-import { META_REVIEW_SUBJECTS, metaReviewSubjectOf, WORKER_MEMORY_VERBS } from "./meta-review.js";
+import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -49,7 +49,7 @@ import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 
 
-import { carriesReadOnly, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 
 
 import { tierNames } from "./tier.js";
@@ -1210,7 +1210,7 @@ export class CodexWorker implements WorkerAdapter {
     // 実体の綴りで filesystem 表・skills/list・-C を書く(issue #864)。無い checkout はここで投げ、pickup が spawn_failed に落とす
     const workspacePath = realpathSync(place.path);
     const hook = installBoardHook(this.options.codexHome);
-    const subject = metaReviewSubjectOf(this.options.db, task.id);
+    const subject = metaReviewSubjectOf(this.options.db, task.id); // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
     const verbs = taskVerbSwap(this.options.db, task.id);
     const withheld: readonly string[] = verbs.withheld;
     const taskMcpUrl = new URL(this.options.mcpUrl);
@@ -1234,7 +1234,7 @@ export class CodexWorker implements WorkerAdapter {
         memorySection: memoryPromptSection(memory, material),
       })}\n\n`,
       mcpUrl: taskMcpUrl.toString(),
-      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281: MCP の登録と同じ差を写す。宣言と盤面の面が集合として一致することは
+      // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281 / ADR 0283 決定3: MCP の登録と同じ差を写す(主題の修理子の pull verb の伏せと read_memory_entries は taskVerbSwap と memoryRepairVerbs から来る)。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
       enabledTools: [
         ...(subject

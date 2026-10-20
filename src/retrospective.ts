@@ -23,12 +23,11 @@ import {
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { createBehaviorCandidate, listMemoryEntries, memoryIndex, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
-import { metaReviewSubjectOf } from "./meta-review.js";
 import { readPulls } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
-import { finishTask, getTask, getTextAuthor, type HandoffDoc, isRca, listChildren, repairChildren, type Task } from "./tasks.js";
+import { finishTask, getTask, getTextAuthor, type HandoffDoc, isRca, lineageSubjectOf, listChildren, repairChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
@@ -542,10 +541,10 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   });
 }
 
-/** 行から学んだ記憶の置き場(起草と propose_from_objection が共有): 主題つきの task(meta-review)の行は盤面全体(null)、
- *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事(ADR 0279 決定1)。 */
+/** 行から学んだ記憶の置き場(起草と propose_from_objection が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
+ *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事で、子はそれを継ぐ(ADR 0279 決定1 / ADR 0283 決定1)。 */
 const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Task): string | null =>
-  metaReviewSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
+  lineageSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
 
 /** 初回の帰責の判定が読んだ decision log の切れ目(この event id より前、#1572)。 */
 const readCut = (initial: Attribution) => (initial.decision_log_through === undefined ? initial.id : initial.decision_log_through + 1);

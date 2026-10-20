@@ -27,6 +27,7 @@ import {
   isArtifactDiscarded,
   isAuditSql,
   latestPosedProbe,
+  lineageSubjectOf,
   listBoard,
   moveTask,
   type RegisterTaskInput,
@@ -425,8 +426,9 @@ function bundleObjections(
     const routingRows = pairs.filter((pair) => judges(pair, "routing"));
     const decisionRows = pairs.filter((pair) => !memoryRows.includes(pair) && !routingRows.includes(pair));
     // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
-    // 主題つきの task の判断の行も work の修理子を持たない —— 主題 verb は work に登録されない(ADR 0279 決定3・4)
-    if (decisionRows.length > 0 && objected.type !== "interview" && !objected.meta_review_subject && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+    // 行の主題を持つ task(meta-review、その下の主題の修理子・RCA とその子孫)の判断の行も work の修理子を持たない —— 主題 verb は work に
+    // 登録されず、直すブランチも無い(ADR 0279 決定3・4 / ADR 0283 決定2)
+    if (decisionRows.length > 0 && objected.type !== "interview" && lineageSubjectOf(db, taskId) === null && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
     if (memoryRows.length > 0) {

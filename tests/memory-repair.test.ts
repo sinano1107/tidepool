@@ -232,6 +232,16 @@ it("修理子の記憶の verb は運ぶ行の種類で決まる —— 書き�
   expect(memoryRepairVerbs(db, repairChild(second.review.id).id).sort()).toEqual([...new Set([...MEMORY_META_REVIEW_VERBS, ...writes])].sort());
 });
 
+it("meta-review の下の書き込みの行だけを運ぶ修理子は、書き込みの修理 verb 6本に meta-review の id 読みを足す —— 親の主題の読み手(ADR 0283 決定3)", () => {
+  const { db, reviewed, knowledge, repairOf } = board();
+  const moved = moveMemoryByMetaReview(db, { entry_id: knowledge("Squash"), scope: "charts", path: "build/squash", mover: metaReview }, "worker", at, reviewed.id);
+
+  const repair = repairOf(moved.event_id, reviewed.id);
+
+  const writes = ["invalidate_memory", "restore_memory", "move_memory", "move_memory_branch", "restore_memory_branch", "replace_memory"];
+  expect(memoryRepairVerbs(db, repair.id).sort()).toEqual([...writes, "read_memory_entries"].sort());
+});
+
 /** 書き込みの行と判断の行の両方を運ぶ修理子(ADR 0281 決定1): review が窓の外のエントリ P を盤面全体へ広げ、定義 D を書き、窓の candidate C・
  *  Knowledge K・approved の Behavior B を据え置いた。異議は移動と定義の書き込みの行と、C・K・B の判断の行。O は窓の外で誰も触らない。 */
 function unionRepair() {
