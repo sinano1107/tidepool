@@ -438,6 +438,13 @@ function mapData(
         meta: `${TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null, meta: 'concurrency=1' };
+  // ADR 0294 決定1: 最後の poll の失敗は停止でも枠の状態でもない —— slot 行の枝にすると、一撃が投げて枠が塞がったまま
+  // (決定5)の回に走っている行に隠れるので、欄があれば別の1行で、後始末の行と同じ「行 + いつ」の形で報せる
+  const failure = queueEnvelope.lastPollFailure;
+  const pollFailure = failure && {
+    line: 'last poll failed · the next poll retries',
+    meta: `${failure.message} · at ${fmtTime(failure.at)}`,
+  };
   return {
     questions, log: logEntries, queue, board: cols, icons,
     scratchpad: triage.scratchpad.map((line): TpScratchLine => ({ id: line.id, text: line.line })),
@@ -445,7 +452,7 @@ function mapData(
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
-    slot, pickupHalt, running: !!running, paused: !!paused,
+    slot, pollFailure, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0143 / 0260) — Provider × 窓ごとの盤面状態応答から素通し
     spendDown: pause.spendDown,

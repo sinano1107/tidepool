@@ -81,6 +81,7 @@ import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
+import type { PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
@@ -264,6 +265,8 @@ export interface Scheduler {
   /** Settles when no poll is in flight — a convergence pass waits on it so that landing's push never overlaps
    *  pickup's fetch / checkout in the same checkout (CONTEXT.md「収束」). */
   idle: () => Promise<void>;
+  /** 最後の poll の失敗(ADR 0294 決定1): 本体に入った poll が成功するまで残る。memory だけで、再起動で消える。 */
+  lastPollFailure: () => PollFailure | undefined;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -378,6 +381,12 @@ export function startScheduler(deps: {
     converge,
   } = deps;
   let inFlight = false;
+  let lastPollFailure: PollFailure | undefined;
+  /** slot を握る前の想定外の例外(と後始末の一撃の throw、ADR 0294 決定5): 盤面は落とさず、行に残して次の poll に任せる。 */
+  const pollFailed = (err: unknown) => {
+    console.error("[scheduler] poll failed; the next poll retries:", err);
+    lastPollFailure = { at: clock.now().toISOString(), message: err instanceof Error ? err.message : String(err) };
+  };
   const resumeTimer = createResumeTimers(clock, pollNow);
 
   async function pickupBlocked(): Promise<boolean> {
@@ -724,6 +733,8 @@ export function startScheduler(deps: {
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
     let afterPoll: (() => void) | void;
+    // 成功 = 門を越えて本体(候補の読み)に入り、投げずに終わった poll。門で返った poll は行を触らない(ADR 0294 決定1)
+    let entered = false;
     try {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
@@ -732,6 +743,7 @@ export function startScheduler(deps: {
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
       refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
       if (await pickupBlocked()) return;
+      entered = true;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。
       const stopped = quarantineStops(db);
@@ -892,10 +904,20 @@ export function startScheduler(deps: {
         }
       };
       afterPoll = await pickup(head, chosen, content, recordShadowRow);
+    } catch (err) {
+      entered = false;
+      pollFailed(err);
+      return;
     } finally {
       inFlight = false;
+      if (entered) lastPollFailure = undefined;
     }
-    afterPoll?.();
+    // 一撃が投げても撃ち直さない —— slot は再起動まで塞がる(#2036 の問い、ADR 0294 決定5)
+    try {
+      afterPoll?.();
+    } catch (err) {
+      pollFailed(err);
+    }
   }
 
   let stopped = false;
@@ -909,7 +931,7 @@ export function startScheduler(deps: {
       const running = poll();
       polling = running.catch(() => {});
       return running;
-    });
+    }).catch((err) => console.error("[scheduler] pickup trigger failed:", err));
   }
 
   const cancel = clock.setInterval(pollNow, HOURLY);
@@ -921,5 +943,6 @@ export function startScheduler(deps: {
     },
     pollNow,
     idle: () => polling,
+    lastPollFailure: () => lastPollFailure,
   };
 }

@@ -6,7 +6,7 @@ import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { registerTask } from "../src/tasks.js";
 import { FakeClock, fakeContainers, healthyOpenai, noRetrospectiveCalls, ScriptedWorker, UNRESOLVABLE_AGENT } from "./fakes.js";
-import { executionSetting, HUMAN_WEBUI } from "./harness.js";
+import { executionSetting, HUMAN_WEBUI, unhandledRejectionsDuring } from "./harness.js";
 
 // ADR 0097 決定1/3: pickup の時点で解決できない assignee は、poll を倒さず agent 名の quarantine に落とし、その head を飛ばす
 it.each(UNRESOLVABLE_AGENT)("先頭の assignee の候補解決が %s で倒れると、poll はその agent を quarantine し、後ろのタスクを拾う", async (_, fail) => {
@@ -56,9 +56,6 @@ it.each(UNRESOLVABLE_AGENT)("openai の観測後に引き直した候補解決�
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
   const candidates = implicitTaskExecutionCandidates(db);
-  const rejections: unknown[] = [];
-  const onRejection = (reason: unknown) => rejections.push(reason);
-  process.on("unhandledRejection", onRejection);
   let driftedCalls = 0;
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
@@ -92,10 +89,7 @@ it.each(UNRESOLVABLE_AGENT)("openai の観測後に引き直した候補解決�
     clock.now(),
     ...HUMAN_WEBUI,
   );
-  await clock.advance(HOURLY);
-  // unhandledRejection は reject の後の macrotask で届く
-  await new Promise((resolve) => setImmediate(resolve));
-  process.off("unhandledRejection", onRejection);
+  const rejections = await unhandledRejectionsDuring(() => clock.advance(HOURLY));
 
   expect(rejections).toEqual([]);
   expect(driftedCalls).toBe(2);
@@ -104,12 +98,11 @@ it.each(UNRESOLVABLE_AGENT)("openai の観測後に引き直した候補解決�
   scheduler.stop();
 });
 
-it("openai の観測後に引き直した候補解決が解決できない agent 以外の例外で倒れたら、その例外は poll の外へ伝わる", async () => {
+// ADR 0294 決定1: 解決できない agent 以外の例外は quarantine にせず、最後の poll の失敗の行に残す
+it("openai の観測後に引き直した候補解決が解決できない agent 以外の例外で倒れたら、poll は外へ投げず最後の poll の失敗に残す", async () => {
   const db = openDb(":memory:");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock);
-  const failure = new Error("registry read failed");
-  const raised = new Promise((resolve) => process.once("unhandledRejection", resolve));
   let calls = 0;
   const scheduler = startScheduler({
     retrospectiveCalls: noRetrospectiveCalls,
@@ -126,14 +119,15 @@ it("openai の観測後に引き直した候補解決が解決できない agent
     taskExecutionCandidates: () => {
       calls++;
       if (calls === 1) return [executionSetting("openai", "gpt-5.6-sol")];
-      throw failure;
+      throw new Error("registry read failed");
     },
   });
 
   registerTask(db, { type: "work", title: "head", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
-  await clock.advance(HOURLY);
+  const rejections = await unhandledRejectionsDuring(() => clock.advance(HOURLY));
 
-  expect(await raised).toBe(failure);
+  expect(rejections).toEqual([]);
+  expect(scheduler.lastPollFailure()?.message).toBe("registry read failed");
   expect(worker.started).toEqual([]);
   scheduler.stop();
 });

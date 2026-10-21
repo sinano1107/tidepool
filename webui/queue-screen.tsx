@@ -165,6 +165,7 @@ interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
     slot: AppSlot;
+    pollFailure?: { line: string; meta: string };
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: import('../src/wire-contract').ProviderUsage[];
@@ -250,6 +251,13 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
           ? 'repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)'
           : slot.color,
       }}></div>
+      {data.pollFailure && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>poll</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>{data.pollFailure.line}</span>
+          <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{data.pollFailure.meta}</span>
+        </div>
+      )}
 
       {shownProviders.length > 0 && (
         <Card data-testid="provider-usage" style={{ padding: '10px 12px', marginBottom: 14 }}>

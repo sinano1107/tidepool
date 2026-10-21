@@ -16,6 +16,7 @@ import {
   questions,
   queueWork,
   type Tidepool,
+  unhandledRejectionsDuring,
 } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -255,28 +256,21 @@ it("pickup の準備が想定外の例外を投げると spawn_failed と failur
     }
     return defaultingTo(ws)(name);
   };
-  const unhandled: unknown[] = [];
-  const onUnhandled = (reason: unknown) => unhandled.push(reason);
-  process.on("unhandledRejection", onUnhandled);
-  try {
-    t = await bootTidepool({ workspace: ws, resolveWorkspace, watchdog: WATCHDOG });
-    const task = queueWork(t, "never runs");
-    const next = queueWork(t, "next in line");
+  t = await bootTidepool({ workspace: ws, resolveWorkspace, watchdog: WATCHDOG });
+  const task = queueWork(t, "never runs");
+  const next = queueWork(t, "next in line");
 
-    await expect(t.clock.advance(HOUR)).resolves.toBeUndefined();
+  const unhandled = await unhandledRejectionsDuring(() => t.clock.advance(HOUR));
 
-    // question の本文は同じ一撃が作るので、1本目のテストが釘付けしている(ADR 0107 決定3)
-    expect(await neverStarted()).toHaveLength(1);
-    const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
-    expect(events.find((e: any) => e.kind === "spawn_failed").payload).toEqual({
-      kind: "spawn_failed",
-      error_code: null,
-      message: "resolver blew up",
-    });
-    expect(await status(task.id)).toBe("blocked");
-    expect(started()).toEqual([next.id]);
-    expect(unhandled).toEqual([]);
-  } finally {
-    process.off("unhandledRejection", onUnhandled);
-  }
+  // question の本文は同じ一撃が作るので、1本目のテストが釘付けしている(ADR 0107 決定3)
+  expect(await neverStarted()).toHaveLength(1);
+  const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+  expect(events.find((e: any) => e.kind === "spawn_failed").payload).toEqual({
+    kind: "spawn_failed",
+    error_code: null,
+    message: "resolver blew up",
+  });
+  expect(await status(task.id)).toBe("blocked");
+  expect(started()).toEqual([next.id]);
+  expect(unhandled).toEqual([]);
 });

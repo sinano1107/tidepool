@@ -901,6 +901,20 @@ export function failGitCommits(): void {
   vi.stubEnv(`GIT_CONFIG_VALUE_${n + 1}`, "/nonexistent-gpg");
 }
 
+/** `body` の間に撃たれた `unhandledRejection` の理由を集める。reject は後の macrotask で届くので、1つ流してから外す。 */
+export async function unhandledRejectionsDuring(body: () => Promise<unknown>): Promise<unknown[]> {
+  const rejections: unknown[] = [];
+  const record = (reason: unknown) => rejections.push(reason);
+  process.on("unhandledRejection", record);
+  try {
+    await body();
+    await new Promise((resolve) => setImmediate(resolve));
+  } finally {
+    process.off("unhandledRejection", record);
+  }
+  return rejections;
+}
+
 /** setup のみ: task を一度 pickup された形にする(列も status も動かさない)—— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
 export function markPickedUp(db: Db, taskId: string, at: Date, workerId = "deckhand"): void {
   appendEvent(db, { taskId, workerId, origin: "board", at, payload: { kind: "task_picked_up" } });
