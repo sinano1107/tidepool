@@ -264,7 +264,6 @@ it("pickup の準備が想定外の例外を投げると spawn_failed と failur
     const next = queueWork(t, "next in line");
 
     await expect(t.clock.advance(HOUR)).resolves.toBeUndefined();
-    await settle();
 
     const [question, ...more] = await neverStarted();
     expect(more).toEqual([]);
