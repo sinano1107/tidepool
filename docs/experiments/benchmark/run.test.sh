@@ -258,8 +258,8 @@ copy b-work
 copy a-interview
 check
 registry-seed
-registry-workspaces
 workspace b-work
+registry-workspaces
 token
 board-start
 board-ready
@@ -324,7 +324,6 @@ gate-board-unit" "$(steps)"
 reset_case
 GATE_STATUS=Running
 GATE_ACTIVE=0
-printf 'interview\n' > "$CASE_DIR/state/type/root2"
 run_harness
 check "gate VM up but its board stopped: the run goes on" "0" "$rc"
 

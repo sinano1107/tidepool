@@ -96,7 +96,7 @@ check_credentials() {
 
 # Everything a run writes lives under ~/bench, so the reset is one directory. ~/.tidepool keeps the logins.
 reset_state() {
-  vm "systemctl --user stop $UNIT 2> /dev/null; systemctl --user reset-failed $UNIT 2> /dev/null; rm -rf ~/bench && mkdir -p ~/bench/exercises ~/bench/results"
+  vm "systemctl --user stop $UNIT 2> /dev/null; systemctl --user reset-failed $UNIT 2> /dev/null; rm -rf ~/bench && mkdir -p ~/bench/exercises"
   vm 'cat > ~/bench/env' << ENV
 export TIDEPOOL_REGISTRY=\$HOME/bench/registry TIDEPOOL_DB=\$HOME/bench/board.sqlite TIDEPOOL_WORKER_LOGS=\$HOME/bench/worker-logs
 export TIDEPOOL_WORKSPACES_DIR=\$HOME/bench/workspaces TIDEPOOL_API_TOKEN_FILE=\$HOME/bench/api-token
@@ -126,29 +126,22 @@ copy_exercises() {
   vm "cd ~/bench && $TSX check $(printf 'exercises/%s ' "${NAMES[@]}")"
 }
 
-# The registry's origin is a bare repo in the VM: the template seed, or the given URL#REF. One workspace per exercise.
+# The registry's origin is a bare repo in the VM: the template seed, or the given URL#REF. One workspace per exercise, seeded here.
 seed_registry() {
   if [[ -z "$REGISTRY" ]]; then
     vm 'source ~/bench/env && git init -q --bare ~/bench/registry.git && git clone -q ~/bench/registry.git "$TIDEPOOL_REGISTRY" && cd ~/tidepool && npm run -s init-registry > /dev/null'
   else
     vm "source ~/bench/env && git init -q --bare ~/bench/registry.git && git clone -q $(printf %q "${REGISTRY%#*}") \"\$TIDEPOOL_REGISTRY\" && cd \"\$TIDEPOOL_REGISTRY\" && git checkout -q $(printf %q "${REGISTRY##*#}") && git remote set-url origin ~/bench/registry.git && git push -q origin HEAD:main"
   fi
+  # Each exercise's workspace is a git repo whose initial commit is its seed; main is its protected branch.
   local name ws yaml=""
-  for name in "${NAMES[@]}"; do
-    ws="$(decl '.task.workspace // .interview.workspace // empty' "$name")"
-    [[ -n "$ws" ]] && yaml+="$ws:"$'\n'"  review_allowed_commands:"$'\n'"    - \"node --test\""$'\n'
-  done
-  REGISTRY_COMMIT="$(vm 'source ~/bench/env && cd "$TIDEPOOL_REGISTRY" && cat >> workspaces.yaml && git commit -qam "Benchmark workspaces" && git push -q origin HEAD:main && git rev-parse HEAD' <<< "$yaml")"
-}
-
-# Each exercise's workspace is a git repo whose initial commit is its seed; main is its protected branch.
-seed_workspaces() {
-  local name ws
   for name in "${NAMES[@]}"; do
     ws="$(decl '.task.workspace // .interview.workspace // empty' "$name")"
     [[ -n "$ws" ]] || continue
     vm "source ~/bench/env && w=\"\$TIDEPOOL_WORKSPACES_DIR/$ws\" && git init -q -b main \"\$w\" && cp -a ~/bench/exercises/$name/workspace/. \"\$w\"/ && git -C \"\$w\" add -A && git -C \"\$w\" commit -qm 'Seed $name'"
+    yaml+="$ws:"$'\n'"  review_allowed_commands:"$'\n'"    - \"node --test\""$'\n'
   done
+  REGISTRY_COMMIT="$(vm 'source ~/bench/env && cd "$TIDEPOOL_REGISTRY" && cat >> workspaces.yaml && git commit -qam "Benchmark workspaces" && git push -q origin HEAD:main && git rev-parse HEAD' <<< "$yaml")"
 }
 
 api() {
@@ -292,7 +285,6 @@ main() {
   prepare_claude_cli
   copy_exercises
   seed_registry
-  seed_workspaces
   start_board
   configure_board
   register_exercises
