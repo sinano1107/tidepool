@@ -22,6 +22,7 @@ import {
   codexCommandThrough,
   compatibilityCheck,
   createCodexAppServerProbe,
+  probeEnv,
 } from "../src/codex-app-server.js";
 import { egressCurl, judgeConformance, judgeSeedRows } from "../src/codex-cli-conformance.js";
 import { createCodexCapabilityCheck, permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js";
@@ -48,10 +49,7 @@ const { call } = createBoardCalls({
   onCliVersionMismatch: () => {},
 });
 const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".tidepool", "codex");
-const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
-// 盤面の Codex の経路は ChatGPT の認証だけ(ADR 0098)—— API key に落ちる道を残さない
-delete env.OPENAI_API_KEY;
-delete env.CODEX_API_KEY;
+const env = probeEnv(codexHome);
 const pinnedVersion = execFileSync(executable, ["--version"], { encoding: "utf8" }).trim();
 const command = codexCommandThrough(call, "conformance App Server", CODEX_APP_SERVER_LIMIT_MS);
 

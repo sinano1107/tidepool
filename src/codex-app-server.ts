@@ -182,7 +182,8 @@ export function codexLoginAbsence(codexHome: string): string | undefined {
   return existsSync(path) ? undefined : `no Codex login: ${path} is absent`;
 }
 
-function probeEnv(codexHome: string): NodeJS.ProcessEnv {
+/** Codex の Board call の env: 盤面の CODEX_HOME を指し、API key に落ちる道を残さない(ADR 0098)。 */
+export function probeEnv(codexHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
   delete env.OPENAI_API_KEY;
   delete env.CODEX_API_KEY;
