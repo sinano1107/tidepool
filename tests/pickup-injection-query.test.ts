@@ -22,7 +22,7 @@ it("表示言語 Japanese の盤面で人間が登録した task は、title / p
 
   await t.clock.advance(HOUR);
 
-  expect(translationClient.calls).toEqual([{ source: injectionQueryText(task), language: "English" }]);
+  expect(translationClient.calls).toEqual([{ fragments: [injectionQueryText(task)], language: "English" }]);
   expect(t.worker.startedQueries).toEqual([{ view: "Fix the tide chart drift" }]);
   expect(t.worker.started[0]).toMatchObject({ title: "潮汐グラフのずれを直す", purpose: task.purpose, completion_criteria: task.completion_criteria });
 });
@@ -47,7 +47,7 @@ it("表示言語 Japanese の盤面で、異議の材料を持つ盤面名義の
   await t.clock.advance(HOUR);
 
   expect(t.worker.started.map((x) => x.id)).toEqual([review.id]);
-  expect(translationClient.calls).toEqual([{ source: injectionQueryText(review), language: "English" }]);
+  expect(translationClient.calls).toEqual([{ fragments: [injectionQueryText(review)], language: "English" }]);
   expect(t.worker.startedQueries).toEqual([{ view: "Find the root cause of the tide chart drift" }]);
 });
 
@@ -140,7 +140,7 @@ it("同じ task の2回目の session は cache に当たって翻訳を撃た�
 
   await rerun(() => api(t.baseUrl, "PATCH", `/api/tasks/${task.id}`, { title: "潮汐グラフのずれを今度こそ直す" }));
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, task.id, task.id]);
-  expect(translationClient.calls.map((c) => c.source)).toEqual([injectionQueryText(task), injectionQueryText(t.worker.started[2]!)]);
+  expect(translationClient.calls.map((c) => c.fragments)).toEqual([[injectionQueryText(task)], [injectionQueryText(t.worker.started[2]!)]]);
 });
 
 it("issue-backed の task は pickup で取った文面を訳す", { timeout: GIT_FIXTURE_TEST_TIMEOUT }, async () => {
@@ -152,5 +152,5 @@ it("issue-backed の task は pickup で取った文面を訳す", { timeout: GI
   await t.clock.advance(HOUR);
 
   expect(t.worker.started[0]!.title).toBe("潮汐グラフのずれ");
-  expect(translationClient.calls).toEqual([{ source: injectionQueryText(t.worker.started[0]!), language: "English" }]);
+  expect(translationClient.calls).toEqual([{ fragments: [injectionQueryText(t.worker.started[0]!)], language: "English" }]);
 });

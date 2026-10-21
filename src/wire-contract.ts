@@ -465,7 +465,21 @@ export interface WireContract {
     | { decisions: string[]; handoff: string | null; result: string | null };
   "POST /api/settings/display-language": { language: string };
   "GET /api/settings/github": { loggedIn: boolean };
+  /** 翻訳の呼び出し1回 = 1行(src/translation-cache.ts の listTranslationUsage、ADR 0296 決定5)。古い順、末尾が直近。 */
   "GET /api/translate/usage": {
-    records: Array<{ usage: { input_tokens: number; output_tokens: number; estimated_cost_usd: number } }>;
+    records: Array<{
+      provider: "anthropic" | "openai";
+      model: string;
+      fragments: number;
+      usage: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_tokens: number;
+        cache_creation_tokens: number;
+        /** null は測れない(Codex は費用を返さない)—— 0 ではない */
+        estimated_cost_usd: number | null;
+      };
+      createdAt: string;
+    }>;
   };
 }

@@ -1,7 +1,11 @@
-import { runClaudeBoardCallText } from "./claude-board-call-runner.js";
+import { z } from "zod";
+import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { GlossaryEntry } from "./glossary.js";
-import type { TranslationClient, TranslationResult } from "./translate.js";
+import type { TranslationClient, TranslationResult, TranslationSetting } from "./translate.js";
+
+/** haiku is an alias, not a table row: a refusal names it, and nothing quarantines it (ADR 0202 決定2) */
+const TRANSLATION_SETTING: TranslationSetting = { provider: "anthropic", model: "haiku", effort: "low" };
 
 /** What this board asks of a translation (ADR 0062 決定3), passed as
  *  `--system-prompt` so the requirements are stated once per call instead of
@@ -19,7 +23,9 @@ const TRANSLATION_SYSTEM_PROMPT = [
   "You are the translator for a work-tracking board. You are given board text and a target " +
     "language, and you return that text in that language. Nothing else is asked of you.",
   "Rules:",
-  "- Respond with ONLY the translation. No preamble, no explanation, no markdown fence around it.",
+  '- The text arrives as JSON fragments, each with an id. Respond with ONLY {"items": [{"id": <id>, "text": ' +
+    "<translation>}]}, one item per fragment with its id unchanged. No preamble, no explanation, no " +
+    "markdown fence around it. Each rule below applies to each fragment on its own.",
   "- Preserve the markdown structure and line breaks of the source exactly: headings stay " +
     "headings, list items stay list items, blank lines stay where they are.",
   "- Do not translate identifiers, file paths, code spans, commands, or quoted error messages — " +
@@ -29,7 +35,10 @@ const TRANSLATION_SYSTEM_PROMPT = [
   "- Translate everything and nothing more: omit no content, add no content, reorder nothing.",
 ].join("\n");
 
-function buildPrompt(source: string, language: string, glossary: GlossaryEntry[]): string {
+/** The answer's shape (ADR 0296 決定4): the model's reply is untrusted input. */
+const answerSchema = z.object({ items: z.array(z.object({ id: z.number(), text: z.string() })) });
+
+function buildPrompt(fragments: string[], language: string, glossary: GlossaryEntry[]): string {
   // the glossary's Japanese gloss only means something when translating into
   // Japanese — CONTEXT.md carries no other language's terms (issue #47).
   // Exact match against the canonical value: display-language is normalized
@@ -44,7 +53,8 @@ function buildPrompt(source: string, language: string, glossary: GlossaryEntry[]
   // the glossary sits between the target language and the source: it is
   // per-board data the system prompt (a constant) cannot carry, and it reads
   // as a note about this text rather than as a standing rule
-  return [`Target language: ${language}`, glossaryBlock, `Text:\n${source}`]
+  const items = fragments.map((text, id) => ({ id, text }));
+  return [`Target language: ${language}`, glossaryBlock, `Text:\n${JSON.stringify({ items })}`]
     .filter(Boolean)
     .join("\n\n");
 }
@@ -132,26 +142,34 @@ export class ClaudeTranslationClient implements TranslationClient {
     else this.running -= 1;
   }
 
-  async translate(source: string, language: string): Promise<TranslationResult> {
+  async translate(fragments: string[], language: string): Promise<TranslationResult> {
     await this.enterFloor();
     try {
-      return await this.runTranslation(source, language);
+      return await this.runTranslation(fragments, language);
     } finally {
       this.leaveFloor();
     }
   }
 
-  private async runTranslation(source: string, language: string): Promise<TranslationResult> {
-    const { output, usage } = await runClaudeBoardCallText({
-      exec: this.exec,
-      label: "translation",
-      systemPrompt: TRANSLATION_SYSTEM_PROMPT,
-      prompt: buildPrompt(source, language, this.glossary),
-      // haiku is an alias, not a table row: a refusal names it, and nothing quarantines it (ADR 0202 決定2)
-      setting: { provider: "anthropic", model: "haiku", effort: "low" },
-      reasoning: false,
-    });
+  private async runTranslation(fragments: string[], language: string): Promise<TranslationResult> {
+    const { output, usage } = await runClaudeBoardCallJson(
+      {
+        exec: this.exec,
+        label: "translation",
+        systemPrompt: TRANSLATION_SYSTEM_PROMPT,
+        prompt: buildPrompt(fragments, language, this.glossary),
+        setting: TRANSLATION_SETTING,
+        reasoning: false,
+      },
+      answerSchema,
+    );
     if (!usage) throw new Error("translation CLI response missing usage");
-    return { text: output, usage };
+    // ids are the fragments' indexes: a missing, duplicate or extra id fails the whole call,
+    // so a wrong pairing never reaches the cache (ADR 0296 決定4)
+    const byId = new Map(output.items.map(({ id, text }) => [id, text]));
+    if (byId.size !== output.items.length || byId.size !== fragments.length || fragments.some((_, id) => !byId.has(id))) {
+      throw new Error("translation answer ids do not match the fragments sent");
+    }
+    return { texts: fragments.map((_, id) => byId.get(id)!), usage, setting: TRANSLATION_SETTING };
   }
 }

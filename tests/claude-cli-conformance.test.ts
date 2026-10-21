@@ -45,11 +45,11 @@ function passingObservations(): ConformanceObservations {
       new ClaudeTranslationClient({
         exec: async () =>
           JSON.stringify({
-            result: "盤面",
+            result: JSON.stringify({ items: [{ id: 0, text: "盤面" }] }),
             total_cost_usd: 0.000586,
             usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
           }),
-      }).translate("the board", "Japanese"),
+      }).translate(["the board"], "Japanese"),
   };
 }
 

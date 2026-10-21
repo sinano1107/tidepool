@@ -86,7 +86,7 @@ const { rows } = await judgeConformance(
       ),
     translation: () =>
       new ClaudeTranslationClient({ exec: execThrough(call, "conformance translation") }).translate(
-        "The board retires a settled tree.",
+        ["The board retires a settled tree."],
         "Japanese",
       ),
   },

@@ -76,7 +76,7 @@ function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSett
   if (cause) throw new RowRefusalError(provider, model, cause);
 }
 
-/** The answer as the model wrote it — translation's, until it answers in JSON (#2414). */
+/** The answer as the model wrote it. */
 export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
   const { exec, label, systemPrompt, prompt, setting, reasoning } = call;
   let stdout: string;

@@ -413,17 +413,31 @@ export function openDb(path: string): Db {
     -- doc section — shares one lookup shape regardless of whether its source
     -- lives on an events row or a tasks row. Log entries are immutable
     -- (CONTEXT.md: 記録は不滅・不変) so a cache hit never needs invalidating.
+    -- It holds text only: usage belongs to the call, not to a fragment (ADR 0296 決定5).
     CREATE TABLE IF NOT EXISTS translation_cache (
-      source_hash           TEXT NOT NULL,
-      language              TEXT NOT NULL,
-      translated            TEXT NOT NULL,
+      source_hash TEXT NOT NULL,
+      language    TEXT NOT NULL,
+      translated  TEXT NOT NULL,
+      created_at  TEXT NOT NULL,
+      PRIMARY KEY (source_hash, language)
+    );
+
+    -- one row per translation Board call (ADR 0296 決定5): a batched call's
+    -- fragments carry no usage of their own. model / effort are the pin's
+    -- spelling (alias haiku / low), not the concrete id that answered; a
+    -- null effort is "none", a null cost is "not measurable" (Codex on
+    -- ChatGPT auth returns none), never 0.
+    CREATE TABLE IF NOT EXISTS translation_calls (
+      provider              TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai')),
+      model                 TEXT NOT NULL,
+      effort                TEXT,
+      fragments             INTEGER NOT NULL,
       input_tokens          INTEGER NOT NULL,
       output_tokens         INTEGER NOT NULL,
       cache_read_tokens     INTEGER NOT NULL,
       cache_creation_tokens INTEGER NOT NULL,
-      estimated_cost_usd    REAL NOT NULL,
-      created_at            TEXT NOT NULL,
-      PRIMARY KEY (source_hash, language)
+      estimated_cost_usd    REAL,
+      created_at            TEXT NOT NULL
     );
 
     -- the merge dial's auto_if_ci_green queue (issue #11): a completed
