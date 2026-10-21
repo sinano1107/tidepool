@@ -1284,12 +1284,19 @@ export function createLanding(deps: LandingDeps): Landing {
       if (!queued) {
         const answering = new Set<string>();
         const run = tail.then(async () => {
-          await deps.pickupIdle?.();
-          queued = undefined;
+          try {
+            await deps.pickupIdle?.();
+          } finally {
+            queued = undefined;
+          }
           return pass(answering);
         });
         queued = { answering, run };
-        tail = run;
+        // 回の rejection はその回の呼び手だけが受け取る —— 列には持ち越さない(#2400)
+        tail = run.then(
+          () => undefined,
+          () => undefined,
+        );
       }
       if (options?.answering !== undefined) queued.answering.add(options.answering);
       return queued.run;

@@ -1323,6 +1323,37 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   expect(promotionFailures(db, first.id)).toEqual([]);
 });
 
+// ADR 0241 決定2: 回の失敗はその回に閉じる —— 列が rejection を以後の突きに持ち越さない(#2400)
+it("pickupIdle が一度 reject した回の後でも、次の収束は新しい回として pickupIdle を待ってから走る", async () => {
+  const { db, clock } = await openBoard();
+  const pickupIdle = vi.fn().mockRejectedValueOnce(new Error("idle failed")).mockResolvedValue(undefined);
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, github: null, pickupIdle });
+
+  await expect(landing.converge()).rejects.toThrow("idle failed");
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(pickupIdle).toHaveBeenCalledTimes(2);
+});
+
+it("retry の回が答えている question を読めずに reject しても、束ねられた呼び手も同じ理由を受け取り、次の収束は走る", async () => {
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, github: null });
+  const prepare = db.prepare.bind(db);
+  let thrown = false;
+  vi.spyOn(db, "prepare").mockImplementation((sql) => {
+    if (!thrown && sql.startsWith("SELECT *, ") && sql.endsWith("FROM tasks WHERE id = ?")) {
+      thrown = true;
+      throw new Error("database is locked");
+    }
+    return prepare(sql);
+  });
+
+  const retry = landing.converge({ answering: "question-1" });
+  const bundled = landing.converge();
+  await expect(retry).rejects.toThrow("database is locked");
+  await expect(bundled).rejects.toThrow("database is locked");
+  await expect(landing.converge()).resolves.toEqual([]);
+});
+
 it("人間が担当して完了した work は根にならず、何も撃たれない", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-human-work");
   const { db, clock } = await openBoard();
