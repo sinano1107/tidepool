@@ -105,7 +105,8 @@ const OPEN_FEATURES = [
   "code_mode_host",
   // 閉じると ShellCommand へ降格するだけ —— 必須機能の実装の切り替え(ADR 0135 決定2)
   "unified_exec",
-  // remote compaction の V2 / V1 の選択。閉じても local compaction にはならない
+  // remote compaction の V2 / V1 の選択。閉じても local compaction にはならず、V1 の `/responses/compact` は
+  // ChatGPT の backend で 404 を返して turn が落ちる(#2430 で実測)
   "remote_compaction_v2",
   // thread ごとの login shell 環境 snapshot —— 実装の切り替え
   "shell_snapshot",
