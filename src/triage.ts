@@ -384,8 +384,9 @@ function bundleObjections(
       });
     }
     const registerRepair = (type: "work" | RepairType, titlePrefix: string, rows: string, group: ObjectionPair[]): void => {
-      // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)
-      let assignee = objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id;
+      // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)。question の空は参照でなく人間 ——
+      // listBoard の SQL が question の assignee を human と読むのと同じ値にする(#2377)
+      let assignee = objected.type === "question" ? HUMAN_WORKER_ID : (objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id);
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
       try {
         assertAssigneeCanTake(assigneeDeps, assignee, type);

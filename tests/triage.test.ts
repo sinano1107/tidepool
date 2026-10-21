@@ -5,10 +5,11 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, repairReplace } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { completeRca, type GatedJudgment } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
+  answerQuestionViaWebui,
   api,
   auditorRcaOn,
   bootTidepool,
@@ -942,6 +943,42 @@ it("pickup 前の work の人間 decompose への異議は修理子の宛先を�
   const repair = listChildren(db, task.id).find((child) => child.title === "repair: t")!;
   expect(repair.assignee).toBeNull();
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+});
+
+it.each([
+  ["commit", (db: Db, at: Date) => commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: () => false })],
+  ["timeout", (db: Db, at: Date) => closeStaleTriage(db, new Date(at.getTime() + TRIAGE_TIMEOUT), { agentRegistered: () => true, resolvesToBuiltIn: () => false })],
+] as const)("%s で閉じても question の人間の判断への異議から立つ修理子の宛先は human で、slot に出ない(ADR 0237 / #2377)", (_, close) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-10T00:00:00.000Z");
+  const question = registerTask(
+    db,
+    {
+      type: "question",
+      title: "retry?",
+      purpose: "p",
+      completion_criteria: "c",
+      workspace: "sandbox",
+      question: [{ title: "retry?", options: ["retry", "abandon promotion"], recommendation: "retry" }],
+    },
+    at,
+    BOARD_WORKER_ID,
+    "board",
+  );
+  answerQuestionViaWebui(db, question, ["abandon promotion"], at);
+  const entry = logDecision(db, getTask(db, question.id)!, "abandon promotion", HUMAN_WORKER_ID, at, "webui");
+  startTriage(db, at);
+  raiseObjection(db, entry, "retry it", at);
+
+  close(db, at);
+
+  const children = listChildren(db, question.id);
+  const repair = children.find((child) => child.type === "work")!;
+  expect(repair.assignee).toBe(HUMAN_WORKER_ID);
+  expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
+  const rca = children.find((child) => child.type === "review")!;
+  expect(rca.title).toBe("rca (auditor): retry?");
+  expect(nextSlotTask(db, "sandbox", "deckhand", "fugu", undefined, [rca.id])).toBeUndefined();
 });
 
 it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
