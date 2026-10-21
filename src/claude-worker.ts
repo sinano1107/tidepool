@@ -2315,7 +2315,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const swap = readModelSwap(parsed);
       if (swap) streamObserved.modelSwaps.push(swap);
       const started = readSubagentStart(parsed);
-      if (started && !streamObserved.subagents.has(started.id ?? {})) streamObserved.subagents.set(started.id ?? {}, null);
+      if (started) streamObserved.subagents.set(started.id ?? {}, null);
       const resolved = readSubagentModel(parsed);
       if (resolved) streamObserved.subagents.set(resolved.id ?? {}, resolved.model);
       const refusal = readRootRefusal(parsed);

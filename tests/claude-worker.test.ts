@@ -4418,29 +4418,6 @@ describe("advisor capability (issue #33)", () => {
       expect(await run("task-swap-local", "local")).toMatchObject({ usage: separated });
     });
 
-    // issue #2432: local の差し替えの行き先が advisor の id なら、subagent の消費が advisor の entry に入る
-    it("scope が local の差し替えの行き先が advisor の id なら advisor.usage は null、別の id なら数字", async () => {
-      const run = async (id: string, to: string) => {
-        const { start, processes, emitExit, db } = await makeAdvisorWorker();
-        start(id);
-        processes[0]!.stdout.write(initLine("claude-sonnet-5"));
-        processes[0]!.stdout.write(swapLine({ scope: "local", original_model: "claude-sonnet-5", fallback_model: to }));
-        processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
-        processes[0]!.stdout.write(resultLine());
-        emitExit(0, null);
-        return usageOf(db, id);
-      };
-      const models = {
-        "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
-        "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
-      };
-      const advisor = (usage: unknown) => ({ model: "claude-opus-5", consultations: 1, usage, failed_calls: [] });
-      expect(await run("task-local-to-advisor", "claude-opus-5")).toMatchObject({ advisor: advisor(null), models });
-      expect(await run("task-local-elsewhere", "claude-opus-4-8")).toMatchObject({
-        advisor: advisor({ input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 }),
-        models,
-      });
-    });
   });
 
   // ── advisor と同じ model の subagent(issue #2432)──────────────────
@@ -4503,6 +4480,14 @@ describe("advisor capability (issue #33)", () => {
 
     it("local_bash の起動の行だけの session は数字のまま(背景の Bash は model を走らせない)", async () => {
       expectAdvisorUsage(await run("task-sub-bash", [taskStarted("toolu_A", "local_bash")]), separated);
+    });
+
+    // local の差し替えは subagent だけが替わる(ADR 0215 決定2)—— 行き先が advisor の id なら、その消費が advisor の entry に入る
+    it("scope が local の差し替えの行き先が advisor の id なら null、別の id なら数字", async () => {
+      const localSwap = (to: string) =>
+        `${JSON.stringify({ type: "system", subtype: "model_refusal_fallback", scope: "local", original_model: "claude-sonnet-5", fallback_model: to })}\n`;
+      expectAdvisorUsage(await run("task-local-to-advisor", [localSwap("claude-opus-5")]), null);
+      expectAdvisorUsage(await run("task-local-elsewhere", [localSwap("claude-opus-4-8")]), separated);
     });
   });
 });
