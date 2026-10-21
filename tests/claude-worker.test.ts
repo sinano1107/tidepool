@@ -4417,6 +4417,93 @@ describe("advisor capability (issue #33)", () => {
       expect(await run("task-swap-omitted", undefined)).toMatchObject({ usage: null });
       expect(await run("task-swap-local", "local")).toMatchObject({ usage: separated });
     });
+
+    // issue #2432: local の差し替えの行き先が advisor の id なら、subagent の消費が advisor の entry に入る
+    it("scope が local の差し替えの行き先が advisor の id なら advisor.usage は null、別の id なら数字", async () => {
+      const run = async (id: string, to: string) => {
+        const { start, processes, emitExit, db } = await makeAdvisorWorker();
+        start(id);
+        processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+        processes[0]!.stdout.write(swapLine({ scope: "local", original_model: "claude-sonnet-5", fallback_model: to }));
+        processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
+        processes[0]!.stdout.write(resultLine());
+        emitExit(0, null);
+        return usageOf(db, id);
+      };
+      const models = {
+        "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
+        "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
+      };
+      const advisor = (usage: unknown) => ({ model: "claude-opus-5", consultations: 1, usage, failed_calls: [] });
+      expect(await run("task-local-to-advisor", "claude-opus-5")).toMatchObject({ advisor: advisor(null), models });
+      expect(await run("task-local-elsewhere", "claude-opus-4-8")).toMatchObject({
+        advisor: advisor({ input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 }),
+        models,
+      });
+    });
+  });
+
+  // ── advisor と同じ model の subagent(issue #2432)──────────────────
+  // `modelUsage` は model id ごとの合算なので、advisor と同じ model の subagent の消費は advisor の entry に足される
+  // (2.1.286 実測、run D)。stream に見えた事実で「入ったか、入ったかもしれない」なら null、差し引きはしない。
+  describe("advisor と同じ model の subagent(issue #2432)", () => {
+    // fixture worker-session-2.1.237.stream.jsonl の形: 起動の行と、親の tool_result 行の top-level の `tool_use_result`
+    const taskStarted = (toolUseId: string, task_type = "local_agent") =>
+      `${JSON.stringify({ type: "system", subtype: "task_started", task_id: `task-${toolUseId}`, tool_use_id: toolUseId, task_type })}\n`;
+    const agentResult = (toolUseId: string, resolvedModel: string, status = "completed") =>
+      `${JSON.stringify({
+        type: "user",
+        parent_tool_use_id: null,
+        message: { role: "user", content: [{ tool_use_id: toolUseId, type: "tool_result", content: [{ type: "text", text: "done" }] }] },
+        tool_use_result: { status, resolvedModel },
+      })}\n`;
+
+    /** main sonnet × advisor opus、最後の呼び出しに相談がある session に `lines` を挟んで流し、usage 全体を返す。 */
+    const run = async (id: string, lines: string[]) => {
+      const { start, processes, emitExit, db } = await makeAdvisorWorker();
+      start(id);
+      processes[0]!.stdout.write(initLine("claude-sonnet-5"));
+      for (const line of lines) processes[0]!.stdout.write(line);
+      processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
+      processes[0]!.stdout.write(resultLine());
+      emitExit(0, null);
+      return usageOf(db, id);
+    };
+    const separated = { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 };
+    // model / consultations / failed_calls と models は、どの場合でも変わらない
+    const expectAdvisorUsage = (usage: Awaited<ReturnType<typeof run>>, advisorUsage: typeof separated | null) =>
+      expect(usage).toMatchObject({
+        advisor: { model: "claude-opus-5", consultations: 1, usage: advisorUsage, failed_calls: [] },
+        models: {
+          "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
+          "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
+        },
+      });
+
+    it("subagent が走っていない、または advisor と別の model で返った session は数字のまま", async () => {
+      expectAdvisorUsage(await run("task-sub-none", []), separated);
+      expectAdvisorUsage(await run("task-sub-sonnet", [taskStarted("toolu_A"), agentResult("toolu_A", "claude-sonnet-5")]), separated);
+    });
+
+    it("subagent の resolvedModel が advisor と同じ id なら null(foreground の completed でも background の async_launched でも)", async () => {
+      expectAdvisorUsage(await run("task-sub-opus", [taskStarted("toolu_A"), agentResult("toolu_A", "claude-opus-5")]), null);
+      expectAdvisorUsage(
+        await run("task-sub-opus-bg", [taskStarted("toolu_A"), agentResult("toolu_A", "claude-opus-5", "async_launched")]),
+        null,
+      );
+    });
+
+    // run F: 2段目の結果の行は `tool_use_result` を持たず、2段目の opus の消費も advisor の行に足された
+    it("解決先が観測されないまま終わった起動があれば null(2段目の subagent)", async () => {
+      expectAdvisorUsage(
+        await run("task-sub-depth2", [taskStarted("toolu_A"), taskStarted("toolu_B"), agentResult("toolu_A", "claude-sonnet-5")]),
+        null,
+      );
+    });
+
+    it("local_bash の起動の行だけの session は数字のまま(背景の Bash は model を走らせない)", async () => {
+      expectAdvisorUsage(await run("task-sub-bash", [taskStarted("toolu_A", "local_bash")]), separated);
+    });
   });
 });
 

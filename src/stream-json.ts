@@ -175,6 +175,24 @@ export function readModelSwap(parsed: Record<string, unknown> | null): ModelSwap
   };
 }
 
+/** subagent の起動の行(`system/task_started`)の `tool_use_id`(issue #2432)。`local_bash`(背景の Bash)は
+ *  model を走らせないので起動に数えない。`task_type` の無い行・知らない値は数える側に倒す。
+ *  `id` は文字列でなければ null —— 組み合わせられない起動として残る。 */
+export function readSubagentStart(parsed: Record<string, unknown> | null): { id: string | null } | null {
+  if (parsed?.type !== "system" || parsed.subtype !== "task_started" || parsed.task_type === "local_bash") return null;
+  return { id: typeof parsed.tool_use_id === "string" ? parsed.tool_use_id : null };
+}
+
+/** subagent の解決先の model(issue #2432): tool_result 行の top-level の `tool_use_result.resolvedModel`。
+ *  親スレッドに絞らない。`id` は同じ行の tool_result block の `tool_use_id` で、読めなければ null。 */
+export function readSubagentModel(parsed: Record<string, unknown> | null): { id: string | null; model: string } | null {
+  const model = (parsed?.tool_use_result as { resolvedModel?: unknown } | undefined)?.resolvedModel;
+  if (parsed?.type !== "user" || typeof model !== "string") return null;
+  const content = (parsed.message as { content?: unknown } | undefined)?.content;
+  const id = Array.isArray(content) ? content.find((block) => block?.type === "tool_result")?.tool_use_id : undefined;
+  return { id: typeof id === "string" ? id : null, model };
+}
+
 /** root のモデルの assistant 行か —— subagent の行は `parent_tool_use_id` を持つ。 */
 export function isRootAssistant(parsed: Record<string, unknown> | null): parsed is Record<string, unknown> {
   return parsed?.type === "assistant" && parsed.parent_tool_use_id == null;

@@ -96,7 +96,12 @@ export interface AdvisorRecord {
    *  one (which merges both into a single per-model entry — measured), or when
    *  the main model's own resolved id was never observed, since then
    *  separability itself is unknown, or when the main model was swapped
-   *  (`swapsMain`, ADR 0215 決定4). */
+   *  (`swapsMain`, ADR 0215 決定4). Also unmeasurable when something other
+   *  than the advisor ran, or may have run, on the advisor's model, since
+   *  `modelUsage` sums per model id (issue #2432, measured): a subagent whose
+   *  resolved model (`tool_use_result.resolvedModel`) is the advisor's id, a
+   *  subagent launch whose resolved model was never observed by exit, or a
+   *  `local` swap to the advisor's id. Nothing is subtracted (ADR 0094 決定2). */
   usage: {
     input_tokens: number;
     output_tokens: number;
@@ -499,7 +504,10 @@ export type EventPayload =
          *  not treat as machine-observed); a reader who wants to pair a
          *  model id with the advisor does so themselves, against the
          *  session's `worker_spawned.advisor` pin (the spawn event
-         *  `worker_spawned_event_id` points at). Optional and omitted
+         *  `worker_spawned_event_id` points at). Except when a subagent ran
+         *  on the advisor's model: its tokens sit in the same entry, and the
+         *  board records no subagent model to tell them apart with (ADR 0287
+         *  決定5) — `advisor.usage` is null then (issue #2432). Optional and omitted
          *  (never null) when the result line carries no readable breakdown
          *  at all — a session with no models here says nothing about
          *  whether one ran, only that this field could not be filled in;
