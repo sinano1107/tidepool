@@ -1,10 +1,12 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { appendEvent } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
-import { registerTask } from "../src/tasks.js";
+import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
@@ -12,11 +14,12 @@ import {
   projectSettingsHiddenByBoard,
   releaseWorkspace,
   restoreWorkspaceProjectSettingsAtBoot,
+  taskRunPlace,
   type WorkspaceConfig,
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeContainerRuntime } from "./fakes.js";
-import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, type Tidepool } from "./harness.js";
+import { bootTidepool, commitWork, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, interviewExaminee, makeWorkspace, type Tidepool } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -306,4 +309,98 @@ it("登録 path が無い workspace の探りの失敗は印なしと読み、�
   restoreWorkspaceProjectSettingsAtBoot(board, () => [gone], new Date("2026-10-21T00:00:00.000Z"));
 
   expect(workspaceNeedsHuman(board, gone.name)).toBe(false);
+});
+
+const BOOT = new Date("2026-10-21T00:00:00.000Z");
+
+/** 受験者の checkout を開いた姿: 受験者の event がこの checkout を指す。走る場所は pickup と同じ `taskRunPlace`(ADR 0276 決定1・3)。 */
+async function examineeCheckout(board: Db, name: string) {
+  const checkout = await monorepo(name);
+  const examinee = interviewExaminee(board, BOOT);
+  appendEvent(board, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path: checkout.path }, at: BOOT });
+  return { examinee, place: taskRunPlace(board, examinee, checkout) };
+}
+
+const sparseSnapshotOf = (board: Db, key: string) => board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(key);
+
+it("起動時の復元は registry 外の受験者の checkout も写しどおり戻し、受験者の写しを消す(#2379)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const { examinee, place } = await examineeCheckout(db, "sparse-boot-examinee");
+  excludeWorkspaceProjectSettings(db, place);
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(exists(place, ".claude/settings.json")).toBe(true);
+  // 人間は sparse を使っていない —— 盤面の行ごと sparse が外れる
+  expect(git(place.path, "config", "--type=bool", "--default=false", "--get", "core.sparseCheckout")).toBe("false");
+  expect(sparseSnapshotOf(db, examinee.id)).toBeNull();
+  expect(workspaceNeedsHuman(db, place.name)).toBe(false);
+});
+
+it("起動時の復元は registry 外の面接室も写しどおり戻し、root の写しを消す(#2379)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const room = await monorepo("sparse-boot-room");
+  const root = getTask(db, interviewRootIdOf(db, interviewExaminee(db, BOOT))!)!;
+  appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
+  const place = taskRunPlace(db, root, registered);
+  excludeWorkspaceProjectSettings(db, place);
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(exists(place, ".claude/settings.json")).toBe(true);
+  expect(git(place.path, "config", "--type=bool", "--default=false", "--get", "core.sparseCheckout")).toBe("false");
+  expect(sparseSnapshotOf(db, root.id)).toBeNull();
+  expect(workspaceNeedsHuman(db, root.id)).toBe(false);
+});
+
+it("受験者の checkout の戻しの失敗は面接室の root id に quarantine を立てる(#2379、ADR 0273 決定8)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const { examinee, place } = await examineeCheckout(db, "sparse-boot-examinee-broken");
+  excludeWorkspaceProjectSettings(db, place);
+  db.prepare("UPDATE workspace_state SET sparse_snapshot = 'not json' WHERE name = ?").run(examinee.id);
+  silenceLog();
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(workspaceNeedsHuman(db, interviewRootIdOf(db, examinee)!)).toBe(true);
+  expect(workspaceNeedsHuman(db, examinee.id)).toBe(false);
+});
+
+it("人間が消した受験者の checkout(path ごと・.git だけ)は、起動時に写しを消して log 1行ずつ、quarantine しない(#2379)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const whole = await examineeCheckout(db, "sparse-boot-examinee-gone");
+  const dotGit = await examineeCheckout(db, "sparse-boot-examinee-dotgit");
+  excludeWorkspaceProjectSettings(db, whole.place);
+  excludeWorkspaceProjectSettings(db, dotGit.place);
+  rmSync(whole.place.path, { recursive: true, force: true });
+  rmSync(join(dotGit.place.path, ".git"), { recursive: true, force: true });
+  const log = silenceLog();
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(sparseSnapshotOf(db, whole.examinee.id)).toBeNull();
+  expect(sparseSnapshotOf(db, dotGit.examinee.id)).toBeNull();
+  expect(workspaceNeedsHuman(db, whole.place.name)).toBe(false);
+  expect(workspaceNeedsHuman(db, dotGit.place.name)).toBe(false);
+  expect(log).toHaveBeenCalledTimes(2);
+});
+
+it("どの event でも走る場所に解けない写しは log 1行で残し、ref_snapshot だけの行は触らない(#2379)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const insert = db.prepare("INSERT INTO workspace_state (name, ref_snapshot, sparse_snapshot) VALUES (?, ?, ?)");
+  insert.run("unknown-key", null, '{"mode":"disabled","pattern":null}');
+  insert.run("refs-only", "{}", null);
+  const before = db.prepare("SELECT * FROM workspace_state ORDER BY name").all();
+  const log = silenceLog();
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(db.prepare("SELECT * FROM workspace_state ORDER BY name").all()).toEqual(before);
+  expect(workspaceNeedsHuman(db, "unknown-key")).toBe(false);
+  expect(log).toHaveBeenCalledOnce();
 });
