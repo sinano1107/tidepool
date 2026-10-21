@@ -580,8 +580,9 @@ export function materializeWorkspaceProjectSettings(db: Db, workspace: Workspace
 }
 
 /** Recover a sparse exclusion left by a previous board process — each listed workspace whose name
- *  still has a snapshot, or whose checkout still carries the board's line (ADR 0293 決定3 / 決定7);
- *  rows under other keys are not visited. The caller must first prove that the old container set is empty;
+ *  still has a snapshot, or whose checkout still carries the board's line (ADR 0293 決定3 / 決定7),
+ *  then every other key with a snapshot: an examinee's checkout or an interview room (issue #2379).
+ *  The caller must first prove that the old container set is empty;
  *  otherwise restoring settings would expose them to a process that survived the restart. */
 export function restoreWorkspaceProjectSettingsAtBoot(
   db: Db,
@@ -598,13 +599,39 @@ export function restoreWorkspaceProjectSettingsAtBoot(
     );
     return;
   }
-  for (const workspace of workspaces) {
+  const registered = new Set(workspaces.map((workspace) => workspace.name));
+  const places = [...workspaces];
+  const keys = db.prepare("SELECT name FROM workspace_state WHERE sparse_snapshot IS NOT NULL").pluck().all() as string[];
+  for (const key of keys.filter((key) => !registered.has(key))) {
+    const place = recordedPlaceOf(db, key);
+    if (!place) {
+      console.error(`[workspace] ${key}: a sparse snapshot is stored, but no examinee checkout or interview room is recorded under it; leaving it`);
+      continue;
+    }
+    // 写しは checkout が開いた後にしか書かれない —— 無ければ人間が記録の checkout を消した形で、戻すものが無い(ADR 0276 決定4)
+    if (!existsSync(join(place.path, ".git"))) {
+      db.prepare("UPDATE workspace_state SET sparse_snapshot = NULL WHERE name = ?").run(key);
+      console.error(`[workspace] ${key}: the checkout at ${place.path} is gone; dropping its sparse snapshot`);
+      continue;
+    }
+    places.push(place);
+  }
+  for (const workspace of places) {
     try {
       materializeWorkspaceProjectSettings(db, workspace);
     } catch (err) {
       quarantineWorkspace(db, workspace.name, err, now);
     }
   }
+}
+
+/** 写しの鍵を registry 外の走る場所へ解く: 受験者の checkout(名前は面接室の root id、鍵は受験者の id —— ADR 0276 決定3)、
+ *  無ければ面接室(名前 = 鍵 = root id)。quarantine はどちらも root id に立つ(ADR 0273 決定8)。 */
+function recordedPlaceOf(db: Db, key: string): WorkspaceConfig | undefined {
+  const path = examineeCheckoutPath(db, key);
+  if (path === undefined) return recordedInterviewRoom(db, key);
+  const examinee: RunPlace = { name: interviewRootIdOf(db, getTask(db, key)!)!, path, reads: [], snapshot_key: key };
+  return examinee;
 }
 
 /** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
