@@ -380,4 +380,5 @@ it("seed row は worker と同じ正規化で判定し、全欄 0 や cached + c
   const rows = await judgeSeedRows(async (row) => turns[row.model]!);
 
   expect(rows.map((row) => row.pass)).toEqual([false, false, true]);
+  expect(rows[0]!.detail).toBe("turn.completed usage is not a measurement; tokens in 0 / cached 0 / cache write 0 / out 0");
 });

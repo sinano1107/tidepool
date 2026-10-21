@@ -221,7 +221,7 @@ export async function judgeConformance(obs: ConformanceObservations): Promise<{ 
 }
 
 /** 種の openai 行ごとに `exec --json` の最小の1ターンを撃ち(ADR 0187 決定4)、worker の出力の読み取りで読む:
- *  `turn.failed` が無く、`turn.completed` の usage が読めたときだけ合格。1行ずつ順に撃つ。 */
+ *  `turn.failed` が無く、`turn.completed` の usage が worker と同じ正規化で計測値として読めたときだけ合格。1行ずつ順に撃つ。 */
 export async function judgeSeedRows(
   execTurn: (row: { model: string; effort: string | null }) => Promise<string>,
 ): Promise<Row[]> {
@@ -236,7 +236,7 @@ export async function judgeSeedRows(
         const usage = readCodexUsage(completed);
         if (!usage) return fail("no turn.completed line with readable usage");
         const tokens = `tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / cache write ${usage.cache_write_input_tokens} / out ${usage.output_tokens}`;
-        // worker と同じ正規化で判定する —— 欠測(null)になる報告は seed row でも不合格(#2426)
+        // worker と同じ正規化関数で判定する —— 欠測(null)になる報告は seed row でも不合格(#2426)
         return codexTokenUsage(completed) ? { pass: true, detail: `turn.completed; ${tokens}` } : fail(`turn.completed usage is not a measurement; ${tokens}`);
       }),
     );
