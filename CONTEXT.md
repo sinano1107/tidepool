@@ -592,6 +592,8 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 **保護 workspace(protected)**: 感度を資源側に張り付けるマーカー。保護 workspace を名指しする子登録は、登録者の権限に関係なく無条件で人間への承認 question に変換され、そこへの PR は merge ダイヤルに関係なく常に人間が merge する。「そこへの変更は常に人間承認」を profile 側の状態から独立させる不変条件。v1 の用途は registry 自身。
 
+**sparse snapshot(sparse-checkout の写し)**: Claude worker の session 中に Git 共有された `.claude/settings.json` を実体化から外す(ADR 0158)前に、盤面がその checkout の sparse-checkout の状態(人間が出している範囲と、その書き方)を記録したもの。checkout の sparse-checkout は人間のもので、盤面は自分だけのものとして書き換えない —— 人間の状態に settings.json 1枚の除外を足して外し、写しどおり戻す。写しの有無が「盤面が外している最中か」の唯一の印で、ファイルの隠れ方(skip-worktree)からは読まない。盤面の状態なので置き場は盤面 DB(ref の基準と同じ)。slot 解放時の WIP の「退避」とは別物(2026-10-21 の grilling、issue #1024 / ADR 0293)。
+
 ## Team(チーム)
 
 オーケストレーター — decompose を専門性とする普通の agent(ADR 0017 の線: 専門性が定義の差として現れる正当なケース) — を根とする、assignable_to グラフの部分木の**導出ビュー**。独立したエンティティではなく、新しい正本を持たない — 「誰が誰に振れるか」の正本は assignable_to のみであり、下階層のオーケストレーターは配下のうち自身も decompose 専門で自分の assignable_to を持つ agent として自然に表現される(2026-07-22 の grilling、issue #84)。チーム(委譲の木)は場所(workspace)と直交し、複数 workspace を跨いでよい — agent がどこで走れるかは別軸の制約が担う。委譲はすべて盤面経由なので、チームの実際の稼働(呼び出しグラフ)は追加機構なしで監査可能。
