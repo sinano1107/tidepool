@@ -42,6 +42,7 @@ import { capInterruptionHandler, RECLAIM_TIMEOUT, spawnFailureHandler } from "..
 import type { WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
+  excludeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
   type WorkspaceConfig,
   workspaceNeedsHuman,
@@ -1675,16 +1676,60 @@ describe("ClaudeCodeWorker", () => {
     await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({}));
     git(ws.path, "add", ".claude/settings.json");
     git(ws.path, "commit", "-m", "share project hooks");
-    // 前の session が隠したまま —— sparse-checkout の書き換えを lock で塞ぐと戻せない
-    git(ws.path, "sparse-checkout", "set", "--no-cone", "/*", "!.claude/settings.json");
-    await writeFile(join(ws.path, ".git", "info", "sparse-checkout.lock"), "");
     const { start, calls, db, stops } = await makeWorker({
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
+    // 前の session が隠したまま(写しが残る —— ADR 0293 決定3)。index を lock で塞ぐと戻せない
+    excludeWorkspaceProjectSettings(db, { ...ws, name: "tidepool" });
+    await writeFile(join(ws.path, ".git", "index.lock"), "");
     const task = start("task-sbx-unrestorable-settings");
     expect(calls).toEqual([]);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(true);
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("sparse-checkout") }]]);
+  });
+
+  it("回収後に隠した settings.json を戻せなければ workspace を quarantine する(#1969)", async () => {
+    const ws = await makeWorkspace("tracked-settings-unrestorable-after-reclaim");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
+    git(ws.path, "add", ".claude/settings.json");
+    git(ws.path, "commit", "-m", "share project hooks");
+    const { start, calls, db, emitExit } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+    start("task-sbx-unrestorable-after-reclaim");
+    expect(calls).toHaveLength(1);
+    await writeFile(join(ws.path, ".git", "index.lock"), "");
+
+    emitExit(0, null);
+    await vi.waitFor(() =>
+      expect(quarantineQuestion(db, "workspace", "tidepool")?.purpose).toContain("sparse-checkout"),
+    );
+  });
+
+  it("人間の cone が .claude を外していれば、S bit が立っていても隠したものと読まず、tree を変えずに spawn する(ADR 0293 決定3)", async () => {
+    const ws = await makeWorkspace("human-cone-without-claude");
+    await mkdir(join(ws.path, ".claude"), { recursive: true });
+    await mkdir(join(ws.path, "pkg-a"), { recursive: true });
+    await writeFile(join(ws.path, ".claude", "settings.json"), JSON.stringify({ hooks: { PostToolUse: [] } }));
+    await writeFile(join(ws.path, "pkg-a", "a.txt"), "a\n");
+    git(ws.path, "add", ".");
+    git(ws.path, "commit", "-m", "monorepo");
+    git(ws.path, "sparse-checkout", "set", "pkg-a");
+    const { start, calls, db, emitExit } = await makeWorker({
+      "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
+    });
+
+    start("task-human-cone");
+    expect(calls).toHaveLength(1);
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
+    expect(git(ws.path, "config", "--get", "core.sparseCheckoutCone")).toBe("true");
+
+    emitExit(0, null);
+    await Promise.resolve();
+    expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
+    expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
   });
 
   it("sparse 後に branch の settings.json が床キーへ変わっても quarantine せず、次の task も spawn する(ADR 0158)", async () => {

@@ -243,9 +243,13 @@ export function openDb(path: string): Db {
     -- タスクブランチ以外が1つでも動いていれば quarantine する。worker が書けない
     -- 場所であることが要件なので git の ref ではなくここに置く。name は走る場所の
     -- 名前、受験者の checkout だけは受験者の id(兄弟と面接室の名前を共有する —— ADR 0276 決定3)。
+    -- sparse_snapshot は盤面が settings.json を隠す前の人間の sparse-checkout の写し
+    -- (JSON: pattern ファイルの中身 or null と mode)。有ることが「盤面が隠している最中」の
+    -- 唯一の印で、戻しが成功した後に消す(ADR 0293)。worker が書ける .git/ には置かない。
     CREATE TABLE IF NOT EXISTS workspace_state (
-      name         TEXT PRIMARY KEY,
-      ref_snapshot TEXT
+      name            TEXT PRIMARY KEY,
+      ref_snapshot    TEXT,
+      sparse_snapshot TEXT
     );
 
     -- ADR 0098: a Provider probe is one observation with zero or more

@@ -624,28 +624,27 @@ const defaultRunOk: RunOkFn = (command, args) => {
  *  / ADR 0158), while staying in Git for the human side. */
 const FLOOR_DEFINING_KEYS = ["sandbox", "permissions"];
 
-function settingsIndexState(workspacePath: string, path: string): "tracked" | "hidden" | undefined {
-  const indexed = spawnSync("git", ["ls-files", "-v", "--", path], {
+function tracked(workspacePath: string, path: string): boolean {
+  const indexed = spawnSync("git", ["ls-files", "--", path], {
     cwd: workspacePath,
     encoding: "utf8",
   });
-  if (indexed.status !== 0 || indexed.stdout === "") return undefined;
-  return indexed.stdout.startsWith("S ") ? "hidden" : "tracked";
+  return indexed.status === 0 && indexed.stdout !== "";
 }
 
+/** `hiddenByBoard`: 盤面が隠している最中(sparse snapshot がある —— ADR 0293 決定3)。そのときだけ、作業ツリーに
+ *  無い settings.json を index から読む。人間自身の sparse-checkout が外したファイルは無いものとして扱う。 */
 function settingsFile(
   workspacePath: string,
   name: string,
-): { raw: string; tracked?: true; hidden?: true } | "unreadable" | undefined {
+  hiddenByBoard: boolean,
+): { raw: string } | "unreadable" | undefined {
   const path = `.claude/${name}`;
   try {
     return { raw: readFileSync(join(workspacePath, path), "utf8") };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") return "unreadable";
-    if (
-      name !== "settings.json" ||
-      settingsIndexState(workspacePath, ".claude/settings.json") !== "hidden"
-    ) {
+    if (name !== "settings.json" || !hiddenByBoard || !tracked(workspacePath, ".claude/settings.json")) {
       return undefined;
     }
     const indexed = spawnSync("git", ["show", `:${path}`], {
@@ -653,7 +652,7 @@ function settingsFile(
       encoding: "utf8",
     });
     return indexed.status === 0 && indexed.stdout !== null
-      ? { raw: indexed.stdout, tracked: true, hidden: true }
+      ? { raw: indexed.stdout }
       : "unreadable";
   }
 }
@@ -700,37 +699,34 @@ function settingsFile(
  *  `untrackedProjectSettings` is not part of the guard: it feeds the register
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
  *  and not in the index, whatever it holds. */
-export function workspaceSettingsDisposition(workspacePath: string) {
+export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoard = false) {
   const offending: string[] = [];
   let excludeProjectSettings = false;
   let projectHooks = false;
-  let hiddenProjectSettings = false;
   let untrackedProjectSettings = false;
   for (const name of PROJECT_SETTINGS_FILES) {
-    const file = settingsFile(workspacePath, name);
+    const file = settingsFile(workspacePath, name, hiddenByBoard);
     if (file === undefined) continue;
-    const indexed =
-      name === "settings.json" ? settingsIndexState(workspacePath, ".claude/settings.json") : undefined;
+    const indexed = name === "settings.json" && tracked(workspacePath, ".claude/settings.json");
     // 登録の門の信号(issue #686)。中身は読まない —— parse より前に、存在と未追跡だけで立てる
-    if (name === "settings.json" && indexed === undefined) untrackedProjectSettings = true;
+    if (name === "settings.json" && !indexed) untrackedProjectSettings = true;
     if (file === "unreadable") {
       offending.push(name);
       continue;
     }
-    if (name === "settings.json" && file.hidden) hiddenProjectSettings = true;
     try {
       const parsed: unknown = JSON.parse(file.raw);
       if (typeof parsed !== "object" || parsed === null) continue;
       const floor = FLOOR_DEFINING_KEYS.some((key) => key in parsed);
       if (!floor && !("hooks" in parsed)) continue;
-      if (indexed === undefined) offending.push(name);
+      if (!indexed) offending.push(name);
       else {
         excludeProjectSettings = true;
         // 登録の門の信号は広げない —— 床キー持ちの tracked は黙って通す(issue #686)
         if (!floor) projectHooks = true;
       }
     } catch {
-      if (indexed === undefined) offending.push(name);
+      if (!indexed) offending.push(name);
       else excludeProjectSettings = true;
     }
   }
@@ -738,7 +734,6 @@ export function workspaceSettingsDisposition(workspacePath: string) {
     overriding: offending,
     excludeProjectSettings,
     projectHooks,
-    hiddenProjectSettings,
     untrackedProjectSettings,
   };
 }
