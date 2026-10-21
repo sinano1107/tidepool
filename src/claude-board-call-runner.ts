@@ -57,17 +57,17 @@ const envelopeUsageSchema = z
  *  is instructed to answer with bare JSON, but real-world output sometimes
  *  wraps it in a markdown fence or a sentence of prose around it — a strict
  *  JSON.parse alone would reject those instead of drafting. Falls back to
- *  parsing the trimmed text as-is when no fence/braces are found, so a
+ *  parsing the trimmed text as-is when no braces are found, so a
  *  genuinely malformed response still throws (draftTask rejects → #12's 503
- *  fallback), not silently drafts garbage. */
+ *  fallback), not silently drafts garbage. The fence and the prose both sit
+ *  outside the outermost braces, so the slice alone drops them — matching the
+ *  fence itself broke on a ``` inside a JSON string (a translated code block,
+ *  #2414). */
 function extractJson(text: string): unknown {
   const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const candidate = fenced ? fenced[1]! : trimmed;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  const jsonSlice = start !== -1 && end > start ? candidate.slice(start, end + 1) : candidate;
-  return JSON.parse(jsonSlice);
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  return JSON.parse(start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed);
 }
 
 /** 行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */

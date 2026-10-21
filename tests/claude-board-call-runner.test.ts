@@ -15,6 +15,16 @@ describe("Claude の Board call runner", () => {
     ).resolves.toEqual({ output: { ok: true }, usage: undefined });
   });
 
+  it("答えの JSON の文字列が ``` を含んでも、包む fence の有無によらず JSON を取り出す(#2414 の 20 断片実測)", async () => {
+    const textSchema = z.object({ text: z.string() });
+    const answer = JSON.stringify({ text: "```ts\nconst x = 1;\n```" });
+    for (const result of [answer, `\`\`\`json\n${answer}\n\`\`\``]) {
+      await expect(
+        runClaudeBoardCallJson(call(async () => JSON.stringify({ result })), textSchema),
+      ).resolves.toEqual({ output: { text: "```ts\nconst x = 1;\n```" }, usage: undefined });
+    }
+  });
+
   it("封筒が JSON でない・result が文字列でない・schema に合わない答えは reject する", async () => {
     await expect(runClaudeBoardCallJson(call(async () => "not json"), schema)).rejects.toThrow();
     await expect(runClaudeBoardCallJson(call(async () => JSON.stringify({ result: 1 })), schema)).rejects.toThrow(
