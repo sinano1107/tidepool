@@ -16,7 +16,7 @@ export class TranslationTargetError extends Error {}
 
 /** How many fragments one translation call carries at most (ADR 0296 決定4) —
  *  a target with more is split into calls of this size, fired one after another. */
-export const TRANSLATION_FRAGMENTS_PER_CALL = 20;
+const TRANSLATION_FRAGMENTS_PER_CALL = 20;
 
 export type TranslationOutcome =
   | { status: "translated"; text: string; cached: boolean }
@@ -31,7 +31,7 @@ export type TranslationOutcome =
  *  Board call is unavailable (`isAnthropicBoardCallBlocked`), and then the
  *  whole target reports throttled — a target reads as one coherent unit,
  *  never a partly translated blob. A call that fails writes nothing. */
-export async function translateFragments(
+async function translateFragments(
   db: Db,
   client: TranslationClient,
   sources: string[],

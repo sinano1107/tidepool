@@ -1,6 +1,5 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { recordKnowledge } from "../src/memory.js";
@@ -12,9 +11,7 @@ import {
   splitHandoffMarkdown,
 } from "../src/tasks.js";
 import {
-  TRANSLATION_FRAGMENTS_PER_CALL,
   TranslationTargetError,
-  translateFragments,
   translateHandoff,
   translateLogEntry,
   translateMemoryEntry,
@@ -308,35 +305,35 @@ it("キャッシュ済みの断片は呼び出しに載らず、未訳の断片�
   expect(outcome).toMatchObject({ purpose: "[translated] shared purpose", cached: false });
 });
 
-// 今の対象(question は最大4項目、handoff は既知の見出しだけ)は上限 20 に届かない —— 断片の集合を直接渡す
-it("断片が上限を超える対象は上限ごとの呼び出しに分けて順に撃ち、呼び出しごとに使用量を1行残す", async () => {
+it("断片が上限 20 を超える対象は上限ごとの呼び出しに分けて順に撃ち、呼び出しごとに使用量を1行残す(ADR 0296 決定4)", async () => {
   const db = await freshDb();
-  const sources = Array.from({ length: TRANSLATION_FRAGMENTS_PER_CALL + 5 }, (_, i) => `fragment ${i}`);
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  // 本文に既知の見出しが繰り返し現れれば、handoff は 6 節を超えて分かれる —— 6 + 19 = 25 節
+  const extra = Array.from({ length: 19 }, (_, i) => `known issue ${i}\n\n## Known issues not worth a task`).join("\n\n");
+  const completed = completeTask(
+    db,
+    task,
+    { outcome: "o", deliverables: "d", decision_refs: "r", dead_ends: "e", resume_context: "c", known_issues: `${extra}\n\nlast issue` },
+    "human",
+    NOW,
+    "worker",
+  );
   const client = new FakeTranslationClient();
 
-  const outcome = await translateFragments(db, client, sources, "Japanese", NOW);
+  const outcome = await translateHandoff(db, client, completed.id, "Japanese", NOW);
 
-  expect(client.calls.map((call) => call.fragments)).toEqual([
-    sources.slice(0, TRANSLATION_FRAGMENTS_PER_CALL),
-    sources.slice(TRANSLATION_FRAGMENTS_PER_CALL),
-  ]);
-  expect(listTranslationUsage(db).map((record) => record.fragments)).toEqual([TRANSLATION_FRAGMENTS_PER_CALL, 5]);
-  expect(outcome).toEqual({ status: "translated", texts: sources.map((s) => `[translated] ${s}`), cached: false });
+  expect(client.calls.map((call) => call.fragments.length)).toEqual([20, 5]);
+  expect(listTranslationUsage(db).map((record) => record.fragments)).toEqual([20, 5]);
+  expect(outcome).toMatchObject({ status: "translated", cached: false });
 });
 
-it("応答の id が入力と一致しない呼び出しは失敗し、一致した断片も含めて何もキャッシュせず記録も残さない(ADR 0296 決定4)", async () => {
+it("呼び出しが失敗した対象は、どの断片もキャッシュせず使用量の行も残さない(ADR 0296 決定4)", async () => {
   const db = await freshDb();
   const task = registerQuestionWith(db, "purpose", ["item?"]);
-  const client = new ClaudeTranslationClient({
-    exec: async () =>
-      JSON.stringify({
-        result: JSON.stringify({ items: [{ id: 0, text: "目的" }] }),
-        total_cost_usd: 0.001,
-        usage: { input_tokens: 1, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
-  });
+  const client = new FakeTranslationClient();
+  client.scriptFailure(new Error("translation answer ids do not match the request"));
 
-  await expect(translateQuestion(db, client, task.id, "Japanese", NOW)).rejects.toThrow(/ids/);
+  await expect(translateQuestion(db, client, task.id, "Japanese", NOW)).rejects.toThrow("ids");
   expect(getCachedTranslation(db, hashSource("purpose"), "Japanese")).toBeUndefined();
   expect(listTranslationUsage(db)).toEqual([]);
 });

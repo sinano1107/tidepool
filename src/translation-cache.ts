@@ -58,11 +58,12 @@ export interface TranslationUsageRecord {
 
 type TranslationCallRow = Omit<TranslationUsageRecord, "usage" | "createdAt"> & TranslationUsage & { created_at: string };
 
-/** Every translation call's usage, oldest first (issue #47's "record it the
- *  same way worker sessions do, make it observable"): a cache hit makes no
- *  call and so adds no row. Rows sharing a `created_at` (one request's `now`
- *  covers each chunk of one target, issue #688) come back in the order they
- *  were inserted, so the last one is the latest call. */
+/** Every translation call's usage, oldest `created_at` first (issue #47's
+ *  "record it the same way worker sessions do, make it observable"): a cache
+ *  hit makes no call and so adds no row. Rows sharing a `created_at` (one
+ *  request's `now` covers each chunk of one target, issue #688) come back in
+ *  the order they were inserted. `created_at` is the request's start, so two
+ *  overlapping requests can land out of that order (#1006). */
 export function listTranslationUsage(db: Db): TranslationUsageRecord[] {
   const rows = db
     .prepare(

@@ -77,7 +77,7 @@ function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSett
 }
 
 /** The answer as the model wrote it. */
-export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
+async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
   const { exec, label, systemPrompt, prompt, setting, reasoning } = call;
   let stdout: string;
   try {
