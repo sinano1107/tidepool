@@ -60,6 +60,7 @@ import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
   materializeWorkspaceProjectSettings,
+  projectSettingsHiddenByBoard,
   quarantineWorkspace,
   type RunPlace,
   resolveExecutionWorkspace,
@@ -1711,7 +1712,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       this.projectSettingsSessions.delete(key);
       try {
-        materializeWorkspaceProjectSettings(workspace);
+        materializeWorkspaceProjectSettings(this.options.db, workspace);
       } catch (err) {
         quarantineWorkspace(this.options.db, workspace.name, err, this.options.clock.now());
       }
@@ -1806,19 +1807,20 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       stopped(stop);
       return;
     }
-    const settings = workspaceSettingsDisposition(place.path);
+    const hidden = projectSettingsHiddenByBoard(this.options.db, place);
+    const settings = workspaceSettingsDisposition(place.path, hidden);
     if (settings.excludeProjectSettings) {
       try {
         const reclaimed = this.containers.open(task.id).reclaimed;
-        excludeWorkspaceProjectSettings(place);
+        excludeWorkspaceProjectSettings(this.options.db, place);
         this.restoreProjectSettingsAfterReclaim(reclaimed, place);
       } catch (err) {
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;
       }
-    } else if (settings.hiddenProjectSettings) {
+    } else if (hidden) {
       try {
-        materializeWorkspaceProjectSettings(place);
+        materializeWorkspaceProjectSettings(this.options.db, place);
       } catch (err) {
         stopped(quarantineWorkspace(this.options.db, place.name, err, this.options.clock.now()));
         return;

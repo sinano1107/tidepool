@@ -34,10 +34,16 @@ export function gitWithEnv(env: NodeJS.ProcessEnv, cwd: string, ...args: string[
   return run(cwd, args, env).toString().trim();
 }
 
-function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv): Buffer {
+/** `git` に stdin を渡したもの(`--stdin` を取る subcommand 用)。 */
+export function gitWithInput(input: string, cwd: string, ...args: string[]): string {
+  return run(cwd, args, undefined, input).toString().trim();
+}
+
+function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): Buffer {
   return execFileSync("git", args, {
     cwd,
     env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
+    input,
+    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
 }
