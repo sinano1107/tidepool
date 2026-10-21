@@ -10,6 +10,6 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["src", "tests", "scripts", "e2e"],
+  "include": ["src", "tests", "scripts", "e2e", "docs/experiments/benchmark"],
   "exclude": ["e2e/*.scratch.spec.ts"]
 }
