@@ -1,6 +1,6 @@
 import { type Row, rowOf, type Verdict } from "./claude-cli-conformance.js";
 import { type CodexAppServerProbeResult, type compatibilityCheck, modelListResponse, whyRowUnlisted } from "./codex-app-server.js";
-import { observedAgentsMdLayer, parseJsonl, readTurnFailure, readUsage } from "./codex-worker.js";
+import { observedAgentsMdLayer, parseJsonl, readCodexUsage, readTurnFailure } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
@@ -155,7 +155,7 @@ export async function judgeSeedRows(
         const events = (await execTurn({ model, effort })).split("\n").map(parseJsonl);
         const failure = events.map(readTurnFailure).filter((message) => message !== null).at(-1);
         if (failure !== undefined) return fail(`turn.failed: ${failure}`);
-        const usage = events.map(readUsage).filter((read) => read !== null).at(-1);
+        const usage = events.map(readCodexUsage).filter((read) => read !== null).at(-1);
         return usage
           ? { pass: true, detail: `turn.completed; tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / cache write ${usage.cache_write_input_tokens} / out ${usage.output_tokens}` }
           : fail("no turn.completed line with readable usage");

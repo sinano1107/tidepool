@@ -1096,7 +1096,7 @@ interface CodexUsage {
   output_tokens: number;
 }
 
-export function readUsage(value: unknown): CodexUsage | null {
+export function readCodexUsage(value: unknown): CodexUsage | null {
   if (!value || typeof value !== "object") return null;
   const event = value as { type?: unknown; usage?: Record<string, unknown> };
   const usage = event.type === "turn.completed" ? event.usage : undefined;
@@ -1108,8 +1108,8 @@ export function readUsage(value: unknown): CodexUsage | null {
 
 /** Codex の usage を盤面の語彙に写す唯一の入口(#2410)。欄が欠けるか引き算が負なら欠測(null) ——
  *  0 で埋めず、負を 0 に丸めない(#534)。 */
-export function codexTokenUsage(value: unknown): TokenUsage | null {
-  const usage = readUsage(value);
+function codexTokenUsage(value: unknown): TokenUsage | null {
+  const usage = readCodexUsage(value);
   if (!usage) return null;
   const input = usage.input_tokens - usage.cached_input_tokens - usage.cache_write_input_tokens;
   return input < 0
