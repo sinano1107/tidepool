@@ -128,9 +128,12 @@ export interface ModelSwap {
  *  model は変わらない。省略(null)は `session`。 */
 export const swapsMain = (swap: ModelSwap): boolean => swap.scope !== "local";
 
-/** One model's (or the whole session's) consumption in the board's own
- *  vocabulary (ADR 0005 / issue #32) — the shape `worker_exited.usage` reports
- *  at the top level and per model id in `models`. */
+/** Consumption in the board's own vocabulary (ADR 0005 / issue #32) — the shape
+ *  `worker_exited.usage` reports at the top level and per model id in `models`.
+ *  What it covers depends on where it sits (ADR 0297 決定1): at the top level the
+ *  four token fields are the parent thread's (the worker's main model) on every
+ *  provider, while on Claude `estimated_cost_usd` and the `models` map as a whole
+ *  are whole-session. See `worker_exited.usage`. */
 export interface TokenUsage {
   /** Input outside the cache — neither a cache read nor a cache write. The prompt total is
    *  input_tokens + cache_read_tokens + cache_creation_tokens (issue #2410). */
@@ -415,6 +418,15 @@ export type EventPayload =
   // session total. The fields are left as they are so rows stay comparable
   // across the change; `advisor` below is what makes the gap readable
   // instead of silent.
+  //
+  // Scope by provider (ADR 0297 決定1): the four top-level token fields are the
+  // parent thread's consumption on Claude and Codex alike. On Claude, the
+  // top-level `estimated_cost_usd` and the `models` map as a whole are
+  // whole-session, subagents and advisor included (an entry is per model id,
+  // not per thread — see `models`). On Codex, subagent (child thread)
+  // consumption is not observed anywhere, and remote compaction V2 consumption
+  // is suspected not to be included either (issue #2430), so a Codex count can
+  // be lower than what the session actually used.
   | {
       kind: "worker_exited";
       exit_code: number | null;
@@ -476,6 +488,10 @@ export type EventPayload =
         advisor: AdvisorRecord | null;
         /** ADR 0094 決定2: the CLI result line's per-model `modelUsage` carried
          *  as observed, keyed by the model id the CLI reports for that entry.
+         *  The map as a whole is whole-session on Claude (ADR 0297 決定1),
+         *  but an entry is per model id, not per thread: a subagent on the
+         *  main model is summed into the main model's entry, and one on
+         *  another model gets that model's entry (issue #2427, measured).
          *  This is raw observation, not attribution — the board does NOT
          *  infer which entry is the advisor from this breakdown (the "main
          *  vs. everything else" rule matched 7/7 in a measurement but reads

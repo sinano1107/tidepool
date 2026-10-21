@@ -88,7 +88,9 @@ export interface EpisodeAction {
   /** subagent 起動行(`Agent` / `Task`)にだけ付く、その subagent 自身の消費
    *  ——`task_notification` 行が `tool_use_id` で結んで運ぶ(ADR 0083 追記 2 決定4)。
    *  **合算外の観測**である: 「合算は親スレッドのみ」の線は変えず、session 単位の
-   *  消費は `worker_exited.usage` を正本として読む。行動行がトークン欄を持たない
+   *  消費は `worker_exited.usage` を正本として読む(上位の token 欄は親スレッドだけで、
+   *  Claude の subagent の分は同じ `usage` の `estimated_cost_usd` と `models` に入る。
+   *  Codex の subagent の消費はどこにも観測されない、ADR 0297)。行動行がトークン欄を持たない
    *  のは、assistant 行の `usage` が message 開始時のスナップショットで行動単位の
    *  消費ではないため(追記 2、実測)。 */
   subagentUsage: SubagentUsage | null;
