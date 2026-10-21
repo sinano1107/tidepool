@@ -56,7 +56,7 @@ import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { interviewTitle } from "./routing-review.js";
-import type { TaskExecutionCandidates } from "./scheduler.js";
+import type { PollOutcome, TaskExecutionCandidates } from "./scheduler.js";
 import {
   answerQuestion,
   assertAnswerable,
@@ -550,6 +550,8 @@ export interface QuarantineCheckDeps {
   registryReachability?: RegistryReachabilityCheck;
   /** ADR 0112 決定3: 後始末を**投げる版で**もう一度走らせる —— 検査が解放の門そのもの。 */
   teardownQuarantine?: FailedTeardownCheck;
+  /** ADR 0294 決定2: 続く poll の失敗の受理の検査は poll の撃ち直しそのもの。Absent → その確認への回答は拒まれる。 */
+  rerunPoll?: () => Promise<PollOutcome>;
   /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0184 決定5: 行の Quarantine の probe。その Provider の口が無い行への回答は拒む。
@@ -569,7 +571,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
+  const { containment, registryReachability, teardownQuarantine, rerunPoll, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -680,6 +682,14 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     // 検査そのものが後始末の再実行なので、投げれば question は開いたまま残り、人間は
     // 直してもう一度答えられる。
     ...(teardownQuarantine && { failedTeardown: (value) => teardownQuarantine(value!) }),
+    // 通った poll は開いた question を観測で決着させているので、回答の口は決着済みの形で返る(QuestionClosedError の枝)
+    ...(rerunPoll && {
+      pollFailure: async () => {
+        const result = await rerunPoll();
+        if (result.outcome === "threw") throw new DomainError(`the board's poll still throws: ${result.message}`);
+        if (result.outcome === "blocked") throw new DomainError(`the board cannot re-run the poll now: ${result.reason}`);
+      },
+    }),
     // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの
     ...(recordDir !== undefined && {
       recordContainer: async () => {
