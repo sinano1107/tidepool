@@ -1116,10 +1116,11 @@ export function readCodexUsage(value: unknown): CodexUsage | null {
 }
 
 /** Codex の usage を盤面の語彙に写す唯一の入口(#2410)。欄が欠けるか引き算が負なら欠測(null) ——
- *  0 で埋めず、負を 0 に丸めない(#534)。 */
-function codexTokenUsage(value: unknown): TokenUsage | null {
+ *  0 で埋めず、負を 0 に丸めない(#534)。入力 0 も欠測: codex は usage の報告を受け取らないと
+ *  `Usage::default()`(全欄 0)を書く(#2426)。 */
+export function codexTokenUsage(value: unknown): TokenUsage | null {
   const usage = readCodexUsage(value);
-  if (!usage) return null;
+  if (!usage || usage.input_tokens === 0) return null;
   const input = usage.input_tokens - usage.cached_input_tokens - usage.cache_write_input_tokens;
   return input < 0
     ? null

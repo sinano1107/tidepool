@@ -1216,6 +1216,12 @@ describe("CodexWorker (ADR 0098)", () => {
     expect((await exitedAfter("codex-usage-negative", [completed])).usage).toBeNull();
   });
 
+  // issue #2426: usage の報告を受け取らなかった codex は Usage::default()(全欄 0)を書く
+  it("全欄 0 の turn.completed の usage は消費 0 の計測値にせず欠測(null)", async () => {
+    const completed = { type: "turn.completed", usage: { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0 } };
+    expect((await exitedAfter("codex-usage-zero", [completed])).usage).toBeNull();
+  });
+
   it("turn.failed の error.message を入れ子の JSON も解かず逐語で reported_error に載せる(ADR 0188 / #1256)", async () => {
     const message =
       '{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The \'gpt-4\' model is not supported when using Codex with a ChatGPT account."}}';

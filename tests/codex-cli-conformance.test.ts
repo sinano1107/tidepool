@@ -367,3 +367,17 @@ it("種の openai 行ごとに exec --json の1ターンを盤面の出力の読
   ]);
   expect(rows[1]!.detail).toContain("is not supported when using Codex with a ChatGPT account");
 });
+
+it("seed row は worker と同じ正規化で判定し、全欄 0 や cached + cache_write > input の turn.completed を不合格にする(#2426)", async () => {
+  const completed = (usage: object) => JSON.stringify({ type: "turn.completed", usage });
+  const turns: Record<string, string> = {
+    // usage の報告を受け取らなかった codex の Usage::default()
+    "gpt-5.6-terra": completed({ input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0 }),
+    "gpt-5.6-sol": completed({ input_tokens: 10, cached_input_tokens: 8, cache_write_input_tokens: 3, output_tokens: 1 }),
+    "gpt-6-astra": fixture("worker-session-codex-0.147.0.stream.jsonl"),
+  };
+
+  const rows = await judgeSeedRows(async (row) => turns[row.model]!);
+
+  expect(rows.map((row) => row.pass)).toEqual([false, false, true]);
+});
