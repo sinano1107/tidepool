@@ -70,7 +70,7 @@ export class ClaudeAttributionClient implements AttributionClient {
   ): Promise<AttributionJudgment> {
     return (
       await runClaudeBoardCallJson(
-        { exec: this.exec, label: "attribution", prompt: buildPrompt(input), row: setting, reasoning: true },
+        { exec: this.exec, label: "attribution", prompt: buildPrompt(input), setting, reasoning: true },
         judgmentSchema,
       )
     ).output;

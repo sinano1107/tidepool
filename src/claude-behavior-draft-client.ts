@@ -47,7 +47,7 @@ export class ClaudeBehaviorDraftClient implements BehaviorDraftClient {
   async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft> {
     return (
       await runClaudeBoardCallJson(
-        { exec: this.exec, label: "behavior draft", prompt: buildPrompt(input), row: setting, reasoning: true },
+        { exec: this.exec, label: "behavior draft", prompt: buildPrompt(input), setting, reasoning: true },
         draftSchema,
       )
     ).output;

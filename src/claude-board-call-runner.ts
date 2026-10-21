@@ -10,7 +10,7 @@ import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRef
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import type { TranslationUsage } from "./translate.js";
 
-type BoardCallRow = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+type BoardCallSetting = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
 
 /** One Board call that goes to **fetch an answer** (#662): the draft uses, the three retrospective uses and
  *  display-time translation all run through here. */
@@ -21,8 +21,8 @@ export interface ClaudeBoardCall {
   /** absent → the CLI's default system prompt */
   systemPrompt?: string;
   prompt: string;
-  /** the row the call runs on; a row refusal names its provider / model (ADR 0202 決定1) */
-  row: BoardCallRow;
+  /** the table row the call runs on, or translation's own setting; a row refusal names its provider / model (ADR 0202 決定1) */
+  setting: BoardCallSetting;
   /** false → the env also closes the model's reasoning (ADR 0062 決定2) */
   reasoning: boolean;
 }
@@ -71,14 +71,14 @@ function extractJson(text: string): unknown {
 }
 
 /** 行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */
-function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallRow): void {
+function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSetting): void {
   const cause = rowRefusalCause(envelope);
   if (cause) throw new RowRefusalError(provider, model, cause);
 }
 
 /** The answer as the model wrote it — translation's, until it answers in JSON (#2414). */
 export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
-  const { exec, label, systemPrompt, prompt, row, reasoning } = call;
+  const { exec, label, systemPrompt, prompt, setting, reasoning } = call;
   let stdout: string;
   try {
     stdout = await exec(
@@ -89,7 +89,7 @@ export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<Cla
         "--output-format",
         "json",
         ...(systemPrompt === undefined ? [] : ["--system-prompt", systemPrompt]),
-        ...pinnedModelFlags(row.model, row.effort),
+        ...pinnedModelFlags(setting.model, setting.effort),
         ...emptyToolSurfaceFlags(),
         // with no tools at all a second turn is structurally impossible; the
         // flag stays as the explicit statement that a single answer is what
@@ -111,11 +111,11 @@ export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<Cla
       reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
     );
   } catch (err) {
-    throwIfRowRefused(execFailureEnvelope(err), row);
+    throwIfRowRefused(execFailureEnvelope(err), setting);
     rethrowCliAuthExecFailure(err);
   }
   const envelope: unknown = JSON.parse(stdout);
-  throwIfRowRefused(envelope, row);
+  throwIfRowRefused(envelope, setting);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
   if (is_error === true) throw new Error(typeof result === "string" ? result : `${label} CLI reported an error`);
   if (typeof result !== "string") {

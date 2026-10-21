@@ -72,7 +72,7 @@ export class ClaudeAllocationClient implements AllocationClient {
   ): Promise<AllocationJudgment> {
     return (
       await runClaudeBoardCallJson(
-        { exec: this.exec, label: "allocation review", prompt: buildPrompt(input), row: setting, reasoning: true },
+        { exec: this.exec, label: "allocation review", prompt: buildPrompt(input), setting, reasoning: true },
         judgmentSchema,
       )
     ).output;

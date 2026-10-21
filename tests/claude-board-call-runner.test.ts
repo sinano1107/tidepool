@@ -5,7 +5,7 @@ import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
-const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", row: ROW, reasoning: true });
+const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
 const schema = z.object({ ok: z.boolean() });
 
 describe("Claude の Board call runner", () => {

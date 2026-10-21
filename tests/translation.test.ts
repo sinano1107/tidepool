@@ -132,7 +132,7 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });
 });
 
-it("CLI の封筒が is_error: true なら翻訳は失敗として返り、エラー本文を訳としてキャッシュしない(#652)", async () => {
+it("CLI の封筒が is_error: true なら translateSource は reject し、エラー本文を訳としてキャッシュしない(#652)", async () => {
   const db = await freshDb();
   const client = new ClaudeTranslationClient({
     exec: async () =>

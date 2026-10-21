@@ -198,6 +198,6 @@ export class ClaudeDraftClient implements DraftClient {
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
     }
-    return (await runClaudeBoardCallJson({ exec: this.exec, label: "draft", prompt, row, reasoning: true }, schema)).output;
+    return (await runClaudeBoardCallJson({ exec: this.exec, label: "draft", prompt, setting: row, reasoning: true }, schema)).output;
   }
 }

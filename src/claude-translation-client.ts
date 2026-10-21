@@ -84,9 +84,9 @@ export interface ClaudeTranslationClientOptions {
 }
 
 /** The real TranslationClient (issue #47): a headless one-shot `claude -p`
- *  call through the same runner as ClaudeDraftClient (#662) — pinned to haiku
- *  (cheaper than draft's sonnet: this is a mechanical translation, not a
- *  generation task). */
+ *  call through the same runner as ClaudeDraftClient (#662) — pinned to the
+ *  haiku alias rather than a table row: this is a mechanical translation, not
+ *  a generation task. */
 export class ClaudeTranslationClient implements TranslationClient {
   private readonly glossary: GlossaryEntry[];
   private readonly exec: ExecFn;
@@ -148,7 +148,7 @@ export class ClaudeTranslationClient implements TranslationClient {
       systemPrompt: TRANSLATION_SYSTEM_PROMPT,
       prompt: buildPrompt(source, language, this.glossary),
       // haiku is an alias, not a table row: a refusal names it, and nothing quarantines it (ADR 0202 決定2)
-      row: { provider: "anthropic", model: "haiku", effort: "low" },
+      setting: { provider: "anthropic", model: "haiku", effort: "low" },
       reasoning: false,
     });
     if (!usage) throw new Error("translation CLI response missing usage");
