@@ -1293,10 +1293,7 @@ export function createLanding(deps: LandingDeps): Landing {
         });
         queued = { answering, run };
         // 回の rejection はその回の呼び手だけが受け取る —— 列には持ち越さない(#2400)
-        tail = run.then(
-          () => undefined,
-          () => undefined,
-        );
+        tail = run.catch(() => undefined);
       }
       if (options?.answering !== undefined) queued.answering.add(options.answering);
       return queued.run;
