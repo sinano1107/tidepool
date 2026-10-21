@@ -7,6 +7,7 @@ import { FakeContainerRuntime, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
+  defaultingTo,
   GIT_FIXTURE_TEST_TIMEOUT,
   git,
   HOUR,
@@ -240,4 +241,42 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
   await t.clock.advance(2 * HOUR);
   expect(await status(next.id)).toBe("todo");
   expect(await neverStarted()).toHaveLength(1);
+});
+
+// ADR 0294 決定3(issue #2386): slot を握った後の pickup の中の想定外の throw も ADR 0118 の族
+it("pickup の準備が想定外の例外を投げると spawn_failed と failure question に落ち、枠が空いて次の todo が拾われる —— unhandledRejection は撃たれない", async () => {
+  const ws = await makeWorkspace("sandbox");
+  // 投げるのは pickup の1回目の呼び出しだけ —— 後始末の解放も同じ resolver を引き、毎回投げると後始末が落ちて次が拾われない
+  let armed = true;
+  const resolveWorkspace = (name: string | null) => {
+    if (armed) {
+      armed = false;
+      throw new Error("resolver blew up");
+    }
+    return defaultingTo(ws)(name);
+  };
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    t = await bootTidepool({ workspace: ws, resolveWorkspace, watchdog: WATCHDOG });
+    const task = queueWork(t, "never runs");
+    const next = queueWork(t, "next in line");
+
+    await expect(t.clock.advance(HOUR)).resolves.toBeUndefined();
+
+    // question の本文は同じ一撃が作るので、1本目のテストが釘付けしている(ADR 0107 決定3)
+    expect(await neverStarted()).toHaveLength(1);
+    const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+    expect(events.find((e: any) => e.kind === "spawn_failed").payload).toEqual({
+      kind: "spawn_failed",
+      error_code: null,
+      message: "resolver blew up",
+    });
+    expect(await status(task.id)).toBe("blocked");
+    expect(started()).toEqual([next.id]);
+    expect(unhandled).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
 });
