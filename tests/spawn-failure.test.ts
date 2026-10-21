@@ -265,14 +265,8 @@ it("pickup の準備が想定外の例外を投げると spawn_failed と failur
 
     await expect(t.clock.advance(HOUR)).resolves.toBeUndefined();
 
-    const [question, ...more] = await neverStarted();
-    expect(more).toEqual([]);
-    expect(question.question_items[0].options).toEqual(["retry", "abandon"]);
-    expect(question.purpose).toContain(task.id);
-    expect(question.purpose).toContain("never ran");
-    expect(question.purpose).toContain("resolver blew up");
-    expect(question.purpose).not.toMatch(/time limit|container|bug|environment/i);
-
+    // question の本文は同じ一撃が作るので、1本目のテストが釘付けしている(ADR 0107 決定3)
+    expect(await neverStarted()).toHaveLength(1);
     const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
     expect(events.find((e: any) => e.kind === "spawn_failed").payload).toEqual({
       kind: "spawn_failed",
