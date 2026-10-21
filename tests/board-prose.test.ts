@@ -115,13 +115,18 @@ async function selfRcaProse(db: Db, objected: Task, at: Date) {
   const entryId = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
   appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
-  const verbs = taskVerbSwap(db, rca.id);
+  return reviewProse(db, registryDir, rca, spawn(db, rca, at));
+}
+
+/** review の task の spawn `spawnedEventId` の文面(registry は `registryDir` の main)。 */
+function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: number) {
+  const verbs = taskVerbSwap(db, task.id);
   return boardProse({
     db,
     registryDir,
     registry: loadRegistry(registryDir, "purely-local"),
-    task: rca,
-    spawnedEventId: spawn(db, rca, at),
+    task,
+    spawnedEventId,
     systemPrompt: "",
     profile: REVIEWER_AUTHORITY_PROFILE,
     doctrine: boardDoctrine(CLAUDE, verbs),
@@ -194,24 +199,9 @@ it("review の spawn の Roster はその spawn の時点の Executor —— spa
   pickupTask(db, parent, "deckhand", at, { assignee: "deckhand" });
   const afterPickup = spawn(db, review, at, "fugu");
   const registryDir = await makeRegistry();
-  const verbs = taskVerbSwap(db, review.id);
-  const prose = (spawnedEventId: number) =>
-    boardProse({
-      db,
-      registryDir,
-      registry: loadRegistry(registryDir, "purely-local"),
-      task: review,
-      spawnedEventId,
-      systemPrompt: "",
-      profile: REVIEWER_AUTHORITY_PROFILE,
-      doctrine: boardDoctrine(CLAUDE, verbs),
-      verbs,
-      allowedDomains: undefined,
-      memorySection: null,
-    });
 
-  expect(prose(beforePickup)).not.toContain("## Roster");
-  expect(prose(afterPickup)).toContain("## Roster\n\ndeckhand — General work agent for the tidepool board");
+  expect(reviewProse(db, registryDir, review, beforePickup)).not.toContain("## Roster");
+  expect(reviewProse(db, registryDir, review, afterPickup)).toContain("## Roster\n\ndeckhand — General work agent for the tidepool board");
 });
 
 it("異議された entry が同じ版の2つの spawn にまたがり、spawn ごとに Roster が違えば、self RCA の当時版は2節に分かれる(ADR 0270 追記 / ADR 0295)", async () => {
@@ -231,21 +221,8 @@ it("異議された entry が同じ版の2つの spawn にまたがり、spawn �
   object(beforePickup);
   object(afterPickup);
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
-  const verbs = taskVerbSwap(db, rca.id);
 
-  const prose = boardProse({
-    db,
-    registryDir,
-    registry: loadRegistry(registryDir, "purely-local"),
-    task: rca,
-    spawnedEventId: spawn(db, rca, at),
-    systemPrompt: "",
-    profile: REVIEWER_AUTHORITY_PROFILE,
-    doctrine: boardDoctrine(CLAUDE, verbs),
-    verbs,
-    allowedDomains: undefined,
-    memorySection: null,
-  });
+  const prose = reviewProse(db, registryDir, rca, spawn(db, rca, at));
 
   const [, first, second] = prose.split(/\n### Live for your objected /);
   expect([first?.split("\n", 1)[0], second?.split("\n", 1)[0]]).toEqual([`entry #${beforePickup}`, `entry #${afterPickup}`]);
