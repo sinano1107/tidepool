@@ -15,7 +15,8 @@
    ではこの形で成り立つ。ADR 0098 決定7 の床は、触れる先を持たない呼び出しなので満たす。
 2. **用途ごとの Provider は盤面設定の欄が名指す。** 下書き4用途の欄は盤面既定の段の隣、振り返り3用途の欄は判断の段の隣。種は
    `anthropic`、未設定という状態は持たない。worker の Provider 順位は読まない —— 好みの順位が盤面の呼び出しまで動かすのは、
-   ADR 0098 決定8 が退けた暗黙の既定である。コード固定は Codex だけの盤面(#1010)が種で `openai` を入れる道を塞ぐ。
+   ADR 0098 決定8 が退けた暗黙の既定である。コード固定は Codex だけの盤面(#1010)が種で `openai` を入れる道を塞ぐ。欄の値は
+   `anthropic` / `openai` —— moonshot は ADR 0096 のとおり Board call に向けない。編集面は段の欄と同じく settings タブと管理 MCP。
    ADR 0111 追記4 の「Provider は `anthropic` 固定」を置き換える。
 3. **翻訳は盤面設定の翻訳の欄(Provider, model, effort の1組)で走る。** 種は `anthropic` の alias `haiku` / `low`。表の行ではないので
    alias を拒む理由(分類と学習器のセル、ADR 0182)は当たらず、openai は具体 id(`gpt-5.6-luna` は ChatGPT 認証で受理を実測)を
@@ -25,7 +26,8 @@
    受け取り、断片ごとに cache する。1回に載せる断片数は盤面の定数で上限を持ち、超えた分は呼び出し元が次の呼び出しにする ——
    1 HTTP リクエスト ≈ Board call 1回に収め、ADR 0063 決定1 の「流量を決めるのは呼び出し元」は保つ。同時2本の床と 30 秒の待ち
    (ADR 0063 決定2)はそのまま。10 断片を1回で訳す実測は両 Harness で件数・順序・markdown・code span・URL を保ち、1断片あたりの
-   token は 1件1回の 1/3〜1/5 だった。pickup 時の Memory の query の英訳は断片1つのまとめ。ADR 0063 決定1 の「1件1回」を置き換える。
+   token は 1件1回の 1/3〜1/5 だった。id の欠け・重複・余計は検証で落とし、部分的には cache しない。pickup 時の Memory の query の
+   英訳は断片1つのまとめ。ADR 0063 決定1 の「1件1回」を置き換える。
 5. **翻訳の usage は呼び出し1回 = 1行の表に残す。** まとめると断片1行に usage は付かない —— 1行に全量・他に 0 を書くのは #534 で
    直した偽のゼロと同じ形。`translation_cache` から usage の列を外し、`translation_calls`(Provider, model, 断片数, token、費用は null 可)
    を新設する。費用の null は「測れない」(Codex は ChatGPT 認証で費用を返さない)で、0 にしない。settings の translation spend は
@@ -36,7 +38,8 @@
    Harness で違う形になる(ADR 0157 の線)。#275 はこれで決着する。翻訳は ADR 0062 決定3 の自前の文面のまま。
 7. **Codex の呼び出しの門と失敗。** 撃つ前の門は Provider で一般化した同じ4つ —— 資格情報の不在は `auth.json` の存否(ADR 0116 決定4)で
    「撃てなかった」、失効・使用量・行の Quarantine は app-server probe の観測から。撃った後は `turn.failed` の文言を読まず「撃って失敗」
-   として数えるだけ(認証失効と行の拒否は次の probe が拾う)。出力は `--output-schema` で受け、検証は両 Harness とも zod の1本。
+   として数えるだけ(認証失効と行の拒否は次の probe が拾う)。Harness の封じ込めの Quarantine は Claude と同じく Board call を
+   止めない。出力は `--output-schema` で受け、検証は両 Harness とも zod の1本。
 
 ## 帰結
 
