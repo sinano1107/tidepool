@@ -698,7 +698,11 @@ function settingsFile(
  *
  *  `untrackedProjectSettings` is not part of the guard: it feeds the register
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
- *  and not in the index, whatever it holds. */
+ *  and not in the index, whatever it holds.
+ *
+ *  `hiddenByBoard` is the caller's sparse snapshot presence (ADR 0293 決定3): only then is a
+ *  tracked `settings.json` absent from the tree read from the index. Callers without a snapshot
+ *  leave it false, so a file the human's own sparse-checkout leaves out reads as absent. */
 export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoard = false) {
   const offending: string[] = [];
   let excludeProjectSettings = false;

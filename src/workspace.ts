@@ -550,8 +550,8 @@ export function materializeWorkspaceProjectSettings(db: Db, workspace: Workspace
   db.prepare("UPDATE workspace_state SET sparse_snapshot = NULL WHERE name = ?").run(snapshotKey(workspace));
 }
 
-/** Recover a sparse exclusion left by a previous board process — every workspace that still has a
- *  snapshot (ADR 0293 決定3). The caller must first prove that the old container set is empty;
+/** Recover a sparse exclusion left by a previous board process — each listed workspace whose name
+ *  still has a snapshot (ADR 0293 決定3); rows under other keys are not visited. The caller must first prove that the old container set is empty;
  *  otherwise restoring settings would expose them to a process that survived the restart. */
 export function restoreWorkspaceProjectSettingsAtBoot(
   db: Db,

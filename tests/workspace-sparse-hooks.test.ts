@@ -87,7 +87,7 @@ it("hooks settings は slot 解放中も sparse のまま親子の WIP に混ぜ
 });
 
 /** 前の盤面 process が隠したまま落ちた形 —— 写しは次の盤面が開く DB に残る(ADR 0293 決定5)。 */
-async function hiddenByPreviousBoard(workspace: WorkspaceConfig): Promise<string> {
+async function boardDirLeftHiding(workspace: WorkspaceConfig): Promise<string> {
   const dir = await tempDir("tidepool-test-");
   const previous = openDb(join(dir, "board.sqlite"));
   excludeWorkspaceProjectSettings(previous, workspace);
@@ -102,7 +102,7 @@ it("再起動は前 process が残した sparse settings を human side へ戻�
   await writeFile(join(workspace.path, ".claude", "settings.json"), settings);
   git(workspace.path, "add", ".claude/settings.json");
   git(workspace.path, "commit", "-m", "share project hooks");
-  const dir = await hiddenByPreviousBoard(workspace);
+  const dir = await boardDirLeftHiding(workspace);
 
   tidepool = await bootTidepool({
     dir,
@@ -122,7 +122,7 @@ it("再起動時に前 worker の不在を証明できなければ sparse settin
   );
   git(workspace.path, "add", ".claude/settings.json");
   git(workspace.path, "commit", "-m", "share project hooks");
-  const dir = await hiddenByPreviousBoard(workspace);
+  const dir = await boardDirLeftHiding(workspace);
   const containers = new FakeContainerRuntime();
   containers.scriptPreflight("a container from a previous run is still populated");
 
@@ -212,6 +212,7 @@ it("起動時の復元は写しの有無で対象を選ぶ —— S bit は読�
   restoreWorkspaceProjectSettingsAtBoot(db, () => [hidden, humans], new Date("2026-10-21T00:00:00.000Z"));
 
   expect(git(hidden.path, "sparse-checkout", "list").split("\n")).toEqual([".claude", "pkg-a"]);
+  expect(git(hidden.path, "config", "--get", "core.sparseCheckoutCone")).toBe("true");
   expect(exists(hidden, ".claude/settings.json")).toBe(true);
   expect(git(humans.path, "sparse-checkout", "list")).toBe("pkg-a");
   expect(exists(humans, ".claude/settings.json")).toBe(false);
