@@ -133,9 +133,9 @@ const UNSETTABLE_FEATURES = [
  * 採取時は付けていない(probe は付ける)。`-c` は closedSurfaceConfig() と同じ導出 —— どちらかを
  * 動かしたらこの定数も動く。
  *
- * pin を上げるときは、採り直しに加えて vendor source で2点を読み直す(ADR 0135 決定5): model metadata が
- * features に勝つ欄(今日は `multi_agent_version` —— ADR 0134、`tool_mode` —— #762)と、`apply_map` の
- * 読み飛ばし(UNSETTABLE_FEATURES が増減しうる)。
+ * pin を上げるときは、採り直しに加えて vendor source を読み直す: model metadata の最悪値読み(ADR 0255 決定3)と、
+ * `apply_map` の読み飛ばし(ADR 0135 決定4。UNSETTABLE_FEATURES が増減しうる)。手順は
+ * docs/codex-cli-version-bump.md の「Re-read the Codex source」の段。
  *
  * ```bash
  * CODEX_HOME=$(mktemp -d)
@@ -362,7 +362,8 @@ export function observedHooks(
   };
 }
 
-// cwd ごとの entry の `errors[]` は読まない —— 読めなかった skill は返らないので、閉じる対象にも観測にも現れない
+// cwd ごとの entry の `errors[]` は読まない —— 読めなかった skill は返らないので、閉じる対象にも観測にも現れない。
+// これは版に従属する前提(#1972 が 0.147.0 で実測)で、版上げの適合試験の skill の閉鎖の行が確かめる(#1940)
 const skillsListResponse = z.object({
   data: z.array(
     z.object({
@@ -541,7 +542,7 @@ export function permissionConfig(
 /** 閉じる名前は導出する(ADR 0135 決定1): snapshot の全名 − 開ける名前 − `=false` が届かない名前。
  *  既定が false のものにも明示的に `=false` を渡す。開ける側を `-c` に書かないのは、それが版の宣言に
  *  当たるからである(ADR 0134 決定2)。 */
-function closedSurfaceConfig(): string[] {
+export function closedSurfaceConfig(): string[] {
   const stays = new Set<string>([...OPEN_FEATURES, ...UNSETTABLE_FEATURES]);
   return [
     "features.network_proxy=true",
@@ -689,15 +690,16 @@ const SKILL_CHECK_FAILED =
 
 /** (codex, workspace) の組の検査(ADR 0259 決定1・3・5): 列挙した skill を閉じた spawn の設定を `--strict-config` で
  *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は本文だけ marker の spawn の設定(ADR 0259 追記)で、回答時の検査は
- *  placeholder の設定で、同じこれを撃つ。列挙・観測そのものの失敗は投げる(決定6)。 */
-async function codexWorkspaceContainment(options: {
+ *  placeholder の設定で、版上げの適合試験の skill の閉鎖の行(#1940)は観測の生の result ごと、同じこれを撃つ。
+ *  列挙・観測そのものの失敗は投げる(決定6)。 */
+export async function codexWorkspaceContainment(options: {
   call: BoardCall;
   executable: string;
   env: NodeJS.ProcessEnv;
   /** 実体の path(realpath 済み)。 */
   workspace: string;
   config: (skills: string) => string[];
-}): Promise<{ skills: string; capability: ContainmentCapability }> {
+}): Promise<{ skills: string; capability: ContainmentCapability; observed: unknown }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
   const skills = await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace);
   const config = options.config(skills);
@@ -711,6 +713,7 @@ async function codexWorkspaceContainment(options: {
   const enabled = enabledSkills(observed, [options.workspace]);
   return {
     skills,
+    observed,
     capability: enabled.length === 0
       ? { available: true }
       : {

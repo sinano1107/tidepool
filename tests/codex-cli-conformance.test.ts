@@ -1,9 +1,18 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
-import { type ConformanceObservations, judgeConformance, judgeSeedRows } from "../src/codex-cli-conformance.js";
+import {
+  type ConformanceObservations,
+  judgeConformance,
+  judgeSeedRows,
+  SKILL_CLOSURE_MARKERS,
+} from "../src/codex-cli-conformance.js";
 
 const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, import.meta.url), "utf8");
+
+const { readable, unreadable, prompt } = SKILL_CLOSURE_MARKERS;
+/** 捕まえた request の body の代わり —— 判定が読むのは marker の有無だけ。 */
+const requestBody = (...markers: string[]) => JSON.stringify({ input: [...markers, prompt].map((text) => ({ type: "input_text", text })) });
 
 /** `model/list` の Model の `supportedReasoningEfforts`(codex-cli 0.147.0 の生成 schema の形)。 */
 const efforts = (...values: string[]) =>
@@ -39,6 +48,8 @@ const OBSERVED: CodexAppServerProbeResult = {
 //   0.151.0 は許可ドメインが 200・リスト外が 403。allowed は set-cookie の行だけ落としてある
 // - prompt-input-project-doc: codex-cli 0.147.0 を使い捨ての CODEX_HOME(AGENTS.md のマーカー入り)と AGENTS.md を置いた
 //   workspace で、`project_doc_max_bytes=0` を付けずに撃ったもの。workspace のパスだけ無害な固定値へ置換してある
+// skills-list-closed-unreadable は採ったものではない: 実物の codex-skills-list-closed.json の workspace B の entry に、
+// `errors[]` を2つ足して作った。`errors[]` の形は `SkillErrorInfo` の生成 schema、message は #1972 の実測の stderr の文面
 const passing = (): ConformanceObservations => ({
   compatibility: async () => ({ ok: true, cliVersion: "codex-cli 0.147.0" }),
   appServer: async () => OBSERVED,
@@ -48,9 +59,15 @@ const passing = (): ConformanceObservations => ({
   unlistedDomain: async () => fixture("codex-egress-curl-0.151.0-blocked.txt"),
   // 実物の 0.147.0 で、global の AGENTS.md だけが見出しで載った形(ADR 0148 の実測)
   promptInput: async () => fixture("codex-prompt-input-global-agents-md.json"),
+  skillClosure: async () => ({
+    capability: { available: true },
+    skillsList: JSON.parse(fixture("codex-skills-list-closed-unreadable.json")),
+    openRequest: requestBody(...Object.values(readable)),
+    closedRequest: requestBody(),
+  }),
 });
 
-it("各面の観測が盤面の読み取りを通れば、9面すべてが合格で ok", async () => {
+it("各面の観測が盤面の読み取りを通れば、10面すべてが合格で ok", async () => {
   const { rows, ok } = await judgeConformance(passing());
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
@@ -63,9 +80,19 @@ it("各面の観測が盤面の読み取りを通れば、9面すべてが合格
     ["allowed domain reached", true],
     ["unlisted domain → 403 blocked-by-allowlist", true],
     ["AGENTS.md layer", true],
+    ["skill closure", true],
   ]);
   expect(ok).toBe(true);
 });
+
+/** 合格の観測の skill の閉鎖を一部だけ差し替える。 */
+const closure = (changed: Partial<Awaited<ReturnType<ConformanceObservations["skillClosure"]>>>): Partial<ConformanceObservations> => ({
+  skillClosure: async () => ({ ...(await passing().skillClosure()), ...changed }),
+});
+const unreadableList = () =>
+  JSON.parse(fixture("codex-skills-list-closed-unreadable.json")) as {
+    data: Array<{ skills: Array<{ name: string; path: string; enabled: boolean }>; errors: Array<{ path: string; message: string }> }>;
+  };
 
 const visibleModelList = () =>
   JSON.parse(fixture("codex-model-list-0.147.0.json")) as {
@@ -166,6 +193,54 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
     "AGENTS.md layer",
     { promptInput: async () => fixture("codex-prompt-input-project-doc-0.147.0.json") },
     "# AGENTS.md instructions for /home/board/workspace",
+  ],
+  [
+    "盤面の skills.config を当てた exec の request に、workspace の skill の marker が残る",
+    "skill closure",
+    closure({ closedRequest: requestBody(readable.flat) }),
+    readable.flat,
+  ],
+  [
+    "閉じた設定の下の skills/list が、まだ有効な skill を報告する",
+    "skill closure",
+    closure({ capability: { available: false, reason: "Codex still reports these skills enabled: flat" } }),
+    "still reports these skills enabled: flat",
+  ],
+  [
+    "errors[] に挙がった skill が skills[] にも返る",
+    "skill closure",
+    closure({
+      skillsList: (() => {
+        const list = unreadableList();
+        list.data[0]!.skills.push({ name: "nodesc", path: list.data[0]!.errors[0]!.path, enabled: false });
+        return list;
+      })(),
+    }),
+    "/board/fixture/ws/B/.agents/skills/nodesc/SKILL.md",
+  ],
+  [
+    "errors[] に挙がった skill の本文が exec の request に載る",
+    "skill closure",
+    closure({ closedRequest: requestBody(unreadable.noFrontmatter) }),
+    unreadable.noFrontmatter,
+  ],
+  [
+    "読めない SKILL.md を置いたのに errors[] が空",
+    "skill closure",
+    closure({ skillsList: JSON.parse(fixture("codex-skills-list-closed.json")) }),
+    "errors[] is empty",
+  ],
+  [
+    "skills.config を外した exec の request に、読める skill の marker が載らない —— 閉じた側に無いことが閉鎖の証拠にならない",
+    "skill closure",
+    closure({ openRequest: requestBody(readable.flat, readable.nested, readable.linked, readable.codexHome) }),
+    readable.ancestor,
+  ],
+  [
+    "閉じた exec の request が捕まっていない(空の body)",
+    "skill closure",
+    closure({ closedRequest: "" }),
+    prompt,
   ],
 ])("%s: その面だけが不合格で、ok は false", async (_case, surface, changed, detail) => {
   const { rows, ok } = await judgeConformance({ ...passing(), ...changed });
