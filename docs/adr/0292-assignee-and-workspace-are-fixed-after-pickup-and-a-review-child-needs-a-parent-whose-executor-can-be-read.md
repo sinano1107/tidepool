@@ -47,3 +47,5 @@
 - **範囲外**: review type の親が escalate で `todo` に戻り、その間に Auditor の既定が差し替わって再 pickup されると Executor が
   session をまたいで変わり、その review への RCA の Roster がずれうる(派生 issue)。異議された task の修理子の宛先(#2371)は列が
   動かなくなったので問いが消える。
+- **範囲外**: 盤面が実行前の親の下に立てる auditor RCA(決定2 の門の外)では、spawn の Roster(列が空なら空)と、親の pickup の fill や
+  pickup 前の Edit の後の読みが割れる —— 決定2 が人間の扉で塞いだのと同じ辺(#2374)。

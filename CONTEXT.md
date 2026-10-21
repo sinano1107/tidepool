@@ -257,7 +257,7 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 そのタスクを**実行したという事実**。Assignee が前を向いた値(誰が実行することになるか)であるのに対し、Executor は後ろを向いた値であり、出所は盤面の event log —— ポインタへの参照ではなく確定値である。列に値があるときは両者が一致するため同じものに見えるが、別概念である: 未指定の assignee は「その時のポインタ」を意味し、実行後にポインタが動けば現在のポインタは当時の実行者ではない。一致は pickup 済みの task の列が Edit で動かないこと(Edit 参照、ADR 0292)が保証する —— 実行済みの task が todo に戻った窓で列を書き換えられた間は、この一致は成り立っていなかった(2026-10-21 の grilling、issue #2369)。
 
-「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。spawn の Roster・live の免除・`direct` 印・当時版(self RCA の注入と帰責の入力)はこの1つの読みを共有し、pickup 済みの列が動かないので spawn の後も同じ値を返す(ADR 0292)。列を書かない review type の親(ADR 0233 決定3)だけは、再 pickup で Executor が session をまたいで変わりうる。
+「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。spawn の Roster・live の免除・`direct` 印・当時版(self RCA の注入と帰責の入力)はこの1つの読みを共有し、pickup 済みの列が動かないので、spawn の時点で親が実行済みなら spawn の後も同じ値を返す(ADR 0292)。盤面が実行前の親の下に立てる auditor RCA では、後の pickup や Edit で列が動いて割れうる(issue #2374)。列を書かない review type の親(ADR 0233 決定3)だけは、再 pickup で Executor が session をまたいで変わりうる。
 
 ## Registrant(登録者)
 
