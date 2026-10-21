@@ -28,3 +28,9 @@
   べきかを code は知らず、釘が打てない。
 - **文言だけ直し、本文は出さない** —— 誤りは消えるが、Interview の root への異議から立つ RCA(ADR 0268 決定3)が本文を見られない問題は
   残る。
+
+## 追記(2026-10-21 の grilling、issue #2374 / ADR 0295)
+
+決定3 の束ねの鍵 `(registry_commit, definition_version)` に、その spawn が描いた Roster が加わる。Executor は session の spawn を時点として
+読む(ADR 0295 決定2)ので、同じ版の2つの session が別の Roster を見うる —— 版も Roster も同じときだけ1節に畳み、Roster だけ違う
+spawn は別の版と同じく entry の id で区別する。

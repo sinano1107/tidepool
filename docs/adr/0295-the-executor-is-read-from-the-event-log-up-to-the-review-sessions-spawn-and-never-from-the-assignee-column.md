@@ -44,6 +44,8 @@ review type の親は列を書かないので、escalate 後の再 pickup でも
 - ADR 0054 の「列に値があればそのまま返す(従来どおり)」と ADR 0292 の「Executor の読みは ADR 0054 のまま」は本 ADR で変わる
   (両方に追記)。ADR 0054 の全域性の節が置いた「RCA の親は必ず pickup 済み(`decision_logged` は worker session が書く)」は
   人間 decompose で外れており、「まだ居ない」が正当な答えになる場合に、盤面が実行前の親の下に立てる RCA が加わる。
+- self RCA の当時版の束ね(ADR 0270 決定3 の `(registry_commit, definition_version)`)は、同じ版の2つの session が別の Roster を
+  見うるので、描いた Roster を鍵に加える —— 版も Roster も同じときだけ1節に畳む(0270 に追記)。
 - ADR 0292 決定2 の門(人間の review 子)は「今、実行の事実があるか」なので区切り無しのまま。ADR 0233 決定3(review の列は
   書かない)も変えない —— #2373 は区切りで消える。
 - **範囲外**: RCA が走っている間に親の統合が始まること(付帯子の線、ADR 0049)、列を書く側の問い(族 #1796)。
