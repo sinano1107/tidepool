@@ -901,6 +901,11 @@ export function failGitCommits(): void {
   vi.stubEnv(`GIT_CONFIG_VALUE_${n + 1}`, "/nonexistent-gpg");
 }
 
+/** setup のみ: task を一度 pickup された形にする(列も status も動かさない)—— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
+export function markPickedUp(db: Db, taskId: string, at: Date, workerId = "deckhand"): void {
+  appendEvent(db, { taskId, workerId, origin: "board", at, payload: { kind: "task_picked_up" } });
+}
+
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */
 export function interviewExaminee(db: Db, at: Date): Task {
   const interview = registerTask(

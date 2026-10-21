@@ -1123,6 +1123,20 @@ export function registerTask(
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
   assertRepairHasParent(input);
+  // ADR 0292 決定2: review は親の結果に付く付帯子 —— 人間は Executor(ADR 0054)の引けない親に付けられない。
+  // 盤面の付帯子は掛けない(異議由来の auditor RCA は実行前の親にも立つ)
+  if (
+    workerId === HUMAN_WORKER_ID &&
+    input.type === "review" &&
+    input.parent_id !== undefined &&
+    !latestEventOfTask(db, input.parent_id, "task_completed") &&
+    !latestEventOfTask(db, input.parent_id, "task_picked_up")
+  ) {
+    throw new DomainError(
+      "a review child attaches to its parent's result, and this parent has neither been picked up nor completed — " +
+        "to have it reviewed later, set its review flag or review_by",
+    );
+  }
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
   if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
     const ancestorWorkspace = derivedWorkspace(db, { workspace: null, type: input.type, parent_id: input.parent_id! });

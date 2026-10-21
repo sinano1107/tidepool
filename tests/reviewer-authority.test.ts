@@ -4,7 +4,7 @@ import { DomainError } from "../src/domain-error.js";
 import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
 import { assigneeNeedsApproval, editTask, getTask, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor, type Task } from "../src/tasks.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -68,6 +68,7 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
 it("review タスクの分解子を、レビュー対象タスクの assignee と同じ宛先にする割当は、reviewer profile の assignable_to(空)に関わらず常に許可される(ADR 0013: 修理の宛先はレビュー対象の実行者)", async () => {
   t = await bootTidepool();
   const reviewed = seed({ type: "work", title: "wire the moisture sensor", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  markPickedUp(t.db, reviewed.id, t.clock.now(), "reef-crab");
   const review = seed({
     type: "review",
     title: "RCA for the sensor task",
@@ -206,6 +207,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
     resolveAuthority: (assignee) => (assignee === "auditor" ? PERMISSIVE_AUDITOR_AUTHORITY : undefined),
   });
   const reviewed = seed({ type: "work", title: "wire the moisture sensor 2", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  markPickedUp(t.db, reviewed.id, t.clock.now(), "reef-crab");
   const review = seed({
     type: "review",
     title: "RCA for the sensor task 2",
@@ -245,12 +247,12 @@ it("assignee の無い被レビュータスクの Executor は、最後の picku
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
   const write = (workerId: string, payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: work.id, workerId, origin: "board", at, payload });
   write("worker-a", { kind: "task_picked_up" });
   write("worker-b", { kind: "task_completed", handoff_present: true, result: null });
   write("worker-c", { kind: "task_picked_up" });
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
   expect(work.assignee).toBeNull();
   expect(reviewedTaskExecutor(db, review)).toBe("worker-b");

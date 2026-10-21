@@ -38,6 +38,7 @@ import {
   FULL_HANDOFF,
   HUMAN_WEBUI,
   judgmentRepairTask,
+  markPickedUp,
   mcpClient,
   openTestExamineeCheckout,
   openTestInterviewRoom,
@@ -837,6 +838,7 @@ describe("CodexWorker (ADR 0098)", () => {
       at,
       ...HUMAN_WEBUI,
     );
+    markPickedUp(f.db, reviewed.id, at);
     await f.start(task(f.db, "codex-roster-work"));
     await f.start(registerTask(
       f.db,
@@ -879,6 +881,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const at = new Date("2026-08-24T00:00:00.000Z");
     const objected = task(f.db, "codex-objected");
+    markPickedUp(f.db, objected.id, at, "codex-agent");
     appendEvent(f.db, {
       taskId: objected.id,
       workerId: "codex-agent",
@@ -936,6 +939,7 @@ describe("CodexWorker (ADR 0098)", () => {
     const objectedCommit = execFileSync("git", ["rev-parse", "main"], { cwd: f.registry }).toString().trim();
     const at = new Date("2026-08-24T00:00:00.000Z");
     const objected = task(f.db, "codex-objected-1741");
+    markPickedUp(f.db, objected.id, at, "codex-agent");
     appendEvent(f.db, {
       taskId: objected.id,
       workerId: "codex-agent",

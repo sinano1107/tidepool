@@ -25,7 +25,7 @@ import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { listChildren, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { HUMAN_WEBUI, judgedMemoryReview } from "./harness.js";
+import { HUMAN_WEBUI, judgedMemoryReview, markPickedUp } from "./harness.js";
 
 /** 修理子から同じ操作の verb を呼ぶ —— meta-review と1つの関数で、射程は門が対象で切り替える(ADR 0281 決定1)。 */
 const invalidateAsRepairer = (db: Db, repairer: { taskId: string; agent: string }, input: { entry_id: number; reason: "capability" }, at: Date) => ({
@@ -98,6 +98,7 @@ it("修理 verb は異議された書き込みが触ったエントリ(path_move
   raiseObjection(db, logDecision(db, objected, "squashed", "deckhand", at, "worker"), "undo it", at);
   commitTriage(db, at);
   const decisionRepair = repairChild(objected.id, "work");
+  markPickedUp(db, objected.id, at);
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [] }, at, ...HUMAN_WEBUI);
 
   // invalidate_memory / move_memory は meta-review と1つの関数で、修理子でない書き手には meta-review の規則が掛かる —— その門は MCP の登録(ADR 0281 決定1)

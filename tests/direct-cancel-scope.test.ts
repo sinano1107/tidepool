@@ -38,6 +38,7 @@ import {
   HUMAN_WEBUI,
   humanDecomposeTaskViaWebui,
   judgmentRepairTask,
+  markPickedUp,
   settleReview,
 } from "./harness.js";
 
@@ -474,6 +475,7 @@ it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "R", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const mid = registerTask(db, { type: "work", title: "M", purpose: "p", completion_criteria: "c", parent_id: root.id }, NOW, ...HUMAN_WEBUI);
+  markPickedUp(db, mid.id, NOW);
   const leaf = registerTask(db, { type: "review", title: "Q", purpose: "p", completion_criteria: "c", parent_id: mid.id }, NOW, ...HUMAN_WEBUI);
   cancelTaskDirectly(db, mid, null, NOW, {}, "webui");
   cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");

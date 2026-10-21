@@ -13,7 +13,7 @@ import {
   BOARD_WORKER_ID,
   HUMAN_WORKER_ID,
 } from "../src/worker-id.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
   it("全ステータス・type・親子関係が揃い、blocked は導出値、skipped は現れない", () => {
@@ -25,6 +25,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       new Date(0),
       ...HUMAN_WEBUI,
     );
+    markPickedUp(db, parent.id, new Date(0));
     const openChild = registerTask(
       db,
       {
