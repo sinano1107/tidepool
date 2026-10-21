@@ -441,7 +441,7 @@ export function startScheduler(deps: {
    *  scheduler と違う entry を選びうる(温存中の Provider で走る)。
    *
    *  戻り値は worker が1度も走らなかった pickup の後始末の一撃で、呼び手が poll の外で撃つ —— 資源の Quarantine の停止
-   *  (registry drift・準備の失敗、ADR 0274)、記録の器が書けない pickup(ADR 0266 決定3)、`start` の同期 throw(ADR 0118)。
+   *  (registry drift・準備の失敗、ADR 0274)、記録の器が書けない pickup(ADR 0266 決定3)、`pickupTask` が行を返した後から `start` までの想定外の throw(ADR 0118 / ADR 0294 決定3)。
    *  thunk で poll の外へ出す形は #570 のもので、記録された理由は「poll の中で解放すれば契機は捨てられる(ADR 0119 決定5)」
    *  だけである。その理由は ADR 0241 の後では成り立たない —— adapter の同期の枝は `start()` の中から同じ一撃を撃ち、その契機は
    *  `inFlight` の間に届くが、収束が走っている poll の終わりを待つので失われない(ADR 0241 決定5、`pollNow`)。形はそのまま
@@ -466,70 +466,70 @@ export function startScheduler(deps: {
     });
     // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
     if (!picked) return;
-    onPicked();
-    slot.occupy(picked.id);
-    // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
-    // かった pickup でも、force / reclaimed の相手はもう存在している。
-    containers.open(picked.id);
-    // branch discipline is the board's own, not the worker's: by the time
-    // the worker starts, the workspace already sits on the task branch
-    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-    // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、先頭へ戻して後始末を通す
-    const stopped = (stop: ResourceStop) => () => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop });
-    if (resolve) {
-      let drift: (() => void) | undefined;
-      const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
-      // an unknown workspace name (registry drift) quarantines in place of a
-      // thrown error, and the picked task — not itself the failure — returns
-      // to the queue head through teardown, freeing the slot (ADR 0274)
-      if (!resolved) return drift;
-      // a branch discipline gap (issue #27: the workspace's configured
-      // branch doesn't exist in this checkout) is a resource problem, same
-      // as registry drift above — the *workspace* is quarantined immediately
-      // rather than surfacing only as a console.error, so a human sees an
-      // actionable repair question and no other task aimed at this workspace
-      // gets picked up meanwhile; the picked task returns to the queue head
-      // the same way (ADR 0274).
-      // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
-      // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
-      // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
-      // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
-      // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
-      // どちらも作れなければ面接室(root id)の quarantine に落ちる
-      const rootId = interviewRootIdOf(db, picked);
-      if (rootId !== undefined) {
-        try {
-          if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
-          else openExamineeCheckout(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
-        } catch (err) {
-          return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
-        }
-      }
-      // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
-      // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
-      // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
-      const place = taskRunPlace(db, picked, resolved);
-      for (const read of place.reads.filter(isRemoteBacked)) {
-        try {
-          await freshenPlaceAtPickup(read, { githubAuth, registry });
-        } catch (err) {
-          return stopped(await quarantineWithRepoAccessGuidance(read, err));
-        }
-      }
-      try {
-        await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
-      } catch (err) {
-        return stopped(await quarantineWithRepoAccessGuidance(place, err));
-      }
-    }
-    const started = { ...picked, ...content };
-    const query = await injectionQuery(started);
     try {
+      onPicked();
+      slot.occupy(picked.id);
+      // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
+      // かった pickup でも、force / reclaimed の相手はもう存在している。
+      containers.open(picked.id);
+      // branch discipline is the board's own, not the worker's: by the time
+      // the worker starts, the workspace already sits on the task branch
+      const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+      // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、先頭へ戻して後始末を通す
+      const stopped = (stop: ResourceStop) => () => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop });
+      if (resolve) {
+        let drift: (() => void) | undefined;
+        const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
+        // an unknown workspace name (registry drift) quarantines in place of a
+        // thrown error, and the picked task — not itself the failure — returns
+        // to the queue head through teardown, freeing the slot (ADR 0274)
+        if (!resolved) return drift;
+        // a branch discipline gap (issue #27: the workspace's configured
+        // branch doesn't exist in this checkout) is a resource problem, same
+        // as registry drift above — the *workspace* is quarantined immediately
+        // rather than surfacing only as a console.error, so a human sees an
+        // actionable repair question and no other task aimed at this workspace
+        // gets picked up meanwhile; the picked task returns to the queue head
+        // the same way (ADR 0274).
+        // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
+        // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
+        // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
+        // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
+        // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
+        // どちらも作れなければ面接室(root id)の quarantine に落ちる
+        const rootId = interviewRootIdOf(db, picked);
+        if (rootId !== undefined) {
+          try {
+            if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+            else openExamineeCheckout(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+          } catch (err) {
+            return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
+          }
+        }
+        // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
+        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
+        // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
+        const place = taskRunPlace(db, picked, resolved);
+        for (const read of place.reads.filter(isRemoteBacked)) {
+          try {
+            await freshenPlaceAtPickup(read, { githubAuth, registry });
+          } catch (err) {
+            return stopped(await quarantineWithRepoAccessGuidance(read, err));
+          }
+        }
+        try {
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
+        } catch (err) {
+          return stopped(await quarantineWithRepoAccessGuidance(place, err));
+        }
+      }
+      const started = { ...picked, ...content };
+      const query = await injectionQuery(started);
       worker.start(started, setting, query);
     } catch (err) {
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
       if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
-      // ADR 0118: worker が1度も走らなかった pickup。観測点がこの event を書き、
+      // ADR 0118 / ADR 0294 決定3: worker が1度も走らなかった pickup。観測点がこの event を書き、
       // 記録と後始末は adapter の非同期 spawn 失敗と同じ一撃に落とす
       const failure = { error_code: null, message: err instanceof Error ? err.message : String(err) };
       console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
