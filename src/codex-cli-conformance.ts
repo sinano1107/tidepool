@@ -79,8 +79,9 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
     async (obs) => {
       const result = await obs.appServer();
       if (result.status !== "observed") return fail(`${result.status}: ${result.reason}`);
-      const unlisted = openaiSeedRows().flatMap(({ model }) => {
-        const why = whyRowUnlisted(result, model);
+      // 盤面の登録の照合と同じく effort も照らす(ADR 0218 決定2)
+      const unlisted = openaiSeedRows().flatMap(({ model, effort }) => {
+        const why = whyRowUnlisted(result, model, effort ?? undefined);
         return why ? [`${model}: ${why.reason}`] : [];
       });
       if (unlisted.length > 0) return fail(unlisted.join("; "));

@@ -97,6 +97,17 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
     "gpt-6-astra: the Codex App Server model list (codex-cli 0.147.0, hidden models included) does not include this model id",
   ],
   [
+    "種の openai 行の model は一覧にあるが、行の effort を広告しない(盤面の登録の照合と同じ、ADR 0218 決定2)",
+    "model/list → openai seed rows",
+    {
+      appServer: async () => ({
+        ...OBSERVED,
+        models: new Map([...OBSERVED.models].map(([id, values]) => [id, id === "gpt-5.6-sol" ? ["low", "medium"] : values])),
+      }),
+    },
+    "gpt-5.6-sol: the Codex App Server model list (codex-cli 0.147.0, hidden models included) does not advertise effort high for this model id",
+  ],
+  [
     "隠れていない model が語彙の値を欠く(隠れた gpt-5.5 が 0.147.0 で max を欠いた形)",
     "effort vocabulary",
     {
