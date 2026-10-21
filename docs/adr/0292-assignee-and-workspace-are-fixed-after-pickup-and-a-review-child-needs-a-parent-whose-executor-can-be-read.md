@@ -49,3 +49,9 @@
   動かなくなったので問いが消える。
 - **範囲外**: 盤面が実行前の親の下に立てる auditor RCA(決定2 の門の外)では、spawn の Roster(列が空なら空)と、親の pickup の fill や
   pickup 前の Edit の後の読みが割れる —— 決定2 が人間の扉で塞いだのと同じ辺(#2374)。
+
+## 追記(2026-10-21 の grilling、issue #2374 / ADR 0295)
+
+決定1 の「Executor の読みは ADR 0054 のまま」は ADR 0295 で変わった。閉じられない扉が2つ残った —— 未実行の親の pickup の埋めと、
+一度も pickup されていない task への Edit(ADR 0233 決定5)—— ので、範囲外に置いた辺(#2374)と review type の再 pickup(#2373)は、
+Executor を session の spawn を時点として event log から読む(列は読まない)ことで消える。決定1 の門と決定2 の門はそのまま。

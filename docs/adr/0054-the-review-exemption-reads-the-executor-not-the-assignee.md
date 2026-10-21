@@ -129,3 +129,10 @@ RCA review の親は完了しているとは限らない。CONTEXT.md の Object
 registry の authority profile `auditor` に置いた `assignable_to: ["tako"]` は、この不具合の回避を
 意図したものだったが `REVIEWER_AUTHORITY_PROFILE` に上書きされて**そもそも効いていない**。
 修正後は `[]` が正直な値である。
+
+## 追記(2026-10-21 の grilling、issue #2374 / ADR 0295)
+
+決定の「`assignee` 列に値があるときはその値をそのまま返す」は ADR 0295 決定1 で消えた。Executor は review の session の spawn を
+時点として event log だけから読む。列は pickup 前は前を向いた札で実行者ではなく、未実行の親の pickup の埋めや Edit で後から動く。
+全域性の節の「異議由来の RCA の親は必ず pickup されている」は人間 decompose(人間名義の `decision_logged`)で外れており、盤面が
+実行前の親の下に立てる auditor RCA も `undefined`(まだ居ない)が正しい答えになる。
