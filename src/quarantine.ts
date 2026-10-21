@@ -17,6 +17,7 @@ import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type
 import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
+export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
 
 interface QuarantineProse {
   title: string;
@@ -220,6 +221,20 @@ export const QUARANTINES = [
     }),
   },
   {
+    // 続く poll の失敗(ADR 0294 決定2): 機構だけを借り、何も止めない —— pickup を止めているのは失敗そのもの。
+    // 断言するのは いつから・何回・最初と最新の例外の本文 だけで(呼び出し側が reason に畳む)、原因の所在は言わない
+    kind: "pollFailure",
+    scope: "none",
+    prose: (_value: string | null, reason: string): QuarantineProse => ({
+      title: POLL_FAILURE_QUESTION_TITLE,
+      purpose:
+        `${reason}\n\n` +
+        "Answering re-runs the poll: if it throws again the answer is refused, this question stays open, " +
+        "and the refusal carries that run's exception body.",
+      completion_criteria: "a poll runs without throwing",
+    }),
+  },
+  {
     kind: "workspace",
     scope: "workspace",
     // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
@@ -410,8 +425,8 @@ export const QUARANTINES = [
   /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク /
    *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)/
    *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)/
-   *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)。 */
-  scope: "board" | "workspace" | "assignees" | "row" | "pair" | "target";
+   *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)/ 何も止めない(続く poll の失敗、ADR 0294 決定2)。 */
+  scope: "board" | "workspace" | "assignees" | "row" | "pair" | "target" | "none";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */
   resolveAssignees?: (values: string[]) => string[];
@@ -438,7 +453,7 @@ export type QuarantineResolvers = Partial<Record<QuarantineKind, (values: string
 export function quarantineStops(db: Db, resolvers: QuarantineResolvers = {}): ResourceStops {
   const stops: ResourceStops = { workspaces: [], assignees: [] };
   for (const row of QUARANTINES) {
-    if (row.scope === "board" || row.scope === "row" || row.scope === "pair" || row.scope === "target") continue;
+    if (row.scope === "board" || row.scope === "row" || row.scope === "pair" || row.scope === "target" || row.scope === "none") continue;
     const values = openQuarantineValues(db, row.kind) as string[];
     if (values.length === 0) continue;
     if (row.scope === "workspace") {

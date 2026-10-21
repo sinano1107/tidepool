@@ -669,6 +669,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     reclaim,
     registryReachability,
     teardownQuarantine,
+    rerunPoll: () => scheduler.rerunPoll(),
     providerCliAuth,
     modelProbes,
     clock: options.clock,
