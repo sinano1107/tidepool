@@ -1,0 +1,13 @@
+{
+  "title": "Fix the two planted slugify defects",
+  "readings": ["work"],
+  "test": "node --test \"$EXERCISE_DIR/expected.test.cjs\"",
+  "task": {
+    "title": "Make slugify meet its spec",
+    "purpose": "slugify.js in this workspace is meant to satisfy SPEC.md, and its tests pass, but users report slugs that break the spec. Find every rule it does not meet and fix it.",
+    "completion_criteria": "Every rule in SPEC.md holds for slugify, each fixed rule has a test in slugify.test.js, and `node --test` passes.",
+    "workspace": "slugify",
+    "tier": "standard",
+    "assignee": "tako"
+  }
+}

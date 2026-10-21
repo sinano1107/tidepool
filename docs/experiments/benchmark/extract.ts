@@ -94,6 +94,16 @@ export interface ExerciseRun {
   test_exit: number | null;
 }
 
+/** 人間が Interview の root を retry すると旧い root は cancel され、新しい root が `interview_retried` で旧い root を名指す。
+ *  登録で受け取った id から、その後継を辿り切った今の root を返す(retry されていなければ id のまま)。 */
+export function currentRoot(db: Db, taskId: string): string {
+  const retries = listEventsOfKinds(db, ["interview_retried"]);
+  const successor = (id: string) => retries.find((e) => e.payload.kind === "interview_retried" && e.payload.previous_root_id === id)?.task_id ?? null;
+  let id = taskId;
+  for (let next = successor(id); next !== null; next = successor(id)) id = next;
+  return id;
+}
+
 const VERB_PREFIX = "mcp__tidepool__";
 
 /** root と、その子孫・Interview の受験者(root の子ではない)とその子孫。 */
@@ -325,6 +335,7 @@ const runInputSchema = z
   .strict();
 
 /** `tsx extract.ts check <exercise-dir>...` は宣言を検査するだけ(harness が走行の前に呼ぶ)。
+ *  `tsx extract.ts current-root <db> <task-id>` は retry の後の今の root の id を印字する(harness が決着待ちの poll ごとに呼ぶ)。
  *  `tsx extract.ts run <db> <worker-logs> <input.json> <out-dir>` は record.json と summary.md を書く。盤面と同じ commit の
  *  checkout から走らせる。 */
 function main([command, ...args]: string[]): void {
@@ -332,7 +343,13 @@ function main([command, ...args]: string[]): void {
     for (const dir of args) loadExercise(dir);
     return;
   }
-  if (command !== "run" || args.length !== 4) throw new Error("usage: extract.ts check <exercise-dir>... | extract.ts run <db> <worker-logs> <input.json> <out-dir>");
+  if (command === "current-root" && args.length === 2) {
+    const db = new Database(args[0]!, { readonly: true, fileMustExist: true });
+    console.log(currentRoot(db, args[1]!));
+    return;
+  }
+  if (command !== "run" || args.length !== 4)
+    throw new Error("usage: extract.ts check <exercise-dir>... | extract.ts current-root <db> <task-id> | extract.ts run <db> <worker-logs> <input.json> <out-dir>");
   const [dbPath, logDir, inputPath, outDir] = args as [string, string, string, string];
   const parsed = runInputSchema.safeParse(JSON.parse(readFileSync(inputPath, "utf8")));
   if (!parsed.success) throw new Error(`${inputPath}:\n${z.prettifyError(parsed.error)}`);
