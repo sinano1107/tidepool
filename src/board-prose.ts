@@ -347,7 +347,8 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   // by this worker at or before the entry. Map insertion order is
   // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
   // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)—— と、spawn が描いた Roster
-  // (ADR 0270 追記)。同じ版で spawn ごとに変わる Roster の元は被レビュー task の Executor だけなので、その名で代える
+  // (ADR 0270 追記)。同じ版で spawn ごとに変わる Roster の元は被レビュー task の Executor だけなので、その名で代える。
+  // ponytail: registry に無い(組み込みを含む)別々の Executor は同じ空の Roster でも別節になる —— 畳みたくなったら描いた Roster の行を鍵にする
   const objected = getTask(db, task.parent_id)!;
   const byVersion = new Map<string, { entryIds: number[]; spawnedEventId: number }>();
   const unresolved: number[] = [];
