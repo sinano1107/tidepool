@@ -6,8 +6,9 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { type Exercise, extract, loadExercise } from "../docs/experiments/benchmark/extract.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
-import { createBehaviorCandidate, invalidateMemoryByMetaReview, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
-import { completeInterview, completeTask, getTask, logDecision, registerTask } from "../src/tasks.js";
+import { registerLocalMergeQuestion } from "../src/landing.js";
+import { createBehaviorCandidate, defineMemoryByMetaReview, invalidateMemoryByMetaReview, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
+import { completeInterview, completeTask, getTask, listBoard, logDecision, registerTask } from "../src/tasks.js";
 import {
   answerQuestionViaWebui,
   completedWork,
@@ -62,20 +63,20 @@ it("宣言の loader は課題ディレクトリの exercise.json を読み、�
 
 it("宣言の loader は必須欄の欠けと未知の読みの種別を、欄名を名指して拒否する", () => {
   const { title: _, ...untitled } = WORK_EXERCISE;
-  expect(() => loadExercise(exerciseDir(untitled))).toThrow(/title/);
+  expect(() => loadExercise(exerciseDir(untitled))).toThrow(/→ at title/);
 
   const { completion_criteria: __, ...criterialess } = WORK_EXERCISE.task;
-  expect(() => loadExercise(exerciseDir({ ...WORK_EXERCISE, task: criterialess }))).toThrow(/task\.completion_criteria/);
+  expect(() => loadExercise(exerciseDir({ ...WORK_EXERCISE, task: criterialess }))).toThrow(/→ at task\.completion_criteria/);
 
-  expect(() => loadExercise(exerciseDir({ ...WORK_EXERCISE, readings: ["work", "vibes"] }))).toThrow(/readings\[1\]/);
+  expect(() => loadExercise(exerciseDir({ ...WORK_EXERCISE, readings: ["work", "vibes"] }))).toThrow(/→ at readings\[1\]/);
 
   // 登録する task も Interview の欄も無い宣言は、何を登録するかが無い
   const { task: ___, ...nothingToRegister } = WORK_EXERCISE;
-  expect(() => loadExercise(exerciseDir(nothingToRegister))).toThrow(/task/);
+  expect(() => loadExercise(exerciseDir(nothingToRegister))).toThrow(/→ at task\b/);
 
   // task の課題は期待解のテストを持つ —— 「対処できた」は課題が決める(ADR 0298 決定5)
   const { test: ____, ...untested } = WORK_EXERCISE;
-  expect(() => loadExercise(exerciseDir(untested))).toThrow(/test/);
+  expect(() => loadExercise(exerciseDir(untested))).toThrow(/→ at test\b/);
 });
 
 it("Interview の課題は人間が出せる登録欄を持ち、期待解のテストは無くてよい", () => {
@@ -92,7 +93,7 @@ it("Interview の課題は人間が出せる登録欄を持ち、期待解のテ
   expect(loadExercise(exerciseDir(interview))).toMatchObject(interview);
   expect(() =>
     loadExercise(exerciseDir({ ...interview, interview: { ...interview.interview, targets: [{ provider: "anthropic" }] } })),
-  ).toThrow(/interview\.targets\[0\]\.model/);
+  ).toThrow(/→ at interview\.targets\[0\]\.model/);
 });
 
 const AT = new Date("2026-10-22T00:00:00.000Z");
@@ -206,6 +207,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
     (review) => {
       invalidateMemoryByMetaReview(db, { entry_id: retired, reason: "environment" }, "fugu", "worker", AT, review.id);
       proposeMemoryChange(db, review.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "fugu", AT);
+      defineMemoryByMetaReview(db, { scope: null, path: "build", text: "Build notes.", author: { activity: "meta_review", name: "fugu" } }, "worker", AT, review.id);
     },
   );
   // routing meta-review: 窓に shadow 行1つと opus の session 2つ
@@ -251,7 +253,10 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
     expect.objectContaining({ recommended: expect.objectContaining({ model: "claude-sonnet-5-5" }), actual: expect.objectContaining({ model: "claude-opus-5-5" }), diverged: true }),
   ]);
   // meta-review が店を直接書き換えた記録
-  expect(record.memory_writes).toEqual([expect.objectContaining({ kind: "memory_entry_invalidated", entry_id: retired, activity: "meta_review" })]);
+  expect(record.memory_writes).toEqual([
+    expect.objectContaining({ kind: "memory_entry_invalidated", entry_id: retired, activity: "meta_review" }),
+    expect.objectContaining({ kind: "memory_entry_created", entry: expect.objectContaining({ text: "Build notes." }), event_id: expect.any(Number) }),
+  ]);
   // Interview の root の面接室・rubric・採点
   expect(record.interviews).toEqual([
     { root_id: root.id, room: expect.stringContaining("tidepool-rooms-"), rubric: "tests pass", scores: [{ examinee_id: examinee.id, outcome: "accepted" }] },
@@ -301,10 +306,14 @@ it("人間待ちの時間は question の登録と回答の時刻から出て、
   answerQuestionViaWebui(db, first, ["left"], minute(40));
   answerQuestionViaWebui(db, second, ["right"], minute(50));
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "deckhand", minute(60), "worker");
+  // land question は task の子ではない(盤面の root の question)—— 70〜90 分の待ちも課題の人間待ち
+  registerLocalMergeQuestion(db, getTask(db, work.id)!, "land it", minute(70));
+  const land = listBoard(db).find((t) => t.title.startsWith("land completed task"))!;
+  answerQuestionViaWebui(db, getTask(db, land.id)!, ["hold"], minute(90));
 
   const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], {});
 
-  expect(markdown).toContain("| work | yes | done | — | — | — | 60m | 40m | 20m | 2 |");
-  expect(record.exercises[0]!.duration_ms).toEqual({ wall: 60 * 60_000, human_wait: 40 * 60_000, board: 20 * 60_000 });
-  expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation"]);
+  expect(markdown).toContain("| work | yes | done | — | — | — | 90m | 60m | 30m | 3 |");
+  expect(record.exercises[0]!.duration_ms).toEqual({ wall: 90 * 60_000, human_wait: 60 * 60_000, board: 30 * 60_000 });
+  expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation", "local_merge"]);
 });

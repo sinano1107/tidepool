@@ -154,10 +154,14 @@ function shadowRows(db: Db) {
 }
 
 /** 課題1つの列。 */
-function exerciseRecord(db: Db, logDir: string, { exercise, task_id, test_exit }: ExerciseRun) {
+function exerciseRecord(db: Db, logDir: string, all: readonly Task[], { exercise, task_id, test_exit }: ExerciseRun) {
   const root = getTask(db, task_id);
   if (!root) throw new Error(`exercise ${exercise.name}: no task ${task_id} on the board`);
-  const tasks = subtree(db, root);
+  const own = subtree(db, root);
+  const ids = new Set(own.map((task) => task.id));
+  // 着地の question は着地する task の子ではなく、列で task を名指す
+  const landing = all.filter((q) => ids.has(q.question_pending_local_merge_task_id ?? q.question_pending_pr_promotion_task_id ?? ""));
+  const tasks = [...own, ...landing];
   const ran = tasks.flatMap((task) => sessions(db, logDir, task));
   const costs = ran.flatMap((s) => (s.cost_usd === null ? [] : [s.cost_usd]));
   return {
@@ -177,9 +181,9 @@ function exerciseRecord(db: Db, logDir: string, { exercise, task_id, test_exit }
 
 /** 走行の記録: 課題ごとの列と、4プロセスの判断を人間が読む走行ごとの節。 */
 export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: Record<string, unknown>) {
-  const exercises = runs.map((run) => exerciseRecord(db, logDir, run));
   // 盤面の task すべて(一覧の読み口は決着した木を落とすので、登録の event から引く)
   const all = listEventsOfKinds(db, ["task_registered"]).flatMap((e) => (e.task_id === null ? [] : [getTask(db, e.task_id)!]));
+  const exercises = runs.map((run) => exerciseRecord(db, logDir, all, run));
   const record = {
     config,
     exercises,
@@ -198,8 +202,9 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
         : [{ question_id: q.id, review_id: q.parent_id, proposal: q.question_proposal, answer: latestEventOfTask(db, q.id, "question_answered")?.payload ?? null }],
     ),
     shadow: shadowRows(db),
-    memory_writes: listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"]).flatMap((e) =>
-      e.payload.activity === "meta_review" ? [{ event_id: e.id, ...e.payload }] : [],
+    // 作成は書き手が entry.author、移動・復元の複製と無効化は event の activity が持つ
+    memory_writes: listEventsOfKinds(db, ["memory_entry_created", "memory_entry_invalidated"]).flatMap(({ id, payload: p }) =>
+      (p.activity ?? (p.kind === "memory_entry_created" ? p.entry.author.activity : undefined)) === "meta_review" ? [{ event_id: id, ...p }] : [],
     ),
     interviews: all.flatMap((root) =>
       root.type === "interview"
