@@ -14,12 +14,15 @@
    assignee も workspace も pickup で、Edit の「未消費フィールドを書き換える」(issue #130)の線に assignee を揃えた。これで
    ADR 0054 の「列に値があれば一致する」は門で保証される前提になり、Executor の読みは ADR 0054 のまま。#2362(workspace の同じ穴)は
    同じ門で消える。
-2. **Executor が引けない親(`task_completed` も `task_picked_up` も無い)に review 子は登録できない。** domain の `registerTask` が
-   扉を問わず拒む(ADR 0290 決定2 の形)。review は親の結果に付く付帯子(ADR 0049)で、結果の無い親には付く先が無い。決定1 だけでは、
-   assignee 空の親の下に先に review を立てると pickup の fill(ADR 0233 決定2)で列が後から埋まり、spawn の Roster(空)と後の読み(1名)が
-   割れる辺が残る。人間 assignee の task は pickup 無しで完了する(`task_completed` だけが残る)ので、述語は pickup でなく ADR 0054 の
-   読みそのもの。盤面自身の付帯子(完了時レビュー・RCA・監査)は必ず実行の後に立つので、この形を作れるのは人間の扉だけだった。
-   将来のレビューの予約は Review flag / `review_by`。
+2. **Executor が引けない親(`task_completed` も `task_picked_up` も無い)に、人間は review 子を登録できない。** domain の `registerTask` が
+   人間名義(`HUMAN_WORKER_ID`)の登録を拒む —— WebUI・MCP の人間の扉と提案 question の approve はすべてここを通る。review は親の結果に
+   付く付帯子(ADR 0049)で、結果の無い親には付く先が無い。決定1 だけでは、assignee 空の親の下に先に review を立てると pickup の fill
+   (ADR 0233 決定2)で列が後から埋まり、spawn の Roster(空)と後の読み(1名)が割れる辺が残る。人間 assignee の task は pickup 無しで
+   完了する(`task_completed` だけが残る)ので、述語は pickup でなく ADR 0054 の読みそのもの。将来のレビューの予約は Review flag / `review_by`。
+   盤面自身の付帯子は門に掛けない。完了時レビュー・監査は実行の後に立つが、異議由来の auditor RCA は実行前の親にも立つ —— 一度も
+   pickup されていない task への人間の decompose(`decision_logged` を人間名義で書く)に異議が出ると、triage は self RCA を飛ばして
+   auditor RCA だけを登録する(`bundleObjections`)。この RCA には見る対象(人間の判断)があり、拒むと triage の commit ごと巻き戻る
+   (実装時に `tests/triage.test.ts` の ADR 0237 のテストで判明し、当初の「扉を問わず」を改めた)。
 
 ## Considered options
 
@@ -31,6 +34,8 @@
   今の手。task ブランチの続きが切れる不便は別の経路(派生 issue)で開く。pickup 後に `human` へ手渡す Edit も同じ門で止まり、
   人間が引き取る手は cancel になる。
 - **実行前の review 子を許し、Roster 空・免除無しで走らせる** —— 見るものの無い review に slot と課金を使う。
+- **門を扉を問わず掛け、Executor の引けない親では triage が auditor RCA を飛ばす** —— 人間の判断への異議から RCA が消える。
+  飛ばした事実を記録しても、見る対象のある review を落とすことに変わりはない。
 
 ## 帰結
 
@@ -42,3 +47,5 @@
 - **範囲外**: review type の親が escalate で `todo` に戻り、その間に Auditor の既定が差し替わって再 pickup されると Executor が
   session をまたいで変わり、その review への RCA の Roster がずれうる(派生 issue)。異議された task の修理子の宛先(#2371)は列が
   動かなくなったので問いが消える。
+- **範囲外**: 盤面が実行前の親の下に立てる auditor RCA(決定2 の門の外)では、spawn の Roster(列が空なら空)と、親の pickup の fill や
+  pickup 前の Edit の後の読みが割れる —— 決定2 が人間の扉で塞いだのと同じ辺(#2374)。

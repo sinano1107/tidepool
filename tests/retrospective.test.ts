@@ -30,6 +30,7 @@ import {
   KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
+  markPickedUp,
   mcpClient,
   memoryEntries,
   nextPoll,
@@ -1880,6 +1881,7 @@ it("帰責の入力の当時版は、異議された entry の session の spawn
 /** deckhand が実行した work を被レビュー task に持つ review の task(組み込みの Auditor が走る形)。 */
 const reviewSession = (db: ReturnType<typeof openDb>) => {
   const reviewed = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  markPickedUp(db, reviewed.id, at);
   return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, ...HUMAN_WEBUI);
 };
 

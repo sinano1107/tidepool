@@ -1,13 +1,15 @@
+import { execFileSync } from "node:child_process";
 import { expect, it } from "vitest";
 import { boardDoctrine, boardProse } from "../src/board-prose.js";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
+import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, MEMORY_REPAIR_NOTICE, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 
 
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
@@ -98,6 +100,57 @@ it.each(REPAIR_NOTICES)("profile が reviewer 定数でも、%s の Authority �
 
   expect(prose).toContain(`## Authority\n\n${notice}\n\n`);
   expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
+});
+
+/** `objected`(deckhand が pickup 済み)の deckhand の判断の行への異議の self RCA の文面 —— 当時版は registry の main の commit。 */
+async function selfRcaProse(db: Db, objected: Task, at: Date) {
+  const registryDir = await makeRegistry();
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  appendEvent(db, { taskId: objected.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
+  const entryId = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
+  appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  const verbs = taskVerbSwap(db, rca.id);
+  return boardProse({
+    db,
+    registryDir,
+    registry: loadRegistry(registryDir, "purely-local"),
+    task: rca,
+    systemPrompt: "",
+    profile: REVIEWER_AUTHORITY_PROFILE,
+    doctrine: boardDoctrine(CLAUDE, verbs),
+    verbs,
+    allowedDomains: undefined,
+    memorySection: null,
+  });
+}
+
+it.each(REPAIR_NOTICES)("%s の task への self RCA の当時版は、Authority が修理の1行で Roster 節が無い —— spawn と同じ type の分岐(#2366)", async (type, notice) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const root = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const repair = pickupTask(db, registerTask(db, { type, title: "repair", purpose: "p", completion_criteria: "c", parent_id: root.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
+
+  const prose = await selfRcaProse(db, repair, at);
+
+  expect(prose).toContain(`### Authority as it stood then (the board's repair notice)\n\n${notice}`);
+  expect(prose).not.toContain("Roster as it stood then");
+});
+
+it("Interview の root への self RCA の当時版は、Authority が reviewer 定数を指す1行で、Roster 節は無い —— root の Roster は空(#2366)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const interview = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
+  const root = pickupTask(db, interview, "deckhand", at, { assignee: "deckhand" })!;
+
+  const prose = await selfRcaProse(db, root, at);
+
+  expect(prose).toContain(
+    "### Authority as it stood then (the board's reviewer authority)\n\n" +
+      "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+      "It is board code, not a registry profile, so it is not a target for a registry diff.",
+  );
+  expect(prose).not.toContain("Roster as it stood then");
 });
 
 it("Interview の監査 review の spawn の文面は reviewer の Authority の直後に、findings の行き先が complete_audit の判定だという1行を置く(ADR 0273 決定3・4 / ADR 0271 決定2 の形)", () => {

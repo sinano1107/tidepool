@@ -1,9 +1,11 @@
 import { afterEach, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
 import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
-import { type RegisterTaskInput, registerTask, reviewedTaskExecutor } from "../src/tasks.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
+import { assigneeNeedsApproval, editTask, getTask, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -67,6 +69,7 @@ it("review タスクは実行 assignee 自身の authority profile がどれだ�
 it("review タスクの分解子を、レビュー対象タスクの assignee と同じ宛先にする割当は、reviewer profile の assignable_to(空)に関わらず常に許可される(ADR 0013: 修理の宛先はレビュー対象の実行者)", async () => {
   t = await bootTidepool();
   const reviewed = seed({ type: "work", title: "wire the moisture sensor", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  markPickedUp(t.db, reviewed.id, t.clock.now(), "reef-crab");
   const review = seed({
     type: "review",
     title: "RCA for the sensor task",
@@ -172,156 +175,38 @@ it("assignee 未設定の完了タスクを review すると、記録された e
   });
 });
 
-it("task_completed が無ければ最後の pickup executor を修理先にでき、pickup 自体が無ければ免除は成立しない(ADR 0054 / issue #217)", async () => {
-  t = await bootTidepool({ workerId: "first-worker" });
-  const pickedParent = (
-    await api(t.baseUrl, "POST", "/api/tasks", {
-      type: "work",
-      title: "unfinished reviewed work",
-      purpose: "purpose",
-      completion_criteria: "criteria",
-    })
-  ).json;
-  await t.clock.advance(HOUR); // first pickup, never completed
-  const firstWorkerClient = await mcpClient(t.mcpBaseUrl, pickedParent.id);
-  await firstWorkerClient.callTool({
-    name: "escalate",
-    arguments: {
-      context: "pause before retrying with another worker",
-      questions: [
-        { title: "retry?", options: ["continue", "stop"], recommendation: "continue" },
-      ],
-    },
-  });
-  await firstWorkerClient.close();
-  const retryQuestion = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) => task.type === "question" && task.parent_id === pickedParent.id,
-  );
-  await t.stopServer();
-  t = await bootTidepool({ dir: t.dir, workerId: "second-worker" });
-  // pickup が first-worker を書いたので(ADR 0233)、人間が空に戻して次の pickup を新しい既定へ解決させる
-  expect((await api(t.baseUrl, "PATCH", `/api/tasks/${pickedParent.id}`, { assignee: "" })).status).toBe(200);
-  await api(t.baseUrl, "POST", `/api/tasks/${retryQuestion.id}/answer`, {
-    answers: ["continue"],
-  }); // immediate poll records the second pickup
+it("pickup 後の被レビュー task の assignee は空に戻せず、Executor は pickup が書いた worker のまま(ADR 0292 決定1 / ADR 0054 / issue #217)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-01-01T00:00:00Z");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  returnToQueue(db, pickupTask(db, work, "first-worker", at, { assignee: "first-worker" })!, { kind: "cap_interrupted" }, at);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
-  const parentClient = await mcpClient(t.mcpBaseUrl, pickedParent.id);
-  await parentClient.callTool({
-    name: "log_decision",
-    arguments: { line: "the unfinished decision under review" },
-  });
-  const entry = (await api(t.baseUrl, "GET", "/api/log")).json.entries.find(
-    (event: any) => event.payload.line === "the unfinished decision under review",
-  );
-  await api(t.baseUrl, "POST", "/api/triage/start");
-  await api(t.baseUrl, "POST", "/api/triage/objection", {
-    entry_id: entry.id,
-    comment: "repair the unfinished decision",
-  });
-  await api(t.baseUrl, "POST", "/api/triage/close");
-  const pickedParentReview = (await api(t.baseUrl, "GET", "/api/tasks")).json.find(
-    (task: any) =>
-      task.type === "review" &&
-      task.parent_id === pickedParent.id &&
-      task.title.startsWith("rca (auditor):"),
-  );
-  // 並べ替えは slot が埋まっている間に済ませる —— decompose の解放が撃つ poll(ADR 0119 決定3)が
-  // そのまま先頭の auditor review を拾う
-  await api(t.baseUrl, "POST", `/api/tasks/${pickedParentReview.id}/move`, { after: null });
-  await parentClient.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "pause the unfinished parent without completing it",
-      children: [{ title: "remaining work", purpose: "p", completion_criteria: "c" }],
-    },
-  });
-  await parentClient.close();
-  await t.clock.advance(HOUR); // auditor review picked up
-  const pickedReviewClient = await mcpClient(t.mcpBaseUrl, pickedParentReview.id);
-  await pickedReviewClient.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "return the repair to the recorded executor",
-      children: [
-        {
-          title: "repair by the latest executor",
-          purpose: "p",
-          completion_criteria: "c",
-          assignee: "second-worker",
-        },
-        {
-          title: "repair by the earlier executor",
-          purpose: "p",
-          completion_criteria: "c",
-          assignee: "first-worker",
-        },
-      ],
-    },
-  });
-  await pickedReviewClient.close();
-  const pickedBoard = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  const pickedParentVerdict = {
-    latestRepairRegistered: pickedBoard.some(
-      (task: any) => task.title === "repair by the latest executor",
-    ),
-    earlierRepairRegistered: pickedBoard.some(
-      (task: any) => task.title === "repair by the earlier executor",
-    ),
-    approvalQuestionRegistered: pickedBoard.some(
-      (task: any) => task.type === "question" && task.parent_id === pickedParentReview.id,
-    ),
-  };
+  expect(() => editTask(db, getTask(db, work.id)!, { assignee: "" }, at, "webui")).toThrow(DomainError);
+  expect(reviewedTaskExecutor(db, review)).toBe("first-worker");
+});
 
-  await t.stop();
-  t = await bootTidepool();
-  const untouchedParent = seed({ type: "work", title: "untouched reviewed work", purpose: "purpose", completion_criteria: "criteria" });
-  const untouchedParentReview = seed({
-    type: "review",
-    title: "review untouched work",
-    purpose: "purpose",
-    completion_criteria: "criteria",
-    parent_id: untouchedParent.id,
-    assignee: "auditor",
-  });
-  await api(t.baseUrl, "POST", `/api/tasks/${untouchedParentReview.id}/move`, { after: null });
-  await t.clock.advance(HOUR); // review picked up before its untouched parent
-  const untouchedReviewClient = await mcpClient(t.mcpBaseUrl, untouchedParentReview.id);
-  await untouchedReviewClient.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "there is no executor to exempt",
-      children: [
-        {
-          title: "repair untouched work",
-          purpose: "p",
-          completion_criteria: "c",
-          assignee: "fake-worker",
-        },
-      ],
-    },
-  });
-  await untouchedReviewClient.close();
-  const untouchedBoard = (await api(t.baseUrl, "GET", "/api/tasks")).json;
+it("task_completed も pickup も無い被レビュー task では Executor が引けず、免除は成立しない(ADR 0054 / issue #217)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-01-01T00:00:00Z");
+  const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  // 人間名義の review 子は実行前の親に付けられない(ADR 0292 決定2)—— 盤面名義(異議由来の auditor RCA の形)で置く
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, BOARD_WORKER_ID, "board");
 
-  expect({
-    pickedParent: pickedParentVerdict,
-    untouchedParent: {
-      repairRegistered: untouchedBoard.some(
-        (task: any) => task.title === "repair untouched work",
-      ),
-      approvalQuestionRegistered: untouchedBoard.some(
-        (task: any) => task.type === "question" && task.parent_id === untouchedParentReview.id,
-      ),
-    },
-  }).toEqual({
-    pickedParent: {
-      latestRepairRegistered: true,
-      earlierRepairRegistered: false,
-      approvalQuestionRegistered: true,
-    },
-    untouchedParent: { repairRegistered: false, approvalQuestionRegistered: true },
-  });
-}, 10_000);
+  expect(reviewedTaskExecutor(db, review)).toBeUndefined();
+  expect(assigneeNeedsApproval(db, review, "fake-worker", { assignable_to: [] })).toBe(true);
+});
+
+it("列を書かない review type の被レビュー task は、task_completed が無ければ最後の pickup の worker が Executor(ADR 0054 / ADR 0233 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-01-01T00:00:00Z");
+  const reviewed = registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  pickupTask(db, reviewed, "worker-x", at);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, ...HUMAN_WEBUI);
+
+  expect(getTask(db, reviewed.id)!.assignee).toBeNull();
+  expect(reviewedTaskExecutor(db, review)).toBe("worker-x");
+});
 
 const PERMISSIVE_AUDITOR_AUTHORITY: AuthorityProfile = {
   name: "permissive-auditor",
@@ -334,6 +219,7 @@ it("review タスクの分解子を、レビュー対象タスクの assignee �
     resolveAuthority: (assignee) => (assignee === "auditor" ? PERMISSIVE_AUDITOR_AUTHORITY : undefined),
   });
   const reviewed = seed({ type: "work", title: "wire the moisture sensor 2", purpose: "purpose", completion_criteria: "criteria", assignee: "reef-crab" });
+  markPickedUp(t.db, reviewed.id, t.clock.now(), "reef-crab");
   const review = seed({
     type: "review",
     title: "RCA for the sensor task 2",
@@ -373,12 +259,12 @@ it("assignee の無い被レビュータスクの Executor は、最後の picku
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
   const write = (workerId: string, payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: work.id, workerId, origin: "board", at, payload });
   write("worker-a", { kind: "task_picked_up" });
   write("worker-b", { kind: "task_completed", handoff_present: true, result: null });
   write("worker-c", { kind: "task_picked_up" });
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
   expect(work.assignee).toBeNull();
   expect(reviewedTaskExecutor(db, review)).toBe("worker-b");

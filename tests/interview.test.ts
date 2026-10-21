@@ -15,7 +15,7 @@ import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } f
 import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, POSED_HEAD, poseAccepted, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, markPickedUp, POSED_HEAD, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 
 // Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
 
@@ -590,6 +590,7 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   expect(names(plain)).toEqual(["sandbox"]);
   // review の鎖は review でない祖先で切れる(`taskRunPlace` と同じ辿り方)
   const workUnderAudit = registerTask(db, { type: "work", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  markPickedUp(db, workUnderAudit.id, new Date(0));
   const reviewUnderWork = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: workUnderAudit.id }, new Date(0), ...HUMAN_WEBUI);
   for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
 });
@@ -597,6 +598,7 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
 it("workspace を指定しない付帯子の review が開く場所の名前は、既定でなく最も近い固定済みの祖先の名前(ADR 0290 決定5)", () => {
   const db = openDb(":memory:");
   const parent = registerTask(db, { type: "work", ...PLAIN, workspace: "reef" }, new Date(0), ...HUMAN_WEBUI);
+  markPickedUp(db, parent.id, new Date(0));
   const review = registerTask(db, { type: "review", ...PLAIN, parent_id: parent.id }, new Date(0), ...HUMAN_WEBUI);
 
   expect(openedPlaceNames(db, review.id, "sandbox")).toEqual(["reef"]);
@@ -891,6 +893,7 @@ it("前の出題の監査が未決着のあいだの出題は拒まれる。監�
 it("監査の完了は監査でない task(root を親にした人間登録の review・root)と空の findings を拒み、何も記録しない(ADR 0273 決定3)", () => {
   const { db, root } = registerInterview();
   const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
+  markPickedUp(db, root.id, new Date(0));
   const review = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: root.id }, new Date(0), ...HUMAN_WEBUI);
 
   for (const task of [review, getTask(db, root.id)!]) expect(() => audited(db, task, "accepted")).toThrow("only an Interview's audit completes with complete_audit");
@@ -1009,6 +1012,7 @@ it("受験者を親にした work と review の登録は扉を問わず拒ま�
   }
   expect(listChildren(db, child.id)).toEqual([]);
   expect(failureQuestion(db, child.id, new Date(0)).parent_id).toBe(child.id);
+  markPickedUp(db, root.id, new Date(0));
   expect(registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI).parent_id).toBe(root.id);
 });
 

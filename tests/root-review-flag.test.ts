@@ -3,7 +3,7 @@ import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { editTask, listBoard, type RegisterTaskInput, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
 /** ルートは flag によらず完了時にレビューされるので、ルートへの review_flag: true は不発の値として拒否する
  *  (issue #1467 / ADR 0111 決定1 と同じ理由)。 */
@@ -87,6 +87,7 @@ it.each([false, undefined])("work でない type も review_flag: %s なら今�
   const root = registerTask(db, ROOT, NOW, ...HUMAN_WEBUI);
 
   const question = registerTask(db, { ...QUESTION, parent_id: root.id, review_flag }, NOW, ...HUMAN_WEBUI);
+  markPickedUp(db, root.id, NOW);
   const review = registerTask(db, { ...ROOT, type: "review", parent_id: root.id, review_flag }, NOW, ...HUMAN_WEBUI);
   expect(listBoard(db).map((task) => task.id)).toEqual(expect.arrayContaining([question.id, review.id]));
 });

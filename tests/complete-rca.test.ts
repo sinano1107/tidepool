@@ -7,7 +7,7 @@ import { completeRca, proposeFromObjection } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows } from "./harness.js";
+import { FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, markPickedUp } from "./harness.js";
 
 /** RCA は complete_rca で終わり、propose_from_objection の起草は RCA の task に記録を残す(ADR 0278 決定1〜5 の RCA・ADR 0280、issue #2285)。 */
 
@@ -214,6 +214,7 @@ it("未決着の子があれば拒まれ、判断の行も書かれない ——
 
 it("RCA でない review・空の root_cause・エントリの無い所見は拒まれる", () => {
   const { db, work, entries, self } = objected(["capability"]);
+  markPickedUp(db, work.id, at);
   const review = registerTask(db, { type: "review", title: "look again", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
   expect(() => completeRca(db, review, { findings: [] }, "auditor", at, "worker")).toThrow("only an RCA completes with complete_rca");

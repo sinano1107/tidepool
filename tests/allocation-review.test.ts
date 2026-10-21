@@ -9,7 +9,7 @@ import { reportProviderUsage } from "../src/throttle.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeAllocationClient } from "./fakes.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -87,6 +87,7 @@ it("Codex の session は Episode があっても行動列が観測なし(null)�
 function recordedAllocation(t: Tidepool, session: typeof spawned, requestedTier?: string): AllocationTarget {
   const at = t.clock.now();
   const work = registerTask(t.db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c", tier: requestedTier }, at, ...HUMAN_WEBUI);
+  markPickedUp(t.db, work.id, at, "reef-crab");
   const review = registerTask(t.db, { type: "review", title: "review", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
   const spawnedId = appendEvent(t.db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: session });
   const completedId = appendEvent(t.db, { taskId: review.id, workerId: HUMAN_WORKER_ID, origin: "webui", at, payload: { kind: "task_completed", handoff_present: false, result: "accepted" } });

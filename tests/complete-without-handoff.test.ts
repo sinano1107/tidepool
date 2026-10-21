@@ -3,7 +3,7 @@ import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
 
 const NOW = new Date("2026-10-19T00:00:00.000Z");
 
@@ -45,6 +45,7 @@ for (const type of ["review", "memory_repair", "routing_repair"] as const) {
   it(`an agent ${type} task cannot complete without a handoff outcome`, () => {
     const db = openDb(":memory:");
     const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+    markPickedUp(db, parent.id, NOW);
     const task = registerTask(db, { type, title: `some ${type}`, purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
 
     for (const handoff of [undefined, { outcome: "  " }]) {

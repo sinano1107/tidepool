@@ -28,7 +28,7 @@ import { getTask, listBoard, logDecision, registerTask, type Task } from "../src
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
-import { bundledObjection, HUMAN_WEBUI, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, HUMAN_WEBUI, markPickedUp, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** AI の直接適用の書き込みの記録(issue #632 / ADR 0252 決定1〜3)のドメイン層。tool 結果と決定ログ API への写像はサーバ境界
@@ -92,6 +92,7 @@ it("worker の define_memory_branch・RCA の Knowledge・meta-review の define
     payload: { kind: "objection_attributed", entry_id: entry, objection_event_ids: [objection], cause: "missing_information", evidence: "e", entries: null, round: "initial" },
     at,
   });
+  markPickedUp(db, objected.id, at);
   const rca = task("rca (auditor): objected", { type: "review", parent_id: objected.id, objection_event_ids: [objection] });
   const reasoning = logDecision(db, rca, "the fixture rule was never written down", "auditor", at, "worker");
   proposeFromObjection(db, rca.id, { entry_id: entry, path: "testing", title: "Fixtures", text: "Keep the fixtures.", as: "knowledge", based_on_decision: reasoning }, {}, "auditor", at);

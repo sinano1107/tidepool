@@ -8,7 +8,7 @@ import { proposeFromObjection } from "../src/retrospective.js";
 import { listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { bundledObjection, decomposedChild } from "./harness.js";
+import { bundledObjection, decomposedChild, markPickedUp } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_objection` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
  *  tool error への写像はサーバ境界(tests/mcp-propose-from-objection.test.ts)が言う。 */
@@ -23,8 +23,10 @@ const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entri
   const objection = bundledObjection(db, taskId, entry_id, at);
   return appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [objection], cause, evidence: "e", entries, round: "initial" }, at });
 };
-/** 異議されたエントリ(agent の記入)に cause を帰責する。 */
+/** 異議されたエントリに cause を帰責する。親は deckhand が一度 pickup した形にする —— RCA 子(人間名義の登録)が付ける(ADR 0292 決定2)。
+ *  pickup は人間に起きないので、エントリの書き手が人間でも pickup の名義は deckhand。 */
 const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): number => {
+  markPickedUp(db, parent.id, at);
   const entry = logDecision(db, parent, `decided as ${cause}`, worker, at, "worker");
   attribute(db, parent.id, entry, cause);
   return entry;
@@ -235,6 +237,7 @@ it("premise_breached の宣言への異議エントリからも提案できる",
   const parent = task(db, "work", "T");
   const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at, "worker");
   const child = task(db, "work", "A", HUMAN_WORKER_ID, parent.id);
+  markPickedUp(db, child.id, at);
   const entry = appendEvent(db, {
     taskId: child.id,
     workerId: "deckhand",

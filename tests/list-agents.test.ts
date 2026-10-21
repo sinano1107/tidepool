@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import type { AuthorityProfile } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, queueWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -87,6 +87,7 @@ it("list_agents は review タスクでは、reviewer の assignable_to が空�
   t = await bootTidepool({ listAgents: () => [{ name: "navigator", description: "Navigation specialist" }] });
   // 扉を通さずに置く —— 扉の登録は pickup の契機で(ADR 0119 決定2)、レビュー対象が先に slot へ入る
   const reviewed = queueWork(t, "wire the sensor", undefined, "navigator");
+  markPickedUp(t.db, reviewed.id, t.clock.now(), "navigator");
   const review = registerTask(
     t.db,
     {

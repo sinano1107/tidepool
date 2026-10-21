@@ -9,7 +9,7 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import { answerQuestionViaWebui, HUMAN_WEBUI } from "./harness.js";
+import { answerQuestionViaWebui, HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
 const HANDOFF = {
   outcome: "done",
@@ -96,6 +96,7 @@ it("answering a question returns the parent to the queue head when only attached
     new Date(1),
     ...HUMAN_WEBUI,
   );
+  markPickedUp(db, parent.id, new Date(1));
   registerTask(
     db,
     {
