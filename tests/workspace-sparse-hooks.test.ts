@@ -355,6 +355,20 @@ it("起動時の復元は registry 外の面接室も写しどおり戻し、roo
   expect(workspaceNeedsHuman(db, root.id)).toBe(false);
 });
 
+it("受験者の checkout の戻しの失敗は面接室の root id に quarantine を立てる(#2379、ADR 0273 決定8)", async () => {
+  db = openDb(":memory:");
+  const registered = await monorepo("sparse-boot-registered");
+  const { examinee, place } = await examineeCheckout(db, "sparse-boot-examinee-broken");
+  excludeWorkspaceProjectSettings(db, place);
+  db.prepare("UPDATE workspace_state SET sparse_snapshot = 'not json' WHERE name = ?").run(examinee.id);
+  silenceLog();
+
+  restoreWorkspaceProjectSettingsAtBoot(db, () => [registered], BOOT);
+
+  expect(workspaceNeedsHuman(db, interviewRootIdOf(db, examinee)!)).toBe(true);
+  expect(workspaceNeedsHuman(db, examinee.id)).toBe(false);
+});
+
 it("人間が消した受験者の checkout(path ごと・.git だけ)は、起動時に写しを消して log 1行ずつ、quarantine しない(#2379)", async () => {
   db = openDb(":memory:");
   const registered = await monorepo("sparse-boot-registered");
