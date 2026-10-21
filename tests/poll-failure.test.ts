@@ -8,6 +8,10 @@ afterEach(async () => {
   t = undefined;
 });
 
+beforeEach(() => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+});
+
 // ADR 0294 決定1: 行の振る舞いは domain 層(tests/scheduler-poll-failure.test.ts)が言う。ここは2つの読み口への写像だけ
 it("最後の poll の失敗は GET /api/queue と list_queue の封筒に同じ欄で載る", async () => {
   let broken = false;
@@ -52,10 +56,6 @@ async function bootWithPollFailureQuestion() {
   const answer = () => api(t!.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
   return { registry, question, answer };
 }
-
-beforeEach(() => {
-  vi.spyOn(console, "error").mockImplementation(() => {});
-});
 
 it("回答は poll の撃ち直しで確かめる —— まだ投げれば新しい例外の本文で拒み、直れば観測決着の形で返す", async () => {
   const { registry, question, answer } = await bootWithPollFailureQuestion();

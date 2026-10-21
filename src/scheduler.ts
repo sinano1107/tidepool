@@ -394,33 +394,42 @@ export function startScheduler(deps: {
   let inFlight = false;
   let lastPollFailure: PollFailure | undefined;
   /** 成功を挟まず続く失敗の計測(ADR 0294 決定2): 最初の失敗と回数。行と同じく memory だけ。 */
-  let firstPollFailure: PollFailure | undefined;
-  let pollFailures = 0;
+  let streak: { first: PollFailure; count: number } | undefined;
   /** slot を握る前の想定外の例外(と後始末の一撃の throw、ADR 0294 決定5): 盤面は落とさず、行に残して次の poll に任せる。
    *  門の前・門の中の throw も数える —— 門の前で投げ続ける poll も pickup を同じく止めている */
   const pollFailed = (err: unknown) => {
     console.error("[scheduler] poll failed; the next poll retries:", err);
     const now = clock.now();
     lastPollFailure = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err) };
-    firstPollFailure ??= lastPollFailure;
-    pollFailures++;
+    streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
+    const { first, count } = streak;
     // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
-    if (now.getTime() - Date.parse(firstPollFailure.at) < POLL_FAILURE_QUESTION_AFTER || openQuarantineQuestion(db, "pollFailure", null)) return;
-    registerQuarantine(
-      db,
-      "pollFailure",
-      null,
-      `the board's poll has thrown ${pollFailures} times since ${firstPollFailure.at} with no successful poll in between.\n\n` +
-        `First exception: ${firstPollFailure.message}\n\nLatest exception: ${lastPollFailure.message}`,
-      now,
-    );
+    if (now.getTime() - Date.parse(first.at) < POLL_FAILURE_QUESTION_AFTER) return;
+    // 失敗そのものが DB の故障なら question も書けない —— ここで投げれば poll が投げ、`idle` を待つ収束まで倒れる(ADR 0294 決定1)
+    try {
+      if (openQuarantineQuestion(db, "pollFailure", null)) return;
+      registerQuarantine(
+        db,
+        "pollFailure",
+        null,
+        `the board's poll has thrown ${count} times since ${first.at} with no successful poll in between.\n\n` +
+          `First exception: ${first.message}\n\nLatest exception: ${lastPollFailure.message}`,
+        now,
+      );
+    } catch (questionErr) {
+      console.error("[scheduler] could not raise the poll failure question:", questionErr);
+    }
   };
   /** 本体に入った poll が投げずに終わった: 行と計測を戻し、開いた question を観測で決着させる(ADR 0184 決定5 の形)。 */
   const pollSucceeded = () => {
-    lastPollFailure = firstPollFailure = undefined;
-    pollFailures = 0;
-    const open = openQuarantineQuestion(db, "pollFailure", null);
-    if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "pollFailure", value: null }, clock.now());
+    lastPollFailure = streak = undefined;
+    // finally の中で撃つので、投げれば poll が投げる(上と同じ)
+    try {
+      const open = openQuarantineQuestion(db, "pollFailure", null);
+      if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "pollFailure", value: null }, clock.now());
+    } catch (settleErr) {
+      console.error("[scheduler] could not settle the poll failure question:", settleErr);
+    }
   };
   const resumeTimer = createResumeTimers(clock, pollNow);
 

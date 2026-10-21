@@ -6,7 +6,7 @@ import { POLL_FAILURE_QUESTION_TITLE } from "../src/quarantine.js";
 import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, getTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, listBoard, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
@@ -127,6 +127,8 @@ it("pickup の契機で収束が reject しても unhandledRejection は撃た�
 
 const MINUTE = 60 * 1000;
 
+const quietErrors = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
 /** pickup の契機1回(`pollNow`)を撃ち、その poll の終わりまで待つ。 */
 async function trigger(scheduler: ReturnType<typeof board>["scheduler"]) {
   scheduler.pollNow();
@@ -135,9 +137,7 @@ async function trigger(scheduler: ReturnType<typeof board>["scheduler"]) {
 }
 
 describe("続く poll の失敗の question(ADR 0294 決定2)", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
+  beforeEach(() => void quietErrors());
 
   it("最初の失敗から10分後の失敗で Tidepool 名義の question が1枚立ち、もう1度投げても2枚目も再発火の event も無い", async () => {
     const { db, clock, scheduler } = board();
@@ -152,6 +152,21 @@ describe("続く poll の失敗の question(ADR 0294 決定2)", () => {
 
     expect(listBoardQuestions(db).map((q) => q.id)).toEqual([question.id]);
     expect(listEvents(db, question.id).map((e) => e.payload.kind)).not.toContain("quarantine_refired");
+    scheduler.stop();
+  });
+
+  it("門の中(封じ込めの検査)で投げ続ける poll も数え、10分で立つ", async () => {
+    const { db, clock, scheduler, state } = board({
+      containment: async () => {
+        throw new Error("containment probe exploded");
+      },
+    });
+    await trigger(scheduler);
+    await clock.advance(10 * MINUTE);
+    await trigger(scheduler);
+
+    expect(quarantineQuestion(db, "pollFailure", null)!.purpose).toContain("Latest exception: containment probe exploded");
+    expect(state.calls).toBe(0);
     scheduler.stop();
   });
 
@@ -223,9 +238,7 @@ describe("続く poll の失敗の question(ADR 0294 決定2)", () => {
 });
 
 describe("撃ち直しの口(ADR 0294 決定2 の受理の検査)", () => {
-  beforeEach(() => {
-    vi.spyOn(console, "error").mockImplementation(() => {});
-  });
+  beforeEach(() => void quietErrors());
 
   it("本体が投げれば例外の本文を、投げなければ成功を返す", async () => {
     const { scheduler, state, worker } = board();
@@ -250,7 +263,29 @@ describe("撃ち直しの口(ADR 0294 決定2 の受理の検査)", () => {
     expect(state.calls).toBe(0);
     scheduler.stop();
   });
+
+  it("走っている poll があれば入れなかったと答え、その poll を `idle` から見失わせない", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { scheduler, state } = board({
+      containment: async () => {
+        await held;
+        return { available: true };
+      },
+    });
+    state.broken = false;
+
+    const first = scheduler.rerunPoll();
+    expect(await scheduler.rerunPoll()).toEqual({ outcome: "blocked", reason: "another poll is in flight" });
+    let idled = false;
+    void scheduler.idle().then(() => (idled = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(idled).toBe(false);
+
+    release();
+    expect(await first).toEqual({ outcome: "succeeded" });
+    scheduler.stop();
+  });
 });
 
-const listBoardQuestions = (db: ReturnType<typeof openDb>) =>
-  db.prepare("SELECT id FROM tasks WHERE type = 'question'").all() as Array<{ id: string }>;
+const listBoardQuestions = (db: ReturnType<typeof openDb>) => listBoard(db).filter((task) => task.type === "question");
