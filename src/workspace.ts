@@ -538,7 +538,7 @@ export function materializeWorkspaceProjectSettings(db: Db, workspace: Workspace
   if (snapshot.mode === "disabled") {
     git(workspace.path, "sparse-checkout", "disable");
     // disable は盤面の pattern を残す —— 人間のファイルがあればそれに、無ければ消す
-    if (snapshot.pattern === null) rmSync(patternPath);
+    if (snapshot.pattern === null) rmSync(patternPath, { force: true });
     else writeFileSync(patternPath, snapshot.pattern);
   } else {
     // set は session 中に外された sparse も有効に戻す(reapply は無効な checkout を拒む)。set は pattern を書き直すので、
