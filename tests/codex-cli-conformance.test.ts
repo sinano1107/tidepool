@@ -12,7 +12,7 @@ const fixture = (name: string) => readFileSync(new URL(`fixtures/${name}`, impor
 
 const { readable, unreadable, prompt } = SKILL_CLOSURE_MARKERS;
 /** 捕まえた request の body の代わり —— 判定が読むのは marker の有無だけ。 */
-const requestBody = (...markers: string[]) => JSON.stringify({ input: [...markers, prompt].map((text) => ({ type: "input_text", text })) });
+const requestBody = (...markers: string[]) => [...markers, prompt].join("\n");
 
 /** `model/list` の Model の `supportedReasoningEfforts`(codex-cli 0.147.0 の生成 schema の形)。 */
 const efforts = (...values: string[]) =>

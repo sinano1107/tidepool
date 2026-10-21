@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { platform } from "node:process";
 import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
@@ -115,71 +115,67 @@ async function skillClosure() {
     });
   });
   await new Promise<void>((resolve) => endpoint.listen(0, "127.0.0.1", resolve));
-  // workspace は homedir() の下(#712)。祖先の skill は git の root に置き、workspace はその子 —— 実物の ~/.agents には触れない
-  const created = [
-    mkdtempSync(join(homedir(), ".tidepool-codex-conformance-skills-")),
-    mkdtempSync(join(tmpdir(), "tidepool-codex-conformance-home-")),
-  ];
   try {
-    const [root, home] = created.map((dir) => realpathSync(dir)) as [string, string];
-    const workspace = join(root, "ws");
-    const skill = (dir: string, text: string) => {
-      mkdirSync(dir, { recursive: true });
-      writeFileSync(join(dir, "SKILL.md"), text);
-    };
-    const readableSkill = (dir: string, marker: string) =>
-      skill(dir, `---\nname: ${dir.split("/").at(-1)}\ndescription: ${marker}\n---\n${marker}\n`);
-    execFileSync("git", ["init", "-q", root]);
-    readableSkill(join(workspace, ".agents/skills/flat"), readable.flat);
-    readableSkill(join(workspace, ".agents/skills/pack/inner"), readable.nested);
-    readableSkill(join(workspace, "vendor/linked"), readable.linked);
-    symlinkSync("../../vendor/linked", join(workspace, ".agents/skills/linked"));
-    readableSkill(join(root, ".agents/skills/ancestor"), readable.ancestor);
-    readableSkill(join(home, "skills/home-skill"), readable.codexHome);
-    skill(join(workspace, ".agents/skills/nodesc"), `---\nname: nodesc\n---\n${unreadable.noDescription}\n`);
-    skill(join(workspace, ".agents/skills/nofm"), `${unreadable.noFrontmatter}\n`);
+    // 祖先の skill は git の root(使い捨ての workspace)に置き、exec の workspace はその子 —— 実物の ~/.agents には触れない
+    return await inDisposable(async ({ home, workspace: root }) => {
+      const workspace = join(root, "ws");
+      const skill = (dir: string, text: string) => {
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, "SKILL.md"), text);
+      };
+      const readableSkill = (dir: string, marker: string) =>
+        skill(dir, `---\nname: ${basename(dir)}\ndescription: ${marker}\n---\n${marker}\n`);
+      execFileSync("git", ["init", "-q", root]);
+      readableSkill(join(workspace, ".agents/skills/flat"), readable.flat);
+      readableSkill(join(workspace, ".agents/skills/pack/inner"), readable.nested);
+      readableSkill(join(workspace, "vendor/linked"), readable.linked);
+      symlinkSync("../../vendor/linked", join(workspace, ".agents/skills/linked"));
+      readableSkill(join(root, ".agents/skills/ancestor"), readable.ancestor);
+      readableSkill(join(home, "skills/home-skill"), readable.codexHome);
+      skill(join(workspace, ".agents/skills/nodesc"), `---\nname: nodesc\n---\n${unreadable.noDescription}\n`);
+      skill(join(workspace, ".agents/skills/nofm"), `${unreadable.noFrontmatter}\n`);
 
-    const freshEnv = probeEnv(home);
-    const loaded = [...closedSurfaceConfig(), 'forced_login_method="chatgpt"'];
-    const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, config: (skills) => [...loaded, skills] });
-    const provider = "tidepool_conformance";
-    const { port } = endpoint.address() as AddressInfo;
-    // worker と同じ exec の flag(hook を付けないので --dangerously-bypass-hook-trust は要らない)
-    const capture = async (config: string[]) => {
-      bodies.length = 0;
-      await run({
-        kind: "conformance skill closure",
-        args: [
-          "--ask-for-approval", "never",
-          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
-          "-C", workspace,
-          ...[
-            ...config,
-            `model_provider="${provider}"`,
-            `model_providers.${provider}.name="${provider}"`,
-            `model_providers.${provider}.base_url="http://127.0.0.1:${port}/v1"`,
-            `model_providers.${provider}.wire_api="responses"`,
-          ].flatMap((entry) => ["-c", entry]),
-          prompt,
-        ],
-        cwd: workspace,
-        env: freshEnv,
-        limitMs: 60_000,
-      });
-      const [first] = bodies;
-      if (first === undefined) throw new Error("codex exec sent no request to the fake Responses endpoint");
-      return first;
-    };
-    return {
-      capability: checked.capability,
-      skillsList: checked.observed,
-      // 対照: skills.config だけを外した同じ exec
-      openRequest: await capture(loaded),
-      closedRequest: await capture([...loaded, checked.skills]),
-    };
+      const freshEnv = probeEnv(home);
+      const loaded = [...closedSurfaceConfig(), 'forced_login_method="chatgpt"'];
+      const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, config: (skills) => [...loaded, skills] });
+      const provider = "tidepool_conformance";
+      const { port } = endpoint.address() as AddressInfo;
+      // worker と同じ exec の flag(hook を付けないので --dangerously-bypass-hook-trust は要らない)
+      const capture = async (config: string[]) => {
+        bodies.length = 0;
+        await run({
+          kind: "conformance skill closure",
+          args: [
+            "--ask-for-approval", "never",
+            "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config",
+            "-C", workspace,
+            ...[
+              ...config,
+              `model_provider="${provider}"`,
+              `model_providers.${provider}.name="${provider}"`,
+              `model_providers.${provider}.base_url="http://127.0.0.1:${port}/v1"`,
+              `model_providers.${provider}.wire_api="responses"`,
+            ].flatMap((entry) => ["-c", entry]),
+            prompt,
+          ],
+          cwd: workspace,
+          env: freshEnv,
+          limitMs: 60_000,
+        });
+        const [first] = bodies;
+        if (first === undefined) throw new Error("codex exec sent no request to the fake Responses endpoint");
+        return first;
+      };
+      return {
+        capability: checked.capability,
+        skillsList: checked.observed,
+        // 対照: skills.config だけを外した同じ exec
+        openRequest: await capture(loaded),
+        closedRequest: await capture([...loaded, checked.skills]),
+      };
+    });
   } finally {
     endpoint.close();
-    for (const dir of created) rmSync(dir, { recursive: true, force: true });
   }
 }
 
