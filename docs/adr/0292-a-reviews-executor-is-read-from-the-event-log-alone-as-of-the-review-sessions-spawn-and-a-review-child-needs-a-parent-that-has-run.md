@@ -14,10 +14,12 @@
 2. **review が問う Executor は、その review session の spawn の時点のもの。** 親の event を review の最新 `worker_spawned` の位置で
    区切って読み、spawn の Roster・免除・`direct` 印・当時版(self RCA の注入と帰責の入力)はすべてこの1つの読みを共有する。
    付帯子は親を塞がない(ADR 0049)ので、review の走行中に親が別の worker に pickup されうるが、読みは動かない。review が
-   escalate から戻って再 spawn すれば、区切りと Roster が一緒に動く。
-3. **実行の事実(`task_picked_up`)の無い親に review 子は登録できない。** domain の `registerTask` が扉を問わず拒む(ADR 0290 決定2
-   の形)。review は親の結果に付く付帯子(ADR 0049)で、結果の無い親には付く先が無い。盤面自身の付帯子(完了時レビュー・RCA・
-   監査)は必ず実行の後に立つので、この形を作れるのは人間の扉だけだった。将来のレビューの予約は Review flag / `review_by`。
+   escalate から戻って再 spawn すれば、区切りと Roster が一緒に動く。描画と記録の順序は adapter を問わず `worker_spawned` を先に
+   追記し、その id を区切りに描く(ADR 0149 決定2 の順序の中で、描画は event の後・spawn の前)。
+3. **Executor が引けない親(`task_completed` も `task_picked_up` も無い)に review 子は登録できない。** domain の `registerTask` が
+   扉を問わず拒む(ADR 0290 決定2 の形)。review は親の結果に付く付帯子(ADR 0049)で、結果の無い親には付く先が無い。人間
+   assignee の task は pickup 無しで完了する(`task_completed` だけが残る)ので、述語は pickup でなく決定1 の読みそのもの。盤面自身の
+   付帯子(完了時レビュー・RCA・監査)は必ず実行の後に立つので、この形を作れるのは人間の扉だけだった。将来のレビューの予約は Review flag / `review_by`。
 
 ## Considered options
 
