@@ -43,3 +43,9 @@ ADR 0158 の退けた案が守った「Codex agent が担当なら動く workspa
   では、構成がずれたときの安全網が無いままになる。
 - **`skills.include_instructions=false`** —— 一覧の block を消すだけで探索は止まらず、観測も常に空になって意味を失う。
 - **pickup の門で組を判定する** —— head ごとに app-server を起こすことになり、slot に入らない行の分まで撃つ。
+
+## 追記(2026-10-21 の grilling、issue #2374 / ADR 0295)
+
+決定3 の観測が当てる config は、`developer_instructions`(盤面の本文)だけを決定4 の permission canary と同じ marker に差し替える。
+本文は `worker_spawned` の id を Executor の読みの区切りに持つので event の後にしか描けず、Codex adapter の順は確認 → event → 描画 →
+spawn になる(ADR 0295 決定4)。観測の主題は skill の閉じ方で、本文は skill の設定に関わらない。

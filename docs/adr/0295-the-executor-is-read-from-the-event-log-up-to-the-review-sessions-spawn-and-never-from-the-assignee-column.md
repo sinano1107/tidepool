@@ -19,9 +19,11 @@ review type の親は列を書かないので、escalate 後の再 pickup でも
 3. **時点は event log を区切って運ぶ。記録は足さない。** spawn の Roster は自分の `worker_spawned` の id、live の免除と `list_agents`
    の `direct` 印はその session の最新 `worker_spawned`、self RCA の当時版と帰責の入力は手に持つ spawned の id を区切りに、同じ
    1つの読みを呼ぶ。「この id より前に実行の event が無い」は log の事実そのものなので、spawn 記録への写しは要らない。
-4. **Codex adapter も `worker_spawned` を本文の描画より先に書く。** 封じ込めの確認(ADR 0259)は本文入りの config を要るので、
-   順は event → 描画 → 確認 → spawn。Claude adapter と同じく event は attempt の記録で、失敗は `spawn_failed` が対を閉じる
-   (ADR 0149 決定2)。描画と event の間の `await` の窓に親の pickup が入る interleaving はこれで消える。
+4. **Codex adapter も `worker_spawned` を本文の描画より先に書く。順は封じ込めの確認(ADR 0259 決定3)→ event → 描画 → spawn で、
+   Claude adapter と同じ(停止はすべて `worker_spawned` の前、event と描画は同期で窓が無い)。** 確認が当てる config は本文
+   (`developer_instructions`)だけを permission canary と同じ marker に差し替える(ADR 0259 決定4 の形、0259 に追記)—— 観測の主題は
+   skill の閉じ方で本文ではなく、本文は event の id を区切りに持つので event の後にしか描けない。不成立の pickup は今までどおり
+   `pickup_stopped` だけを刻む(ADR 0274 決定2)。
 
 ## Considered options
 
@@ -32,6 +34,10 @@ review type の親は列を書かないので、escalate 後の再 pickup でも
 - **異議の対象が人間の entry だけの RCA は Roster を常に空にする / 実行前の親では Executor を読まない**(issue の候補)—— 決定1 で
   両方とも自動で含まれる。
 - **Codex は描画時の最新 event id を区切りにして `worker_spawned` に書く** —— 退けた写しがここだけ戻る。
+- **Codex は event を封じ込めの確認より先に書く**(当初の決定4)—— 不成立の pickup に `worker_spawned` → `pickup_stopped` という
+  新しい形が残り、Claude(停止はすべて event の前)と揃わない。
+- **本文を確認の後に描き、観測の config をそのまま本文入りにする** —— 観測した config と spawn の config が本文の分だけ違い、
+  ADR 0259 決定3 の「spawn の設定を当てた観測」の釘を崩す。
 
 ## 帰結
 
