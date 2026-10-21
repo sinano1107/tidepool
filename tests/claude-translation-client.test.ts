@@ -16,11 +16,6 @@ const ENVELOPE = (result: string) =>
 /** 断片 i に id i で答える封筒 */
 const RESULT_ENVELOPE = (texts: string[]) => ENVELOPE(JSON.stringify({ items: texts.map((text, id) => ({ id, text })) }));
 
-/** user prompt に載った id 付きの断片 */
-function sentItems(prompt: string): unknown {
-  return JSON.parse(prompt.slice(prompt.indexOf("{")));
-}
-
 describe("ClaudeTranslationClient", () => {
   it("断片の配列を id 付きの JSON で1回の CLI 呼び出しに載せ、同じ順の訳文と呼び出し1回の使用量と走った設定を返す", async () => {
     const prompts: string[] = [];
@@ -44,7 +39,8 @@ describe("ClaudeTranslationClient", () => {
       setting: { provider: "anthropic", model: "haiku", effort: "low" },
     });
     expect(prompts).toHaveLength(1);
-    expect(sentItems(prompts[0]!)).toEqual({
+    // user prompt に載った id 付きの断片
+    expect(JSON.parse(prompts[0]!.slice(prompts[0]!.indexOf("{")))).toEqual({
       items: [
         { id: 0, text: "a" },
         { id: 1, text: "b" },

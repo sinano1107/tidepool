@@ -167,7 +167,7 @@ export class ClaudeTranslationClient implements TranslationClient {
     // ids are the fragments' indexes: a missing, duplicate or extra id fails the whole call,
     // so a wrong pairing never reaches the cache (ADR 0296 決定4)
     const byId = new Map(output.items.map(({ id, text }) => [id, text]));
-    if (byId.size !== output.items.length || byId.size !== fragments.length || fragments.some((_, id) => !byId.has(id))) {
+    if (output.items.length !== fragments.length || fragments.some((_, id) => !byId.has(id))) {
       throw new Error("translation answer ids do not match the fragments sent");
     }
     return { texts: fragments.map((_, id) => byId.get(id)!), usage, setting: TRANSLATION_SETTING };

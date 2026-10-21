@@ -56,12 +56,7 @@ export interface TranslationUsageRecord {
   createdAt: string;
 }
 
-interface TranslationCallRow extends TranslationUsage {
-  provider: TranslationSetting["provider"];
-  model: string;
-  fragments: number;
-  created_at: string;
-}
+type TranslationCallRow = Omit<TranslationUsageRecord, "usage" | "createdAt"> & TranslationUsage & { created_at: string };
 
 /** Every translation call's usage, oldest first (issue #47's "record it the
  *  same way worker sessions do, make it observable"): a cache hit makes no
