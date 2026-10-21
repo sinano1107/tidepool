@@ -91,11 +91,12 @@ const egress = (host: string) =>
     return result.stdout + result.stderr;
   });
 
-const probe = createCodexAppServerProbe({ executable, codexHome, command, pinnedVersion });
+const appServerOptions = { executable, codexHome, command, pinnedVersion };
+const probe = createCodexAppServerProbe(appServerOptions);
 let appServer: Promise<CodexAppServerProbeResult> | undefined;
 
 const { rows } = await judgeConformance({
-  compatibility: () => compatibilityCheck({ executable, codexHome, command, pinnedVersion }),
+  compatibility: () => compatibilityCheck(appServerOptions),
   // 使用量・認証・model/list は同じ1回の probe を読む
   appServer: () => (appServer ??= probe(new Date())),
   preflight: createCodexCapabilityCheck({ executable, onPath, codexHome, call, pinnedVersion }),
@@ -120,12 +121,14 @@ const { rows } = await judgeConformance({
     }),
 });
 
-// 種の openai 行は、1ターンの `exec --json` を worker の出力の読み取りで読む(ADR 0187 決定4)
+// 種の openai 行は、1ターンの `exec --json` を worker の出力の読み取りで読む(ADR 0187 決定4)。
+// approval は worker と同じく global の `--ask-for-approval never` で閉じる
 const seedTurn = codexCommandThrough(call, "conformance seed row", 5 * 60_000);
 const seedRows = await judgeSeedRows(async ({ model, effort }) => {
   const result = await seedTurn(
     executable,
     [
+      "--ask-for-approval", "never",
       "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only",
       "-m", model,
       ...(effort === null ? [] : ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`]),
