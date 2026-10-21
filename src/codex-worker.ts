@@ -589,6 +589,12 @@ function hookConfig(hook: string): string[] {
   ];
 }
 
+/** ChatGPT 認証だけを使う(ADR 0098 決定3)。spawn と、版上げの適合試験の skill の閉鎖の行の exec が読む。 */
+export const FORCED_LOGIN_METHOD = 'forced_login_method="chatgpt"';
+
+/** worker の `codex exec` の flag のうち hook に依らないもの。spawn と、版上げの適合試験の skill の閉鎖の行の exec が読む。 */
+export const WORKER_EXEC_FLAGS = ["--ephemeral", "--ignore-user-config", "--ignore-rules", "--strict-config"] as const;
+
 /** 列挙した path をすべて閉じる `skills.config`(ADR 0259 決定2)。scope は問わない。 */
 function closedSkillsConfig(paths: readonly string[]): string {
   return `skills.config=[${paths.map((path) => `{path=${toml(path)},enabled=false}`).join(",")}]`;
@@ -617,7 +623,7 @@ function spawnConfig(input: {
     `developer_instructions=${toml(input.developerInstructions)}`,
     ...permissionConfig(input.taskType, input.workspace, input.taskTemp, input.executable, input.allowedDomains, input.readPaths),
     ...closedSurfaceConfig(),
-    'forced_login_method="chatgpt"',
+    FORCED_LOGIN_METHOD,
     `mcp_servers.tidepool.url=${toml(input.mcpUrl)}`,
     `mcp_servers.tidepool.enabled_tools=${toml(input.enabledTools)}`,
     "mcp_servers.tidepool.required=true",
@@ -630,7 +636,7 @@ function spawnConfig(input: {
   ];
 }
 
-function configArgs(config: readonly string[]): string[] {
+export function configArgs(config: readonly string[]): string[] {
   return config.flatMap((entry) => ["-c", entry]);
 }
 
@@ -1372,8 +1378,7 @@ export class CodexWorker implements WorkerAdapter {
         this.options.executable,
         [
           "--ask-for-approval", "never",
-          "exec", "--json", "--ephemeral", "--ignore-user-config", "--ignore-rules",
-          "--strict-config", "--dangerously-bypass-hook-trust",
+          "exec", "--json", ...WORKER_EXEC_FLAGS, "--dangerously-bypass-hook-trust",
           "-C", workspacePath,
           "-m", setting.model,
           ...configArgs(spawnConfig({ ...input, developerInstructions, taskTemp, skills: checked.skills })),

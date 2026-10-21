@@ -47,9 +47,10 @@ Keep both changes until step 9's PR merges, then put the files back with
 
 ## 4. Re-read the Codex source
 
-Two premises have no machine check, so read them in the source of the new version: the
-`openai/codex` repository at the tag `rust-v<version>`, under `codex-rs/`. There is no local
-checkout of it; read it on GitHub. Write the result of each read into step 9's PR description.
+Two premises are checked by machine only in part or not at all, so read them in the source of the
+new version: the `openai/codex` repository at the tag `rust-v<version>`, under `codex-rs/`. There is
+no local checkout of it; read it on GitHub. Write the result of each read into step 9's PR
+description.
 
 **Model metadata, at its worst values** (ADR 0255 決定3). The backend sets the metadata values at
 runtime and can change them in the middle of a session, so the pin fixes only which fields are
@@ -64,10 +65,11 @@ it. Name any opened surface without a floor.
 
 **Features that `apply_map` skips** (ADR 0135 決定4). `=false` does not reach a feature that the
 vendor's `apply_map` skips by a hand-written list before `disable()`. `UNSETTABLE_FEATURES` in
-`src/codex-worker.ts` copies that list. A name added to the list shows up as `true` in step 3's
-snapshot and fails the type of `CODEX_FEATURE_SNAPSHOT`, but a name taken off the list fails
-nothing. Read the list at the new version, update `UNSETTABLE_FEATURES` in the VM checkout if it
-moved, and put the list as read, with what changed, in the PR.
+`src/codex-worker.ts` copies that list. Machines catch only part of a change. A name added to the
+list fails the type of `CODEX_FEATURE_SNAPSHOT` only if its default is `true`, because then it shows
+up as `true` in step 3's snapshot. A name taken off the list fails nothing. Read the list at the
+new version, update `UNSETTABLE_FEATURES` in the VM checkout if it moved, and put the list as
+read, with what changed, in the PR.
 
 ## 5. Start the board and see the containment preflight hold
 
@@ -123,10 +125,11 @@ functions. It prints one row per surface as a Markdown table:
   skills, a skill in a disposable `CODEX_HOME`, and two unreadable `SKILL.md` files, the board's
   own enumeration and observation close every skill. `codex exec` with the worker's flags is
   pointed at a fake Responses endpoint, and its first request is captured twice: without the
-  board's `skills.config` every readable skill's marker is in it, and with it none is. The
-  unreadable skills appear only in the `errors[]` of `skills/list`, never in `skills[]` or a
-  request (#1972). The exec uses the disposable `CODEX_HOME`, so no login token reaches the fake
-  endpoint
+  board's `skills.config` every readable skill's marker is in it, and with it no skill is listed
+  at all (no `(file: …)` locator, so bundled skills count too). `errors[]` of `skills/list` names
+  exactly the two unreadable files, which appear in neither `skills[]` nor a request (#1972). The
+  exec uses the disposable `CODEX_HOME`, and the row fails if any request to the fake endpoint
+  carries an `Authorization` header
 - each openai seed row runs one minimal `codex exec --json` turn at this version, read by the
   worker's output reading as completed (ADR 0187 決定4)
 
@@ -139,7 +142,7 @@ to the existing fail-closed handling (ADR 0186 決定7):
 
 - A usage-cap interruption (429): the `turn.failed` line and the usage read after it (ADR 0261).
 - An expired credential: `account/read` with no account, or the rate-limit read refused with
-  `401 Unauthorized` (ADR 0127 決定2). The test only sees a working login.
+  `401 Unauthorized` (ADR 0127 決定1・2). The test only sees a working login.
 
 ## 8. Run the reader-cap canary
 
@@ -170,13 +173,15 @@ nothing checks is left to the board's fail-closed handling.
 | --- | --- | --- |
 | `codex features list` matches `CODEX_FEATURE_SNAPSHOT` under the board's `-c` lines | ADR 0135 決定1, ADR 0108 追記 (#532) | The snapshot (step 3), then the containment preflight (step 5) |
 | `--version` and the `account/read`, `account/rateLimits/read` and `model/list` request and response schemas | ADR 0098 決定4 | Conformance row `--version / App Server schema` (step 7) |
-| Usage and the account state read from the App Server | ADR 0098 決定4, ADR 0127 決定2 | Conformance rows `usage` and `authentication` (step 7). An expired credential is not checked |
+| Usage and the account state read from the App Server | ADR 0098 決定4, ADR 0127 決定1・2 | Conformance rows `usage` and `authentication` (step 7). An expired credential is not checked |
 | An App Server in a fresh empty cwd reads no project layer | ADR 0206 決定1 | The containment preflight: a project hook would break the exact hook registration match |
 | Every openai seed row's model is in `model/list`, and an unknown id reads as a row refusal | ADR 0184 決定3, ADR 0187 決定4 | Conformance row `model/list → openai seed rows` (step 7) |
-| The `exec --json` events: `turn.completed` with usage, `turn.failed`, `item.completed` | ADR 0187 決定4, ADR 0261 | Conformance seed rows (step 7). The 429 `turn.failed` of a usage cap is not checked |
+| The `exec --json` events: `turn.completed` with usage, and `turn.failed` | ADR 0187 決定4, ADR 0261 | Conformance seed rows (step 7). The 429 `turn.failed` of a usage cap is not checked |
 | The worker's exec flags: `--ask-for-approval never`, `exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config --dangerously-bypass-hook-trust` | ADR 0098 決定3 | Conformance row `skill closure` runs them without `--dangerously-bypass-hook-trust`; the seed rows run part of them (step 7) |
 | Every spawn `-c` key parses under `--strict-config` | ADR 0142 決定1 | The containment preflight (step 5) |
-| The hook gate's registration and the `hooks/list` shape | ADR 0130 決定1 (#734) | The containment preflight (step 5) |
+| The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |
+| The PreToolUse hook's stdin carries `agent_id` only for a subagent | ADR 0130 決定1 | Not checked: which call it selects cannot be observed without a model call (決定3) |
+| `mcp_servers.tidepool.default_tools_approval_mode="approve"` takes effect | ADR 0129 決定1 | Not checked |
 | `developer_instructions` is the board's layer above the task | ADR 0124 決定4 | The containment preflight's developer marker (step 5) |
 | The permission profile keys and `codex sandbox -P` | ADR 0256 決定3 | Conformance domain rows (step 7) and the containment preflight (step 5) |
 | An allowlisted domain is reached and an unlisted one is refused with 403 | ADR 0256 決定3 | Conformance rows `allowed domain reached` and `unlisted domain → 403 blocked-by-allowlist` (step 7) |
@@ -188,5 +193,5 @@ nothing checks is left to the board's fail-closed handling.
 | `skills/list` returns every skill `exec` loads, and a path's `enabled=false` closes it | ADR 0259 決定2・3, #1972 | Conformance row `skill closure` (step 7) |
 | `agents.default_subagent_model` does not reach a worker from outside the board's `CODEX_HOME` | ADR 0287 決定4 | Not checked |
 | The `ModelInfo` fields that are read, at their worst values | ADR 0255 決定3 | The source re-read (step 4) |
-| The names `apply_map` skips | ADR 0135 決定4 | The source re-read (step 4); a name added to the list also fails the snapshot's type |
+| The names `apply_map` skips | ADR 0135 決定4 | The source re-read (step 4); a name added to the list also fails the snapshot's type if its default is `true` |
 | The Interview root's floor holds for Codex | ADR 0273 決定2 (#2197) | Interview-room canary (step 6) |

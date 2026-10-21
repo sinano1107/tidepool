@@ -25,16 +25,22 @@ export interface ConformanceObservations {
    *  `codex debug prompt-input` の stdout。 */
   promptInput: () => Promise<string>;
   /** skill の閉鎖の行の観測。script が `SKILL_CLOSURE_MARKERS` の skill を置いた workspace と使い捨ての `CODEX_HOME` で撃つ。 */
-  skillClosure: () => Promise<{
-    /** 盤面の検査(`codexWorkspaceContainment`)の答え —— 閉じた設定の下で有効と報告された skill が無ければ成り立つ。 */
-    capability: ContainmentCapability;
-    /** その検査が閉じた設定の下で撃った `skills/list` の生の result。 */
-    skillsList: unknown;
-    /** `skills.config` を外した exec の最初の request の body —— skill が request に載ることの対照。 */
-    openRequest: string;
-    /** 盤面の `skills.config` を当てた exec の最初の request の body。 */
-    closedRequest: string;
-  }>;
+  skillClosure: () => Promise<SkillClosureObservation>;
+}
+
+export interface SkillClosureObservation {
+  /** 盤面の検査(`codexWorkspaceContainment`)の答え —— 閉じた設定の下で有効と報告された skill が無ければ成り立つ。 */
+  capability: ContainmentCapability;
+  /** その検査が閉じた設定の下で撃った `skills/list` の生の result。 */
+  skillsList: unknown;
+  /** `skills.config` を外した exec の最初の request の body —— skill が request に載ることの対照。 */
+  openRequest: string;
+  /** 盤面の `skills.config` を当てた exec の最初の request の body。 */
+  closedRequest: string;
+  /** 置いた読めない SKILL.md(`description` 無し・frontmatter 無し)の実体の path。 */
+  unreadablePaths: readonly string[];
+  /** 偽の endpoint が受けた request のどれかに `Authorization` header があったか。 */
+  authorizationSent: boolean;
 }
 
 /** skill の閉鎖の行で script が SKILL.md と exec の prompt に書き、判定が request の body で探す marker。 */
@@ -46,11 +52,6 @@ export const SKILL_CLOSURE_MARKERS = {
     linked: "TIDEPOOL_CONFORMANCE_SKILL_LINKED",
     ancestor: "TIDEPOOL_CONFORMANCE_SKILL_ANCESTOR",
     codexHome: "TIDEPOOL_CONFORMANCE_SKILL_CODEX_HOME",
-  },
-  /** 読めない SKILL.md(本文に書く)。`skills/list` は `errors[]` にだけ挙げ、exec も読み込まない(#1972)。 */
-  unreadable: {
-    noDescription: "TIDEPOOL_CONFORMANCE_SKILL_NO_DESCRIPTION",
-    noFrontmatter: "TIDEPOOL_CONFORMANCE_SKILL_NO_FRONTMATTER",
   },
   /** exec の prompt —— 捕まえた body がその exec の request であることの印。 */
   prompt: "TIDEPOOL_CONFORMANCE_SKILL_CLOSURE_PROMPT",
@@ -179,22 +180,31 @@ const SURFACES: Array<[string, (obs: ConformanceObservations) => Promise<Verdict
     "skill closure",
     async (obs) => {
       // ADR 0259 決定2・3 と #1972: skills/list が exec の読み込む skill をすべて返し、path の enabled=false で閉じること
-      const { capability, skillsList, openRequest, closedRequest } = await obs.skillClosure();
-      const { readable, unreadable, prompt } = SKILL_CLOSURE_MARKERS;
+      const { capability, skillsList, openRequest, closedRequest, unreadablePaths, authorizationSent } = await obs.skillClosure();
+      const { readable, prompt } = SKILL_CLOSURE_MARKERS;
+      // 盤面の CODEX_HOME のログインが偽の endpoint へ出ていない(使い捨ての CODEX_HOME で撃った)こと
+      if (authorizationSent) return fail("a request to the fake Responses endpoint carried an Authorization header");
       const uncaptured = Object.entries({ open: openRequest, closed: closedRequest }).filter(([, body]) => !body.includes(prompt));
       if (uncaptured.length > 0) return fail(`the ${uncaptured.map(([label]) => label).join(" / ")} exec's captured request lacks the prompt ${prompt}`);
       // 対照: 閉じなければ載ること。載らない版では、閉じた側に無いことが閉鎖を示さない
       const unshown = Object.values(readable).filter((marker) => !openRequest.includes(marker));
       if (unshown.length > 0) return fail(`without skills.config the request lacks ${unshown.join(", ")}, so their absence under closure proves nothing`);
       if (!capability.available) return fail(capability.reason);
-      const leaked = [...Object.values(readable), ...Object.values(unreadable)].filter((marker) => closedRequest.includes(marker));
+      const leaked = Object.values(readable).filter((marker) => closedRequest.includes(marker));
       if (leaked.length > 0) return fail(`under the board's skills.config the request still carries ${leaked.join(", ")}`);
+      // request は skill を `- name: description (file: path)` で載せ、本文は載せない —— 読めない skill は path で探す
+      const loadedUnreadable = unreadablePaths.filter((path) => openRequest.includes(path) || closedRequest.includes(path));
+      if (loadedUnreadable.length > 0) return fail(`exec loads ${loadedUnreadable.join(", ")}, which skills/list cannot read`);
+      // marker を置いていない skill(system skill など)も含め、閉じた request に skill の行が1つも残らない
+      if (closedRequest.includes("(file: ")) return fail("under the board's skills.config the request still lists a skill with a (file: …) locator");
       const entries = skillsListEntries.parse(skillsList).data;
       const errored = entries.flatMap((entry) => entry.errors.map((error) => error.path));
-      if (errored.length === 0) return fail("skills/list errors[] is empty although unreadable SKILL.md files were placed");
+      if (!sameSet(errored, unreadablePaths)) {
+        return fail(`skills/list errors[] names [${errored.join(", ")}] instead of the placed ${unreadablePaths.join(", ")}`);
+      }
       const listed = new Set(entries.flatMap((entry) => entry.skills.map((skill) => skill.path)));
-      const both = errored.filter((path) => listed.has(path));
-      if (both.length > 0) return fail(`skills/list reports ${both.join(", ")} in both errors[] and skills[]`);
+      const listedAndErrored = errored.filter((path) => listed.has(path));
+      if (listedAndErrored.length > 0) return fail(`skills/list reports ${listedAndErrored.join(", ")} in both errors[] and skills[]`);
       return {
         pass: true,
         detail: `${Object.keys(readable).length} skills reach the request only without skills.config; ${errored.length} unreadable skills only in errors[]`,
