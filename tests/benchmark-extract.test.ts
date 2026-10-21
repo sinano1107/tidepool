@@ -101,10 +101,8 @@ const AT = new Date("2026-10-22T00:00:00.000Z");
 const exercise = (name: string, over: Partial<Exercise> = {}): Exercise => ({ name, ...WORK_EXERCISE, readings: ["work"], ...over }) as Exercise;
 
 /** fixture の transcript を、盤面の TranscriptStore と同じ名前(`<task>.<worker_spawned の id>.stream.jsonl`)で worker-logs に置く。 */
-function placeTranscript(logs: string, fixture: string, taskId: string, spawnedId: number): string {
-  const base = join(logs, `${taskId}.${spawnedId}`);
-  copyFileSync(join(import.meta.dirname, "fixtures", fixture), `${base}.stream.jsonl`);
-  return base;
+function placeTranscript(logs: string, fixture: string, taskId: string, spawnedId: number): void {
+  copyFileSync(join(import.meta.dirname, "fixtures", fixture), join(logs, `${taskId}.${spawnedId}.stream.jsonl`));
 }
 
 /** 盤面が刻む worker session 1本(worker_spawned と worker_exited)。費用は盤面が result 行の total_cost_usd を写した値で、Codex は null。 */

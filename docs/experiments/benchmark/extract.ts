@@ -59,13 +59,7 @@ export type Exercise = z.infer<typeof exerciseSchema> & { name: string };
 export function loadExercise(dir: string): Exercise {
   const file = join(dir, "exercise.json");
   const parsed = exerciseSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
-  if (!parsed.success) {
-    const issues = parsed.error.issues.map((issue) => {
-      const path = issue.path.map((key) => (typeof key === "number" ? `[${key}]` : `.${String(key)}`)).join("").slice(1);
-      return `${path || "(root)"}: ${issue.message}`;
-    });
-    throw new Error(`${file}: ${issues.join("; ")}`);
-  }
+  if (!parsed.success) throw new Error(`${file}:\n${z.prettifyError(parsed.error)}`);
   return { name: basename(dir), ...parsed.data };
 }
 
@@ -150,12 +144,12 @@ function duration(db: Db, root: Task, tasks: readonly Task[]) {
 /** shadow 行すべて。読み口は meta-review の窓で切るので、窓の起点を 0 に置いて続きを辿る(読み手の task id は起点を渡すと読まれない)。 */
 function shadowRows(db: Db) {
   const rows = [];
-  let page = listRoutingShadow(db, "", { since_watermark: 0 });
-  rows.push(...page.shadow);
-  while (page.next) {
-    page = listRoutingShadow(db, "", { next: page.next });
+  let next: string | undefined;
+  do {
+    const page = listRoutingShadow(db, "", next ? { next } : { since_watermark: 0 });
     rows.push(...page.shadow);
-  }
+    next = page.next;
+  } while (next);
   return rows;
 }
 
