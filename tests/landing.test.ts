@@ -1323,7 +1323,7 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   expect(promotionFailures(db, first.id)).toEqual([]);
 });
 
-// ADR 0241 決定2: 回の失敗はその回に閉じる —— 列が rejection を以後の突きに持ち越さない(#2400)
+// #2400: 回の失敗はその回の呼び手(束ねられた呼び手も)だけが受け取る —— 列は rejection を以後の突きに持ち越さない
 it("pickupIdle が一度 reject した回の後でも、次の収束は新しい回として pickupIdle を待ってから走る", async () => {
   const { db, clock } = await openBoard();
   const pickupIdle = vi.fn().mockRejectedValueOnce(new Error("idle failed")).mockResolvedValue(undefined);
