@@ -66,7 +66,7 @@ import type {
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
-import type { TranslationClient, TranslationResult } from "../src/translate.js";
+import type { TranslationClient, TranslationResult, TranslationUsage } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
 import { tempDir } from "./temp-dir.js";
@@ -836,31 +836,39 @@ export class FakeDraftClient implements DraftClient {
   }
 }
 
-const DEFAULT_TRANSLATION_USAGE = {
-  input_tokens: 10,
-  output_tokens: 5,
-  cache_read_tokens: 0,
-  cache_creation_tokens: 0,
-  estimated_cost_usd: 0.0001,
-};
-
 /** Scripted stand-in at the TranslationClient seam (issue #47): records every
- *  (source, language) pair it was asked to translate, in call order — tests
- *  assert on `.calls.length` to prove a cache hit skipped a real call. */
+ *  (fragments, language) call it was asked to translate, in call order — tests
+ *  assert on `.calls` to prove a cache hit skipped a real call and that one
+ *  target is one call (ADR 0296 決定4). The scripted translation is per fragment. */
 export class FakeTranslationClient implements TranslationClient {
-  readonly calls: Array<{ source: string; language: string }> = [];
+  readonly calls: Array<{ fragments: string[]; language: string }> = [];
   private response: string | ((source: string) => string) = (source) => `[translated] ${source}`;
+  private usage: TranslationUsage = {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_tokens: 0,
+    cache_creation_tokens: 0,
+    estimated_cost_usd: 0.0001,
+  };
   private failure: Error | null = null;
 
-  async translate(source: string, language: string): Promise<TranslationResult> {
-    this.calls.push({ source, language });
+  async translate(fragments: string[], language: string): Promise<TranslationResult> {
+    this.calls.push({ fragments, language });
     if (this.failure) throw this.failure;
-    const text = typeof this.response === "function" ? this.response(source) : this.response;
-    return { text, usage: DEFAULT_TRANSLATION_USAGE };
+    const respond = this.response;
+    return {
+      texts: fragments.map((source) => (typeof respond === "function" ? respond(source) : respond)),
+      usage: this.usage,
+      setting: { provider: "anthropic", model: "haiku", effort: "low" },
+    };
   }
 
   scriptTranslation(text: string | ((source: string) => string)): void {
     this.response = text;
+  }
+
+  scriptUsage(usage: TranslationUsage): void {
+    this.usage = usage;
   }
 
   scriptFailure(err: Error): void {

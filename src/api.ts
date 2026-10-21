@@ -1595,7 +1595,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     }
   });
 
-  // every generated (non-cached) translation's token usage (issue #47's
+  // every translation call's token usage, one record per call (ADR 0296 決定5; issue #47's
   // "record it the same way worker sessions do, make it observable") — a
   // read path parallel to GET /api/tasks/:id/events surfacing worker_exited
   // usage, since translation calls aren't tied to any one task/worker session.

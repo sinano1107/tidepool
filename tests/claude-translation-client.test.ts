@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 
-const RESULT_ENVELOPE = (result: string) =>
+const ENVELOPE = (result: string) =>
   JSON.stringify({
     result,
     total_cost_usd: 0.000586,
@@ -13,24 +13,59 @@ const RESULT_ENVELOPE = (result: string) =>
     },
   });
 
+/** 断片 i に id i で答える封筒 */
+const RESULT_ENVELOPE = (texts: string[]) => ENVELOPE(JSON.stringify({ items: texts.map((text, id) => ({ id, text })) }));
+
 describe("ClaudeTranslationClient", () => {
-  it("CLI の JSON エンベロープから訳文とトークン使用量を組み立てて返す", async () => {
+  it("断片の配列を id 付きの JSON で1回の CLI 呼び出しに載せ、同じ順の訳文と呼び出し1回の使用量と走った設定を返す", async () => {
+    const prompts: string[] = [];
     const client = new ClaudeTranslationClient({
-      exec: async () => RESULT_ENVELOPE("盤面は決着したツリーを退ける"),
+      exec: async (_command, args) => {
+        prompts.push(args[1]!);
+        // 順を入れ替えて答えても id で元の順に戻る
+        return ENVELOPE(JSON.stringify({ items: [{ id: 1, text: "訳B" }, { id: 0, text: "訳A" }, { id: 2, text: "訳C" }] }));
+      },
     });
 
-    await expect(client.translate("the board retires a settled tree", "Japanese")).resolves.toEqual(
-      {
-        text: "盤面は決着したツリーを退ける",
-        usage: {
-          input_tokens: 506,
-          output_tokens: 16,
-          cache_read_tokens: 0,
-          cache_creation_tokens: 0,
-          estimated_cost_usd: 0.000586,
-        },
+    await expect(client.translate(["a", "b", "c"], "Japanese")).resolves.toEqual({
+      texts: ["訳A", "訳B", "訳C"],
+      usage: {
+        input_tokens: 506,
+        output_tokens: 16,
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
+        estimated_cost_usd: 0.000586,
       },
-    );
+      setting: { provider: "anthropic", model: "haiku", effort: "low" },
+    });
+    expect(prompts).toHaveLength(1);
+    // user prompt に載った id 付きの断片
+    expect(JSON.parse(prompts[0]!.slice(prompts[0]!.indexOf("{")))).toEqual({
+      items: [
+        { id: 0, text: "a" },
+        { id: 1, text: "b" },
+        { id: 2, text: "c" },
+      ],
+    });
+  });
+
+  it("``` で包まれた応答からも JSON を取り出す", async () => {
+    const client = new ClaudeTranslationClient({
+      exec: async () => ENVELOPE(`\`\`\`json\n${JSON.stringify({ items: [{ id: 0, text: "訳" }] })}\n\`\`\``),
+    });
+
+    expect((await client.translate(["s"], "Japanese")).texts).toEqual(["訳"]);
+  });
+
+  it.each([
+    ["欠け", [{ id: 0, text: "訳A" }]],
+    ["重複", [{ id: 0, text: "訳A" }, { id: 0, text: "訳A'" }]],
+    ["余計", [{ id: 0, text: "訳A" }, { id: 1, text: "訳B" }, { id: 2, text: "訳?" }]],
+    ["範囲外", [{ id: 0, text: "訳A" }, { id: 5, text: "訳B" }]],
+  ])("応答の id が入力と一致しない(%s)と呼び出しごと reject する", async (_, items) => {
+    const client = new ClaudeTranslationClient({ exec: async () => ENVELOPE(JSON.stringify({ items })) });
+
+    await expect(client.translate(["a", "b"], "Japanese")).rejects.toThrow(/ids/);
   });
 
   it("--model haiku を固定指定する(issue #47: draft の sonnet より軽い一発翻訳)", async () => {
@@ -38,11 +73,11 @@ describe("ClaudeTranslationClient", () => {
     const client = new ClaudeTranslationClient({
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "Japanese");
+    await client.translate(["s"], "Japanese");
 
     expect(calls[0]!.join(" ")).toContain("--model haiku");
   });
@@ -55,11 +90,11 @@ describe("ClaudeTranslationClient", () => {
     const client = new ClaudeTranslationClient({
       exec: async (_command, _args, env) => {
         envs.push(env);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "Japanese");
+    await client.translate(["s"], "Japanese");
 
     expect(envs[0]!.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
     expect(envs[0]!.PATH).toBe(process.env.PATH);
@@ -74,11 +109,11 @@ describe("ClaudeTranslationClient", () => {
       exec: async (_command, args, env) => {
         calls.push(args);
         envs.push(env);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "Japanese");
+    await client.translate(["s"], "Japanese");
 
     const args = calls[0]!;
     const at = args.indexOf("--tools");
@@ -93,11 +128,11 @@ describe("ClaudeTranslationClient", () => {
     const client = new ClaudeTranslationClient({
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "Japanese");
+    await client.translate(["s"], "Japanese");
 
     const argLine = calls[0]!.join(" ");
     expect(argLine).toContain("--max-turns 1");
@@ -105,47 +140,31 @@ describe("ClaudeTranslationClient", () => {
   });
 
   // ADR 0062 決定3: 翻訳の要求は自前のシステムプロンプトが持ち、user prompt は
-  // 対象言語と原文だけの薄いものになる。既定のシステムプロンプトはコーディング
+  // 対象言語と id 付きの断片だけの薄いものになる。既定のシステムプロンプトはコーディング
   // エージェントの人格であり翻訳者としては雑音で、3,600 トークン払って翻訳に不利な
-  // 指示を積んでいた(実測: 訳文の質も書き下し版のほうが上)。
-  it("翻訳の要求はシステムプロンプトに載り、user prompt は対象言語と原文だけになる(ADR 0062 決定3)", async () => {
+  // 指示を積んでいた(実測: 訳文の質も書き下し版のほうが上)。答えの形(id 付きの JSON)も
+  // 要求の1行としてシステムプロンプト側に綴られる(ADR 0296 決定4)。
+  it("翻訳の要求と答えの形はシステムプロンプトに載り、user prompt は対象言語と id 付きの断片だけになる(ADR 0062 決定3)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeTranslationClient({
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
-    const source = "the board retires a settled tree";
 
-    await client.translate(source, "French");
+    await client.translate(["the board retires a settled tree"], "French");
 
     const args = calls[0]!;
     const systemPrompt = args[args.indexOf("--system-prompt") + 1]!;
     const userPrompt = args[1]!;
     // markdown 構造の保持は要求のひとつ —— それが綴られる場所がシステムプロンプト側
     expect(systemPrompt).toMatch(/markdown/i);
+    expect(systemPrompt).toContain('{"items": [{"id"');
     expect(userPrompt).not.toMatch(/markdown/i);
     expect(userPrompt).toContain("French");
-    expect(userPrompt).toContain(source);
-    // 「薄い」を額面どおり見る: 原文と言語名のほかに載るものはほとんど無い
-    expect(userPrompt.length).toBeLessThan(source.length + 80);
-  });
-
-  it("プロンプトに翻訳先言語と原文が含まれる", async () => {
-    const calls: string[][] = [];
-    const client = new ClaudeTranslationClient({
-      exec: async (_command, args) => {
-        calls.push(args);
-        return RESULT_ENVELOPE("t");
-      },
-    });
-
-    await client.translate("the board retires a settled tree", "French");
-
-    const prompt = calls[0]![1]!;
-    expect(prompt).toContain("French");
-    expect(prompt).toContain("the board retires a settled tree");
+    // 「薄い」を額面どおり見る: 断片の JSON の手前には言語名ほどしか載らない
+    expect(userPrompt.slice(0, userPrompt.indexOf("{")).length).toBeLessThan(80);
   });
 
   it("日本語への翻訳時、渡された用語集がプロンプトに埋め込まれる(issue #47)", async () => {
@@ -154,11 +173,11 @@ describe("ClaudeTranslationClient", () => {
       glossary: [{ term: "Settled", ja: "決着" }, { term: "Held", ja: "保留" }],
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "Japanese");
+    await client.translate(["s"], "Japanese");
 
     const prompt = calls[0]![1]!;
     expect(prompt).toContain("Settled = 決着");
@@ -171,11 +190,11 @@ describe("ClaudeTranslationClient", () => {
       glossary: [{ term: "Settled", ja: "決着" }],
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "japanese");
+    await client.translate(["s"], "japanese");
 
     const prompt = calls[0]![1]!;
     expect(prompt).not.toContain("決着");
@@ -187,11 +206,11 @@ describe("ClaudeTranslationClient", () => {
       glossary: [{ term: "Settled", ja: "決着" }],
       exec: async (_command, args) => {
         calls.push(args);
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
-    await client.translate("s", "French");
+    await client.translate(["s"], "French");
 
     const prompt = calls[0]![1]!;
     expect(prompt).not.toContain("決着");
@@ -211,14 +230,14 @@ describe("ClaudeTranslationClient", () => {
         peak = Math.max(peak, running);
         await new Promise<void>((resolve) => release.push(resolve));
         running -= 1;
-        return RESULT_ENVELOPE("t");
+        return RESULT_ENVELOPE(["t"]);
       },
     });
 
     const calls = [
-      client.translate("a", "Japanese"),
-      client.translate("b", "Japanese"),
-      client.translate("c", "Japanese"),
+      client.translate(["a"], "Japanese"),
+      client.translate(["b"], "Japanese"),
+      client.translate(["c"], "Japanese"),
     ];
     await Promise.resolve();
     expect(release.length).toBe(2);
@@ -242,9 +261,9 @@ describe("ClaudeTranslationClient", () => {
         exec: () => new Promise<string>(() => {}),
       });
 
-      void client.translate("a", "Japanese");
-      void client.translate("b", "Japanese");
-      const gaveUp = client.translate("c", "Japanese");
+      void client.translate(["a"], "Japanese");
+      void client.translate(["b"], "Japanese");
+      const gaveUp = client.translate(["c"], "Japanese");
       // 諦める前に reject しないこと —— そこが「待つ」の中身である
       const settledEarly = vi.advanceTimersByTimeAsync(29_000).then(() => "still waiting");
       await expect(Promise.race([gaveUp.catch(() => "gave up"), settledEarly])).resolves.toBe(
@@ -259,11 +278,11 @@ describe("ClaudeTranslationClient", () => {
     }
   });
 
-  it("CLI 出力が不正な JSON エンベロープの場合、translate は reject する", async () => {
+  it("CLI のエンベロープに使用量が無い場合、translate は reject する", async () => {
     const client = new ClaudeTranslationClient({
-      exec: async () => JSON.stringify({ result: "no usage field here" }),
+      exec: async () => JSON.stringify({ result: JSON.stringify({ items: [{ id: 0, text: "t" }] }) }),
     });
 
-    await expect(client.translate("s", "Japanese")).rejects.toThrow();
+    await expect(client.translate(["s"], "Japanese")).rejects.toThrow(/usage/);
   });
 });

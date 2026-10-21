@@ -4,7 +4,7 @@ import { listMemoryEntries } from "./memory.js";
 import { getTask, splitHandoffMarkdown } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
-import { getCachedTranslation, hashSource, saveTranslation } from "./translation-cache.js";
+import { getCachedTranslation, hashSource, recordTranslationCall, saveTranslation } from "./translation-cache.js";
 
 /** Raised when a translation request names a target that doesn't resolve to
  *  translatable source text — an unknown event id, an event that isn't a
@@ -14,15 +14,50 @@ import { getCachedTranslation, hashSource, saveTranslation } from "./translation
  *  in-authority-but-rejected shape `DomainError` covers (400/409 there). */
 export class TranslationTargetError extends Error {}
 
+/** How many fragments one translation call carries at most (ADR 0296 決定4) —
+ *  a target with more is split into calls of this size, fired one after another. */
+const TRANSLATION_FRAGMENTS_PER_CALL = 20;
+
 export type TranslationOutcome =
   | { status: "translated"; text: string; cached: boolean }
   | { status: "throttled" };
 
-/** Resolves one translation, cache-first (issue #47): a cache hit never
- *  touches the client or the throttle gate (an already-paid-for translation
- *  costs nothing to show again, even while throttled). A cache miss skips
- *  only this Anthropic Board call while that Provider is unavailable
- *  (`isAnthropicBoardCallBlocked`). */
+/** One display target's fragments, cache-first (issue #47 / ADR 0296 決定4):
+ *  only the fragments not yet cached go out, in calls of at most
+ *  TRANSLATION_FRAGMENTS_PER_CALL; each fragment is cached and each call
+ *  leaves one `translation_calls` row. A cache hit never touches the client
+ *  or the throttle gate (an already-paid-for translation costs nothing to
+ *  show again, even while throttled); a call is skipped while the Anthropic
+ *  Board call is unavailable (`isAnthropicBoardCallBlocked`), and then the
+ *  whole target reports throttled — a target reads as one coherent unit,
+ *  never a partly translated blob. A call that fails writes nothing. */
+async function translateFragments(
+  db: Db,
+  client: TranslationClient,
+  sources: string[],
+  language: string,
+  now: Date,
+): Promise<{ status: "translated"; texts: string[]; cached: boolean } | { status: "throttled" }> {
+  const translated = new Map<string, string>();
+  for (const source of sources) {
+    const hit = getCachedTranslation(db, hashSource(source), language);
+    if (hit !== undefined) translated.set(source, hit);
+  }
+  const misses = [...new Set(sources)].filter((source) => !translated.has(source));
+  for (let at = 0; at < misses.length; at += TRANSLATION_FRAGMENTS_PER_CALL) {
+    if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
+    const chunk = misses.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
+    const { texts, usage, setting } = await client.translate(chunk, language);
+    chunk.forEach((source, i) => {
+      saveTranslation(db, hashSource(source), language, texts[i]!, now);
+      translated.set(source, texts[i]!);
+    });
+    recordTranslationCall(db, setting, chunk.length, usage, now);
+  }
+  return { status: "translated", texts: sources.map((source) => translated.get(source)!), cached: misses.length === 0 };
+}
+
+/** One fragment as a target of its own (a log entry, a human's original, the pickup-time query). */
 export async function translateSource(
   db: Db,
   client: TranslationClient,
@@ -30,13 +65,8 @@ export async function translateSource(
   language: string,
   now: Date,
 ): Promise<TranslationOutcome> {
-  const hash = hashSource(source);
-  const cached = getCachedTranslation(db, hash, language);
-  if (cached) return { status: "translated", text: cached.translated, cached: true };
-  if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
-  const result = await client.translate(source, language);
-  saveTranslation(db, hash, language, result.text, result.usage, now);
-  return { status: "translated", text: result.text, cached: false };
+  const outcome = await translateFragments(db, client, [source], language, now);
+  return outcome.status === "throttled" ? outcome : { status: "translated", text: outcome.texts[0]!, cached: outcome.cached };
 }
 
 /** Resolves the translatable source text for a decision-log entry or a
@@ -79,40 +109,10 @@ export async function translateMemoryEntry(
   // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
   const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
   if (!entry) throw new TranslationTargetError(`no memory entry ${entryId}`);
-  const tracker = { allCached: true };
-  try {
-    const title = await translateTracked(db, client, entry.title, language, now, tracker);
-    const text = await translateTracked(db, client, entry.text, language, now, tracker);
-    return { status: "translated", title, text, cached: tracker.allCached };
-  } catch (err) {
-    if (err instanceof ThrottledSignal) return { status: "throttled" };
-    throw err;
-  }
-}
-
-/** Internal short-circuit for a multi-fragment translation (a handoff's
- *  sections, a question's purpose/items): thrown by translateTracked instead
- *  of each caller repeating its own "outcome.status === 'throttled' → early
- *  return" check. Never escapes this module — every exported multi-fragment
- *  translator catches it at its own top level. */
-class ThrottledSignal extends Error {}
-
-/** Translates one fragment and folds its cache-hit status into `tracker`
- *  (issue #47) — the shared body behind translateHandoff/translateQuestion's
- *  per-fragment loops, so "translate, note throttled, fold into allCached"
- *  is written once. */
-async function translateTracked(
-  db: Db,
-  client: TranslationClient,
-  source: string,
-  language: string,
-  now: Date,
-  tracker: { allCached: boolean },
-): Promise<string> {
-  const outcome = await translateSource(db, client, source, language, now);
-  if (outcome.status === "throttled") throw new ThrottledSignal();
-  tracker.allCached = tracker.allCached && outcome.cached;
-  return outcome.text;
+  const outcome = await translateFragments(db, client, [entry.title, entry.text], language, now);
+  if (outcome.status === "throttled") return outcome;
+  const [title, text] = outcome.texts as [string, string];
+  return { status: "translated", title, text, cached: outcome.cached };
 }
 
 export type TranslateHandoffOutcome =
@@ -122,10 +122,7 @@ export type TranslateHandoffOutcome =
 /** The handoff doc translation target (issue #47): headings are recovered
  *  mechanically by splitHandoffMarkdown and never sent to the client — only
  *  each section's body is translated, then reassembled under its original
- *  (English) heading. A miss on ANY section while throttled reports the
- *  whole doc as throttled rather than a partially-translated blob — a
- *  handoff reads as one coherent unit, same "all English or all translated"
- *  posture the toggle UX implies. */
+ *  (English) heading. */
 export async function translateHandoff(
   db: Db,
   client: TranslationClient,
@@ -137,19 +134,10 @@ export async function translateHandoff(
   if (!task) throw new TranslationTargetError(`no task with id ${taskId}`);
   if (!task.handoff_doc) throw new TranslationTargetError(`task ${taskId} has no handoff doc`);
   const sections = splitHandoffMarkdown(task.handoff_doc);
-
-  const tracker = { allCached: true };
-  try {
-    const translatedSections: string[] = [];
-    for (const section of sections) {
-      const text = await translateTracked(db, client, section.body, language, now, tracker);
-      translatedSections.push(`## ${section.heading}\n\n${text}`);
-    }
-    return { status: "translated", doc: translatedSections.join("\n\n"), cached: tracker.allCached };
-  } catch (err) {
-    if (err instanceof ThrottledSignal) return { status: "throttled" };
-    throw err;
-  }
+  const outcome = await translateFragments(db, client, sections.map((section) => section.body), language, now);
+  if (outcome.status === "throttled") return outcome;
+  const doc = sections.map((section, i) => `## ${section.heading}\n\n${outcome.texts[i]}`).join("\n\n");
+  return { status: "translated", doc, cached: outcome.cached };
 }
 
 export interface TranslatedQuestionItem {
@@ -164,9 +152,7 @@ export type TranslateQuestionOutcome =
 /** A question's purpose and each item's title/detail (issue #47) — CONTEXT.md's
  *  scope exclusion: option labels and the recommendation are never sent here
  *  (a mistranslated option is a 30-second decision an agent reads back, ADR
- *  0015's precision addendum keeps those original). Same all-or-nothing
- *  throttle posture as translateHandoff: a question card is one coherent
- *  unit. */
+ *  0015's precision addendum keeps those original). */
 export async function translateQuestion(
   db: Db,
   client: TranslationClient,
@@ -177,22 +163,21 @@ export async function translateQuestion(
   const task = getTask(db, taskId);
   if (!task) throw new TranslationTargetError(`no task with id ${taskId}`);
   if (task.type !== "question") throw new TranslationTargetError(`task ${taskId} is not a question`);
-
-  const tracker = { allCached: true };
-  try {
-    const purpose = await translateTracked(db, client, task.purpose, language, now, tracker);
-    const items: TranslatedQuestionItem[] = [];
-    for (const item of task.question_items ?? []) {
-      const title = await translateTracked(db, client, item.title, language, now, tracker);
-      const detail =
-        item.detail !== undefined
-          ? await translateTracked(db, client, item.detail, language, now, tracker)
-          : undefined;
-      items.push({ title, detail });
-    }
-    return { status: "translated", purpose, items, cached: tracker.allCached };
-  } catch (err) {
-    if (err instanceof ThrottledSignal) return { status: "throttled" };
-    throw err;
-  }
+  const items = task.question_items ?? [];
+  const sources = [
+    task.purpose,
+    ...items.flatMap((item) => (item.detail === undefined ? [item.title] : [item.title, item.detail])),
+  ];
+  const outcome = await translateFragments(db, client, sources, language, now);
+  if (outcome.status === "throttled") return outcome;
+  // the texts come back in the order the sources were laid out above
+  const texts = outcome.texts.values();
+  const next = () => texts.next().value!;
+  const purpose = next();
+  return {
+    status: "translated",
+    purpose,
+    items: items.map((item) => ({ title: next(), detail: item.detail === undefined ? undefined : next() })),
+    cached: outcome.cached,
+  };
 }

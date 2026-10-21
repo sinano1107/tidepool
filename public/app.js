@@ -2100,12 +2100,19 @@ function GitHubLoginCard({ loggedIn }) {
 function TranslateUsageCard({ records }) {
   const { Card, FieldRow } = window.TidepoolDesignSystem_8a0ead;
   const last = records?.at(-1);
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "translation spend"), last ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "translations", kind: "mono", value: `${records.length} generated` }), /* @__PURE__ */ React.createElement(
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "translation spend"), last ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(FieldRow, { label: "calls", kind: "mono", value: `${records.length}` }), /* @__PURE__ */ React.createElement(
     FieldRow,
     {
       label: "estimated cost",
       kind: "mono",
-      value: `$${records.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`
+      value: `$${records.reduce((sum, r) => sum + (r.usage.estimated_cost_usd ?? 0), 0).toFixed(4)}`
+    }
+  ), /* @__PURE__ */ React.createElement(
+    FieldRow,
+    {
+      label: "calls with unknown cost",
+      kind: "mono",
+      value: `${records.filter((r) => r.usage.estimated_cost_usd === null).length}`
     }
   ), /* @__PURE__ */ React.createElement(
     FieldRow,
@@ -2117,9 +2124,9 @@ function TranslateUsageCard({ records }) {
   )) : /* @__PURE__ */ React.createElement(
     FieldRow,
     {
-      label: "translations",
+      label: "calls",
       kind: "unset",
-      unsetLabel: records ? "none generated yet" : translationSpendUnavailable
+      unsetLabel: records ? "none made yet" : translationSpendUnavailable
     }
   ));
 }

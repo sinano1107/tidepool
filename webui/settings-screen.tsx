@@ -1078,9 +1078,11 @@ function GitHubLoginCard({ loggedIn }: { loggedIn: boolean | null }) {
   );
 }
 
-// Translation spend (issue #273). The last call's in/out is where a regression
-// in ADR 0062's env would show — compared against that ADR, not against a
-// second copy of its numbers kept here.
+// Translation spend (issue #273), one record per translation call (ADR 0296
+// 決定5). The last call's in/out is where a regression in ADR 0062's env would
+// show — compared against that ADR, not against a second copy of its numbers
+// kept here. A null cost is "not measurable": it stays out of the total and is
+// counted on its own, so the total never reads as more complete than it is.
 // `records` null means the read failed: a face put here to catch a silent
 // regression must not itself go silent, so the card stays and says so.
 function TranslateUsageCard({ records }: { records: WireContract['GET /api/translate/usage']['records'] | null }) {
@@ -1091,15 +1093,17 @@ function TranslateUsageCard({ records }: { records: WireContract['GET /api/trans
       <span style={settingsCardLabel}>translation spend</span>
       {last ? (
         <React.Fragment>
-          <FieldRow label="translations" kind="mono" value={`${records!.length} generated`} />
+          <FieldRow label="calls" kind="mono" value={`${records!.length}`} />
           <FieldRow label="estimated cost" kind="mono"
-            value={`$${records!.reduce((sum, r) => sum + r.usage.estimated_cost_usd, 0).toFixed(4)}`} />
+            value={`$${records!.reduce((sum, r) => sum + (r.usage.estimated_cost_usd ?? 0), 0).toFixed(4)}`} />
+          <FieldRow label="calls with unknown cost" kind="mono"
+            value={`${records!.filter((r) => r.usage.estimated_cost_usd === null).length}`} />
           <FieldRow label="last call" kind="mono"
             value={`${last.usage.input_tokens} in / ${last.usage.output_tokens} out`} />
         </React.Fragment>
       ) : (
-        <FieldRow label="translations" kind="unset"
-          unsetLabel={records ? 'none generated yet' : translationSpendUnavailable} />
+        <FieldRow label="calls" kind="unset"
+          unsetLabel={records ? 'none made yet' : translationSpendUnavailable} />
       )}
     </Card>
   );

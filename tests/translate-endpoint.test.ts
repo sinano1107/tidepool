@@ -41,9 +41,7 @@ it("decision log の一行を翻訳する(type: log_entry)", async () => {
     text: "アプローチAを採用することにした",
     cached: false,
   });
-  expect(translationClient.calls).toEqual([
-    { source: "decided to use approach A", language: "Japanese" },
-  ]);
+  expect(translationClient.calls).toEqual([{ fragments: ["decided to use approach A"], language: "Japanese" }]);
 });
 
 it("同じ event_id への2回目の翻訳リクエストはキャッシュから返し、クライアントを再度呼ばない", async () => {
@@ -75,7 +73,7 @@ it("同じ event_id への2回目の翻訳リクエストはキャッシュか�
     task_id: question.id,
   });
   expect(second.json.cached).toBe(true);
-  expect(translationClient.calls).toHaveLength(2); // purpose + 1 item title, no repeat
+  expect(translationClient.calls).toHaveLength(1); // purpose + 1 item title in one call, no repeat
 });
 
 it("throttled 中の応答は throttled と区別できる", async () => {
@@ -194,9 +192,15 @@ it("不正なリクエストボディは 400 を返す", async () => {
   expect(res.status).toBe(400);
 });
 
-it("GET /api/translate/usage で生成済み翻訳のトークン消費を観測できる(完了基準: worker session と同様に観測可能)", async () => {
+it("GET /api/translate/usage は翻訳の呼び出し1回を1件として返し、測れない費用は null のまま届く(ADR 0296 決定5)", async () => {
   const translationClient = new FakeTranslationClient();
-  translationClient.scriptTranslation("訳文");
+  translationClient.scriptUsage({
+    input_tokens: 120,
+    output_tokens: 40,
+    cache_read_tokens: 3,
+    cache_creation_tokens: 0,
+    estimated_cost_usd: null,
+  });
   t = await bootTidepool({ translationClient });
 
   const question = registerQuestion(t, {
@@ -205,26 +209,26 @@ it("GET /api/translate/usage で生成済み翻訳のトークン消費を観測
     completion_criteria: "answered",
     question: [{ title: "merge now?", options: ["merge", "hold"], recommendation: "merge" }],
   });
-  // one generation (purpose) + one cache hit on re-request — usage is only
-  // ever recorded once per source+language, never on the cached replay
-  await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: question.id });
   await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: question.id });
 
   const res = await api(t.baseUrl, "GET", "/api/translate/usage");
 
   expect(res.status).toBe(200);
-  expect(res.json.records).toHaveLength(2); // purpose + the item's title, each generated once
-  expect(res.json.records[0]).toEqual({
-    language: "Japanese",
-    usage: {
-      input_tokens: 10,
-      output_tokens: 5,
-      cache_read_tokens: 0,
-      cache_creation_tokens: 0,
-      estimated_cost_usd: 0.0001,
+  expect(res.json.records).toEqual([
+    {
+      provider: "anthropic",
+      model: "haiku",
+      fragments: 2,
+      usage: {
+        input_tokens: 120,
+        output_tokens: 40,
+        cache_read_tokens: 3,
+        cache_creation_tokens: 0,
+        estimated_cost_usd: null,
+      },
+      createdAt: expect.any(String),
     },
-    createdAt: expect.any(String),
-  });
+  ]);
 });
 
 it("人間の原文は type: to_english で英語へ、英語は type: back_translation で表示言語へ訳す —— client 不在なら 503(issue #593)", async () => {
@@ -237,8 +241,8 @@ it("人間の原文は type: to_english で英語へ、英語は type: back_tran
   expect(toEnglish.json).toEqual({ status: "translated", text: "[translated] テストは Node 22 が要る", cached: false });
   expect(back.json).toEqual({ status: "translated", text: "[translated] Tests need Node 22.", cached: false });
   expect(translationClient.calls).toEqual([
-    { source: "テストは Node 22 が要る", language: "English" },
-    { source: "Tests need Node 22.", language: "Japanese" },
+    { fragments: ["テストは Node 22 が要る"], language: "English" },
+    { fragments: ["Tests need Node 22."], language: "Japanese" },
   ]);
 
   await t.stop();
