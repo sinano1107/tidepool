@@ -978,6 +978,7 @@ it.each([
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
   const rca = children.find((child) => child.type === "review")!;
   expect(rca.title).toBe("rca (auditor): retry?");
+  // RCA は正当に slot の先頭に来るので候補から外し、残りに修理子が無いことを見る
   expect(nextSlotTask(db, "sandbox", "deckhand", "fugu", undefined, [rca.id])).toBeUndefined();
 });
 
