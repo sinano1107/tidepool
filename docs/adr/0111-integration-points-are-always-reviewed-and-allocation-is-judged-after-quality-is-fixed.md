@@ -1,5 +1,7 @@
 # 統合点のレビューは必須、配分の評価は品質判定を固定した後に別の呼び出しで行う
 
+**Status 追記: 追記4 の「Provider は `anthropic` 固定のまま残す」は ADR 0296 決定2 で置き換え** —— 振り返り Board call の Provider は判断の段の隣の欄が名指す(2026-10-21 の grilling、issue #456)。
+
 **Status 追記: 決定6 の「review type のルート task」は ADR 0273 決定2 で第5の task type `interview` に置き換え** —— 権限面が review と違う(実環境を読み、面接室にだけ書く)(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
 2026-09-10 の grilling(issue #238 / #357)で決定。実行設定の選択(ADR 0110)を学習するには、全 task に一貫した受理ラベルが要る。
