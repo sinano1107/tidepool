@@ -253,9 +253,7 @@ it("写しを失った sparse 無しの checkout は、pickup で盤面の行を
   const board = rebuildBoard();
   const log = silenceLog();
   const storedSnapshot = () =>
-    (board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(workspace.name) ?? null) as
-      | string
-      | null;
+    board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(workspace.name) as string | null;
 
   // claude-worker の pickup の枝と同じ順
   const hidden = projectSettingsHiddenByBoard(board, workspace);
