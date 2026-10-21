@@ -205,7 +205,11 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
   const tasks = [...tree, ...landingQuestions];
   const treeSessions = tasks.flatMap((task) => sessions(db, logDir, task));
   const costByHarness: Record<string, number> = {};
-  for (const { harness, cost_usd } of treeSessions) if (cost_usd !== null) costByHarness[harness] = (costByHarness[harness] ?? 0) + cost_usd;
+  const unpricedByHarness: Record<string, number> = {};
+  for (const { harness, cost_usd } of treeSessions) {
+    if (cost_usd === null) unpricedByHarness[harness] = (unpricedByHarness[harness] ?? 0) + 1;
+    else costByHarness[harness] = (costByHarness[harness] ?? 0) + cost_usd;
+  }
   return {
     name: exercise.name,
     title: exercise.title,
@@ -214,9 +218,9 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     handled: test_exit === null ? null : test_exit === 0,
     settlement: settlement(db, root, tasks),
     duration_ms: duration(db, root, tasks),
-    // 費用の無い session(Codex、終わらなかった session)は和に入れず数える —— 部分和を全額と読ませない
+    // 費用の無い session(Codex、終わらなかった session)は和に入れず Harness ごとに数える —— 部分和を全額と読ませない
     cost_usd_by_harness: costByHarness,
-    unpriced_sessions: treeSessions.filter((s) => s.cost_usd === null).length,
+    unpriced_sessions_by_harness: unpricedByHarness,
     questions: tasks.filter((t) => t.type === "question").map((q) => questionKindOf(q).kind),
     sessions: treeSessions,
   };
@@ -288,7 +292,7 @@ function summary(exercises: ReturnType<typeof exerciseRecord>[]): string {
   const rows = exercises.map((e) => {
     const cost = [
       ...Object.entries(e.cost_usd_by_harness).map(([harness, usd]) => `${harness} ${usd.toFixed(2)}`),
-      ...(e.unpriced_sessions > 0 ? [`${e.unpriced_sessions} unpriced`] : []),
+      ...Object.entries(e.unpriced_sessions_by_harness).map(([harness, n]) => `${harness} ${n} unpriced`),
     ];
     return [
       e.name,

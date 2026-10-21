@@ -175,7 +175,7 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
       verbs: ["get_current_task", "log_decision", "log_decision", "log_decision", "complete_task"],
     },
   ]);
-  expect(claude).toMatchObject({ cost_usd_by_harness: { "claude-code": 0.7102510000000001 }, unpriced_sessions: 0 });
+  expect(claude).toMatchObject({ cost_usd_by_harness: { "claude-code": 0.7102510000000001 }, unpriced_sessions_by_harness: {} });
   // Codex の費用は観測されない(ADR 0297)—— 0 ではなく null
   expect(codex!.sessions).toEqual([
     {
@@ -187,7 +187,7 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
     },
   ]);
   // 費用の無い session は和に入れず数える —— 部分和を全額と読まない
-  expect(codex).toMatchObject({ cost_usd_by_harness: {}, unpriced_sessions: 1 });
+  expect(codex).toMatchObject({ cost_usd_by_harness: {}, unpriced_sessions_by_harness: { codex: 1 } });
 });
 
 it("transcript が無い session は verb 列が null で、行は落とさない", () => {
@@ -365,5 +365,5 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   expect(record.exercises[0]!.duration_ms).toEqual({ wall: 90 * 60_000, queue: 5 * 60_000, human_wait: 63 * 60_000, board: 22 * 60_000 });
   expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation", "escalation", "local_merge"]);
   // 終わらなかった session は費用が無い —— 和に入らず数で出る
-  expect(markdown).toContain("| work | yes | done | — | — | 1 unpriced | 90m | 5m | 63m | 22m | 4 |");
+  expect(markdown).toContain("| work | yes | done | — | — | claude-code 1 unpriced | 90m | 5m | 63m | 22m | 4 |");
 });
