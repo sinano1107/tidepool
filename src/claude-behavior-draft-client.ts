@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { runOneShotJsonPrompt } from "./claude-draft-client.js";
+import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import { TIER_DEFINITION_RULE } from "./meta-review.js";
@@ -45,8 +45,11 @@ export class ClaudeBehaviorDraftClient implements BehaviorDraftClient {
   }
 
   async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft> {
-    return draftSchema.parse(
-      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting, "behavior draft"),
-    );
+    return (
+      await runClaudeBoardCallJson(
+        { exec: this.exec, label: "behavior draft", prompt: buildPrompt(input), row: setting, reasoning: true },
+        draftSchema,
+      )
+    ).output;
   }
 }

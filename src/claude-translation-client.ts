@@ -1,28 +1,7 @@
-import { z } from "zod";
-import {
-  boardCallEnvWithoutThinking,
-  type ExecFn,
-  emptyToolSurfaceFlags,
-  pinnedModelFlags,
-} from "./claude-worker.js";
-import { rethrowCliAuthExecFailure } from "./cli-auth.js";
+import { runClaudeBoardCallText } from "./claude-board-call-runner.js";
+import type { ExecFn } from "./claude-worker.js";
 import type { GlossaryEntry } from "./glossary.js";
 import type { TranslationClient, TranslationResult } from "./translate.js";
-
-// the CLI's `-p --output-format json` envelope (vendor-specific, kept private
-// to this adapter — ADR 0005), verified against a real `claude -p` run: the
-// same total_cost_usd/usage shape claude-worker.ts's stream-json result event
-// carries, so translation usage can be recorded at the same granularity
-const resultEnvelopeSchema = z.object({
-  result: z.string(),
-  total_cost_usd: z.number(),
-  usage: z.object({
-    input_tokens: z.number(),
-    output_tokens: z.number(),
-    cache_read_input_tokens: z.number(),
-    cache_creation_input_tokens: z.number(),
-  }),
-});
 
 /** What this board asks of a translation (ADR 0062 決定3), passed as
  *  `--system-prompt` so the requirements are stated once per call instead of
@@ -105,9 +84,9 @@ export interface ClaudeTranslationClientOptions {
 }
 
 /** The real TranslationClient (issue #47): a headless one-shot `claude -p`
- *  call, same ExecFn process boundary ClaudeDraftClient's runDraftPrompt
- *  uses — pinned to haiku (cheaper than draft's sonnet: this is a mechanical
- *  translation, not a generation task). */
+ *  call through the same runner as ClaudeDraftClient (#662) — pinned to haiku
+ *  (cheaper than draft's sonnet: this is a mechanical translation, not a
+ *  generation task). */
 export class ClaudeTranslationClient implements TranslationClient {
   private readonly glossary: GlossaryEntry[];
   private readonly exec: ExecFn;
@@ -163,49 +142,16 @@ export class ClaudeTranslationClient implements TranslationClient {
   }
 
   private async runTranslation(source: string, language: string): Promise<TranslationResult> {
-    let stdout: string;
-    try {
-      stdout = await this.exec(
-        "claude",
-        [
-          "-p",
-          buildPrompt(source, language, this.glossary),
-          "--output-format",
-          "json",
-          "--system-prompt",
-          TRANSLATION_SYSTEM_PROMPT,
-          ...pinnedModelFlags("haiku", "low"),
-          ...emptyToolSurfaceFlags(),
-          // with no tools at all a second turn is structurally impossible; the
-          // flag stays as the explicit statement that a single answer is what
-          // this call is for, so a CLI that ever raises another turn fails loud
-          "--max-turns",
-          "1",
-          // --system-prompt already keeps the board repo's own CLAUDE.md out, so
-          // --safe-mode remains here for the rest: hooks, plugins and MCP config
-          // the board's own cwd would otherwise contribute to what must stay a
-          // bare translated answer
-          "--safe-mode",
-        ],
-        // a Board call with no advisor (ADR 0044) and no reasoning (ADR 0062
-        // 決定2). A haiku main model is no protection for the first — measured
-        // 2026-08-04, haiku + an inherited advisorModel attaches opus to every
-        // display-time translation. The second was 80% of the output tokens.
-        boardCallEnvWithoutThinking(),
-      );
-    } catch (err) {
-      rethrowCliAuthExecFailure(err);
-    }
-    const envelope = resultEnvelopeSchema.parse(JSON.parse(stdout));
-    return {
-      text: envelope.result,
-      usage: {
-        input_tokens: envelope.usage.input_tokens,
-        output_tokens: envelope.usage.output_tokens,
-        cache_read_tokens: envelope.usage.cache_read_input_tokens,
-        cache_creation_tokens: envelope.usage.cache_creation_input_tokens,
-        estimated_cost_usd: envelope.total_cost_usd,
-      },
-    };
+    const { output, usage } = await runClaudeBoardCallText({
+      exec: this.exec,
+      label: "translation",
+      systemPrompt: TRANSLATION_SYSTEM_PROMPT,
+      prompt: buildPrompt(source, language, this.glossary),
+      // haiku is an alias, not a table row: a refusal names it, and nothing quarantines it (ADR 0202 決定2)
+      row: { provider: "anthropic", model: "haiku", effort: "low" },
+      reasoning: false,
+    });
+    if (!usage) throw new Error("translation CLI response missing usage");
+    return { text: output, usage };
   }
 }

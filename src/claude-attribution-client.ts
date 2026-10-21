@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CAUSES } from "./cause.js";
-import { runOneShotJsonPrompt } from "./claude-draft-client.js";
+import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import type { AttributionClient, AttributionInput, AttributionJudgment } from "./retrospective.js";
@@ -68,8 +68,11 @@ export class ClaudeAttributionClient implements AttributionClient {
     input: AttributionInput,
     setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
   ): Promise<AttributionJudgment> {
-    return judgmentSchema.parse(
-      await runOneShotJsonPrompt(this.exec, buildPrompt(input), setting, "attribution"),
-    );
+    return (
+      await runClaudeBoardCallJson(
+        { exec: this.exec, label: "attribution", prompt: buildPrompt(input), row: setting, reasoning: true },
+        judgmentSchema,
+      )
+    ).output;
   }
 }

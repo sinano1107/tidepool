@@ -1,14 +1,9 @@
 import { z } from "zod";
-import {
-  boardCallEnv,
-  type ExecFn,
-  emptyToolSurfaceFlags,
-  pinnedModelFlags,
-} from "./claude-worker.js";
-import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRefusalCause } from "./cli-auth.js";
+import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
+import type { ExecFn } from "./claude-worker.js";
 import type { Db } from "./db.js";
 import type { ChildDraftContext, DraftClient, HandoffDraft, IssueInspection, TaskDraft } from "./draft.js";
-import { boardDefaultTier, type ExecutionSettingRow } from "./execution-setting.js";
+import { boardDefaultTier } from "./execution-setting.js";
 import type { Issue } from "./github.js";
 import type { RegistryCandidates } from "./registry.js";
 import { HANDOFF_FIELDS } from "./tasks.js";
@@ -155,23 +150,6 @@ function buildInspectionPrompt(issue: Issue): string {
   );
 }
 
-/** Safely extracts a JSON object from a CLI response (issue #25): the model
- *  is instructed to answer with bare JSON, but real-world output sometimes
- *  wraps it in a markdown fence or a sentence of prose around it — a strict
- *  JSON.parse alone would reject those instead of drafting. Falls back to
- *  parsing the trimmed text as-is when no fence/braces are found, so a
- *  genuinely malformed response still throws (draftTask rejects → #12's 503
- *  fallback), not silently drafts garbage. */
-function extractJson(text: string): unknown {
-  const trimmed = text.trim();
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-  const candidate = fenced ? fenced[1]! : trimmed;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
-  const jsonSlice = start !== -1 && end > start ? candidate.slice(start, end + 1) : candidate;
-  return JSON.parse(jsonSlice);
-}
-
 export interface ClaudeDraftClientOptions {
   /** Assignee/workspace candidates (issue #12's registryCandidates) to steer
    *  the drafted assignee/workspace toward known names. Absent → the model
@@ -200,88 +178,26 @@ export class ClaudeDraftClient implements DraftClient {
     language: string,
     context?: ChildDraftContext,
   ): Promise<TaskDraft> {
-    return taskDraftSchema.parse(
-      await this.run(buildPrompt(dump, language, this.candidates, context)),
-    ) as TaskDraft;
+    return (await this.run(buildPrompt(dump, language, this.candidates, context), taskDraftSchema)) as TaskDraft;
   }
 
   async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
-    return handoffDraftSchema.parse(await this.run(buildHandoffPrompt(dump, language)));
+    return this.run(buildHandoffPrompt(dump, language), handoffDraftSchema);
   }
 
   async inspectIssue(issue: Issue): Promise<IssueInspection> {
-    return issueInspectionSchema.parse(await this.run(buildInspectionPrompt(issue)));
+    return this.run(buildInspectionPrompt(issue), issueInspectionSchema);
   }
 
   // runs on the board default tier's cheapest runnable anthropic row whose window is open (ADR 0192 / ADR 0200 決定4 /
   // #1445): no such row fails with the reason, never falls back outside the table
-  private async run(prompt: string): Promise<unknown> {
+  private async run<T>(prompt: string, schema: z.ZodType<T>): Promise<T> {
     let row;
     try {
       row = boardCallRow(this.db, boardDefaultTier(this.db));
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
     }
-    return runOneShotJsonPrompt(this.exec, prompt, row, "draft");
+    return (await runClaudeBoardCallJson({ exec: this.exec, label: "draft", prompt, row, reasoning: true }, schema)).output;
   }
-}
-
-type BoardCallRow = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
-
-/** 表の行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */
-function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallRow): void {
-  const cause = rowRefusalCause(envelope);
-  if (cause) throw new RowRefusalError(provider, model, cause);
-}
-
-/** The one-shot `claude -p` Board call every drafting call, the allocation
- *  review (issue #547), the attribution (issue #574) and the behavior draft (issue #617) share — the prompt, the table row it runs on and the
- *  label for errors differ; the reply is the JSON object `extractJson` finds. */
-export async function runOneShotJsonPrompt(
-  exec: ExecFn,
-  prompt: string,
-  row: BoardCallRow,
-  label: string,
-): Promise<unknown> {
-  let stdout: string;
-  try {
-    stdout = await exec(
-      "claude",
-      [
-        "-p",
-        prompt,
-        "--output-format",
-        "json",
-        ...pinnedModelFlags(row.model, row.effort),
-        ...emptyToolSurfaceFlags(),
-        // with no tools at all a second turn is structurally impossible; the
-        // flag stays as the explicit statement that a single answer is what
-        // this call is for, so a CLI that ever raises another turn fails loud
-        "--max-turns",
-        "1",
-        // this call runs with the board's own cwd, not a task workspace —
-        // --safe-mode keeps the board repo's own CLAUDE.md/skills/MCP config
-        // from leaking into what must stay a bare JSON answer. Auth/model/
-        // tools/permissions are unaffected (unlike --bare, which would force
-        // API-key-only auth). It does **not** keep an advisor out — measured,
-        // issue #174 — which is what the env below is for.
-        "--safe-mode",
-      ],
-      // a Board call: no advisor, spelled explicitly (ADR 0044). Without it the
-      // host's own advisorModel rode along on every JIT draft poll and burned
-      // opus, unrecorded anywhere.
-      boardCallEnv(),
-    );
-  } catch (err) {
-    throwIfRowRefused(execFailureEnvelope(err), row);
-    rethrowCliAuthExecFailure(err);
-  }
-  const envelope: unknown = JSON.parse(stdout);
-  throwIfRowRefused(envelope, row);
-  const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
-  if (typeof result !== "string") {
-    throw new Error(`${label} CLI response missing a string result field`);
-  }
-  if (is_error === true) throw new Error(result);
-  return extractJson(result);
 }
