@@ -45,3 +45,7 @@ CI を読んで merge しうる。ダイヤルも新しい既定 agent の profi
 付帯子の review に例外が2つ。決定2 の「写しは列を読むだけ」は pickup 前には当たらず、付帯子の review の列は pickup まで NULL で、
 pickup 前の読み手は最も近い固定済みの祖先から導く(ADR 0290 決定1・5)。決定5 の「`""` で空に戻せる」は付帯子の review では拒む
 (ADR 0290 決定3)—— 既定への参照を持たないので、戻す先が無い。
+
+## 追記4(2026-10-21 の grilling、issue #2369 / ADR 0292)
+
+決定5「人間の編集で空に戻すことは許す」は、一度も pickup されていない task に限る。pickup の event を持つ task の `assignee` と `workspace` は Edit で変えられず、空に戻すこともできない(ADR 0292 決定1)。決定1「再 pickup も最初の pickup で解決した先に従う」を Edit の側からも守る門で、決定2 の読み手が列を「走った先」として読める前提になる。
