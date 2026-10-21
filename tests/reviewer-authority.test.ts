@@ -3,7 +3,8 @@ import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
-import { assigneeNeedsApproval, editTask, getTask, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor, type Task } from "../src/tasks.js";
+import { assigneeNeedsApproval, editTask, getTask, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -189,11 +190,22 @@ it("task_completed も pickup も無い被レビュー task では Executor が�
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  // 読みの側だけを確かめる —— 行は置かない
-  const review: Task = { ...work, id: "review", type: "review", parent_id: work.id };
+  // 人間名義の review 子は実行前の親に付けられない(ADR 0292 決定2)—— 盤面名義(異議由来の auditor RCA の形)で置く
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, BOARD_WORKER_ID, "board");
 
   expect(reviewedTaskExecutor(db, review)).toBeUndefined();
   expect(assigneeNeedsApproval(db, review, "fake-worker", { assignable_to: [] })).toBe(true);
+});
+
+it("列を書かない review type の被レビュー task は、task_completed が無ければ最後の pickup の worker が Executor(ADR 0054 / ADR 0233 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-01-01T00:00:00Z");
+  const reviewed = registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  pickupTask(db, reviewed, "worker-x", at);
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, ...HUMAN_WEBUI);
+
+  expect(getTask(db, reviewed.id)!.assignee).toBeNull();
+  expect(reviewedTaskExecutor(db, review)).toBe("worker-x");
 });
 
 const PERMISSIVE_AUDITOR_AUTHORITY: AuthorityProfile = {

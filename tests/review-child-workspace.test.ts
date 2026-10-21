@@ -11,6 +11,8 @@ import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 const at = new Date(0);
 const register = (db: Db, input: Partial<RegisterTaskInput> & Pick<RegisterTaskInput, "type">): Task =>
   registerTask(db, { title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI);
+const boardReview = (db: Db, input: Partial<RegisterTaskInput>): Task =>
+  registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, BOARD_WORKER_ID, "board");
 /** 一度 pickup された形の親 —— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
 const ran = (db: Db, task: Task): Task => {
   markPickedUp(db, task.id, at);
@@ -33,20 +35,21 @@ describe("付帯子の review の登録(ADR 0290 決定1・2)", () => {
     expect(() => register(db, { type: "review", parent_id: parent.id, workspace: "lagoon" })).toThrow(/root review/);
   });
 
+  // 実行前の親の下の付帯子 —— 盤面名義(異議由来の auditor RCA の形)で、ADR 0292 決定2 の門を通らずに ADR 0290 の検査に届く
   it("固定済みの祖先が無いときは、どの名前の明示も拒まれる", () => {
     const db = openDb(":memory:");
-    const parent = ran(db, register(db, { type: "work" }));
+    const parent = register(db, { type: "work" });
 
-    expect(() => register(db, { type: "review", parent_id: parent.id, workspace: "reef" })).toThrow(DomainError);
+    expect(() => boardReview(db, { parent_id: parent.id, workspace: "reef" })).toThrow(/nearest ancestor's workspace/);
   });
 
   it("列が NULL の分解子を越えて最も近い固定済みの祖先と比べる", () => {
     const db = openDb(":memory:");
     const root = register(db, { type: "work", workspace: "reef" });
-    const child = ran(db, register(db, { type: "work", parent_id: root.id }));
+    const child = register(db, { type: "work", parent_id: root.id });
 
-    expect(() => register(db, { type: "review", parent_id: child.id, workspace: "lagoon" })).toThrow(DomainError);
-    expect(register(db, { type: "review", parent_id: child.id, workspace: "reef" }).workspace).toBeNull();
+    expect(() => boardReview(db, { parent_id: child.id, workspace: "lagoon" })).toThrow(/nearest ancestor's workspace/);
+    expect(boardReview(db, { parent_id: child.id, workspace: "reef" }).workspace).toBeNull();
   });
 });
 
@@ -62,7 +65,7 @@ describe("Executor の引けない親への review 子の登録(ADR 0292 決定2
     const db = openDb(":memory:");
     const parent = register(db, { type: "work", assignee: "deckhand" });
 
-    expect(registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board").parent_id).toBe(parent.id);
+    expect(boardReview(db, { parent_id: parent.id }).parent_id).toBe(parent.id);
   });
 
   it("pickup 済み(in_progress・todo に戻った)の親と、人間が pickup 無しで完了した親には登録できる", () => {

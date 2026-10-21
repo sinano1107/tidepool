@@ -479,6 +479,17 @@ export interface InterviewTarget {
   effort: string | null;
 }
 
+/** ADR 0292 決定2: review は親の結果に付く付帯子 —— 人間は Executor(ADR 0054)の引けない親に付けられない。
+ *  盤面の付帯子は掛けない(異議由来の auditor RCA は実行前の親にも立つ)。 */
+function assertReviewChildHasExecutor(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">, workerId: string): void {
+  if (workerId === HUMAN_WORKER_ID && input.type === "review" && input.parent_id && !executionEvent(db, input.parent_id)) {
+    throw new DomainError(
+      "a review child attaches to its parent's result, and this parent has neither been picked up nor completed — " +
+        "to have it reviewed later, set its review flag or review_by",
+    );
+  }
+}
+
 /** 修理子は異議された task の子 —— 親を切ると異議された判断の文脈が消える(ADR 0272 追記2 / ADR 0046)。 */
 function assertRepairHasParent(input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
   if (isRepairType(input.type) && input.parent_id === undefined) {
@@ -1123,20 +1134,7 @@ export function registerTask(
   assertNoExamineeChild(db, input);
   assertArtifactNotDiscarded(db, input);
   assertRepairHasParent(input);
-  // ADR 0292 決定2: review は親の結果に付く付帯子 —— 人間は Executor(ADR 0054)の引けない親に付けられない。
-  // 盤面の付帯子は掛けない(異議由来の auditor RCA は実行前の親にも立つ)
-  if (
-    workerId === HUMAN_WORKER_ID &&
-    input.type === "review" &&
-    input.parent_id !== undefined &&
-    !latestEventOfTask(db, input.parent_id, "task_completed") &&
-    !latestEventOfTask(db, input.parent_id, "task_picked_up")
-  ) {
-    throw new DomainError(
-      "a review child attaches to its parent's result, and this parent has neither been picked up nor completed — " +
-        "to have it reviewed later, set its review flag or review_by",
-    );
-  }
+  assertReviewChildHasExecutor(db, input, workerId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
   if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
     const ancestorWorkspace = derivedWorkspace(db, { workspace: null, type: input.type, parent_id: input.parent_id! });
@@ -3040,9 +3038,12 @@ export function reviewedTaskExecutor(db: Db, task: Task): string | undefined {
   const reviewed = getTask(db, task.parent_id);
   if (!reviewed) return undefined;
   if (reviewed.assignee !== null) return reviewed.assignee;
-  return (
-    latestEventOfTask(db, task.parent_id, "task_completed") ?? latestEventOfTask(db, task.parent_id, "task_picked_up")
-  )?.worker_id;
+  return executionEvent(db, task.parent_id)?.worker_id;
+}
+
+/** 実行の事実(ADR 0054): 最新の task_completed、無ければ最新の task_picked_up。 */
+function executionEvent(db: Db, taskId: string) {
+  return latestEventOfTask(db, taskId, "task_completed") ?? latestEventOfTask(db, taskId, "task_picked_up");
 }
 
 /** Whether assigning `name` from `task` would need a human approval question
@@ -3495,7 +3496,8 @@ export function editTask(
     // ADR 0292 決定1: 両欄の消費点は pickup —— 一度 pickup された task の列は走った先の固定の事実(ADR 0233 決定1)
     if (latestEventOfTask(db, task.id, "task_picked_up")) {
       throw new DomainError(
-        `a task that has been picked up keeps its ${field} — it records where the task ran; cancel it and register a new task to run it elsewhere`,
+        `a task that has been picked up keeps its ${field} — it records ${field === "assignee" ? "who ran the task" : "where the task ran"}; ` +
+          "to change it, cancel the task and register a new one",
       );
     }
     changes.push({ field, from: task[field], to: next, value: next });

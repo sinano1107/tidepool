@@ -223,12 +223,16 @@ function versionEvidence(
       "the Authority and Roster you were given then are missing from this evidence."
     );
   }
-  const label = then.source === "profile" ? `profile ${agent.authority}` : `the board's ${then.source} authority`;
-  const guidance =
-    then.source === "reviewer"
-      ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
-        "It is board code, not a registry profile, so it is not a target for a registry diff."
-      : then.guidance;
+  const { label, guidance } = {
+    profile: { label: `profile ${agent.authority}`, guidance: then.guidance },
+    repair: { label: "the board's repair notice", guidance: then.guidance },
+    reviewer: {
+      label: "the board's reviewer authority",
+      guidance:
+        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        "It is board code, not a registry profile, so it is not a target for a registry diff.",
+    },
+  }[then.source];
   return (
     body +
     authoritySection(guidance, `${level} Authority as it stood then (${label})`) +

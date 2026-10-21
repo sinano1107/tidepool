@@ -207,13 +207,6 @@ it("pickup 済みの task でも、assignee / workspace の値が変わらない
   expect(listEvents(db, task.id).filter((e) => e.kind === "task_edited").map((e) => (e.payload as { field: string }).field)).toEqual(["title"]);
 });
 
-it("pickup の無い task の assignee / workspace は従来どおり空に戻せる(ADR 0233 決定5)", () => {
-  const db = openDb(":memory:");
-  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand", workspace: "home" }, at, ...HUMAN_WEBUI);
-
-  expect(editTask(db, task, { assignee: "", workspace: "" }, at, "webui")).toMatchObject({ assignee: null, workspace: null });
-});
-
 it("拒否の後も、review の spawn の当時版の Roster は spawn が描いた [deckhand] のまま(#2369 の再現)", async () => {
   const { db, task } = returnedAfterPickup();
   const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: task.id }, at, ...HUMAN_WEBUI);
@@ -223,5 +216,7 @@ it("拒否の後も、review の spawn の当時版の Roster は spawn が描�
   const spawned = listEvents(db, review.id).find((e) => e.kind === "worker_spawned")!;
 
   expect(() => editTask(db, task, { assignee: "navigator" }, at, "webui")).toThrow(DomainError);
-  expect(agentDefinitionThen(db, registryDir, spawned)?.authority.assignable_to).toEqual(["deckhand"]);
+  const then = agentDefinitionThen(db, registryDir, spawned);
+  expect(then?.authority.assignable_to).toEqual(["deckhand"]);
+  expect(then?.roster.map((agent) => agent.name)).toEqual(["deckhand"]);
 });

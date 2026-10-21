@@ -23,9 +23,10 @@ const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entri
   const objection = bundledObjection(db, taskId, entry_id, at);
   return appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [objection], cause, evidence: "e", entries, round: "initial" }, at });
 };
-/** 異議されたエントリ(agent の記入)に cause を帰責する。 */
+/** 異議されたエントリに cause を帰責する。親は deckhand が一度 pickup した形にする —— RCA 子(人間名義の登録)が付ける(ADR 0292 決定2)。
+ *  pickup は人間に起きないので、エントリの書き手が人間でも pickup の名義は deckhand。 */
 const objected = (db: Db, parent: Task, cause: Cause, worker = "deckhand"): number => {
-  markPickedUp(db, parent.id, at, worker);
+  markPickedUp(db, parent.id, at);
   const entry = logDecision(db, parent, `decided as ${cause}`, worker, at, "worker");
   attribute(db, parent.id, entry, cause);
   return entry;
