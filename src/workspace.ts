@@ -492,9 +492,36 @@ function storedSparseSnapshot(db: Db, workspace: WorkspaceConfig): SparseSnapsho
   return row?.sparse_snapshot ? (JSON.parse(row.sparse_snapshot) as SparseSnapshot) : undefined;
 }
 
-/** 「盤面が settings.json を隠している最中か」の唯一の印 —— S bit は読まない(ADR 0293 決定3)。 */
+/** 盤面しか書かない除外の行(ADR 0293 決定2)。旧い機構の `!.claude/settings.json` は印と読まない(決定7)。 */
+const BOARD_SETTINGS_LINE = "!/.claude/settings.json";
+
+const configEnabled = (workspace: WorkspaceConfig, key: string) =>
+  git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
+
+/** DB の写しを失った checkout に盤面の行が残っていれば、その行を外した pattern を non-cone の写しと読む(ADR 0293 決定7)。
+ *  無効な sparse の行は死んでいるので読まない。探りの失敗(checkout が無い・git repository でない)は「印なし」。
+ *  `adopt` は写しとして使う側 —— 隠すか戻すときだけ log に残し、印の問いでは残さない。 */
+function snapshotFromBoardLine(workspace: WorkspaceConfig, adopt = false): SparseSnapshot | undefined {
+  let lines: string[];
+  try {
+    if (!configEnabled(workspace, "core.sparseCheckout")) return undefined;
+    lines = readFileSync(sparsePatternPath(workspace), "utf8").split("\n");
+  } catch {
+    return undefined;
+  }
+  if (!lines.includes(BOARD_SETTINGS_LINE)) return undefined;
+  if (adopt) {
+    console.error(
+      `[workspace] ${workspace.name}: no sparse snapshot is stored, but the board's ${BOARD_SETTINGS_LINE} line is left ` +
+        "in the sparse-checkout; taking the other lines as the human's non-cone patterns (cone mode is not restored)",
+    );
+  }
+  return { mode: "no-cone", pattern: lines.filter((line) => line !== BOARD_SETTINGS_LINE).join("\n") };
+}
+
+/** 「盤面が settings.json を隠している最中か」の印 —— 写し、無ければ残った盤面の行。S bit は読まない(ADR 0293 決定3)。 */
 export function projectSettingsHiddenByBoard(db: Db, workspace: WorkspaceConfig): boolean {
-  return storedSparseSnapshot(db, workspace) !== undefined;
+  return (storedSparseSnapshot(db, workspace) ?? snapshotFromBoardLine(workspace)) !== undefined;
 }
 
 /** Keep shared project settings (ADR 0158) in Git but out of the worker's physical checkout:
@@ -502,24 +529,26 @@ export function projectSettingsHiddenByBoard(db: Db, workspace: WorkspaceConfig)
  *  worker never sees more than the human's checkout does. Non-cone sparse-checkout leaves the
  *  index and status clean, so branch changes and the slot-release tree rule need no special case. */
 export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConfig): void {
-  // 写しは無いときだけ撮る —— 回収前の2本目が盤面の形を人間の状態として写さない(ADR 0293 決定1)
+  // 写しは DB に無いときだけ撮る —— 回収前の2本目が盤面の形を人間の状態として写さない(ADR 0293 決定1)。
+  // 残った盤面の行から読んだ写しも DB に写す —— この session の回収が worker の書いた pattern を読み直さない(決定7)
   let snapshot = storedSparseSnapshot(db, workspace);
   if (!snapshot) {
-    const patternPath = sparsePatternPath(workspace);
-    const pattern = existsSync(patternPath) ? readFileSync(patternPath, "utf8") : null;
-    const enabled = (key: string) =>
-      git(workspace.path, "config", "--type=bool", "--default=false", "--get", key) === "true";
-    snapshot =
-      pattern === null || !enabled("core.sparseCheckout")
-        ? { mode: "disabled", pattern }
-        : { mode: enabled("core.sparseCheckoutCone") ? "cone" : "no-cone", pattern };
+    snapshot = snapshotFromBoardLine(workspace, true);
+    if (!snapshot) {
+      const patternPath = sparsePatternPath(workspace);
+      const pattern = existsSync(patternPath) ? readFileSync(patternPath, "utf8") : null;
+      snapshot =
+        pattern === null || !configEnabled(workspace, "core.sparseCheckout")
+          ? { mode: "disabled", pattern }
+          : { mode: configEnabled(workspace, "core.sparseCheckoutCone") ? "cone" : "no-cone", pattern };
+    }
     db.prepare(
       `INSERT INTO workspace_state (name, sparse_snapshot) VALUES (?, ?)
        ON CONFLICT(name) DO UPDATE SET sparse_snapshot = excluded.sparse_snapshot`,
     ).run(snapshotKey(workspace), JSON.stringify(snapshot));
   }
   const base = snapshot.mode === "disabled" ? "/*\n" : snapshot.pattern;
-  gitWithInput(`${base.trimEnd()}\n!/.claude/settings.json\n`, workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
+  gitWithInput(`${base.trimEnd()}\n${BOARD_SETTINGS_LINE}\n`, workspace.path, "sparse-checkout", "set", "--no-cone", "--stdin");
   if (lstatSync(join(workspace.path, ".claude", "settings.json"), { throwIfNoEntry: false })) {
     throw new Error(`workspace ${workspace.name}: could not exclude .claude/settings.json`);
   }
@@ -532,7 +561,7 @@ export function excludeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConf
  *  let git itself write the mode (cone lives in config.worktree — ADR 0293 決定4). The snapshot
  *  is dropped only after git succeeded; a failure throws for the caller to quarantine. */
 export function materializeWorkspaceProjectSettings(db: Db, workspace: WorkspaceConfig): void {
-  const snapshot = storedSparseSnapshot(db, workspace);
+  const snapshot = storedSparseSnapshot(db, workspace) ?? snapshotFromBoardLine(workspace, true);
   if (!snapshot) return;
   const patternPath = sparsePatternPath(workspace);
   if (snapshot.mode === "disabled") {
@@ -551,7 +580,8 @@ export function materializeWorkspaceProjectSettings(db: Db, workspace: Workspace
 }
 
 /** Recover a sparse exclusion left by a previous board process — each listed workspace whose name
- *  still has a snapshot (ADR 0293 決定3); rows under other keys are not visited. The caller must first prove that the old container set is empty;
+ *  still has a snapshot, or whose checkout still carries the board's line (ADR 0293 決定3 / 決定7);
+ *  rows under other keys are not visited. The caller must first prove that the old container set is empty;
  *  otherwise restoring settings would expose them to a process that survived the restart. */
 export function restoreWorkspaceProjectSettingsAtBoot(
   db: Db,
