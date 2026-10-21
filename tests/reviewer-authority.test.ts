@@ -177,8 +177,7 @@ it("pickup 後の被レビュー task の assignee は空に戻せず、Executor
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  pickupTask(db, work, "first-worker", at, { assignee: "first-worker" });
-  returnToQueue(db, getTask(db, work.id)!, { kind: "cap_interrupted" }, at);
+  returnToQueue(db, pickupTask(db, work, "first-worker", at, { assignee: "first-worker" })!, { kind: "cap_interrupted" }, at);
   const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
   expect(() => editTask(db, getTask(db, work.id)!, { assignee: "" }, at, "webui")).toThrow(DomainError);

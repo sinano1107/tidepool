@@ -182,8 +182,7 @@ const at = new Date("2026-10-21T00:00:00.000Z");
 function returnedAfterPickup() {
   const db = openDb(":memory:");
   const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand", workspace: "home" }, at, ...HUMAN_WEBUI);
-  pickupTask(db, task, "deckhand", at);
-  returnToQueue(db, getTask(db, task.id)!, { kind: "cap_interrupted" }, at);
+  returnToQueue(db, pickupTask(db, task, "deckhand", at)!, { kind: "cap_interrupted" }, at);
   return { db, task: getTask(db, task.id)! };
 }
 
