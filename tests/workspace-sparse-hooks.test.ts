@@ -247,13 +247,11 @@ it("写しを失った cone の checkout は、起動時に残った盤面の行
   expect(log).toHaveBeenCalledOnce();
 });
 
-it("写しを失った sparse 無しの checkout は、pickup で盤面の行を印と読み、隠すとき行を外した写しを DB に残す(ADR 0293 決定7)", async () => {
+it("写しを失った sparse 無しの checkout は、pickup で盤面の行を印と読み、隠すとき行を外した写しを盤面に残す(ADR 0293 決定7)", async () => {
   const workspace = await monorepo("sparse-orphan-none");
   excludeWorkspaceProjectSettings(rebuildBoard(), workspace);
   const board = rebuildBoard();
   const log = silenceLog();
-  const storedSnapshot = () =>
-    board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(workspace.name) as string | null;
 
   // claude-worker の pickup の枝と同じ順
   const hidden = projectSettingsHiddenByBoard(board, workspace);
@@ -262,12 +260,26 @@ it("写しを失った sparse 無しの checkout は、pickup で盤面の行を
   expect(workspaceSettingsDisposition(workspace.path, hidden).excludeProjectSettings).toBe(true);
   excludeWorkspaceProjectSettings(board, workspace);
   expect(log).toHaveBeenCalledOnce();
-  expect(JSON.parse(storedSnapshot()!)).toEqual({ mode: "no-cone", pattern: "/*\n" });
+  // session 中に worker が pattern ファイルを書き換えても、回収は盤面に残した写しで戻す(決定5)
+  writeFileSync(join(workspace.path, ".git/info/sparse-checkout"), "/pkg-b/\n!/.claude/settings.json\n");
 
   materializeWorkspaceProjectSettings(board, workspace);
   expect(git(workspace.path, "sparse-checkout", "list")).toBe("/*");
   expect(exists(workspace, ".claude/settings.json")).toBe(true);
-  expect(storedSnapshot()).toBeNull();
+  expect(exists(workspace, "pkg-a/a.txt")).toBe(true);
+  expect(projectSettingsHiddenByBoard(board, workspace)).toBe(false);
+});
+
+it("旧い機構の行(先頭 / 無し)は盤面の印と読まない(ADR 0293 決定7)", async () => {
+  const workspace = await monorepo("sparse-orphan-legacy");
+  git(workspace.path, "sparse-checkout", "set", "--no-cone", "/*", "!.claude/settings.json");
+  const board = rebuildBoard();
+
+  expect(projectSettingsHiddenByBoard(board, workspace)).toBe(false);
+  restoreWorkspaceProjectSettingsAtBoot(board, () => [workspace], new Date("2026-10-21T00:00:00.000Z"));
+
+  expect(git(workspace.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!.claude/settings.json"]);
+  expect(exists(workspace, ".claude/settings.json")).toBe(false);
 });
 
 it("人間が disable した checkout に残る盤面の行は死んでいて、印と読まない(ADR 0293 決定7)", async () => {

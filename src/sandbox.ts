@@ -700,9 +700,9 @@ function settingsFile(
  *  gate's live-checkout signal (issue #686) — `.claude/settings.json` on disk
  *  and not in the index, whatever it holds.
  *
- *  `hiddenByBoard` is the caller's sparse snapshot presence (ADR 0293 決定3): only then is a
- *  tracked `settings.json` absent from the tree read from the index. Callers without a snapshot
- *  leave it false, so a file the human's own sparse-checkout leaves out reads as absent. */
+ *  `hiddenByBoard` is `projectSettingsHiddenByBoard` — the sparse snapshot, or failing that the
+ *  board's leftover exclusion line (ADR 0293 決定3 / 決定7): only then is a tracked `settings.json`
+ *  absent from the tree read from the index. Callers without that mark leave it false, so a file the human's own sparse-checkout leaves out reads as absent. */
 export function workspaceSettingsDisposition(workspacePath: string, hiddenByBoard = false) {
   const offending: string[] = [];
   let excludeProjectSettings = false;
