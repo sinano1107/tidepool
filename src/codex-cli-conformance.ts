@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { type Row, rowOf, type Verdict } from "./claude-cli-conformance.js";
 import { type CodexAppServerProbeResult, type compatibilityCheck, modelListResponse, whyRowUnlisted } from "./codex-app-server.js";
-import { observedAgentsMdLayer, parseJsonl, readCodexUsage, readTurnFailure } from "./codex-worker.js";
+import { codexTokenUsage, observedAgentsMdLayer, parseJsonl, readCodexUsage, readTurnFailure } from "./codex-worker.js";
 import type { ContainmentCapability } from "./containment.js";
 import { EFFORT_LEVELS } from "./effort.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
@@ -221,7 +221,7 @@ export async function judgeConformance(obs: ConformanceObservations): Promise<{ 
 }
 
 /** 種の openai 行ごとに `exec --json` の最小の1ターンを撃ち(ADR 0187 決定4)、worker の出力の読み取りで読む:
- *  `turn.failed` が無く、`turn.completed` の usage が読めたときだけ合格。1行ずつ順に撃つ。 */
+ *  `turn.failed` が無く、`turn.completed` の usage が worker と同じ正規化で計測値として読めたときだけ合格。1行ずつ順に撃つ。 */
 export async function judgeSeedRows(
   execTurn: (row: { model: string; effort: string | null }) => Promise<string>,
 ): Promise<Row[]> {
@@ -232,10 +232,12 @@ export async function judgeSeedRows(
         const events = (await execTurn({ model, effort })).split("\n").map(parseJsonl);
         const failure = events.map(readTurnFailure).filter((message) => message !== null).at(-1);
         if (failure !== undefined) return fail(`turn.failed: ${failure}`);
-        const usage = events.map(readCodexUsage).filter((read) => read !== null).at(-1);
-        return usage
-          ? { pass: true, detail: `turn.completed; tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / cache write ${usage.cache_write_input_tokens} / out ${usage.output_tokens}` }
-          : fail("no turn.completed line with readable usage");
+        const completed = events.filter((event) => readCodexUsage(event) !== null).at(-1);
+        const usage = readCodexUsage(completed);
+        if (!usage) return fail("no turn.completed line with readable usage");
+        const tokens = `tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / cache write ${usage.cache_write_input_tokens} / out ${usage.output_tokens}`;
+        // worker と同じ正規化関数で判定する —— 欠測(null)になる報告は seed row でも不合格(#2426)
+        return codexTokenUsage(completed) ? { pass: true, detail: `turn.completed; ${tokens}` } : fail(`turn.completed usage is not a measurement; ${tokens}`);
       }),
     );
   }

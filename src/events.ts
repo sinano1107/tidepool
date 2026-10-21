@@ -397,7 +397,8 @@ export type EventPayload =
   | { kind: "quarantine_released"; quarantine: string; value: string | null; observed_event_id?: number }
   // issue #32: pairs with worker_spawned to close out a worker session
   // (spawn~exit) — usage is null when the session ended without a final
-  // stream-json `result` event (e.g. watchdog kill); the event itself is
+  // stream-json `result` event (e.g. watchdog kill), or when its report cannot be
+  // read as a measurement (Codex, issues #2410 / #2426); the event itself is
   // always written, so a missing report never erases the session's cost.
   // estimated_cost_usd mirrors the CLI's total_cost_usd verbatim, but named
   // for the board's own vocabulary: under a subscription there is no real
