@@ -37,10 +37,10 @@ function buildPrompt(input: AllocationReviewInput): string {
     "actions (the action counts were not observed), or usage.advisor.usage (the advisor's share of the " +
     "consumption could not be measured) means that value was not observed — never zero, never \"did nothing\", " +
     "never zero cost; do not read it as evidence either way. " +
-    "The token counts in usage cover the worker's main thread only. For Claude, usage.models and " +
-    "usage.estimated_cost_usd include subagents and the advisor; for Codex, subagent consumption is not " +
-    "observed anywhere, so its counts can be lower than what the session actually used — do not read a " +
-    "small Codex count as evidence the session was cheap. " +
+    "The token counts in usage cover the worker's main thread only, and leave out context compaction. " +
+    "For Claude, usage.models and usage.estimated_cost_usd include subagents, the advisor and compaction; " +
+    "for Codex, neither subagent nor compaction consumption is observed anywhere, so its counts can be lower " +
+    "than what the session actually used — do not read a small Codex count as evidence the session was cheap. " +
     "Respond with ONLY a single JSON object (no markdown " +
     "fences, no prose) with these fields: " +
     `"allocation" (one of ${ALLOCATIONS.join(" / ")} — overpowered means a cheaper setting would ` +

@@ -131,9 +131,10 @@ export const swapsMain = (swap: ModelSwap): boolean => swap.scope !== "local";
 /** Consumption in the board's own vocabulary (ADR 0005 / issue #32) — the shape
  *  `worker_exited.usage` reports at the top level and per model id in `models`.
  *  What it covers depends on where it sits (ADR 0297 決定1): at the top level the
- *  four token fields are the parent thread's (the worker's main model) on every
- *  provider, while on Claude `estimated_cost_usd` and the `models` map as a whole
- *  are whole-session. See `worker_exited.usage`. */
+ *  four token fields sum the parent thread's ordinary inference calls (the
+ *  worker's main model) on every provider — subagent, advisor and compaction
+ *  calls are not in them — while on Claude `estimated_cost_usd` and the `models`
+ *  map as a whole are whole-session. See `worker_exited.usage`. */
 export interface TokenUsage {
   /** Input outside the cache — neither a cache read nor a cache write. The prompt total is
    *  input_tokens + cache_read_tokens + cache_creation_tokens (issue #2410). */
@@ -419,14 +420,16 @@ export type EventPayload =
   // across the change; `advisor` below is what makes the gap readable
   // instead of silent.
   //
-  // Scope by provider (ADR 0297 決定1): the four top-level token fields are the
-  // parent thread's consumption on Claude and Codex alike. On Claude, the
-  // top-level `estimated_cost_usd` and the `models` map as a whole are
-  // whole-session, subagents and advisor included (an entry is per model id,
-  // not per thread — see `models`). On Codex, subagent (child thread)
-  // consumption is not observed anywhere, and remote compaction V2 consumption
-  // is suspected not to be included either (issue #2430), so a Codex count can
-  // be lower than what the session actually used.
+  // Scope by provider (ADR 0297 決定1): the four top-level token fields sum the
+  // parent thread's ordinary inference calls on Claude and Codex alike —
+  // Claude's main-loop assistant messages, Codex's turn sampling responses — so
+  // subagent, advisor and context-compaction calls are not in them (compaction
+  // measured on both, issue #2430). On Claude, the top-level
+  // `estimated_cost_usd` and the `models` map as a whole are whole-session, all
+  // of those included (an entry is per model id, not per thread — see
+  // `models`). On Codex, neither subagent (child thread) nor compaction
+  // consumption is observed anywhere, so a Codex count can be lower than what
+  // the session actually used.
   | {
       kind: "worker_exited";
       exit_code: number | null;
