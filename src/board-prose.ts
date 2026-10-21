@@ -196,46 +196,43 @@ function reviewAssignableTo(db: Db, review: Task): string[] {
 /** One 当時版 version's evidence (ADR 0020 part 4, #1741 addendum): the body,
  *  then the Authority and Roster sections that spawn rendered, rebuilt from the
  *  registry at that commit under `level` headings nested in the 当時版 section.
- *  `parentReviewAssignableTo` is set when the objected task was itself a review:
- *  its Authority was then the reviewer constant, identical to the RCA's own. */
+ *  The objected task's type picks the branch, shared with spawn (`guidanceByType`):
+ *  a review's / interview's Authority was the reviewer constant, identical to the RCA's own,
+ *  so it is pointed at rather than repeated. */
 function versionEvidence(
+  db: Db,
   level: string,
   assignee: string,
   agent: AgentAtCommit & { body: string },
   registry: RegistryAtCommit,
-  parentReviewAssignableTo: string[] | undefined,
+  objected: Task,
 ): string {
   const body =
     agent.builtin && agent.body === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
       : agent.body;
-  let then: { label: string; guidance: string; assignable_to: string[] };
-  if (parentReviewAssignableTo !== undefined) {
-    then = {
-      label: "the board's reviewer authority",
-      guidance:
-        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
-        "It is board code, not a registry profile, so it is not a target for a registry diff.",
-      assignable_to: parentReviewAssignableTo,
-    };
-  } else {
-    const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
-    if (profile === undefined) {
-      const missing =
-        agent.authority === undefined
-          ? "your definition named no readable authority profile"
-          : `the authority profile ${agent.authority} could not be read`;
-      return (
-        `${body}\n\nNote: ${missing} at that commit — ` +
-        "the Authority and Roster you were given then are missing from this evidence."
-      );
-    }
-    then = { label: `profile ${agent.authority}`, ...profile };
+  const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
+  const then = guidanceByType(db, objected, profile);
+  if (then === undefined) {
+    const missing =
+      agent.authority === undefined
+        ? "your definition named no readable authority profile"
+        : `the authority profile ${agent.authority} could not be read`;
+    return (
+      `${body}\n\nNote: ${missing} at that commit — ` +
+      "the Authority and Roster you were given then are missing from this evidence."
+    );
   }
+  const label = then.source === "profile" ? `profile ${agent.authority}` : `the board's ${then.source} authority`;
+  const guidance =
+    then.source === "reviewer"
+      ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        "It is board code, not a registry profile, so it is not a target for a registry diff."
+      : then.guidance;
   return (
     body +
-    authoritySection(then.guidance, `${level} Authority as it stood then (${then.label})`) +
-    rosterSection(buildRoster(rosterSourceAt(registry), then.assignable_to), `${level} Roster as it stood then (${then.label})`)
+    authoritySection(guidance, `${level} Authority as it stood then (${label})`) +
+    rosterSection(buildRoster(rosterSourceAt(registry), then.rosterAssignableTo), `${level} Roster as it stood then (${label})`)
   );
 }
 
@@ -364,8 +361,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     const key = JSON.stringify([registry_commit, definition_version]);
     byVersion.set(key, [...(byVersion.get(key) ?? []), entryId]);
   }
-  const parent = getTask(db, task.parent_id);
-  const parentReviewAssignableTo = parent?.type === "review" ? reviewAssignableTo(db, parent) : undefined;
+  const objected = getTask(db, task.parent_id)!;
   const resolved: Array<{ entryIds: number[] } & NonNullable<ReturnType<typeof versionAt>>> = [];
   for (const [key, entryIds] of byVersion) {
     const [commit, version]: [string, string] = JSON.parse(key);
@@ -375,7 +371,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   }
   if (resolved.length === 0) return "";
   const evidence = (level: string, { agent, registry }: (typeof resolved)[number]) =>
-    versionEvidence(level, task.assignee!, agent, registry, parentReviewAssignableTo);
+    versionEvidence(db, level, task.assignee!, agent, registry, objected);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
@@ -422,8 +418,8 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
 
 /** Authority 節の本文・Roster の元・その直後の1行を type で選ぶ。修理子の type は Authority 節が
  *  REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。review / interview は reviewer の
- *  guidance と executor 1名の roster(ADR 0056)で、guidance の文は変えず直後に盤面が1行足す
- *  (ADR 0271 決定2 / ADR 0273 決定4)。それ以外は実行 agent の profile のまま。 */
+ *  guidance で、roster は review なら Executor 1名(ADR 0056)、interview は空(`reviewedTaskExecutor` は review にしか
+ *  引かない)。guidance の文は変えず直後に盤面が1行足す(ADR 0271 決定2 / ADR 0273 決定4)。それ以外は実行 agent の profile のまま。 */
 function authorityByType(
   db: Db,
   task: Task,
@@ -436,17 +432,18 @@ function authorityByType(
   return { ...guidanceByType(db, task, profile)!, notice };
 }
 
-/** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。profile を読むのは
+/** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。spawn・帰責の当時版・
+ *  self RCA の当時版が共有する唯一の分岐で、`source` は当時版の見出しが名指す文の出所。profile を読むのは
  *  修理子の type でも review / interview でもない task だけで、そこで profile が無ければ undefined。 */
 function guidanceByType(
   db: Db,
   task: Task,
   profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
-): { guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
-  if (isRepairType(task.type)) return { guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
+): { source: "repair" | "reviewer" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
+  if (isRepairType(task.type)) return { source: "repair", guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
-    return { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task) };
-  return profile && { guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
+    return { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task) };
+  return profile && { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
 /** 盤面が書いた文面の全体(ADR 0157 決定1)。節の順序は Harness を問わず

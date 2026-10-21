@@ -1,5 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { afterEach, expect, it } from "vitest";
-import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
+import { agentDefinitionThen } from "../src/board-prose.js";
+import { openDb } from "../src/db.js";
+import { DomainError } from "../src/domain-error.js";
+import { appendEvent, listEvents } from "../src/events.js";
+import { editTask, getTask, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
+import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, queueChild, queueWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -165,4 +172,57 @@ it("同じ review_by を送り直しても、未指名に [] を送っても tas
     (e) => e.kind === "task_edited" && e.payload.field === "review_by",
   );
   expect(edited).toHaveLength(1);
+});
+
+// pickup 済み task の assignee / workspace の門(ADR 0292 決定1 / #2369 / #2362)—— ドメイン層
+
+const at = new Date("2026-10-21T00:00:00.000Z");
+
+/** 人間登録の work を deckhand が pickup し、上限到達で `todo` に戻した盤面(escalate・decompose・queue 復帰と同じ窓)。 */
+function returnedAfterPickup() {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand", workspace: "home" }, at, ...HUMAN_WEBUI);
+  pickupTask(db, task, "deckhand", at);
+  returnToQueue(db, getTask(db, task.id)!, { kind: "cap_interrupted" }, at);
+  return { db, task: getTask(db, task.id)! };
+}
+
+it.each([
+  ["assignee を別名に", { assignee: "navigator" }],
+  ["assignee を空に", { assignee: "" }],
+  ["workspace を別名に", { workspace: "other" }],
+  ["workspace を空に", { workspace: "" }],
+])("pickup 済みで todo に戻った task の %s変える Edit は拒まれ、列は動かない(ADR 0292 決定1)", (_, input) => {
+  const { db, task } = returnedAfterPickup();
+
+  expect(() => editTask(db, task, input, at, "webui")).toThrow(DomainError);
+  expect(getTask(db, task.id)).toMatchObject({ assignee: "deckhand", workspace: "home" });
+});
+
+it("pickup 済みの task でも、assignee / workspace の値が変わらない送信と他の欄の Edit は従来どおり通る", () => {
+  const { db, task } = returnedAfterPickup();
+
+  const edited = editTask(db, task, { assignee: "deckhand", workspace: "home", title: "renamed" }, at, "webui");
+
+  expect(edited.title).toBe("renamed");
+  expect(listEvents(db, task.id).filter((e) => e.kind === "task_edited").map((e) => (e.payload as { field: string }).field)).toEqual(["title"]);
+});
+
+it("pickup の無い task の assignee / workspace は従来どおり空に戻せる(ADR 0233 決定5)", () => {
+  const db = openDb(":memory:");
+  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand", workspace: "home" }, at, ...HUMAN_WEBUI);
+
+  expect(editTask(db, task, { assignee: "", workspace: "" }, at, "webui")).toMatchObject({ assignee: null, workspace: null });
+});
+
+it("拒否の後も、review の spawn の当時版の Roster は spawn が描いた [deckhand] のまま(#2369 の再現)", async () => {
+  const { db, task } = returnedAfterPickup();
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: task.id }, at, ...HUMAN_WEBUI);
+  const registryDir = await makeRegistry();
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  appendEvent(db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
+  const spawned = listEvents(db, review.id).find((e) => e.kind === "worker_spawned")!;
+
+  expect(() => editTask(db, task, { assignee: "navigator" }, at, "webui")).toThrow(DomainError);
+  expect(agentDefinitionThen(db, registryDir, spawned)?.authority.assignable_to).toEqual(["deckhand"]);
 });

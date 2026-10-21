@@ -3465,7 +3465,7 @@ export function editTask(
   // input-derived) column name in the UPDATE below. An empty assignee/
   // workspace string means "unset — resolve to the board default" (CONTEXT.md's
   // Assignee/Workspace), so it is normalized to null, same "" ⇢ default the
-  // registration door omits the field for.
+  // registration door omits the field for — before the first pickup only (below).
   const flag = (v: number): string => (v ? "true" : "false");
   const changes: Array<{ field: string; from: string | null; to: string | null; value: string | number | null }> = [];
   for (const field of ["title", "purpose", "completion_criteria"] as const) {
@@ -3477,7 +3477,14 @@ export function editTask(
   for (const field of ["assignee", "workspace"] as const) {
     if (input[field] === undefined) continue;
     const next = input[field] || null;
-    if (next !== task[field]) changes.push({ field, from: task[field], to: next, value: next });
+    if (next === task[field]) continue;
+    // ADR 0292 決定1: 両欄の消費点は pickup —— 一度 pickup された task の列は走った先の固定の事実(ADR 0233 決定1)
+    if (latestEventOfTask(db, task.id, "task_picked_up")) {
+      throw new DomainError(
+        `a task that has been picked up keeps its ${field} — it records where the task ran; cancel it and register a new task to run it elsewhere`,
+      );
+    }
+    changes.push({ field, from: task[field], to: next, value: next });
   }
   for (const field of ["risk_flag", "review_flag"] as const) {
     const next = input[field];
