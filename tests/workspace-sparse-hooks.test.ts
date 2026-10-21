@@ -3,11 +3,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
+import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { registerTask } from "../src/tasks.js";
 import {
   excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
+  projectSettingsHiddenByBoard,
   releaseWorkspace,
   restoreWorkspaceProjectSettingsAtBoot,
   type WorkspaceConfig,
@@ -23,6 +25,7 @@ let db: Db | undefined;
 let tidepool: Tidepool | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   db?.close();
   db = undefined;
   await tidepool?.stop();
@@ -217,4 +220,80 @@ it("起動時の復元は写しの有無で対象を選ぶ —— S bit は読�
   expect(git(humans.path, "sparse-checkout", "list")).toBe("pkg-a");
   expect(exists(humans, ".claude/settings.json")).toBe(false);
   expect(workspaceNeedsHuman(db, humans.name)).toBe(false);
+});
+
+/** 盤面の作り直し —— 前の DB の写しは失われる(ADR 0293 決定7)。 */
+function rebuildBoard(): Db {
+  db?.close();
+  db = openDb(":memory:");
+  return db;
+}
+
+const silenceLog = () => vi.spyOn(console, "error").mockImplementation(() => {});
+
+it("写しを失った cone の checkout は、起動時に残った盤面の行を外して人間の行どおり戻す(ADR 0293 決定7)", async () => {
+  const workspace = await monorepo("sparse-orphan-cone");
+  git(workspace.path, "sparse-checkout", "set", "pkg-a", ".claude");
+  excludeWorkspaceProjectSettings(rebuildBoard(), workspace);
+  const board = rebuildBoard();
+  const log = silenceLog();
+
+  restoreWorkspaceProjectSettingsAtBoot(board, () => [workspace], new Date("2026-10-21T00:00:00.000Z"));
+
+  expect(git(workspace.path, "sparse-checkout", "list").split("\n")).toEqual(["/*", "!/*/", "/.claude/", "/pkg-a/"]);
+  expect(exists(workspace, ".claude/settings.json")).toBe(true);
+  expect(exists(workspace, "pkg-b")).toBe(false);
+  expect(workspaceNeedsHuman(board, workspace.name)).toBe(false);
+  expect(log).toHaveBeenCalledOnce();
+});
+
+it("写しを失った sparse 無しの checkout は、pickup で盤面の行を印と読み、隠すとき行を外した写しを DB に残す(ADR 0293 決定7)", async () => {
+  const workspace = await monorepo("sparse-orphan-none");
+  excludeWorkspaceProjectSettings(rebuildBoard(), workspace);
+  const board = rebuildBoard();
+  const log = silenceLog();
+  const storedSnapshot = () =>
+    (board.prepare("SELECT sparse_snapshot FROM workspace_state WHERE name = ?").pluck().get(workspace.name) ?? null) as
+      | string
+      | null;
+
+  // claude-worker の pickup の枝と同じ順
+  const hidden = projectSettingsHiddenByBoard(board, workspace);
+  expect(log).not.toHaveBeenCalled();
+  expect(hidden).toBe(true);
+  expect(workspaceSettingsDisposition(workspace.path, hidden).excludeProjectSettings).toBe(true);
+  excludeWorkspaceProjectSettings(board, workspace);
+  expect(log).toHaveBeenCalledOnce();
+  expect(JSON.parse(storedSnapshot()!)).toEqual({ mode: "no-cone", pattern: "/*\n" });
+
+  materializeWorkspaceProjectSettings(board, workspace);
+  expect(git(workspace.path, "sparse-checkout", "list")).toBe("/*");
+  expect(exists(workspace, ".claude/settings.json")).toBe(true);
+  expect(storedSnapshot()).toBeNull();
+});
+
+it("人間が disable した checkout に残る盤面の行は死んでいて、印と読まない(ADR 0293 決定7)", async () => {
+  const workspace = await monorepo("sparse-orphan-disabled");
+  excludeWorkspaceProjectSettings(rebuildBoard(), workspace);
+  git(workspace.path, "sparse-checkout", "disable");
+  const pattern = readFileSync(join(workspace.path, ".git/info/sparse-checkout"), "utf8");
+  const board = rebuildBoard();
+  const log = silenceLog();
+
+  expect(projectSettingsHiddenByBoard(board, workspace)).toBe(false);
+  restoreWorkspaceProjectSettingsAtBoot(board, () => [workspace], new Date("2026-10-21T00:00:00.000Z"));
+
+  expect(git(workspace.path, "config", "--type=bool", "--default=false", "--get", "core.sparseCheckout")).toBe("false");
+  expect(readFileSync(join(workspace.path, ".git/info/sparse-checkout"), "utf8")).toBe(pattern);
+  expect(log).not.toHaveBeenCalled();
+});
+
+it("登録 path が無い workspace の探りの失敗は印なしと読み、起動時に quarantine しない(ADR 0293 決定7)", async () => {
+  const workspace = await makeWorkspace("sparse-orphan-gone");
+  const gone = { ...workspace, path: join(workspace.path, "gone") };
+  const board = rebuildBoard();
+
+  restoreWorkspaceProjectSettingsAtBoot(board, () => [gone], new Date("2026-10-21T00:00:00.000Z"));
+
+  expect(workspaceNeedsHuman(board, gone.name)).toBe(false);
 });
