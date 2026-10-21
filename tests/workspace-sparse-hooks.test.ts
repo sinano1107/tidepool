@@ -5,7 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
-import { registerTask } from "../src/tasks.js";
+import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   excludeWorkspaceProjectSettings,
@@ -342,7 +342,7 @@ it("起動時の復元は registry 外の面接室も写しどおり戻し、roo
   db = openDb(":memory:");
   const registered = await monorepo("sparse-boot-registered");
   const room = await monorepo("sparse-boot-room");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the target writes the parser", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] as never }, BOOT, ...HUMAN_WEBUI);
+  const root = getTask(db, interviewRootIdOf(db, interviewExaminee(db, BOOT))!)!;
   appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
   const place = taskRunPlace(db, root, registered);
   excludeWorkspaceProjectSettings(db, place);
