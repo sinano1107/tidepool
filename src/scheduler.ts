@@ -278,6 +278,7 @@ export interface Scheduler {
 /** poll 1回の結末: 本体に入って投げずに終わった / 投げた / 門で返った(その理由)。 */
 export type PollOutcome = { outcome: "succeeded" } | { outcome: "threw"; message: string } | { outcome: "blocked"; reason: string };
 const SUCCEEDED: PollOutcome = { outcome: "succeeded" };
+const IN_FLIGHT: PollOutcome = { outcome: "blocked", reason: "another poll is in flight" };
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
  *  to the worker and mark it in_progress. */
@@ -754,7 +755,7 @@ export function startScheduler(deps: {
   }
 
   async function poll(): Promise<PollOutcome> {
-    if (inFlight) return { outcome: "blocked", reason: "another poll is in flight" };
+    if (inFlight) return IN_FLIGHT;
     // **`inFlight` は `pickupBlocked` より手前で立てる。** 封じ込め能力の検査が
     // 実 HTTP を1往復するようになった時点(issue #154)で、ここに await 点が
     // できた — 後で立てると、hourly tick と `POST /tasks/:id/move` が同時に
@@ -986,6 +987,8 @@ export function startScheduler(deps: {
       await converge();
       await polling;
       if (stopped) return { outcome: "blocked", reason: "the board is stopping" };
+      // 待つ間に契機の poll が走り出していれば、その promise を置き換えない —— `idle` が走っている poll を見失う(`pollNow` と同じ判定)
+      if (inFlight) return IN_FLIGHT;
       const rerun = poll();
       polling = rerun;
       return rerun;
