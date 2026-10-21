@@ -35,15 +35,23 @@ export interface ClaudeBoardCallAnswer<T> {
 
 // the CLI's `-p --output-format json` usage (vendor-specific, kept private to this adapter — ADR 0005):
 // the same total_cost_usd/usage shape claude-worker.ts's stream-json result event carries
-const envelopeUsageSchema = z.object({
-  total_cost_usd: z.number(),
-  usage: z.object({
-    input_tokens: z.number(),
-    output_tokens: z.number(),
-    cache_read_input_tokens: z.number(),
-    cache_creation_input_tokens: z.number(),
-  }),
-});
+const envelopeUsageSchema = z
+  .object({
+    total_cost_usd: z.number(),
+    usage: z.object({
+      input_tokens: z.number(),
+      output_tokens: z.number(),
+      cache_read_input_tokens: z.number(),
+      cache_creation_input_tokens: z.number(),
+    }),
+  })
+  .transform(({ total_cost_usd, usage }): TranslationUsage => ({
+    input_tokens: usage.input_tokens,
+    output_tokens: usage.output_tokens,
+    cache_read_tokens: usage.cache_read_input_tokens,
+    cache_creation_tokens: usage.cache_creation_input_tokens,
+    estimated_cost_usd: total_cost_usd,
+  }));
 
 /** Safely extracts a JSON object from a CLI response (issue #25): the model
  *  is instructed to answer with bare JSON, but real-world output sometimes
@@ -113,19 +121,7 @@ export async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<Cla
   if (typeof result !== "string") {
     throw new Error(`${label} CLI response missing a string result field`);
   }
-  const parsed = envelopeUsageSchema.safeParse(envelope);
-  return {
-    output: result,
-    usage: parsed.success
-      ? {
-          input_tokens: parsed.data.usage.input_tokens,
-          output_tokens: parsed.data.usage.output_tokens,
-          cache_read_tokens: parsed.data.usage.cache_read_input_tokens,
-          cache_creation_tokens: parsed.data.usage.cache_creation_input_tokens,
-          estimated_cost_usd: parsed.data.total_cost_usd,
-        }
-      : undefined,
-  };
+  return { output: result, usage: envelopeUsageSchema.safeParse(envelope).data };
 }
 
 /** The answer as the JSON object `extractJson` finds in it, validated by `schema` — the model's reply is untrusted input. */
