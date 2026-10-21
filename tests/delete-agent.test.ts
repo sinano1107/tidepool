@@ -5,7 +5,7 @@ import { openDb } from "../src/db.js";
 import { loadRegistry, registryAtCommit } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI } from "./harness.js";
+import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 
 function git(cwd: string, ...args: string[]): string {
@@ -274,6 +274,7 @@ describe("countUnsettledWorkAssignedTo: 数えるのは未決着の work だけ(
     const db = openDb(":memory:");
     const at = new Date("2026-08-05T00:00:00.000Z");
     const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    markPickedUp(db, parent.id, at);
     for (const type of ["memory_repair", "routing_repair", "review"] as const) {
       registerTask(db, { type, title: type, purpose: "p", completion_criteria: "c", assignee: "deckhand", parent_id: parent.id }, at, ...HUMAN_WEBUI);
     }
