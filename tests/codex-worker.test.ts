@@ -1089,10 +1089,10 @@ describe("CodexWorker (ADR 0098)", () => {
       exit_code: 0,
       signal: null,
       usage: {
-        input_tokens: 120,
+        input_tokens: 93,
         output_tokens: 30,
         cache_read_tokens: 20,
-        cache_creation_tokens: 0,
+        cache_creation_tokens: 7,
         estimated_cost_usd: null,
         advisor: null,
       },
@@ -1191,6 +1191,30 @@ describe("CodexWorker (ADR 0098)", () => {
   const reportedErrorAfter = async (id: string, events: object[]) => (await exitedAfter(id, events)).reported_error;
   const lastMessageAfter = async (id: string, events: object[]) => (await exitedAfter(id, events)).last_message;
   const said = (text: string) => ({ type: "item.completed", item: { id: "item_0", type: "agent_message", text } });
+
+  // issue #2410: Codex の usage は input_tokens をキャッシュ外の入力に写す。欠けた欄と負の引き算は欠測(null)
+  it("0.147.0 の実物の turn.completed から、cache 読み・cache 書きを引いたキャッシュ外の input_tokens を書く", async () => {
+    const line = readFileSync(new URL("fixtures/worker-session-codex-0.147.0.stream.jsonl", import.meta.url), "utf8")
+      .split("\n")
+      .find((text) => text.includes('"turn.completed"'))!;
+    expect((await exitedAfter("codex-usage-0147", [JSON.parse(line)])).usage).toMatchObject({
+      input_tokens: 17_375,
+      output_tokens: 584,
+      cache_read_tokens: 79_616,
+      cache_creation_tokens: 0,
+      estimated_cost_usd: null,
+    });
+  });
+
+  it("cache_write_input_tokens が無い turn.completed の usage は 0 で埋めず欠測(null)", async () => {
+    const completed = { type: "turn.completed", usage: { input_tokens: 120, cached_input_tokens: 20, output_tokens: 30 } };
+    expect((await exitedAfter("codex-usage-no-cache-write", [completed])).usage).toBeNull();
+  });
+
+  it("cached + cache_write が input を超える turn.completed の usage は負にも 0 にも丸めず欠測(null)", async () => {
+    const completed = { type: "turn.completed", usage: { input_tokens: 10, cached_input_tokens: 8, cache_write_input_tokens: 3, output_tokens: 1 } };
+    expect((await exitedAfter("codex-usage-negative", [completed])).usage).toBeNull();
+  });
 
   it("turn.failed の error.message を入れ子の JSON も解かず逐語で reported_error に載せる(ADR 0188 / #1256)", async () => {
     const message =
@@ -1353,7 +1377,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     await tick();
     f.process.processes[0]!.stdout.write(
       `${JSON.stringify({ type: "turn.failed", error: { message: "boom" } })}\n` +
-        `${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 9, cached_input_tokens: 1, output_tokens: 4 } })}\n`,
+        `${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 9, cached_input_tokens: 1, cache_write_input_tokens: 0, output_tokens: 4 } })}\n`,
     );
     f.process.processes[0]!.stderr.write("LAST-STDERR\n");
     await tick();
@@ -1362,7 +1386,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     expect(exitedOf(f, value.id)).toMatchObject({
       reported_error: "boom",
       stderr_tail: "LAST-STDERR",
-      usage: { input_tokens: 9, output_tokens: 4, cache_read_tokens: 1 },
+      usage: { input_tokens: 8, output_tokens: 4, cache_read_tokens: 1 },
       output_closed: true,
     });
   });
@@ -1457,7 +1481,7 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     const { value, calls, exited } = await exitAfter(
       "codex-completed",
       probe,
-      { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, output_tokens: 1 } },
+      { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1 } },
       0,
     );
 

@@ -132,9 +132,12 @@ export const swapsMain = (swap: ModelSwap): boolean => swap.scope !== "local";
  *  vocabulary (ADR 0005 / issue #32) — the shape `worker_exited.usage` reports
  *  at the top level and per model id in `models`. */
 export interface TokenUsage {
+  /** Input outside the cache — neither a cache read nor a cache write. The prompt total is
+   *  input_tokens + cache_read_tokens + cache_creation_tokens (issue #2410). */
   input_tokens: number;
   output_tokens: number;
   cache_read_tokens: number;
+  /** A Codex 0 copies codex's own report; whether the backend reported a cache write is not visible here (issue #2410). */
   cache_creation_tokens: number;
   /** Codex JSONL reports tokens but no API-equivalent cost under ChatGPT auth. */
   estimated_cost_usd: number | null;
