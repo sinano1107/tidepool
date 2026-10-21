@@ -83,7 +83,10 @@ case "$sub" in
       *"claude-cli-version"*) printf '{"claude":"2.1.289","codex":"0.147.0"}' ;;
       *"Benchmark workspaces"*) echo registrysha ;;
       *"npm run -s token") printf '\n  token: TKN\n  hash stored in: /home/x/bench/api-token\n' ;;
-      *"current-root"*) id="${cmd##* }"; at_poll "$CASE_DIR/state/root/$id" "$id" ;;
+      *"current-root"*)
+        id="${cmd##* }"; root="$(at_poll "$CASE_DIR/state/root/$id" "$id")"
+        [ "$root" = FAIL ] && exit 1
+        echo "$root" ;;
       *"export EXERCISE_DIR"*) exit "$TEST_EXIT" ;;
     esac
     ;;
@@ -127,7 +130,10 @@ case "$method $path" in
     status="$(at_poll "$CASE_DIR/state/status/$id" landed)"
     case "$status" in landed | held) status=done ;; esac
     echo "{\"id\":\"$id\",\"status\":\"$status\",\"type\":\"$(at_poll "$CASE_DIR/state/type/$id" work)\"}" ;;
-  "GET /your-tasks") echo '[{"id":"q1","title":"land completed task: Fix it"}]' ;;
+  "GET /tasks") echo '[{"id":"root1","type":"work","status":"done","title":"Fix it"},{"id":"q1","type":"question","status":"todo","title":"land completed task: Fix it"}]' ;;
+  "POST /spend-down")
+    if [ "$(at_poll "$CASE_DIR/state/spend-down" ok)" = refuse ]; then echo '{"error":"window is resetting"}'; exit 22; fi
+    echo '{}' ;;
   "GET /settings/execution") echo '{"table":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25,"quarantine_question_id":null}]}' ;;
   *) echo '{}' ;;
 esac
@@ -217,7 +223,7 @@ steps() {
     -e 's/^vm\([^)]*\) .*current-root .* ([^ ]*)$/current-root \1/' \
     -e 's/^curl GET [^ ]* \/tasks\/([^/ ]*)\/events.*/events \1/' \
     -e 's/^curl GET [^ ]* \/tasks\/([^/ ]*) *$/status \1/' \
-    -e 's/^curl GET [^ ]* \/your-tasks.*/questions/' \
+    -e 's/^curl GET [^ ]* \/tasks *$/questions/' \
     -e 's/^vm\([^)]*\) .*export EXERCISE_DIR.*/expected-test/' \
     -e 's/^curl GET [^ ]* \/settings\/execution.*/read-table/' \
     -e 's/^limactl copy .* tidepool-bench:bench\/input.json$/copy-input/' \
@@ -375,6 +381,16 @@ check "Interview retry: exits 0" "0" "$rc"
 check "Interview retry: keeps waiting on the new root, not the cancelled old one" "3" "$(grep -c '^sleep' <<< "$log")"
 check "Interview retry: the old root is not read again once the retry is seen" "1" "$(grep -c 'curl GET http://127.0.0.1:4700 /tasks/root2 *$' <<< "$log")"
 check "Interview retry: the extraction gets the new root's id" "root3" "$(jq -r '.exercises[1].task_id' "$CASE_DIR/input.json")"
+
+# Hours of waiting meet transient failures: spend-down refused after a window reset, a current-root read that fails.
+reset_case
+ARGS="b-work"
+printf 'todo\ntodo\nlanded\n' > "$CASE_DIR/state/status/root1"
+printf 'FAIL\nroot1\n' > "$CASE_DIR/state/root/root1"
+printf 'ok\nrefuse\nok\n' > "$CASE_DIR/state/spend-down"
+run_harness
+check "transient failures in the wait: the run still settles and extracts" "0 root1" "$rc $(jq -r '.exercises[0].task_id' "$CASE_DIR/input.json")"
+check "transient failures in the wait: the open questions are listed once" "1" "$(grep -c 'land completed task: Fix it' <<< "$output")"
 
 # --- summary ----------------------------------------------------------------------
 

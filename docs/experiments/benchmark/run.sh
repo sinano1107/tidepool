@@ -207,24 +207,26 @@ settled() {
 }
 
 # No timeout, per exercise or overall: a human's wait is recorded, not failed (ADR 0298 決定6). Settlement comes in
-# any order, so every root is read on every poll, through a retry if the human retried an Interview root.
+# any order, so every root is read on every poll, through a retry if the human retried an Interview root. A failed
+# read only costs that poll: the run must outlive a transient error over hours of waiting.
 wait_for_settlement() {
-  local i open shown="" questions
+  local i open root shown="" questions
   while :; do
     open=0
     for i in "${!ROOTS[@]}"; do
-      ROOTS[i]="$(vm "source ~/bench/env && $TSX current-root \"\$TIDEPOOL_DB\" ${ROOTS[i]}")"
+      root="$(vm "source ~/bench/env && $TSX current-root \"\$TIDEPOOL_DB\" ${ROOTS[i]}")" && ROOTS[i]="$root"
       settled "${ROOTS[i]}" || open=1
     done
     ((open)) || return 0
-    questions="$(api GET /your-tasks | jq -r '.[] | "  \(.id)  \(.title)"')"
-    if [[ "$questions" != "$shown" ]]; then
+    if questions="$(api GET /tasks | jq -r '.[] | select(.type == "question" and .status != "done" and .status != "cancelled") | "  \(.id)  \(.title)"')" \
+      && [[ "$questions" != "$shown" ]]; then
       log "waiting on the board; open questions (answer them in the WebUI):"
       printf '%s\n' "${questions:-  (none)}"
       shown="$questions"
     fi
-    # re-armed every poll: a session window's reset drops it, and the post wakes the scheduler
-    spend_down
+    # re-armed every poll: a session window's reset drops it, and the post wakes the scheduler. The board refuses
+    # an arm for the 5 minutes after a window resets, so a refusal waits for the next poll.
+    spend_down || true
     sleep 60
   done
 }
