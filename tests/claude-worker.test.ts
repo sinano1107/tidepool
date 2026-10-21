@@ -4293,6 +4293,20 @@ describe("advisor capability (issue #33)", () => {
 
   // ── 差し替え(issue #1523 / ADR 0215)────────────────────────────
 
+  // #1425 の VM 実測で見た2段目の行(`...` で省かれていた欄は足さない)
+  const swapLine = (over: Record<string, unknown> = {}) =>
+    `${JSON.stringify({
+      type: "system",
+      subtype: "model_refusal_fallback",
+      trigger: "refusal",
+      direction: "retry",
+      scope: "session",
+      original_model: "claude-fable-5-1",
+      fallback_model: "claude-opus-4-8",
+      api_refusal_category: "cyber",
+      ...over,
+    })}\n`;
+
   describe("差し替え(issue #1523 / ADR 0215)", () => {
     const REFUSAL_ENVS = ["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "CLAUDE_CODE_NO_MODEL_FALLBACK", "CLAUDE_CODE_DISABLE_REFUSAL_RETRY"];
 
@@ -4307,20 +4321,6 @@ describe("advisor capability (issue #33)", () => {
         vi.unstubAllEnvs();
       }
     });
-
-    // #1425 の VM 実測で見た2段目の行(`...` で省かれていた欄は足さない)
-    const swapLine = (over: Record<string, unknown> = {}) =>
-      `${JSON.stringify({
-        type: "system",
-        subtype: "model_refusal_fallback",
-        trigger: "refusal",
-        direction: "retry",
-        scope: "session",
-        original_model: "claude-fable-5-1",
-        fallback_model: "claude-opus-4-8",
-        api_refusal_category: "cyber",
-        ...over,
-      })}\n`;
 
     it("model_refusal_fallback の行は出た順に usage.model_swaps へ逐語で載り、scope が local の行も載る(決定2・3)", async () => {
       const exits: WorkerExit[] = [];
@@ -4417,7 +4417,6 @@ describe("advisor capability (issue #33)", () => {
       expect(await run("task-swap-omitted", undefined)).toMatchObject({ usage: null });
       expect(await run("task-swap-local", "local")).toMatchObject({ usage: separated });
     });
-
   });
 
   // ── advisor と同じ model の subagent(issue #2432)──────────────────
@@ -4484,8 +4483,7 @@ describe("advisor capability (issue #33)", () => {
 
     // local の差し替えは subagent だけが替わる(ADR 0215 決定2)—— 行き先が advisor の id なら、その消費が advisor の entry に入る
     it("scope が local の差し替えの行き先が advisor の id なら null、別の id なら数字", async () => {
-      const localSwap = (to: string) =>
-        `${JSON.stringify({ type: "system", subtype: "model_refusal_fallback", scope: "local", original_model: "claude-sonnet-5", fallback_model: to })}\n`;
+      const localSwap = (to: string) => swapLine({ scope: "local", original_model: "claude-sonnet-5", fallback_model: to });
       expectAdvisorUsage(await run("task-local-to-advisor", [localSwap("claude-opus-5")]), null);
       expectAdvisorUsage(await run("task-local-elsewhere", [localSwap("claude-opus-4-8")]), separated);
     });
