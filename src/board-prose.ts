@@ -346,11 +346,8 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   // per entry: the spawn live when it was written — the latest worker_spawned
   // by this worker at or before the entry. Map insertion order is
   // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
-  // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)—— と、spawn が描いた Roster
-  // (ADR 0270 追記)。同じ版で spawn ごとに変わる Roster の元は被レビュー task の Executor だけなので、その名で代える。
-  // ponytail: registry に無い(組み込みを含む)別々の Executor は同じ空の Roster でも別節になる —— 畳みたくなったら描いた Roster の行を鍵にする
-  const objected = getTask(db, task.parent_id)!;
-  const byVersion = new Map<string, { entryIds: number[]; spawnedEventId: number }>();
+  // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)
+  const byVersion = new Map<string, Array<{ entryId: number; spawnedEventId: number }>>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
     const spawned = events
@@ -366,20 +363,32 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
       EventPayload,
       { kind: "worker_spawned" }
     >;
-    const key = JSON.stringify([registry_commit, definition_version, reviewedTaskExecutor(db, objected, spawned.id) ?? null]);
-    const bundle = byVersion.get(key) ?? { entryIds: [], spawnedEventId: spawned.id };
-    byVersion.set(key, { ...bundle, entryIds: [...bundle.entryIds, entryId] });
+    const key = JSON.stringify([registry_commit, definition_version]);
+    byVersion.set(key, [...(byVersion.get(key) ?? []), { entryId, spawnedEventId: spawned.id }]);
   }
-  const resolved: Array<{ entryIds: number[]; spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>> = [];
-  for (const [key, bundle] of byVersion) {
+  const objected = getTask(db, task.parent_id)!;
+  type Version = { spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>;
+  const evidence = (level: string, { agent, registry, spawnedEventId }: Version) =>
+    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId);
+  // 同じ版でも spawn ごとに Roster が違いうる(Executor は spawn の時点で読む —— ADR 0295)ので、版の中では
+  // 各 spawn で描いた証拠が同じ entry だけを1節に畳む(ADR 0270 追記)
+  const drawn = new Map<string, { entryIds: number[] } & Version>();
+  for (const [key, entries] of byVersion) {
     const [commit, version]: [string, string] = JSON.parse(key);
     const at = versionAt(registryDir, task.assignee, commit, version);
-    if (at === undefined) unresolved.push(...bundle.entryIds);
-    else resolved.push({ ...bundle, ...at });
+    if (at === undefined) {
+      unresolved.push(...entries.map((entry) => entry.entryId));
+      continue;
+    }
+    for (const { entryId, spawnedEventId } of entries) {
+      const drawnKey = JSON.stringify([key, evidence("####", { ...at, spawnedEventId })]);
+      const bundle = drawn.get(drawnKey);
+      if (bundle) bundle.entryIds.push(entryId);
+      else drawn.set(drawnKey, { entryIds: [entryId], spawnedEventId, ...at });
+    }
   }
+  const resolved = [...drawn.values()].sort((a, b) => a.entryIds[0]! - b.entryIds[0]!);
   if (resolved.length === 0) return "";
-  const evidence = (level: string, { agent, registry, spawnedEventId }: (typeof resolved)[number]) =>
-    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (

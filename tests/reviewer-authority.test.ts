@@ -326,6 +326,17 @@ it("review type の親が RCA の spawn の後に別の worker で再 pickup さ
   expect(reviewedTaskExecutor(db, rca)).toBe("worker-a");
 });
 
+it("assignee を明示しただけで一度も pickup されていない親の下の review の Executor は「まだ居ない」で、免除は成立しない —— 列は実行の事実ではない(ADR 0295 決定1)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00Z");
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "tako" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+  const spawned = appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+
+  expect(reviewedTaskExecutor(db, review, spawned)).toBeUndefined();
+  expect(assigneeNeedsApproval(db, review, "tako", { assignable_to: [] })).toBe(true);
+});
+
 it("実行前の親の下の RCA の session の最中に親が pickup されても、その session の list_agents は親の worker を needs_approval のまま示し、宛てた修理は承認 question になる(ADR 0295 決定3 / #2374)", async () => {
   t = await bootTidepool({ listAgents: () => [{ name: "tako", description: "The parent's later executor" }] });
   const parent = seed({ type: "work", title: "wire the tide gauge", purpose: "purpose", completion_criteria: "criteria" });

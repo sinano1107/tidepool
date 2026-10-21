@@ -229,3 +229,26 @@ it("異議された entry が同じ版の2つの spawn にまたがり、spawn �
   expect(first).not.toContain("Roster as it stood then");
   expect(second).toContain("#### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board");
 });
+
+it("2つの spawn で Executor が違っても描いた Roster が同じなら、self RCA の当時版は1節に畳む —— まだ居ない Executor と、その commit の registry に無い Executor はどちらも空(ADR 0270 追記)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  const parent = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const objected = pickupTask(db, registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board"), "deckhand", at)!;
+  const object = (entryId: number) =>
+    appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  spawn(db, objected, at, "deckhand", commit);
+  object(logDecision(db, objected, "found nothing to repair", "deckhand", at, "worker"));
+  pickupTask(db, parent, "retired-agent", at, { assignee: "retired-agent" });
+  spawn(db, objected, at, "deckhand", commit);
+  object(logDecision(db, objected, "kept the finding", "deckhand", at, "worker"));
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+
+  const prose = reviewProse(db, registryDir, rca, spawn(db, rca, at));
+
+  expect(prose).toContain("## Definition under review (as it stood when you ran the objected task)");
+  expect(prose).not.toContain("### Live for your objected");
+  expect(prose).not.toContain("Roster as it stood then");
+});

@@ -3034,17 +3034,14 @@ function outsideAuthority(value: string | undefined, allowlist: string[] | undef
  *  #43 / ADR 0014) share this exact lookup rather than reimplementing it and
  *  risking drift from decomposeTask's actual check below.
  *
- *  ADR 0295: the Executor is a fact as of `cutoff` (an event id) — the review
- *  session's own spawn — read from the log, never from the reviewed task's
- *  `assignee` column. Without a cutoff, the review's latest `worker_spawned`
- *  (during a session, that session's spawn); a review never spawned (a human
- *  decomposing it from the WebUI) reads the whole log. */
-export function reviewedTaskExecutor(
-  db: Db,
-  task: Task,
-  cutoff = latestEventOfTask(db, task.id, "worker_spawned")?.id,
-): string | undefined {
+ *  ADR 0295: the Executor is a fact as of the review session's spawn
+ *  (`spawnedEventId`, the cutoff) — read from the log before that id, never
+ *  from the reviewed task's `assignee` column. Without one, the review's
+ *  latest `worker_spawned` (during a session, that session's spawn); a review
+ *  never spawned (a human decomposing it from the WebUI) reads the whole log. */
+export function reviewedTaskExecutor(db: Db, task: Task, spawnedEventId?: number): string | undefined {
   if (task.type !== "review" || !task.parent_id) return undefined;
+  const cutoff = spawnedEventId ?? latestEventOfTask(db, task.id, "worker_spawned")?.id;
   return executionEvent(db, task.parent_id, cutoff)?.worker_id;
 }
 
