@@ -36,9 +36,12 @@ The first run creates the VM and then stops at the login it needs. Log the VM's 
 limactl shell tidepool-bench -- bash -lc 'claude auth login'
 ```
 
-If the rows name `openai` or `moonshot`, the harness also wants the VM's Codex login
-(`CODEX_HOME=~/.tidepool/codex codex login --device-auth`, after a run has installed the pinned codex) or the
-key at `~/.tidepool/moonshot-api-key`.
+If the table rows or an Interview's targets name `openai`, the harness checks the Codex login before it changes
+anything. Install the pinned codex in `tidepool-bench` first, as in
+[step 2 of the Codex version bump](../../codex-cli-version-bump.md#2-install-the-new-version-in-the-vm), with
+`CODEX_APP_SERVER_VERSION` (`src/codex-app-server.ts`) as the version. Then log it in:
+`limactl shell tidepool-bench -- bash -lc 'CODEX_HOME=~/.tidepool/codex codex login --device-auth'`. If they name
+`moonshot`, put the key at `~/.tidepool/moonshot-api-key` in the VM.
 
 During the run the harness prints a URL. Open it on the Mac: it logs you into the benchmark board's WebUI at
 `http://127.0.0.1:4700`. Answer the board's questions there as in real use, following each exercise's README.

@@ -10,10 +10,11 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BENCH_VM="${BENCH_VM:-tidepool-bench}"
-# The gate board's VM (#1879) and its board unit (scripts/vm-board.sh). Only ever read here, never changed.
-GATE_VM="tidepool-board"
+# The benchmark VM and its board unit. Fixed, never taken from the environment: the steps below wipe and rewrite it.
+BENCH_VM="tidepool-bench"
 UNIT="tidepool-bench"
+# The gate board's VM (#1879). Only ever read here, never changed.
+GATE_VM="tidepool-board"
 # Lima forwards the guest's ports to the Mac on their own numbers, so keep clear of the gate board's 4589/4590.
 PORT=4700
 EXERCISES="${BENCH_EXERCISES:-$HERE/exercises}"
@@ -80,15 +81,19 @@ refuse_if_gate_board_running() {
 check_credentials() {
   vm 'claude auth status --json' 2> /dev/null | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true' \
     || fail "log the benchmark VM's claude in first: limactl shell $BENCH_VM -- bash -lc 'claude auth login'"
-  local providers
-  providers="$(rows | jq -r .provider | sort -u)"
+  # The providers the run speaks beyond the default rows: its table rows and its Interview targets.
+  local providers name
+  providers="$({
+    rows
+    for name in "${NAMES[@]}"; do jq -c '.interview.targets // [] | .[]' "$EXERCISES/$name/exercise.json"; done
+  } | jq -r .provider | sort -u)"
   if grep -qx openai <<< "$providers"; then
     vm 'test -s ~/.tidepool/codex/auth.json' \
-      || fail "the rows name openai: log the VM's codex in first: limactl shell $BENCH_VM -- bash -lc 'CODEX_HOME=~/.tidepool/codex codex login --device-auth'"
+      || fail "the run uses openai: install the pinned codex in the VM and log it in first (README.md, Run)"
   fi
   if grep -qx moonshot <<< "$providers"; then
     vm 'test -s ~/.tidepool/moonshot-api-key' \
-      || fail "the rows name moonshot: put the key in the VM at ~/.tidepool/moonshot-api-key (mode 600)"
+      || fail "the run uses moonshot: put the key in the VM at ~/.tidepool/moonshot-api-key (mode 600)"
   fi
   # Commits in the registry and the workspaces need an identity; this VM never had gh to take one from.
   vm 'git config --global user.email > /dev/null || { git config --global user.name benchmark && git config --global user.email benchmark@localhost; }'
@@ -127,11 +132,14 @@ copy_exercises() {
 }
 
 # The registry's origin is a bare repo in the VM: the template seed, or the given URL#REF. One workspace per exercise, seeded here.
+# The record names the registry as measured, not the seeded commit (whose sha changes every run): the given ref's
+# commit, or the template at the tidepool commit, which the seed follows from.
 seed_registry() {
   if [[ -z "$REGISTRY" ]]; then
     vm 'source ~/bench/env && git init -q --bare ~/bench/registry.git && git clone -q ~/bench/registry.git "$TIDEPOOL_REGISTRY" && cd ~/tidepool && npm run -s init-registry > /dev/null'
+    REGISTRY_COMMIT="template@$TIDEPOOL_COMMIT"
   else
-    vm "source ~/bench/env && git init -q --bare ~/bench/registry.git && git clone -q $(printf %q "${REGISTRY%#*}") \"\$TIDEPOOL_REGISTRY\" && cd \"\$TIDEPOOL_REGISTRY\" && git checkout -q $(printf %q "${REGISTRY##*#}") && git remote set-url origin ~/bench/registry.git && git push -q origin HEAD:main"
+    REGISTRY_COMMIT="$(vm "source ~/bench/env && git init -q --bare ~/bench/registry.git && git clone -q $(printf %q "${REGISTRY%#*}") \"\$TIDEPOOL_REGISTRY\" && cd \"\$TIDEPOOL_REGISTRY\" && git checkout -q $(printf %q "${REGISTRY##*#}") && git remote set-url origin ~/bench/registry.git && git push -q origin HEAD:main && git rev-parse HEAD")"
   fi
   # Each exercise's workspace is a git repo whose initial commit is its seed; main is its protected branch.
   local name ws yaml=""
@@ -141,7 +149,7 @@ seed_registry() {
     vm "source ~/bench/env && w=\"\$TIDEPOOL_WORKSPACES_DIR/$ws\" && git init -q -b main \"\$w\" && cp -a ~/bench/exercises/$name/workspace/. \"\$w\"/ && git -C \"\$w\" add -A && git -C \"\$w\" commit -qm 'Seed $name'"
     yaml+="$ws:"$'\n'"  review_allowed_commands:"$'\n'"    - \"node --test\""$'\n'
   done
-  REGISTRY_COMMIT="$(vm 'source ~/bench/env && cd "$TIDEPOOL_REGISTRY" && cat >> workspaces.yaml && git commit -qam "Benchmark workspaces" && git push -q origin HEAD:main && git rev-parse HEAD' <<< "$yaml")"
+  vm 'source ~/bench/env && cd "$TIDEPOOL_REGISTRY" && cat >> workspaces.yaml && git commit -qam "Benchmark workspaces" && git push -q origin HEAD:main' <<< "$yaml"
 }
 
 api() {
@@ -151,11 +159,13 @@ api() {
 }
 
 # A fresh token every start (the board keeps only its hash), and the board as a service so this script goes on.
+# Lingering keeps the user manager, and so the board, alive while no `limactl shell` session is open.
 start_board() {
   local notice
+  vm 'loginctl enable-linger "$USER"'
   notice="$(vm 'source ~/bench/env && cd ~/tidepool && npm run -s token')"
   TOKEN="$(awk '/token:/ { print $2 }' <<< "$notice")"
-  vm 'systemd-run --user --unit tidepool-bench -p Delegate=yes -- bash -lc "source ~/bench/env && cd ~/tidepool && exec npm start"' > /dev/null
+  vm "systemd-run --user --unit $UNIT -p Delegate=yes -- bash -lc 'source ~/bench/env && cd ~/tidepool && exec npm start'" > /dev/null
   local tries=0
   until api GET /pause > /dev/null 2>&1; do
     ((++tries < 60)) || fail "the board did not answer on $PORT: limactl shell $BENCH_VM -- journalctl --user -u $UNIT"
@@ -179,7 +189,8 @@ configure_board() {
   while read -r row; do
     [[ -n "$row" ]] && api POST /settings/execution -d "{\"setting\":\"row\",\"row\":$row}" > /dev/null
   done <<< "$(rows)"
-  spend_down
+  # a refusal (the 5 minutes after a window reset) is retried by every poll of the wait
+  spend_down || true
 }
 
 ROOTS=()
@@ -209,13 +220,18 @@ settled() {
 # No timeout, per exercise or overall: a human's wait is recorded, not failed (ADR 0298 決定6). Settlement comes in
 # any order, so every root is read on every poll, through a retry if the human retried an Interview root. A failed
 # read only costs that poll: the run must outlive a transient error over hours of waiting.
+current_root() { vm "source ~/bench/env && $TSX current-root \"\$TIDEPOOL_DB\" $1"; }
+
 wait_for_settlement() {
   local i open root shown="" questions
   while :; do
     open=0
     for i in "${!ROOTS[@]}"; do
-      root="$(vm "source ~/bench/env && $TSX current-root \"\$TIDEPOOL_DB\" ${ROOTS[i]}")" && ROOTS[i]="$root"
-      settled "${ROOTS[i]}" || open=1
+      root="$(current_root "${ROOTS[i]}")" && ROOTS[i]="$root"
+      # A retry cancels the old root and registers the new one in one step, which may fall between the two reads
+      # above: a settled root counts only if it is still the current one.
+      if settled "${ROOTS[i]}" && root="$(current_root "${ROOTS[i]}")" && [[ "$root" == "${ROOTS[i]}" ]]; then continue; fi
+      open=1
     done
     ((open)) || return 0
     if questions="$(api GET /tasks | jq -r '.[] | select(.type == "question" and .status != "done" and .status != "cancelled") | "  \(.id)  \(.title)"')" \
@@ -266,9 +282,10 @@ extract_record() {
 }
 
 # Paused, then stopped: the state stays for the human to read (ADR 0298 決定7), and --serve brings it back paused.
+# Also the exit trap of a run that fails or is interrupted once the board is up, so neither step may abort the other.
 stop_board() {
-  api POST /pause -d '{"paused":true}' > /dev/null
-  vm "systemctl --user stop $UNIT"
+  api POST /pause -d '{"paused":true}' > /dev/null || true
+  vm "systemctl --user stop $UNIT" || true
 }
 
 main() {
@@ -288,11 +305,14 @@ main() {
   copy_exercises
   seed_registry
   start_board
+  trap stop_board EXIT
+  trap 'exit 130' INT TERM
   configure_board
   register_exercises
   wait_for_settlement
   run_expected_tests
   extract_record
+  trap - EXIT
   stop_board
   log "Run record: $OUT"
 }

@@ -39,9 +39,27 @@ check() {
 # slept; a file's line N is what that root reads on poll N (the last line holds after it runs out):
 #   status/<id>  todo | done (no landing yet) | landed | held | cancelled
 #   type/<id>    work (default) | interview
-#   root/<id>    what `extract.ts current-root` prints for <id> (default: <id> itself)
+#   root/<id>    what `extract.ts current-root` prints for <id>, by call rather than by poll — a poll may resolve a
+#                root twice (default: <id> itself; FAIL fails the call)
+# and these switch a single failure on:
+#   spend-down        ok | refuse, by poll
+#   register-fails    present: POST /tasks answers 400
 
 write_stubs() {
+  cat > "$STUB_DIR/at_call" << 'STUB'
+#!/bin/bash
+# at_call FILE KEY DEFAULT: FILE's line for this call of KEY
+mkdir -p "$CASE_DIR/calls"
+n=$(($(cat "$CASE_DIR/calls/$2" 2> /dev/null || echo 0) + 1)); echo "$n" > "$CASE_DIR/calls/$2"
+if [ -f "$1" ]; then
+  total=$(wc -l < "$1")
+  [ "$n" -le "$total" ] || n=$total
+  sed -n "${n}p" "$1"
+else
+  echo "$3"
+fi
+STUB
+
   cat > "$STUB_DIR/at_poll" << 'STUB'
 #!/bin/bash
 # at_poll FILE DEFAULT: FILE's line for the current poll
@@ -81,10 +99,11 @@ case "$sub" in
       "claude auth status --json") [ "$CLAUDE_LOGGED_IN" = 1 ] && echo '{"loggedIn": true}' || echo '{"loggedIn": false}' ;;
       *"git -C ~/tidepool rev-parse HEAD") echo tidepoolsha ;;
       *"claude-cli-version"*) printf '{"claude":"2.1.289","codex":"0.147.0"}' ;;
-      *"Benchmark workspaces"*) echo registrysha ;;
+      *"remote set-url origin"*"git rev-parse HEAD") echo givensha ;;
+      "test -s ~/.tidepool/codex/auth.json") exit $((1 - CODEX_LOGGED_IN)) ;;
       *"npm run -s token") printf '\n  token: TKN\n  hash stored in: /home/x/bench/api-token\n' ;;
       *"current-root"*)
-        id="${cmd##* }"; root="$(at_poll "$CASE_DIR/state/root/$id" "$id")"
+        id="${cmd##* }"; root="$(at_call "$CASE_DIR/state/root/$id" "$id" "$id")"
         [ "$root" = FAIL ] && exit 1
         echo "$root" ;;
       *"export EXERCISE_DIR"*) exit "$TEST_EXIT" ;;
@@ -116,6 +135,7 @@ path="${url#http://127.0.0.1:4700/api}"
 echo "curl $method ${url%%/api*} $path $body" >> "$CMD_LOG"
 case "$method $path" in
   "POST /tasks")
+    if [ -f "$CASE_DIR/state/register-fails" ]; then echo '{"error":"workspace bws is not in the registry"}'; exit 22; fi
     n=$(($(cat "$CASE_DIR/registered" 2> /dev/null || echo 0) + 1)); echo "$n" > "$CASE_DIR/registered"
     echo "{\"id\":\"root$n\"}" ;;
   "GET /tasks/"*"/events")
@@ -181,6 +201,7 @@ reset_case() {
   GATE_STATUS=""
   GATE_ACTIVE=0
   CLAUDE_LOGGED_IN=1
+  CODEX_LOGGED_IN=1
   TEST_EXIT=0
   ARGS=""
 }
@@ -189,7 +210,7 @@ reset_case() {
 run_harness() {
   output=$(env PATH="$STUB_DIR:/usr/bin:/bin" HOME="$CASE_DIR" CMD_LOG="$CMD_LOG" CASE_DIR="$CASE_DIR" \
     BENCH_EXERCISES="$EXERCISES" BENCH_RESULTS="$CASE_DIR/results" GATE_STATUS="$GATE_STATUS" GATE_ACTIVE="$GATE_ACTIVE" \
-    CLAUDE_LOGGED_IN="$CLAUDE_LOGGED_IN" TEST_EXIT="$TEST_EXIT" SCRIPT_DIR="$SCRIPT_DIR" \
+    CLAUDE_LOGGED_IN="$CLAUDE_LOGGED_IN" CODEX_LOGGED_IN="$CODEX_LOGGED_IN" TEST_EXIT="$TEST_EXIT" SCRIPT_DIR="$SCRIPT_DIR" \
     bash -c "set -euo pipefail; source \"\$SCRIPT_DIR/run.sh\"; main $ARGS" < /dev/null 2>&1) && rc=0 || rc=$?
   log="$(cat "$CMD_LOG")"
 }
@@ -214,6 +235,8 @@ steps() {
     -e 's/^vm\([^)]*\) .*Benchmark workspaces.*/registry-workspaces/' \
     -e 's/^vm\([^)]*\) .*git init -q -b main .*Seed (.*)'"'"'$/workspace \1/' \
     -e 's/^vm\([^)]*\) .*npm run -s token/token/' \
+    -e 's/^vm\([^)]*\) loginctl enable-linger.*/linger/' \
+    -e 's/^vm\([^)]*\) test -s ~\/.tidepool\/codex.*/codex-login/' \
     -e 's/^vm\([^)]*\) systemd-run .*/board-start/' \
     -e 's/^curl GET [^ ]* \/pause.*/board-ready/' \
     -e 's/^curl POST [^ ]* \/settings\/display-language.*/display-language/' \
@@ -266,6 +289,7 @@ check
 registry-seed
 workspace b-work
 registry-workspaces
+linger
 token
 board-start
 board-ready
@@ -284,8 +308,10 @@ sleep
 current-root root1
 status root1
 events root1
+current-root root1
 current-root root2
 status root2
+current-root root2
 expected-test
 read-table
 copy-input
@@ -308,7 +334,7 @@ check "default: one registry workspace per exercise that names one" "bws:
   review_allowed_commands:
     - \"node --test\"" "$(cat "$CASE_DIR/stdin.workspaces.yaml")"
 check "default: the extraction gets the configuration, the root ids and the test exits" \
-  '{"config":{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"table_rows":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25}],"registry_commit":"registrysha","issue_2437":"undecided"},"exercises":[{"dir":"exercises/b-work","task_id":"root1","test_exit":0},{"dir":"exercises/a-interview","task_id":"root2","test_exit":null}]}' \
+  '{"config":{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"table_rows":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25}],"registry_commit":"template@tidepoolsha","issue_2437":"undecided"},"exercises":[{"dir":"exercises/b-work","task_id":"root1","test_exit":0},{"dir":"exercises/a-interview","task_id":"root2","test_exit":null}]}' \
   "$(jq -c . "$CASE_DIR/input.json")"
 check "default: nothing deletes the run's state after the extraction" "" \
   "$(sed -n '/extract.ts run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
@@ -391,6 +417,50 @@ printf 'ok\nrefuse\nok\n' > "$CASE_DIR/state/spend-down"
 run_harness
 check "transient failures in the wait: the run still settles and extracts" "0 root1" "$rc $(jq -r '.exercises[0].task_id' "$CASE_DIR/input.json")"
 check "transient failures in the wait: the open questions are listed once" "1" "$(grep -c 'land completed task: Fix it' <<< "$output")"
+
+# The retry lands between the two reads of one poll: current-root still names the old root, which then reads
+# cancelled. The cancelled root must not count as settled while the re-read names its successor.
+reset_case
+printf 'interview\n' > "$CASE_DIR/state/type/root2"
+printf 'todo\ncancelled\n' > "$CASE_DIR/state/status/root2"
+printf 'root2\nroot2\nroot3\n' > "$CASE_DIR/state/root/root2"
+printf 'interview\n' > "$CASE_DIR/state/type/root3"
+printf 'done\n' > "$CASE_DIR/state/status/root3"
+run_harness
+check "retry between the reads: exits 0" "0" "$rc"
+check "retry between the reads: the cancelled old root does not end the wait" "2" "$(grep -c '^sleep' <<< "$log")"
+check "retry between the reads: the extraction gets the new root's id" "root3" "$(jq -r '.exercises[1].task_id' "$CASE_DIR/input.json")"
+
+# The first spend-down, while the board is configured, is refused: the run goes on to register its exercises.
+reset_case
+ARGS="b-work"
+printf 'refuse\nok\n' > "$CASE_DIR/state/spend-down"
+run_harness
+check "spend-down refused at configuration: the run registers and completes" "0 1" "$rc $(grep -c '^curl POST [^ ]* /tasks ' <<< "$log")"
+
+# A step after the board started fails: the board is paused and stopped, and its state stays.
+reset_case
+ARGS="b-work"
+touch "$CASE_DIR/state/register-fails"
+run_harness
+check "failing register: exits non-zero" "1" "$((rc != 0))"
+check "failing register: the board is still paused and stopped" "pause
+board-stop" "$(steps | tail -2)"
+check "failing register: nothing deletes the state once the board is up" "" \
+  "$(sed -n '/systemd-run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
+
+# An Interview that targets openai needs the Codex login, checked before anything is reset.
+reset_case
+CODEX_LOGGED_IN=0
+sed -i '' 's/"provider": "anthropic"/"provider": "openai"/' "$EXERCISES/a-interview/exercise.json"
+run_harness
+check "Interview targets openai without a Codex login: stops before the reset" "1 codex-login" "$((rc != 0)) $(steps | tail -1)"
+
+# A given registry is recorded by the commit of its ref, not by the commit the harness adds on top.
+reset_case
+ARGS="--registry https://example.com/registry.git#v1 b-work"
+run_harness
+check "given registry: the record names its ref's commit" "0 givensha" "$rc $(jq -r .config.registry_commit "$CASE_DIR/input.json")"
 
 # --- summary ----------------------------------------------------------------------
 
