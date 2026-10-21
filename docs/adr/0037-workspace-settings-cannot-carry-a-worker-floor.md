@@ -1,5 +1,7 @@
 # workspace 自身の settings は worker の床を運べない: hooks を殺し、settings ファイルへの書き込みを二層で塞ぐ
 
+**Status 追記: 追記(issue #382)の「worker session 中だけ Git の sparse-checkout で実体化から外し、回収を観測してから戻す」の書き方は [ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) で定め直した(2026-10-21)—— 人間の sparse-checkout の写しに1行足して隠し、写しどおり戻す。外す・戻すという線はそのまま。**
+
 issue #143 のグリリング(2026-08-02)で決定。#60 / ADR 0033 が per-task `--settings` でサンドボックス化する worker の Bash に対し、**workspace checkout 内の `.claude/settings.json` / `settings.local.json` はハーネス側(サンドボックスの外)に効く経路を2つ持つ** — hook の実行と、`sandbox` ブロックによる床の再定義。work セッションは自分の checkout に書けるので、両方とも worker 自身が仕込める。ADR 0033 の #60 追記が張った spawn 時ガード(`floorOverridingSettings`)は、この文書の実測で**紙の壁**だと判明した。
 
 ## 実測が設計を規定する(CLI 2.1.220 / macOS Seatbelt、本番 Pi 2.1.207 / bwrap。すべて control つき)

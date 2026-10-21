@@ -1,5 +1,7 @@
 # Git 共有された workspace の settings.json は中身を問わず worker から隠し、quarantine しない
 
+**Status 追記: 隠す書き方(pattern の置き換え・`sparse-checkout add` での戻し・skip-worktree の S bit での判定)は [ADR 0293](0293-the-board-hides-tracked-settings-by-adding-one-line-to-a-snapshot-of-the-humans-sparse-checkout-and-restores-the-snapshot.md) で、人間の sparse-checkout の写しに `!/.claude/settings.json` の1行を足して隠し、写しどおり戻す形に置き換わった(2026-10-21)。決定1〜4 はそのまま。**
+
 2026-09-26 の grilling(issue #1005)で決定。ADR 0037 追記(issue #382)は、tracked な `.claude/settings.json` が
 hooks だけなら worker session 中に sparse-checkout で実体化から外し、`sandbox` / `permissions` や壊れた JSON を持てば
 「床の著者権の主張」として従来どおり quarantine するとした。その結果、`permissions.allow` を commit した普通の
