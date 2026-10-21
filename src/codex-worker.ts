@@ -418,10 +418,12 @@ function featureDrift(observed: Readonly<Record<string, string>>): string[] {
 
 export type CodexCapabilityProbe = () => Promise<CodexCapabilityObservation>;
 
-/** Version pin + measured #195 surface contract. Any drift closes Codex only. */
+/** Version pin + measured #195 surface contract. Any drift closes Codex only.
+ *  `pinnedVersion` は version 行の差し替え口で、渡すのは版上げの適合試験だけ(#1385)。 */
 export async function checkCodexCapability(
   probe: CodexCapabilityProbe,
   hookPath: string,
+  pinnedVersion = CODEX_CLI_VERSION,
 ): Promise<ContainmentCapability> {
   let observed: CodexCapabilityObservation;
   try {
@@ -431,7 +433,7 @@ export async function checkCodexCapability(
   }
   const mismatch = (
     [
-      ["version", [CODEX_CLI_VERSION], [observed.cliVersion]],
+      ["version", [pinnedVersion], [observed.cliVersion]],
       ["skill", [], observed.skills],
       // 盤面が Codex に登録されていることを要求する hook —— spawn が渡す宣言と同じ1つの形
       [
@@ -1013,6 +1015,8 @@ export function createCodexCapabilityCheck(options: {
   onPath?: boolean;
   codexHome: string;
   call: BoardCall;
+  /** version 行の差し替え口(`checkCodexCapability`)。盤面は渡さない。 */
+  pinnedVersion?: string;
 }): () => Promise<ContainmentCapability> {
   if (options.onPath === false) {
     return async () => ({ available: false, reason: "Codex containment preflight failed: codex was not found on PATH when the board started" });
@@ -1020,6 +1024,7 @@ export function createCodexCapabilityCheck(options: {
   return () => checkCodexCapability(
     () => actualCodexCapability(options),
     boardHookPath(options.codexHome),
+    options.pinnedVersion,
   );
 }
 
@@ -1088,7 +1093,7 @@ interface CodexUsage {
   output_tokens: number;
 }
 
-function readUsage(value: unknown): CodexUsage | null {
+export function readUsage(value: unknown): CodexUsage | null {
   if (!value || typeof value !== "object") return null;
   const event = value as { type?: unknown; usage?: Record<string, unknown> };
   const usage = event.type === "turn.completed" ? event.usage : undefined;
@@ -1099,7 +1104,7 @@ function readUsage(value: unknown): CodexUsage | null {
 
 /** ADR 0188: `turn.failed` の message を逐語で(入れ子の JSON は解かない)。`error` event は
  *  再試行のたびにも流れるので代用しない —— `turn.failed` が自分で代用している。 */
-function readTurnFailure(value: unknown): string | null {
+export function readTurnFailure(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
   const event = value as { type?: unknown; error?: { message?: unknown } };
   const message = event.type === "turn.failed" ? event.error?.message : undefined;
@@ -1138,7 +1143,7 @@ function readAgentMessage(value: unknown): string | null {
 
 /** JSONL の1行を読む。空行も壊れた行も null —— 逐語の transcript が残る証拠で、
  *  壊れた行は正規化した usage も認証の事実も運ばない。 */
-function parseJsonl(line: string): unknown {
+export function parseJsonl(line: string): unknown {
   try {
     return JSON.parse(line);
   } catch {

@@ -31,8 +31,8 @@ async function replay<T>(stdout: string, project: (parsed: Record<string, unknow
   return read();
 }
 
-type Verdict = { pass: boolean; detail: string };
-type Row = Verdict & { surface: string };
+export type Verdict = { pass: boolean; detail: string };
+export type Row = Verdict & { surface: string };
 
 const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Promise<Verdict>]> = [
   [
@@ -89,8 +89,8 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
   ["translation client", async (obs) => (await obs.translation(), { pass: true, detail: "translated" })],
 ];
 
-/** 1面の観測を行にする。投げたらその面の不合格として読む。 */
-async function rowOf(surface: string, judge: () => Promise<Verdict>): Promise<Row> {
+/** 1面の観測を行にする。投げたらその面の不合格として読む。Codex の適合試験も同じ読みで使う。 */
+export async function rowOf(surface: string, judge: () => Promise<Verdict>): Promise<Row> {
   try {
     return { surface, ...(await judge()) };
   } catch (err) {

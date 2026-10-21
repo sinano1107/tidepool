@@ -269,6 +269,18 @@ it.each([
   if (!capability.available) expect(capability.reason).toContain("Codex containment preflight");
 });
 
+it("版上げの適合試験が渡す固定の版は version 行の照合だけを差し替え、他の面は照合したまま(#1385)", async () => {
+  const next = { ...VALID, cliVersion: "codex-cli 0.151.0" };
+  expect(await checkCodexCapability(async () => next, BOARD_HOOK_PATH, "codex-cli 0.151.0")).toEqual({ available: true });
+
+  const drifted = await checkCodexCapability(
+    async () => ({ ...next, agentsMdLayer: ["# AGENTS.md instructions"] }),
+    BOARD_HOOK_PATH,
+    "codex-cli 0.151.0",
+  );
+  expect(drifted).toMatchObject({ available: false, reason: expect.stringContaining("agents.md mismatch") });
+});
+
 it.each([
   [
     "ベンダーが増やした未知の名前",

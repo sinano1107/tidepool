@@ -1,0 +1,8 @@
+HTTP/1.1 403 Forbidden
+content-type: text/plain
+x-proxy-error: blocked-by-allowlist
+content-length: 24
+date: Wed, 21 Oct 2026 09:49:25 GMT
+
+http_connect=403 http_code=000
+curl: (7) CONNECT tunnel failed, response 403
