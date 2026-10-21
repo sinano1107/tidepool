@@ -22,6 +22,12 @@ export interface Teardown {
   settlement: "completed" | "released" | "interrupted" | "never_ran";
 }
 
+/** 最後の poll の失敗(ADR 0294 決定1)。停止ではないが pickup を待たせているものの2つ目。 */
+export interface PollFailure {
+  at: string;
+  message: string;
+}
+
 /** サーバ側の正本は src/throttle.ts の DisplayProviderUsage(値集合の移送は issue #352)。 */
 export interface ProviderUsage {
   provider: string;
@@ -185,6 +191,7 @@ export interface WireContract {
   "GET /api/queue": {
     halts: BoardHalt[];
     teardown?: Teardown;
+    lastPollFailure?: PollFailure;
     providerUsage?: ProviderUsage[];
     tasks: QueueTask[];
   };

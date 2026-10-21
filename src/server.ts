@@ -714,12 +714,18 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const stopNotificationPoll = options.clock.setInterval(() => {
     void notificationTick.run(options.clock.now());
   }, 60 * 1000);
+  // ADR 0294 決定1: 最後の poll の失敗は queue の2つの読み口(`GET /api/queue`・`list_queue`)へ同じ1つを配る
+  const pollFailureJson = () => {
+    const lastPollFailure = scheduler.lastPollFailure();
+    return lastPollFailure ? { lastPollFailure } : {};
+  };
   app.use(
     "/api",
     createApiRouter({
       db,
       clock: options.clock,
       pollNow,
+      pollFailureJson,
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
@@ -754,6 +760,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       clock: options.clock,
       pollNow,
+      pollFailureJson,
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,

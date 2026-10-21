@@ -35,6 +35,7 @@ function listGetRoutes(db: Db): string[] {
     db,
     clock: new FakeClock(),
     pollNow: () => {},
+    pollFailureJson: () => ({}),
     landing: unusedLanding,
     taskExecutionCandidates: () => [],
   });

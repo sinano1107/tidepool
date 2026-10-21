@@ -119,6 +119,7 @@ import {
 import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
 import type { PendingReclaim } from "./watchdog.js";
+import type { WireContract } from "./wire-contract.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
@@ -145,6 +146,8 @@ export interface ManagementMcpDeps {
   landing: Landing;
   draftClient?: DraftClient;
   pollNow: () => void;
+  /** 最後の poll の失敗の欄(ADR 0294 決定1)。`GET /api/queue` と同じ1つ。 */
+  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure">;
   defaultAgentName?: string;
   auditorName?: string;
   interviewerName?: string;
@@ -367,8 +370,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "list_queue",
     {
       description:
-        "List the execution queue and pickup state: `halts` (and `teardown` while a session is being torn down) say why pickup " +
-        `is waiting, \`tasks\` lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts` and `teardown` come")}`,
+        "List the execution queue and pickup state: `halts` (plus `teardown` while a session is being torn down, and " +
+        "`lastPollFailure` while the last poll that got past the gates threw) say why pickup is waiting, `tasks` lists the queue " +
+        `in board order. ${nextDescription("list_queue", "tasks", "`halts`, `teardown` and `lastPollFailure` come")}`,
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -388,7 +392,11 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           closedRoot,
           deps.interviewerName,
         );
-        return packItems(read, "tasks", tasks, { halts: boardHalts(deps.db), ...(teardown ? { teardown } : {}) });
+        return packItems(read, "tasks", tasks, {
+          halts: boardHalts(deps.db),
+          ...(teardown ? { teardown } : {}),
+          ...deps.pollFailureJson(),
+        });
       }),
   );
   server.registerTool(

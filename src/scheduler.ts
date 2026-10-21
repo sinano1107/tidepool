@@ -81,6 +81,7 @@ import { RecordContainerError } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
+import type { PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
@@ -264,6 +265,8 @@ export interface Scheduler {
   /** Settles when no poll is in flight — a convergence pass waits on it so that landing's push never overlaps
    *  pickup's fetch / checkout in the same checkout (CONTEXT.md「収束」). */
   idle: () => Promise<void>;
+  /** 最後の poll の失敗(ADR 0294 決定1): 本体に入った poll が成功するまで残る。memory だけで、再起動で消える。 */
+  lastPollFailure: () => PollFailure | undefined;
 }
 
 /** Hourly poll: if the slot is free, hand the queue head (lowest sort_key todo)
@@ -378,6 +381,12 @@ export function startScheduler(deps: {
     converge,
   } = deps;
   let inFlight = false;
+  let lastPollFailure: PollFailure | undefined;
+  /** slot を握る前の想定外の例外(と後始末の一撃の throw、ADR 0294 決定5): 盤面は落とさず、行に残して次の poll に任せる。 */
+  const pollFailed = (err: unknown) => {
+    console.error("[scheduler] poll failed; the next poll retries:", err);
+    lastPollFailure = { at: clock.now().toISOString(), message: err instanceof Error ? err.message : String(err) };
+  };
   const resumeTimer = createResumeTimers(clock, pollNow);
 
   async function pickupBlocked(): Promise<boolean> {
@@ -397,15 +406,7 @@ export function startScheduler(deps: {
     // run at all. Unlike the workspace/agent quarantines below this halts the
     // whole board — containment belongs to the host and to the board's own
     // wiring, so no narrower resource can be halted.
-    if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return true;
-    // the gate is keyed on each candidate's own execution workspace (issue
-    // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
-    // workspace or agent keeps its own tasks out of the candidates, never the
-    // whole board. The slot is one (ADR 0001), so this holds only because a
-    // pickup such a quarantine stopped before its worker ran returns to the
-    // queue head through teardown and frees the slot (ADR 0274).
-    // No resolvers here: provider / Harness names are taken out by the poll below.
-    return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName);
+    return !!containment && (await containmentPickupBlocked(db, containment, clock.now()));
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
@@ -724,6 +725,9 @@ export function startScheduler(deps: {
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
     let afterPoll: (() => void) | void;
+    // 成功 = 門を越えて本体(候補の読み)に入り、投げずに終わった poll —— 本体に入った時点で立て、投げれば下ろす。
+    // 門で返った poll は行を触らない(ADR 0294 決定1)。空の queue は本体の読みで返るので成功に数える
+    let succeeded = false;
     try {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
@@ -732,6 +736,15 @@ export function startScheduler(deps: {
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
       refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
       if (await pickupBlocked()) return;
+      succeeded = true;
+      // the candidate read is keyed on each candidate's own execution workspace (issue
+      // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
+      // workspace or agent keeps its own tasks out of the candidates, never the
+      // whole board. The slot is one (ADR 0001), so this holds only because a
+      // pickup such a quarantine stopped before its worker ran returns to the
+      // queue head through teardown and frees the slot (ADR 0274).
+      // No resolvers here: provider / Harness names are taken out below.
+      if (!nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName)) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。
       const stopped = quarantineStops(db);
@@ -892,24 +905,33 @@ export function startScheduler(deps: {
         }
       };
       afterPoll = await pickup(head, chosen, content, recordShadowRow);
+    } catch (err) {
+      succeeded = false;
+      pollFailed(err);
+      return;
     } finally {
       inFlight = false;
+      if (succeeded) lastPollFailure = undefined;
     }
-    afterPoll?.();
+    // 一撃が投げても撃ち直さない —— slot は再起動まで塞がる(#2036 の問い、ADR 0294 決定5)
+    try {
+      afterPoll?.();
+    } catch (err) {
+      pollFailed(err);
+    }
   }
 
   let stopped = false;
-  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。失敗は poll 自身の void と同じに扱う
+  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。poll は投げない(ADR 0294 決定1)
   let polling: Promise<void> = Promise.resolve();
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
     // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
     void converge().then(() => {
       if (stopped || inFlight) return;
-      const running = poll();
-      polling = running.catch(() => {});
-      return running;
-    });
+      polling = poll();
+      return polling;
+    }).catch((err) => console.error("[scheduler] pickup trigger failed:", err));
   }
 
   const cancel = clock.setInterval(pollNow, HOURLY);
@@ -921,5 +943,6 @@ export function startScheduler(deps: {
     },
     pollNow,
     idle: () => polling,
+    lastPollFailure: () => lastPollFailure,
   };
 }

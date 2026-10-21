@@ -357,7 +357,7 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
     borderRadius: 1,
     marginBottom: 14,
     background: paused ? "repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)" : slot.color
-  } }), shownProviders.length > 0 && /* @__PURE__ */ React.createElement(Card, { "data-testid": "provider-usage", style: { padding: "10px 12px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, "provider usage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } }, shownProviders.map((provider) => {
+  } }), data.pollFailureMeta && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--coral-4)", textTransform: "uppercase", letterSpacing: "0.08em" } }, "poll"), /* @__PURE__ */ React.createElement("span", { style: { flex: 1, minWidth: 0, fontSize: "var(--text-sm)", color: "var(--text-body)" } }, "last poll failed \xB7 the next poll retries"), /* @__PURE__ */ React.createElement("span", { style: { flexBasis: "100%", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, data.pollFailureMeta)), shownProviders.length > 0 && /* @__PURE__ */ React.createElement(Card, { "data-testid": "provider-usage", style: { padding: "10px 12px", marginBottom: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 } }, "provider usage"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 10 } }, shownProviders.map((provider) => {
     const usage = providerUsage.find((candidate) => candidate.provider === provider);
     return /* @__PURE__ */ React.createElement("div", { key: provider, "data-testid": `provider-usage-${provider}` }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" } }, /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", color: "var(--text-body)" } }, provider), usage && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-xs)", color: usage.status === "observed" ? "var(--tide-5)" : "var(--coral-4)" } }, usage.status), usage?.plan && /* @__PURE__ */ React.createElement("span", { style: { fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, usage.plan), usage?.observedAt && /* @__PURE__ */ React.createElement("span", { style: { marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: "var(--text-muted)" } }, "observed ", new Date(usage.observedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }))), usage?.reason && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 3, fontSize: "var(--text-xs)", color: "var(--coral-4)" } }, usage.reason), usage?.windows.map((window2) => {
       const spend = spendDown[provider]?.[window2.window];
@@ -4227,6 +4227,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     line: "session teardown \xB7 nothing new starts",
     meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
   } : { color: "var(--rock-3)", line: "slot free \u2014 nothing running", taskId: null, meta: "concurrency=1" };
+  const failure = queueEnvelope.lastPollFailure;
+  const pollFailureMeta = failure && `${failure.message} \xB7 at ${fmtTime(failure.at)}`;
   return {
     questions,
     log: logEntries,
@@ -4239,6 +4241,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
     slot,
+    pollFailureMeta,
     pickupHalt,
     running: !!running,
     paused: !!paused,
