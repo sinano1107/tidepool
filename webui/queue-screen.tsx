@@ -165,7 +165,8 @@ interface QueueScreenProps {
   data: {
     /** 色も行も meta もサーバが導いた答えをそのまま描く(ADR 0068 決定1)。 */
     slot: AppSlot;
-    pollFailure?: { line: string; meta: string };
+    /** 最後の poll の失敗の meta(本文 · いつ)。行の文言は固定。 */
+    pollFailure?: string;
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: import('../src/wire-contract').ProviderUsage[];
@@ -254,8 +255,8 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
       {data.pollFailure && (
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 14 }}>
           <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>poll</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>{data.pollFailure.line}</span>
-          <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{data.pollFailure.meta}</span>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>last poll failed · the next poll retries</span>
+          <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{data.pollFailure}</span>
         </div>
       )}
 

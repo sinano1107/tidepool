@@ -441,10 +441,7 @@ function mapData(
   // ADR 0294 決定1: 最後の poll の失敗は停止でも枠の状態でもない —— slot 行の枝にすると、一撃が投げて枠が塞がったまま
   // (決定5)の回に走っている行に隠れるので、欄があれば別の1行で、後始末の行と同じ「行 + いつ」の形で報せる
   const failure = queueEnvelope.lastPollFailure;
-  const pollFailure = failure && {
-    line: 'last poll failed · the next poll retries',
-    meta: `${failure.message} · at ${fmtTime(failure.at)}`,
-  };
+  const pollFailure = failure && `${failure.message} · at ${fmtTime(failure.at)}`;
   return {
     questions, log: logEntries, queue, board: cols, icons,
     scratchpad: triage.scratchpad.map((line): TpScratchLine => ({ id: line.id, text: line.line })),

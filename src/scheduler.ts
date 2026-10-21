@@ -921,16 +921,15 @@ export function startScheduler(deps: {
   }
 
   let stopped = false;
-  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。失敗は poll 自身の void と同じに扱う
+  // 走っている poll。収束の回はこれが終わるのを待つ(`idle`)。poll は投げない(ADR 0294 決定1)
   let polling: Promise<void> = Promise.resolve();
   function pollNow(): void {
     // 収束の側は契機を捨てない(列が束ねる)。捨てるのは poll の側の inFlight だけ(ADR 0119 決定5)。
     // 収束を待つ間に盤面が止まれば、閉じた DB を読まない
     void converge().then(() => {
       if (stopped || inFlight) return;
-      const running = poll();
-      polling = running.catch(() => {});
-      return running;
+      polling = poll();
+      return polling;
     }).catch((err) => console.error("[scheduler] pickup trigger failed:", err));
   }
 
