@@ -1,11 +1,13 @@
 import { afterEach, expect, it } from "vitest";
+import type { Db } from "../src/db.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, type TaskScopedPayload } from "../src/events.js";
+import { appendEvent, listEvents, type TaskScopedPayload } from "../src/events.js";
 import type { AuthorityProfile } from "../src/registry.js";
-import { assigneeNeedsApproval, editTask, getTask, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor } from "../src/tasks.js";
+import { assigneeNeedsApproval, editTask, getTask, humanDecomposeTask, listChildren, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor } from "../src/tasks.js";
+import { commitTriage, raiseObjection } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
+import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -268,4 +270,69 @@ it("assignee の無い被レビュータスクの Executor は、最後の picku
 
   expect(work.assignee).toBeNull();
   expect(reviewedTaskExecutor(db, review)).toBe("worker-b");
+});
+
+/** #2374 の経路: 一度も pickup されていない親への人間の decompose → 異議 → commit が親の下に立てる auditor RCA と、
+ *  その spawn(adapter と同じく `worker_spawned` を刻む)の id。 */
+function auditorRcaUnderUnexecutedParent(db: Db, at: Date) {
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  humanDecomposeTask(db, parent, { reason: "split the work", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  raiseObjection(db, listEvents(db, parent.id).find((event) => event.kind === "decision_logged")!.id, "redo it", at);
+  commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
+  const rca = listChildren(db, parent.id).find((child) => child.title.startsWith("rca (auditor)"))!;
+  const spawned = appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  return { parent: getTask(db, parent.id)!, rca, spawned };
+}
+
+it("実行前の親の下の RCA の Executor は、spawn の後に親が埋めつきで pickup されても「まだ居ない」のままで免除は成立せず、再 spawn は撮り直す(ADR 0295 決定1・2 / #2374)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00Z");
+  const { parent, rca, spawned } = auditorRcaUnderUnexecutedParent(db, at);
+
+  pickupTask(db, parent, "tako", at, { assignee: "tako" });
+
+  expect(getTask(db, parent.id)!.assignee).toBe("tako");
+  expect(reviewedTaskExecutor(db, rca, spawned)).toBeUndefined();
+  expect(reviewedTaskExecutor(db, rca)).toBeUndefined();
+  expect(assigneeNeedsApproval(db, rca, "tako", { assignable_to: [] })).toBe(true);
+  appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  expect(reviewedTaskExecutor(db, rca)).toBe("tako");
+});
+
+it("一度も pickup されていない親の assignee を Edit しても、RCA の Executor は動かない —— 列は実行の事実ではない(ADR 0295 決定1 / ADR 0233 決定5)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00Z");
+  const { parent, rca } = auditorRcaUnderUnexecutedParent(db, at);
+
+  editTask(db, parent, { assignee: "tako" }, at, "webui");
+
+  expect(getTask(db, parent.id)!.assignee).toBe("tako");
+  expect(reviewedTaskExecutor(db, rca)).toBeUndefined();
+  expect(assigneeNeedsApproval(db, rca, "tako", { assignable_to: [] })).toBe(true);
+});
+
+it("review type の親が RCA の spawn の後に別の worker で再 pickup されても、その RCA の Executor は spawn までの pickup の worker のまま(ADR 0295 決定2 / #2373)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00Z");
+  const reviewed = registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const picked = pickupTask(db, reviewed, "worker-a", at)!;
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, BOARD_WORKER_ID, "board");
+  const spawned = appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+
+  returnToQueue(db, picked, { kind: "cap_interrupted" }, at);
+  pickupTask(db, getTask(db, reviewed.id)!, "worker-b", at);
+
+  expect(reviewedTaskExecutor(db, rca, spawned)).toBe("worker-a");
+  expect(reviewedTaskExecutor(db, rca)).toBe("worker-a");
+});
+
+it("assignee を明示しただけで一度も pickup されていない親の下の review の Executor は「まだ居ない」で、免除は成立しない —— 列は実行の事実ではない(ADR 0295 決定1)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00Z");
+  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "tako" }, at, ...HUMAN_WEBUI);
+  const review = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+  const spawned = appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+
+  expect(reviewedTaskExecutor(db, review, spawned)).toBeUndefined();
+  expect(assigneeNeedsApproval(db, review, "tako", { assignable_to: [] })).toBe(true);
 });

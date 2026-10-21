@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { boardDoctrine } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
-import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
+import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -22,6 +22,7 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
@@ -517,8 +518,36 @@ describe("CodexWorker (ADR 0098)", () => {
       `skills.config=[${listedSkillPaths(codexSkillsListAt([f.workspace]), [f.workspace]).map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(",")}]`,
     );
     const configPairs = spawned.flatMap((arg, i) => (spawned[i - 1] === "-c" ? ["-c", arg] : []));
-    expect(observation!.spec.args).toEqual(["app-server", "--strict-config", ...configPairs]);
+    // 観測は spawn の設定のうち本文だけを marker に差し替えて当てる(ADR 0259 追記 / ADR 0295 決定4)
+    const marked = `developer_instructions=${JSON.stringify(CODEX_DEVELOPER_MARKER)}`;
+    expect(configPairs).not.toContain(marked);
+    expect(observation!.spec.args).toEqual([
+      "app-server",
+      "--strict-config",
+      ...configPairs.map((arg) => (arg.startsWith("developer_instructions=") ? marked : arg)),
+    ]);
     expect(observation!.requests).toEqual(enumeration!.requests);
+  });
+
+  it("worker_spawned は封じ込めの観測の後・本文の描画の前に書かれ、Roster はその id の時点の Executor —— 観測の最中に pickup された親の worker が載る(ADR 0295 決定4)", async () => {
+    let duringObservation = () => {};
+    const f = await fixture(undefined, undefined, undefined, undefined, {
+      appServer: (args, cwds) => {
+        if (args.includes("--strict-config")) duringObservation();
+        return honestSkillsList(args, cwds);
+      },
+    });
+    const at = new Date("2026-08-24T00:00:00.000Z");
+    const parent = registerTask(f.db, { type: "work", workspace: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const review = registerTask(f.db, { type: "review", assignee: "codex-agent", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+    duringObservation = () => markPickedUp(f.db, parent.id, at, "codex-agent");
+
+    await f.start(review);
+
+    const pickedUp = listEvents(f.db, parent.id).find((event) => event.kind === "task_picked_up")!;
+    const spawned = listEvents(f.db, review.id).find((event) => event.kind === "worker_spawned")!;
+    expect(pickedUp.id).toBeLessThan(spawned.id);
+    expect(developerInstructions(f.process.calls[0]!.args)).toContain("## Roster\n\ncodex-agent — Codex agent");
   });
 
   it("閉じた設定の下で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {

@@ -186,10 +186,10 @@ function authoritySection(guidance: string, heading = "## Authority"): string {
   return guidance === "" ? "" : `\n\n${heading}\n\n${guidance}`;
 }
 
-/** A review's roster (ADR 0056): the reviewed task's executor, the one name its
- *  repairs may always target. */
-function reviewAssignableTo(db: Db, review: Task): string[] {
-  const executor = reviewedTaskExecutor(db, review);
+/** A review's roster (ADR 0056): the reviewed task's executor as of the session's
+ *  spawn `spawnedEventId` (ADR 0295), the one name its repairs may always target. */
+function reviewAssignableTo(db: Db, review: Task, spawnedEventId: number): string[] {
+  const executor = reviewedTaskExecutor(db, review, spawnedEventId);
   return executor !== undefined ? [executor] : (REVIEWER_AUTHORITY_PROFILE.assignable_to ?? []);
 }
 
@@ -206,13 +206,14 @@ function versionEvidence(
   agent: AgentAtCommit & { body: string },
   registry: RegistryAtCommit,
   objected: Task,
+  spawnedEventId: number,
 ): string {
   const body =
     agent.builtin && agent.body === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
       : agent.body;
   const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
-  const then = guidanceByType(db, objected, profile);
+  const then = guidanceByType(db, objected, profile, spawnedEventId);
   if (then === undefined) {
     const missing =
       agent.authority === undefined
@@ -284,7 +285,7 @@ export function agentDefinitionThen(db: Db, registryDir: string, spawned: EventR
   const at = versionAt(registryDir, spawned.worker_id, registry_commit, definition_version);
   if (!at) return null;
   const profile = at.agent.authority === undefined ? undefined : ownEntry(at.registry.authority, at.agent.authority);
-  const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile);
+  const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile, spawned.id);
   if (!then) return null;
   const assignable_to = then.rosterAssignableTo ?? [];
   return {
@@ -346,7 +347,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   // by this worker at or before the entry. Map insertion order is
   // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
   // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)
-  const byVersion = new Map<string, number[]>();
+  const byVersion = new Map<string, Array<{ entryId: number; spawnedEventId: number }>>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
     const spawned = events
@@ -363,19 +364,31 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
       { kind: "worker_spawned" }
     >;
     const key = JSON.stringify([registry_commit, definition_version]);
-    byVersion.set(key, [...(byVersion.get(key) ?? []), entryId]);
+    byVersion.set(key, [...(byVersion.get(key) ?? []), { entryId, spawnedEventId: spawned.id }]);
   }
   const objected = getTask(db, task.parent_id)!;
-  const resolved: Array<{ entryIds: number[] } & NonNullable<ReturnType<typeof versionAt>>> = [];
-  for (const [key, entryIds] of byVersion) {
+  type Version = { spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>;
+  const evidence = (level: string, { agent, registry, spawnedEventId }: Version) =>
+    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId);
+  // 同じ版でも spawn ごとに Roster が違いうる(Executor は spawn の時点で読む —— ADR 0295)ので、版の中では
+  // 各 spawn で描いた証拠が同じ entry だけを1節に畳む(ADR 0270 追記)
+  const drawn = new Map<string, { entryIds: number[] } & Version>();
+  for (const [key, entries] of byVersion) {
     const [commit, version]: [string, string] = JSON.parse(key);
     const at = versionAt(registryDir, task.assignee, commit, version);
-    if (at === undefined) unresolved.push(...entryIds);
-    else resolved.push({ entryIds, ...at });
+    if (at === undefined) {
+      unresolved.push(...entries.map((entry) => entry.entryId));
+      continue;
+    }
+    for (const { entryId, spawnedEventId } of entries) {
+      const drawnKey = JSON.stringify([key, evidence("####", { ...at, spawnedEventId })]);
+      const bundle = drawn.get(drawnKey);
+      if (bundle) bundle.entryIds.push(entryId);
+      else drawn.set(drawnKey, { entryIds: [entryId], spawnedEventId, ...at });
+    }
   }
+  const resolved = [...drawn.values()].sort((a, b) => a.entryIds[0]! - b.entryIds[0]!);
   if (resolved.length === 0) return "";
-  const evidence = (level: string, { agent, registry }: (typeof resolved)[number]) =>
-    versionEvidence(db, level, task.assignee!, agent, registry, objected);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
@@ -428,12 +441,13 @@ function authorityByType(
   db: Db,
   task: Task,
   profile: AuthorityProfile,
+  spawnedEventId: number,
 ): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
   const notice =
     isRepairType(task.type) ? undefined
     : auditedPosedEventId(db, task.id) !== undefined ? INTERVIEW_AUDIT_NOTICE
     : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
-  return { ...guidanceByType(db, task, profile)!, notice };
+  return { ...guidanceByType(db, task, profile, spawnedEventId)!, notice };
 }
 
 /** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。spawn・帰責の当時版・
@@ -443,10 +457,12 @@ function guidanceByType(
   db: Db,
   task: Task,
   profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
+  /** Roster を描いた session の spawn —— review の Executor の時点(ADR 0295 決定3)。 */
+  spawnedEventId: number,
 ): { source: "repair" | "reviewer" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
   if (isRepairType(task.type)) return { source: "repair", guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
-    return { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task) };
+    return { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task, spawnedEventId) };
   return profile && { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
@@ -461,6 +477,8 @@ export function boardProse(input: {
   registryDir: string;
   registry: Registry;
   task: Task;
+  /** この文面で起こす session の `worker_spawned` の id(ADR 0295 決定3)。 */
+  spawnedEventId: number;
   systemPrompt: string;
   profile: AuthorityProfile;
   doctrine: string;
@@ -470,7 +488,7 @@ export function boardProse(input: {
   memorySection: string | null;
 }): string {
   const { db, task } = input;
-  const { guidance, rosterAssignableTo, notice } = authorityByType(db, task, input.profile);
+  const { guidance, rosterAssignableTo, notice } = authorityByType(db, task, input.profile, input.spawnedEventId);
   const injected = notice ? `\n\n${notice}` : "";
   return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

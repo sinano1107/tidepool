@@ -686,7 +686,7 @@ const SKILL_CHECK_FAILED =
   "so it could not decide or confirm which skills are closed";
 
 /** (codex, workspace) の組の検査(ADR 0259 決定1・3・5): 列挙した skill を閉じた spawn の設定を `--strict-config` で
- *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は spawn の設定で、回答時の検査は
+ *  当てた `skills/list` が、すべて `enabled: false` と答えるか。worker の起動は本文だけ marker の spawn の設定(ADR 0259 追記)で、回答時の検査は
  *  placeholder の設定で、同じこれを撃つ。列挙・観測そのものの失敗は投げる(決定6)。 */
 async function codexWorkspaceContainment(options: {
   call: BoardCall;
@@ -695,11 +695,10 @@ async function codexWorkspaceContainment(options: {
   /** 実体の path(realpath 済み)。 */
   workspace: string;
   config: (skills: string) => string[];
-}): Promise<{ config: string[]; capability: ContainmentCapability }> {
+}): Promise<{ skills: string; capability: ContainmentCapability }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
-  const config = options.config(
-    await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace),
-  );
+  const skills = await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace);
+  const config = options.config(skills);
   const [observed] = await callAppServer(
     through("Codex skill observation"),
     options.executable,
@@ -709,7 +708,7 @@ async function codexWorkspaceContainment(options: {
   );
   const enabled = enabledSkills(observed, [options.workspace]);
   return {
-    config,
+    skills,
     capability: enabled.length === 0
       ? { available: true }
       : {
@@ -1219,20 +1218,9 @@ export class CodexWorker implements WorkerAdapter {
       taskType: task.type,
       // openai の行は「無い」を取らない —— 書く入口が拒む(ADR 0218 決定5)
       effort: setting.effort!,
-      // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から組む。Codex は次の
-      // part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
-      developerInstructions: `${boardProse({
-        db: this.options.db,
-        registryDir: this.options.registry.dir,
-        registry,
-        task,
-        systemPrompt: agent.definition.systemPrompt,
-        profile: agent.profile,
-        doctrine: codexDoctrine(verbs),
-        verbs,
-        allowedDomains: workspace.allowed_domains,
-        memorySection: memoryPromptSection(memory, material),
-      })}\n\n`,
+      // 封じ込めの観測は本文だけを marker に差し替えた spawn の設定を当てる。本文は `worker_spawned` の id を
+      // Executor の区切りに持つので、event の後で描いて差し替える(ADR 0259 追記 / ADR 0295 決定4)
+      developerInstructions: CODEX_DEVELOPER_MARKER,
       mcpUrl: taskMcpUrl.toString(),
       // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281 / ADR 0283 決定3・追記1: MCP の登録と同じ差を写す(主題の修理子と行の主題を持つ RCA の pull verb の伏せは taskVerbSwap、read_memory_entries は memoryRepairVerbs / routingRepairVerbs / isSubjectReaderRca から来る)。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
@@ -1335,6 +1323,21 @@ export class CodexWorker implements WorkerAdapter {
       });
       recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
+      // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から、この spawn の id で組む(ADR 0295 決定4)。
+      // Codex は次の part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
+      const developerInstructions = `${boardProse({
+        db: this.options.db,
+        registryDir: this.options.registry.dir,
+        registry,
+        task,
+        spawnedEventId: spawned,
+        systemPrompt: agent.definition.systemPrompt,
+        profile: agent.profile,
+        doctrine: codexDoctrine(verbs),
+        verbs,
+        allowedDomains: workspace.allowed_domains,
+        memorySection: memoryPromptSection(memory, material),
+      })}\n\n`;
       const transcript = this.options.transcripts.open(task.id, spawned);
       const child = this.containers.open(task.id).spawn(
         this.options.executable,
@@ -1344,7 +1347,7 @@ export class CodexWorker implements WorkerAdapter {
           "--strict-config", "--dangerously-bypass-hook-trust",
           "-C", workspacePath,
           "-m", setting.model,
-          ...configArgs(checked.config),
+          ...configArgs(spawnConfig({ ...input, developerInstructions, taskTemp, skills: checked.skills })),
           taskPrompt(task),
         ],
         { cwd: workspacePath, env },

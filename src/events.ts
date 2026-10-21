@@ -925,9 +925,16 @@ export function listEventsOfKinds<K extends EventKind>(
     .map((r) => parseEventRow(r) as EventRowOf<K>);
 }
 
-/** タスクの kind の event のうち最新の1件。 */
-export function latestEventOfTask<K extends EventKind>(db: Db, taskId: string, kind: K): EventRowOf<K> | undefined {
-  const row = db.prepare("SELECT * FROM events WHERE task_id = ? AND kind = ? ORDER BY id DESC LIMIT 1").get(taskId, kind);
+/** タスクの kind の event のうち最新の1件。`before` を渡すとその id より前だけを見る(ADR 0295 決定3)。 */
+export function latestEventOfTask<K extends EventKind>(
+  db: Db,
+  taskId: string,
+  kind: K,
+  before = Number.MAX_SAFE_INTEGER,
+): EventRowOf<K> | undefined {
+  const row = db
+    .prepare("SELECT * FROM events WHERE task_id = ? AND kind = ? AND id < ? ORDER BY id DESC LIMIT 1")
+    .get(taskId, kind, before);
   return row === undefined ? undefined : (parseEventRow(row) as EventRowOf<K>);
 }
 

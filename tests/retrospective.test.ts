@@ -10,10 +10,10 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, REPAIR_NOTICES, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, pickupTask, REPAIR_NOTICES, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -1942,6 +1942,23 @@ it.each([
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
   expect(client.calls.map((c) => c.input.agent_definition)).toEqual([expect.objectContaining({ builtin: false, authority, roster })]);
+});
+
+it("実行前の親の下の review の session の当時版の Roster は、spawn の後に親が pickup され review が再 spawn されても、異議された entry の spawn が描いた空のまま(ADR 0295 決定3 / #2374)", async () => {
+  let parentId = "";
+  const b = await definitionBoard({
+    sessionTask: (db) => {
+      parentId = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
+      return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: parentId }, at, BOARD_WORKER_ID, "board");
+    },
+  });
+  pickupTask(b.db, getTask(b.db, parentId)!, "deckhand", at, { assignee: "deckhand" });
+  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: b.commit } });
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition?.roster)).toEqual([[]]);
 });
 
 it("帰責の入力の読んだ記憶に、同じ spawn で注入された Definition が入る —— 注入された他の leaf・前の session の注入は入らず、pull と重なれば1つ", async () => {

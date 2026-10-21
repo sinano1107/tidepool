@@ -9,6 +9,7 @@ import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from 
 import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 
 
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
@@ -19,6 +20,9 @@ const CODEX = { delegate: "a subagent", workflow: false };
 const NOT_SPLIT =
   "This task is not split: complete it in this session. If it is larger than one session can finish, finish what you can and state in the handoff what remains.";
 const words = (text: string) => text.replace(/\s+/g, " ");
+/** adapter と同じく、文面を描く session の `worker_spawned` を先に刻んでその id を返す(ADR 0295 決定3)。 */
+const spawn = (db: Db, task: Task, at: Date, workerId = "deckhand", commit = WORKER_SPAWNED.registry_commit) =>
+  appendEvent(db, { taskId: task.id, workerId, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
 /** task ごとの verb の差し替え(taskVerbSwap の値): 普通の task、分けない task(pin の子)、出題前と出題済みの Interview の root。 */
 const SPLIT = { withheld: [], added: [] };
 const NOT_SPLIT_SWAP = { withheld: ["decompose", "redecompose"] as const, added: [] };
@@ -71,6 +75,7 @@ async function repairProse(profile: AuthorityProfile, type: "memory_repair" | "r
     registryDir: "",
     registry: loadRegistry(await makeRegistry(), "purely-local"),
     task,
+    spawnedEventId: spawn(db, task, at),
     systemPrompt: "",
     profile,
     doctrine: boardDoctrine(CLAUDE, verbs),
@@ -110,12 +115,18 @@ async function selfRcaProse(db: Db, objected: Task, at: Date) {
   const entryId = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
   appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
-  const verbs = taskVerbSwap(db, rca.id);
+  return reviewProse(db, registryDir, rca, spawn(db, rca, at));
+}
+
+/** review の task の spawn `spawnedEventId` の文面(registry は `registryDir` の main)。 */
+function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: number) {
+  const verbs = taskVerbSwap(db, task.id);
   return boardProse({
     db,
     registryDir,
     registry: loadRegistry(registryDir, "purely-local"),
-    task: rca,
+    task,
+    spawnedEventId,
     systemPrompt: "",
     profile: REVIEWER_AUTHORITY_PROFILE,
     doctrine: boardDoctrine(CLAUDE, verbs),
@@ -165,6 +176,7 @@ it("Interview の監査 review の spawn の文面は reviewer の Authority の
     registryDir: "",
     registry: { commit: "c", agents: {}, authority: {}, workspaces: {} },
     task: audit,
+    spawnedEventId: spawn(db, audit, at, "fugu"),
     systemPrompt: "",
     profile: { name: "default", guidance: "Prefer reversible actions." },
     doctrine: boardDoctrine(CLAUDE, verbs),
@@ -175,4 +187,68 @@ it("Interview の監査 review の spawn の文面は reviewer の Authority の
 
   expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_AUDIT_NOTICE}\n\n`);
   expect(INTERVIEW_AUDIT_NOTICE).toBe("This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.");
+});
+
+it("review の spawn の Roster はその spawn の時点の Executor —— spawn の後に親が pickup されても空のままで、pickup の後の再 spawn は撮り直す(ADR 0295 決定1・2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const parent = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  // 盤面名義の RCA(人間名義の review 子は実行前の親に付かない —— ADR 0292 決定2)
+  const review = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+  const beforePickup = spawn(db, review, at, "fugu");
+  pickupTask(db, parent, "deckhand", at, { assignee: "deckhand" });
+  const afterPickup = spawn(db, review, at, "fugu");
+  const registryDir = await makeRegistry();
+
+  expect(reviewProse(db, registryDir, review, beforePickup)).not.toContain("## Roster");
+  expect(reviewProse(db, registryDir, review, afterPickup)).toContain("## Roster\n\ndeckhand — General work agent for the tidepool board");
+});
+
+it("異議された entry が同じ版の2つの spawn にまたがり、spawn ごとに Roster が違えば、self RCA の当時版は2節に分かれる(ADR 0270 追記 / ADR 0295)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  const parent = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const objected = pickupTask(db, registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board"), "deckhand", at)!;
+  const object = (entryId: number) =>
+    appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  spawn(db, objected, at, "deckhand", commit);
+  const beforePickup = logDecision(db, objected, "found nothing to repair", "deckhand", at, "worker");
+  pickupTask(db, parent, "deckhand", at, { assignee: "deckhand" });
+  spawn(db, objected, at, "deckhand", commit);
+  const afterPickup = logDecision(db, objected, "kept the finding", "deckhand", at, "worker");
+  object(beforePickup);
+  object(afterPickup);
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+
+  const prose = reviewProse(db, registryDir, rca, spawn(db, rca, at));
+
+  const [, first, second] = prose.split(/\n### Live for your objected /);
+  expect([first?.split("\n", 1)[0], second?.split("\n", 1)[0]]).toEqual([`entry #${beforePickup}`, `entry #${afterPickup}`]);
+  expect(first).not.toContain("Roster as it stood then");
+  expect(second).toContain("#### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board");
+});
+
+it("2つの spawn で Executor が違っても描いた Roster が同じなら、self RCA の当時版は1節に畳む —— まだ居ない Executor と、その commit の registry に無い Executor はどちらも空(ADR 0270 追記)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  const parent = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const objected = pickupTask(db, registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board"), "deckhand", at)!;
+  const object = (entryId: number) =>
+    appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  spawn(db, objected, at, "deckhand", commit);
+  object(logDecision(db, objected, "found nothing to repair", "deckhand", at, "worker"));
+  pickupTask(db, parent, "retired-agent", at, { assignee: "retired-agent" });
+  spawn(db, objected, at, "deckhand", commit);
+  object(logDecision(db, objected, "kept the finding", "deckhand", at, "worker"));
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+
+  const prose = reviewProse(db, registryDir, rca, spawn(db, rca, at));
+
+  expect(prose).toContain("## Definition under review (as it stood when you ran the objected task)");
+  expect(prose).not.toContain("### Live for your objected");
+  expect(prose).not.toContain("Roster as it stood then");
 });
