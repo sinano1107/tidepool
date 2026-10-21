@@ -13,7 +13,7 @@
 
 ## 付帯子(Attached child)
 
-親の**作業のため**ではなく、親の**結果に対して**後から付けられた子(2026-08-05 の grilling、issue #181 / ADR 0049)。親に付くのは帰属だけが文脈を運ぶ配線だからであって、親がそれを待っているからではない。したがって**付帯子は親を塞がない**: 親の完了も pickup も、未決着の付帯子には妨げられない。ただし**着地は待つ**(2026-08-21 の grilling、issue #399 / ADR 0092): PR 昇格・merge question・無人 merge キューへの投入は、親の子孫全体に未決着の付帯子がゼロで、かつ未束ねの異議がゼロのときにだけ走る(分解子への修理も、その修理に付いたレビューも、着地する枝へ流れ込む。異議の側は 2026-09-01 の grilling / ADR 0106 — 着地 参照)。型は問わない — review 子も異議由来の修理・RCA も等しく待ち、走行中のタスクへ出た異議は修理を経てから着地する。門は完了ではなく着地に置かれているので、ADR 0049 の線(完了・blocked・pickup)は無傷である。親の cancel(直接 cancel・Interview の root の retry・failure question の abandon)を生き延びる付帯子は RCA review と記憶の修理子で、work の修理子・完了時レビュー・人間登録の review 子は道連れになる(2026-10-17 の grilling、issue #2152 / ADR 0271 —— 旧・ADR 0268 の「系譜に透明な review の付帯子は残る」の線は改訂。記憶の修理子は issue #2150 / ADR 0272)—— 線は型ではなく「仕事の宛先が親の生死に依らないか」で引く。記憶の修理子の宛先は記憶の店で、親と一緒には死なない。RCA の宛先は帰責なので成果が消えても残り、完了時レビューと人間登録の review 子の宛先(修理・配分評価)は親の計画と一緒に死ぬ。
+親の**作業のため**ではなく、親の**結果に対して**後から付けられた子(2026-08-05 の grilling、issue #181 / ADR 0049)。親に付くのは帰属だけが文脈を運ぶ配線だからであって、親がそれを待っているからではない。結果に付くので、実行の事実(pickup)の無い親には review 子は登録できない —— 将来のレビューの予約は Review flag / `review_by`(2026-10-21 の grilling、issue #2369 / ADR 0292)。したがって**付帯子は親を塞がない**: 親の完了も pickup も、未決着の付帯子には妨げられない。ただし**着地は待つ**(2026-08-21 の grilling、issue #399 / ADR 0092): PR 昇格・merge question・無人 merge キューへの投入は、親の子孫全体に未決着の付帯子がゼロで、かつ未束ねの異議がゼロのときにだけ走る(分解子への修理も、その修理に付いたレビューも、着地する枝へ流れ込む。異議の側は 2026-09-01 の grilling / ADR 0106 — 着地 参照)。型は問わない — review 子も異議由来の修理・RCA も等しく待ち、走行中のタスクへ出た異議は修理を経てから着地する。門は完了ではなく着地に置かれているので、ADR 0049 の線(完了・blocked・pickup)は無傷である。親の cancel(直接 cancel・Interview の root の retry・failure question の abandon)を生き延びる付帯子は RCA review と記憶の修理子で、work の修理子・完了時レビュー・人間登録の review 子は道連れになる(2026-10-17 の grilling、issue #2152 / ADR 0271 —— 旧・ADR 0268 の「系譜に透明な review の付帯子は残る」の線は改訂。記憶の修理子は issue #2150 / ADR 0272)—— 線は型ではなく「仕事の宛先が親の生死に依らないか」で引く。記憶の修理子の宛先は記憶の店で、親と一緒には死なない。RCA の宛先は帰責なので成果が消えても残り、完了時レビューと人間登録の review 子の宛先(修理・配分評価)は親の計画と一緒に死ぬ。
 
 線は「**親が待っている子**」の側に引かれ、付帯子はその補集合である。親が待つのは2種 — 親の作業を分けた子(decompose / 人間 decompose、分解判断に乗る)と、親が答えを仰いだ question(escalation)。この2種だけが blocked を導出し、完了を塞ぐ。提案を運ぶ question(ADR 0120)を除けば、親を持つ question はエスカレーション由来なので(Question 参照 — 盤面名義の失敗質問も同じ経路)、「提案を運ばない、親を持つ question = 親が待つ子」は代理ではなく事実である。
 
@@ -255,9 +255,9 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 ## Executor(実行者)
 
-そのタスクを**実行したという事実**。Assignee が前を向いた値(誰が実行することになるか)であるのに対し、Executor は後ろを向いた値であり、出所は盤面の event log —— ポインタへの参照ではなく確定値である。列に値があるときは両者が一致するため同じものに見えるが、別概念である: 未指定の assignee は「その時のポインタ」を意味し、実行後にポインタが動けば現在のポインタは当時の実行者ではない。
+そのタスクを**実行したという事実**。Assignee が前を向いた値(誰が実行することになるか)であるのに対し、Executor は後ろを向いた値であり、出所は盤面の event log —— ポインタへの参照ではなく確定値である。列に値があっても両者が一致するとは限らない —— 実行済みの task が todo に戻った窓で Edit は列を書き換えるし、未指定の assignee は「その時のポインタ」で、実行後にポインタが動けば現在のポインタは当時の実行者ではない。Executor は列を読まず、event log だけから引く(2026-10-21 の grilling、issue #2369 / ADR 0292)。
 
-「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。
+「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。review が問う Executor は**その review session の spawn の時点**のもの —— 被レビュー task の event を spawn 記録の位置で区切って読み、spawn の Roster・免除・`direct` 印・当時版が1つの読みを共有する。付帯子は親を塞がないので review の走行中に親が別の worker に pickup されうるが、読みは動かない(ADR 0292)。
 
 ## Registrant(登録者)
 
@@ -285,7 +285,7 @@ assignee 未指定のタスクが解決される先。特別な種類のエー�
 
 agent が委譲判断の材料として受け取る worker の一覧。各行は名前と description(その worker がいつ委譲先として適するかを registry の著者が書く1行の散文)からなり、モデル名などベンダー固有の語彙は決して含まれない — tier や得意分野の伝達も description の散文が担う。2つの形で提示される: 「直接委譲できる相手」(spawn 時に与えられる)と、委譲されうる worker 全体の照会(直接委譲できない worker は承認 question への変換を要することがマークされる)。human は registry に定義を持たないが、委譲可能な worker として roster には現れる。盤面(Tidepool)は逆で、盤面上の登場人物でありながら roster には現れない — 委譲されえないため、行の意味(「この相手に振れる」)が成立しない(登場人物 参照)。組み込み agent に解決される名前も同じ理由で roster に現れない — 委譲は常に work で、組み込みは work を実行しない(2026-10-10 の grilling、issue #1744 / ADR 0235)。shadow している間はその名前は普通の agent なので現れる。
 
-「直接委譲できる相手」の中身は type で決まる。通常は自分の assignable_to を解決したものだが、**review タスクでは被レビュータスクの Executor ただ1人**である(2026-08-09 の grilling、issue #218 / ADR 0056) — read-only が行為の性質である以上その authority も盤面固定であり(ADR 0013)、そこで常時許可される委譲先は「修理の宛先 = レビュー対象を実行した本人」という免除1つだけだからである。したがって roster の入力は registry だけではなく、event log(Executor 参照)にも及ぶ。ルート review には被レビュータスクが存在せず、roster は空になる。`memory_repair` には合法な委譲先が無く(分解の verb を type で伏せる)、roster は無い —— Authority の散文も review と同じく盤面の定数で、profile の散文は現れない(2026-10-19 の grilling、issue #2217 / ADR 0272 追記3)。「なぜこの名前が並ぶのか」を roster の行は説明しない — 行の形は常に `名前 — description` であり、由来を言うのは authority の散文の役目である。
+「直接委譲できる相手」の中身は type で決まる。通常は自分の assignable_to を解決したものだが、**review タスクでは被レビュータスクの Executor ただ1人**である(2026-08-09 の grilling、issue #218 / ADR 0056) — read-only が行為の性質である以上その authority も盤面固定であり(ADR 0013)、そこで常時許可される委譲先は「修理の宛先 = レビュー対象を実行した本人」という免除1つだけだからである。したがって roster の入力は registry だけではなく、event log(Executor 参照)にも及び、読む時点は review session の spawn である —— 免除・`direct` 印・当時版も同じ時点を読む(ADR 0292)。ルート review には被レビュータスクが存在せず、roster は空になる。`memory_repair` には合法な委譲先が無く(分解の verb を type で伏せる)、roster は無い —— Authority の散文も review と同じく盤面の定数で、profile の散文は現れない(2026-10-19 の grilling、issue #2217 / ADR 0272 追記3)。「なぜこの名前が並ぶのか」を roster の行は説明しない — 行の形は常に `名前 — description` であり、由来を言うのは authority の散文の役目である。
 
 ## Worker session(ワーカーセッション)
 

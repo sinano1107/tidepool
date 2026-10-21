@@ -1,5 +1,7 @@
 # レビューの免除が問うのは Assignee ではなく Executor である
 
+**Status 追記: 「`assignee` 列に値があればそのまま返す」の一文は ADR 0292 が改めた(2026-10-21 の grilling、issue #2369)** —— 列は Edit で動くので Executor は event log だけから、その review session の spawn の時点で読む。順序(`task_completed` → 最後の `task_picked_up`)は変わらない。
+
 issue #217 で決定。ADR 0013 の免除 —— レビューの修理子は被レビュータスクの実行者を常に名指してよい
 (「that's part of what a review *is*」)—— の実装(`reviewedTaskAssignee`、`src/tasks.ts:1576`)は、
 親タスクの `assignee` **列を素で**読んでいた。ADR 0011 により未指定の assignee は「その時の盤面の
