@@ -43,6 +43,8 @@ import {
   readInitModel,
   readModelSwap,
   readRootRefusal,
+  readSubagentModel,
+  readSubagentStart,
 } from "./stream-json.js";
 import {
   carriesReadOnly,
@@ -961,10 +963,11 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
 }
 
 /** What the stdout scan collected while the stream ran — the session's advisor
- *  (issue #33) and its model swaps and refusals (ADR 0215). All are needed at
- *  exit and none survives on the result line: the consultations, failed calls
- *  and refusals happen in assistant lines, the swaps and the main model's
- *  resolved id on system lines. */
+ *  (issue #33), its model swaps and refusals (ADR 0215) and its subagents'
+ *  models (issue #2432). All are needed at exit and none survives on the
+ *  result line: the consultations, failed calls and refusals happen in
+ *  assistant lines, the swaps, subagent launches and the main model's resolved
+ *  id on system lines, the subagents' resolved models on tool_result lines. */
 interface StreamObservation {
   /** Advisor calls whose result carried advice, seen on the parent thread (ADR 0214). */
   consultations: number;
@@ -978,6 +981,9 @@ interface StreamObservation {
   /** ADR 0215: `usage.refusals` keyed by `message.id` — one message splits into
    *  several assistant lines, one per block, so a refusal counts once per id. */
   refusals: Map<unknown, string | null>;
+  /** issue #2432: the subagents seen on the stream, keyed by `tool_use_id`, with the resolved
+   *  model observed for each — null while none has been. An unpairable id gets a key of its own. */
+  subagents: Map<unknown, string | null>;
 }
 
 /** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
@@ -999,7 +1005,7 @@ function toAdvisorRecord(
 }
 
 /** The advisor's own token/cost slice, or null when it cannot be measured
- *  (see the field's own doc in events.ts). Four ways it is unmeasurable:
+ *  (see the field's own doc in events.ts). Five ways it is unmeasurable:
  *
  *  - the advisor's resolved id was never reported;
  *  - it resolved to the same model as the main one, which merges both into a
@@ -1013,14 +1019,21 @@ function toAdvisorRecord(
  *    measured" must not turn into a confident wrong number;
  *  - **the main model was swapped** mid-session (ADR 0215 決定4) — the init
  *    line's model is then not the one that ran, so the comparison above says
- *    nothing. A `local` swap leaves the session's model as it was. */
+ *    nothing. A `local` swap leaves the session's model as it was;
+ *  - **something else ran, or may have run, on the advisor's model** (issue
+ *    #2432) — `modelUsage` sums per model id, so its tokens sit in the
+ *    advisor's entry: a subagent resolved to the advisor's id, a subagent
+ *    launch with no resolved model observed by exit (a nested one, or a
+ *    renamed field), or a `local` swap to the advisor's id. Not subtracted
+ *    (ADR 0094 決定2). */
 function advisorUsage(
   result: StreamResultEvent,
   model: string | null,
   observed: StreamObservation,
 ): AdvisorRecord["usage"] {
   if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
-  if (observed.modelSwaps.some(swapsMain)) return null;
+  if (observed.modelSwaps.some((swap) => swapsMain(swap) || swap.to === model)) return null;
+  if ([...observed.subagents.values()].some((resolved) => resolved === null || resolved === model)) return null;
   const breakdown = result.modelUsage;
   if (typeof breakdown !== "object" || breakdown === null) return null;
   const entry = ownEntry(breakdown as Record<string, unknown>, model);
@@ -2284,7 +2297,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // consultations are assistant-line blocks and the resolved main model is on
     // the init line — so they are accumulated while the stream runs. The stdout
     // scan already reads every line, so the added cost is a filter per line.
-    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: new Map() };
+    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: new Map(), subagents: new Map() };
     // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
     // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
     const observe = (parsed: Record<string, unknown> | null) => {
@@ -2301,6 +2314,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       streamObserved.mainModel = readInitModel(parsed) ?? streamObserved.mainModel;
       const swap = readModelSwap(parsed);
       if (swap) streamObserved.modelSwaps.push(swap);
+      const started = readSubagentStart(parsed);
+      if (started) streamObserved.subagents.set(started.id ?? {}, null);
+      const resolved = readSubagentModel(parsed);
+      if (resolved) streamObserved.subagents.set(resolved.id ?? {}, resolved.model);
       const refusal = readRootRefusal(parsed);
       if (refusal && !streamObserved.refusals.has(refusal.id)) streamObserved.refusals.set(refusal.id, refusal.category);
       if (!toolSurfaceObserved) {
