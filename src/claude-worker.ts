@@ -2226,6 +2226,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             registryDir: this.options.registry.dir,
             registry,
             task,
+            spawnedEventId,
             systemPrompt: definition.systemPrompt,
             profile,
             // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)

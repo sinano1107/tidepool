@@ -3032,18 +3032,25 @@ function outsideAuthority(value: string | undefined, allowlist: string[] | undef
  *  not a delegation the reviewer happens to hold. Exported so callers that
  *  need to predict decomposeTask's own verdict (mcp.ts's `list_agents`, issue
  *  #43 / ADR 0014) share this exact lookup rather than reimplementing it and
- *  risking drift from decomposeTask's actual check below. */
-export function reviewedTaskExecutor(db: Db, task: Task): string | undefined {
+ *  risking drift from decomposeTask's actual check below.
+ *
+ *  ADR 0295: the Executor is a fact as of `cutoff` (an event id) — the review
+ *  session's own spawn — read from the log, never from the reviewed task's
+ *  `assignee` column. Without a cutoff, the review's latest `worker_spawned`
+ *  (during a session, that session's spawn); a review never spawned (a human
+ *  decomposing it from the WebUI) reads the whole log. */
+export function reviewedTaskExecutor(
+  db: Db,
+  task: Task,
+  cutoff = latestEventOfTask(db, task.id, "worker_spawned")?.id,
+): string | undefined {
   if (task.type !== "review" || !task.parent_id) return undefined;
-  const reviewed = getTask(db, task.parent_id);
-  if (!reviewed) return undefined;
-  if (reviewed.assignee !== null) return reviewed.assignee;
-  return executionEvent(db, task.parent_id)?.worker_id;
+  return executionEvent(db, task.parent_id, cutoff)?.worker_id;
 }
 
-/** 実行の事実(ADR 0054): 最新の task_completed、無ければ最新の task_picked_up。 */
-function executionEvent(db: Db, taskId: string) {
-  return latestEventOfTask(db, taskId, "task_completed") ?? latestEventOfTask(db, taskId, "task_picked_up");
+/** 実行の事実(ADR 0054): `before` より前の最新の task_completed、無ければ最新の task_picked_up。 */
+function executionEvent(db: Db, taskId: string, before?: number) {
+  return latestEventOfTask(db, taskId, "task_completed", before) ?? latestEventOfTask(db, taskId, "task_picked_up", before);
 }
 
 /** Whether assigning `name` from `task` would need a human approval question

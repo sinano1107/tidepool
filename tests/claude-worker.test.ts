@@ -55,7 +55,7 @@ import {
   recordingPty,
   recordingSpawn,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, markPickedUp, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -3528,6 +3528,8 @@ describe("ClaudeCodeWorker", () => {
   it("被レビュー task が review だったとき、当時の Authority は reviewer 定数を指す1行になり、Roster は当時の被レビュー task の executor で組み直す(issue #1741)", async () => {
     const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
     insertTask(db, makeTask("reviewed-10", null, "lookout", "work"));
+    // Executor は列でなく、当時の session の spawn までの実行の事実(ADR 0295 決定1)
+    markPickedUp(db, "reviewed-10", new FakeClock().now(), "lookout");
     insertTask(db, { ...makeTask("objected-10", null, "deckhand", "review"), parent_id: "reviewed-10" });
     objectDecisionAt(db, "objected-10", "deckhand", registryGit(registryDir)("rev-parse", "main"));
 
@@ -3552,6 +3554,7 @@ describe("ClaudeCodeWorker", () => {
       { enumerateSkills: recordingEnumerator([]).enumerateSkills },
     );
     insertTask(db, makeTask("reviewed-11", null, "deckhand", "work"));
+    markPickedUp(db, "reviewed-11", new FakeClock().now(), "deckhand");
     insertTask(db, { ...makeTask("objected-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-11" });
     objectDecisionAt(
       db,
