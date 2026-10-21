@@ -254,7 +254,7 @@ it("種の openai 行ごとに exec --json の1ターンを盤面の出力の読
     { model: "gpt-6-astra", effort: "high" },
   ]);
   expect(rows).toEqual([
-    { surface: "seed row gpt-5.6-terra", pass: true, detail: "turn.completed; tokens in 96991 / cached 79616 / out 584" },
+    { surface: "seed row gpt-5.6-terra", pass: true, detail: "turn.completed; tokens in 96991 / cached 79616 / cache write 0 / out 584" },
     { surface: "seed row gpt-5.6-sol", pass: false, detail: expect.stringContaining("turn.failed: ") },
     { surface: "seed row gpt-6-astra", pass: false, detail: "no turn.completed line with readable usage" },
   ]);

@@ -157,7 +157,7 @@ export async function judgeSeedRows(
         if (failure !== undefined) return fail(`turn.failed: ${failure}`);
         const usage = events.map(readUsage).filter((read) => read !== null).at(-1);
         return usage
-          ? { pass: true, detail: `turn.completed; tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / out ${usage.output_tokens}` }
+          ? { pass: true, detail: `turn.completed; tokens in ${usage.input_tokens} / cached ${usage.cached_input_tokens} / cache write ${usage.cache_write_input_tokens} / out ${usage.output_tokens}` }
           : fail("no turn.completed line with readable usage");
       }),
     );

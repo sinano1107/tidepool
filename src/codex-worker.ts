@@ -28,7 +28,7 @@ import {
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { appendEvent, type EventPayload, type ResourceStop } from "./events.js";
+import { appendEvent, type EventPayload, type ResourceStop, type TokenUsage } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { git } from "./git.js";
 import type { CodexWorkspaceCheck } from "./harness-containment.js";
@@ -1087,9 +1087,12 @@ function workerEnv(
   return env;
 }
 
+/** `turn.completed.usage` のうち盤面が読む 4 欄。`cached_input_tokens` と `cache_write_input_tokens` は
+ *  `input_tokens` の内数(codex-rs 0.147.0)。`reasoning_output_tokens` は読まない(#2423)。 */
 interface CodexUsage {
   input_tokens: number;
   cached_input_tokens: number;
+  cache_write_input_tokens: number;
   output_tokens: number;
 }
 
@@ -1097,9 +1100,27 @@ export function readUsage(value: unknown): CodexUsage | null {
   if (!value || typeof value !== "object") return null;
   const event = value as { type?: unknown; usage?: Record<string, unknown> };
   const usage = event.type === "turn.completed" ? event.usage : undefined;
-  return usage && [usage.input_tokens, usage.cached_input_tokens, usage.output_tokens].every(Number.isFinite)
+  return usage &&
+    [usage.input_tokens, usage.cached_input_tokens, usage.cache_write_input_tokens, usage.output_tokens].every(Number.isFinite)
     ? usage as unknown as CodexUsage
     : null;
+}
+
+/** Codex の usage を盤面の語彙に写す唯一の入口(#2410)。欄が欠けるか引き算が負なら欠測(null) ——
+ *  0 で埋めず、負を 0 に丸めない(#534)。 */
+export function codexTokenUsage(value: unknown): TokenUsage | null {
+  const usage = readUsage(value);
+  if (!usage) return null;
+  const input = usage.input_tokens - usage.cached_input_tokens - usage.cache_write_input_tokens;
+  return input < 0
+    ? null
+    : {
+        input_tokens: input,
+        output_tokens: usage.output_tokens,
+        cache_read_tokens: usage.cached_input_tokens,
+        cache_creation_tokens: usage.cache_write_input_tokens,
+        estimated_cost_usd: null,
+      };
 }
 
 /** ADR 0188: `turn.failed` の message を逐語で(入れ子の JSON は解かない)。`error` event は
@@ -1359,13 +1380,13 @@ export class CodexWorker implements WorkerAdapter {
       );
       child.stdout.pipe(transcript.stream);
       child.stderr.pipe(transcript.stderr);
-      let usage: CodexUsage | null = null;
+      let usage: TokenUsage | null = null;
       let reportedError: string | null = null;
       let lastMessage: string | null = null;
       // ADR 0261 決定2: 読み直しの条件は `turn.failed` の行の有無だけ —— 文(reported_error)は読まない
       let turnFailed = false;
       const observe = (event: unknown) => {
-        usage = readUsage(event) ?? usage;
+        usage = codexTokenUsage(event) ?? usage;
         reportedError = readTurnFailure(event) ?? reportedError;
         turnFailed ||= isTurnFailure(event);
         lastMessage = readAgentMessage(event) ?? lastMessage;
@@ -1402,11 +1423,7 @@ export class CodexWorker implements WorkerAdapter {
       const record = (exit: WorkerExit, outputClosed: boolean) => {
         const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
           ? {
-              input_tokens: usage.input_tokens,
-              output_tokens: usage.output_tokens,
-              cache_read_tokens: usage.cached_input_tokens,
-              cache_creation_tokens: 0,
-              estimated_cost_usd: null,
+              ...usage,
               advisor: null,
               model_swaps: [],
               refusals: [],
