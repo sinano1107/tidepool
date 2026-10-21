@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
@@ -129,4 +130,22 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   const outcome = await translateSource(db, client, "same text", "Japanese", NOW);
 
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });
+});
+
+it("CLI の封筒が is_error: true なら translateSource は reject し、エラー本文を訳としてキャッシュしない(#652)", async () => {
+  const db = await freshDb();
+  const client = new ClaudeTranslationClient({
+    exec: async () =>
+      JSON.stringify({
+        is_error: true,
+        result: "You've hit your session limit",
+        total_cost_usd: 0,
+        usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      }),
+  });
+
+  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow(
+    "You've hit your session limit",
+  );
+  expect(getCachedTranslation(db, hashSource("the board retires a settled tree"), "Japanese")).toBeUndefined();
 });

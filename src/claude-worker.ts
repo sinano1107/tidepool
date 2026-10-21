@@ -427,8 +427,10 @@ export function pinnedModelFlags(model: string, effort: string | null): string[]
  *  translation's input.
  *
  *  Named here rather than spelled at each call site because the set of callers
- *  is the decision: exactly two of ADR 0044's five Board calls take it — the AI
- *  draft and display-time translation. **The three probes must never call it**
+ *  is the decision: its one caller is the Board call runner
+ *  (claude-board-call-runner.ts) that every answer-fetching Board call goes
+ *  through — the drafts, the retrospective judgments and display-time
+ *  translation (#662). **The three probes must never call it**
  *  (skill enumeration ping, tool-surface probe, usage scrape): they go to
  *  *observe* the CLI's state, and an observer trimming the environment it is
  *  observing is self-contradictory. For the tool-surface probe it would be
