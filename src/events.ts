@@ -132,8 +132,8 @@ export const swapsMain = (swap: ModelSwap): boolean => swap.scope !== "local";
  *  `worker_exited.usage` reports at the top level and per model id in `models`.
  *  What it covers depends on where it sits (ADR 0297 決定1): at the top level the
  *  four token fields are the parent thread's (the worker's main model) on every
- *  provider, while `estimated_cost_usd` and each `models` entry are whole-session
- *  on Claude. See `worker_exited.usage`. */
+ *  provider, while on Claude `estimated_cost_usd` and the `models` map as a whole
+ *  are whole-session. See `worker_exited.usage`. */
 export interface TokenUsage {
   /** Input outside the cache — neither a cache read nor a cache write. The prompt total is
    *  input_tokens + cache_read_tokens + cache_creation_tokens (issue #2410). */
@@ -421,8 +421,9 @@ export type EventPayload =
   //
   // Scope by provider (ADR 0297 決定1): the four top-level token fields are the
   // parent thread's consumption on Claude and Codex alike. On Claude, the
-  // top-level `estimated_cost_usd` and every `models` entry are whole-session,
-  // subagents and advisor included. On Codex, subagent (child thread)
+  // top-level `estimated_cost_usd` and the `models` map as a whole are
+  // whole-session, subagents and advisor included (an entry is per model id,
+  // not per thread — see `models`). On Codex, subagent (child thread)
   // consumption is not observed anywhere, and remote compaction V2 consumption
   // is suspected not to be included either (issue #2430), so a Codex count can
   // be lower than what the session actually used.
@@ -487,8 +488,10 @@ export type EventPayload =
         advisor: AdvisorRecord | null;
         /** ADR 0094 決定2: the CLI result line's per-model `modelUsage` carried
          *  as observed, keyed by the model id the CLI reports for that entry.
-         *  Whole-session on Claude: subagents and the advisor are among the
-         *  entries (ADR 0297 決定1).
+         *  The map as a whole is whole-session on Claude (ADR 0297 決定1),
+         *  but an entry is per model id, not per thread: a subagent on the
+         *  main model is summed into the main model's entry, and one on
+         *  another model gets that model's entry (issue #2427, measured).
          *  This is raw observation, not attribution — the board does NOT
          *  infer which entry is the advisor from this breakdown (the "main
          *  vs. everything else" rule matched 7/7 in a measurement but reads

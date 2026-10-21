@@ -48,7 +48,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   );
   // 上位の token 欄は親スレッドだけ、Claude の models / cost は subagent と advisor を含み、Codex の subagent の消費は観測されない(ADR 0297 決定1・3)
   expect(args[1]).toContain(
-    "The token counts in usage cover the worker's main thread only. For Claude, usage.models and usage.estimated_cost_usd include subagents and the advisor; for Codex, subagent consumption is not observed anywhere, so its counts can be lower than what the session actually used — do not read a small Codex count as evidence the session was cheap. ",
+    "The token counts in usage cover the worker's main thread only. For Claude, usage.models and usage.estimated_cost_usd include subagents and the advisor; for Codex, subagent consumption is not observed anywhere, so its counts can be lower than what the session actually used — do not read a small Codex count as evidence the session was cheap.",
   );
   // cause の memory は配分評価の入力に読んだ記憶が無いので載せない(ADR 0166 決定1)
   expect(args[1]).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
