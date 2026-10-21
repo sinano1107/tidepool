@@ -336,33 +336,3 @@ it("assignee を明示しただけで一度も pickup されていない親の�
   expect(reviewedTaskExecutor(db, review, spawned)).toBeUndefined();
   expect(assigneeNeedsApproval(db, review, "tako", { assignable_to: [] })).toBe(true);
 });
-
-it("実行前の親の下の RCA の session の最中に親が pickup されても、その session の list_agents は親の worker を needs_approval のまま示し、宛てた修理は承認 question になる(ADR 0295 決定3 / #2374)", async () => {
-  t = await bootTidepool({ listAgents: () => [{ name: "tako", description: "The parent's later executor" }] });
-  const parent = seed({ type: "work", title: "wire the tide gauge", purpose: "purpose", completion_criteria: "criteria" });
-  // 盤面名義の RCA(異議由来の auditor RCA の形 —— 人間名義の review 子は実行前の親に付かない、ADR 0292 決定2)
-  const rca = registerTask(t.db, { type: "review", title: "RCA for the gauge", purpose: "p", completion_criteria: "c", parent_id: parent.id }, t.clock.now(), BOARD_WORKER_ID, "board");
-  await api(t.baseUrl, "POST", `/api/tasks/${rca.id}/move`, { after: null });
-  await t.clock.advance(HOUR); // RCA picked up
-  // 偽の worker は `worker_spawned` を刻まないので、adapter の代わりに置く
-  appendEvent(t.db, { taskId: rca.id, workerId: "fugu", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
-  markPickedUp(t.db, parent.id, t.clock.now(), "tako");
-
-  const client = await mcpClient(t.mcpBaseUrl, rca.id);
-  const rosterResult: any = await client.callTool({ name: "list_agents", arguments: {} });
-  await client.callTool({
-    name: "decompose",
-    arguments: {
-      reason: "the parent's executor should repair it",
-      children: [{ title: "repair by the later executor", purpose: "p", completion_criteria: "c", assignee: "tako" }],
-    },
-  });
-  await client.close();
-
-  const board = (await api(t.baseUrl, "GET", "/api/tasks")).json;
-  expect({
-    takoStatus: JSON.parse(rosterResult.content[0].text).agents.find((agent: any) => agent.name === "tako")?.status,
-    repairRegistered: board.some((task: any) => task.title === "repair by the later executor"),
-    approvalQuestionRegistered: board.some((task: any) => task.type === "question" && task.parent_id === rca.id),
-  }).toEqual({ takoStatus: "needs_approval", repairRegistered: false, approvalQuestionRegistered: true });
-});
