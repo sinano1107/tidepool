@@ -127,7 +127,7 @@ const rateLimitsResponse = z.object({
 });
 
 // ページの続きは読まない —— 続きがあれば一覧は不完全で、照合すると走る行を外しうる
-const modelListResponse = z.object({
+export const modelListResponse = z.object({
   data: z.array(z.object({ id: z.string(), supportedReasoningEfforts: z.array(z.object({ reasoningEffort: z.string() })) })),
   nextCursor: z.null().optional(),
 });
@@ -247,12 +247,10 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
   );
 }
 
-/** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim 済みの版と `CODEX_APP_SERVER_VERSION` の
+/** Codex CLI の版の照合(ADR 0186 決定3 / ADR 0098 決定4): trim 済みの版と固定の版(既定 `CODEX_APP_SERVER_VERSION`)の
  *  完全一致。一致すれば null、外れれば理由。null の観測は版が読めなかったことを表す。 */
-function codexVersionMismatch(observed: string | null): string | null {
-  return observed === CODEX_APP_SERVER_VERSION
-    ? null
-    : `expected ${CODEX_APP_SERVER_VERSION}, observed ${observed ?? "unavailable"}`;
+function codexVersionMismatch(observed: string | null, pinned = CODEX_APP_SERVER_VERSION): string | null {
+  return observed === pinned ? null : `expected ${pinned}, observed ${observed ?? "unavailable"}`;
 }
 
 /** Board call の口の門が使う版の照合(読めなければ投げ、口が不一致に倒す)。 */
@@ -261,11 +259,16 @@ export async function checkCodexCliVersion(readVersion: () => Promise<string>): 
   return reason === null ? { available: true } : { available: false, reason };
 }
 
-async function compatibilityCheck(
-  executable: string,
-  env: NodeJS.ProcessEnv,
-  command: CodexCliCommand,
-): Promise<{ ok: true; cliVersion: string } | { ok: false; cliVersion: string | null; reason: string }> {
+/** 版と生成 schema の互換性検査(ADR 0098 決定4)。`pinnedVersion` は版の照合の差し替え口で、渡すのは版上げの
+ *  適合試験だけ —— 試す版を渡して版の照合を外し、schema の照合は残す(#1385)。一致した版が観測した版である。 */
+export async function compatibilityCheck(options: {
+  executable: string;
+  codexHome: string;
+  command: CodexCliCommand;
+  pinnedVersion?: string;
+}): Promise<{ ok: true; cliVersion: string } | { ok: false; cliVersion: string | null; reason: string }> {
+  const { executable, command, pinnedVersion = CODEX_APP_SERVER_VERSION } = options;
+  const env = probeEnv(options.codexHome);
   let versionResult: CodexCliCommandResult;
   try {
     versionResult = await command(executable, ["--version"], { env });
@@ -273,7 +276,7 @@ async function compatibilityCheck(
     return { ok: false, cliVersion: null, reason: `version check failed: ${String(error)}` };
   }
   const version = versionResult.exitCode === 0 ? versionResult.stdout.trim() : null;
-  const mismatch = codexVersionMismatch(version);
+  const mismatch = codexVersionMismatch(version, pinnedVersion);
   if (mismatch !== null) return { ok: false, cliVersion: version, reason: mismatch };
   const schemaDir = mkdtempSync(join(tmpdir(), "tidepool-codex-schema-"));
   try {
@@ -293,7 +296,7 @@ async function compatibilityCheck(
     if (!schemasConform(requests, account, rateLimits, modelList)) {
       return { ok: false, cliVersion: version, reason: "required App Server method or response schema drifted" };
     }
-    return { ok: true, cliVersion: CODEX_APP_SERVER_VERSION };
+    return { ok: true, cliVersion: pinnedVersion };
   } catch (error) {
     return { ok: false, cliVersion: version, reason: `could not inspect generated schema: ${String(error)}` };
   } finally {
@@ -402,13 +405,15 @@ export function createCodexAppServerProbe(options: {
   executable: string;
   codexHome: string;
   command: CodexCliCommand;
+  /** 版の照合の差し替え口(`compatibilityCheck`)。盤面は渡さない。 */
+  pinnedVersion?: string;
 }): CodexAppServerProbe {
   const { command } = options;
   const env = probeEnv(options.codexHome);
   // ponytail: concurrent calls before the first pass each run their own check; share the in-flight promise if that cost shows up
   let passed: { ok: true; cliVersion: string } | undefined;
   return async (now) => {
-    const compatible = passed ?? await compatibilityCheck(options.executable, env, command);
+    const compatible = passed ?? await compatibilityCheck(options);
     if (!compatible.ok) {
       return {
         status: "unobservable",

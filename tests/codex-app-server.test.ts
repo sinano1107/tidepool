@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
@@ -742,6 +742,39 @@ it("schema 生成の失敗は保持されず、次の呼び出しが検査をや
   codex.state.schemaFails = false;
   expect(await codex.probe()).toMatchObject({ status: "observed" });
   expect(codex.state).toMatchObject({ versionCalls: 2, schemaCalls: 2 });
+});
+
+it("版上げの適合試験が渡す固定の版は版の照合だけを差し替え、観測した版を cliVersion として返す(#1385)", async () => {
+  const { command } = fakeCodex({ version: "codex-cli 0.151.0" });
+  const result = await createCodexAppServerProbe({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/tmp/codex",
+    command,
+    pinnedVersion: "codex-cli 0.151.0",
+  })(new Date(1_000));
+
+  expect(result).toMatchObject({ status: "observed", cliVersion: "codex-cli 0.151.0" });
+});
+
+it("差し替えた固定の版の下でも、生成 schema のずれは App Server を読む前に観測不能に倒れる(#1385)", async () => {
+  const { command, calls } = fakeCodex({
+    version: "codex-cli 0.151.0",
+    drift: (out) => rmSync(join(out, "v2", "ModelListResponse.json")),
+  });
+  const result = await createCodexAppServerProbe({
+    executable: "/opt/tidepool/bin/codex",
+    codexHome: "/tmp/codex",
+    command,
+    pinnedVersion: "codex-cli 0.151.0",
+  })(new Date(1_000));
+
+  // 版の不一致の理由(`expected …, observed …`)でなく schema の理由で倒れる —— 版の照合は差し替え済み
+  expect(result).toMatchObject({
+    status: "unobservable",
+    cliVersion: "codex-cli 0.151.0",
+    reason: expect.stringContaining("generated schema"),
+  });
+  expect(callsTo(calls, "appServer")).toBe(0);
 });
 
 it("互換性検査が一度通れば、以後の呼び出しは版も schema も読み直さない", async () => {

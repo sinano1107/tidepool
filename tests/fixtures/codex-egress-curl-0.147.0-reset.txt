@@ -1,0 +1,2 @@
+http_connect=000 http_code=000
+curl: (56) Recv failure: Connection reset by peer

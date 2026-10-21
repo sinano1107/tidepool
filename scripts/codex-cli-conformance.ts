@@ -1,0 +1,145 @@
+/** Codex CLI の版上げの適合試験(ADR 0186 決定7 / issue #1385)。このホストの `codex` の実物の出力を、盤面自身の
+ *  Board call の口から取って盤面自身の読み取り関数で判定し、面ごとの合否を Markdown の表で出す(種の openai 行が
+ *  走るかも、ADR 0187 決定4)。1つでも不合格なら exit 1。
+ *
+ *  サブスクリプションの認証が要るので CI では回さない。Lima VM で `Delegate=yes` の scope の中から走らせる
+ *  (手順は docs/codex-cli-version-bump.md)。試すのはまだ固定していない版なので、口の版の門には常に一致を返す
+ *  検査を渡し、互換性検査と preflight の版の照合には観測した版を渡して外す —— schema と他の面の照合は残る。
+ *
+ *  使い方: CODEX_HOME=~/.tidepool/codex systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/codex-cli-conformance.ts */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+import { platform } from "node:process";
+import { type BoardCallSpec, createBoardCalls, readOutput } from "../src/board-call.js";
+import { containerRuntimeFor } from "../src/cgroup-container.js";
+import { SystemClock } from "../src/clock.js";
+import {
+  CODEX_APP_SERVER_LIMIT_MS,
+  type CodexAppServerProbeResult,
+  callAppServer,
+  codexCommandThrough,
+  compatibilityCheck,
+  createCodexAppServerProbe,
+} from "../src/codex-app-server.js";
+import { egressCurl, judgeConformance, judgeSeedRows } from "../src/codex-cli-conformance.js";
+import { createCodexCapabilityCheck, permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js";
+import { ProcessContainers } from "../src/process-container.js";
+import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
+
+const { executable, onPath } = resolveCodexExecutable();
+if (!onPath) {
+  console.error("codex is not on PATH");
+  process.exit(1);
+}
+const containers = new ProcessContainers(containerRuntimeFor(platform));
+const preflight = containers.preflight();
+if (!preflight.available) {
+  console.error(preflight.reason);
+  process.exit(1);
+}
+const { call } = createBoardCalls({
+  containers,
+  clock: new SystemClock(),
+  reclaimTimeout: RECLAIM_TIMEOUT,
+  onReclaimTimeout: (reason) => console.warn(reason),
+  checkCliVersion: async () => ({ available: true }),
+  onCliVersionMismatch: () => {},
+});
+const codexHome = process.env.CODEX_HOME ?? join(homedir(), ".tidepool", "codex");
+const env: NodeJS.ProcessEnv = { ...process.env, CODEX_HOME: codexHome };
+// 盤面の Codex の経路は ChatGPT の認証だけ(ADR 0098)—— API key に落ちる道を残さない
+delete env.OPENAI_API_KEY;
+delete env.CODEX_API_KEY;
+const pinnedVersion = execFileSync(executable, ["--version"], { encoding: "utf8" }).trim();
+const command = codexCommandThrough(call, "conformance App Server", CODEX_APP_SERVER_LIMIT_MS);
+
+/** 使い捨てのディレクトリの中で1回撃って消す。workspace は実物の checkout と同じく homedir() の下に置く(#712)。 */
+async function inDisposable<T>(run: (dirs: { home: string; workspace: string; temp: string }) => Promise<T>): Promise<T> {
+  const created = [
+    mkdtempSync(join(tmpdir(), "tidepool-codex-conformance-home-")),
+    mkdtempSync(join(homedir(), ".tidepool-codex-conformance-workspace-")),
+    mkdtempSync(join(tmpdir(), "tidepool-codex-conformance-temp-")),
+  ];
+  try {
+    const [home, workspace, temp] = created.map((dir) => realpathSync(dir)) as [string, string, string];
+    mkdirSync(join(workspace, ".git"));
+    return await run({ home, workspace, temp });
+  } finally {
+    for (const dir of created) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** Board call を1回撃つ。口が答えを返さなければ投げる —— その面の不合格になる。 */
+async function run(spec: Omit<BoardCallSpec, "harness" | "command">) {
+  const result = await call({ ...spec, harness: "codex", command: executable }, readOutput);
+  if (result === null) throw new Error(`the ${spec.kind} Board call did not complete (limit, spawn failure, or no container)`);
+  return result;
+}
+
+// 到達の2行(ADR 0256 決定3): 盤面が worker に渡す permission profile をそのまま `codex sandbox` に渡す
+const ALLOWED_DOMAIN = "registry.npmjs.org";
+const egress = (host: string) =>
+  inDisposable(async ({ workspace, temp }) => {
+    const config = [...permissionConfig("work", workspace, temp, executable, [ALLOWED_DOMAIN]), "features.network_proxy=true"];
+    const result = await run({
+      kind: "conformance egress",
+      args: ["sandbox", "-P", "tidepool-work", "-C", workspace, ...config.flatMap((entry) => ["-c", entry]), ...egressCurl(host)],
+      cwd: workspace,
+      env: { ...env, TMPDIR: temp, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      limitMs: 60_000,
+    });
+    return result.stdout + result.stderr;
+  });
+
+const probe = createCodexAppServerProbe({ executable, codexHome, command, pinnedVersion });
+let appServer: Promise<CodexAppServerProbeResult> | undefined;
+
+const { rows } = await judgeConformance({
+  compatibility: () => compatibilityCheck({ executable, codexHome, command, pinnedVersion }),
+  // 使用量・認証・model/list は同じ1回の probe を読む
+  appServer: () => (appServer ??= probe(new Date())),
+  preflight: createCodexCapabilityCheck({ executable, onPath, codexHome, call, pinnedVersion }),
+  visibleModels: async () =>
+    (await callAppServer(command, executable, env, [], [{ method: "model/list", params: { includeHidden: false } }]))[0],
+  allowedDomain: () => egress(ALLOWED_DOMAIN),
+  unlistedDomain: () => egress("example.org"),
+  // マーカーは使い捨ての CODEX_HOME に置き、盤面の CODEX_HOME には何も残さない
+  promptInput: () =>
+    inDisposable(async ({ home, workspace }) => {
+      writeFileSync(join(home, "AGENTS.md"), "TIDEPOOL_CONFORMANCE_GLOBAL_AGENTS_MARKER\n");
+      writeFileSync(join(workspace, "AGENTS.md"), "TIDEPOOL_CONFORMANCE_WORKSPACE_AGENTS_MARKER\n");
+      const result = await run({
+        kind: "conformance prompt-input",
+        args: ["debug", "prompt-input", "-c", "project_doc_max_bytes=0", "conformance"],
+        cwd: workspace,
+        env: { ...env, CODEX_HOME: home },
+        limitMs: CODEX_APP_SERVER_LIMIT_MS,
+      });
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || `codex exited ${result.exitCode}`);
+      return result.stdout;
+    }),
+});
+
+// 種の openai 行は、1ターンの `exec --json` を worker の出力の読み取りで読む(ADR 0187 決定4)
+const seedTurn = codexCommandThrough(call, "conformance seed row", 5 * 60_000);
+const seedRows = await judgeSeedRows(async ({ model, effort }) => {
+  const result = await seedTurn(
+    executable,
+    [
+      "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only",
+      "-m", model,
+      ...(effort === null ? [] : ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`]),
+      "Reply with the single word OK.",
+    ],
+    { env },
+  );
+  if (!result.stdout.trim()) throw new Error(result.stderr.trim() || `codex exited ${result.exitCode}`);
+  return result.stdout;
+});
+
+const table = [...rows, ...seedRows];
+console.log("| surface | result | detail |\n|---|---|---|");
+for (const row of table) console.log(`| ${row.surface} | ${row.pass ? "合格" : "不合格"} | ${row.detail.replaceAll("|", "\\|")} |`);
+process.exit(table.every((row) => row.pass) ? 0 : 1);
