@@ -406,15 +406,7 @@ export function startScheduler(deps: {
     // run at all. Unlike the workspace/agent quarantines below this halts the
     // whole board — containment belongs to the host and to the board's own
     // wiring, so no narrower resource can be halted.
-    if (containment && (await containmentPickupBlocked(db, containment, clock.now()))) return true;
-    // the gate is keyed on each candidate's own execution workspace (issue
-    // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
-    // workspace or agent keeps its own tasks out of the candidates, never the
-    // whole board. The slot is one (ADR 0001), so this holds only because a
-    // pickup such a quarantine stopped before its worker ran returns to the
-    // queue head through teardown and frees the slot (ADR 0274).
-    // No resolvers here: provider / Harness names are taken out by the poll below.
-    return !nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName);
+    return !!containment && (await containmentPickupBlocked(db, containment, clock.now()));
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
@@ -733,8 +725,9 @@ export function startScheduler(deps: {
     // ゲートを抜けて二重に pickup し、確認 question も2枚立つ。
     inFlight = true;
     let afterPoll: (() => void) | void;
-    // 成功 = 門を越えて本体(候補の読み)に入り、投げずに終わった poll。門で返った poll は行を触らない(ADR 0294 決定1)
-    let entered = false;
+    // 成功 = 門を越えて本体(候補の読み)に入り、投げずに終わった poll —— 本体に入った時点で立て、投げれば下ろす。
+    // 門で返った poll は行を触らない(ADR 0294 決定1)。空の queue は本体の読みで返るので成功に数える
+    let succeeded = false;
     try {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
       // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
@@ -743,7 +736,15 @@ export function startScheduler(deps: {
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない
       refireRetrospectiveCalls(db, retrospectiveCalls, clock.now());
       if (await pickupBlocked()) return;
-      entered = true;
+      succeeded = true;
+      // the candidate read is keyed on each candidate's own execution workspace (issue
+      // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
+      // workspace or agent keeps its own tasks out of the candidates, never the
+      // whole board. The slot is one (ADR 0001), so this holds only because a
+      // pickup such a quarantine stopped before its worker ran returns to the
+      // queue head through teardown and frees the slot (ADR 0274).
+      // No resolvers here: provider / Harness names are taken out below.
+      if (!nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName)) return;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。
       const stopped = quarantineStops(db);
@@ -905,12 +906,12 @@ export function startScheduler(deps: {
       };
       afterPoll = await pickup(head, chosen, content, recordShadowRow);
     } catch (err) {
-      entered = false;
+      succeeded = false;
       pollFailed(err);
       return;
     } finally {
       inFlight = false;
-      if (entered) lastPollFailure = undefined;
+      if (succeeded) lastPollFailure = undefined;
     }
     // 一撃が投げても撃ち直さない —— slot は再起動まで塞がる(#2036 の問い、ADR 0294 決定5)
     try {
