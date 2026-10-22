@@ -21,9 +21,11 @@ meta-review の下)、祖先の cancel を生き延びた RCA が cancel の前�
    verb を伏せる —— MCP の登録と Codex の宣言)、権限の文と当時版、`get_current_task`、cascade、cancel の面、直接 cancel の門、流し読みの
    予告と commit の文、人間の登録扉の拒否理由。今の門の3条件(Interview の root か・監査か・主題を持つか)と「異議された task 自身が
    cancelled」はこの1本に畳む。
-4. **cascade は表から導く。** 祖先の cancel は、表が立てない未決着の task を、生き延びる付帯子で止まらずに子孫すべてから倒す —— RCA は
-   残り、RCA の分解子とその下の承認 question は倒れる。cancel の面の「捨てられる done の work」も同じ範囲を数える。床に乗る他の規則
-   (受験者・親の実行の事実など)は cascade を動かさない。
+4. **cascade は表から導き、付帯子で止まらない。** 表は性質を2つ1か所に持つ —— 宛先がブランチに依存するか(決定2)と、宛先が親の生死に
+   依るか(ADR 0271 決定3: 親が待っている子と、RCA・修理子以外の付帯子 —— 提案 question を含む)。cancel された task の子は後者で倒れ(今どおり)、
+   生き延びた付帯子の下では前者で倒れる —— RCA は残り、RCA の分解子とその下の承認 question は倒れ、RCA の escalate の question は残る。
+   倒れた task の子にも同じ規則が掛かる。cancel の面の「捨てられる done の work」も同じ範囲を数える。床に乗る他の規則(受験者・親の
+   実行の事実など)は cascade を動かさない。
 5. **権限の文は打ち消さず置き換える。** 帰り先の無い系譜で reviewer の文を持って走る task(RCA・出題の監査・Interview の root)の Authority 節は、reviewer の定数(「修理を振れ」)の後に
    「修理は立たない」を足すのをやめ、盤面の文1つ(読み取り専用・直すな・所見はその task の完了 verb で書け)にし、Roster 節を持たない
    —— 理由 (a)(b) を問わず(ADR 0272 追記3 の形)。当時版は spawn の時点の状態で文を選ぶ((b) は途中で変わる)。走行中に cancel が
