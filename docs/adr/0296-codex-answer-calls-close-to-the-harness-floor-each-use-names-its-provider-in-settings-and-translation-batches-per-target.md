@@ -1,5 +1,8 @@
 # Codex の答えを取りに行く Board call は Harness の床まで閉じ、用途ごとの Provider は盤面設定の欄が名指し、翻訳は対象1つにつき1回にまとめる
 
+**Status 追記: 決定5 の `translation_calls` は ADR 0299 決定2 で Board call 全体の表 `board_calls` に畳んだ** —— 呼び出し1回 = 1行と
+費用の null の意味はそのままで、用途の欄を足し、断片数は翻訳の行だけが持つ(2026-10-22 の grilling、issue #2447)。
+
 2026-10-21 の grilling(issue #456)で決定。ADR 0098 決定8 は「将来の Board call は用途ごとに Provider を明示し、同じ正準経路を使う」と
 置いたまま、答えを取りに行く8用途はすべて Claude CLI 固定だった(ADR 0111 追記4、ADR 0192 決定4)。pin 版 `codex-cli 0.147.0` の
 一発呼び出しを VM で実測し(表と request 本体の捕捉は #456 のコメント)、Codex 版の呼び出しの形と、Provider の置き場、翻訳の撃ち方を決める。
