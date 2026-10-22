@@ -337,12 +337,17 @@ function writeMergeTree(
   }
 }
 
-/** ADR 0103 決定3 / ADR 0243 決定4: `first` と `second` の merge commit を、ref を書く**前に**作る —— index も worktree も
- *  HEAD も使わずに結果ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、親をこの順に持つ Tidepool 名義の commit に
- *  する。undefined は conflict で、中断状態はどこにも残らない。 */
-function mergeCommit(workspace: WorkspaceConfig, first: string, second: string, message: string): string | undefined {
-  const tree = writeMergeTree(workspace, first, second);
-  return tree && git(workspace.path, "commit-tree", tree, "-p", first, "-p", second, "-m", message);
+/** ADR 0103 決定3 / ADR 0243 決定4: `firstParent` と `secondParent` の merge commit を、ref を書く**前に**作る —— index も
+ *  worktree も HEAD も使わずに結果ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、親をこの順に持つ Tidepool 名義の
+ *  commit にする。undefined は conflict で、中断状態はどこにも残らない。 */
+function mergeCommit(
+  workspace: WorkspaceConfig,
+  firstParent: string,
+  secondParent: string,
+  message: string,
+): string | undefined {
+  const tree = writeMergeTree(workspace, firstParent, secondParent);
+  return tree && git(workspace.path, "commit-tree", tree, "-p", firstParent, "-p", secondParent, "-m", message);
 }
 
 /** ADR 0105: the content effect of merging `source` into `candidate`.
@@ -792,7 +797,7 @@ export async function freshenPlaceAtPickup(
   assertRemoteDeclarationMatchesClone(place);
   await ensureWorkspaceToken(place, board.githubAuth);
   refreshWorkspace(place, board.githubAuth);
-  parkOnProtectedBranch(place);
+  parkOnProtectedBranch(place, outsideTheGate);
 }
 
 /** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。読む場所には当てない —— タスクブランチも基準も
@@ -980,6 +985,9 @@ export function boardRefWriter(db: Db, workspace: WorkspaceConfig): RefWriter {
   return (ref, newSha, write) => writeBoardRefs(db, workspace, [[ref, newSha]], write);
 }
 
+/** 口を通さずに書く。pickup の鮮度の段の休止位置だけが使う —— 口に通すのは #2459。 */
+const outsideTheGate: RefWriter = (_ref, _newSha, write) => write();
+
 /** ADR 0069 の3条件 —— **既知パス・untracked・0 バイト**をすべて満たすファイルだけが
  *  「セッションの遺物ではないと確定的に識別できるもの」である。tree rule の退避除外と
  *  完了の門(ADR 0084)の dirty 判定は同じ集合を見なければならない —— 2箇所に綴りが
@@ -1142,9 +1150,9 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
  *  `releaseWorkspace` と pickup の鮮度の段 `freshenPlaceAtPickup` が受ける)。
  *
- *  後始末と受理のやり直しは ff を口に通す(`writeRef`、ADR 0243 決定4)。pickup の鮮度の段は通さない —— 直後の全撮りが
- *  基準を作り直し、読む場所には基準が無い。 */
-function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter = (_ref, _sha, write) => write()): void {
+ *  ff は呼び手が渡す `writeRef` で書く: 後始末と受理のやり直しは口(ADR 0243 決定4)、pickup の鮮度の段だけが
+ *  `outsideTheGate` を明示して渡す(#2459)。 */
+function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter): void {
   const branch = protectedBranch(workspace);
   git(workspace.path, "checkout", branch);
   if (!isRemoteBacked(workspace)) return;
@@ -1415,7 +1423,8 @@ function undeliveredMergeBacks(
 
 /** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
  *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
- *  後始末と同じ fetch → 帰り先へ merge back → 休止位置へ戻す、を踏む。どの書き込みも口を通り、基準の行は書いた値に
+ *  保護ブランチの fetch(後始末の fetch と違い口を通る形 —— `refreshProtectedBranch`)→ 帰り先へ merge back → 休止位置へ
+ *  戻す、を踏む。どの書き込みも口を通り、基準の行は書いた値に
  *  畳まれる(ADR 0243 決定4)。conflict は中断状態を残さないので、休止位置へ戻して出口の文のまま投げる。 */
 export async function redoMergeBacks(
   db: Db,

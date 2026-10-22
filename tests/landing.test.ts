@@ -3655,7 +3655,8 @@ it("merge back が走らなかった修理は、受理の検査が帰り先へ m
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(pollNow).toHaveBeenCalledOnce();
   expect(head(workspace)).toBe("main");
-  expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
+  // 帰り先は修理が分かれてから動いていない —— merge commit を作らず修理の tip へ ff する
+  expect(git(workspace.path, "rev-parse", `task/${work.id}`)).toBe(git(workspace.path, "rev-parse", `task/${repair.id}`));
 });
 
 // ADR 0243 決定4・5: 受理の merge back も休止位置の ff も口を通る —— 帰り先の行は merge commit の1値に畳まれる
@@ -4888,10 +4889,14 @@ it.each([
 it("休止中の merge 回答は checkout ごと merge commit へ進め、作業ツリーはその内容になる", async () => {
   const workspace = await makeWorkspace("landing-dormant-merge-checkout");
   const { db, clock } = await openBoard();
-  const { questions } = await dormantSerialLanding(db, clock, workspace);
+  const { works, questions } = await dormantSerialLanding(db, clock, workspace);
+  const protectedBefore = git(workspace.path, "rev-parse", "refs/heads/main");
 
   await answerMerge(db, clock, workspace, questions[1]!);
 
+  // 第1親は保護ブランチの先の位置 —— first-parent の履歴が保護ブランチの歩みのまま残る
+  expect(git(workspace.path, "rev-parse", "main^1")).toBe(protectedBefore);
+  expect(git(workspace.path, "rev-parse", "main^2")).toBe(git(workspace.path, "rev-parse", `task/${works[1]!.id}`));
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(git(workspace.path, "rev-parse", "refs/heads/main"));
   expect(readFileSync(join(workspace.path, "first.txt"), "utf8")).toBe("first\n");

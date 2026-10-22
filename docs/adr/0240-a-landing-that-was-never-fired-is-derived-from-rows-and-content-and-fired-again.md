@@ -1,5 +1,7 @@
 # 撃たれなかった着地は、印ではなく行の状態と内容から導いて撃ち直す
 
+**Status 追記: 決定4 の「帰り先を checkout して merge し」「conflict すれば merge を取り消して」は、[ADR 0243](0243-the-boards-own-ref-write-is-announced-in-the-baseline-before-the-write-and-folded-after-it.md) 決定4 で「merge commit を merge-tree で先に作り、口を通して `merge --ff-only` で進める。conflict は merge-tree の段階で分かり、取り消す merge は始まらない」に置き換わった(2026-10-22、#1874)。やり直す場所・拒否文の2つの出口・休止位置へ戻すことはそのまま。**
+
 2026-10-12 の grilling(issue #1766、発端は #1625 / ADR 0231 と #1777 / ADR 0239)で決定。後始末は後始末の印を消して
 から着地と再発火を撃ち、その間には await がある。ここで盤面が落ちると、起動時の復旧は印の無い行を拾わないので、
 誰も撃ち直さない。ADR 0109 追記1 の「完了と着地の間で盤面が落ちても、着地は失われない」が成り立つのは、印を消す前の
