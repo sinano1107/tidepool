@@ -131,3 +131,6 @@ Then compare the new binary's built-in effort rules with `CLAUDE_EFFORT_RULES` i
 (ADR 0218 決定3): the fixed list of ids it sends without effort, and the values it lowers to `high`
 per id. If either changed, update `CLAUDE_EFFORT_RULES` in the same PR. Until then, the table's door
 accepts a value the model no longer runs as written, or refuses one it now does.
+
+After the PR merges, run the [benchmark](experiments/benchmark/README.md) at the new pin and compare its record
+with the last run on the old one.

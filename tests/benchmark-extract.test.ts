@@ -3,13 +3,13 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { type Exercise, extract, loadExercise, type RunConfig } from "../docs/experiments/benchmark/extract.js";
+import { currentRoot, type Exercise, extract, loadExercise, type RunConfig } from "../docs/experiments/benchmark/extract.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { registerLocalMergeQuestion } from "../src/landing.js";
 import { createBehaviorCandidate, defineMemoryByMetaReview, invalidateMemoryByMetaReview, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
 import { questionKindOf } from "../src/question-kind.js";
-import { completeInterview, completeTask, getTask, listBoard, logDecision, registerTask, settleQuestionAsObserved } from "../src/tasks.js";
+import { completeInterview, completeTask, getTask, listBoard, logDecision, registerTask, retryInterviewRoot, settleQuestionAsObserved } from "../src/tasks.js";
 import {
   answerQuestionViaWebui,
   completedWork,
@@ -21,6 +21,8 @@ import {
   judgedMemoryReview,
   judgedRoutingReview,
   openTestInterviewRoom,
+  POSED_HEAD,
+  poseAccepted,
   QUIET_EXIT,
   routedOpusSessions,
   settleReviews,
@@ -366,4 +368,17 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation", "escalation", "local_merge"]);
   // 終わらなかった session は費用が無い —— 和に入らず数で出る
   expect(markdown).toContain("| work | yes | done | — | — | claude-code 1 unpriced | 90m | 5m | 63m | 22m | 4 |");
+});
+
+it("Interview の root を人間が retry しても、harness が登録で受け取った id は今の root に辿られる(2度の retry も)", () => {
+  const db = openDb(":memory:");
+  const first = getTask(db, examineeRootId(db, interviewExaminee(db, AT).id))!;
+  const second = retryInterviewRoot(db, first, undefined, AT, {}, "webui");
+  poseAccepted(db, second, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", AT, "worker", POSED_HEAD);
+  const third = retryInterviewRoot(db, getTask(db, second.id)!, undefined, AT, {}, "webui");
+
+  expect([first.id, second.id, third.id].map((id) => currentRoot(db, id))).toEqual([third.id, third.id, third.id]);
+  // retry されていない root はそのまま
+  const plain = workTask(db, "plain");
+  expect(currentRoot(db, plain)).toBe(plain);
 });
