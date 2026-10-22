@@ -523,6 +523,9 @@ export interface Landing {
   takeInFlightMark(workspace: string | null, prNumber: number): (() => void) | null;
   /** 印が付いているかを読むだけ —— 執行しない回答が印の付いた PR を拒むための口(ADR 0288 決定2)。 */
   isMarked(workspace: string | null, prNumber: number): boolean;
+  /** 盤面の停止(issue #1851): 以後の `converge()` は回を始めず空を返し、走っている回と列に入った回の終わりで解ける。
+   *  回の失敗では reject しない。 */
+  stop(): Promise<void>;
 }
 
 export interface LandingDeps {
@@ -1279,9 +1282,11 @@ export function createLanding(deps: LandingDeps): Landing {
   // 走っている間の突きは捨てず、まだ始まっていない次の1回に束ねる —— 呼び手は自分の呼び出しより後に始まる回の結果を受け取る
   let tail: Promise<unknown> = Promise.resolve();
   let queued: { answering: Set<string>; run: Promise<RootVerdict[]> } | undefined;
+  let stopped = false;
   const landing: Landing = {
     converge(options) {
       if (!queued) {
+        if (stopped) return Promise.resolve([]);
         const answering = new Set<string>();
         const run = tail.then(async () => {
           try {
@@ -1297,6 +1302,10 @@ export function createLanding(deps: LandingDeps): Landing {
       }
       if (options?.answering !== undefined) queued.answering.add(options.answering);
       return queued.run;
+    },
+    async stop() {
+      stopped = true;
+      await tail;
     },
     async observePullRequestOutcome(question) {
       const prNumber = question.question_pending_merge_pr;

@@ -874,25 +874,32 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   return {
     port: humanPort,
     mcpPort: (mcpListener.address() as AddressInfo).port,
-    stop: () =>
-      new Promise((resolve, reject) => {
-        stopTriageWatchdog();
-        stopAutoMergePoll?.();
-        stopOutsideMergeScan?.();
-        stopNotificationPoll();
-        stopCliAuthExpiryWarning?.();
-        watchdog?.stop();
-        scheduler.stop();
-        // `stop()` は peer の都合を待たない(issue #773)。`close()` の callback は
-        // 残った接続が消えるまで発火せず、内部の `closeIdleConnections()` は
-        // ServerResponse が付いたままの socket を飛ばす。
-        listener.close((err) => {
-          if (err) return reject(err);
-          mcpListener.close((err2) => (err2 ? reject(err2) : resolve()));
-          mcpListener.closeAllConnections();
+    stop: async () => {
+      stopTriageWatchdog();
+      stopAutoMergePoll?.();
+      stopOutsideMergeScan?.();
+      stopNotificationPoll();
+      stopCliAuthExpiryWarning?.();
+      watchdog?.stop();
+      scheduler.stop();
+      // 走っている収束の回と列に入った回を終えてから DB を閉じる(issue #1851)
+      const landed = landing.stop();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          // `stop()` は peer の都合を待たない(issue #773)。`close()` の callback は
+          // 残った接続が消えるまで発火せず、内部の `closeIdleConnections()` は
+          // ServerResponse が付いたままの socket を飛ばす。
+          listener.close((err) => {
+            if (err) return reject(err);
+            mcpListener.close((err2) => (err2 ? reject(err2) : resolve()));
+            mcpListener.closeAllConnections();
+          });
+          listener.closeAllConnections();
         });
-        listener.closeAllConnections();
+      } finally {
+        await landed;
         db.close();
-      }),
+      }
+    },
   };
 }
