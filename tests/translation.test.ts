@@ -1,11 +1,12 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { listTranslationUsage } from "../src/board-call-usage.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
-import { getCachedTranslation, hashSource, listTranslationUsage } from "../src/translation-cache.js";
-import { FakeTranslationClient } from "./fakes.js";
+import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
+import { BOARD_CALL_USAGE, CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -77,7 +78,7 @@ it("Anthropic window が throttled のとき、translateSource は throttled を
   expect(client.calls).toHaveLength(0);
 });
 
-it("呼び出し1回が translation_calls の1行になり、Provider・pin の綴りの model・断片数・使用量を持つ(ADR 0296 決定5)", async () => {
+it("呼び出し1回が用途 translation の1行になり、Provider・pin の綴りの model・断片数・使用量を持つ(ADR 0296 決定5)", async () => {
   const db = await freshDb();
   const client = new FakeTranslationClient();
 
@@ -113,20 +114,28 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });
 });
 
-it("CLI の封筒が is_error: true なら translateSource は reject し、エラー本文を訳としてキャッシュしない(#652)", async () => {
+it.each([
+  ["非ゼロ終了の is_error", { is_error: true, result: "overloaded" }, 1],
+  ["id の食い違い", { result: JSON.stringify({ items: [{ id: 7, text: "訳" }] }) }, 0],
+])("usage を報告して失敗した呼び出し(%s)も1行を残し、キャッシュには何も書かない(ADR 0299 決定3)", async (_, envelope, exitCode) => {
   const db = await freshDb();
+  const stdout = JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
   const client = new ClaudeTranslationClient({
-    exec: async () =>
-      JSON.stringify({
-        is_error: true,
-        result: "You've hit your session limit",
-        total_cost_usd: 0,
-        usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
+    exec: async () => {
+      if (exitCode !== 0) throw Object.assign(new Error(`Command failed: claude exited ${exitCode}`), { stdout });
+      return stdout;
+    },
   });
 
-  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow(
-    "You've hit your session limit",
-  );
+  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow();
   expect(getCachedTranslation(db, hashSource("the board retires a settled tree"), "Japanese")).toBeUndefined();
+  expect(listTranslationUsage(db)).toEqual([
+    {
+      provider: "anthropic",
+      model: "haiku",
+      fragments: 1,
+      usage: BOARD_CALL_USAGE,
+      createdAt: NOW.toISOString(),
+    },
+  ]);
 });

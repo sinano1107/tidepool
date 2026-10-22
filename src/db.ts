@@ -422,16 +422,20 @@ export function openDb(path: string): Db {
       PRIMARY KEY (source_hash, language)
     );
 
-    -- one row per translation Board call (ADR 0296 決定5): a batched call's
-    -- fragments carry no usage of their own. model / effort are the pin's
-    -- spelling (alias haiku / low), not the concrete id that answered; a
-    -- null effort is "none", a null cost is "not measurable" (Codex on
-    -- ChatGPT auth returns none), never 0.
-    CREATE TABLE IF NOT EXISTS translation_calls (
-      provider              TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai')),
+    -- one row per Board call whose CLI reported usage, success or not
+    -- (ADR 0299 決定2 / 決定3): a batched translation call's fragments carry
+    -- no usage of their own, so only translation rows hold a fragment count.
+    -- model / effort are the pin's spelling (alias haiku / low), not the
+    -- concrete id that answered; a null effort is "none", a null cost is
+    -- "not measurable" (Codex on ChatGPT auth returns none), never 0.
+    CREATE TABLE IF NOT EXISTS board_calls (
+      use                   TEXT NOT NULL CHECK (use IN ('translation', 'task_draft', 'child_draft', 'handoff_draft',
+                              'issue_inspection', 'allocation_review', 'attribution', 'behavior_draft',
+                              'cli_auth_probe', 'model_probe')),
+      provider              TEXT NOT NULL CHECK (provider IN ('anthropic', 'openai', 'moonshot')),
       model                 TEXT NOT NULL,
       effort                TEXT,
-      fragments             INTEGER NOT NULL,
+      fragments             INTEGER CHECK ((use = 'translation') = (fragments IS NOT NULL)),
       input_tokens          INTEGER NOT NULL,
       output_tokens         INTEGER NOT NULL,
       cache_read_tokens     INTEGER NOT NULL,

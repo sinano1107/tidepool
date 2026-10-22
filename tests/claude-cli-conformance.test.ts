@@ -7,6 +7,7 @@ import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { openDb } from "../src/db.js";
 import { composeTerminalScreen } from "../src/usage.js";
+import { CLI_ENVELOPE_USAGE } from "./fakes.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
 
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8");
@@ -39,7 +40,7 @@ function passingObservations(): ConformanceObservations {
       new ClaudeDraftClient({
         db: openDb(":memory:"),
         exec: async () =>
-          JSON.stringify({ result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) }),
+          JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) }),
       }).draftTask("water the greenhouse", "English"),
     translation: () =>
       new ClaudeTranslationClient({

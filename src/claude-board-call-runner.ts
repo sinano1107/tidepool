@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { type BoardCallSetting, BoardCallUsageError } from "./board-call-usage.js";
 import {
   boardCallEnv,
   boardCallEnvWithoutThinking,
@@ -6,8 +7,13 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
-import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRefusalCause } from "./cli-auth.js";
-import type { ExecutionSettingRow } from "./execution-setting.js";
+import {
+  execFailureEnvelope,
+  isCliAuthFailureEnvelope,
+  RowRefusalError,
+  rethrowCliAuthExecFailure,
+  rowRefusalCause,
+} from "./cli-auth.js";
 import type { TranslationUsage } from "./translate.js";
 
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
@@ -18,8 +24,6 @@ const BOARD_CALL_SYSTEM_PROMPT = [
   "Do exactly what the user message instructs, and reply with only the JSON it asks for.",
   "No tools, no follow-up turns, no prose around the JSON.",
 ].join(" ");
-
-type BoardCallSetting = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
 
 /** One Board call that goes to **fetch an answer** (#662): the draft uses, the three retrospective uses and
  *  display-time translation all run through here. */
@@ -38,8 +42,7 @@ export interface ClaudeBoardCall {
 
 export interface ClaudeBoardCallAnswer<T> {
   output: T;
-  /** absent when the envelope carries no usage */
-  usage?: TranslationUsage;
+  usage: TranslationUsage;
 }
 
 // the CLI's `-p --output-format json` usage (vendor-specific, kept private to this adapter — ADR 0005):
@@ -121,21 +124,33 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoar
       reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
     );
   } catch (err) {
-    throwIfRowRefused(execFailureEnvelope(err), setting);
+    const failed = execFailureEnvelope(err);
+    throwIfRowRefused(failed, setting);
+    // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn
+    // and carries it, while a 401 leaves no row (ADR 0299 決定3)
+    const usage = isCliAuthFailureEnvelope(failed) ? undefined : envelopeUsageSchema.safeParse(failed).data;
+    if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage);
     rethrowCliAuthExecFailure(err);
   }
   const envelope: unknown = JSON.parse(stdout);
   throwIfRowRefused(envelope, setting);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
-  if (is_error === true) throw new Error(typeof result === "string" ? result : `${label} CLI reported an error`);
-  if (typeof result !== "string") {
-    throw new Error(`${label} CLI response missing a string result field`);
-  }
-  return { output: result, usage: envelopeUsageSchema.safeParse(envelope).data };
+  const usage = envelopeUsageSchema.safeParse(envelope).data;
+  // a failure the CLI reported usage for still ran a turn: the error carries it (ADR 0299 決定3)
+  const fail = (message: string) => (usage ? new BoardCallUsageError(message, setting, usage) : new Error(message));
+  if (is_error === true) throw fail(typeof result === "string" ? result : `${label} CLI reported an error`);
+  if (typeof result !== "string") throw fail(`${label} CLI response missing a string result field`);
+  // an answer without usage is a broken answer, not a degraded record (ADR 0299 決定4)
+  if (!usage) throw new Error(`${label} CLI response missing usage`);
+  return { output: result, usage };
 }
 
 /** The answer as the JSON object `extractJson` finds in it, validated by `schema` — the model's reply is untrusted input. */
 export async function runClaudeBoardCallJson<T>(call: ClaudeBoardCall, schema: z.ZodType<T>): Promise<ClaudeBoardCallAnswer<T>> {
   const { output, usage } = await runClaudeBoardCallText(call);
-  return { output: schema.parse(extractJson(output)), usage };
+  try {
+    return { output: schema.parse(extractJson(output)), usage };
+  } catch (err) {
+    throw new BoardCallUsageError((err as Error).message, call.setting, usage);
+  }
 }

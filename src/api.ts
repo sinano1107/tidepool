@@ -5,6 +5,7 @@ import {
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
 } from "./agent-create.js";
+import { listTranslationUsage } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
 import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
 import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -143,7 +144,6 @@ import {
   translateQuestion,
   translateSource,
 } from "./translation.js";
-import { listTranslationUsage } from "./translation-cache.js";
 import {
   activeTriageSession,
   addScratchpadLine,

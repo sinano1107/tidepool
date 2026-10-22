@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import type { Db } from "./db.js";
-import type { TranslationSetting, TranslationUsage } from "./translate.js";
 
 /** The cache key for one translation target's source text (issue #47): a
  *  content hash rather than an event id, so every target shape (an events
@@ -29,54 +28,4 @@ export function saveTranslation(db: Db, sourceHash: string, language: string, tr
     `INSERT OR IGNORE INTO translation_cache (source_hash, language, translated, created_at)
      VALUES (?, ?, ?, ?)`,
   ).run(sourceHash, language, translated, now.toISOString());
-}
-
-/** One translation call's usage — a batched call is one row, its fragments carry none (ADR 0296 決定5). */
-export function recordTranslationCall(
-  db: Db,
-  setting: TranslationSetting,
-  fragments: number,
-  usage: TranslationUsage,
-  now: Date,
-): void {
-  db.prepare(
-    `INSERT INTO translation_calls
-       (provider, model, effort, fragments, input_tokens, output_tokens,
-        cache_read_tokens, cache_creation_tokens, estimated_cost_usd, created_at)
-     VALUES (@provider, @model, @effort, @fragments, @input_tokens, @output_tokens,
-             @cache_read_tokens, @cache_creation_tokens, @estimated_cost_usd, @createdAt)`,
-  ).run({ ...setting, fragments, ...usage, createdAt: now.toISOString() });
-}
-
-export interface TranslationUsageRecord {
-  provider: TranslationSetting["provider"];
-  model: string;
-  fragments: number;
-  usage: TranslationUsage;
-  createdAt: string;
-}
-
-type TranslationCallRow = Omit<TranslationUsageRecord, "usage" | "createdAt"> & TranslationUsage & { created_at: string };
-
-/** Every translation call's usage, oldest `created_at` first (issue #47's
- *  "record it the same way worker sessions do, make it observable"): a cache
- *  hit makes no call and so adds no row. Rows sharing a `created_at` (one
- *  request's `now` covers each chunk of one target, issue #688) come back in
- *  the order they were inserted. `created_at` is the request's start, so two
- *  overlapping requests can land out of that order (#1006). */
-export function listTranslationUsage(db: Db): TranslationUsageRecord[] {
-  const rows = db
-    .prepare(
-      `SELECT provider, model, fragments, input_tokens, output_tokens, cache_read_tokens,
-              cache_creation_tokens, estimated_cost_usd, created_at
-         FROM translation_calls ORDER BY created_at, rowid`,
-    )
-    .all() as TranslationCallRow[];
-  return rows.map(({ provider, model, fragments, created_at, ...usage }) => ({
-    provider,
-    model,
-    fragments,
-    usage,
-    createdAt: created_at,
-  }));
 }

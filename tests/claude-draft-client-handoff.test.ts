@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { openDb } from "../src/db.js";
-import { boardCallSystemPrompt } from "./fakes.js";
+import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const db = openDb(":memory:");
 
@@ -14,7 +14,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
     });
     const client = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ result: draftJson }),
+      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: draftJson }),
     });
 
     await expect(
@@ -29,7 +29,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
   it("CLI 出力が JSON でない場合、draftHandoff は reject する", async () => {
     const client = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ result: "not actually JSON" }),
+      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "not actually JSON" }),
     });
 
     await expect(client.draftHandoff("mounted the sensor", "English")).rejects.toThrow();
@@ -41,7 +41,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ result: JSON.stringify({ outcome: "done" }) });
+        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ outcome: "done" }) });
       },
     });
 
@@ -61,7 +61,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ result: JSON.stringify({ outcome: "o" }) });
+        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ outcome: "o" }) });
       },
     });
 

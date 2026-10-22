@@ -1262,6 +1262,21 @@ export async function driveCodexPreflight(
   return { spawn, capability, index: spawn.calls.length - 1, listedCwd };
 }
 
+/** `claude -p --output-format json` の封筒が報告する usage —— 答えを取りに行く Board call は、これが無いと失敗する(ADR 0299 決定4)。 */
+export const CLI_ENVELOPE_USAGE = {
+  total_cost_usd: 0.000586,
+  usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+};
+
+/** CLI_ENVELOPE_USAGE を盤面の usage の形で */
+export const BOARD_CALL_USAGE = {
+  input_tokens: 506,
+  output_tokens: 16,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  estimated_cost_usd: 0.000586,
+};
+
 /** 用途を名指さない Board call が runner から受け取る `--system-prompt` の文面(ADR 0296 決定6)。用途ごとの
  *  client がこれと同じ文面を撃つことを、文面の写しも export も持たずに言うための読み口。 */
 export async function boardCallSystemPrompt(): Promise<string> {
@@ -1270,7 +1285,7 @@ export async function boardCallSystemPrompt(): Promise<string> {
     {
       exec: async (_command, a) => {
         args = a;
-        return JSON.stringify({ result: "{}" });
+        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "{}" });
       },
       label: "system prompt probe",
       prompt: "p",

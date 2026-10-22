@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
 import type { AttributionInput } from "../src/retrospective.js";
-import { boardCallSystemPrompt } from "./fakes.js";
+import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AttributionInput = {
   entry_id: 7,
@@ -19,7 +19,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   const client = new ClaudeAttributionClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
@@ -42,7 +42,7 @@ it("帰責の判定は、用途に依らない盤面の system prompt を --syst
   const client = new ClaudeAttributionClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
@@ -54,12 +54,12 @@ it("帰責の判定は、用途に依らない盤面の system prompt を --syst
 
 it("語彙の外の cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {
   const outOfVocabulary = new ClaudeAttributionClient({
-    exec: async () => JSON.stringify({ result: JSON.stringify({ cause: "laziness", evidence: "e" }) }),
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ cause: "laziness", evidence: "e" }) }),
   });
   await expect(outOfVocabulary.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 
   const prose = new ClaudeAttributionClient({
-    exec: async () => JSON.stringify({ result: "looks like a preference to me" }),
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "looks like a preference to me" }),
   });
   await expect(prose.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 });
@@ -70,7 +70,7 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ result: JSON.stringify(memory) });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(memory) });
     },
   });
 
@@ -85,7 +85,7 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
 
 it("memory 以外の判定が entries を null で返しても判定は失われず、entries の無い判定として届く", async () => {
   const client = new ClaudeAttributionClient({
-    exec: async () => JSON.stringify({ result: JSON.stringify({ ...judgment, entries: null }) }),
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ...judgment, entries: null }) }),
   });
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
@@ -96,7 +96,7 @@ it("prompt は environment を worker の外側の事情として判断の妥当
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ result: JSON.stringify(judgment) });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
 
@@ -110,7 +110,7 @@ it("prompt は environment を worker の外側の事情として判断の妥当
 
 it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙の内側として届く(ADR 0291 決定1・3)", async (cause) => {
   const client = new ClaudeAttributionClient({
-    exec: async () => JSON.stringify({ result: JSON.stringify({ cause, evidence: "e" }) }),
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ cause, evidence: "e" }) }),
   });
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual({ cause, evidence: "e" });
@@ -121,7 +121,7 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ result: JSON.stringify(judgment) });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
 
