@@ -6,7 +6,7 @@ import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeAudit, INTERVIEW_AUDIT_NOTICE, INTERVIEW_ROOT_NOTICE,isArtifactDiscarded, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeAudit, INTERVIEW_AUDIT_NOTICE, INTERVIEW_ROOT_NOTICE, isArtifactDiscarded, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 
 
 import { BOARD_WORKER_ID } from "../src/worker-id.js";

@@ -507,6 +507,6 @@ export function boardProse(input: {
   const { db, task } = input;
   const { guidance, rosterAssignableTo, notice } = authorityByType(db, task, input.profile, input.spawnedEventId);
   const injected = notice ? `\n\n${notice}` : "";
-  const interview = task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : "";
-  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${interview}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  const discipline = task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : "";
+  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${discipline}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

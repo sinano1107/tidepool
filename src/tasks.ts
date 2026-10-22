@@ -3654,7 +3654,8 @@ export const ARTIFACT_DISCARDED_NOTICE =
 export const INTERVIEW_AUDIT_NOTICE =
   "This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.";
 
-/** Interview の root の spawn の文面に盤面が注入する1行(#2211、INTERVIEW_AUDIT_NOTICE と同じ形): root は reviewer の guidance を持つが
+/** Interview の root の spawn の文面に盤面が注入する1行(#2211、Authority 節の直後に置く形は INTERVIEW_AUDIT_NOTICE と同じ。
+ *  envelope には載せない): root は reviewer の guidance を持つが
  *  分解しないので、その「findings become repair tasks」の行き先を言い直す。guidance の文は self RCA が「同じ文」と言うので変えない。 */
 export const INTERVIEW_ROOT_NOTICE =
   "This task runs an Interview: no repair task stands here, so write your findings in complete_interview's handoff.";
