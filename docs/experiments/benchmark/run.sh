@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# docs/experiments/benchmark/run.sh — run the benchmark's exercise set against one configuration on a
-# disposable board in its own Lima VM, and extract the run record (ADR 0298, #2441). Run from the Mac:
+# docs/experiments/benchmark/run.sh — run the benchmark's sequence (run.json) item by item against one configuration
+# on a disposable board in its own Lima VM, and extract the run record (ADR 0298, #2441, #2503). Run from the Mac:
 #
-#   bash docs/experiments/benchmark/run.sh [--commit REF] [--registry URL#REF] [--rows FILE]
-#        [--issue-2437 STATE] [--label LABEL] [EXERCISE...]
+#   bash docs/experiments/benchmark/run.sh --new [--sequence FILE] [--commit REF] [--registry URL#REF]
+#        [--rows FILE] [--label LABEL]   # a new run: deletes the last run's state
+#   bash docs/experiments/benchmark/run.sh             # resume the run in the VM from its first unprocessed item
 #   bash docs/experiments/benchmark/run.sh --serve     # start the last run's board again, paused
 #
 # See README.md for what each step means and how to read the record. Tested by run.test.sh.
@@ -17,7 +18,7 @@ UNIT="tidepool-bench"
 GATE_VM="tidepool-board"
 # Lima forwards the guest's ports to the Mac on their own numbers, so keep clear of the gate board's 4589/4590.
 PORT=4700
-EXERCISES="${BENCH_EXERCISES:-$HERE/exercises}"
+SEQUENCE="${BENCH_SEQUENCE:-$HERE/run.json}"
 RESULTS="${BENCH_RESULTS:-$HERE/results}"
 # Inside the VM. Literal on purpose: the guest shell expands $HOME.
 TSX='~/tidepool/node_modules/.bin/tsx ~/tidepool/docs/experiments/benchmark/extract.ts'
@@ -27,37 +28,39 @@ TSX='~/tidepool/node_modules/.bin/tsx ~/tidepool/docs/experiments/benchmark/extr
 # shellcheck source=../../../scripts/mac-install.sh
 TIDEPOOL_VM="$BENCH_VM" source "$HERE/../../../scripts/mac-install.sh"
 
+NEW=0
 COMMIT=main
 REGISTRY=""
 ROWS_FILE=""
-ISSUE_2437=undecided
 LABEL=run
-NAMES=()
 
 parse_args() {
+  local given=""
   while (($#)); do
     case "$1" in
-      --commit) COMMIT="$2"; shift 2 ;;
-      --registry) REGISTRY="$2"; shift 2 ;;
-      --rows) ROWS_FILE="$2"; shift 2 ;;
-      --issue-2437) ISSUE_2437="$2"; shift 2 ;;
-      --label) LABEL="$2"; shift 2 ;;
-      -*) fail "unknown option $1" ;;
-      *) NAMES+=("$1"); shift ;;
+      --new) NEW=1; shift ;;
+      --sequence) SEQUENCE="$2"; given+=" $1"; shift 2 ;;
+      --commit) COMMIT="$2"; given+=" $1"; shift 2 ;;
+      --registry) REGISTRY="$2"; given+=" $1"; shift 2 ;;
+      --rows) ROWS_FILE="$2"; given+=" $1"; shift 2 ;;
+      --label) LABEL="$2"; given+=" $1"; shift 2 ;;
+      *) fail "unknown argument $1" ;;
     esac
   done
-  if ((${#NAMES[@]} == 0)); then
-    local dir
-    for dir in "$EXERCISES"/*/; do NAMES+=("$(basename "$dir")"); done
-  fi
-  # Declaration order, except that Interview exercises go last: an Interview's writes must not land in the
-  # window of the memory meta-review being read (#2439 story 26).
-  local name tasks=() interviews=()
-  for name in "${NAMES[@]}"; do
+  # A resume runs the configuration the run started with: an option here would be silently ignored.
+  ((NEW)) || [[ -z "$given" ]] || fail "$given configure a new run: add --new (it deletes the last run's state), or drop them to resume"
+}
+
+# The sequence's exercises, in declaration order: they live in exercises/ next to it.
+NAMES=()
+load_sequence() {
+  [[ -f "$SEQUENCE" ]] || fail "no sequence $SEQUENCE"
+  EXERCISES="$(dirname "$SEQUENCE")/exercises"
+  local name
+  while read -r name; do
     [[ -f "$EXERCISES/$name/exercise.json" ]] || fail "no exercise $name in $EXERCISES"
-    if jq -e '.interview' "$EXERCISES/$name/exercise.json" > /dev/null; then interviews+=("$name"); else tasks+=("$name"); fi
-  done
-  NAMES=(${tasks[@]+"${tasks[@]}"} ${interviews[@]+"${interviews[@]}"})
+    NAMES+=("$name")
+  done < <(jq -r '.items[] | .exercise // empty' "$SEQUENCE")
 }
 
 decl() { jq -r "$1" "$EXERCISES/$2/exercise.json"; }
@@ -127,8 +130,27 @@ apply_cli_pins() {
 copy_exercises() {
   local name
   for name in "${NAMES[@]}"; do limactl copy -r "$EXERCISES/$name" "$BENCH_VM:bench/exercises/"; done
+  limactl copy "$SEQUENCE" "$BENCH_VM:bench/run.json"
   # The loader at the board's commit rejects a malformed declaration now, not after an hour of board time.
-  vm "cd ~/bench && $TSX check $(printf 'exercises/%s ' "${NAMES[@]}")"
+  vm "cd ~/bench && $TSX check run.json"
+}
+
+# What the board does not hold, for a resume: the configuration measured and the label. The sequence and its
+# exercises are already under ~/bench; the human steps' outcomes are appended there as each step finishes.
+save_state() {
+  jq -nc --arg commit "$TIDEPOOL_COMMIT" --argjson pins "$CLI_PINS" --arg registry "$REGISTRY_COMMIT" --arg label "$LABEL" \
+    '{tidepool_commit: $commit, cli_pins: $pins, registry_commit: $registry, label: $label}' | vm 'cat > ~/bench/state.json'
+}
+
+# A resume reads the run as it started: its configuration, and its sequence and exercises copied back from the VM.
+# ponytail: a --rows file is not copied back, so a resume checks the Codex / Moonshot logins against the exercises' rows only
+restore_state() {
+  vm 'test -f ~/bench/state.json' || fail "no run in $BENCH_VM's ~/bench to resume: start one with --new"
+  { read -r TIDEPOOL_COMMIT; read -r CLI_PINS; read -r REGISTRY_COMMIT; read -r LABEL; } \
+    <<< "$(vm 'cat ~/bench/state.json' | jq -r '.tidepool_commit, (.cli_pins | tojson), .registry_commit, .label')"
+  RESUME_DIR="$(mktemp -d)"
+  limactl copy -r "$BENCH_VM:bench/exercises" "$BENCH_VM:bench/run.json" "$RESUME_DIR/"
+  SEQUENCE="$RESUME_DIR/run.json"
 }
 
 # The registry's origin is a bare repo in the VM: the template seed, or the given URL#REF. One workspace per exercise, seeded here.
@@ -189,19 +211,11 @@ configure_board() {
   while read -r row; do
     [[ -n "$row" ]] && api POST /settings/execution -d "{\"setting\":\"row\",\"row\":$row}" > /dev/null
   done <<< "$(rows)"
+  local period
+  period="$(jq '.period_days // empty' "$SEQUENCE")"
+  [[ -z "$period" ]] || api POST /settings/meta-review -d "{\"period_days\":$period}" > /dev/null
   # a refusal (the 5 minutes after a window reset) is retried by every poll of the wait
   spend_down || true
-}
-
-ROOTS=()
-register_exercises() {
-  local name body
-  for name in "${NAMES[@]}"; do
-    body="$(jq -c 'if .task then .task + {type: "work"} else {type: "interview", title, hypothesis: .interview.hypothesis, tier: .interview.tier, interview_targets: .interview.targets}
-      + (.interview | {measured_work, workspace} | with_entries(select(.value != null))) end' "$EXERCISES/$name/exercise.json")"
-    ROOTS+=("$(api POST /tasks -d "$body" | jq -r .id)")
-    log "registered $name as ${ROOTS[${#ROOTS[@]} - 1]}"
-  done
 }
 
 # Closed, and for a work root its land question answered (landed or held) or nothing to land.
@@ -217,33 +231,133 @@ settled() {
   esac
 }
 
-# No timeout, per exercise or overall: a human's wait is recorded, not failed (ADR 0298 決定6). Settlement comes in
-# any order, so every root is read on every poll, through a retry if the human retried an Interview root. A failed
-# read only costs that poll: the run must outlive a transient error over hours of waiting.
-current_root() { vm "source ~/bench/env && $TSX current-root \"\$TIDEPOOL_DB\" $1"; }
+# A read of the board's DB at the board's commit, in the VM.
+board_read() { vm "source ~/bench/env && $TSX $1 \"\$TIDEPOOL_DB\" $2"; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-wait_for_settlement() {
-  local i open root shown="" questions
+# One poll's housekeeping: list the open questions when they change, and re-arm spend-down (a session window's reset
+# drops it, and the post wakes the scheduler; the board refuses an arm for the 5 minutes after a window resets, so a
+# refusal waits for the next poll).
+SHOWN=""
+poll() {
+  local questions
+  if questions="$(api GET /tasks | jq -r '.[] | select(.type == "question" and .status != "done" and .status != "cancelled") | "  \(.id)  \(.title)"')" \
+    && [[ "$questions" != "$SHOWN" ]]; then
+    log "waiting on the board; open questions (answer them in the WebUI):"
+    printf '%s\n' "${questions:-  (none)}"
+    SHOWN="$questions"
+  fi
+  spend_down || true
+}
+
+# A line the human types in this terminal (`done` / `skip`), or nothing once a poll's length has passed. Without a
+# terminal (end of input) it waits the poll's length all the same rather than spin.
+human_answer() {
+  local line rc=0
+  read -r -t 60 -u 3 line || rc=$?
+  if ((rc == 0)); then printf '%s\n' "$line"; elif ((rc <= 128)); then sleep 60; fi
+}
+
+# The record of a human step, appended to ~/bench as the step finishes: what a resume skips and the extraction reads.
+record_step() { # item, human, subject ("" for none), outcome, prompted_at, waited_on (JSON)
+  jq -nc --argjson item "$1" --arg human "$2" --arg subject "$3" --arg outcome "$4" --arg prompted "$5" --arg finished "$(now)" --argjson waited "$6" \
+    '{item: $item, human: $human} + (if $subject == "" then {} else {subject: $subject} end) + {outcome: $outcome, prompted_at: $prompted, finished_at: $finished, waited_on: $waited}' \
+    | vm 'cat >> ~/bench/human-steps.jsonl'
+  log "human step $1: $4"
+}
+
+# An exercise: registered unless the board already holds its root (a resume), then waited on until it settles. No
+# timeout: a human's wait is recorded, not failed (ADR 0298 決定6). The root is followed through a retry if the human
+# retried an Interview root. A failed read only costs that poll: the run must outlive a transient error over hours.
+ROOTS=()
+run_exercise() { # name, root already on the board or ""
+  local root="$2" next body
+  if [[ -z "$root" ]]; then
+    body="$(jq -c 'if .task then .task + {type: "work"} else {type: "interview", title, hypothesis: .interview.hypothesis, tier: .interview.tier, interview_targets: .interview.targets}
+      + (.interview | {measured_work, workspace} | with_entries(select(.value != null))) end' "$EXERCISES/$1/exercise.json")"
+    root="$(api POST /tasks -d "$body" | jq -r .id)"
+    log "registered $1 as $root"
+  fi
   while :; do
-    open=0
-    for i in "${!ROOTS[@]}"; do
-      root="$(current_root "${ROOTS[i]}")" && ROOTS[i]="$root"
-      # A retry cancels the old root and registers the new one in one step, which may fall between the two reads
-      # above: a settled root counts only if it is still the current one.
-      if settled "${ROOTS[i]}" && root="$(current_root "${ROOTS[i]}")" && [[ "$root" == "${ROOTS[i]}" ]]; then continue; fi
-      open=1
-    done
-    ((open)) || return 0
-    if questions="$(api GET /tasks | jq -r '.[] | select(.type == "question" and .status != "done" and .status != "cancelled") | "  \(.id)  \(.title)"')" \
-      && [[ "$questions" != "$shown" ]]; then
-      log "waiting on the board; open questions (answer them in the WebUI):"
-      printf '%s\n' "${questions:-  (none)}"
-      shown="$questions"
-    fi
-    # re-armed every poll: a session window's reset drops it, and the post wakes the scheduler. The board refuses
-    # an arm for the 5 minutes after a window resets, so a refusal waits for the next poll.
-    spend_down || true
+    next="$(board_read current-root "$root")" && root="$next"
+    # A retry cancels the old root and registers the new one in one step, which may fall between the two reads:
+    # a settled root counts only if it is still the current one.
+    if settled "$root" && next="$(board_read current-root "$root")" && [[ "$next" == "$root" ]]; then break; fi
+    poll
     sleep 60
+  done
+  ROOTS+=("$root")
+}
+
+# Human step (a): the human starts the subject's first meta-review in the WebUI (ADR 0300), and the run waits for it
+# and everything under it (repair children, RCA, proposal questions) to settle. A closed door (no material yet) is
+# recorded and passed without waiting.
+first_meta_review() { # item, subject, root the human already started or ""
+  local prompted_at state
+  prompted_at="$(now)"
+  if [[ -z "$3" ]] && api GET /settings/meta-review/status | jq -e ".$2 | .first_review == \"not_started\" and .material == 0" > /dev/null; then
+    record_step "$1" first_meta_review "$2" door_closed "$prompted_at" null
+    return
+  fi
+  [[ -n "$3" ]] || log "human step $1: in the WebUI's settings, press 'Start first $2 meta-review', then answer its questions as they come (type skip here to leave it out)"
+  while :; do
+    state="$(board_read first-meta-review "$2")" || state='{"root":null}'
+    if jq -e .settled <<< "$state" > /dev/null; then
+      record_step "$1" first_meta_review "$2" done "$prompted_at" "$(jq .root <<< "$state")"
+      return
+    fi
+    if jq -e '.root == null' <<< "$state" > /dev/null; then
+      if [[ "$(human_answer)" == skip ]]; then
+        record_step "$1" first_meta_review "$2" human_skip "$prompted_at" null
+        return
+      fi
+    else
+      sleep 60
+    fi
+    poll
+  done
+}
+
+# Human step (b): free text the human acts on. Once they type done, the run waits until the board has no unsettled
+# task left (attached children included).
+human_step() { # item, instructions
+  local prompted_at answer
+  prompted_at="$(now)"
+  log "human step $1: $2 (type done here when it is done, or skip to leave it out)"
+  while :; do
+    answer="$(human_answer)"
+    [[ "$answer" != done ]] || break
+    if [[ "$answer" == skip ]]; then
+      record_step "$1" step "" human_skip "$prompted_at" null
+      return
+    fi
+    poll
+  done
+  # ponytail: settled is isSettled's statuses (src/task-status.ts) — add a settled status there, add it here
+  until api GET /tasks | jq -e 'all(.[]; .status == "done" or .status == "cancelled")' > /dev/null; do
+    poll
+    sleep 60
+  done
+  record_step "$1" step "" done "$prompted_at" '"board"'
+}
+
+# The sequence, one item at a time: an exercise is registered only after the previous item settled (ADR 0298 追記
+# #2449 決定2). Where to continue comes from the board's record and the human steps' record, not from this shell.
+run_sequence() {
+  # The human's answers come in on fd 3; nothing else (a `limactl shell` above all) may read what they type.
+  exec 3<&0 < /dev/null
+  local position i n item root outcome
+  position="$(vm "source ~/bench/env && $TSX position ~/bench/run.json \"\$TIDEPOOL_DB\" ~/bench/human-steps.jsonl")"
+  n="$(jq '.items | length' "$SEQUENCE")"
+  for ((i = 0; i < n; i++)); do
+    item="$(jq -c ".items[$i]" "$SEQUENCE")"
+    root="$(jq -r ".[$i].root // empty" <<< "$position")"
+    outcome="$(jq -r ".[$i].outcome // empty" <<< "$position")"
+    case "$(jq -r '.human // "exercise"' <<< "$item")" in
+      exercise) run_exercise "$(jq -r .exercise <<< "$item")" "$root" ;;
+      first_meta_review) [[ -n "$outcome" ]] || first_meta_review "$i" "$(jq -r .subject <<< "$item")" "$root" ;;
+      step) [[ -n "$outcome" ]] || human_step "$i" "$(jq -r .instructions <<< "$item")" ;;
+    esac
   done
 }
 
@@ -256,7 +370,8 @@ run_expected_tests() {
     test="$(decl '.test // empty' "$name")"
     if [[ -z "$test" ]]; then TEST_EXITS+=(null); continue; fi
     ws="$(decl '.task.workspace' "$name")"
-    vm "source ~/bench/env && git clone -q -b main \"\$TIDEPOOL_WORKSPACES_DIR/$ws\" ~/bench/check/$name && cd ~/bench/check/$name && export EXERCISE_DIR=~/bench/exercises/$name && $test" && rc=0 || rc=$?
+    # a fresh clone each time, so a resumed run never meets the last attempt's
+    vm "source ~/bench/env && mkdir -p ~/bench/check && d=\$(mktemp -d ~/bench/check/$name.XXXXXX) && git clone -q -b main \"\$TIDEPOOL_WORKSPACES_DIR/$ws\" \$d && cd \$d && export EXERCISE_DIR=~/bench/exercises/$name && $test" && rc=0 || rc=$?
     log "$name: expected-answer test exited $rc"
     TEST_EXITS+=("$rc")
   done
@@ -267,12 +382,12 @@ extract_record() {
   input="$(mktemp)"
   table="$(api GET /settings/execution | jq -c '.table | map(del(.quarantine_question_id))')"
   {
-    jq -n --arg commit "$TIDEPOOL_COMMIT" --argjson pins "$CLI_PINS" --argjson rows "$table" --arg registry "$REGISTRY_COMMIT" --arg issue "$ISSUE_2437" \
-      '{tidepool_commit: $commit, cli_pins: $pins, table_rows: $rows, registry_commit: $registry, issue_2437: $issue}'
+    jq -n --arg commit "$TIDEPOOL_COMMIT" --argjson pins "$CLI_PINS" --argjson rows "$table" --arg registry "$REGISTRY_COMMIT" \
+      '{tidepool_commit: $commit, cli_pins: $pins, table_rows: $rows, registry_commit: $registry}'
     for i in "${!NAMES[@]}"; do
       jq -n --arg dir "exercises/${NAMES[i]}" --arg id "${ROOTS[i]}" --argjson exit "${TEST_EXITS[i]}" '{dir: $dir, task_id: $id, test_exit: $exit}'
     done
-  } | jq -s '{config: .[0], exercises: .[1:]}' > "$input"
+  } | jq -s --argjson steps "$(vm 'cat ~/bench/human-steps.jsonl 2> /dev/null || true' | jq -s .)" '{config: .[0], exercises: .[1:], human_steps: $steps}' > "$input"
   limactl copy "$input" "$BENCH_VM:bench/input.json"
   rm -f "$input"
   vm "source ~/bench/env && cd ~/bench && $TSX run \"\$TIDEPOOL_DB\" \"\$TIDEPOOL_WORKER_LOGS\" input.json results"
@@ -297,23 +412,32 @@ main() {
   refuse_if_gate_board_running
   ensure_lima
   ensure_vm
-  check_credentials
-  reset_state
-  checkout_commit
-  apply_cli_pins
-  prepare_claude_cli
-  copy_exercises
-  seed_registry
+  if ((NEW)); then
+    load_sequence
+    check_credentials
+    reset_state
+    checkout_commit
+    apply_cli_pins
+    prepare_claude_cli
+    copy_exercises
+    seed_registry
+    save_state
+  else
+    # Nothing is reset, checked out, seeded or configured again: the table-row posts are not idempotent.
+    restore_state
+    load_sequence
+    check_credentials
+  fi
   start_board
   trap stop_board EXIT
   trap 'exit 130' INT TERM
-  configure_board
-  register_exercises
-  wait_for_settlement
+  if ((NEW)); then configure_board; else api POST /pause -d '{"paused":false}' > /dev/null; fi
+  run_sequence
   run_expected_tests
   extract_record
   trap - EXIT
   stop_board
+  [[ -z "${RESUME_DIR:-}" ]] || rm -rf "$RESUME_DIR"
   log "Run record: $OUT"
 }
 

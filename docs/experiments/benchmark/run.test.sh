@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Tests for docs/experiments/benchmark/run.sh (#2441). Same shape as scripts/mac-install.test.sh: stubs record
+# Tests for docs/experiments/benchmark/run.sh (#2441, #2503). Same shape as scripts/mac-install.test.sh: stubs record
 # every external command, each case sources the harness in a fresh `bash -c` and calls main, and the summary is
 # PASS/FAIL counts. PATH inside a case is the stub dir plus /usr/bin:/bin only, so no real Lima is reached —
 # this Mac has real instances (`tidepool`, the gate board's `tidepool-board`) that a stray call would change.
 # jq is the real /usr/bin/jq: the harness's JSON is part of what is pinned.
 #
-# Pinned at the command boundary: the order of a default run, the refusal while the gate board runs, the
-# Interview exercise registered last, the wait without a timeout and in any settlement order (through an
-# Interview retry), nothing deleted after the extraction, and every VM command naming the benchmark instance.
+# Pinned at the command boundary: the order of a new run, the refusal while the gate board runs, the sequence
+# registered one item at a time in its declared order (the next only after the previous root settled, through an
+# Interview retry), registration stopping at a human step until it settles or the human types done / skip, the
+# period_days post, a resume continuing from the first unprocessed item without deleting anything, nothing deleted
+# after the extraction, and every VM command naming the benchmark instance.
 #
 # Run: bash docs/experiments/benchmark/run.test.sh
 set -euo pipefail
@@ -35,15 +37,22 @@ check() {
 }
 
 # --- stubs ------------------------------------------------------------------
-# A case's board is a set of files under $CASE_DIR/state. The poll number is how many times the harness has
-# slept; a file's line N is what that root reads on poll N (the last line holds after it runs out):
+# The VM's ~/bench is $CASE_DIR/bench: `limactl copy` and the harness's reads and writes of its files go there. A
+# case's board is a set of files under $CASE_DIR/state. The poll number is how many times the harness has slept; a
+# file's line N is what that root reads on poll N (the last line holds after it runs out):
 #   status/<id>  todo | done (no landing yet) | landed | held | cancelled
 #   type/<id>    work (default) | interview
-#   root/<id>    what `extract.ts current-root` prints for <id>, by call rather than by poll — a poll may resolve a
-#                root twice (default: <id> itself; FAIL fails the call)
+#   board        what GET /tasks answers (default: one open land question)
+# and by call rather than by poll (the last line holds after it runs out):
+#   root/<id>           what `extract.ts current-root` prints for <id> (default: <id> itself; FAIL fails the call) —
+#                       a poll may resolve a root twice
+#   first-meta-review   what `extract.ts first-meta-review` prints (default: not started)
+#   meta-review-status  what GET /settings/meta-review/status answers (default: both subjects have material)
+#   position            what `extract.ts position` prints (default: nothing processed yet)
 # and these switch a single failure on:
 #   spend-down        ok | refuse, by poll
 #   register-fails    present: POST /tasks answers 400
+# $CASE_DIR/stdin is what the human types in the harness's terminal.
 
 write_stubs() {
   cat > "$STUB_DIR/at_call" << 'STUB'
@@ -94,8 +103,12 @@ case "$sub" in
     case "$cmd" in
       "cat > ~/bench/env") cat > "$CASE_DIR/stdin.env" ;;
       *"cat >> workspaces.yaml"*) cat > "$CASE_DIR/stdin.workspaces.yaml" ;;
-    esac
-    case "$cmd" in
+      *"rm -rf ~/bench && mkdir -p ~/bench/exercises"*) rm -rf "$CASE_DIR/bench" && mkdir -p "$CASE_DIR/bench/exercises" ;;
+      "cat > ~/bench/state.json") cat > "$CASE_DIR/bench/state.json" ;;
+      "test -f ~/bench/state.json") [ -f "$CASE_DIR/bench/state.json" ] || exit 1 ;;
+      "cat ~/bench/state.json") cat "$CASE_DIR/bench/state.json" ;;
+      "cat >> ~/bench/human-steps.jsonl") cat >> "$CASE_DIR/bench/human-steps.jsonl" ;;
+      "cat ~/bench/human-steps.jsonl 2> /dev/null || true") cat "$CASE_DIR/bench/human-steps.jsonl" 2> /dev/null || true ;;
       "claude auth status --json") [ "$CLAUDE_LOGGED_IN" = 1 ] && echo '{"loggedIn": true}' || echo '{"loggedIn": false}' ;;
       *"git -C ~/tidepool rev-parse HEAD") echo tidepoolsha ;;
       *"claude-cli-version"*) printf '{"claude":"2.1.289","codex":"0.147.0"}' ;;
@@ -106,13 +119,23 @@ case "$sub" in
         id="${cmd##* }"; root="$(at_call "$CASE_DIR/state/root/$id" "$id" "$id")"
         [ "$root" = FAIL ] && exit 1
         echo "$root" ;;
+      *"extract.ts position"*)
+        at_call "$CASE_DIR/state/position" position "$(jq -c '[.items[] | {root: null, outcome: null}]' "$CASE_DIR/bench/run.json")" ;;
+      *"first-meta-review"*) at_call "$CASE_DIR/state/first-meta-review" first-meta-review '{"root":null,"settled":false}' ;;
       *"export EXERCISE_DIR"*) exit "$TEST_EXIT" ;;
+      *"extract.ts run"*) mkdir -p "$CASE_DIR/bench/results" && touch "$CASE_DIR/bench/results/record.json" "$CASE_DIR/bench/results/summary.md" ;;
     esac
     ;;
   copy)
     echo "limactl copy $*" >> "$CMD_LOG"
-    [ "${!#}" = "tidepool-bench:bench/input.json" ] && cp "$1" "$CASE_DIR/input.json"
-    case "${!#}" in */) touch "${!#}record.json" "${!#}summary.md" ;; esac
+    [ "$1" = -r ] && shift
+    dest="${!#}"
+    case "$dest" in tidepool-bench:*) dest="$CASE_DIR/${dest#tidepool-bench:}" ;; esac
+    while [ $# -gt 1 ]; do
+      src="$1"; shift
+      case "$src" in tidepool-bench:*) src="$CASE_DIR/${src#tidepool-bench:}" ;; esac
+      cp -R "$src" "$dest"
+    done
     ;;
   *) echo "limactl $sub $*" >> "$CMD_LOG" ;;
 esac
@@ -150,7 +173,10 @@ case "$method $path" in
     status="$(at_poll "$CASE_DIR/state/status/$id" landed)"
     case "$status" in landed | held) status=done ;; esac
     echo "{\"id\":\"$id\",\"status\":\"$status\",\"type\":\"$(at_poll "$CASE_DIR/state/type/$id" work)\"}" ;;
-  "GET /tasks") echo '[{"id":"root1","type":"work","status":"done","title":"Fix it"},{"id":"q1","type":"question","status":"todo","title":"land completed task: Fix it"}]' ;;
+  "GET /tasks") at_poll "$CASE_DIR/state/board" '[{"id":"root1","type":"work","status":"done","title":"Fix it"},{"id":"q1","type":"question","status":"todo","title":"land completed task: Fix it"}]' ;;
+  "GET /settings/meta-review/status")
+    at_call "$CASE_DIR/state/meta-review-status" meta-review-status \
+      '{"memory":{"first_review":"not_started","material":3,"first_material_at":"2026-10-22T00:00:00Z"},"routing":{"first_review":"not_started","material":2,"first_material_at":"2026-10-22T00:00:00Z"}}' ;;
   "POST /spend-down")
     if [ "$(at_poll "$CASE_DIR/state/spend-down" ok)" = refuse ]; then echo '{"error":"window is resetting"}'; exit 22; fi
     echo '{}' ;;
@@ -172,7 +198,7 @@ STUB
   chmod +x "$STUB_DIR"/*
 }
 
-# Two exercises whose names sort the Interview first, so "Interview last" is the harness's doing.
+# Three exercises; the default sequence declares the Interview first, so its position is the declaration's doing.
 write_exercises() {
   mkdir -p "$EXERCISES/a-interview" "$EXERCISES/b-work/workspace"
   cat > "$EXERCISES/a-interview/exercise.json" << 'JSON'
@@ -184,7 +210,13 @@ JSON
 {"title": "Fix it", "readings": ["work"], "test": "node --test expected.test.js",
  "task": {"title": "Fix it", "purpose": "p", "completion_criteria": "c", "workspace": "bws", "tier": "standard", "assignee": "tako"}}
 JSON
+  cp -r "$EXERCISES/b-work" "$EXERCISES/c-work"
+  sed -i '' 's/"Fix it"/"Fix more"/; s/"bws"/"cws"/' "$EXERCISES/c-work/exercise.json"
+  sequence '{"exercise": "a-interview"}, {"exercise": "b-work"}'
 }
+
+# The case's run.json: its items, comma-separated.
+sequence() { echo "{\"items\": [$1]}" > "$CASE_DIR/run.json"; }
 
 CASE_N=0
 reset_case() {
@@ -196,6 +228,7 @@ reset_case() {
   mkdir -p "$STUB_DIR" "$CASE_DIR/state/status" "$CASE_DIR/state/type" "$CASE_DIR/state/root"
   : > "$CMD_LOG"
   : > "$CASE_DIR/sleeps"
+  : > "$CASE_DIR/stdin"
   write_stubs
   write_exercises
   GATE_STATUS=""
@@ -203,15 +236,15 @@ reset_case() {
   CLAUDE_LOGGED_IN=1
   CODEX_LOGGED_IN=1
   TEST_EXIT=0
-  ARGS=""
+  ARGS="--new"
 }
 
 # Sets $rc, $output and $log; main runs as a bare command in its own bash so its `set -e` is real.
 run_harness() {
   output=$(env PATH="$STUB_DIR:/usr/bin:/bin" HOME="$CASE_DIR" CMD_LOG="$CMD_LOG" CASE_DIR="$CASE_DIR" \
-    BENCH_EXERCISES="$EXERCISES" BENCH_RESULTS="$CASE_DIR/results" GATE_STATUS="$GATE_STATUS" GATE_ACTIVE="$GATE_ACTIVE" \
+    BENCH_SEQUENCE="$CASE_DIR/run.json" BENCH_RESULTS="$CASE_DIR/results" GATE_STATUS="$GATE_STATUS" GATE_ACTIVE="$GATE_ACTIVE" \
     CLAUDE_LOGGED_IN="$CLAUDE_LOGGED_IN" CODEX_LOGGED_IN="$CODEX_LOGGED_IN" TEST_EXIT="$TEST_EXIT" SCRIPT_DIR="$SCRIPT_DIR" \
-    bash -c "set -euo pipefail; source \"\$SCRIPT_DIR/run.sh\"; main $ARGS" < /dev/null 2>&1) && rc=0 || rc=$?
+    bash -c "set -euo pipefail; source \"\$SCRIPT_DIR/run.sh\"; main $ARGS" < "$CASE_DIR/stdin" 2>&1) && rc=0 || rc=$?
   log="$(cat "$CMD_LOG")"
 }
 
@@ -229,11 +262,16 @@ steps() {
     -e 's/^vm\([^)]*\) git -C ~\/tidepool rev-parse HEAD/read-commit/' \
     -e 's/^vm\([^)]*\) .*claude-cli-version.*/cli-pins/' \
     -e 's/^vm\([^)]*\) .*prepare-claude-cli.*/trust/' \
+    -e 's/^limactl copy -r tidepool-bench:bench\/exercises .*/copy-back/' \
     -e 's/^limactl copy -r .*\/([^/ ]*) tidepool-bench:bench\/exercises\/$/copy \1/' \
+    -e 's/^limactl copy .*run.json tidepool-bench:bench\/run.json$/copy-sequence/' \
     -e 's/^vm\([^)]*\) .*extract.ts check .*/check/' \
     -e 's/^vm\([^)]*\) .*init-registry.*/registry-seed/' \
     -e 's/^vm\([^)]*\) .*Benchmark workspaces.*/registry-workspaces/' \
     -e 's/^vm\([^)]*\) .*git init -q -b main .*Seed (.*)'"'"'$/workspace \1/' \
+    -e 's/^vm\([^)]*\) cat > ~\/bench\/state.json/save-state/' \
+    -e 's/^vm\([^)]*\) test -f ~\/bench\/state.json/has-state/' \
+    -e 's/^vm\([^)]*\) cat ~\/bench\/state.json/read-state/' \
     -e 's/^vm\([^)]*\) .*npm run -s token/token/' \
     -e 's/^vm\([^)]*\) loginctl enable-linger.*/linger/' \
     -e 's/^vm\([^)]*\) test -s ~\/.tidepool\/codex.*/codex-login/' \
@@ -241,17 +279,24 @@ steps() {
     -e 's/^curl GET [^ ]* \/pause.*/board-ready/' \
     -e 's/^curl POST [^ ]* \/settings\/display-language.*/display-language/' \
     -e 's/^curl POST [^ ]* \/settings\/execution.*/table-row/' \
+    -e 's/^curl POST [^ ]* \/settings\/meta-review .*/period-days/' \
+    -e 's/^curl GET [^ ]* \/settings\/meta-review\/status.*/meta-review-status/' \
     -e 's/^curl POST [^ ]* \/spend-down.*/spend-down/' \
+    -e 's/^vm\([^)]*\) .*extract.ts position.*/position/' \
+    -e 's/^vm\([^)]*\) .*extract.ts first-meta-review.*/first-meta-review/' \
+    -e 's/^vm\([^)]*\) cat >> ~\/bench\/human-steps.jsonl/record-step/' \
+    -e 's/^vm\([^)]*\) cat ~\/bench\/human-steps.jsonl.*/read-steps/' \
     -e 's/^curl POST [^ ]* \/tasks .*"title":"([^"]*)".*/register \1/' \
     -e 's/^vm\([^)]*\) .*current-root .* ([^ ]*)$/current-root \1/' \
     -e 's/^curl GET [^ ]* \/tasks\/([^/ ]*)\/events.*/events \1/' \
     -e 's/^curl GET [^ ]* \/tasks\/([^/ ]*) *$/status \1/' \
-    -e 's/^curl GET [^ ]* \/tasks *$/questions/' \
+    -e 's/^curl GET [^ ]* \/tasks *$/board-tasks/' \
     -e 's/^vm\([^)]*\) .*export EXERCISE_DIR.*/expected-test/' \
     -e 's/^curl GET [^ ]* \/settings\/execution.*/read-table/' \
     -e 's/^limactl copy .* tidepool-bench:bench\/input.json$/copy-input/' \
     -e 's/^vm\([^)]*\) .*extract.ts run .*/extract/' \
     -e 's/^limactl copy tidepool-bench:bench\/results\/.*/copy-results/' \
+    -e 's/^curl POST [^ ]* \/pause .*"paused":false.*/unpause/' \
     -e 's/^curl POST [^ ]* \/pause.*/pause/' \
     -e 's/^vm\([^)]*\) systemctl --user stop tidepool-bench$/board-stop/' \
     -e 's/^sleep .*/sleep/' \
@@ -264,16 +309,20 @@ instances() {
     -e 's/^limactl copy (-r )?([^ :]*):.*/\2/p' <<< "$log"
 }
 
-# --- the default run ----------------------------------------------------------
-# One poll where the work root still waits on its land question, then everything settled.
+# The steps before the first line matching $1 (an extended regex over the step names).
+steps_before() { steps | awk -v stop="$1" '$0 ~ stop { exit } { print }'; }
+
+input_json() { jq -c "${1:-.}" "$CASE_DIR/bench/input.json"; }
+
+# --- a new run ------------------------------------------------------------------
+# The Interview is declared first and waits one poll; the work exercise is registered only after it settled.
 
 reset_case
-printf 'done\nlanded\n' > "$CASE_DIR/state/status/root1"
-printf 'interview\n' > "$CASE_DIR/state/type/root2"
-printf 'todo\ndone\n' > "$CASE_DIR/state/status/root2"
+printf 'interview\n' > "$CASE_DIR/state/type/root1"
+printf 'todo\ndone\n' > "$CASE_DIR/state/status/root1"
 run_harness
-check "default: exits 0" "0" "$rc"
-check "default: runs the whole sequence in order (CLI pins after the checkout move, Interview registered last)" "gate-vm-status
+check "new run: exits 0" "0" "$rc"
+check "new run: runs the whole sequence in order (CLI pins after the checkout move, the exercises in declared order, the next registered only after the previous settled)" "gate-vm-status
 vm-status
 claude-login
 git-identity
@@ -283,64 +332,82 @@ checkout
 read-commit
 cli-pins
 trust
-copy b-work
 copy a-interview
+copy b-work
+copy-sequence
 check
 registry-seed
 workspace b-work
 registry-workspaces
+save-state
 linger
 token
 board-start
 board-ready
 display-language
 spend-down
-register Fix it
+position
 register Interview the standard tier
 current-root root1
 status root1
-events root1
-current-root root2
-status root2
-questions
+board-tasks
 spend-down
 sleep
 current-root root1
 status root1
-events root1
 current-root root1
+register Fix it
 current-root root2
 status root2
+events root2
 current-root root2
 expected-test
 read-table
+read-steps
 copy-input
 extract
 copy-results
 pause
 board-stop" "$(steps)"
-check "default: every limactl call names the benchmark instance, except the two reads of the gate VM" "tidepool-board" \
+check "new run: every limactl call names the benchmark instance, except the two reads of the gate VM" "tidepool-board" \
   "$(instances | grep -vx tidepool-bench | sort -u)"
-check "default: the gate VM is only read (its status and its board unit), never changed" "limactl list --format {{.Status}} tidepool-board" \
+check "new run: the gate VM is only read (its status and its board unit), never changed" "limactl list --format {{.Status}} tidepool-board" \
   "$(grep 'tidepool-board' <<< "$log" | grep -v '^vm(tidepool-board) systemctl --user is-active')"
-check "default: every API call goes to the benchmark board's port, not the gate board's 4589" "http://127.0.0.1:4700" \
+check "new run: every API call goes to the benchmark board's port, not the gate board's 4589" "http://127.0.0.1:4700" \
   "$(sed -nE 's/^curl [A-Z]+ ([^ ]*) .*/\1/p' <<< "$log" | sort -u)"
-check "default: nothing runs on the Mac that belongs in the VM (git, npm, node) and nothing is timed out" "" \
+check "new run: nothing runs on the Mac that belongs in the VM (git, npm, node) and nothing is timed out" "" \
   "$(grep -E '^(git|npm|node|npx|brew|timeout) ' <<< "$log" || true)"
-check "default: the board's state lives under ~/bench, on a port other than the gate board's" "export TIDEPOOL_REGISTRY=\$HOME/bench/registry TIDEPOOL_DB=\$HOME/bench/board.sqlite TIDEPOOL_WORKER_LOGS=\$HOME/bench/worker-logs
+check "new run: the board's state lives under ~/bench, on a port other than the gate board's" "export TIDEPOOL_REGISTRY=\$HOME/bench/registry TIDEPOOL_DB=\$HOME/bench/board.sqlite TIDEPOOL_WORKER_LOGS=\$HOME/bench/worker-logs
 export TIDEPOOL_WORKSPACES_DIR=\$HOME/bench/workspaces TIDEPOOL_API_TOKEN_FILE=\$HOME/bench/api-token
 export PORT=4700 MCP_PORT=4701 PATH=\$HOME/.local/bin:\$PATH" "$(cat "$CASE_DIR/stdin.env")"
-check "default: one registry workspace per exercise that names one" "bws:
+check "new run: one registry workspace per exercise that names one" "bws:
   review_allowed_commands:
     - \"node --test\"" "$(cat "$CASE_DIR/stdin.workspaces.yaml")"
-check "default: the extraction gets the configuration, the root ids and the test exits" \
-  '{"config":{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"table_rows":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25}],"registry_commit":"template@tidepoolsha","issue_2437":"undecided"},"exercises":[{"dir":"exercises/b-work","task_id":"root1","test_exit":0},{"dir":"exercises/a-interview","task_id":"root2","test_exit":null}]}' \
-  "$(jq -c . "$CASE_DIR/input.json")"
-check "default: nothing deletes the run's state after the extraction" "" \
+check "new run: what a resume needs and the board does not hold is saved under ~/bench" \
+  '{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"registry_commit":"template@tidepoolsha","label":"run"}' \
+  "$(jq -c . "$CASE_DIR/bench/state.json")"
+check "new run: the sequence is copied next to its exercises" "$(cat "$CASE_DIR/run.json")" "$(cat "$CASE_DIR/bench/run.json")"
+check "new run: the extraction gets the configuration, the root ids and test exits in sequence order, and the human steps" \
+  '{"config":{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"table_rows":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25}],"registry_commit":"template@tidepoolsha"},"exercises":[{"dir":"exercises/a-interview","task_id":"root1","test_exit":null},{"dir":"exercises/b-work","task_id":"root2","test_exit":0}],"human_steps":[]}' \
+  "$(input_json)"
+check "new run: nothing deletes the run's state after the extraction" "" \
   "$(sed -n '/extract.ts run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
-check "default: the record lands in results/<date>-<label> and its path is printed" "1" \
+check "new run: the record lands in results/<date>-<label> and its path is printed" "1" \
   "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-run" <<< "$output")"
-check "default: prints where to open the WebUI" "1" "$(grep -c 'http://127.0.0.1:4700/auth?token=TKN' <<< "$output")"
+check "new run: prints where to open the WebUI" "1" "$(grep -c 'http://127.0.0.1:4700/auth?token=TKN' <<< "$output")"
+
+# period_days from the sequence is set before the first registration.
+reset_case
+echo '{"period_days": 1, "items": [{"exercise": "b-work"}]}' > "$CASE_DIR/run.json"
+run_harness
+check "period_days: posted to the board's meta-review settings before anything is registered" "0 period-days" \
+  "$rc $(steps_before '^register' | grep -x period-days)"
+check "period_days: the post carries the declared value" '1' \
+  "$(grep -c 'curl POST http://127.0.0.1:4700 /settings/meta-review {"period_days":1}' <<< "$log")"
+
+reset_case
+run_harness
+check "no period_days: the board's period is left alone" "" "$(steps | grep -x period-days || true)"
 
 # --- the gate board ------------------------------------------------------------
 
@@ -370,77 +437,83 @@ vm-status
 claude-login" "$(steps)"
 
 # --- the wait -------------------------------------------------------------------
-# Settlement comes in any order: the later root settles first and the earlier one stays open for polls.
+
+# Two work exercises: the second is registered only once the first has landed, two polls in.
+reset_case
+sequence '{"exercise": "b-work"}, {"exercise": "c-work"}'
+printf 'todo\ntodo\nlanded\n' > "$CASE_DIR/state/status/root1"
+run_harness
+check "serial: exits 0" "0" "$rc"
+check "serial: the second exercise is registered after the first root landed, not before" "2 1" \
+  "$(steps_before '^register Fix more$' | grep -c '^sleep$') $(steps | grep -c '^register Fix more$')"
 
 reset_case
-cp -r "$EXERCISES/b-work" "$EXERCISES/c-work"
-sed -i '' 's/"Fix it"/"Fix more"/; s/"bws"/"cws"/' "$EXERCISES/c-work/exercise.json"
-ARGS="b-work c-work"
+sequence '{"exercise": "b-work"}'
 printf 'todo\ntodo\ndone\ndone\nlanded\n' > "$CASE_DIR/state/status/root1"
-printf 'landed\n' > "$CASE_DIR/state/status/root2"
 run_harness
-check "reverse settlement: exits 0" "0" "$rc"
-check "reverse settlement: polls until the earlier root too has landed" "4" "$(grep -c '^sleep' <<< "$log")"
-check "reverse settlement: no expected test or extraction before the last poll" "" \
+check "landing: exits 0" "0" "$rc"
+check "landing: polls until the root has landed" "4" "$(grep -c '^sleep' <<< "$log")"
+check "landing: no expected test or extraction before the last poll" "" \
   "$(steps | awk '/^sleep$/ { last = NR } { line[NR] = $0 } END { for (i = 1; i < last; i++) print line[i] }' | grep -E '^(expected-test|extract)$' || true)"
-check "reverse settlement: a root done but not yet landed keeps the run waiting (read on polls 3, 4 and 5)" "3" \
+check "landing: a root done but not yet landed keeps the run waiting (read on polls 3, 4 and 5)" "3" \
   "$(grep -c 'curl GET http://127.0.0.1:4700 /tasks/root1/events' <<< "$log")"
 
 # A held land question settles the root too: the human declined to land, and the tests then read main as it is.
 reset_case
-ARGS="b-work"
+sequence '{"exercise": "b-work"}'
 printf 'held\n' > "$CASE_DIR/state/status/root1"
 TEST_EXIT=1
 run_harness
-check "held land question: the run settles and records the failing test" "0 1" \
-  "$rc $(jq -r '.exercises[0].test_exit' "$CASE_DIR/input.json")"
+check "held land question: the run settles and records the failing test" "0 1" "$rc $(input_json '.exercises[0].test_exit')"
 
 # The human retries the Interview root mid-wait: the old root reads cancelled, current-root names the new one.
 reset_case
-printf 'interview\n' > "$CASE_DIR/state/type/root2"
-printf 'todo\ncancelled\n' > "$CASE_DIR/state/status/root2"
-printf 'root2\nroot3\n' > "$CASE_DIR/state/root/root2"
-printf 'interview\n' > "$CASE_DIR/state/type/root3"
-printf 'todo\ntodo\ntodo\ndone\n' > "$CASE_DIR/state/status/root3"
+sequence '{"exercise": "a-interview"}'
+printf 'interview\n' > "$CASE_DIR/state/type/root1"
+printf 'todo\ncancelled\n' > "$CASE_DIR/state/status/root1"
+printf 'root1\nroot9\n' > "$CASE_DIR/state/root/root1"
+printf 'interview\n' > "$CASE_DIR/state/type/root9"
+printf 'todo\ntodo\ntodo\ndone\n' > "$CASE_DIR/state/status/root9"
 run_harness
 check "Interview retry: exits 0" "0" "$rc"
 check "Interview retry: keeps waiting on the new root, not the cancelled old one" "3" "$(grep -c '^sleep' <<< "$log")"
-check "Interview retry: the old root is not read again once the retry is seen" "1" "$(grep -c 'curl GET http://127.0.0.1:4700 /tasks/root2 *$' <<< "$log")"
-check "Interview retry: the extraction gets the new root's id" "root3" "$(jq -r '.exercises[1].task_id' "$CASE_DIR/input.json")"
+check "Interview retry: the old root is not read again once the retry is seen" "1" "$(grep -c 'curl GET http://127.0.0.1:4700 /tasks/root1 *$' <<< "$log")"
+check "Interview retry: the extraction gets the new root's id" '"root9"' "$(input_json '.exercises[0].task_id')"
 
 # Hours of waiting meet transient failures: spend-down refused after a window reset, a current-root read that fails.
 reset_case
-ARGS="b-work"
+sequence '{"exercise": "b-work"}'
 printf 'todo\ntodo\nlanded\n' > "$CASE_DIR/state/status/root1"
 printf 'FAIL\nroot1\n' > "$CASE_DIR/state/root/root1"
 printf 'ok\nrefuse\nok\n' > "$CASE_DIR/state/spend-down"
 run_harness
-check "transient failures in the wait: the run still settles and extracts" "0 root1" "$rc $(jq -r '.exercises[0].task_id' "$CASE_DIR/input.json")"
+check "transient failures in the wait: the run still settles and extracts" '0 "root1"' "$rc $(input_json '.exercises[0].task_id')"
 check "transient failures in the wait: the open questions are listed once" "1" "$(grep -c 'land completed task: Fix it' <<< "$output")"
 
 # The retry lands between the two reads of one poll: current-root still names the old root, which then reads
 # cancelled. The cancelled root must not count as settled while the re-read names its successor.
 reset_case
-printf 'interview\n' > "$CASE_DIR/state/type/root2"
-printf 'todo\ncancelled\n' > "$CASE_DIR/state/status/root2"
-printf 'root2\nroot2\nroot3\n' > "$CASE_DIR/state/root/root2"
-printf 'interview\n' > "$CASE_DIR/state/type/root3"
-printf 'done\n' > "$CASE_DIR/state/status/root3"
+sequence '{"exercise": "a-interview"}'
+printf 'interview\n' > "$CASE_DIR/state/type/root1"
+printf 'todo\ncancelled\n' > "$CASE_DIR/state/status/root1"
+printf 'root1\nroot1\nroot9\n' > "$CASE_DIR/state/root/root1"
+printf 'interview\n' > "$CASE_DIR/state/type/root9"
+printf 'done\n' > "$CASE_DIR/state/status/root9"
 run_harness
 check "retry between the reads: exits 0" "0" "$rc"
 check "retry between the reads: the cancelled old root does not end the wait" "2" "$(grep -c '^sleep' <<< "$log")"
-check "retry between the reads: the extraction gets the new root's id" "root3" "$(jq -r '.exercises[1].task_id' "$CASE_DIR/input.json")"
+check "retry between the reads: the extraction gets the new root's id" '"root9"' "$(input_json '.exercises[0].task_id')"
 
 # The first spend-down, while the board is configured, is refused: the run goes on to register its exercises.
 reset_case
-ARGS="b-work"
+sequence '{"exercise": "b-work"}'
 printf 'refuse\nok\n' > "$CASE_DIR/state/spend-down"
 run_harness
 check "spend-down refused at configuration: the run registers and completes" "0 1" "$rc $(grep -c '^curl POST [^ ]* /tasks ' <<< "$log")"
 
 # A step after the board started fails: the board is paused and stopped, and its state stays.
 reset_case
-ARGS="b-work"
+sequence '{"exercise": "b-work"}'
 touch "$CASE_DIR/state/register-fails"
 run_harness
 check "failing register: exits non-zero" "1" "$((rc != 0))"
@@ -458,9 +531,152 @@ check "Interview targets openai without a Codex login: stops before the reset" "
 
 # A given registry is recorded by the commit of its ref, not by the commit the harness adds on top.
 reset_case
-ARGS="--registry https://example.com/registry.git#v1 b-work"
+sequence '{"exercise": "b-work"}'
+ARGS="--new --registry https://example.com/registry.git#v1"
 run_harness
-check "given registry: the record names its ref's commit" "0 givensha" "$rc $(jq -r .config.registry_commit "$CASE_DIR/input.json")"
+check "given registry: the record names its ref's commit" '0 "givensha"' "$rc $(input_json .config.registry_commit)"
+
+# --- human steps ------------------------------------------------------------------
+
+# (a) The first memory meta-review: the human is prompted, and the next exercise waits for the review the human
+# started and everything under it to settle.
+reset_case
+sequence '{"exercise": "b-work"}, {"human": "first_meta_review", "subject": "memory"}, {"exercise": "c-work"}'
+printf '%s\n' '{"root":null,"settled":false}' '{"root":"mr1","settled":false}' '{"root":"mr1","settled":true}' > "$CASE_DIR/state/first-meta-review"
+run_harness
+check "first meta-review: exits 0" "0" "$rc"
+check "first meta-review: prompts the human with the subject and the door" "1" "$(grep -c "press 'Start first memory meta-review'" <<< "$output")"
+check "first meta-review: the next exercise is registered only after the review and everything under it settled" \
+  "register Fix it
+current-root root1
+status root1
+events root1
+current-root root1
+meta-review-status
+first-meta-review
+sleep
+board-tasks
+spend-down
+first-meta-review
+sleep
+board-tasks
+spend-down
+first-meta-review
+record-step
+register Fix more" "$(steps | sed -n '/^register Fix it$/,/^register Fix more$/p')"
+check "first meta-review: the step is recorded as done, waiting on the review's root" \
+  '{"item":1,"human":"first_meta_review","subject":"memory","outcome":"done","waited_on":"mr1"}' \
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
+
+# (a) with the door closed: no material for routing yet, so the step is recorded and passed without waiting.
+reset_case
+sequence '{"exercise": "b-work"}, {"human": "first_meta_review", "subject": "routing"}, {"exercise": "c-work"}'
+echo '{"memory":{"first_review":"not_started","material":3,"first_material_at":"x"},"routing":{"first_review":"not_started","material":0,"first_material_at":null}}' > "$CASE_DIR/state/meta-review-status"
+run_harness
+check "closed door: exits 0 without prompting or waiting" "0 0 0" \
+  "$rc $(grep -c 'Start first' <<< "$output" || true) $(grep -c '^sleep' <<< "$log" || true)"
+check "closed door: recorded apart from a human skip" '{"item":1,"human":"first_meta_review","subject":"routing","outcome":"door_closed","waited_on":null}' \
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
+
+# (b) Free text: the run waits for the human's done, then for the board to have no unsettled task.
+reset_case
+sequence '{"exercise": "b-work"}, {"human": "step", "instructions": "Object to the write row of the memory meta-review"}, {"exercise": "c-work"}'
+printf 'not yet\ndone\n' > "$CASE_DIR/stdin"
+printf '%s\n' '[{"id":"r1","type":"work","status":"in_progress","title":"repair: x"}]' '[{"id":"r1","type":"work","status":"done","title":"repair: x"}]' > "$CASE_DIR/state/board"
+run_harness
+check "free-text step: exits 0" "0" "$rc"
+check "free-text step: prints the instructions" "1" "$(grep -c 'Object to the write row of the memory meta-review' <<< "$output")"
+check "free-text step: after done, the next exercise waits for the board's open task to settle" "1 1" \
+  "$(steps_before '^register Fix more$' | grep -c '^sleep$') $(steps | grep -c '^register Fix more$')"
+check "free-text step: recorded as done, having waited on the board" '{"item":1,"human":"step","outcome":"done","waited_on":"board"}' \
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
+
+# The control run: the human types skip at both human steps, and the run flows to the end with the skips recorded.
+reset_case
+sequence '{"exercise": "b-work"}, {"human": "first_meta_review", "subject": "memory"}, {"human": "step", "instructions": "Object to it"}, {"exercise": "c-work"}'
+printf 'skip\nskip\n' > "$CASE_DIR/stdin"
+ARGS="--new --label control"
+run_harness
+check "control run: exits 0 and extracts" "0 1" "$rc $(steps | grep -c '^extract$')"
+check "control run: both human steps recorded as the human's skip, waiting on nothing" \
+  '[{"item":1,"human":"first_meta_review","subject":"memory","outcome":"human_skip","waited_on":null},{"item":2,"human":"step","outcome":"human_skip","waited_on":null}]' \
+  "$(input_json '.human_steps | map(del(.prompted_at, .finished_at))')"
+check "control run: no poll was waited out" "0" "$(grep -c '^sleep' <<< "$log" || true)"
+check "control run: the record lands under its label" "1" "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-control" <<< "$output")"
+
+# --- resume -----------------------------------------------------------------------
+# The VM holds a run that stopped in the middle: the first exercise registered (as root7) and settled, the free-text
+# step done, the first meta-review started by the human but not settled, the last exercise not registered.
+
+reset_case
+sequence '{"exercise": "b-work"}, {"human": "step", "instructions": "Object to it"}, {"human": "first_meta_review", "subject": "memory"}, {"exercise": "c-work"}'
+mkdir -p "$CASE_DIR/bench"
+cp -R "$EXERCISES" "$CASE_DIR/run.json" "$CASE_DIR/bench/"
+echo '{"tidepool_commit":"oldsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"registry_commit":"template@oldsha","label":"week1"}' > "$CASE_DIR/bench/state.json"
+echo '{"item":1,"human":"step","outcome":"done","prompted_at":"2026-10-21T00:00:00Z","finished_at":"2026-10-21T01:00:00Z","waited_on":"board"}' > "$CASE_DIR/bench/human-steps.jsonl"
+echo '[{"root":"root7","outcome":null},{"root":null,"outcome":"done"},{"root":"mr1","outcome":null},{"root":null,"outcome":null}]' > "$CASE_DIR/state/position"
+printf '%s\n' '{"root":"mr1","settled":false}' '{"root":"mr1","settled":true}' > "$CASE_DIR/state/first-meta-review"
+ARGS=""
+run_harness
+check "resume: exits 0" "0" "$rc"
+check "resume: restarts the board without resetting, checking out, seeding or configuring it, unpauses it, and continues from the first unprocessed item" "gate-vm-status
+vm-status
+has-state
+read-state
+copy-back
+claude-login
+git-identity
+linger
+token
+board-start
+board-ready
+unpause
+position
+current-root root7
+status root7
+events root7
+current-root root7
+first-meta-review
+sleep
+board-tasks
+spend-down
+first-meta-review
+record-step
+register Fix more
+current-root root1
+status root1
+events root1
+current-root root1
+expected-test
+read-table
+read-steps
+copy-input
+extract
+copy-results
+pause
+board-stop" "$(steps)"
+check "resume: neither the done step nor the started meta-review is prompted again" "0" \
+  "$(grep -cE 'Object to it|Start first' <<< "$output" || true)"
+check "resume: nothing is deleted" "" "$(grep -E 'rm -rf|reset-failed' <<< "$log" || true)"
+check "resume: the extraction gets the run's own configuration and every exercise and human step" \
+  '{"commit":"oldsha","tasks":["root7","root1"],"steps":[1,2]}' \
+  "$(input_json '{commit: .config.tidepool_commit, tasks: [.exercises[].task_id], steps: [.human_steps[].item]}')"
+check "resume: the record lands under the run's label" "1" "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-week1" <<< "$output")"
+
+# No run in the VM: a resume stops and says how to start one, and nothing is created or reset.
+reset_case
+ARGS=""
+run_harness
+check "resume without a run: exits non-zero and says to pass --new" "1 1" "$((rc != 0)) $(grep -c -- '--new' <<< "$output")"
+check "resume without a run: stops at the check" "gate-vm-status
+vm-status
+has-state" "$(steps)"
+
+# A configuration option without --new would be ignored by a resume: refused before anything is touched.
+reset_case
+ARGS="--label control"
+run_harness
+check "configuration without --new: refused before any call" "1 1 " "$((rc != 0)) $(grep -c 'add --new' <<< "$output") $(steps)"
 
 # --- summary ----------------------------------------------------------------------
 
