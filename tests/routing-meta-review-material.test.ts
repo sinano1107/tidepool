@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, bundledObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -199,7 +199,13 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
   const parent = register(db, true);
   // fable は種で frontier —— 同じ段への提案は拒まれる(issue #1666)ので、別の段を名指す
   const propose = (model: string) =>
-    proposeRoutingChange(db, parent, { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: model === "claude-fable-5-1" ? "economy" : "frontier" }, rationale: "r" }, "auditor", at).question_id;
+    proposeRoutingChange(
+      db,
+      parent,
+      { op: "row", row: { provider: "anthropic", model, effort: "high" }, change: { tier: model === "claude-fable-5-1" ? "economy" : "frontier" }, evidence: [rowSession(db, { provider: "anthropic", model, effort: "high" }, at)], rationale: "r" },
+      "auditor",
+      at,
+    ).question_id;
   const answer = (id: string, answers: string[], comment?: string, amendment?: { tier: "economy" }) => answerQuestionViaWebui(db, getTask(db, id)!, answers, at, { comment, amendment });
   const early = propose("claude-sonnet-5-5");
   answer(early, ["reject"], "Too early.");

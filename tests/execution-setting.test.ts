@@ -40,7 +40,7 @@ import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChi
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
 import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
 import { awaitWindow, unusedLanding } from "./fakes.js";
-import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { HUMAN_WEBUI, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 const table: ExecutionSettingTable = SEED_EXECUTION_SETTINGS;
 /** 種の盤面の段の名前(順序どおり)。 */
@@ -610,6 +610,7 @@ const rowProposal: RoutingRowProposal = {
   op: "row",
   row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
   change: { tier: tierId("frontier") },
+  evidence: [1],
   pin: { ...opusRow, tier: tierId("standard") },
 };
 
@@ -1047,7 +1048,8 @@ function proposeOnOpus(db: ReturnType<typeof openDb>, effort: string, change: ob
   const now = new Date();
   registerMetaReview(db, "routing", now);
   const review = routingReviewId(db);
-  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opusKey(effort), change, rationale: "r" }, "auditor", now);
+  const evidence = [rowSession(db, opusKey(effort), now)];
+  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opusKey(effort), change, evidence, rationale: "r" }, "auditor", now);
   const answer = (amendment?: object) =>
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
   return { question_id, answer };
@@ -1080,7 +1082,7 @@ it("行の提案は、名指した欄のどれかが行の現在値と同じな�
   const db = boardWithOpusMax();
   const review = routingReviewOf(db, new Date());
   const propose = (row: { provider: string; model: string; effort: string | null }, change: object) =>
-    proposeRoutingChange(db, review, { op: "row", row, change, rationale: "r" }, "auditor", new Date());
+    proposeRoutingChange(db, review, { op: "row", row, change, evidence: [rowSession(db, row, new Date())], rationale: "r" }, "auditor", new Date());
   expect(() => propose(opusKey("max"), { effort: "max" })).toThrow(/already has effort max/);
   expect(() => propose(opusKey("high"), { tier: "standard" })).toThrow(/already in tier standard/);
   expect(() => propose(opusKey("high"), { tier: "standard", effort: "xhigh" })).toThrow(/already in tier standard/);
@@ -1127,7 +1129,7 @@ it("model が high に下げる effort への行の提案は作る時点で拒�
   const db = boardWithOpus45();
   registerMetaReview(db, "routing", new Date());
   const review = routingReviewId(db);
-  expect(() => proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "max" }, rationale: "r" }, "auditor", new Date())).toThrow(
+  expect(() => proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "max" }, evidence: [rowSession(db, opus45Key, new Date())], rationale: "r" }, "auditor", new Date())).toThrow(
     /runs as high.*write high/,
   );
   expect(listChildren(db, review)).toEqual([]);
@@ -1138,7 +1140,7 @@ it("承認に添える、model が high に下げる effort の修正値は拒�
   const now = new Date();
   registerMetaReview(db, "routing", now);
   const review = routingReviewId(db);
-  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
+  const { question_id } = proposeRoutingChange(db, review, { op: "row", row: opus45Key, change: { effort: "medium" }, evidence: [rowSession(db, opus45Key, now)], rationale: "r" }, "auditor", now);
   await expect(
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, { effort: "max" }),
   ).rejects.toThrow(/runs as high.*write high/);
@@ -1173,7 +1175,7 @@ it("effort を捨てる id の行への5値の提案と、ほかの id の行へ
   const db = boardWithHaiku45();
   const review = routingReviewOf(db, new Date());
   const propose = (row: { provider: string; model: string; effort: string | null }, change: object) =>
-    proposeRoutingChange(db, review, { op: "row", row, change, rationale: "r" }, "auditor", new Date());
+    proposeRoutingChange(db, review, { op: "row", row, change, evidence: [rowSession(db, row, new Date())], rationale: "r" }, "auditor", new Date());
   expect(() => propose(haiku45Key, { effort: "low" })).toThrow(/takes no effort.*write no effort/);
   expect(() => propose(sonnetKey, { effort: null })).toThrow("effort must be one of low / medium / high / xhigh / max");
   expect(listChildren(db, review)).toEqual([]);
@@ -1187,11 +1189,11 @@ it("承認に添える修正値も、effort を捨てる id の行の5値とほ�
   const review = routingReviewOf(db, now);
   const answer = (question_id: string, amendment: object) =>
     submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => now, "webui", false, amendment);
-  const haiku = proposeRoutingChange(db, review, { op: "row", row: haiku45Key, change: { tier: "standard" }, rationale: "r" }, "auditor", now);
+  const haiku = proposeRoutingChange(db, review, { op: "row", row: haiku45Key, change: { tier: "standard" }, evidence: [rowSession(db, haiku45Key, now)], rationale: "r" }, "auditor", now);
   await expect(answer(haiku.question_id, { effort: "high" })).rejects.toThrow(/takes no effort.*write no effort/);
   expect(getTask(db, haiku.question_id)).toMatchObject({ status: "todo" });
   expect(haiku45Rows(db)).toEqual([haiku45]);
-  const sonnet = proposeRoutingChange(db, review, { op: "row", row: sonnetKey, change: { effort: "medium" }, rationale: "r" }, "auditor", now);
+  const sonnet = proposeRoutingChange(db, review, { op: "row", row: sonnetKey, change: { effort: "medium" }, evidence: [rowSession(db, sonnetKey, now)], rationale: "r" }, "auditor", now);
   await expect(answer(sonnet.question_id, { effort: null })).rejects.toThrow("effort must be one of low / medium / high / xhigh / max");
   expect(getTask(db, sonnet.question_id)).toMatchObject({ status: "todo" });
   expect(readExecutionSettings(db).table.filter((row) => row.model === "claude-sonnet-5-5")).toEqual([
@@ -1205,7 +1207,7 @@ it("tier の提案の approve の registry への commit の await の間に観�
   const db = openDb(":memory:");
   const review = routingReviewOf(db, now);
   const evidence = appendEvent(db, {
-    taskId: review,
+    taskId: registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI).id,
     workerId: "deckhand",
     origin: "board",
     at: now,

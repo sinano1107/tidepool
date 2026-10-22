@@ -18,6 +18,7 @@ import {
   QUIET_EXIT,
   readFollowingNext,
   registerWork,
+  rowSession,
   startFirstMetaReviewViaWebui,
   type Tidepool,
   WORKER_SPAWNED,
@@ -184,8 +185,9 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
   // 長い comment の提案と、長い agent 名と model 名の 20 の session(それぞれ別の配分評価の組・別のセル・大きな shadow 行)
   const [row] = loadExecutionSettingTable(t.db);
   const now = t.clock.now();
+  const evidence = [rowSession(t.db, row!, now)];
   for (let i = 0; i < 20; i++) {
-    const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", now);
+    const { question_id } = proposeRoutingChange(t.db, review.id, { op: "row", row: row!, change: { effort: "low" }, evidence, rationale: "r" }, "auditor", now);
     expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
     const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
     const run = executionSetting("anthropic", `model-${i}-${"m".repeat(2_500)}`);

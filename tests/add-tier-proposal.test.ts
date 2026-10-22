@@ -1,8 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent } from "../src/events.js";
-import { registerTask } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
-import { api, bootTidepool, HOUR, HUMAN_WEBUI, mcpClient, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, rowSession, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 /** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8)のサーバ境界: 提案 verb と pin、approve での段の挿入と行の移動、
  *  修正値、修正後の名前の衝突で回答ごと拒むこと、隣の段・移す行の変更での陳腐化。pin の照合と修正値の形はドメイン層
@@ -34,8 +32,7 @@ async function boardWithAddTierProposal() {
 
 /** 根拠の episode(setup): 表の opus の行で走った worker_spawned。 */
 function spawned(): number {
-  const { id } = registerTask(t.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
-  return appendEvent(t.db, { taskId: id, workerId: "fugu", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, provider: "anthropic", model: "claude-opus-5-5" } });
+  return rowSession(t.db, OPUS_KEY, t.clock.now(), "fugu");
 }
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;

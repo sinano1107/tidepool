@@ -786,6 +786,11 @@ export function applyExecutionSettingsChange(
   if ((change.setting === "insert_tier" || change.setting === "edit_tier") && change.description !== undefined) {
     change = { ...change, description: normalizeText(change.description) };
   }
+  // 今と同じ説明は編集の event に残さない —— 読み手(routing の段の説明の変更)は description の有無を「説明が変わった」と読む
+  if (change.setting === "edit_tier") {
+    const { description, ...rest } = change;
+    if (description === liveTierRows(db).find((tier) => tier.name === rest.name)?.description) change = rest;
+  }
   return db.transaction(() => {
     switch (change.setting) {
       case "row": {

@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -318,8 +318,9 @@ it("read_routing_settings は予算を超える量の提案を古い順に予算
   const { db, routingReview } = board();
   const review = routingReview();
   const [row] = loadExecutionSettingTable(db);
+  const evidence = [rowSession(db, row!, at)];
   const proposed = Array.from({ length: 20 }, (_, i) => {
-    const { question_id } = proposeRoutingChange(db, review, { op: "row", row: row!, change: { effort: "low" }, rationale: "r" }, "auditor", at);
+    const { question_id } = proposeRoutingChange(db, review, { op: "row", row: row!, change: { effort: "low" }, evidence, rationale: "r" }, "auditor", at);
     answerQuestionViaWebui(db, getTask(db, question_id)!, ["reject"], at, { comment: `${i} ${"潮".repeat(1_000)}` });
     return question_id;
   });

@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, rowSession, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -24,7 +24,7 @@ async function boardWithRoutingReview() {
     return result.isError ? { error: result.content[0].text } : JSON.parse(result.content[0].text);
   };
   const propose = async (change: Record<string, unknown> = { tier: "frontier" }, row: { provider: string; model: string; effort: string | null } = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }) =>
-    (await call("propose_routing_change", { op: "row", row, change, rationale: "12 of 14 opus episodes were underpowered." })).question_id as string;
+    (await call("propose_routing_change", { op: "row", row, change, evidence: [rowSession(t.db, row, t.clock.now())], rationale: "12 of 14 opus episodes were underpowered." })).question_id as string;
   return { review, client, call, propose };
 }
 
@@ -61,7 +61,8 @@ it("表に無い行の提案と schema 違反の変更は断られ、question �
       [{ provider: "anthropic", model: "haiku", effort: "high" }, { tier: "economy" }],
       [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, { tier: "ultra" }],
     ]) {
-      expect(await call("propose_routing_change", { op: "row", row, change, rationale: "r" })).toMatchObject({
+      const evidence = [rowSession(t.db, { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, t.clock.now())];
+      expect(await call("propose_routing_change", { op: "row", row, change, evidence, rationale: "r" })).toMatchObject({
         error: expect.stringMatching(/has no row for|a row change takes tier/),
       });
     }

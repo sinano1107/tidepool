@@ -32,7 +32,7 @@ op ごとの帰結(決定1・2 から導いたもので、独立の決定では�
 | `add_tier` | 移す行 | 移す行の今の段にある全行で、その段で走った本番 session(ADR 0200 決定8 の主張は段の中の対比) | 走った行, workspace |
 | `interview` | 対象(表に無い) | 根拠の各行で、今の段で走った本番 session | 走った行, workspace |
 | `agent_tier` | agent | その agent の `source.tier = agent` の本番 session、全期間 | 走った行, 段, workspace |
-| `tier_description` | 段 | 最後の `edit_tier` 以降にその段を要求した task の本番 session | workspace, task の書き手 |
+| `tier_description` | 段 | 最後の説明の編集(position だけの `edit_tier` は数えない)以降にその段を要求した task の本番 session | workspace, task の書き手 |
 | `promote` / `demote` | フラグ | ADR 0181 追記 決定1 のまま | ADR 0181 追記 決定2 のまま |
 
 `tier_description` の書き手は段を申告した task の登録者(`task_registered` の worker_id、人間も含む)で、走った agent ではない ——
