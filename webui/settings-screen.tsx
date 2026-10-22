@@ -1524,7 +1524,7 @@ function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }: {
         <span style={settingsCardLabel}>meta-review</span>
       </RecordCardHead>
       {!open && <FieldRow label="period" kind="mono" value={`${period} days`} />}
-      {!open && (['memory', 'routing'] as const).map((subject) => {
+      {!open && (Object.keys(status) as Array<keyof typeof status>).map((subject) => {
         const row = status[subject];
         return row.first_review === 'not_started' ? (
           <div key={subject} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
@@ -1542,7 +1542,7 @@ function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }: {
       {open && (
         <React.Fragment>
           <Input label="Period (days)" error={reason} mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={period} />
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+          <p style={muted}>
             the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers the next one as soon as there is something new to review.
           </p>
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save meta-review settings"

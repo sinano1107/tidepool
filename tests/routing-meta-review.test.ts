@@ -77,7 +77,7 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
   });
 
   // 材料0件の門に当たる
-  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review/first", { subject: "routing" })).status).toBe(400);
+  expect(await api(t.baseUrl, "POST", "/api/settings/meta-review/first", { subject: "routing" })).toMatchObject({ status: 400, json: { error: expect.stringContaining("no routing meta-review material") } });
   expect(await openRoutingReviews(t)).toEqual([]);
 });
 

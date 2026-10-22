@@ -57,6 +57,7 @@ it("前回登録が無ければ材料があっても poll は登録せず、扉�
 it("材料が無ければ登録しない(issue #618)", async () => {
   t = await bootTidepool();
 
+  expect(await api(t.baseUrl, "POST", "/api/settings/meta-review/first", { subject: "memory" })).toMatchObject({ status: 400, json: { error: expect.stringContaining("no memory meta-review material") } });
   await t.clock.advance(HOUR);
 
   expect(await openMetaReviews(t)).toEqual([]);

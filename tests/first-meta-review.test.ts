@@ -2,10 +2,9 @@ import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
-import { applyExecutionSettingsChange } from "../src/execution-setting.js";
+import { applyExecutionSettingsChange, readExecutionSettings } from "../src/execution-setting.js";
 import { buildMetaReviewMaterial, defineMemoryByMetaReview, invalidateMemoryByMetaReview, recordKnowledge } from "../src/memory.js";
 import {
-  countMaterial,
   META_REVIEW_SUBJECTS,
   type MetaReviewSubject,
   materialEvents,
@@ -27,7 +26,7 @@ function material(db: Db, subject: MetaReviewSubject, now = at) {
   if (subject === "memory") {
     recordKnowledge(db, { scope: null, path: "build", title: "Use Node 22", text: "Use Node 22.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", now);
   } else {
-    applyExecutionSettingsChange(db, { setting: "priority", value: now === at ? "cost" : "quality" }, "mcp", now);
+    applyExecutionSettingsChange(db, { setting: "priority", value: readExecutionSettings(db).priority === "cost" ? "quality" : "cost" }, "mcp", now);
   }
 }
 
@@ -81,9 +80,8 @@ it("材料の件数は材料の event の読みと同じ集合を数える —�
   applyExecutionSettingsChange(db, { setting: "priority", value: "quality" }, "webui", at, "question-1");
   const kinds = { memory: META_REVIEW_SUBJECTS.memory.material, routing: META_REVIEW_SUBJECTS.routing.material };
 
-  expect(countMaterial(db, kinds.memory, { after: 0 }).count).toBe(2);
+  expect(readMetaReviewStatus(db)).toMatchObject({ memory: { material: 2 }, routing: { material: 1 } });
   expect(materialEvents(db, kinds.memory, { after: 0 })).toHaveLength(2);
-  expect(countMaterial(db, kinds.routing, { after: 0 }).count).toBe(1);
   expect(materialEvents(db, kinds.routing, { after: 0 })).toHaveLength(1);
 });
 
@@ -172,7 +170,7 @@ it("管理MCP: 一覧に初回の状態の読みと扉があり、説明が門�
   }
 });
 
-/** 扉の拒否は何も記録しない: 登録も task も増えない。 */
+/** 扉の拒否は登録も task も増やさない(routing の未決着の門の前の陳腐化の決着は、agents を渡せば周期の登録と同じく残る)。 */
 function expectRefused(db: Db, subject: MetaReviewSubject, gate: RegExp) {
   const before = { registrations: registrations(db, subject).length, tasks: listBoard(db).length };
   expect(() => startFirstMetaReview(db, subject, "mcp", days(1))).toThrow(DomainError);

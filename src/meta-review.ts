@@ -290,7 +290,7 @@ export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[],
 }
 
 /** 窓の中の主題の材料の件数と最初の時刻(行を読み込まない —— 盤面の履歴に比例する、ADR 0300 帰結)。 */
-export function countMaterial(db: Db, kinds: readonly EventKind[], window: MetaReviewWindow): { count: number; first_at: string | null } {
+function countMaterial(db: Db, kinds: readonly EventKind[], window: MetaReviewWindow): { count: number; first_at: string | null } {
   const { sql, params } = materialSql("COUNT(*) AS count, MIN(created_at) AS first_at", kinds, window);
   return db.prepare(sql).get(...params) as { count: number; first_at: string | null };
 }
@@ -324,7 +324,7 @@ export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin:
   if (countMaterial(db, META_REVIEW_SUBJECTS[subject].material, { after: 0 }).count === 0) {
     throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one change to review`);
   }
-  if (hasUnsettled(db, subject, now, agents)) {
+  if (settleAndHasUnsettled(db, subject, now, agents)) {
     throw new DomainError(`an unsettled ${subject} task or proposal question is open: settle it before starting the first ${subject} meta-review`);
   }
   return registerMetaReview(db, subject, now, origin);
@@ -351,7 +351,7 @@ export const metaReviewSettingsChangeSchema = z.object({ period_days: z.number()
 type MetaReviewSettings = { period_days: number };
 
 /** 初回の扉の入力(WebUI と管理 MCP が共有する)。 */
-export const firstMetaReviewSchema = z.object({ subject: z.enum(["memory", "routing"]) });
+export const firstMetaReviewSchema = z.object({ subject: z.enum(Object.keys(META_REVIEW_SUBJECTS) as [MetaReviewSubject, ...MetaReviewSubject[]]) });
 
 export function readMetaReviewSettings(db: Db): MetaReviewSettings {
   const row = db.prepare("SELECT period_days FROM meta_review_defaults WHERE id = 1").get() as { period_days: number | null } | undefined;
@@ -410,15 +410,15 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
     const last = latestRegistration(db, subject);
     // 初回は人間が扉で起こす(ADR 0300 決定2)—— 周期は2回目から数える
     if (!last || Date.parse(last.created_at) + period > now.getTime()) continue;
-    if (hasUnsettled(db, subject, now, agents)) continue;
+    if (settleAndHasUnsettled(db, subject, now, agents)) continue;
     if (countMaterial(db, material, { after: lastDoneWatermark(db, subject, null) }).count > 0) registerMetaReview(db, subject, now);
   }
 }
 
-/** 行の主題が同じ未決着の task があるか —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
+/** 陳腐化した routing の提案を決着してから(書き込みを伴う)、行の主題が同じ未決着の task があるか —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
  *  question(親の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7 / ADR 0283 決定1)。周期の登録と初回の扉が共有する(ADR 0300 決定2)。
  *  提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)。 */
-function hasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: ListAgentTiers): boolean {
+function settleAndHasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: ListAgentTiers): boolean {
   // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
   if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
   // ponytail: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
