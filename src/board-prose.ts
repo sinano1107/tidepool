@@ -210,7 +210,7 @@ function reviewAssignableTo(db: Db, review: Task, spawnedEventId: number): strin
  *  registry at that commit under `level` headings nested in the 当時版 section.
  *  The objected task's type and lineage at that spawn pick the branch, shared with spawn (`guidanceByType`):
  *  a review's / interview's Authority was the reviewer constant — pointed at rather than repeated when the
- *  RCA's own Authority is that same text (`ownReviewer`), rendered otherwise — or nothing at all where its
+ *  RCA's own Authority is that same text (`ownAuthorityIsReviewer`), rendered otherwise — or nothing at all where its
  *  lineage had no return destination then (ADR 0301 決定5). */
 function versionEvidence(
   db: Db,
@@ -220,7 +220,7 @@ function versionEvidence(
   registry: RegistryAtCommit,
   objected: Task,
   spawnedEventId: number,
-  ownReviewer: boolean,
+  ownAuthorityIsReviewer: boolean,
 ): string {
   const body =
     agent.builtin && agent.body === ""
@@ -245,7 +245,7 @@ function versionEvidence(
     reviewer: {
       label: "the board's reviewer authority",
       guidance:
-        (ownReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\nThis is the board's fixed reviewer authority. `) +
+        (ownAuthorityIsReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\nThis is the board's fixed reviewer authority. `) +
         "It is board code, not a registry profile, so it is not a target for a registry diff.",
     },
   }[then.source];
@@ -344,7 +344,7 @@ function entryLabels(ids: number[]): string {
  *  made, nothing to declare) — never a failed spawn. The review still
  *  executes under the current definition (ADR 0019): this only adds
  *  evidence, not the reviewer's identity. */
-function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ownReviewer: boolean): string {
+function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ownAuthorityIsReviewer: boolean): string {
   if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
   const events = listEvents(db, task.parent_id);
   const byId = new Map(events.map((e) => [e.id, e]));
@@ -384,7 +384,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
   const objected = getTask(db, task.parent_id)!;
   type Version = { spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>;
   const evidence = (level: string, { agent, registry, spawnedEventId }: Version) =>
-    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId, ownReviewer);
+    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId, ownAuthorityIsReviewer);
   // 同じ版でも spawn ごとに Roster が違いうる(Executor は spawn の時点で読む —— ADR 0295)ので、版の中では
   // 各 spawn で描いた証拠が同じ entry だけを1節に畳む(ADR 0270 追記)
   const drawn = new Map<string, { entryIds: number[] } & Version>();
@@ -413,7 +413,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
           ? "as the board's code carried it at the version you were spawned under"
           : "recorded at the commit you were spawned from"
       }, with the ` +
-      "Authority and Roster it gave you — " +
+      "Authority and Roster it gave you, if any — " +
       "the version that shaped the decision now under review. Read it as evidence for " +
       '"why did I make that call". You nonetheless carry out this review under your ' +
       "current definition (repair is not a re-enactment).\n\n---\n\n" +
@@ -433,7 +433,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
     "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
     "These are your agent definition bodies recorded at the commits you were spawned " +
     `from${resolved.some((entry) => entry.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
-    "each with the Authority and Roster it gave you, resolved per objected " +
+    "each with the Authority and Roster it gave you, if any, resolved per objected " +
     "decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
     'for "why did I make that call". You nonetheless carry out this review under your ' +

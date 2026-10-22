@@ -2246,6 +2246,9 @@ function withTargetQuestionSweep<T>(db: Db, now: Date, body: () => T): T {
   })();
 }
 
+/** task の cancel を刻む event の kind(SQL の IN の右辺)—— cancel はどの経路も `cancelUnsettledSubtree` がこのどちらかを刻む。 */
+const CANCEL_EVENT_KINDS_SQL = "('task_cancelled', 'task_cancelled_directly')";
+
 /** 断られた対象の question の主題が盤面に残らなくなったときの門(ADR 0199 追記、issue #1992 / #1999): `sinceEventId` より後に cancel された
  *  task が運ぶ鍵(root なら一覧の対象、受験者なら pin の対象)の question のうち、その対象を走らせうる未決着の Interview —— その対象を
  *  pin した未決着の子か、まだその対象の子を持たない未決着の root —— が残らないものを盤面名義に決着させる。観測はその鍵を運んだ
@@ -2259,12 +2262,12 @@ function settleUnrunnableTargetQuestions(db: Db, sinceEventId: number, now: Date
          SELECT q.id, q.question_quarantine_kind AS quarantine, q.question_quarantine_value AS value,
            (SELECT e.id FROM events e JOIN tasks t ON t.id = e.task_id
               JOIN interview_targets it ON it.task_id = t.id OR it.id = t.interview_target_id
-            WHERE e.id > @since AND e.kind IN ('task_cancelled', 'task_cancelled_directly')
+            WHERE e.id > @since AND e.kind IN ${CANCEL_EVENT_KINDS_SQL}
               AND q.question_quarantine_value = ${refusedTargetValueSql("q.question_quarantine_kind")}
               AND (it.task_id <> t.id OR NOT EXISTS (
                 SELECT 1 FROM tasks c WHERE c.interview_target_id = it.id AND NOT ${unsettledSql("c.status")}
                   AND NOT EXISTS (SELECT 1 FROM events ce WHERE ce.task_id = c.id AND ce.id > @since
-                                    AND ce.kind IN ('task_cancelled', 'task_cancelled_directly'))))
+                                    AND ce.kind IN ${CANCEL_EVENT_KINDS_SQL})))
             ORDER BY it.task_id = t.id DESC, e.id DESC LIMIT 1) AS observed
          FROM tasks q
          WHERE q.type = 'question' AND q.status = 'todo' AND q.question_quarantine_kind IN (SELECT value FROM json_each(@kinds))
@@ -3654,12 +3657,12 @@ export const ROUTING_REPAIR_NOTICE =
 /** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
 export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };
 
-/** 行 `t` が cancelled か —— `asOf` を渡せば、その event より前に記録された cancel だけを数える(当時版は spawn の時点の系譜で
+/** 行 `rowRef` が cancelled か —— `asOf` を渡せば、その event より前に記録された cancel だけを数える(当時版は spawn の時点の系譜で
  *  選ぶ —— ADR 0301 決定5)。cancel はどの経路も `cancelUnsettledSubtree` が event を刻む。 */
-function cancelledSql(asOf: number | undefined): string {
+function cancelledSql(rowRef: string, asOf: number | undefined): string {
   return asOf === undefined
-    ? "t.status = 'cancelled'"
-    : `EXISTS (SELECT 1 FROM events ce WHERE ce.task_id = t.id AND ce.kind IN ('task_cancelled', 'task_cancelled_directly') AND ce.id < ${asOf})`;
+    ? `${rowRef}.status = 'cancelled'`
+    : `EXISTS (SELECT 1 FROM events ce WHERE ce.task_id = ${rowRef}.id AND ce.kind IN ${CANCEL_EVENT_KINDS_SQL} AND ce.id < ${asOf})`;
 }
 
 /** ADR 0271 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
@@ -3667,7 +3670,7 @@ function discardingAncestor(db: Db, taskId: string, asOf?: number): Task | undef
   const id = db
     .prepare(
       `${ancestorsSql("?")}
-       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND ${cancelledSql(asOf)} ORDER BY a.depth DESC LIMIT 1`,
+       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND ${cancelledSql("t", asOf)} ORDER BY a.depth DESC LIMIT 1`,
     )
     .pluck()
     .get(taskId) as string | undefined;
@@ -3696,7 +3699,7 @@ export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: n
   }
   const ancestor = discardingAncestor(db, parentId, asOfEventId);
   if (ancestor) return `the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`;
-  if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql(asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
+  if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql("t", asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
   return undefined;
 }
 
