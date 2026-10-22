@@ -12,7 +12,6 @@ import {
   completeTask,
   editTask,
   getTask,
-  isArtifactDiscarded,
   listBoard,
   listChildren,
   logDecision,
@@ -22,6 +21,7 @@ import {
   type Task,
   taskHistoryRows,
   taskVerbSwap,
+  whyNoReturnDestination,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
@@ -410,23 +410,24 @@ it("決着済みの完了時レビューが使う資源の quarantine は祖先�
   expect([done, review].map((task) => getTask(db, task.id)!.status)).toEqual(["done", "done"]);
 });
 
-it("成果が捨てられた task は cancelled の work の祖先を挟む task で、自身だけが cancelled の task・祖先が全部生きている task・兄弟 abandon 後の done の兄弟は当たらない(ADR 0271 決定1)", () => {
+it("成果が捨てられた task は cancelled の work の祖先を挟む task で、帰り先の述語は祖先を名指す —— 自身だけが cancelled の task は自身の cancel を言い、祖先が全部生きている task・兄弟 abandon 後の done の兄弟は帰り先を持つ(ADR 0271 決定1 / ADR 0301 決定1)", () => {
   db = openDb(":memory:");
   const { target, child, rcas } = doneChildrenWithAttachments(db);
-  expect(isArtifactDiscarded(db, child.id)).toBe(false);
+  expect(whyNoReturnDestination(db, child.id)).toBeUndefined();
 
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
 
-  expect(isArtifactDiscarded(db, child.id)).toBe(true);
-  expect(isArtifactDiscarded(db, rcas[0]!.id)).toBe(true);
-  expect(isArtifactDiscarded(db, target.id)).toBe(false);
+  const discarded = `the cancel of ancestor "A" (${target.id}) discarded`;
+  expect(whyNoReturnDestination(db, child.id)).toContain(discarded);
+  expect(whyNoReturnDestination(db, rcas[0]!.id)).toContain(discarded);
+  expect(whyNoReturnDestination(db, target.id)).toMatch(/^its parent "A" .* is cancelled/);
 
   const { done, failed, review } = doneSiblingOfFailed(db);
   answerQuestionViaWebui(db, failureQuestion(db, failed.id, NOW), ["abandon"], NOW);
 
-  expect(isArtifactDiscarded(db, failed.id)).toBe(false);
-  expect(isArtifactDiscarded(db, done.id)).toBe(false);
-  expect(isArtifactDiscarded(db, review.id)).toBe(false);
+  expect(whyNoReturnDestination(db, failed.id)).toMatch(/^its parent .* is cancelled/);
+  expect(whyNoReturnDestination(db, done.id)).toBeUndefined();
+  expect(whyNoReturnDestination(db, review.id)).toBeUndefined();
 });
 
 it("cancelled の work の祖先を挟む task を親にした work の登録は、registerTask・worker の decompose・人間の decompose のどれからも cancelled の祖先を名指す DomainError で拒まれ、question は通る —— 生きた系譜の task の下は今どおり(ADR 0271 決定2)", () => {
@@ -494,7 +495,7 @@ it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にし�
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
 
   for (const parent of [child, getTask(db, rcas[0]!.id)!]) {
-    expect(isArtifactDiscarded(db, parent.id)).toBe(true);
+    expect(whyNoReturnDestination(db, parent.id)).toMatch(/^the cancel of ancestor/);
     const memoryRepair = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
     expect(memoryRepair).toMatchObject({ type, parent_id: parent.id, status: "todo" });
   }
@@ -565,7 +566,7 @@ it("task ごとの verb の差し替えは、memory_repair で分解の verb と
   expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
 
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
-  expect(isArtifactDiscarded(db, memoryRepair.id)).toBe(true);
+  expect(whyNoReturnDestination(db, memoryRepair.id)).toMatch(/^the cancel of ancestor/);
   expect(taskVerbSwap(db, memoryRepair.id)).toEqual({ withheld, added: [] });
 });
 

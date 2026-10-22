@@ -138,7 +138,7 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   expect(await writeRecords(write.repair.id)).toEqual([dropped.event_id]);
 });
 
-it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも成果が捨てられた旨でなく記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
+it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を持ち分解の verb と新規の記憶の書き込みの verb を持たず、get_current_task は祖先の cancel の下でも記憶の修理の1行を運ぶ(ADR 0272 決定3)", async () => {
   t = await bootTidepool();
   const objected = registerTask(t.db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
   cancelTaskDirectly(t.db, objected, null, t.clock.now(), {}, "webui");
@@ -159,7 +159,6 @@ it("memory_repair の worker MCP は tools/list に記憶の修理 verb 6本を�
     expect(envelope.memory_repair).toBe(
       "This task is a memory repair: its reach is limited to the entries the objected memory writes touched and the entries and branches the objected judgments name, so it cannot decompose or write memory outside them, and every write it makes, apart from moving an entry back, stays in its object's scope: widening to the whole board is the human's or the meta-review's. To rewrite an entry a write touched, use replace_memory.",
     );
-    expect(envelope.artifact_discarded).toBeUndefined();
   } finally {
     await client.close();
   }
@@ -244,7 +243,6 @@ it("routing_repair の worker MCP の tools/list は基本の面(get_current_tas
       "This task is a routing repair: it repairs the routing meta-review judgment objected in its purpose, and its reach is limited to what that judgment names, so it cannot decompose, delegate or write memory.",
     );
     expect(envelope.memory_repair).toBeUndefined();
-    expect(envelope.artifact_discarded).toBeUndefined();
   } finally {
     await client.close();
   }

@@ -2248,6 +2248,9 @@ function withTargetQuestionSweep<T>(db: Db, now: Date, body: () => T): T {
   })();
 }
 
+/** task の cancel を刻む event の kind(SQL の IN の右辺)—— cancel はどの経路も `cancelUnsettledSubtree` がこのどちらかを刻む。 */
+const CANCEL_EVENT_KINDS_SQL = "('task_cancelled', 'task_cancelled_directly')";
+
 /** 断られた対象の question の主題が盤面に残らなくなったときの門(ADR 0199 追記、issue #1992 / #1999): `sinceEventId` より後に cancel された
  *  task が運ぶ鍵(root なら一覧の対象、受験者なら pin の対象)の question のうち、その対象を走らせうる未決着の Interview —— その対象を
  *  pin した未決着の子か、まだその対象の子を持たない未決着の root —— が残らないものを盤面名義に決着させる。観測はその鍵を運んだ
@@ -2261,12 +2264,12 @@ function settleUnrunnableTargetQuestions(db: Db, sinceEventId: number, now: Date
          SELECT q.id, q.question_quarantine_kind AS quarantine, q.question_quarantine_value AS value,
            (SELECT e.id FROM events e JOIN tasks t ON t.id = e.task_id
               JOIN interview_targets it ON it.task_id = t.id OR it.id = t.interview_target_id
-            WHERE e.id > @since AND e.kind IN ('task_cancelled', 'task_cancelled_directly')
+            WHERE e.id > @since AND e.kind IN ${CANCEL_EVENT_KINDS_SQL}
               AND q.question_quarantine_value = ${refusedTargetValueSql("q.question_quarantine_kind")}
               AND (it.task_id <> t.id OR NOT EXISTS (
                 SELECT 1 FROM tasks c WHERE c.interview_target_id = it.id AND NOT ${unsettledSql("c.status")}
                   AND NOT EXISTS (SELECT 1 FROM events ce WHERE ce.task_id = c.id AND ce.id > @since
-                                    AND ce.kind IN ('task_cancelled', 'task_cancelled_directly'))))
+                                    AND ce.kind IN ${CANCEL_EVENT_KINDS_SQL})))
             ORDER BY it.task_id = t.id DESC, e.id DESC LIMIT 1) AS observed
          FROM tasks q
          WHERE q.type = 'question' AND q.status = 'todo' AND q.question_quarantine_kind IN (SELECT value FROM json_each(@kinds))
@@ -3642,28 +3645,6 @@ export function ancestorsSql(taskRef: string): string {
       UNION SELECT t.parent_id, a.depth + 1 FROM tasks t JOIN ancestors a ON t.id = a.id)`;
 }
 
-/** 成果が捨てられた task か(ADR 0271 決定1): root との間(root を含み自身を除く)に cancelled の work の祖先を挟む。
- *  ADR 0239 決定1 と同じ線で、状態だけを読む。`parent_id` だけをたどる —— 受験者は親を持たないので Interview の root へは渡らない。 */
-export function isArtifactDiscarded(db: Db, taskId: string): boolean {
-  return discardingAncestor(db, taskId) !== undefined;
-}
-
-/** 成果が捨てられた task で走る review に盤面が注入する1行(ADR 0271 決定2)。`get_current_task` の envelope と spawn の
- *  文面が同じこれを運ぶ —— 分解の verb を伏せるだけでは reviewer の guidance「findings become repair tasks」が宙に浮く。 */
-export const ARTIFACT_DISCARDED_NOTICE =
-  "The artifact under review was discarded by a cancel in this task's lineage: no repair task can stand here, so write findings only.";
-
-/** Interview の監査に盤面が注入する1行(ADR 0273 決定3・4、ADR 0271 決定2 の形): reviewer の guidance「findings become repair tasks」の
- *  行き先を言い直す。`get_current_task` の envelope と spawn の文面が同じこれを運ぶ。 */
-export const INTERVIEW_AUDIT_NOTICE =
-  "This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.";
-
-/** Interview の root の spawn の文面に盤面が注入する1行(#2211、Authority 節の直後に置く形は INTERVIEW_AUDIT_NOTICE と同じ。
- *  envelope には載せない): root は reviewer の guidance を持つが
- *  分解しないので、その「findings become repair tasks」の行き先を言い直す。guidance の文は self RCA が「同じ文」と言うので変えない。 */
-export const INTERVIEW_ROOT_NOTICE =
-  "This task runs an Interview: no repair task stands here, so write your findings in complete_interview's handoff.";
-
 /** memory_repair に盤面が注入する1行(ADR 0272 決定3 / ADR 0281): 伏せた verb の理由と、書き込みの行・判断の行の射程と、書き込みが対象の
  *  scope に留まること(ADR 0285 決定2)。`get_current_task` の envelope と spawn の文面が同じこれを運ぶ。spawn の文面では Authority 節の
  *  本文そのもので、profile の guidance は使わない(ADR 0272 追記3)。 */
@@ -3678,12 +3659,20 @@ export const ROUTING_REPAIR_NOTICE =
 /** 修理子の type ごとの1行 —— Authority 節(board-prose)と `get_current_task` の envelope が同じここを引く。 */
 export const REPAIR_NOTICES: Record<RepairType, string> = { memory_repair: MEMORY_REPAIR_NOTICE, routing_repair: ROUTING_REPAIR_NOTICE };
 
-/** 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
-function discardingAncestor(db: Db, taskId: string): Task | undefined {
+/** 行 `rowRef` が cancelled か —— `asOf` を渡せば、その event より前に記録された cancel だけを数える(当時版は spawn の時点の系譜で
+ *  選ぶ —— ADR 0301 決定5)。cancel はどの経路も `cancelUnsettledSubtree` が event を刻む。 */
+function cancelledSql(rowRef: string, asOf: number | undefined): string {
+  return asOf === undefined
+    ? `${rowRef}.status = 'cancelled'`
+    : `EXISTS (SELECT 1 FROM events ce WHERE ce.task_id = ${rowRef}.id AND ce.kind IN ${CANCEL_EVENT_KINDS_SQL} AND ce.id < ${asOf})`;
+}
+
+/** ADR 0271 決定1 に当てた cancelled の work の祖先のうち最も root 寄りのもの —— cascade で複数が cancelled でも拒否文が名指す1つは決まる。 */
+function discardingAncestor(db: Db, taskId: string, asOf?: number): Task | undefined {
   const id = db
     .prepare(
       `${ancestorsSql("?")}
-       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND t.status = 'cancelled' ORDER BY a.depth DESC LIMIT 1`,
+       SELECT t.id FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.type = 'work' AND ${cancelledSql("t", asOf)} ORDER BY a.depth DESC LIMIT 1`,
     )
     .pluck()
     .get(taskId) as string | undefined;
@@ -3694,8 +3683,9 @@ function discardingAncestor(db: Db, taskId: string): Task | undefined {
  *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
  *  問わない、ADR 0268 決定3)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
- *  知りたい読み手もその task を親として問う。 */
-export function whyNoReturnDestination(db: Db, parentId: string): string | undefined {
+ *  知りたい読み手もその task を親として問う。`asOfEventId` を渡せば (b) はその event より前に記録された cancel だけを数える
+ *  (当時版の Authority —— ADR 0301 決定5。(a) のルートの種類は変わらない)。 */
+export function whyNoReturnDestination(db: Db, parentId: string, asOfEventId?: number): string | undefined {
   const parent = getTask(db, parentId);
   if (!parent) return undefined;
   const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
@@ -3709,9 +3699,9 @@ export function whyNoReturnDestination(db: Db, parentId: string): string | undef
       : `a ${root.type} task`;
     return `this lineage's root is ${kind}, not work aimed at the protected branch, so no repair can land`;
   }
-  const ancestor = discardingAncestor(db, parentId);
+  const ancestor = discardingAncestor(db, parentId, asOfEventId);
   if (ancestor) return `the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`;
-  if (parent.status === "cancelled") return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
+  if (db.prepare(`SELECT 1 FROM tasks t WHERE t.id = ? AND ${cancelledSql("t", asOfEventId)}`).get(parentId)) return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
   return undefined;
 }
 

@@ -15,19 +15,15 @@ import {
   registryAtCommit,
 } from "./registry.js";
 import {
-  ARTIFACT_DISCARDED_NOTICE,
   AUTHORITY_WILDCARD,
-  auditedPosedEventId,
   getTask,
   HUMAN_ROSTER_AGENT,
-  INTERVIEW_AUDIT_NOTICE,
-  INTERVIEW_ROOT_NOTICE,
-  isArtifactDiscarded,
   isRepairType,
   REPAIR_NOTICES,
   reviewedTaskExecutor,
   type Task,
   type TaskVerbSwap,
+  whyNoReturnDestination,
 } from "./tasks.js";
 
 /** doctrine の Harness の語のスロット(ADR 0157 決定3)。「委譲先の語」と「Workflow 段落の有無」の2つだけ。
@@ -212,9 +208,10 @@ function reviewAssignableTo(db: Db, review: Task, spawnedEventId: number): strin
 /** One 当時版 version's evidence (ADR 0020 part 4, #1741 addendum): the body,
  *  then the Authority and Roster sections that spawn rendered, rebuilt from the
  *  registry at that commit under `level` headings nested in the 当時版 section.
- *  The objected task's type picks the branch, shared with spawn (`guidanceByType`):
- *  a review's / interview's Authority was the reviewer constant, identical to the RCA's own,
- *  so it is pointed at rather than repeated. */
+ *  The objected task's type and lineage at that spawn pick the branch, shared with spawn (`guidanceByType`):
+ *  a review's / interview's Authority was the reviewer constant — pointed at rather than repeated when the
+ *  RCA's own Authority is that same text (`ownAuthorityIsReviewer`), rendered otherwise — or nothing at all where its
+ *  lineage had no return destination then (ADR 0301 決定5). */
 function versionEvidence(
   db: Db,
   level: string,
@@ -223,6 +220,7 @@ function versionEvidence(
   registry: RegistryAtCommit,
   objected: Task,
   spawnedEventId: number,
+  ownAuthorityIsReviewer: boolean,
 ): string {
   const body =
     agent.builtin && agent.body === ""
@@ -240,13 +238,14 @@ function versionEvidence(
       "the Authority and Roster you were given then are missing from this evidence."
     );
   }
+  if (then.source === "none") return `${body}\n\nYou were given no Authority section and no Roster section then.`;
   const { label, guidance } = {
     profile: { label: `profile ${agent.authority}`, guidance: then.guidance },
     repair: { label: "the board's repair notice", guidance: then.guidance },
     reviewer: {
       label: "the board's reviewer authority",
       guidance:
-        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+        (ownAuthorityIsReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\nThis is the board's fixed reviewer authority. `) +
         "It is board code, not a registry profile, so it is not a target for a registry diff.",
     },
   }[then.source];
@@ -285,8 +284,8 @@ function versionAt(
 }
 
 /** 帰責の judge に渡す当時版の束(ADR 0291 決定1・2): self RCA の注入と同じ読み口で spawn の (registry_commit,
- *  definition_version) から引く本文と、spawn が描いた Authority の散文・Roster の行(session の task の type で選ぶ ——
- *  `authorityByType` と同じ。profile はその commit のもの)、それに組み込みかどうか。 */
+ *  definition_version) から引く本文と、spawn が描いた Authority の散文・Roster の行(session の task の type と spawn の時点の系譜で
+ *  選ぶ —— spawn と同じ `guidanceByType`。帰り先の無い系譜では空。profile はその commit のもの)、それに組み込みかどうか。 */
 export interface AgentDefinitionThen {
   registry_commit: string;
   builtin: boolean;
@@ -345,7 +344,7 @@ function entryLabels(ids: number[]): string {
  *  made, nothing to declare) — never a failed spawn. The review still
  *  executes under the current definition (ADR 0019): this only adds
  *  evidence, not the reviewer's identity. */
-function historicalDefinitionSection(db: Db, registryDir: string, task: Task): string {
+function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ownAuthorityIsReviewer: boolean): string {
   if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
   const events = listEvents(db, task.parent_id);
   const byId = new Map(events.map((e) => [e.id, e]));
@@ -385,7 +384,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   const objected = getTask(db, task.parent_id)!;
   type Version = { spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>;
   const evidence = (level: string, { agent, registry, spawnedEventId }: Version) =>
-    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId);
+    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId, ownAuthorityIsReviewer);
   // 同じ版でも spawn ごとに Roster が違いうる(Executor は spawn の時点で読む —— ADR 0295)ので、版の中では
   // 各 spawn で描いた証拠が同じ entry だけを1節に畳む(ADR 0270 追記)
   const drawn = new Map<string, { entryIds: number[] } & Version>();
@@ -414,7 +413,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
           ? "as the board's code carried it at the version you were spawned under"
           : "recorded at the commit you were spawned from"
       }, with the ` +
-      "Authority and Roster it gave you — " +
+      "Authority and Roster it gave you, if any — " +
       "the version that shaped the decision now under review. Read it as evidence for " +
       '"why did I make that call". You nonetheless carry out this review under your ' +
       "current definition (repair is not a re-enactment).\n\n---\n\n" +
@@ -434,7 +433,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
     "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
     "These are your agent definition bodies recorded at the commits you were spawned " +
     `from${resolved.some((entry) => entry.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
-    "each with the Authority and Roster it gave you, resolved per objected " +
+    "each with the Authority and Roster it gave you, if any, resolved per objected " +
     "decision-log entry — each version below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
     'for "why did I make that call". You nonetheless carry out this review under your ' +
@@ -449,37 +448,24 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
   );
 }
 
-/** Authority 節の本文・Roster の元・その直後の1行を type で選ぶ。修理子の type は Authority 節が
- *  REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。review / interview は reviewer の
- *  guidance で、roster は review なら Executor 1名(ADR 0056)、interview は空(`reviewedTaskExecutor` は review にしか
- *  引かない)。guidance の文は変えず直後に盤面が1行足す(ADR 0271 決定2 / ADR 0273 決定4、Interview の root は #2211)。それ以外は実行 agent の profile のまま。 */
-function authorityByType(
-  db: Db,
-  task: Task,
-  profile: AuthorityProfile,
-  spawnedEventId: number,
-): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
-  const notice =
-    isRepairType(task.type) ? undefined
-    : task.type === "interview" ? INTERVIEW_ROOT_NOTICE
-    : auditedPosedEventId(db, task.id) !== undefined ? INTERVIEW_AUDIT_NOTICE
-    : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
-  return { ...guidanceByType(db, task, profile, spawnedEventId)!, notice };
-}
-
-/** Authority 節の本文と Roster の元を type で選ぶ(`authorityByType` の盤面の1行を除いた部分)。spawn・帰責の当時版・
- *  self RCA の当時版が共有する唯一の分岐で、`source` は当時版の見出しが名指す文の出所。profile を読むのは
- *  修理子の type でも review / interview でもない task だけで、そこで profile が無ければ undefined。 */
+/** Authority 節の本文と Roster の元を type で選ぶ。spawn・帰責の当時版・self RCA の当時版が共有する唯一の分岐で、`source` は
+ *  当時版の見出しが名指す文の出所。修理子の type は REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。
+ *  review / interview は reviewer の guidance で、roster は review なら Executor 1名(ADR 0056)、interview は空
+ *  (`reviewedTaskExecutor` は review にしか引かない)—— ただし帰り先の無い系譜では Authority 節も Roster 節も持たない(`none`、
+ *  ADR 0301 決定5)。系譜は `spawnedEventId` の時点で読む(cancel は途中で届く)。profile を読むのは修理子の type でも
+ *  review / interview でもない task だけで、そこで profile が無ければ undefined。 */
 function guidanceByType(
   db: Db,
   task: Task,
   profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
-  /** Roster を描いた session の spawn —— review の Executor の時点(ADR 0295 決定3)。 */
+  /** Roster を描いた session の spawn —— review の Executor と系譜の時点(ADR 0295 決定3 / ADR 0301 決定5)。 */
   spawnedEventId: number,
-): { source: "repair" | "reviewer" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
+): { source: "repair" | "reviewer" | "none" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
   if (isRepairType(task.type)) return { source: "repair", guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
-    return { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task, spawnedEventId) };
+    return whyNoReturnDestination(db, task.id, spawnedEventId) === undefined
+      ? { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task, spawnedEventId) }
+      : { source: "none", guidance: "", rosterAssignableTo: undefined };
   return profile && { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
@@ -487,7 +473,7 @@ function guidanceByType(
  *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → Memory。
  *  doctrine は adapter が自分の語彙で組んで渡す(決定2)。review task は registry の
  *  profile でなく reviewer の authority と、被レビュー task の executor 1名の roster を
- *  持つ(ADR 0056)。修理子の type は Authority 節が REPAIR_NOTICES の1行だけで roster を
+ *  持つ(ADR 0056)—— 帰り先の無い系譜ではどちらも持たない(ADR 0301 決定5)。修理子の type は Authority 節が REPAIR_NOTICES の1行だけで roster を
  *  持たない(ADR 0272 追記3)。当事者レビュー(self RCA)は当時版の定義を証拠として持つ(ADR 0020 part 4)。 */
 export function boardProse(input: {
   db: Db;
@@ -505,8 +491,7 @@ export function boardProse(input: {
   memorySection: string | null;
 }): string {
   const { db, task } = input;
-  const { guidance, rosterAssignableTo, notice } = authorityByType(db, task, input.profile, input.spawnedEventId);
-  const injected = notice ? `\n\n${notice}` : "";
+  const { source, guidance, rosterAssignableTo } = guidanceByType(db, task, input.profile, input.spawnedEventId)!;
   const discipline = task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : "";
-  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${discipline}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  return `${input.systemPrompt}${authoritySection(guidance)}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${discipline}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task, source === "reviewer")}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

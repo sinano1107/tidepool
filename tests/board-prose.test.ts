@@ -6,12 +6,15 @@ import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeAudit, INTERVIEW_AUDIT_NOTICE, INTERVIEW_ROOT_NOTICE, isArtifactDiscarded, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
+import { cancelTaskDirectly, completeAudit, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
 
 
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
+import { decomposeTaskViaWorker, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
+
+/** 帰り先の無い系譜で走った task の当時版が Authority 節の代わりに写す1文(ADR 0301 決定5)。 */
+const NO_AUTHORITY_THEN = "You were given no Authority section and no Roster section then.";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
 
@@ -68,7 +71,7 @@ async function repairProse(profile: AuthorityProfile, type: "memory_repair" | "r
   const parent = registerTask(db, { type: "work", title: "index the tide charts", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   cancelTaskDirectly(db, parent, null, at, {}, "webui");
   const task = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
-  expect(isArtifactDiscarded(db, task.id)).toBe(true);
+  expect(whyNoReturnDestination(db, task.id)).toMatch(/^the cancel of ancestor/);
   const verbs = taskVerbSwap(db, task.id);
   return boardProse({
     db,
@@ -90,13 +93,12 @@ const REPAIR_NOTICES = [
   ["routing_repair", ROUTING_REPAIR_NOTICE],
 ] as const;
 
-it.each(REPAIR_NOTICES)("%s の spawn の文面は Authority 節が修理の1行だけで、profile の guidance も Roster 節も無く、祖先の cancel の下でも成果が捨てられた旨を置かず、前提の破綻の宣言も言わない(ADR 0272 決定3・追記3 / ADR 0279 決定4)", async (type, notice) => {
+it.each(REPAIR_NOTICES)("%s の spawn の文面は Authority 節が修理の1行だけで、profile の guidance も Roster 節も無く、祖先の cancel の下でも前提の破綻の宣言も言わない(ADR 0272 決定3・追記3 / ADR 0279 決定4)", async (type, notice) => {
   const prose = await repairProse({ name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] }, type);
 
   expect(prose).toContain(`## Authority\n\n${notice}\n\n`);
   expect(prose).not.toContain("Prefer reversible actions.");
   expect(prose).not.toContain("## Roster");
-  expect(prose).not.toContain(ARTIFACT_DISCARDED_NOTICE);
   expect(prose).not.toContain("premise breach");
 });
 
@@ -107,15 +109,21 @@ it.each(REPAIR_NOTICES)("profile が reviewer 定数でも、%s の Authority �
   expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
 });
 
-/** `objected`(deckhand が pickup 済み)の deckhand の判断の行への異議の self RCA の文面 —— 当時版は registry の main の commit。 */
-async function selfRcaProse(db: Db, objected: Task, at: Date) {
+/** `objected` の `worker` の判断の行への異議の RCA(`assignee` を渡せば self RCA)—— 帰り先の無い系譜(Interview の root)にも立つ(ADR 0301 決定2)。 */
+function rcaOf(db: Db, objected: Task, at: Date, worker = "deckhand", assignee?: string) {
+  const entryId = logDecision(db, objected, "kept the old index", worker, at, "worker");
+  const objection = appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  return registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee, objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+}
+
+/** `objected`(deckhand が pickup 済み)の deckhand の判断の行への異議の self RCA の文面 —— 当時版は registry の main の commit。
+ *  `afterSpawn` は異議された task の spawn の後、判断の行の前に走る。 */
+async function selfRcaProse(db: Db, objected: Task, at: Date, afterSpawn = () => {}) {
   const registryDir = await makeRegistry();
   const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
   appendEvent(db, { taskId: objected.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
-  const entryId = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
-  const objection = appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
-  // 異議の id を運ぶ RCA —— 帰り先の無い系譜(Interview の root)にも立つ(ADR 0301 決定2)
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+  afterSpawn();
+  const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
   return reviewProse(db, registryDir, rca, spawn(db, rca, at));
 }
 
@@ -147,47 +155,6 @@ it.each(REPAIR_NOTICES)("%s の task への self RCA の当時版は、Authority
 
   expect(prose).toContain(`### Authority as it stood then (the board's repair notice)\n\n${notice}`);
   expect(prose).not.toContain("Roster as it stood then");
-});
-
-it("Interview の root への self RCA の当時版は、Authority が reviewer 定数を指す1行で、Roster 節は無い —— root の Roster は空(#2366)", async () => {
-  const db = openDb(":memory:");
-  const at = new Date("2026-10-21T00:00:00.000Z");
-  const interview = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
-  const root = pickupTask(db, interview, "deckhand", at, { assignee: "deckhand" })!;
-
-  const prose = await selfRcaProse(db, root, at);
-
-  expect(prose).toContain(
-    "### Authority as it stood then (the board's reviewer authority)\n\n" +
-      "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
-      "It is board code, not a registry profile, so it is not a target for a registry diff.",
-  );
-  expect(prose).not.toContain("Roster as it stood then");
-});
-
-it("Interview の監査 review の spawn の文面は reviewer の Authority の直後に、findings の行き先が complete_audit の判定だという1行を置く(ADR 0273 決定3・4 / ADR 0271 決定2 の形)", () => {
-  const db = openDb(":memory:");
-  const at = new Date("2026-10-18T00:00:00.000Z");
-  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
-  const audit = poseProbe(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "suzumedai", at, "worker", "0".repeat(40));
-  const verbs = taskVerbSwap(db, audit.id);
-
-  const prose = boardProse({
-    db,
-    registryDir: "",
-    registry: { commit: "c", agents: {}, authority: {}, workspaces: {} },
-    task: audit,
-    spawnedEventId: spawn(db, audit, at, "fugu"),
-    systemPrompt: "",
-    profile: { name: "default", guidance: "Prefer reversible actions." },
-    doctrine: boardDoctrine(CLAUDE, verbs),
-    verbs,
-    allowedDomains: undefined,
-    memorySection: null,
-  });
-
-  expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_AUDIT_NOTICE}\n\n`);
-  expect(INTERVIEW_AUDIT_NOTICE).toBe("This task audits an Interview's probe: no repair task stands here, so give your findings with complete_audit's verdict.");
 });
 
 it("review の spawn の Roster はその spawn の時点の Executor —— spawn の後に親が pickup されても空のままで、pickup の後の再 spawn は撮り直す(ADR 0295 決定1・2)", async () => {
@@ -293,17 +260,6 @@ it.each([
   for (const prose of [beforePose, afterPose]) for (const line of INTERVIEW_DISCIPLINE_LINES) expect(prose).toContain(line);
 });
 
-it("Interview の root の spawn の文面は reviewer の Authority の直後に、修理 task は立たず findings は complete_interview の handoff に書くという1行を置く(#2211 / ADR 0271 決定2 の形)", async () => {
-  const db = openDb(":memory:");
-  const at = new Date("2026-10-22T00:00:00.000Z");
-  const root = interviewRoot(db, at);
-
-  const prose = reviewProse(db, await makeRegistry(), root, spawn(db, root, at, "suzumedai"));
-
-  expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_ROOT_NOTICE}\n\n`);
-  expect(INTERVIEW_ROOT_NOTICE).toBe("This task runs an Interview: no repair task stands here, so write your findings in complete_interview's handoff.");
-});
-
 it("Interview の受験者・監査 review・suzumedai が取った memory_repair の spawn の文面には Interview の規律の節が無い(ADR 0275 決定3)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-22T00:00:00.000Z");
@@ -319,4 +275,104 @@ it("Interview の受験者・監査 review・suzumedai が取った memory_repai
     expect(prose).not.toContain("Interview discipline");
     expect(prose).not.toContain("anonymised reproduction");
   }
+});
+
+/** 分解された work の root(`root` —— 人間が cancel できる)、その子の work(deckhand が pickup 済み)と、その子の下の RCA を deckhand が
+ *  pickup したもの。 */
+function rcaUnderWork(db: Db, at: Date) {
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const [child] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "w", purpose: "p", completion_criteria: "c" }] }, "deckhand", at);
+  const work = pickupTask(db, child!, "deckhand", at, { assignee: "deckhand" })!;
+  return { root, work, rca: pickupTask(db, rcaOf(db, work, at, "deckhand", "deckhand"), "deckhand", at)! };
+}
+
+/** 帰り先の無い系譜で reviewer の文を持って走る task(ADR 0301 決定5)。 */
+const WITHOUT_DESTINATION: Array<[string, (db: Db, at: Date) => Task]> = [
+  ["Interview の root の下の RCA", (db, at) => rcaOf(db, interviewRoot(db, at), at, "suzumedai")],
+  [
+    "cancelled の work の祖先の下の RCA",
+    (db, at) => {
+      const { root, rca } = rcaUnderWork(db, at);
+      cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
+      return rca;
+    },
+  ],
+  ["出題の監査", (db, at) => poseProbe(db, interviewRoot(db, at), PROBE, "suzumedai", at, "worker", "0".repeat(40))],
+  ["Interview の root", (db, at) => interviewRoot(db, at)],
+  ["memory の meta-review", (db, at) => registerTask(db, { type: "review", title: "m", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI)],
+  ["routing の meta-review", (db, at) => registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, ...HUMAN_WEBUI)],
+];
+
+it.each(WITHOUT_DESTINATION)("%s の spawn の文面には Authority 節も Roster 節も無い(ADR 0301 決定5)", async (_, make) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const task = make(db, at);
+
+  const prose = reviewProse(db, await makeRegistry(), task, spawn(db, task, at, "fugu"));
+
+  expect(prose).not.toContain("## Authority");
+  expect(prose).not.toContain("## Roster");
+  expect(prose).not.toContain(REVIEWER_AUTHORITY_PROFILE.guidance);
+});
+
+/** 独立監査(主題の無いルートの review)を deckhand が pickup したもの。 */
+const independentAudit = (db: Db, at: Date) =>
+  pickupTask(db, registerTask(db, { type: "review", title: "audit", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+const DECKHAND_ROSTER = "## Roster\n\ndeckhand — General work agent for the tidepool board";
+
+it.each<[string, (db: Db, at: Date) => Task, string]>([
+  ["完了時レビュー", (db, at) => registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c", parent_id: rcaUnderWork(db, at).work.id }, at, BOARD_WORKER_ID, "board"), DECKHAND_ROSTER],
+  ["独立監査", (db, at) => independentAudit(db, at), "## Board doctrine"],
+  ["独立監査の RCA", (db, at) => rcaOf(db, independentAudit(db, at), at), DECKHAND_ROSTER],
+])("帰り先のある系譜の %s の spawn の文面は今どおり reviewer の文と Roster を持つ(ADR 0301 決定5)", async (_, make, next) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const task = make(db, at);
+
+  const prose = reviewProse(db, await makeRegistry(), task, spawn(db, task, at, "fugu"));
+
+  expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${next}`);
+});
+
+it("Interview の root への self RCA の当時版は、root の当時の文面に Authority 節も Roster 節も無かったことを写し、「同じ文」と指さない(ADR 0301 決定5)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-21T00:00:00.000Z");
+  const interview = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI);
+  const root = pickupTask(db, interview, "deckhand", at, { assignee: "deckhand" })!;
+
+  const prose = await selfRcaProse(db, root, at);
+
+  expect(prose).toContain(NO_AUTHORITY_THEN);
+  expect(prose).not.toContain("Authority as it stood then");
+  expect(prose).not.toContain("Roster as it stood then");
+  expect(prose).not.toContain("the same text as your own");
+});
+
+it("祖先の work の cancel の前に spawn した RCA への self RCA の当時版は、reviewer の文とその時点の Roster を写し —— 自身は Authority 節を持たないので「同じ文」と指さない(ADR 0301 決定5)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const { root, rca } = rcaUnderWork(db, at);
+
+  const prose = await selfRcaProse(db, rca, at, () => cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui"));
+
+  expect(prose).not.toContain("\n## Authority");
+  expect(prose).toContain(
+    `### Authority as it stood then (the board's reviewer authority)\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n` +
+      "This is the board's fixed reviewer authority. It is board code, not a registry profile, so it is not a target for a registry diff.",
+  );
+  expect(prose).toContain("### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board");
+  expect(prose).not.toContain("the same text as your own");
+});
+
+it("祖先の work の cancel の後に spawn した RCA への self RCA の当時版は、Authority 節も Roster 節も無かったことを写す —— cancel は spawn の前に記録されたものだけ数える(ADR 0301 決定5)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const { root, rca } = rcaUnderWork(db, at);
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
+
+  const prose = await selfRcaProse(db, rca, at);
+
+  expect(prose).toContain(NO_AUTHORITY_THEN);
+  expect(prose).not.toContain("Authority as it stood then");
+  expect(prose).not.toContain("Roster as it stood then");
 });

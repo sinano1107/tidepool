@@ -8,7 +8,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { buildMemoryInjection } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { registerQuarantine, tableRowValue, workspaceContainmentValue } from "../src/quarantine.js";
-import { getTask, INTERVIEW_AUDIT_NOTICE } from "../src/tasks.js";
+import { getTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
@@ -737,7 +737,9 @@ it("出題の gate は面接室の写しを head に記録し、立った監査�
   expect(rootTier).toBe(tierIdOf(t.db, "frontier"));
   expect((await tools(auditId)).sort()).toEqual([...AUDIT_VERBS].sort());
   const envelope = JSON.parse((await callAsTask(t, auditId, "get_current_task", {})).content[0].text);
-  expect(envelope.interview_audit).toMatchObject({ notice: INTERVIEW_AUDIT_NOTICE, head, interview_room: room, hypothesis: INTERVIEW.hypothesis });
+  expect(envelope.interview_audit).toMatchObject({ head, interview_room: room, hypothesis: INTERVIEW.hypothesis });
+  // 帰り先の無い系譜の監査に権限の1行は足さない(ADR 0301 決定5)
+  expect(envelope.interview_audit).not.toHaveProperty("notice");
 });
 
 it("却下の後の出し直しは出題の gate が新しい写しを commit して新しい head にし、受理された受験者は却下された写しではなく最後の写しから分岐する(ADR 0273 決定3)", async () => {
