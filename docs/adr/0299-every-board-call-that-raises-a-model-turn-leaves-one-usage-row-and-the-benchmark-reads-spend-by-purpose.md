@@ -56,7 +56,9 @@ runner が受け取った usage を client が捨てていた。判断の段の�
 `claude_code_version_too_old`・401・上限到達による中断の 429)で判定する。404 の封筒は usage の欄を 0 で埋めて届き(2026-10-01 実測、#1249)、401 は runner のテストが usage 欄つきの形を釘付けしている(実測の
 401 封筒の欄は ADR 0070 に無い)—— どちらも行にしない(実装済み)。429 も同じ族で、ADR 0104 決定2 が認める確定的な証拠(`api_error_status: 429`)であり、答えを取りに行く呼び出しも probe も
 行を書かない。全 0 の usage や `num_turns` の値からは判定しない(ADR 0104 の線)。行を残す案は退ける —— 表の定義は model turn を立てた
-呼び出しで、429 の封筒は `duration_api_ms: 0`(2.1.241 の実測 fixture)で turn が走っていない。worker 側が 429 session の
+呼び出しで、429 の封筒は `duration_api_ms: 0`(2.1.241 の実測 fixture)で turn が走っていない。固定版の適合試験も 429 の result 行を
+「result line usage」の面として合格にしていない。この追記は Claude CLI の封筒の話で、Codex の答えを取りに行く runner(#2417)に上限到達の
+構造化された証拠は無く、そこで行を書くかは #2417 で決める。worker 側が 429 session の
 `worker_exited.usage` に 0 を書くのは別の記録(slot を握った session の消費、途中の 429 は前の turn の消費を運ぶ)で、先例にしない。
 固定版 2.1.286 の `-p --output-format json` の 429 封筒は未観測で、binary の構造(result の object は1箇所で組まれ `api_error_status`
 を載せ、headless の loop は `json` と `stream-json` を同じ流れから読む)からの推論である。
