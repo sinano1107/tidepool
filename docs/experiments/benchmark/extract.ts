@@ -156,9 +156,6 @@ type Priced = { group: string; key: string; cost_usd: number | null };
 const tallyBy = (entries: readonly Priced[]) =>
   Object.fromEntries([...new Set(entries.map((e) => e.group))].map((group) => [group, tally(entries.filter((e) => e.group === group))]));
 
-/** 記録から学ぶ task(ADR 0299 決定5): RCA review と記憶・routing の修理子。課題の行の費用から外す。 */
-const learns = (db: Db, task: Task) => isRepairType(task.type) || isRca(db, task.id);
-
 // ponytail: landing.ts の LANDING_ENDED_KINDS は SQL の断片で export されない —— 着地の事実の種類を足したらここも足す
 const LANDINGS = ["local_merge_executed", "pr_merged", "landing_finished", "nothing_to_land"] as const;
 
@@ -240,7 +237,8 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     replaced.push(...subtree(db, earlier));
     prev = latestEventOfTask(db, earlier.id, "interview_retried")?.payload.previous_root_id;
   }
-  const treeSessions = [...tasks, ...replaced].filter((task) => !learns(db, task)).flatMap((task) => sessions(db, logDir, task));
+  // 記録から学ぶ task(RCA review と記憶・routing の修理子)は走行の節に置き、課題の行の費用から外す
+  const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task));
   const { cost_usd, unpriced } = tally(treeSessions.map((s) => ({ key: s.harness, cost_usd: s.cost_usd })));
   return {
     name: exercise.name,
@@ -266,13 +264,6 @@ function learningGroup(db: Db, task: Task): string | null {
   return isRepairType(task.type) ? task.type : null;
 }
 
-/** 走行の節ごとの Board call の用途(ADR 0299 決定5)。 */
-const SECTION_USES = {
-  learning: ["allocation_review", "attribution", "behavior_draft"],
-  human_surface: ["task_draft", "child_draft", "handoff_draft", "issue_inspection", "translation"],
-  observation: ["cli_auth_probe", "model_probe"],
-} as const satisfies Record<string, readonly BoardCallUse[]>;
-
 /** 走行の支出の節(ADR 0299 決定5): Board call の行は用途ごとに Provider で、記録から学ぶ session は置き場ごとに Harness で足す。
  *  どの課題の木にも、どの節にも入らない worker session は未分類として並べる。 */
 function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: ReturnType<typeof exerciseRecord>[]) {
@@ -289,9 +280,9 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
   const onExercise = new Set(exercises.flatMap((e) => e.sessions.map((s) => s.task_id)));
   return {
     not_included: "Calls without usage and the usage TUI's startup quota check are not included.",
-    learning: { ...section(SECTION_USES.learning, learning), sessions: tallyBy(learning) },
-    human_surface: section(SECTION_USES.human_surface),
-    observation: section(SECTION_USES.observation),
+    learning: { ...section(["allocation_review", "attribution", "behavior_draft"], learning), sessions: tallyBy(learning) },
+    human_surface: section(["task_draft", "child_draft", "handoff_draft", "issue_inspection", "translation"]),
+    observation: section(["cli_auth_probe", "model_probe"]),
     unclassified: boardTasks.filter((task) => !onExercise.has(task.id) && learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task)),
   };
 }
