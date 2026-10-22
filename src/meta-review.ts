@@ -315,7 +315,8 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
 }
 
 /** 主題の初回の meta-review を人間が起こす扉(ADR 0300 決定2)。門は3つ —— 同主題の登録が無い(取り消された回も含む)・
- *  盤面の始まりからの材料が1件以上・同主題の未決着が無い。どれかに当たれば何も記録せず拒む。`agents` は周期の登録と同じ registry の一覧。 */
+ *  盤面の始まりからの材料が1件以上・同主題の未決着が無い。どれかに当たれば登録せず拒む —— routing の未決着を数える前の
+ *  陳腐化の決着(settleStaleProposals)は周期の登録と同じく残る。`agents` は周期の登録と同じ registry の一覧。 */
 export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin: "webui" | "mcp", now: Date, agents?: ListAgentTiers): Task {
   if (latestRegistration(db, subject)) {
     throw new DomainError(`the first ${subject} meta-review was already registered: every later one is registered by the period`);
