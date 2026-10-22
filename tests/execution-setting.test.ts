@@ -639,8 +639,8 @@ it("行の提案は変更の段が一覧から消えると target_tier が崩れ
 
 it("昇格 / 降格の提案の pin はフラグの現在値 —— フラグが変われば learner_promoted が崩れ、表の編集では崩れない", () => {
   const settings = (learnerPromoted: boolean, t: ExecutionSettingTable = SEED_EXECUTION_SETTINGS) => ({ table: t, learnerPromoted, tiers: TIERS });
-  const promote = { kind: "routing", op: "promote", evidence: [1] as number[], pin: { promoted: false } } as const;
-  const demote = { kind: "routing", op: "demote", evidence: [1] as number[], pin: { promoted: true } } as const;
+  const promote: RoutingProposal = { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } };
+  const demote: RoutingProposal = { kind: "routing", op: "demote", evidence: [1], pin: { promoted: true } };
   expect(routingPinChanges(promote, settings(false, []))).toEqual([]);
   expect(routingPinChanges(promote, settings(true))).toEqual(["learner_promoted"]);
   expect(routingPinChanges(demote, settings(true))).toEqual([]);

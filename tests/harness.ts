@@ -1208,7 +1208,7 @@ export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-
 /** registry の agent deckhand(組み込みでなく段 standard —— agent_tier で1段下げられる)。 */
 export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], systemPrompt: "p" };
 
-const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
+export const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
 /** setup のみ: standard を求めた task の opus の行の session が2つ走る —— 1つは乖離した shadow 行の pickup で段の出所が agent、もう1つは
  *  段の出所が task で、どちらにも配分評価が付く。routing meta-review の窓の中なら項目は opus の行・agent deckhand・段 standard・学習器。
@@ -1232,11 +1232,11 @@ export function routedOpusSessions(db: Db, at: Date): number[] {
 export function divergedSession(
   db: Db,
   at: Date,
-  options: { learner?: boolean; workspace?: string; learnerModel?: string; learnerRecord?: TrackRecord; tableRecord?: TrackRecord } = {},
+  options: { learner?: boolean; tier?: string; workspace?: string; learnerModel?: string; learnerRecord?: TrackRecord; tableRecord?: TrackRecord } = {},
 ): number {
-  const { learner = false, workspace = "reef", learnerModel = "claude-sonnet-5-5", learnerRecord = NO_RECORD, tableRecord = NO_RECORD } = options;
-  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace }, at, ...HUMAN_WEBUI).id;
-  const tier_id = tierIdOf(db, "standard");
+  const { learner = false, tier = "standard", workspace = "reef", learnerModel = "claude-sonnet-5-5", learnerRecord = NO_RECORD, tableRecord = NO_RECORD } = options;
+  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace }, at, ...HUMAN_WEBUI).id;
+  const tier_id = tierIdOf(db, tier);
   const table = executionSetting("anthropic", OPUS_ROW.model, { tier_id, source: { tier: "task", provider: "rank" } });
   const chosen = executionSetting("anthropic", learnerModel, { tier_id, source: { tier: "task", provider: learner ? "learner" : "rank" } });
   const [recommended, actual] = learner ? [table, chosen] : [chosen, table];

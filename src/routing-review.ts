@@ -606,7 +606,7 @@ function interviewProposal(
 
 /** 学習器の昇格 / 降格の根拠(ADR 0181 追記 #2438): 各 evidence は乖離した shadow 行の session の worker_spawned(行と session の結び方は
  *  list_routing_shadow と同じ shadowRows)で、昇格なら出所が学習器でない行、降格なら出所が学習器の行。 */
-function learnerEvidence(db: Db, op: "promote" | "demote", evidence: number[]): string[] {
+function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number[]): string[] {
   type Row = ReturnType<typeof shadowRows>[number];
   // 根拠の向き: 降格は学習器の選択が走った行(昇格後)、昇格はそれ以外(昇格前)
   const learnerRan = op === "demote";
@@ -628,9 +628,9 @@ function learnerEvidence(db: Db, op: "promote" | "demote", evidence: number[]): 
   // 段は session が走った段(shadow 行は段を持たない)。session に辿り着かなかった行は段も workspace も無い
   const tiers = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e.tier_id]));
   const cell = (c: Cell) => `${rowName(c)}${c.advisor ? ` with advisor ${c.advisor}` : ""}`;
-  const group = (of: Row[]) => {
+  const group = (grouped: Row[]) => {
     const groups = new Map<string, Row[]>();
-    for (const row of of) {
+    for (const row of grouped) {
       const tierId = row.worker_spawned_event_id === null ? undefined : tiers.get(row.worker_spawned_event_id);
       const { learner, table } = bySource(row.recommended, row.actual);
       const key = `tier ${tierId === undefined ? "none" : tierNameOf(db, tierId)}, workspace ${row.workspace ?? "none"}, learner ${cell(learner)}, table ${cell(table)}`;
@@ -640,26 +640,26 @@ function learnerEvidence(db: Db, op: "promote" | "demote", evidence: number[]): 
   };
   const record = ({ board, workspace, seed }: TrackRecord) =>
     `board ${board.accepted}/${board.rejected}, workspace ${workspace.accepted}/${workspace.rejected}${seed ? `, seeded by ${seed.kind}` : ""}`;
-  const lines = [...group(rows.filter((r) => cited.has(r.id)))].map(([key, of]) => {
-    const latest = of.at(-1)!;
+  const lines = [...group(rows.filter((r) => cited.has(r.id)))].map(([key, members]) => {
+    const latest = members.at(-1)!;
     const { learner, table } = bySource(latest.recommended_record, latest.actual_record);
     // 昇格前の outcome は表の結果なので、並べれば学習器の成績と読まれる(ADR 0181 決定6)—— 降格にだけ出す
-    const count = (outcome: string) => of.filter((r) => r.outcome === outcome).length;
+    const count = (outcome: string) => members.filter((r) => r.outcome === outcome).length;
     const outcomes = learnerRan ? `; outcomes ${count("accepted")} accepted, ${count("rejected")} rejected, ${count("excluded")} excluded` : "";
-    return `- ${key}: ${of.length} pickup(s) (tasks ${of.map((r) => r.task_id).join(", ")}); learner ${record(learner)}; table ${record(table)}${outcomes}`;
+    return `- ${key}: ${members.length} pickup(s) (tasks ${members.map((r) => r.task_id).join(", ")}); learner ${record(learner)}; table ${record(table)}${outcomes}`;
   });
   // 引用の外(ADR 0181 追記 決定3): フラグの最後の変更以降(無ければ全期間)の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
   const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
   const span = shadowRows(db, { after: change ?? 0 }).filter((r) => (r.source.provider === "learner") === learnerRan);
   const diverged = span.filter((r) => r.diverged);
   const divergedGroups = group(diverged);
-  const uncited = [...divergedGroups].filter(([, of]) => !of.some((r) => cited.has(r.id)));
+  const uncited = [...divergedGroups].filter(([, members]) => !members.some((r) => cited.has(r.id)));
   return [
     `Evidence: ${cited.size} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
     ...lines,
     `All diverged pickups where the ${learnerRan ? "learner's" : "table's"} choice ran, ${change === undefined ? "over all time (the learner flag never changed)" : `since the learner flag last changed (event ${change})`}: ` +
       `${diverged.length} in ${divergedGroups.size} line(s), ${diverged.filter((r) => cited.has(r.id)).length} cited; ` +
-      `lines not cited: ${uncited.map(([key, of]) => `${key}: ${of.length}`).join("; ") || "none"}. Pickups with two or more candidates in that span: ${span.filter((r) => r.candidates > 1).length}.`,
+      `lines not cited: ${uncited.map(([key, members]) => `${key}: ${members.length}`).join("; ") || "none"}. Pickups with two or more candidates in that span: ${span.filter((r) => r.candidates > 1).length}.`,
   ];
 }
 
@@ -804,14 +804,14 @@ export function proposeRoutingChange(
     const promote = input.op === "promote";
     if (promote === promoted) throw new DomainError(`the learner is already ${promoted ? "promoted" : "not promoted"}; op ${input.op} only applies while it is ${promoted ? "not promoted" : "promoted"}`);
     if (!input.evidence?.length) throw new DomainError(`op ${input.op} names at least one evidence worker_spawned event id: a session of a diverged shadow row`);
-    const evidence = learnerEvidence(db, input.op, input.evidence);
+    const evidenceLines = learnerEvidenceLines(db, input.op, input.evidence);
     proposal = { kind: "routing", op: input.op, evidence: input.evidence, pin: { promoted } };
     title = promote ? "Promote the learner" : "Demote the learner";
     diff = [
       promote
         ? "Work tasks would run on the learner's recommendation instead of the execution-setting table's first choice. The shadow keeps what the table would have chosen."
         : "Work tasks would run on the execution-setting table's first choice again. The shadow keeps what the learner would have recommended.",
-      ...evidence,
+      ...evidenceLines,
     ];
     purpose = `${proposer} proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
   }

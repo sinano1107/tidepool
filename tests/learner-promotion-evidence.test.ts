@@ -7,10 +7,10 @@ import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
-import { divergedSession, executionSetting, HUMAN_WEBUI, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
+import { divergedSession, executionSetting, HUMAN_WEBUI, NO_RECORD, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
 
 /** 学習器の昇格 / 降格の提案の根拠(ADR 0181 追記 #2438)のドメイン層: 根拠の検査と、盤面が根拠の shadow 行から組む detail。MCP の
- *  inputSchema が evidence を通すことと flag の直接の変更での決着はサーバ境界(tests/routing-proposal-question.test.ts)が言う。 */
+ *  inputSchema が evidence を通すことと flag の直接の変更での決着はサーバ境界(tests/routing-proposal-question.test.ts と tests/execution-settings-endpoints.test.ts)が言う。 */
 const at = new Date("2026-10-22T00:00:00.000Z");
 
 const record = (board: [number, number], workspace: [number, number], seed: TrackRecord["seed"] = null): TrackRecord => ({
@@ -23,6 +23,7 @@ function board() {
   const db = openDb(":memory:");
   registerMetaReview(db, "routing", at);
   const review = listBoard(db).find((task) => task.meta_review_subject === "routing")!.id;
+  // 昇格は承認の適用だけが書き、公開の扉は降格しか受けない(executionSettingsChangeSchema の learner_promoted)
   const promote = () => db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
   const propose = (op: "promote" | "demote", evidence?: number[]) => proposeRoutingChange(db, review, { op, evidence, rationale: "r" }, "auditor", at);
   return { db, review, promote, propose };
@@ -43,8 +44,7 @@ it("根拠は乖離した shadow 行の session の worker_spawned に限る —
   // review の session: pickup に shadow 行を書かない
   const reviewSession = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
   const run = executionSetting("anthropic", "claude-opus-5-5");
-  const none = record([0, 0], [0, 0]);
-  recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: none, actual_record: none, candidates: 2 }, at);
+  recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
   const matched = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 
   expect(() => propose("promote", [registered])).toThrow(`evidence ${registered} is not a worker_spawned event`);
@@ -73,38 +73,43 @@ it("昇格前の昇格の提案は、根拠を (段, workspace, 学習器のセ�
   const first = divergedSession(db, at, { learnerRecord: record([1, 0], [1, 0]), tableRecord: record([100, 1], [40, 0]) });
   const latest = divergedSession(db, at, { learnerRecord: record([2, 0], [2, 0]), tableRecord: record([101, 1], [41, 0], { kind: "interview", event_id: 7 }) });
   const elsewhere = divergedSession(db, at, { workspace: "lagoon", learnerRecord: record([2, 0], [0, 0]), tableRecord: record([101, 1], [3, 1]) });
+  const frontier = divergedSession(db, at, { tier: "frontier" });
 
-  const { question_id } = propose("promote", [first, latest, elsewhere]);
+  const { question_id } = propose("promote", [first, latest, elsewhere, frontier]);
 
-  expect(getTask(db, question_id)!.question_proposal).toEqual({ kind: "routing", op: "promote", evidence: [first, latest, elsewhere], pin: { promoted: false } });
+  expect(getTask(db, question_id)!.question_proposal).toEqual({ kind: "routing", op: "promote", evidence: [first, latest, elsewhere, frontier], pin: { promoted: false } });
   const detail = detailOf(db, question_id);
   for (const line of [
     `- tier standard, workspace reef, learner ${SONNET}, table ${OPUS}: 2 pickup(s) (tasks ${taskOf(db, first)}, ${taskOf(db, latest)}); learner board 2/0, workspace 2/0; table board 101/1, workspace 41/0, seeded by interview`,
     `- tier standard, workspace lagoon, learner ${SONNET}, table ${OPUS}: 1 pickup(s) (tasks ${taskOf(db, elsewhere)}); learner board 2/0, workspace 0/0; table board 101/1, workspace 3/1`,
+    `- tier frontier, workspace reef, learner ${SONNET}, table ${OPUS}: 1 pickup(s) (tasks ${taskOf(db, frontier)}); learner board 0/0, workspace 0/0; table board 0/0, workspace 0/0`,
   ]) {
     expect(detail.split("\n")).toContain(line);
   }
   expect(detail).not.toMatch(/outcome/i);
   // フラグが一度も変わっていなければ全期間
   expect(detail.split("\n")).toContain(
-    "All diverged pickups where the table's choice ran, over all time (the learner flag never changed): 3 in 2 line(s), 3 cited; lines not cited: none. Pickups with two or more candidates in that span: 3.",
+    "All diverged pickups where the table's choice ran, over all time (the learner flag never changed): 4 in 3 line(s), 4 cited; lines not cited: none. Pickups with two or more candidates in that span: 4.",
   );
 });
 
 it("引用の外の乖離も盤面が1行で見せる —— フラグの最後の変更以降の同じ向きの乖離行の総数・組の数・うち引用した数・引用されなかった組ごとの件数と、候補が2行以上の pickup の数。変更より前の行と逆の向きの行は数えない", () => {
-  const { db, promote, propose } = board();
+  const { db, propose } = board();
   divergedSession(db, at);
-  promote();
+  // 昇格の承認の適用と同じ書き方(扉の schema を通さない)—— フラグの変更が2回あり、数えるのは最後の変更以降
+  applyExecutionSettingsChange(db, { setting: "learner_promoted", value: true }, "webui", at);
+  divergedSession(db, at);
   divergedSession(db, at, { learner: true });
   const change = applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at)!;
+  // 学習器のフラグでない設定の変更は範囲を切らない
+  applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   const cited = divergedSession(db, at);
   divergedSession(db, at);
   divergedSession(db, at, { learnerModel: "claude-haiku-5-5" });
   divergedSession(db, at, { learner: true });
   const run = executionSetting("anthropic", "claude-opus-5-5");
-  const none = record([0, 0], [0, 0]);
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  for (const candidates of [2, 1]) recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: none, actual_record: none, candidates }, at);
+  for (const candidates of [2, 1]) recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates }, at);
 
   const { question_id } = propose("promote", [cited]);
 
@@ -126,6 +131,9 @@ it("昇格後の降格の提案は、走った学習器のセルと推薦に回�
   expect(getTask(db, question_id)!.question_proposal).toEqual({ kind: "routing", op: "demote", evidence: [excluded, rejected], pin: { promoted: true } });
   expect(detailOf(db, question_id).split("\n")).toContain(
     `- tier standard, workspace reef, learner ${SONNET}, table ${OPUS}: 2 pickup(s) (tasks ${taskOf(db, excluded)}, ${taskOf(db, rejected)}); learner board 3/1, workspace 1/1; table board 90/2, workspace 9/1; outcomes 0 accepted, 1 rejected, 1 excluded`,
+  );
+  expect(detailOf(db, question_id).split("\n")).toContain(
+    "All diverged pickups where the learner's choice ran, over all time (the learner flag never changed): 2 in 1 line(s), 2 cited; lines not cited: none. Pickups with two or more candidates in that span: 2.",
   );
 });
 

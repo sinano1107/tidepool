@@ -1516,7 +1516,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         evidence: z
           .array(z.number().int())
           .optional()
-          .describe("op promote, demote, agent_tier, tier_description, add_tier and interview only: worker_spawned event ids of the sessions your case rests on."),
+          .describe("every op but row: worker_spawned event ids of the sessions your case rests on. op promote and demote: the worker_spawned_event_id of diverged shadow rows."),
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name. op interview: the tier measured."),
         hypothesis: z.string().optional().describe("op interview only: the claim the Interview tests."),
         measured_work: z.string().optional().describe("op interview only, optional: the kind of work to measure."),
