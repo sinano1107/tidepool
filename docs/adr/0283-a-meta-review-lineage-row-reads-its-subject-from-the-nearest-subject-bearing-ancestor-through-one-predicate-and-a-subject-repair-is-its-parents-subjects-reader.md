@@ -55,3 +55,10 @@ worker の pull verb と worker の新規書き込み(`record_knowledge` / `defi
 「修理の射程」ではない。退けた案は決定3 と同じ(scope null に解決する第3の形は `memoryScope` に worker でも meta-review でもない道を
 足す。domain の `recordKnowledge` 自体は worker_verb 名義の scope null を拒まないが、worker の経路は #623 で null を拒む)。
 祖先に meta-review の無い RCA は今どおり worker の面。
+
+## 追記2(2026-10-22 の grilling、issue #2505 / ADR 0301)
+
+決定2 は異議の門を「行の主題」で書き、帰結の除外を「work の祖先を持つ RCA に限る」と言い直したが、主題も work の祖先も持たない
+Interview の木の RCA が漏れ、work の祖先で引くと独立監査(work の祖先を持たずに保護ブランチから切られるのが正しい)まで外れる。
+決定2 の線は ADR 0301 決定1 の帰り先の述語に畳む —— meta-review の系譜は「ルートが保護ブランチを対象にしない」系譜の1つになる。
+帰結の除外(RCA の型つきの行は work の修理子が意味を持つ)は、帰り先のある系譜の RCA に限る。
