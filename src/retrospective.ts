@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
-import { type BoardCallAnswer, BoardCallUsageError, recordBoardCall } from "./board-call-usage.js";
+import { type BoardCallAnswer, recordedAnswer } from "./board-call-usage.js";
 import { type AgentDefinitionThen, agentDefinitionThen } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
@@ -234,11 +234,9 @@ export async function attributeObjections(
       };
       const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
-        const { output, usage } = await call.client.judge(input, call.setting);
-        recordBoardCall(db, "attribution", call.setting, usage, now);
-        judgments.set(o.entry.id, { ...gate(output, input), decision_log_through: through });
+        const judgment = await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting));
+        judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through });
       } catch (err) {
-        if (err instanceof BoardCallUsageError) recordBoardCall(db, "attribution", err.setting, err.usage, now);
         if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
         const payload = {
           kind: "objection_attribution_failed" as const,
@@ -301,11 +299,8 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     const input = secondRoundInput(db, deps.registryDir, objectedId, source);
     let judgment: GatedJudgment;
     try {
-      const { output, usage } = await call.client.judge(input, call.setting);
-      recordBoardCall(db, "attribution", call.setting, usage, now);
-      judgment = gate(output, input);
+      judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting)), input);
     } catch (err) {
-      if (err instanceof BoardCallUsageError) recordBoardCall(db, "attribution", err.setting, err.usage, now);
       if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
       const payload = {
         kind: "objection_attribution_failed" as const,
@@ -356,11 +351,8 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
     let judgment: AllocationJudgment;
     try {
-      const answer = await call.client.judge(input, call.setting);
-      recordBoardCall(db, "allocation_review", call.setting, answer.usage, now);
-      judgment = answer.output;
+      judgment = await recordedAnswer(db, "allocation_review", now, call.client.judge(input, call.setting));
     } catch (err) {
-      if (err instanceof BoardCallUsageError) recordBoardCall(db, "allocation_review", err.setting, err.usage, now);
       if (quarantineBoardCallRefusal(db, err, "allocation_review", reviewed_task_id, now)) return;
       record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
       return;
@@ -540,9 +532,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
     const index = memoryIndex(db, task, scope, entry.worker_id, query).section;
     try {
-      const { output, usage } = await call.client.draft({ ...input, index }, call.setting);
-      recordBoardCall(db, "behavior_draft", call.setting, usage, now);
-      const { addressee, ...fields } = output;
+      const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, call.client.draft({ ...input, index }, call.setting));
       createBehaviorCandidate(
         db,
         {
@@ -556,7 +546,6 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
         now,
       );
     } catch (err) {
-      if (err instanceof BoardCallUsageError) recordBoardCall(db, "behavior_draft", err.setting, err.usage, now);
       if (quarantineBoardCallRefusal(db, err, "behavior_draft", taskId, now)) return;
       appendEvent(db, {
         taskId,

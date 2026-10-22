@@ -47,6 +47,19 @@ export class BoardCallUsageError extends Error {
   }
 }
 
+/** The answer of one answer-fetching Board call, its row written whether the answer came back or the call failed
+ *  after its CLI reported usage (ADR 0299 決定3). A failure without usage (row refusal, 401) writes nothing and is rethrown as is. */
+export async function recordedAnswer<T>(db: Db, use: BoardCallUse, now: Date, call: Promise<BoardCallAnswer<T>>): Promise<T> {
+  try {
+    const { output, usage, setting } = await call;
+    recordBoardCall(db, use, setting, usage, now);
+    return output;
+  } catch (err) {
+    if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, now);
+    throw err;
+  }
+}
+
 /** One Board call's usage, one row per call (ADR 0299 決定2). `fragments` is translation's alone. */
 export function recordBoardCall(
   db: Db,
