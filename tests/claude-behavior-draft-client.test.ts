@@ -24,7 +24,7 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(draft);
+  await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -46,7 +46,7 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
     },
   });
 
-  await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(draft);
+  await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);
 
   const { args } = calls[0]!;
   expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());

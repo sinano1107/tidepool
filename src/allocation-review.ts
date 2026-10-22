@@ -1,3 +1,4 @@
+import type { BoardCallAnswer } from "./board-call-usage.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEvents } from "./events.js";
@@ -40,7 +41,7 @@ export interface AllocationClient {
   judge(
     input: AllocationReviewInput,
     setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
-  ): Promise<AllocationJudgment>;
+  ): Promise<BoardCallAnswer<AllocationJudgment>>;
 }
 
 /** 入力の組み立て(ドメイン層の純関数、spec #541)。verdict と findings は統合レビューの判断の行(ADR 0278 決定5)、実行設定と出所は

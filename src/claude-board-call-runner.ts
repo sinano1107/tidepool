@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type BoardCallSetting, BoardCallUsageError } from "./board-call-usage.js";
+import { type BoardCallAnswer, type BoardCallSetting, type BoardCallUsage, BoardCallUsageError } from "./board-call-usage.js";
 import {
   boardCallEnv,
   boardCallEnvWithoutThinking,
@@ -14,7 +14,6 @@ import {
   rethrowCliAuthExecFailure,
   rowRefusalCause,
 } from "./cli-auth.js";
-import type { TranslationUsage } from "./translate.js";
 
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
  *  user prompt が持つ。翻訳は ADR 0062 決定3 の自前の文面を `systemPrompt` で渡す。Codex の runner(#2417)も
@@ -40,11 +39,6 @@ export interface ClaudeBoardCall {
   reasoning: boolean;
 }
 
-export interface ClaudeBoardCallAnswer<T> {
-  output: T;
-  usage: TranslationUsage;
-}
-
 // the CLI's `-p --output-format json` usage (vendor-specific, kept private to this adapter — ADR 0005):
 // the same total_cost_usd/usage shape claude-worker.ts's stream-json result event carries
 const envelopeUsageSchema = z
@@ -57,7 +51,7 @@ const envelopeUsageSchema = z
       cache_creation_input_tokens: z.number(),
     }),
   })
-  .transform(({ total_cost_usd, usage }): TranslationUsage => ({
+  .transform(({ total_cost_usd, usage }): BoardCallUsage => ({
     input_tokens: usage.input_tokens,
     output_tokens: usage.output_tokens,
     cache_read_tokens: usage.cache_read_input_tokens,
@@ -89,7 +83,7 @@ function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSett
 }
 
 /** The answer as the model wrote it. */
-async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
+async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallAnswer<string>> {
   const { exec, label, systemPrompt = BOARD_CALL_SYSTEM_PROMPT, prompt, setting, reasoning } = call;
   let stdout: string;
   try {
@@ -142,14 +136,14 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoar
   if (typeof result !== "string") throw fail(`${label} CLI response missing a string result field`);
   // an answer without usage is a broken answer, not a degraded record (ADR 0299 決定4)
   if (!usage) throw new Error(`${label} CLI response missing usage`);
-  return { output: result, usage };
+  return { output: result, usage, setting };
 }
 
 /** The answer as the JSON object `extractJson` finds in it, validated by `schema` — the model's reply is untrusted input. */
-export async function runClaudeBoardCallJson<T>(call: ClaudeBoardCall, schema: z.ZodType<T>): Promise<ClaudeBoardCallAnswer<T>> {
-  const { output, usage } = await runClaudeBoardCallText(call);
+export async function runClaudeBoardCallJson<T>(call: ClaudeBoardCall, schema: z.ZodType<T>): Promise<BoardCallAnswer<T>> {
+  const { output, usage, setting } = await runClaudeBoardCallText(call);
   try {
-    return { output: schema.parse(extractJson(output)), usage };
+    return { output: schema.parse(extractJson(output)), usage, setting };
   } catch (err) {
     throw new BoardCallUsageError((err as Error).message, call.setting, usage);
   }

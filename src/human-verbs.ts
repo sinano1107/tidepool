@@ -4,6 +4,7 @@ import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
+import { BoardCallUsageError, recordBoardCall } from "./board-call-usage.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -453,9 +454,12 @@ export async function registerThroughHumanDoor(
         if (deps.draftClient) {
           let inspection;
           try {
-            inspection = await deps.draftClient.inspectIssue(issue);
+            const answer = await deps.draftClient.inspectIssue(issue);
+            recordBoardCall(deps.db, "issue_inspection", answer.setting, answer.usage, now());
+            inspection = answer.output;
           } catch (err) {
-            quarantineBoardCallRefusal(deps.db, err, "issue inspection", undefined, now());
+            if (err instanceof BoardCallUsageError) recordBoardCall(deps.db, "issue_inspection", err.setting, err.usage, now());
+            quarantineBoardCallRefusal(deps.db, err, "issue_inspection", undefined, now());
             const fullError = err instanceof Error ? err.message : String(err);
             console.warn("[issue inspection] LLM inspection failed", fullError);
             const preview = fullError.slice(0, 200);

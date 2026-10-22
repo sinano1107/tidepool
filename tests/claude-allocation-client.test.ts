@@ -29,7 +29,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -69,7 +69,7 @@ it("配分評価は、用途に依らない盤面の system prompt を --system-
     },
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
   const { args } = calls[0]!;
   expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());

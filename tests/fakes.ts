@@ -11,6 +11,7 @@ import type {
   AllocationReviewInput,
 } from "../src/allocation-review.js";
 import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
+import type { BoardCallAnswer, BoardCallSetting, BoardCallUsage } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -68,7 +69,7 @@ import type {
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
-import type { TranslationClient, TranslationResult, TranslationUsage } from "../src/translate.js";
+import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit } from "../src/worker.js";
 import { tempDir } from "./temp-dir.js";
@@ -782,25 +783,28 @@ export class FakeDraftClient implements DraftClient {
   private inspectionByTitle = new Map<string, IssueInspection>();
   private inspectionFailure: Error | null = null;
 
-  async draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<TaskDraft> {
+  /** the row every scripted draft reports it ran on */
+  readonly setting: BoardCallSetting = { provider: "anthropic", model: "sonnet", effort: "medium" };
+
+  async draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<BoardCallAnswer<TaskDraft>> {
     this.dumps.push(dump);
     this.languages.push(language);
     this.contexts.push(context);
     if (this.failure) throw this.failure;
-    return this.response;
+    return { output: this.response, usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
-  async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
+  async draftHandoff(dump: string, language: string): Promise<BoardCallAnswer<HandoffDraft>> {
     this.handoffDumps.push(dump);
     this.handoffLanguages.push(language);
     if (this.handoffFailure) throw this.handoffFailure;
-    return this.handoffResponse;
+    return { output: this.handoffResponse, usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
-  async inspectIssue(issue: Issue): Promise<IssueInspection> {
+  async inspectIssue(issue: Issue): Promise<BoardCallAnswer<IssueInspection>> {
     this.inspected.push(issue);
     if (this.inspectionFailure) throw this.inspectionFailure;
-    return this.inspectionByTitle.get(issue.title) ?? this.inspection;
+    return { output: this.inspectionByTitle.get(issue.title) ?? this.inspection, usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
   scriptDraft(draft: TaskDraft): void {
@@ -846,7 +850,7 @@ export class FakeDraftClient implements DraftClient {
 export class FakeTranslationClient implements TranslationClient {
   readonly calls: Array<{ fragments: string[]; language: string }> = [];
   private response: string | ((source: string) => string) = (source) => `[translated] ${source}`;
-  private usage: TranslationUsage = {
+  private usage: BoardCallUsage = {
     input_tokens: 10,
     output_tokens: 5,
     cache_read_tokens: 0,
@@ -870,7 +874,7 @@ export class FakeTranslationClient implements TranslationClient {
     this.response = text;
   }
 
-  scriptUsage(usage: TranslationUsage): void {
+  scriptUsage(usage: BoardCallUsage): void {
     this.usage = usage;
   }
 
@@ -894,13 +898,10 @@ export class FakeAllocationClient implements AllocationClient {
   };
   private failure: Error | null = null;
 
-  async judge(
-    input: AllocationReviewInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
-  ): Promise<AllocationJudgment> {
+  async judge(input: AllocationReviewInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AllocationJudgment>> {
     this.calls.push({ input, setting });
     if (this.failure) throw this.failure;
-    return this.response;
+    return { output: this.response, usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptJudgment(judgment: AllocationJudgment): void {
@@ -924,14 +925,11 @@ export class FakeAttributionClient implements AttributionClient {
   }> = [];
   private readonly scripted = new Map<number, AttributionJudgment | Error | Promise<AttributionJudgment>>();
 
-  async judge(
-    input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
-  ): Promise<AttributionJudgment> {
+  async judge(input: AttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>> {
     this.calls.push({ input, setting });
     const answer = this.scripted.get(input.entry_id) ?? { cause: "uncertain", evidence: "scripted" };
     if (answer instanceof Error) throw answer;
-    return answer;
+    return { output: await answer, usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptJudgment(entryId: number, judgment: AttributionJudgment | Error | Promise<AttributionJudgment>): void {
@@ -949,14 +947,11 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
   }> = [];
   private readonly scripted = new Map<number, BehaviorDraft | Error | Promise<BehaviorDraft>>();
 
-  async draft(
-    input: BehaviorDraftInput,
-    setting: Pick<ExecutionSettingRow, "model" | "effort">,
-  ): Promise<BehaviorDraft> {
+  async draft(input: BehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>> {
     this.calls.push({ input, setting });
     const answer = this.scripted.get(input.entry_id) ?? new Error("no draft scripted");
     if (answer instanceof Error) throw answer;
-    return answer;
+    return { output: await answer, usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptDraft(entryId: number, draft: BehaviorDraft | Error | Promise<BehaviorDraft>): void {

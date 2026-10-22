@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
@@ -14,7 +15,7 @@ import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, p
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
+import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -888,7 +889,7 @@ it("起草が行の拒否で断られると行の Quarantine が立ち、memory_
   await commit(t, s.task.id, "refused draft");
 
   expect(await rowQuarantines(t)).toEqual([
-    ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The memory draft Board call for task ${s.task.id} ended with API error 404 for this model id`],
+    ["execution-setting row anthropic / claude-fable-5-1 cannot run on this board", `The behavior draft Board call for task ${s.task.id} ended with API error 404 for this model id`],
   ]);
   expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });
@@ -901,7 +902,7 @@ it("起草が 401 で終わると Provider 認証の Quarantine が立ち、memo
   await commit(t, s.task.id, "unauthorized draft");
 
   expect(await providerAuthQuarantines(t)).toEqual([
-    [PROVIDER_AUTH_TITLE, `The memory draft Board call for task ${s.task.id} ended with an authentication failure`],
+    [PROVIDER_AUTH_TITLE, `The behavior draft Board call for task ${s.task.id} ended with an authentication failure`],
   ]);
   expect(await draftsFailed(t, s.task.id)).toEqual([]);
 });
@@ -1482,6 +1483,121 @@ function objectedAfterReading() {
   const decision = b.decide("squashed the branch");
   return { ...b, read, unread, decision, sessionId: b.objectTo(decision) };
 }
+
+/** 判定の段の Board call が撃つ行(種の表の judgement tier)で残る、帰責1回の行。 */
+const ATTRIBUTION_ROW = { use: "attribution", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, usage: BOARD_CALL_USAGE, createdAt: at.toISOString() };
+
+it("初回の帰責は、撃った行の Provider / model / effort で attribution の行を1つ残す(ADR 0299 決定1)", async () => {
+  const b = objectedAfterReading();
+
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, b.sessionId, at);
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+});
+
+/** schema に合わない答え(CLI は usage を報告した)を、判定の段の行で撃った失敗。 */
+const schemaMismatch = () => new BoardCallUsageError("answer did not match the schema", { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, BOARD_CALL_USAGE);
+
+it("初回の帰責の答えが schema に合わなくても attribution の行は残り、失敗は今どおり objection_attribution_failed に残る(ADR 0299 決定3)", async () => {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, schemaMismatch());
+
+  await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at);
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "objection_attribution_failed").map((e) => e.payload)).toEqual([
+    expect.objectContaining({ round: "initial", reason: "Board call failed: answer did not match the schema" }),
+  ]);
+});
+
+/** 初回を撃たずに(未帰責で)commit し、覆う RCA 子を決着させて、第2回が撃てる盤面にする。 */
+function awaitingSecondRound() {
+  const b = objectedAfterReading();
+  commitTriage(b.db, at, [], new Map());
+  for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
+  return b;
+}
+
+it("帰責の第2回は、撃った行の Provider / model / effort で attribution の行を1つ残す(ADR 0299 決定1)", async () => {
+  const b = awaitingSecondRound();
+
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: new FakeAttributionClient() }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+});
+
+it("帰責の第2回の答えが schema に合わなくても attribution の行は残り、失敗は今どおり objection_attribution_failed に残る(ADR 0299 決定3)", async () => {
+  const b = awaitingSecondRound();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, schemaMismatch());
+
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "objection_attribution_failed").map((e) => e.payload)).toEqual([
+    expect.objectContaining({ round: "after_rca", reason: "Board call failed: answer did not match the schema" }),
+  ]);
+});
+
+/** 初回の帰責が preference で確定した異議に、起草の Board call を撃つ(`draft` は起草 client の答え)。 */
+async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["scriptDraft"]>[1]) {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause: "preference", evidence: "taste" });
+  const drafter = new FakeBehaviorDraftClient();
+  drafter.scriptDraft(b.decision, draft);
+  const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+  return b;
+}
+
+it("Behavior candidate の起草は、撃った行の Provider / model / effort で behavior_draft の行を1つ残す(ADR 0299 決定1)", async () => {
+  const b = await draftAfterPreference({ path: "review", title: "Squash", text: "Squash before merge.", addressee: "worker" });
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW, { ...ATTRIBUTION_ROW, use: "behavior_draft" }]);
+});
+
+it("起草の答えが schema に合わなくても behavior_draft の行は残り、失敗は今どおり memory_draft_failed に残る(ADR 0299 決定3)", async () => {
+  const b = await draftAfterPreference(schemaMismatch());
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW, { ...ATTRIBUTION_ROW, use: "behavior_draft" }]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed").map((e) => e.payload)).toEqual([
+    expect.objectContaining({ reason: "answer did not match the schema" }),
+  ]);
+});
+
+it.each([
+  ["行の拒否", refused],
+  ["401", () => new CliAuthError("Invalid API key")],
+])("%s で断られた振り返りの Board call は行を残さない —— 初回の帰責・第2回・起草(ADR 0299 決定3)", async (_, refusal) => {
+  const initial = objectedAfterReading();
+  const initialClient = new FakeAttributionClient();
+  initialClient.scriptJudgment(initial.decision, refusal());
+  await attributeObjections(initial.db, { ...noRetrospectiveCalls, attributionClient: initialClient }, initial.sessionId, at);
+
+  const second = awaitingSecondRound();
+  const secondClient = new FakeAttributionClient();
+  secondClient.scriptJudgment(second.decision, refusal());
+  refireRetrospectiveCalls(second.db, { ...noRetrospectiveCalls, attributionClient: secondClient }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const drafted = await draftAfterPreference(refusal());
+
+  expect([listBoardCalls(initial.db), listBoardCalls(second.db), listBoardCalls(drafted.db)]).toEqual([[], [], [ATTRIBUTION_ROW]]);
+});
+
+it("client の無い盤面では帰責を撃たず、行も残らない", async () => {
+  const b = objectedAfterReading();
+
+  await attributeObjections(b.db, noRetrospectiveCalls, b.sessionId, at);
+
+  expect(listBoardCalls(b.db)).toEqual([]);
+});
 
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));

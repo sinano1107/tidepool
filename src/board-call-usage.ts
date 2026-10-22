@@ -1,6 +1,5 @@
 import type { Db } from "./db.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
-import type { TranslationUsage } from "./translate.js";
 
 /** The `board_calls` table's closed use vocabulary (ADR 0299 決定1) — the DDL's CHECK spells the same list. */
 export type BoardCallUse =
@@ -15,8 +14,26 @@ export type BoardCallUse =
   | "cli_auth_probe"
   | "model_probe";
 
+/** Token usage for one Board call, same granularity as claude-worker.ts's worker_exited usage (issue #47).
+ *  A null cost is "not measurable", never 0 (ADR 0296 決定5). */
+export interface BoardCallUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  estimated_cost_usd: number | null;
+}
+
 /** What a Board call ran on, in the pin's spelling (alias `haiku` / `low` where the call pins one). */
 export type BoardCallSetting = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
+
+/** An answer-fetching Board call's answer, with the usage its CLI reported and the setting it ran on —
+ *  the Provider-neutral caller writes the row from these (ADR 0299 決定6). */
+export interface BoardCallAnswer<T> {
+  output: T;
+  usage: BoardCallUsage;
+  setting: BoardCallSetting;
+}
 
 /** A Board call that failed after its CLI reported usage (schema mismatch, `is_error` with usage): the turn ran,
  *  so the Provider-neutral caller writes its row before handling the failure (ADR 0299 決定3 / 決定6). */
@@ -24,7 +41,7 @@ export class BoardCallUsageError extends Error {
   constructor(
     message: string,
     readonly setting: BoardCallSetting,
-    readonly usage: TranslationUsage,
+    readonly usage: BoardCallUsage,
   ) {
     super(message);
   }
@@ -35,7 +52,7 @@ export function recordBoardCall(
   db: Db,
   use: BoardCallUse,
   setting: BoardCallSetting,
-  usage: TranslationUsage,
+  usage: BoardCallUsage,
   now: Date,
   fragments: number | null = null,
 ): void {
@@ -51,11 +68,11 @@ export function recordBoardCall(
 export interface BoardCallRecord extends BoardCallSetting {
   use: BoardCallUse;
   fragments: number | null;
-  usage: TranslationUsage;
+  usage: BoardCallUsage;
   createdAt: string;
 }
 
-type BoardCallRow = Omit<BoardCallRecord, "usage" | "createdAt"> & TranslationUsage & { created_at: string };
+type BoardCallRow = Omit<BoardCallRecord, "usage" | "createdAt"> & BoardCallUsage & { created_at: string };
 
 /** Oldest `created_at` first; rows sharing one (one request's `now` covers each chunk of one
  *  translation target, issue #688) come back in insertion order. `created_at` is the request's

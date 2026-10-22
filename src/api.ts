@@ -5,7 +5,7 @@ import {
   BuiltInAgentNotEditableError,
   InvalidAgentIconError,
 } from "./agent-create.js";
-import { listTranslationUsage } from "./board-call-usage.js";
+import { BoardCallUsageError, listTranslationUsage, recordBoardCall } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
 import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
 import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
@@ -1269,6 +1269,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(503), { error: "LLM draft client not configured" });
       return;
     }
+    const use = parsed.data.parent_id === undefined ? "task_draft" : "child_draft";
     try {
       let context: ChildDraftContext | undefined;
       if (parsed.data.parent_id !== undefined) {
@@ -1294,7 +1295,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           decomposeReason: parsed.data.decompose_reason,
         };
       }
-      const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
+      const { output: draft, usage, setting } = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
+      recordBoardCall(db, use, setting, usage, clock.now());
       sendJson(res, draft satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
@@ -1303,7 +1305,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // "unreachable" signal as no client configured. AC3 (issue #12) is that
       // draft failures never block registration, only push the user to the
       // plain form, so every draftTask() failure gets 503 here, not 500.
-      quarantineBoardCallRefusal(db, err, "task draft", undefined, clock.now());
+      if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, clock.now());
+      quarantineBoardCallRefusal(db, err, use, undefined, clock.now());
       sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });
@@ -1543,13 +1546,15 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
+      const { output: draft, usage, setting } = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
+      recordBoardCall(db, "handoff_draft", setting, usage, clock.now());
       const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
       sendJson(res, { ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
-      quarantineBoardCallRefusal(db, err, "handoff draft", task.id, clock.now());
+      if (err instanceof BoardCallUsageError) recordBoardCall(db, "handoff_draft", err.setting, err.usage, clock.now());
+      quarantineBoardCallRefusal(db, err, "handoff_draft", task.id, clock.now());
       sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });

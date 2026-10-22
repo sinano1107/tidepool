@@ -5,6 +5,7 @@ import {
   type AllocationJudgment,
   type AllocationReviewInput,
 } from "./allocation-review.js";
+import type { BoardCallAnswer } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
@@ -73,12 +74,10 @@ export class ClaudeAllocationClient implements AllocationClient {
   async judge(
     input: AllocationReviewInput,
     setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
-  ): Promise<AllocationJudgment> {
-    return (
-      await runClaudeBoardCallJson(
-        { exec: this.exec, label: "allocation review", prompt: buildPrompt(input), setting, reasoning: true },
-        judgmentSchema,
-      )
-    ).output;
+  ): Promise<BoardCallAnswer<AllocationJudgment>> {
+    return runClaudeBoardCallJson(
+      { exec: this.exec, label: "allocation review", prompt: buildPrompt(input), setting, reasoning: true },
+      judgmentSchema,
+    );
   }
 }

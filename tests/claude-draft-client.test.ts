@@ -26,7 +26,7 @@ describe("ClaudeDraftClient", () => {
 
     await expect(
       client.draftTask("set up the greenhouse sensor, sloppy is fine here", "English"),
-    ).resolves.toEqual({
+    ).resolves.toHaveProperty("output", {
       title: "set up the greenhouse sensor",
       purpose: "know soil moisture without walking out",
       completion_criteria: "dashboard shows a live moisture reading",
@@ -51,7 +51,7 @@ describe("ClaudeDraftClient", () => {
         }),
     });
 
-    await expect(client.draftTask("set up the greenhouse sensor", "English")).resolves.toEqual({
+    await expect(client.draftTask("set up the greenhouse sensor", "English")).resolves.toHaveProperty("output", {
       title: "set up the greenhouse sensor",
       purpose: "know soil moisture without walking out",
       completion_criteria: "dashboard shows a live moisture reading",
@@ -518,7 +518,7 @@ describe("ClaudeDraftClient", () => {
       },
     });
 
-    const inspection = await client.inspectIssue({
+    const { output: inspection } = await client.inspectIssue({
       title: "曖昧なメモ",
       body: "なんとかする",
       comments: ["補足です"],
@@ -541,7 +541,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: true }) }),
     });
-    await expect(pass.inspectIssue({ title: "t", body: "b", comments: [] })).resolves.toEqual({
+    await expect(pass.inspectIssue({ title: "t", body: "b", comments: [] })).resolves.toHaveProperty("output", {
       ok: true,
     });
 

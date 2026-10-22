@@ -1,5 +1,7 @@
 import { afterEach, expect, it } from "vitest";
-import { FakeDraftClient } from "./fakes.js";
+import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
+import { CliAuthError } from "../src/cli-auth.js";
+import { BOARD_CALL_USAGE, FakeDraftClient } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -50,6 +52,42 @@ it("a DraftClient failure surfaces as 503, not a crash — the same outage signa
     dump: "set up the greenhouse sensor",
   });
   expect(res.status).toBe(503);
+});
+
+it("a task draft leaves one task_draft row with the row the call ran on (ADR 0299 決定1)", async () => {
+  const draftClient = new FakeDraftClient();
+  t = await bootTidepool({ draftClient });
+
+  await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "set up the greenhouse sensor" });
+
+  const rows = listBoardCalls(t.db);
+  expect(rows).toEqual([
+    { use: "task_draft", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: t.clock.now().toISOString() },
+  ]);
+});
+
+it("a draft that failed after its CLI reported usage still 503s and still leaves its task_draft row (ADR 0299 決定3)", async () => {
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptFailure(new BoardCallUsageError("answer did not match the schema", draftClient.setting, BOARD_CALL_USAGE));
+  t = await bootTidepool({ draftClient });
+
+  const res = await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "set up the greenhouse sensor" });
+
+  expect(res.status).toBe(503);
+  const rows = listBoardCalls(t.db);
+  expect(rows.map((row) => row.use)).toEqual(["task_draft"]);
+});
+
+it("a draft that ended with a 401 still 503s and leaves no row (ADR 0299 決定3)", async () => {
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptFailure(new CliAuthError("Invalid API key"));
+  t = await bootTidepool({ draftClient });
+
+  const res = await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "set up the greenhouse sensor" });
+
+  expect(res.status).toBe(503);
+  const rows = listBoardCalls(t.db);
+  expect(rows).toEqual([]);
 });
 
 it("a drafted response registers unmodified through /api/tasks and appends to the queue tail — same API/data model as the plain form", async () => {

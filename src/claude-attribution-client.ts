@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BoardCallAnswer } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
@@ -67,12 +68,10 @@ export class ClaudeAttributionClient implements AttributionClient {
   async judge(
     input: AttributionInput,
     setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
-  ): Promise<AttributionJudgment> {
-    return (
-      await runClaudeBoardCallJson(
-        { exec: this.exec, label: "attribution", prompt: buildPrompt(input), setting, reasoning: true },
-        judgmentSchema,
-      )
-    ).output;
+  ): Promise<BoardCallAnswer<AttributionJudgment>> {
+    return runClaudeBoardCallJson(
+      { exec: this.exec, label: "attribution", prompt: buildPrompt(input), setting, reasoning: true },
+      judgmentSchema,
+    );
   }
 }

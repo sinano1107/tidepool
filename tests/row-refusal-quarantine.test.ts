@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { listBoardCalls } from "../src/board-call-usage.js";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
@@ -482,6 +483,9 @@ it("AI 下書きの3用途は、表の行で撃った Board call が断られる
     `The handoff draft Board call for task ${human.id} ended with API error 404 for this model id`,
     "The issue inspection Board call ended with API error 404 for this model id",
   ]);
+  // 断られた呼び出しの消費は観測できず、行を残さない(ADR 0299 決定3)
+  const rows = listBoardCalls(t.db);
+  expect(rows).toEqual([]);
 });
 
 it("表示時翻訳が 404 を受けても、行の Quarantine は立たない(ADR 0202 帰結)", async () => {

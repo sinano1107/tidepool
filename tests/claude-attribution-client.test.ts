@@ -23,7 +23,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
     },
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
   const { args, env } = calls[0]!;
   const argLine = args.join(" ");
@@ -46,7 +46,7 @@ it("帰責の判定は、用途に依らない盤面の system prompt を --syst
     },
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
   const { args } = calls[0]!;
   expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
@@ -76,7 +76,7 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
 
   await expect(
     client.judge({ ...input, memory_read: [{ id: 3, kind: "behavior", title: "Squash", text: "Squash before merge." }] }, { provider: "anthropic", model: "fable", effort: "high" }),
-  ).resolves.toEqual(memory);
+  ).resolves.toHaveProperty("output", memory);
 
   expect(prompts[0]).toContain("memory is when a memory entry the worker read before the decision, and followed, was itself wrong");
   expect(prompts[0]).toContain('"entries"');
@@ -88,7 +88,7 @@ it("memory 以外の判定が entries を null で返しても判定は失われ
     exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ...judgment, entries: null }) }),
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 });
 
 it("prompt は environment を worker の外側の事情として判断の妥当性で線を引き、escalate せず迂回・推測したなら capability と言う(ADR 0213 決定1・2)", async () => {
@@ -113,7 +113,7 @@ it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙
     exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ cause, evidence: "e" }) }),
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual({ cause, evidence: "e" });
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", { cause, evidence: "e" });
 });
 
 it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・盤面の protocol 文・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4)", async () => {

@@ -1,3 +1,4 @@
+import type { BoardCallAnswer } from "./board-call-usage.js";
 import type { Issue } from "./github.js";
 import type { HandoffDoc } from "./tasks.js";
 
@@ -57,7 +58,7 @@ export interface DraftClient {
   /** language: the board's display language (issue #46), read fresh by the
    *  caller at each use — steers only the connective prose the model adds,
    *  never the fragments carried over from the dump. */
-  draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<TaskDraft>;
-  draftHandoff(dump: string, language: string): Promise<HandoffDraft>;
-  inspectIssue(issue: Issue): Promise<IssueInspection>;
+  draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<BoardCallAnswer<TaskDraft>>;
+  draftHandoff(dump: string, language: string): Promise<BoardCallAnswer<HandoffDraft>>;
+  inspectIssue(issue: Issue): Promise<BoardCallAnswer<IssueInspection>>;
 }
