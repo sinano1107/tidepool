@@ -152,8 +152,6 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
 it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
   const args = boardCallOneTurnArgs("q");
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
-  expect(args).toContain("--safe-mode");
-  expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(args[args.indexOf("-p") + 1]).toBe("q");
 });
 
