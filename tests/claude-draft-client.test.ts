@@ -4,6 +4,7 @@ import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const db = openDb(":memory:");
 const NOW = new Date("2026-10-02T00:00:00Z");
@@ -405,6 +406,25 @@ describe("ClaudeDraftClient", () => {
 
     const args = calls[0]!;
     expect(args[args.indexOf("--tools") + 1]).toBe("");
+  });
+
+  it("draftTask と inspectIssue は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      db,
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
+        });
+      },
+    });
+
+    await client.draftTask("set up the greenhouse sensor", "English");
+    await client.inspectIssue({ title: "t", body: "b", comments: [] });
+
+    expect(calls).toHaveLength(2);
+    for (const args of calls) expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
   });
 
   it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {

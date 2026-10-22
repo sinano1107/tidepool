@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type { AllocationReviewInput } from "../src/allocation-review.js";
 import { ClaudeAllocationClient } from "../src/claude-allocation-client.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const input: AllocationReviewInput = {
   verdict: "accepted",
@@ -57,6 +58,21 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(args[1]).toContain(
     "environment is the worker's surroundings — board tooling, network or sandbox trouble, or an upstream change — when the worker's judgment was sound given what it had",
   );
+});
+
+it("配分評価は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
+  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const client = new ClaudeAllocationClient({
+    exec: async (_command, args, env) => {
+      calls.push({ args, env });
+      return JSON.stringify({ result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
+    },
+  });
+
+  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
+
+  const { args } = calls[0]!;
+  expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
 });
 
 it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定5)", async () => {

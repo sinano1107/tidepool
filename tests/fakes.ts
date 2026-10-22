@@ -4,12 +4,14 @@ import { readFileSync, rmSync } from "node:fs";
 import { basename } from "node:path";
 import { PassThrough } from "node:stream";
 import { expect, vi } from "vitest";
+import { z } from "zod";
 import type {
   AllocationClient,
   AllocationJudgment,
   AllocationReviewInput,
 } from "../src/allocation-review.js";
 import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
+import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { createCodexCapabilityCheck } from "../src/codex-worker.js";
@@ -1257,4 +1259,26 @@ export async function driveCodexPreflight(
   }
 
   return { spawn, capability, index: spawn.calls.length - 1, listedCwd };
+}
+
+/** 用途を名指さない Board call が runner から受け取る `--system-prompt` の文面(ADR 0296 決定6)。用途ごとの
+ *  client がこれと同じ文面を撃つことを、文面の写しも export も持たずに言うための読み口。 */
+export async function boardCallSystemPrompt(): Promise<string> {
+  let args: string[] = [];
+  await runClaudeBoardCallJson(
+    {
+      exec: async (_command, a) => {
+        args = a;
+        return JSON.stringify({ result: "{}" });
+      },
+      label: "system prompt probe",
+      prompt: "p",
+      setting: { provider: "anthropic", model: "sonnet", effort: "low" },
+      reasoning: true,
+    },
+    z.object({}),
+  );
+  const i = args.indexOf("--system-prompt");
+  if (i === -1) throw new Error("the runner passed no --system-prompt");
+  return args[i + 1]!;
 }

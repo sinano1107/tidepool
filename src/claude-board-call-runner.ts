@@ -10,6 +10,15 @@ import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRef
 import type { ExecutionSettingRow } from "./execution-setting.js";
 import type { TranslationUsage } from "./translate.js";
 
+/** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
+ *  user prompt が持つ。翻訳は ADR 0062 決定3 の自前の文面を `systemPrompt` で渡す。Codex の runner(#2417)も
+ *  同じ文面を置換の鍵に書く。 */
+const BOARD_CALL_SYSTEM_PROMPT = [
+  "You answer a single one-shot question from the board.",
+  "Do exactly what the user message instructs, and reply with only the JSON it asks for.",
+  "No tools, no follow-up turns, no prose around the JSON.",
+].join(" ");
+
 type BoardCallSetting = Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
 
 /** One Board call that goes to **fetch an answer** (#662): the draft uses, the three retrospective uses and
@@ -18,7 +27,7 @@ export interface ClaudeBoardCall {
   exec: ExecFn;
   /** names the use in error messages */
   label: string;
-  /** absent → the CLI's default system prompt */
+  /** absent → `BOARD_CALL_SYSTEM_PROMPT` */
   systemPrompt?: string;
   prompt: string;
   /** the table row the call runs on, or translation's own setting; a row refusal names its provider / model (ADR 0202 決定1) */
@@ -78,7 +87,7 @@ function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSett
 
 /** The answer as the model wrote it. */
 async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoardCallAnswer<string>> {
-  const { exec, label, systemPrompt, prompt, setting, reasoning } = call;
+  const { exec, label, systemPrompt = BOARD_CALL_SYSTEM_PROMPT, prompt, setting, reasoning } = call;
   let stdout: string;
   try {
     stdout = await exec(
@@ -88,7 +97,8 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoar
         prompt,
         "--output-format",
         "json",
-        ...(systemPrompt === undefined ? [] : ["--system-prompt", systemPrompt]),
+        "--system-prompt",
+        systemPrompt,
         ...pinnedModelFlags(setting.model, setting.effort),
         ...emptyToolSurfaceFlags(),
         // with no tools at all a second turn is structurally impossible; the

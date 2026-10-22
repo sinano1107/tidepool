@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { openDb } from "../src/db.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const db = openDb(":memory:");
 
@@ -52,5 +53,21 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
         "English technical terms, quoted error messages, and criteria stay exactly as given. Any " +
         "connective prose you add yourself, write in Japanese.",
     );
+  });
+
+  it("用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
+    const calls: string[][] = [];
+    const client = new ClaudeDraftClient({
+      db,
+      exec: async (_command, args) => {
+        calls.push(args);
+        return JSON.stringify({ result: JSON.stringify({ outcome: "o" }) });
+      },
+    });
+
+    await client.draftHandoff("mounted the sensor", "English");
+
+    const args = calls[0]!;
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
   });
 });
