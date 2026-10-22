@@ -8,7 +8,7 @@ import { completeRoutingReview, proposeRoutingChange } from "../src/routing-revi
 import { completeTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { DECKHAND_AGENT, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
 
@@ -106,14 +106,14 @@ const proposals: Array<[op: string, covers: object, propose: (db: Db, review: Ta
     { tier: "standard" },
     (db, review, evidence) => proposeRoutingChange(db, review.id, { op: "tier_description", tier: "standard", description: "Work that needs care.", evidence: [evidence[1]!], rationale: "r" }, "auditor", at),
   ],
-  ["promote", { learner: true }, (db, review) => proposeRoutingChange(db, review.id, { op: "promote", rationale: "r" }, "auditor", at)],
+  ["promote", { learner: true }, (db, review, evidence) => proposeRoutingChange(db, review.id, { op: "promote", evidence: [evidence[0]!], rationale: "r" }, "auditor", at)],
   [
     "demote",
     { learner: true },
     (db, review) => {
       // 昇格は承認の適用だけが書き、公開の扉は降格しか受けない(executionSettingsChangeSchema の learner_promoted)
       db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
-      return proposeRoutingChange(db, review.id, { op: "demote", rationale: "r" }, "auditor", at);
+      return proposeRoutingChange(db, review.id, { op: "demote", evidence: [divergedSession(db, at, { learner: true })], rationale: "r" }, "auditor", at);
     },
   ],
   [

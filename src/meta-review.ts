@@ -134,7 +134,8 @@ export const META_REVIEW_SUBJECTS = {
         "each diverged row carries the track records of the recommended and the actual cell as of that pickup (accepted and rejected, " +
         "board and workspace stage) and how many candidates the pickup had. While the learner is not promoted, a diverged row's outcome " +
         "is the result of the setting the table chose, not of the one the learner recommended. Base any case for promoting the learner " +
-        "on whether the recommended cells' track records, counts included, justify leaving the table. Of the section's shadow rows, " +
+        "on whether the recommended cells' track records, counts included, justify leaving the table. When you propose promoting or demoting the " +
+        "learner, name the diverged rows your case rests on as evidence: the board shows the human their cells' track records and the diverged rows you did not cite. Of the section's shadow rows, " +
         "a pickup with one candidate always matches the table, so do not count it as evidence of agreement. When overpowered verdicts pile up under an " +
         "agent's own tier, propose lowering that agent's tier by exactly one step, never more. When verdicts under tier source task show a " +
         "tier's description draws the wrong work across workspaces and writers, propose rewriting that description; a habit of one workspace or writer is a Behavior, not the tier's definition. The section holds only the proposals " +

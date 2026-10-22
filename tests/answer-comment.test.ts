@@ -130,7 +130,7 @@ it("comment が空白だけの承認 question の reject は HTTP で 409 にな
 const at = new Date("2026-10-01T00:00:00.000Z");
 const QUESTIONS = {
   memory: { options: ["approve", "reject", "defer"], question_kind: { kind: "proposal", proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } } },
-  routing: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", pin: { promoted: false } } } },
+  routing: { options: ["approve", "reject"], question_kind: { kind: "proposal", proposal: { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } } } },
   registry: {
     options: ["approve", "reject"],
     question_kind: { kind: "proposal", proposal: { kind: "registry", op: "agent_tier", agent: "reef-crab", to: 1, pin: { tier: 2, rows: [] }, evidence: [1] } }, // 段は id(種の economy / standard)

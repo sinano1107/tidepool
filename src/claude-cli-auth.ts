@@ -1,4 +1,6 @@
 import { type BoardCall, readOutput } from "./board-call.js";
+import type { BoardCallSetting } from "./board-call-usage.js";
+import { envelopeUsageSchema } from "./claude-board-call-runner.js";
 import {
   boardCallEnv,
   MoonshotApiKeyMissingError,
@@ -12,9 +14,11 @@ import {
   isCliAuthFailureEnvelope,
   type ModelProbe,
   type ModelProbeResult,
+  type ProbeBoardCall,
   rowRefusalCause,
 } from "./cli-auth.js";
 import type { RowRefusalCause } from "./events.js";
+import { MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 
 export interface CliAuthCommandResult {
   exitCode: number | null;
@@ -47,11 +51,13 @@ export const cliAuthCommandThrough =
  * the token can authenticate. This is a probe Board call, so it deliberately
  * does not declare an empty tool surface. */
 export function createClaudeCliAuthCheck(command: CliAuthCommand): CliAuthCheck {
+  const setting: BoardCallSetting = { provider: "anthropic", model: "haiku", effort: "low" };
   return () =>
     runAuthProbe(
       command,
+      setting,
       [
-        ...pinnedModelFlags("haiku", "low"),
+        ...pinnedModelFlags(setting.model, setting.effort),
         "--max-turns",
         "1",
         // 予算は haiku 最小1ターンの実測 $0.0114(2026-09-18 Lima friend-test 実測、claude 2.1.273、
@@ -88,7 +94,12 @@ export function createMoonshotCliAuthCheck(
     }
     // 予算は kimi-k3[1m] 最小1ターンの実測 $0.057〜$0.122(2026-08-24 ライブ実測、issue #447)
     // の約2倍。$0.01 では probe が必ず error_max_budget_usd で止まり quarantine 解除不能になる(issue #466)
-    return runAuthProbe(command, ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
+    return runAuthProbe(
+      command,
+      { provider: "moonshot", model: MOONSHOT_DEFAULT_MODEL, effort: null },
+      ["--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
+      env,
+    );
   };
 }
 
@@ -96,12 +107,15 @@ export function createMoonshotCliAuthCheck(
  *  `--model` を付ける。予算は認証 probe と同じ値で足りる —— 上限はターンが走った後に判定され、
  *  上限で止まっても「走った」と読む(`runModelProbe`)ので、#466 の解除不能はここでは起きない。 */
 export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
-  return (model) =>
-    runModelProbe(
+  return (model) => {
+    const setting: BoardCallSetting = { provider: "anthropic", model, effort: "low" };
+    return runModelProbe(
       command,
-      [...pinnedModelFlags(model, "low"), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
+      setting,
+      [...pinnedModelFlags(setting.model, setting.effort), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
       boardCallEnv(),
     );
+  };
 }
 
 /** moonshot の双子。model は worker の spawn と同じく `--model` と `ANTHROPIC_MODEL` の両方に載せる
@@ -115,7 +129,13 @@ export function createMoonshotModelProbe(keyFile: string | undefined, command: C
       if (err instanceof MoonshotApiKeyMissingError) return { status: "unauthorized", reason: err.message };
       throw err;
     }
-    return runModelProbe(command, ["--model", model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"], env);
+    const setting: BoardCallSetting = { provider: "moonshot", model, effort: null };
+    return runModelProbe(
+      command,
+      setting,
+      ["--model", setting.model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
+      env,
+    );
   };
 }
 
@@ -128,44 +148,53 @@ const MODEL_PROBE_REFUSAL_REASON: Record<RowRefusalCause, string> = {
 
 async function runModelProbe(
   command: CliAuthCommand,
+  setting: BoardCallSetting,
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<ModelProbeResult> {
-  const { exitCode, envelope } = await probeEnvelope(command, extraArgs, env);
+  const { exitCode, envelope, ...probeCall } = await probeEnvelope(command, setting, extraArgs, env);
   if (envelope === null) return { status: "unknown", reason: "probe did not return a JSON envelope" };
   if (isCliAuthFailureEnvelope(envelope)) return { status: "unauthorized", reason: "API returned 401" };
   const refusal = rowRefusalCause(envelope);
   if (refusal !== null) return { status: "refused", reason: MODEL_PROBE_REFUSAL_REASON[refusal] };
   // 予算上限はターンが走った後に判定される(2026-10-01 実測: $0.0001 でも1ターン走って
   // error_max_budget_usd)—— 上限で止まったなら、その id は走った
-  if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs" };
-  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") return { status: "runs" };
-  return { status: "unknown", reason: "probe did not return a successful result" };
+  if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs", ...probeCall };
+  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") return { status: "runs", ...probeCall };
+  return { status: "unknown", reason: "probe did not return a successful result", ...probeCall };
 }
 
+/** `boardCall` is set only when the envelope reported usage and is neither a 401 nor a row refusal —
+ *  those are the observation itself, not a turn's spend (ADR 0299 決定4). */
 async function probeEnvelope(
   command: CliAuthCommand,
+  setting: BoardCallSetting,
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
-): Promise<{ exitCode: number | null; envelope: Record<string, unknown> | null }> {
+): Promise<{ exitCode: number | null; envelope: Record<string, unknown> | null } & ProbeBoardCall> {
   const observed = await command(
     "claude",
     ["-p", "Reply with the single word OK.", "--output-format", "json", ...extraArgs],
     { cwd: process.cwd(), env },
   );
+  let envelope: Record<string, unknown>;
   try {
-    return { exitCode: observed.exitCode, envelope: JSON.parse(observed.stdout) as Record<string, unknown> };
+    envelope = JSON.parse(observed.stdout) as Record<string, unknown>;
   } catch {
     return { exitCode: observed.exitCode, envelope: null };
   }
+  const usage =
+    isCliAuthFailureEnvelope(envelope) || rowRefusalCause(envelope) !== null ? undefined : envelopeUsageSchema.safeParse(envelope).data;
+  return { exitCode: observed.exitCode, envelope, ...(usage && { boardCall: { setting, usage } }) };
 }
 
 async function runAuthProbe(
   command: CliAuthCommand,
+  setting: BoardCallSetting,
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<CliAuthResult> {
-  const { exitCode, envelope } = await probeEnvelope(command, extraArgs, env);
+  const { exitCode, envelope, ...probeCall } = await probeEnvelope(command, setting, extraArgs, env);
   if (envelope === null) {
     return { status: "unknown", reason: "probe did not return a JSON envelope" };
   }
@@ -178,10 +207,11 @@ async function runAuthProbe(
     return {
       status: "unknown",
       reason: "probe hit its budget cap before returning an authentication verdict",
+      ...probeCall,
     };
   }
   if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
-    return { status: "authenticated" };
+    return { status: "authenticated", ...probeCall };
   }
-  return { status: "unknown", reason: "probe did not return a successful authentication result" };
+  return { status: "unknown", reason: "probe did not return a successful authentication result", ...probeCall };
 }

@@ -7,6 +7,7 @@ import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { listBoard } from "../src/tasks.js";
+import { BOARD_CALL_USAGE, PROBE_ENVELOPES, probeCommand } from "./fakes.js";
 import { quarantineQuestion } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -154,6 +155,23 @@ describe("createMoonshotCliAuthCheck(issue #446 — quarantine 回答受理時�
       status: "unknown",
       reason: "probe hit its budget cap before returning an authentication verdict",
     });
+  });
+
+  it("成功と予算の上限は usage と moonshot / kimi-k3[1m] / effort null を返し、401・行の拒否・envelope 無しでは返さない(ADR 0299 決定3)", async () => {
+    const keyFile = await keyFileWith("sk-moonshot-test-key");
+    const results = [];
+    for (const [exitCode, envelope] of PROBE_ENVELOPES) {
+      results.push(await createMoonshotCliAuthCheck(keyFile, probeCommand(exitCode, envelope))());
+    }
+
+    const boardCall = { setting: { provider: "moonshot", model: "kimi-k3[1m]", effort: null }, usage: BOARD_CALL_USAGE };
+    expect(results).toEqual([
+      { status: "authenticated", boardCall },
+      { status: "unknown", reason: "probe hit its budget cap before returning an authentication verdict", boardCall },
+      { status: "unauthorized", reason: "API returned 401" },
+      { status: "unknown", reason: "probe did not return a successful authentication result" },
+      { status: "unknown", reason: "probe did not return a JSON envelope" },
+    ]);
   });
 
   it("キーファイルが無ければ probe を撃たずに unauthorized と分類する(資格情報が無い = 認証できない)", async () => {

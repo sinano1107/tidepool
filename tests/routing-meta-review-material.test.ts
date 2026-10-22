@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, bundledObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -245,6 +245,8 @@ it("決着した提案は回答か陳腐化が窓の中にあるものだけを 
 
 it("節を組んだ記録は主題 routing と、乖離した shadow 行の id・窓の中の全 shadow 行の数と候補が2行以上あった行の数・数えた注釈・新しいセルの初観測・人間が変えた行・提案の question の id、注入した Items to judge、両端の watermark とトークン数を運ぶ", () => {
   const { db, work, spawn, exit, allocate } = board();
+  // 昇格の提案の根拠(前回の窓の中で、この窓の外)
+  const evidence = divergedSession(db, at);
   const previous = register(db, true);
   const task = work("t");
   const diverged = recordShadow(db, task, shadow(sol, opus), at);
@@ -254,7 +256,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const annotation = allocate(task, spawned, "appropriate");
   applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", at);
   const rowEdit = applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "economy", model: "claude-haiku-5-5", effort: "low", price_in: 1, price_out: 5 } }, "webui", at)!;
-  const question = proposeRoutingChange(db, previous, { op: "promote", rationale: "r" }, "auditor", at).question_id;
+  const question = proposeRoutingChange(db, previous, { op: "promote", evidence: [evidence], rationale: "r" }, "auditor", at).question_id;
   answerQuestionViaWebui(db, getTask(db, question)!, ["reject"], at, { comment: "Not yet." });
   const review = register(db);
   const [first, second] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark);

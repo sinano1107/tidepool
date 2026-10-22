@@ -604,6 +604,66 @@ function interviewProposal(
   };
 }
 
+/** 学習器の昇格 / 降格の根拠(ADR 0181 追記 #2438): 各 evidence は乖離した shadow 行の session の worker_spawned(行と session の結び方は
+ *  list_routing_shadow と同じ shadowRows)で、昇格なら出所が学習器でない行、降格なら出所が学習器の行。 */
+function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number[]): string[] {
+  type Row = ReturnType<typeof shadowRows>[number];
+  // 根拠の向き: 降格は学習器の選択が走った行(昇格後)、昇格はそれ以外(昇格前)
+  const learnerRan = op === "demote";
+  const rows = shadowRows(db, { after: 0 });
+  const cited = new Set<number>();
+  for (const id of evidence) {
+    const row = rows.find((r) => r.worker_spawned_event_id === id);
+    if (!row) {
+      if (getEvent(db, id)?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
+      throw new DomainError(`evidence ${id} is not the session of any shadow row: only a work task's pickup writes one`);
+    }
+    if (!row.diverged) throw new DomainError(`evidence ${id} is the session of a shadow row where the learner recommended the cell that ran`);
+    if (!learnerRan && row.source.provider === "learner") throw new DomainError(`evidence ${id} ran on the promoted learner's choice: op promote rests on rows from before promotion`);
+    if (learnerRan && row.source.provider !== "learner") throw new DomainError(`evidence ${id} ran on the table's choice: op demote rests on rows where the promoted learner's choice ran`);
+    cited.add(row.id);
+  }
+  // セルは列でなく出所で呼ぶ —— 昇格後は列の意味が反転する(ADR 0150 決定3)
+  const bySource = <T>(recommended: T, actual: T) => (learnerRan ? { learner: actual, table: recommended } : { learner: recommended, table: actual });
+  // 段は session が走った段(shadow 行は段を持たない)。session に辿り着かなかった行は段も workspace も無い
+  const tiers = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e.tier_id]));
+  const cell = (c: Cell) => `${rowName(c)}${c.advisor ? ` with advisor ${c.advisor}` : ""}`;
+  const group = (grouped: Row[]) => {
+    const groups = new Map<string, Row[]>();
+    for (const row of grouped) {
+      const tierId = row.worker_spawned_event_id === null ? undefined : tiers.get(row.worker_spawned_event_id);
+      const { learner, table } = bySource(row.recommended, row.actual);
+      const key = `tier ${tierId === undefined ? "none" : tierNameOf(db, tierId)}, workspace ${row.workspace ?? "none"}, learner ${cell(learner)}, table ${cell(table)}`;
+      groups.set(key, [...(groups.get(key) ?? []), row]);
+    }
+    return groups;
+  };
+  const record = ({ board, workspace, seed }: TrackRecord) =>
+    `board ${board.accepted}/${board.rejected}, workspace ${workspace.accepted}/${workspace.rejected}${seed ? `, seeded by ${seed.kind}` : ""}`;
+  const lines = [...group(rows.filter((r) => cited.has(r.id)))].map(([key, members]) => {
+    const latest = members.at(-1)!;
+    const { learner, table } = bySource(latest.recommended_record, latest.actual_record);
+    // 昇格前の outcome は表の結果なので、並べれば学習器の成績と読まれる(ADR 0181 決定6)—— 降格にだけ出す
+    const count = (outcome: string) => members.filter((r) => r.outcome === outcome).length;
+    const outcomes = learnerRan ? `; outcomes ${count("accepted")} accepted, ${count("rejected")} rejected, ${count("excluded")} excluded` : "";
+    return `- ${key}: ${members.length} pickup(s) (tasks ${members.map((r) => r.task_id).join(", ")}); learner ${record(learner)}; table ${record(table)}${outcomes}`;
+  });
+  // 引用の外(ADR 0181 追記 決定3): フラグの最後の変更以降(無ければ全期間)の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
+  const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
+  // 候補が2行以上の pickup は向きで絞らない —— 昇格は向きを問わず全 pickup に効く
+  const span = shadowRows(db, { after: change ?? 0 });
+  const diverged = span.filter((r) => r.diverged && (r.source.provider === "learner") === learnerRan);
+  const divergedGroups = group(diverged);
+  const uncited = [...divergedGroups].filter(([, members]) => !members.some((r) => cited.has(r.id)));
+  return [
+    `Evidence: ${cited.size} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
+    ...lines,
+    `All diverged pickups where the ${learnerRan ? "learner's" : "table's"} choice ran, ${change === undefined ? "over all time (the learner flag never changed)" : `since the learner flag last changed (event ${change})`}: ` +
+      `${diverged.length} in ${divergedGroups.size} line(s), ${diverged.filter((r) => cited.has(r.id)).length} cited; ` +
+      `lines not cited: ${uncited.map(([key, members]) => `${key}: ${members.length}`).join("; ") || "none"}. Pickups with two or more candidates in that span: ${span.filter((r) => r.candidates > 1).length}.`,
+  ];
+}
+
 /** 提案 verb(issue #918 / #919 / #920 / #1424 / ADR 0150 決定1・2・4・5 / ADR 0200 決定7・8): 表の既存の1行の tier / effort の置換(op row)、
  *  学習器の昇格 / 降格、agent の既定 tier の1段引き下げ(op agent_tier)、段の説明の書き換え(op tier_description)、段の追加と
  *  行の移動(op add_tier)、または表に無い対象の Interview(op interview)を、meta-review(または routing_repair —— 門は requireRepairReach)の付帯子の question として立てる。pin は row ならその行の全欄、昇格 / 降格ならフラグの現在値、
@@ -654,8 +714,8 @@ export function proposeRoutingChange(
   let diff: string[];
   let purpose: string;
   if (input.op !== "agent_tier" && (input.agent !== undefined || input.to !== undefined)) throw new DomainError(`op ${input.op} takes no agent and no to`);
+  if (input.op === "row" && input.evidence !== undefined) throw new DomainError("op row takes no evidence");
   if (input.op === "row" || input.op === "promote" || input.op === "demote") {
-    if (input.evidence !== undefined) throw new DomainError(`op ${input.op} takes no evidence`);
     if (input.tier !== undefined || input.description !== undefined) throw new DomainError(`op ${input.op} takes no tier or description`);
   }
   if (input.op !== "add_tier" && input.position !== undefined) throw new DomainError(`op ${input.op} takes no position`);
@@ -744,12 +804,15 @@ export function proposeRoutingChange(
     const promoted = readExecutionSettings(db).learnerPromoted;
     const promote = input.op === "promote";
     if (promote === promoted) throw new DomainError(`the learner is already ${promoted ? "promoted" : "not promoted"}; op ${input.op} only applies while it is ${promoted ? "not promoted" : "promoted"}`);
-    proposal = { kind: "routing", op: input.op, pin: { promoted } };
+    if (!input.evidence?.length) throw new DomainError(`op ${input.op} names at least one evidence worker_spawned event id: a session of a diverged shadow row`);
+    const evidenceLines = learnerEvidenceLines(db, input.op, input.evidence);
+    proposal = { kind: "routing", op: input.op, evidence: input.evidence, pin: { promoted } };
     title = promote ? "Promote the learner" : "Demote the learner";
     diff = [
       promote
         ? "Work tasks would run on the learner's recommendation instead of the execution-setting table's first choice. The shadow keeps what the table would have chosen."
         : "Work tasks would run on the execution-setting table's first choice again. The shadow keeps what the learner would have recommended.",
+      ...evidenceLines,
     ];
     purpose = `${proposer} proposes to ${input.op} the learner. Approve applies it; reject leaves the learner as it is.`;
   }
