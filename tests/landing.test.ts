@@ -1323,6 +1323,89 @@ it("2つの収束を重ねても同じ根の PR は1回だけ作られ、回の�
   expect(promotionFailures(db, first.id)).toEqual([]);
 });
 
+// issue #1851: 盤面の停止は列を閉じ、走っている回と列に入った回の終わりを待つ
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+it("回が走っていないときの stop は待たずに解ける", async () => {
+  const { db, clock } = await openBoard();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, github: null });
+
+  let stopped = false;
+  void landing.stop().then(() => {
+    stopped = true;
+  });
+  await settle();
+  expect(stopped).toBe(true);
+});
+
+it("stop の後の収束は回を始めず空を返す", async () => {
+  const { db, clock } = await openBoard();
+  const pickupIdle = vi.fn(async () => {});
+  const github = new FakeGitHubClient();
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, github, pickupIdle });
+
+  await landing.stop();
+  await expect(landing.converge()).resolves.toEqual([]);
+  expect(pickupIdle).not.toHaveBeenCalled();
+  expect(github.requests).toEqual([]);
+});
+
+it("stop の時点で走っている回と列に入った回は走り切り、stop はその後に解ける", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-stop-drains");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const window = awaitWindow();
+  const create = github.createPullRequest.bind(github);
+  github.createPullRequest = async (input) => {
+    await window.hold();
+    return create(input);
+  };
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github });
+  const root = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${root.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, root);
+
+  const running = landing.converge();
+  await window.entered;
+  const queued = landing.converge();
+  let stopped = false;
+  const stopping = landing.stop().then(() => {
+    stopped = true;
+  });
+  await settle();
+  expect(stopped).toBe(false);
+
+  window.open();
+  await expect(running).resolves.toEqual([
+    { taskId: root.id, verdict: { kind: "landed", form: "pull_request_opened", prNumber: 1 } },
+  ]);
+  await expect(queued).resolves.toEqual([{ taskId: root.id, verdict: { kind: "up_to_date", prNumber: 1 } }]);
+  await stopping;
+});
+
+it("stop は待っている回の失敗で reject しない", async () => {
+  const { db, clock } = await openBoard();
+  const window = awaitWindow();
+  const landing = createLanding({
+    defaultAgentName: "tako",
+    db,
+    clock,
+    github: null,
+    pickupIdle: async () => {
+      await window.hold();
+      throw new Error("idle failed");
+    },
+  });
+
+  const run = landing.converge();
+  await window.entered;
+  const stopping = landing.stop();
+  window.open();
+  await expect(run).rejects.toThrow("idle failed");
+  await expect(stopping).resolves.toBeUndefined();
+});
+
 // #2400: 回の失敗はその回の呼び手(束ねられた呼び手も)だけが受け取る —— 列は rejection を以後の突きに持ち越さない
 it("pickupIdle が一度 reject した回の後でも、次の収束は新しい回として pickupIdle を待ってから走る", async () => {
   const { db, clock } = await openBoard();

@@ -1,5 +1,7 @@
+import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { completeTask } from "../src/tasks.js";
+import { openDb } from "../src/db.js";
+import { completeTask, getTask } from "../src/tasks.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
@@ -25,6 +27,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t?.stop();
 });
 
@@ -147,4 +150,35 @@ it("poll が走っている間に届いた契機の収束は、その poll が�
   await settle();
   expect(started()).toEqual([next.id]);
   expect(t.github.requests.map(({ branch }) => branch)).toEqual([`task/${root.id}`]);
+});
+
+// issue #1851: `stop()` の resolve は「盤面がもう何も書かない」—— 走っている収束の回を待ってから DB を閉じる
+it("収束の回が根の処理中に呼んだ stop は、その回が終わるまで resolve せず、回の記録は DB に残る", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("stop-awaits-convergence");
+  const { github, window } = heldGitHub();
+  t = await bootTidepool({ workspace, github });
+  const root = silentlyCompletedRoot(t, workspace);
+  const errors = vi.spyOn(console, "error");
+  const fired = t.clock.advance(HOUR);
+  await window.entered;
+
+  let stopped = false;
+  const stopping = t.stopServer().then(() => {
+    stopped = true;
+  });
+  await settle();
+  expect(stopped).toBe(false);
+
+  window.open();
+  await stopping;
+  await fired;
+  const db = openDb(join(t.dir, "board.sqlite"));
+  try {
+    expect(getTask(db, root.id)?.pr_number).toBe(1);
+  } finally {
+    db.close();
+  }
+  expect(errors.mock.calls.map((call) => call.map(String).join(" ")).join("\n")).not.toContain(
+    "database connection is not open",
+  );
 });
