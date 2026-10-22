@@ -5,12 +5,14 @@ import {
   cliAuthCommandThrough,
   createClaudeCliAuthCheck,
   createClaudeModelProbe,
+  createMoonshotCliAuthCheck,
   createMoonshotModelProbe,
 } from "../src/claude-cli-auth.js";
 import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
 import {
   BOARD_CALL_USAGE,
+  CLI_ENVELOPE_USAGE,
   containerHarness,
   FakeClock,
   FakeContainerRuntime,
@@ -307,3 +309,23 @@ it("Moonshot の model probe は成功と予算の上限で usage と moonshot /
     { status: "unknown", reason: "probe did not return a JSON envelope" },
   ]);
 });
+
+/** 上限到達による中断の 429 は usage の欄を持っても行を書かない —— 判定は 429 の証拠で、usage の値ではない(ADR 0299 追記、#2486)。 */
+const capped = probeCommand(1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 429 });
+const cappedProbes = {
+  "Claude の認証 probe": async () => createClaudeCliAuthCheck(capped)(),
+  "Claude の model probe": async () => createClaudeModelProbe(capped)("claude-fable-5-1"),
+  "Moonshot の認証 probe": async () => createMoonshotCliAuthCheck(await moonshotKeyFile(), capped)(),
+  "Moonshot の model probe": async () => createMoonshotModelProbe(await moonshotKeyFile(), capped)("kimi-k2-5"),
+};
+for (const [name, probe] of Object.entries(cappedProbes)) {
+  it(`${name}は usage つきの 429 で usage を返さない(ADR 0299 追記、#2486)`, async () => {
+    expect(await probe()).not.toHaveProperty("boardCall");
+  });
+}
+
+async function moonshotKeyFile(): Promise<string> {
+  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
+  writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+  return keyFile;
+}

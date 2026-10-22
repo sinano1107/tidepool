@@ -10,6 +10,7 @@ import {
 import {
   CliAuthError,
   execFailureEnvelope,
+  isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
   RowRefusalError,
   rowRefusalCause,
@@ -76,14 +77,19 @@ function extractJson(text: string): unknown {
   return JSON.parse(start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed);
 }
 
-/** envelope が行の拒否(ADR 0202 決定1)か 401(ADR 0070)の証拠なら投げる。非ゼロ終了の stdout もゼロ終了の
- *  stdout も通る1か所で、順は拒否が先。どちらも usage があっても行を残さない(ADR 0299 決定3)。 */
+/** envelope が行の拒否(ADR 0202 決定1)・401(ADR 0070)・上限到達による中断の 429(ADR 0104 決定2)の証拠なら
+ *  投げる。非ゼロ終了の stdout もゼロ終了の stdout も通る1か所で、順は拒否が先。どれも usage があっても行を残さない
+ *  (ADR 0299 決定3・追記)。 */
 function throwIfRefusedOrUnauthorized(envelope: unknown, { provider, model }: BoardCallSetting): void {
   const cause = rowRefusalCause(envelope);
   if (cause) throw new RowRefusalError(provider, model, cause);
   if (isCliAuthFailureEnvelope(envelope)) {
     const { result } = envelope as { result?: unknown };
     throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
+  }
+  if (isCapInterruptionEnvelope(envelope)) {
+    const { result } = envelope as { result?: unknown };
+    throw new Error(typeof result === "string" ? result : "Claude API returned 429");
   }
 }
 

@@ -10,6 +10,7 @@ import {
 import {
   type CliAuthCheck,
   type CliAuthResult,
+  isCapInterruptionEnvelope,
   isCliAuthBudgetCapEnvelope,
   isCliAuthFailureEnvelope,
   type ModelProbe,
@@ -164,8 +165,8 @@ async function runModelProbe(
   return { status: "unknown", reason: "probe did not return a successful result", ...probeCall };
 }
 
-/** `boardCall` is set only when the envelope reported usage and is neither a 401 nor a row refusal —
- *  those are the observation itself, not a turn's spend (ADR 0299 決定4). */
+/** `boardCall` is set only when the envelope reported usage and is neither a 401, a row refusal nor a 429 —
+ *  those are the observation itself, not a turn's spend (ADR 0299 決定4・追記). */
 async function probeEnvelope(
   command: CliAuthCommand,
   setting: BoardCallSetting,
@@ -184,7 +185,9 @@ async function probeEnvelope(
     return { exitCode: observed.exitCode, envelope: null };
   }
   const usage =
-    isCliAuthFailureEnvelope(envelope) || rowRefusalCause(envelope) !== null ? undefined : envelopeUsageSchema.safeParse(envelope).data;
+    isCliAuthFailureEnvelope(envelope) || rowRefusalCause(envelope) !== null || isCapInterruptionEnvelope(envelope)
+      ? undefined
+      : envelopeUsageSchema.safeParse(envelope).data;
   return { exitCode: observed.exitCode, envelope, ...(usage && { boardCall: { setting, usage } }) };
 }
 

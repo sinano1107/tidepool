@@ -106,6 +106,26 @@ describe("Claude の Board call runner", () => {
     }
   });
 
+  it("usage つきの 429 は、どちらの経路で届いても usage を運ばない error で reject する(ADR 0299 追記、#2486)", async () => {
+    // tests/fixtures/worker-session-cap-429.stream.jsonl の result 行(2.1.241 の session 上限)の欄
+    const capped = {
+      is_error: true,
+      subtype: "success",
+      api_error_status: 429,
+      terminal_reason: "api_error",
+      num_turns: 1,
+      duration_api_ms: 0,
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      result: "You've hit your session limit · resets 10:20pm (Asia/Tokyo)",
+    };
+    for (const exec of Object.values(delivered)) {
+      const err = await runClaudeBoardCallJson(call(exec(capped)), schema).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err).not.toBeInstanceOf(BoardCallUsageError);
+    }
+  });
+
   it("非ゼロ終了の 401 は CliAuthError、それ以外の非ゼロ終了は同じ error のまま reject する", async () => {
     const unauthorized: ExecFn = async () => {
       throw Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired" }) });
