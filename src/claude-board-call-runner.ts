@@ -80,7 +80,7 @@ function extractJson(text: string): unknown {
 /** envelope が行の拒否(ADR 0202 決定1)・401(ADR 0070)・上限到達による中断の 429(ADR 0104 決定2)の証拠なら
  *  投げる。非ゼロ終了の stdout もゼロ終了の stdout も通る1か所で、順は拒否が先。どれも usage があっても行を残さない
  *  (ADR 0299 決定3・追記)。 */
-function throwIfRefusedOrUnauthorized(envelope: unknown, { provider, model }: BoardCallSetting): void {
+function throwIfTurnDidNotRun(envelope: unknown, { provider, model }: BoardCallSetting): void {
   const cause = rowRefusalCause(envelope);
   if (cause) throw new RowRefusalError(provider, model, cause);
   if (isCliAuthFailureEnvelope(envelope)) {
@@ -130,14 +130,14 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
     );
   } catch (err) {
     const failed = execFailureEnvelope(err);
-    throwIfRefusedOrUnauthorized(failed, setting);
+    throwIfTurnDidNotRun(failed, setting);
     // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn and carries it
     const usage = envelopeUsageSchema.safeParse(failed).data;
     if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage);
     throw err;
   }
   const envelope: unknown = JSON.parse(stdout);
-  throwIfRefusedOrUnauthorized(envelope, setting);
+  throwIfTurnDidNotRun(envelope, setting);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
   const usage = envelopeUsageSchema.safeParse(envelope).data;
   // a failure the CLI reported usage for still ran a turn: the error carries it (ADR 0299 決定3)

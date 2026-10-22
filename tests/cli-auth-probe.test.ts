@@ -249,8 +249,7 @@ it("行の probe は CLI の版の古さも refused と読み、理由に原因�
 });
 
 it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその id を載せる(worker の spawn と同じ)", async () => {
-  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
-  writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+  const keyFile = await moonshotKeyFile();
   let observed: { args: string[]; env: NodeJS.ProcessEnv } | undefined;
   const probe = createMoonshotModelProbe(keyFile, async (_command, args, { env }) => {
     observed = { args, env };
@@ -263,7 +262,7 @@ it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその 
 });
 
 /** model turn を立てる probe は、envelope が usage を持つときだけ status と一緒に usage と撃った設定を返す(ADR 0299 決定1・3・4)。
- *  401 / 行の拒否 / envelope 無しは usage を返さず、status の読み方は変わらない。 */
+ *  401 / 行の拒否 / envelope 無しは usage を返さず、status の読み方は変わらない。429 はファイル末尾の4本が釘付けする。 */
 it("Claude の認証 probe は成功と予算の上限で usage と anthropic / haiku / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
   const results = [];
   for (const [exitCode, envelope] of PROBE_ENVELOPES) results.push(await createClaudeCliAuthCheck(probeCommand(exitCode, envelope))());
@@ -295,8 +294,7 @@ it("Claude の model probe は成功と予算の上限で usage と anthropic / 
 });
 
 it("Moonshot の model probe は成功と予算の上限で usage と moonshot / その id / effort null を返し、401・行の拒否・envelope 無しでは返さない", async () => {
-  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
-  writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+  const keyFile = await moonshotKeyFile();
   const results = [];
   for (const [exitCode, envelope] of PROBE_ENVELOPES) results.push(await createMoonshotModelProbe(keyFile, probeCommand(exitCode, envelope))("kimi-k2-5"));
 
