@@ -356,7 +356,10 @@ it("祖先の work の cancel の前に spawn した RCA への self RCA の当�
   const prose = await selfRcaProse(db, rca, at, () => cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui"));
 
   expect(prose).not.toContain("\n## Authority");
-  expect(prose).toContain(`### Authority as it stood then (the board's reviewer authority)\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}`);
+  expect(prose).toContain(
+    `### Authority as it stood then (the board's reviewer authority)\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n` +
+      "This is the board's fixed reviewer authority. It is board code, not a registry profile, so it is not a target for a registry diff.",
+  );
   expect(prose).toContain("### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board");
   expect(prose).not.toContain("the same text as your own");
 });

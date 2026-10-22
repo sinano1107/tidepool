@@ -245,7 +245,7 @@ function versionEvidence(
     reviewer: {
       label: "the board's reviewer authority",
       guidance:
-        (ownReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\n`) +
+        (ownReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\nThis is the board's fixed reviewer authority. `) +
         "It is board code, not a registry profile, so it is not a target for a registry diff.",
     },
   }[then.source];
