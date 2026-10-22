@@ -119,7 +119,7 @@ async function api(pathOrKey: string, bodyOrOpts?: unknown, method = 'POST'): Pr
 // `translateTarget` definition, so
 // wrapping it here — not in the kit's `runTranslate` — is what makes "every
 // switch passes through the same gate" true without touching the kit. The
-// kit still fires N calls; this queues them to MAX_CONCURRENT_TRANSLATIONS.
+// kit still fires one call per chunk; this queues them to MAX_CONCURRENT_TRANSLATIONS.
 const MAX_CONCURRENT_TRANSLATIONS = 2;
 let translationsInFlight = 0;
 const translationQueue: (() => void)[] = [];
@@ -154,13 +154,13 @@ function paceTranslation(run: () => Promise<TpTranslation>, signal?: AbortSignal
 }
 
 // display-time translation (issue #47 / ADR 0015): the one seam behind every
-// kit face's own `onTranslate` prop — { type: 'log_entry', event_id } |
+// kit face's own `onTranslate` prop — { type: 'log_entries', event_ids } |
 // { type: 'question' | 'handoff', task_id }. The server resolves
 // cached/throttled/translated; this call never throws on a throttled
 // response (that's a 200), only on a genuine request/outage failure, which
 // each toggle's own catch renders inline. `signal` (ADR 0063 決定4) is
 // optional — only the log skim's fan-out passes one, to cancel unsent
-// requests when its switch is toggled off.
+// chunks when its switch is toggled off.
 const translateTarget: TpTranslateFn = (target, { signal } = {}) => paceTranslation(() => api('POST /api/translate', { body: target }), signal);
 
 // Web Push (issue #14): applicationServerKey wants raw bytes, the server
@@ -316,6 +316,7 @@ function mapData(
     id: e.id, time: fmtTime(e.created_at), agentIcon: icons[e.worker_id],
     unread: e.unread,
     handoffPresent: e.payload.kind === 'task_completed' && !!e.payload.handoff_present,
+    translatable: e.payload.kind !== 'task_completed' || e.payload.result !== null,
     workspace: e.workspace ?? null,
   }));
   // the queue is the todo order the slot walks, straight from /api/queue (ADR

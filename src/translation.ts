@@ -15,8 +15,10 @@ import { getCachedTranslation, hashSource, recordTranslationCall, saveTranslatio
 export class TranslationTargetError extends Error {}
 
 /** How many fragments one translation call carries at most (ADR 0296 決定4) —
- *  a target with more is split into calls of this size, fired one after another. */
-const TRANSLATION_FRAGMENTS_PER_CALL = 20;
+ *  a target with more is split into calls of this size, fired one after another.
+ *  Also the most event ids one `log_entries` request may name; webui/triage-screen.tsx
+ *  copies it to size its chunks. */
+export const TRANSLATION_FRAGMENTS_PER_CALL = 20;
 
 export type TranslationOutcome =
   | { status: "translated"; text: string; cached: boolean }
@@ -96,6 +98,22 @@ export async function translateLogEntry(
 ): Promise<TranslationOutcome> {
   const source = resolveLogEntrySource(db, eventId);
   return translateSource(db, client, source, language, now);
+}
+
+/** Several decision-log lines or completion reports as one target (ADR 0296 決定4) —
+ *  the log skim's chunk. Every id resolves before anything is sent, so one
+ *  unresolvable id fails the whole request. */
+export async function translateLogEntries(
+  db: Db,
+  client: TranslationClient,
+  eventIds: number[],
+  language: string,
+  now: Date,
+): Promise<{ status: "translated"; entries: { event_id: number; text: string }[] } | { status: "throttled" }> {
+  const sources = eventIds.map((eventId) => resolveLogEntrySource(db, eventId));
+  const outcome = await translateFragments(db, client, sources, language, now);
+  if (outcome.status === "throttled") return outcome;
+  return { status: "translated", entries: eventIds.map((event_id, i) => ({ event_id, text: outcome.texts[i]! })) };
 }
 
 /** 記憶のエントリ1件の title と text を表示言語へ(issue #593 / #603、settings の一覧で原文の無い agent 由来を読む)。 */

@@ -10,9 +10,11 @@ import {
   registerTask,
   splitHandoffMarkdown,
 } from "../src/tasks.js";
+import { reportProviderUsage } from "../src/throttle.js";
 import {
   TranslationTargetError,
   translateHandoff,
+  translateLogEntries,
   translateLogEntry,
   translateMemoryEntry,
   translateQuestion,
@@ -109,6 +111,81 @@ it("premise_breached イベントの宣言の理由を解決して翻訳する",
 
   expect(outcome).toEqual({ status: "translated", text: "モジュールMが壊れている", cached: false });
   expect(client.calls).toEqual([{ fragments: ["module M is broken"], language: "Japanese" }]);
+});
+
+it("複数の event id は cache に無い断片だけを1回の呼び出しに載せ、id ごとの訳を要求の順で返す(ADR 0296 決定4)", async () => {
+  const db = await freshDb();
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const ids = ["line a", "line b", "line c"].map((line) => logDecision(db, task, line, "tako", NOW, "worker"));
+  const client = new FakeTranslationClient();
+  await translateLogEntry(db, client, ids[1]!, "Japanese", NOW);
+
+  const outcome = await translateLogEntries(db, client, ids, "Japanese", NOW);
+
+  expect(client.calls.at(-1)).toEqual({ fragments: ["line a", "line c"], language: "Japanese" });
+  expect(outcome).toEqual({
+    status: "translated",
+    entries: [
+      { event_id: ids[0], text: "[translated] line a" },
+      { event_id: ids[1], text: "[translated] line b" },
+      { event_id: ids[2], text: "[translated] line c" },
+    ],
+  });
+});
+
+it("複数の event id がすべて cache 済みなら呼び出しを撃たない", async () => {
+  const db = await freshDb();
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const ids = ["line a", "line b"].map((line) => logDecision(db, task, line, "tako", NOW, "worker"));
+  const client = new FakeTranslationClient();
+  await translateLogEntries(db, client, ids, "Japanese", NOW);
+
+  const outcome = await translateLogEntries(db, client, ids, "Japanese", NOW);
+
+  expect(client.calls).toHaveLength(1);
+  expect(outcome).toMatchObject({ status: "translated", entries: [{ event_id: ids[0] }, { event_id: ids[1] }] });
+});
+
+it("throttled のとき複数の event id は throttled を返し、何も cache しない", async () => {
+  const db = await freshDb();
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const ids = ["line a", "line b"].map((line) => logDecision(db, task, line, "tako", NOW, "worker"));
+  reportProviderUsage(db, {
+    provider: "anthropic",
+    status: "observed",
+    plan: null,
+    cliVersion: null,
+    observedAt: NOW,
+    windows: [
+      {
+        window: "session",
+        model: null,
+        usedPercent: 50,
+        durationMs: 5 * 60 * 60 * 1000,
+        resetsAt: new Date(NOW.getTime() + 60 * 60 * 1000),
+        throttled: true,
+        resumesAt: new Date(NOW.getTime() + 30 * 60 * 1000),
+      },
+    ],
+  });
+  const client = new FakeTranslationClient();
+
+  const outcome = await translateLogEntries(db, client, ids, "Japanese", NOW);
+
+  expect(outcome).toEqual({ status: "throttled" });
+  expect(client.calls).toEqual([]);
+  expect(getCachedTranslation(db, hashSource("line a"), "Japanese")).toBeUndefined();
+});
+
+it("複数の event id に解決できない id が1つでもあれば TranslationTargetError を投げ、何も撃たない", async () => {
+  const db = await freshDb();
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const id = logDecision(db, task, "line a", "tako", NOW, "worker");
+  const client = new FakeTranslationClient();
+
+  await expect(translateLogEntries(db, client, [id, 999], "Japanese", NOW)).rejects.toThrow(TranslationTargetError);
+  expect(client.calls).toEqual([]);
+  expect(getCachedTranslation(db, hashSource("line a"), "Japanese")).toBeUndefined();
 });
 
 it("存在しない event id は TranslationTargetError を投げる", async () => {

@@ -134,8 +134,10 @@ import { getProviderUsage } from "./throttle.js";
 import { PRIORITIES } from "./tier.js";
 import type { TranslationClient } from "./translate.js";
 import {
+  TRANSLATION_FRAGMENTS_PER_CALL,
   TranslationTargetError,
   translateHandoff,
+  translateLogEntries,
   translateLogEntry,
   translateMemoryEntry,
   translateQuestion,
@@ -478,8 +480,8 @@ const displayLanguageSchema = z.object({
 
 // display-time translation (issue #47 / ADR 0015): a discriminated union over
 // the 3 UX surfaces (CONTEXT.md's toggles) — triage log skim (log_entry,
-// covering both a decision-log line and a completion report by event id),
-// question card, handoff expansion — plus memory (issue #593): an agent-written
+// covering both a decision-log line and a completion report by event id;
+// log_entries is the skim's chunk of them, ADR 0296 決定4), question card, handoff expansion — plus memory (issue #593): an agent-written
 // entry's text for the settings list, and the write form's free text (a
 // human's original into English, and that English back into the display
 // language). Neither free-text result is stored on the entry.
@@ -487,6 +489,7 @@ const displayLanguageSchema = z.object({
 // not merely unimplemented).
 const translateRequestSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("log_entry"), event_id: z.number().int() }),
+  z.object({ type: z.literal("log_entries"), event_ids: z.array(z.number().int()).max(TRANSLATION_FRAGMENTS_PER_CALL) }),
   z.object({ type: z.literal("question"), task_id: requiredTextSchema }),
   z.object({ type: z.literal("handoff"), task_id: requiredTextSchema }),
   z.object({ type: z.literal("memory_entry"), entry_id: z.number().int() }),
@@ -1573,6 +1576,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       let outcome;
       if (target.type === "log_entry") {
         outcome = await translateLogEntry(db, translationClient, target.event_id, language, clock.now());
+      } else if (target.type === "log_entries") {
+        outcome = await translateLogEntries(db, translationClient, target.event_ids, language, clock.now());
       } else if (target.type === "memory_entry") {
         outcome = await translateMemoryEntry(db, translationClient, target.entry_id, language, clock.now());
       } else if (target.type === "to_english") {

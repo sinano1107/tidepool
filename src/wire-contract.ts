@@ -292,6 +292,8 @@ export interface WireContract {
         purpose?: string;
         items?: Array<{ title: string; detail?: string }>;
         doc?: string;
+        /** log_entries の訳は要求の event id ごとに来る(ADR 0296 決定4)。 */
+        entries?: Array<{ event_id: number; text: string }>;
       }
     | { status: "throttled" };
   "POST /api/tasks": Pick<BoardTask, "id" | "type">;

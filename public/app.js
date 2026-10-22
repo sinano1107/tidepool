@@ -371,6 +371,7 @@ function TpDiscards({ discards }) {
   if (discards.length === 0) return null;
   return /* @__PURE__ */ React.createElement("div", { "data-testid": "discards", style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", padding: "0 4px" } }, "discards the done work of:", /* @__PURE__ */ React.createElement("ul", { style: { margin: "2px 0 0", paddingLeft: 18 } }, discards.map((d) => /* @__PURE__ */ React.createElement("li", { key: d.id }, /* @__PURE__ */ React.createElement("a", { href: `/api/tasks/${d.id}`, target: "_blank", rel: "noreferrer", style: { color: "var(--tide-4)" } }, d.title)))));
 }
+const TRANSLATION_FRAGMENTS_PER_CALL = 20;
 function TpWaterline({ progress }) {
   return /* @__PURE__ */ React.createElement("div", { style: { height: 2, background: "var(--rock-2)", position: "relative", borderRadius: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { position: "absolute", inset: "0 auto 0 0", width: `${progress * 100}%`, background: "var(--tide-4)", borderRadius: 1, transition: "width var(--duration-slow) var(--ease-tidal)" } }));
 }
@@ -893,7 +894,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
       const hiddenCount = g.readCount - revealed;
       rendered.push(...g.readEntries.slice(hiddenCount), ...g.unreadEntries);
     }
-    return rendered;
+    return rendered.filter((entry) => entry.translatable);
   }, [logGroups, revealedRead]);
   const logTranslateAbort = React.useRef(null);
   React.useEffect(() => {
@@ -905,22 +906,26 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   React.useEffect(() => {
     if (!logTranslateOn || !onTranslate) return;
     const signal = logTranslateAbort.current.signal;
-    for (const entry of renderedLogEntries) {
-      const k = entry.id;
-      if (logTranslateRequested.current.has(k)) continue;
-      logTranslateRequested.current.add(k);
+    const ids = renderedLogEntries.map((entry) => entry.id).filter((k) => !logTranslateRequested.current.has(k));
+    for (let at = 0; at < ids.length; at += TRANSLATION_FRAGMENTS_PER_CALL) {
+      const chunk = ids.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
+      for (const k of chunk) logTranslateRequested.current.add(k);
       runTranslate(
         onTranslate,
-        { type: "log_entry", event_id: entry.id },
-        (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
+        { type: "log_entries", event_ids: chunk },
+        (result) => setLogTranslations((prev) => {
+          const next = { ...prev };
+          for (const k of chunk) next[k] = result;
+          if (result.status === "translated") for (const e of result.entries ?? []) next[e.event_id] = { status: "translated", text: e.text };
+          return next;
+        }),
         {
           signal,
           onAbort: () => {
-            logTranslateRequested.current.delete(k);
+            for (const k of chunk) logTranslateRequested.current.delete(k);
             setLogTranslations((prev) => {
-              if (!(k in prev)) return prev;
               const next = { ...prev };
-              delete next[k];
+              for (const k of chunk) delete next[k];
               return next;
             });
           }
@@ -4116,6 +4121,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     agentIcon: icons[e.worker_id],
     unread: e.unread,
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
+    translatable: e.payload.kind !== "task_completed" || e.payload.result !== null,
     workspace: e.workspace ?? null
   }));
   const queue = queueEnvelope.tasks.filter((t) => t.status === "todo" || t.status === "blocked" || t.status === "skipped").map((t) => ({
