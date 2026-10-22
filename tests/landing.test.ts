@@ -3607,7 +3607,7 @@ it("門が閉じている間にダイヤルが external へ変わった PR は�
 /** タスクブランチを push して PR #1 を開く。auto_if_ci_green なら無人 merge キューに入り、
  *  escalate なら merge question が立つ。checkout はタスクブランチに残る。 */
 async function openPushedPr(name: string, merge: MergeDial) {
-  const { workspace } = await makeRemoteBackedWorkspace(name);
+  const { workspace, publish } = await makeRemoteBackedWorkspace(name);
   const { db, clock } = await openBoard();
   const github = new FakeGitHubClient();
   const work = landingWork(db, clock);
@@ -3624,7 +3624,7 @@ async function openPushedPr(name: string, merge: MergeDial) {
     github,
     resolveAuthority: () => profile(merge),
   });
-  return { workspace, db, clock, github, work: getTask(db, work.id)!, landing };
+  return { workspace, publish, db, clock, github, work: getTask(db, work.id)!, landing };
 }
 
 /** 修理(`parentId` の付帯子)を着地するタスクのブランチから fork し、`repair.txt` を commit して done にする。
@@ -3645,7 +3645,7 @@ function settleRepairNotMergedBack(
 }
 
 /** #1777 の形: 修理の merge back が後始末で conflict し、workspace が quarantine に落ちる。checkout は着地するタスクの
- *  ブランチの上で merge の途中のまま残る。 */
+ *  ブランチの tip に、中断状態なしで残る。 */
 async function quarantinedByMergeBackConflict(name: string, merge: MergeDial) {
   const pr = await openPushedPr(name, merge);
   const { workspace, db, clock, work } = pr;
@@ -3667,11 +3667,23 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
     "left-behind-merge-back-conflict",
     "auto_if_ci_green",
   );
-  expect(question.purpose).toContain(`git merge task/${repair.id}`);
+  expect(question.purpose).toContain(`task/${repair.id} does not merge cleanly`);
 
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
+});
+
+// ADR 0243 決定4: 後始末の merge back は merge commit を merge-tree で先に作るので、conflict は checkout に何も残さない
+it("後始末の merge back が conflict しても、MERGE_HEAD を残さず作業ツリーは帰り先の tip のまま quarantine に落ちる", async () => {
+  const { workspace, work, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
+
+  // まだ答えていない question なので、出口の文は「答え直す」と結ばない
+  expect(question.purpose).toContain("`; then answer. ");
+  expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
+  expect(head(workspace)).toBe(`task/${work.id}`);
+  expect(git(workspace.path, "rev-parse", "HEAD")).toBe(originHead(workspace, work.id));
+  expect(git(workspace.path, "status", "--porcelain")).toBe("");
 });
 
 // ADR 0240 決定4: workspace の quarantine の受理の検査は、内容が帰り先に届いていない done の work の merge back を
@@ -3696,10 +3708,9 @@ const head = (workspace: WorkspaceConfig) => git(workspace.path, "rev-parse", "-
 const originHead = (workspace: WorkspaceConfig, taskId: string) =>
   git(workspace.path, "ls-remote", "origin", `refs/heads/task/${taskId}`).split("\t")[0]!;
 
-it("merge back の conflict を abort しただけの受理は、merge back をやり直して conflict し、取り消して休止位置へ戻し、2つの出口を示して拒む", async () => {
+it("merge back の conflict に手を付けないままの受理は、merge back をやり直して conflict し、休止位置へ戻し、2つの出口を示して拒む", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-conflict", "escalate");
   const { workspace, db, work, repair, question } = pr;
-  git(workspace.path, "merge", "--abort");
 
   await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
     new DomainError(
@@ -3728,31 +3739,42 @@ it("merge back が走らなかった修理は、受理の検査が帰り先へ m
   expect(getTask(db, question.id)!.status).toBe("done");
   expect(pollNow).toHaveBeenCalledOnce();
   expect(head(workspace)).toBe("main");
-  expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
+  // 帰り先は修理が分かれてから動いていない —— merge commit を作らず修理の tip へ ff する
+  expect(git(workspace.path, "rev-parse", `task/${work.id}`)).toBe(git(workspace.path, "rev-parse", `task/${repair.id}`));
 });
 
-// ADR 0243 決定4: 受理の merge back は走っている session が無いときだけ checkout を動かす書き込みなので、基準に触らない ——
-// 次の pickup の全撮りが作り直す
-it("受理の検査がやり直した merge back は、盤面の基準を書き換えない", async () => {
+// ADR 0243 決定4・5: 受理の merge back も休止位置の ff も口を通る —— 帰り先の行は merge commit の1値に畳まれる
+it.each([
+  ["そのままなら、古い基準で解放をやり直しても帰り先も保護ブランチも名指ししない", false],
+  ["merge back の前の位置へ手で戻せば、merge commit の値から動いたと名指しする", true],
+])("受理の検査がやり直した merge back は、帰り先を先の tip を第1親とする merge commit へ進め、基準をその1値に畳む —— %s", async (_shape, rolledBack) => {
   const pr = await openPushedPr("redo-merge-back-baseline", "escalate");
   const { workspace, db, clock, work } = pr;
   const earlier = landingWork(db, clock);
   await prepareWorkspaceAtPickup(db, workspace, earlier);
-  const pickedUp = git(workspace.path, "rev-parse", `task/${work.id}`);
   commitWork(workspace.path, "earlier.txt", "work\n");
   releaseWorkspace(db, workspace, earlier, clock.now());
   git(workspace.path, "checkout", `task/${work.id}`);
   const repair = settleRepairNotMergedBack(db, clock, workspace, work.id);
+  // 修理が分かれた後に帰り先が進む —— merge back は ff にならず merge commit を作る
+  commitWork(workspace.path, "landing.txt", "moved on\n");
+  const targetBefore = git(workspace.path, "rev-parse", `task/${work.id}`);
+  // 原本の保護ブランチも進む —— やり直しの休止位置の ff がローカルの保護ブランチを動かす
+  pr.publish("merged.txt", "merged on GitHub\n", "merged outside");
   quarantineWorkspace(db, workspace.name, new Error("GitHub token acquisition failed"), clock.now());
 
   await answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!);
 
-  expect(git(workspace.path, "merge-base", "--is-ancestor", `task/${repair.id}`, `task/${work.id}`)).toBe("");
-  // 基準は earlier の pickup のまま —— その基準で解放をやり直すと、merge back が動かしたタスクブランチを pickup の値から
-  // 動いたと名指しする(merge back が基準を書き換えていれば名指ししない)
+  const merged = git(workspace.path, "rev-parse", `task/${work.id}`);
+  expect(git(workspace.path, "rev-parse", `${merged}^1`)).toBe(targetBefore);
+  expect(git(workspace.path, "rev-parse", `${merged}^2`)).toBe(git(workspace.path, "rev-parse", `task/${repair.id}`));
+  // earlier の pickup の基準で解放をやり直す: 帰り先の行が merge commit の1値なら、その位置は通り、戻した位置は名指しされる
   git(workspace.path, "checkout", `task/${earlier.id}`);
+  if (rolledBack) git(workspace.path, "update-ref", `refs/heads/task/${work.id}`, targetBefore);
   releaseWorkspace(db, workspace, earlier, clock.now());
-  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${pickedUp} refs/heads/task/${work.id}`);
+  const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose ?? "";
+  if (rolledBack) expect(purpose).toContain(`was: ${merged} refs/heads/task/${work.id}`);
+  else expect(purpose).not.toMatch(new RegExp(`refs/heads/(task/${work.id}|main)\\b`));
 });
 
 it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
@@ -3772,7 +3794,6 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
 ])("merge back の conflict を%s後の受理は通り、収束を突き、続く収束が根へ push して積み残しが消える", async (_, repairByHand) => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-repaired", "escalate");
   const { workspace, db, clock, work, repair, question, landing } = pr;
-  git(workspace.path, "merge", "--abort");
   repairByHand(workspace, repair.id);
   const pollNow = vi.fn();
 
@@ -3788,7 +3809,6 @@ it.each<[string, (workspace: WorkspaceConfig, repairId: string) => void]>([
 it("その workspace で session が走っている間は、checkout を動かさずに受理を拒む", async () => {
   const pr = await quarantinedByMergeBackConflict("redo-merge-back-running", "escalate");
   const { workspace, db, clock, work, question } = pr;
-  git(workspace.path, "merge", "--abort");
   pickupTask(db, landingWork(db, clock), "worker", clock.now());
 
   await expect(answerWorkspaceQuarantine(pr, question)).rejects.toThrow(
@@ -4360,7 +4380,6 @@ it("修理の merge back が conflict して quarantine に落ちた間のロー
   expect(git(workspace.path, "rev-parse", "main")).toBe(protectedHead);
   expect(getTask(db, question.id)!.status).toBe("todo");
 
-  git(workspace.path, "merge", "--abort");
   expect(() => git(workspace.path, "merge", `task/${repair.id}`)).toThrow();
   commitWork(workspace.path, "repair.txt", "fixed and conflicting\n");
   await answerWorkspaceQuarantine({ db, clock, workspace, landing: unusedLanding }, quarantine);
@@ -4954,10 +4973,14 @@ it.each([
 it("休止中の merge 回答は checkout ごと merge commit へ進め、作業ツリーはその内容になる", async () => {
   const workspace = await makeWorkspace("landing-dormant-merge-checkout");
   const { db, clock } = await openBoard();
-  const { questions } = await dormantSerialLanding(db, clock, workspace);
+  const { works, questions } = await dormantSerialLanding(db, clock, workspace);
+  const protectedBefore = git(workspace.path, "rev-parse", "refs/heads/main");
 
   await answerMerge(db, clock, workspace, questions[1]!);
 
+  // 第1親は保護ブランチの先の位置 —— first-parent の履歴が保護ブランチの歩みのまま残る
+  expect(git(workspace.path, "rev-parse", "main^1")).toBe(protectedBefore);
+  expect(git(workspace.path, "rev-parse", "main^2")).toBe(git(workspace.path, "rev-parse", `task/${works[1]!.id}`));
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(git(workspace.path, "rev-parse", "refs/heads/main"));
   expect(readFileSync(join(workspace.path, "first.txt"), "utf8")).toBe("first\n");
