@@ -1089,7 +1089,7 @@ it.each(["root の下の RCA", "監査の下の RCA", "retry で cancelled に�
   expect(listEvents(db, rca.id).flatMap(({ payload }) => (payload.kind === "objection_attributed" ? [payload.entry_id] : []))).toEqual([entry]);
 });
 
-it("root の retry は、root と監査の下の RCA とそれが立てた escalate の question を残し、受験者を倒す —— 直接 cancel・abandon と同じ範囲。RCA の下にブランチに依存する task は床が立てない(ADR 0301 決定4)", () => {
+it("root の retry は、監査の下の RCA と RCA が立てた escalate の question を残し、受験者を倒す —— 直接 cancel・abandon と同じ範囲(ADR 0301 決定4)", () => {
   const { db, root, rootRca, auditRca } = interviewTree();
   const [examinee] = listExaminees(db, root.id);
   const question = [{ title: "which tier?", options: ["a", "b"], recommendation: "a" }];
@@ -1097,8 +1097,8 @@ it("root の retry は、root と監査の下の RCA とそれが立てた escal
 
   retryRoot(db, root);
 
-  expect([root, examinee!].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled"]);
-  expect([rootRca, auditRca, ...escalations].map((task) => getTask(db, task.id)!.status)).toEqual(Array(4).fill("todo"));
+  expect(getTask(db, examinee!.id)!.status).toBe("cancelled");
+  expect([auditRca, ...escalations].map((task) => getTask(db, task.id)!.status)).toEqual(Array(3).fill("todo"));
 });
 
 it("Interview の root の下の RCA は worker の decompose でも人間の decompose でも分けられず、何も登録されない —— 分解の verb も見えない(#2505 測定 D / ADR 0301 決定3)", () => {

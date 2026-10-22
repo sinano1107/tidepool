@@ -1620,7 +1620,7 @@ function cancelUnsettledSubtree(
   origin: EventOrigin,
 ): void {
   // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
-  for (const { id } of cancelScope(db, [rootTaskId], true).filter((task) => !isSettled(task.status))) {
+  for (const { id } of cancelScope(db, [rootTaskId], { throughExaminees: true }).filter((task) => !isSettled(task.status))) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
     appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
@@ -1697,15 +1697,15 @@ export interface CancelDefaults {
  *  nothing; what it fells gates, including the work beneath a surviving RCA. The quarantine
  *  half reads only unsettled rows, as the cascade marks only those: a settled review holds no resource. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const felled = JSON.stringify(cancelScope(db, [taskId], false).map((task) => task.id));
+  const felled = JSON.stringify(cancelScope(db, [taskId], { throughExaminees: false }).map((task) => task.id));
   const failure = db
     .prepare(
       `SELECT 1 FROM tasks q
        WHERE q.type = 'question' AND q.status = 'todo'
          AND q.question_cancel_option IS NOT NULL
-         AND q.id IN (SELECT value FROM json_each(?)) LIMIT 1`,
+         AND q.id IN (SELECT value FROM json_each(@felled)) LIMIT 1`,
     )
-    .get(felled);
+    .get({ felled });
   if (failure) {
     throw new DomainError(
       "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
@@ -1781,16 +1781,16 @@ interface Felled {
 /** cancel が倒す範囲(ADR 0301 決定4)—— cascade・直接 cancel の門・捨てるものの数えが読む1本。根から木全体を歩き、生き延びる付帯子で
  *  止まらない。倒れる task の子は宛先が親の生死に依れば倒れ(`survivesParentCancelSql` の補集合、ADR 0271 決定3)、倒れない task の子は、
  *  その task にこの cancel の後で帰り先が無く(ADR 0301 決定1: 根の外の理由、自身が cancelled、cancelled の work —— 今 cancelled か、この
- *  cancel で cancelled になるもの —— を挟む)、宛先がブランチに依存すれば倒れる。`examinees` は Interview の root から対象を経て受験者へ
+ *  cancel で cancelled になるもの —— を挟む)、宛先がブランチに依存すれば倒れる。`throughExaminees` は Interview の root から対象を経て受験者へ
  *  降りる(cascade だけ —— 受験者は門も捨てるものの数えも持たない、ADR 0267 決定3)。 */
-function cancelScope(db: Db, rootIds: string[], examinees: boolean): Felled[] {
+function cancelScope(db: Db, rootIds: string[], { throughExaminees }: { throughExaminees: boolean }): Felled[] {
   const rows = db
     .prepare(
       `WITH RECURSIVE walk(id, up) AS (
          SELECT value, NULL FROM json_each(@roots)
          UNION
          SELECT c.id, w.id FROM tasks c LEFT JOIN interview_targets it ON it.id = c.interview_target_id
-           JOIN walk w ON w.id = ${examinees ? "COALESCE(c.parent_id, it.task_id)" : "c.parent_id"})
+           JOIN walk w ON w.id = ${throughExaminees ? "COALESCE(c.parent_id, it.task_id)" : "c.parent_id"})
        SELECT t.id, w.up, t.type, t.status, ${survivesParentCancelSql("t")} AS survives, ${rcaSql("t")} AS rca, ${isAuditSql("t.id")} AS audit,
          t.question_pending_child IS NOT NULL AS approval
        FROM walk w JOIN tasks t ON t.id = w.id`,
@@ -1824,7 +1824,7 @@ export interface Discard {
  *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
  *  系譜に入らない。表示時に読み、保存しない。 */
 function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
-  const done = cancelScope(db, rootIds, false).filter((task) => task.type === "work" && task.status === "done" && !task.underCancelled);
+  const done = cancelScope(db, rootIds, { throughExaminees: false }).filter((task) => task.type === "work" && task.status === "done" && !task.underCancelled);
   const rows = db
     .prepare(
       `SELECT t.id, t.title, t.github_issue_number FROM tasks t
@@ -3770,9 +3770,8 @@ function blockingSql(rowRef: string): string {
 }
 
 /** あるタスクを根とする子孫全体(根自身を含む)の CTE。`rootRef` は根の id を持つ SQL 式
- *  (`?` か名前つきパラメータ)、複数の根なら `value FROM json_each(@roots)` のような SELECT の残り(cancel の discards、
- *  ADR 0271 決定4)。着地の門と直接 cancel の question gate、triage の異議
- *  勘定、積み残しが同じ「系譜をたどる」形を共有する。`where`(子の行 `c` の条件)に当たらない子
+ *  (`?` か名前つきパラメータ)、複数の根なら `task_id FROM interview_targets` のような SELECT の残り。着地の門と
+ *  積み残しが同じ「系譜をたどる」形を共有する(cancel が倒す範囲は `cancelScope`)。`where`(子の行 `c` の条件)に当たらない子
  *  とその下へは降りない(根自身は残す)—— 積み残しは cancelled の子を除き、abandon で捨てられた判断の内側を
  *  運ばない(ADR 0239 決定1)。 */
 export function subtreeSql(rootRef: string, where?: string): string {

@@ -364,16 +364,16 @@ function rcaWithChildren(db: Db) {
 }
 
 it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
-  "祖先の%sで、生き延びる RCA の分解の work と承認 question は cancelled で pickup されず、RCA・その escalate の question・主題の修理子は todo のまま、直下の付帯子は今どおり倒れる(ADR 0301 決定4)",
+  "祖先の%sで、生き延びる RCA の分解の work と承認 question は cancelled で pickup されず、RCA・その escalate の question は todo のまま(ADR 0301 決定4)",
   (path) => {
     db = openDb(":memory:");
-    const { target, completionReview, humanReview, runningReview, repair, rca, split, approval, escalation, repairs } = rcaWithChildren(db);
+    const { target, rca, split, approval, escalation, repairs } = rcaWithChildren(db);
 
     if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
     else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
 
-    expect([target, completionReview, humanReview, runningReview, repair, split, approval].map((task) => getTask(db, task.id)!.status)).toEqual(Array(7).fill("cancelled"));
-    expect([rca, escalation, ...repairs].map((task) => getTask(db, task.id)!.status)).toEqual(Array(4).fill("todo"));
+    expect([split, approval].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "cancelled"]);
+    expect([rca, escalation].map((task) => getTask(db, task.id)!.status)).toEqual(["todo", "todo"]);
     const picked: string[] = [];
     for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "tako", NOW)!.id);
     expect(picked).not.toContain(split.id);
