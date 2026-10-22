@@ -139,6 +139,8 @@ async function skillClosure(): Promise<SkillClosureObservation> {
         skill(dir, `---\nname: ${basename(dir)}\ndescription: ${marker}\n---\n${marker}\n`);
       execFileSync("git", ["init", "-q", root], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
       readableSkill(join(workspace, ".agents/skills/flat"), readable.flat);
+      // root 自身の SKILL.md も Codex は skill として読む(#892)
+      readableSkill(join(workspace, ".agents/skills"), readable.root);
       readableSkill(join(workspace, ".agents/skills/pack/inner"), readable.nested);
       readableSkill(join(workspace, "vendor/linked"), readable.linked);
       symlinkSync("../../vendor/linked", join(workspace, ".agents/skills/linked"));
