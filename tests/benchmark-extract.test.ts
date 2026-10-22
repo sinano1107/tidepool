@@ -4,14 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { currentRoot, type Exercise, extract, loadExercise, type RunConfig } from "../docs/experiments/benchmark/extract.js";
+import { type BoardCallUse, recordBoardCall } from "../src/board-call-usage.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { registerLocalMergeQuestion } from "../src/landing.js";
 import { createBehaviorCandidate, defineMemoryByMetaReview, invalidateMemoryByMetaReview, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
 import { questionKindOf } from "../src/question-kind.js";
-import { completeInterview, completeTask, getTask, listBoard, logDecision, registerTask, retryInterviewRoot, settleQuestionAsObserved } from "../src/tasks.js";
+import { completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, registerTask, retryInterviewRoot, settleQuestionAsObserved } from "../src/tasks.js";
+import { commitTriage, raiseObjection } from "../src/triage.js";
 import {
   answerQuestionViaWebui,
+  auditorRcaOn,
   completedWork,
   examineeRootId,
   FULL_HANDOFF,
@@ -20,11 +23,13 @@ import {
   interviewExaminee,
   judgedMemoryReview,
   judgedRoutingReview,
+  judgmentRepairTask,
   openTestInterviewRoom,
   POSED_HEAD,
   poseAccepted,
   QUIET_EXIT,
   routedOpusSessions,
+  routingJudgmentRepairTask,
   settleReviews,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -367,7 +372,7 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   expect(record.exercises[0]!.duration_ms).toEqual({ wall: 90 * 60_000, queue: 5 * 60_000, human_wait: 63 * 60_000, board: 22 * 60_000 });
   expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation", "escalation", "local_merge"]);
   // 終わらなかった session は費用が無い —— 和に入らず数で出る
-  expect(markdown).toContain("| work | yes | done | — | — | claude-code 1 unpriced | 90m | 5m | 63m | 22m | 4 |");
+  expect(markdown).toContain("| work | work | yes | done | — | — | claude-code 1 unpriced | 90m | 5m | 63m | 22m | 4 |");
 });
 
 it("Interview の root を人間が retry しても、harness が登録で受け取った id は今の root に辿られる(2度の retry も)", () => {
@@ -381,4 +386,180 @@ it("Interview の root を人間が retry しても、harness が登録で受け
   // retry されていない root はそのまま
   const plain = workTask(db, "plain");
   expect(currentRoot(db, plain)).toBe(plain);
+});
+
+/** 子のうち題が prefix で始まるもの(異議の束ねが立てる修理子・RCA の題)。 */
+const childTitled = (db: Db, parentId: string, prefix: string) => listChildren(db, parentId).find((child) => child.title.startsWith(prefix))!;
+
+it("仕事の課題の行は種類 work を持ち、費用から RCA と記憶の修理子の session が外れ、work の修理子の session は残る", () => {
+  const db = openDb(":memory:");
+  const work = completedWork(db, AT, "deckhand");
+  session(db, work.id, "deckhand", "claude-code", 1);
+  // 判断の行への異議(capability)で work の修理子と RCA(self・auditor)が立つ
+  auditorRcaOn(db, getTask(db, work.id)!, AT, "deckhand");
+  // 記憶の書き込みの行への異議で memory_repair が立つ
+  const written = recordKnowledge(db, { scope: null, path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", AT, work.id);
+  raiseObjection(db, written.event_id, "undo it", AT);
+  commitTriage(db, AT);
+  session(db, childTitled(db, work.id, "repair:").id, "deckhand", "claude-code", 2);
+  session(db, childTitled(db, work.id, "rca (self)").id, "deckhand", "claude-code", 4);
+  session(db, childTitled(db, work.id, "rca (auditor)").id, "fugu", "claude-code", 8);
+  session(db, childTitled(db, work.id, "memory repair:").id, "deckhand", "codex", null);
+
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG);
+
+  expect(record.exercises[0]).toMatchObject({ kind: "work", cost_usd_by_harness: { "claude-code": 3 } });
+  expect(record.exercises[0]!.unpriced_sessions_by_harness).toEqual({});
+});
+
+/** Interview の宣言を持つ課題(task は持たない)。 */
+const interviewExercise = (name: string): Exercise =>
+  ({
+    name,
+    title: "Interview the parser tier",
+    readings: ["interview"],
+    interview: { hypothesis: "h", tier: "standard", targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
+  }) as Exercise;
+
+it("最適化の課題(Interview)の行は種類 optimisation と、root・受験者・出題の監査の費用を持ち、root への異議から立った RCA は持たない", () => {
+  const db = openDb(":memory:");
+  const examinee = interviewExaminee(db, AT);
+  const root = getTask(db, examineeRootId(db, examinee.id))!;
+  const audit = listChildren(db, root.id).find((child) => child.type === "review")!;
+  session(db, root.id, "auditor", "claude-code", 1);
+  session(db, audit.id, "fugu", "claude-code", 2);
+  session(db, examinee.id, "tako", "codex", null);
+  auditorRcaOn(db, root, AT);
+  session(db, childTitled(db, root.id, "rca (auditor)").id, "fugu", "claude-code", 8);
+
+  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: root.id, test_exit: null }], CONFIG);
+
+  expect(record.exercises[0]).toMatchObject({ kind: "optimisation", cost_usd_by_harness: { "claude-code": 3 }, unpriced_sessions_by_harness: { codex: 1 } });
+});
+
+it("人間の retry で置き換わった前の Interview の root の木の session は、その課題の行に入り未分類に落ちない", () => {
+  const db = openDb(":memory:");
+  const firstExaminee = interviewExaminee(db, AT);
+  const first = getTask(db, examineeRootId(db, firstExaminee.id))!;
+  session(db, first.id, "auditor", "claude-code", 1);
+  session(db, firstExaminee.id, "tako", "claude-code", 2);
+  const second = retryInterviewRoot(db, first, undefined, AT, {}, "webui");
+  session(db, second.id, "auditor", "claude-code", 4);
+  poseAccepted(db, second, { title: "add a parser", probe: "write a parser", completion_criteria: "the parser works", rubric: "tests pass" }, "auditor", AT, "worker", POSED_HEAD);
+  const third = retryInterviewRoot(db, getTask(db, second.id)!, undefined, AT, {}, "webui");
+  session(db, third.id, "auditor", "claude-code", 8);
+
+  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: third.id, test_exit: null }], CONFIG);
+
+  expect(record.exercises[0]!.cost_usd_by_harness).toEqual({ "claude-code": 15 });
+  expect(record.spend.unclassified).toEqual([]);
+});
+
+it("どの課題の木にもどの節にも入らない worker session は未分類に並ぶ", () => {
+  const db = openDb(":memory:");
+  const work = workTask(db, "the exercise");
+  session(db, work, "deckhand", "claude-code", 1);
+  const stray = workTask(db, "registered by hand during the run");
+  session(db, stray, "deckhand", "codex", null);
+
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG);
+
+  expect(record.spend.unclassified).toEqual([{ task_id: stray, agent: "deckhand", harness: "codex", cost_usd: null, verbs: null }]);
+});
+
+/** 盤面の記録の module で Board call の行を1つ書く(費用 null は測れない)。 */
+const boardCall = (db: Db, use: BoardCallUse, provider: "anthropic" | "openai" | "moonshot", cost: number | null) =>
+  recordBoardCall(db, use, { provider, model: "m", effort: "low" }, { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: cost }, AT, use === "translation" ? 1 : null);
+
+it("走行の3つの節が Board call の行を用途・Provider ごとに、記録から学ぶ session を主題・type ごとに Harness で出し、費用の無いものは別に数える", () => {
+  const db = openDb(":memory:");
+  boardCall(db, "allocation_review", "anthropic", 0.5);
+  boardCall(db, "attribution", "anthropic", 0.25);
+  boardCall(db, "attribution", "anthropic", 0.25);
+  boardCall(db, "behavior_draft", "openai", null);
+  boardCall(db, "task_draft", "anthropic", 0.125);
+  boardCall(db, "child_draft", "openai", null);
+  boardCall(db, "translation", "anthropic", 0.0625);
+  boardCall(db, "cli_auth_probe", "moonshot", 0.5);
+  boardCall(db, "model_probe", "anthropic", null);
+  // 仕事の課題の木に立った RCA と、meta-review とその修理子(課題の木の外)
+  const work = completedWork(db, AT, "deckhand");
+  auditorRcaOn(db, getTask(db, work.id)!, AT, "deckhand");
+  session(db, childTitled(db, work.id, "rca (self)").id, "deckhand", "claude-code", 8);
+  session(db, childTitled(db, work.id, "rca (auditor)").id, "fugu", "claude-code", 16);
+  const memoryRepair = judgmentRepairTask(db, AT);
+  session(db, memoryRepair.parent_id!, "fugu", "claude-code", 1);
+  session(db, memoryRepair.id, "fugu", "claude-code", 2);
+  const routingRepair = routingJudgmentRepairTask(db, AT);
+  session(db, routingRepair.parent_id!, "auditor", "codex", null);
+  session(db, routingRepair.id, "auditor", "claude-code", 4);
+
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG);
+
+  const { learning, human_surface, observation } = record.spend;
+  expect(learning).toEqual({
+    board_calls: {
+      allocation_review: { cost_usd: { anthropic: 0.5 }, unpriced: {} },
+      attribution: { cost_usd: { anthropic: 0.5 }, unpriced: {} },
+      behavior_draft: { cost_usd: {}, unpriced: { openai: 1 } },
+    },
+    sessions: {
+      rca: { cost_usd: { "claude-code": 24 }, unpriced: {} },
+      // helper の材料の注入が置く session(終わっていない)は費用が無い
+      "meta_review:memory": { cost_usd: { "claude-code": 1 }, unpriced: { "claude-code": 1 } },
+      memory_repair: { cost_usd: { "claude-code": 2 }, unpriced: {} },
+      "meta_review:routing": { cost_usd: {}, unpriced: { "claude-code": 1, codex: 1 } },
+      routing_repair: { cost_usd: { "claude-code": 4 }, unpriced: {} },
+    },
+    total: { cost_usd: { anthropic: 1, "claude-code": 31 }, unpriced: { openai: 1, "claude-code": 2, codex: 1 } },
+  });
+  expect(human_surface).toEqual({
+    board_calls: {
+      task_draft: { cost_usd: { anthropic: 0.125 }, unpriced: {} },
+      child_draft: { cost_usd: {}, unpriced: { openai: 1 } },
+      translation: { cost_usd: { anthropic: 0.0625 }, unpriced: {} },
+    },
+    total: { cost_usd: { anthropic: 0.1875 }, unpriced: { openai: 1 } },
+  });
+  expect(observation).toEqual({
+    board_calls: {
+      cli_auth_probe: { cost_usd: { moonshot: 0.5 }, unpriced: {} },
+      model_probe: { cost_usd: {}, unpriced: { anthropic: 1 } },
+    },
+    total: { cost_usd: { moonshot: 0.5 }, unpriced: { anthropic: 1 } },
+  });
+  expect(record.spend.unclassified).toEqual([]);
+});
+
+it("記録は含まないものの一文を持ち、Markdown の要約は課題の表に種類の列と、走行の節を1行ずつ持つ", () => {
+  const db = openDb(":memory:");
+  const work = workTask(db, "the exercise");
+  const root = getTask(db, examineeRootId(db, interviewExaminee(db, AT).id))!;
+  boardCall(db, "allocation_review", "anthropic", 0.5);
+  boardCall(db, "attribution", "openai", null);
+  boardCall(db, "translation", "anthropic", 0.25);
+  boardCall(db, "model_probe", "moonshot", 0.125);
+  auditorRcaOn(db, getTask(db, work)!, AT, "deckhand");
+  session(db, childTitled(db, work, "rca (auditor)").id, "fugu", "claude-code", 2);
+  session(db, workTask(db, "stray"), "deckhand", "codex", null);
+
+  const { record, markdown } = extract(
+    db,
+    scratch(),
+    [
+      { exercise: exercise("work"), task_id: work, test_exit: 0 },
+      { exercise: interviewExercise("interview"), task_id: root.id, test_exit: null },
+    ],
+    CONFIG,
+  );
+
+  expect(record.spend.not_included).toBe("Calls without usage and the usage TUI's startup quota check are not included.");
+  expect(markdown).toContain("| exercise | kind | handled |");
+  expect(markdown).toContain("| work | work | yes |");
+  expect(markdown).toContain("| interview | optimisation | — |");
+  expect(markdown).toContain("- learning: anthropic 0.50, claude-code 2.00, openai 1 unpriced\n");
+  expect(markdown).toContain("- human surface: anthropic 0.25\n");
+  expect(markdown).toContain("- observation: moonshot 0.13\n");
+  expect(markdown).toContain("- unclassified: 1 sessions, codex 1 unpriced\n");
+  expect(markdown).toContain("Calls without usage and the usage TUI's startup quota check are not included.");
 });

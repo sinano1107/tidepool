@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { z } from "zod";
+import { type BoardCallUse, listBoardCalls } from "../../../src/board-call-usage.js";
 import type { Db } from "../../../src/db.js";
 import { latestEventOfTask, listEvents, listEventsOfKinds } from "../../../src/events.js";
 import { executionSettingsChangeSchema, interviewTargetSchema } from "../../../src/execution-setting.js";
@@ -10,7 +11,7 @@ import { EXTRACTOR_VERSION, projectEpisode } from "../../../src/precedent.js";
 import { questionKindOf } from "../../../src/question-kind.js";
 import { requiredTextSchema } from "../../../src/required-text-schema.js";
 import { listRoutingShadow } from "../../../src/routing-review.js";
-import { getTask, interviewRoomPath, latestPosedProbe, listChildren, listExaminees, type Task } from "../../../src/tasks.js";
+import { getTask, interviewRoomPath, isRca, isRepairType, latestPosedProbe, listChildren, listExaminees, type Task } from "../../../src/tasks.js";
 
 /** 実行設定の表の1行。綴りは盤面の表の行を足す変更(`setting: "row"`)の row で、検査もその schema に任せる。 */
 const tableRowSchema = z.record(z.string(), z.unknown()).superRefine((row, ctx) => {
@@ -139,6 +140,25 @@ function sessions(db: Db, logDir: string, task: Task) {
   });
 }
 
+/** 費用を Harness(Provider)ごとに足し、費用の無いものは和に入れず数える —— 部分和を全額と読ませない。 */
+function tally(entries: ReadonlyArray<{ key: string; cost_usd: number | null }>) {
+  const cost_usd: Record<string, number> = {};
+  const unpriced: Record<string, number> = {};
+  for (const entry of entries) {
+    if (entry.cost_usd === null) unpriced[entry.key] = (unpriced[entry.key] ?? 0) + 1;
+    else cost_usd[entry.key] = (cost_usd[entry.key] ?? 0) + entry.cost_usd;
+  }
+  return { cost_usd, unpriced };
+}
+
+/** group ごとの tally。 */
+type Priced = { group: string; key: string; cost_usd: number | null };
+const tallyBy = (entries: readonly Priced[]) =>
+  Object.fromEntries([...new Set(entries.map((e) => e.group))].map((group) => [group, tally(entries.filter((e) => e.group === group))]));
+
+/** 記録から学ぶ task(ADR 0299 決定5): RCA review と記憶・routing の修理子。課題の行の費用から外す。 */
+const learns = (db: Db, task: Task) => isRepairType(task.type) || isRca(db, task.id);
+
 // ponytail: landing.ts の LANDING_ENDED_KINDS は SQL の断片で export されない —— 着地の事実の種類を足したらここも足す
 const LANDINGS = ["local_merge_executed", "pr_merged", "landing_finished", "nothing_to_land"] as const;
 
@@ -213,26 +233,66 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     return (kind.kind === "local_merge" || kind.kind === "pr_promotion_retry") && ids.has(kind.task_id);
   });
   const tasks = [...tree, ...landingQuestions];
-  const treeSessions = tasks.flatMap((task) => sessions(db, logDir, task));
-  const costByHarness: Record<string, number> = {};
-  const unpricedByHarness: Record<string, number> = {};
-  for (const { harness, cost_usd } of treeSessions) {
-    if (cost_usd === null) unpricedByHarness[harness] = (unpricedByHarness[harness] ?? 0) + 1;
-    else costByHarness[harness] = (costByHarness[harness] ?? 0) + cost_usd;
+  // 人間の retry で置き換わった前の root の木も費用に入れる(`interview_retried` を遡る)。所要時間・決着は今の root の木で読む
+  const replaced: Task[] = [];
+  for (let prev = latestEventOfTask(db, root.id, "interview_retried")?.payload.previous_root_id; prev !== undefined; ) {
+    const earlier = getTask(db, prev)!;
+    replaced.push(...subtree(db, earlier));
+    prev = latestEventOfTask(db, earlier.id, "interview_retried")?.payload.previous_root_id;
   }
+  const treeSessions = [...tasks, ...replaced].filter((task) => !learns(db, task)).flatMap((task) => sessions(db, logDir, task));
+  const { cost_usd, unpriced } = tally(treeSessions.map((s) => ({ key: s.harness, cost_usd: s.cost_usd })));
   return {
     name: exercise.name,
     title: exercise.title,
+    kind: exercise.task ? ("work" as const) : ("optimisation" as const),
     readings: exercise.readings,
     task_id,
     handled: test_exit === null ? null : test_exit === 0,
     settlement: settlement(db, root, tasks),
     duration_ms: duration(db, root, tasks),
-    // 費用の無い session(Codex、終わらなかった session)は和に入れず Harness ごとに数える —— 部分和を全額と読ませない
-    cost_usd_by_harness: costByHarness,
-    unpriced_sessions_by_harness: unpricedByHarness,
+    // 費用の無い session(Codex、終わらなかった session)は和に入れず Harness ごとに数える
+    cost_usd_by_harness: cost_usd,
+    unpriced_sessions_by_harness: unpriced,
     questions: tasks.filter((t) => t.type === "question").map((q) => questionKindOf(q).kind),
     sessions: treeSessions,
+  };
+}
+
+/** 記録から学ぶ worker session の置き場(ADR 0299 決定5): meta-review は主題ごと、RCA、修理子は type ごと。どれでもなければ null。 */
+function learningGroup(db: Db, task: Task): string | null {
+  if (task.meta_review_subject !== null) return `meta_review:${task.meta_review_subject}`;
+  if (isRca(db, task.id)) return "rca";
+  return isRepairType(task.type) ? task.type : null;
+}
+
+/** 走行の節ごとの Board call の用途(ADR 0299 決定5)。 */
+const SECTION_USES = {
+  learning: ["allocation_review", "attribution", "behavior_draft"],
+  human_surface: ["task_draft", "child_draft", "handoff_draft", "issue_inspection", "translation"],
+  observation: ["cli_auth_probe", "model_probe"],
+} as const satisfies Record<string, readonly BoardCallUse[]>;
+
+/** 走行の支出の節(ADR 0299 決定5): Board call の行は用途ごとに Provider で、記録から学ぶ session は置き場ごとに Harness で足す。
+ *  どの課題の木にも、どの節にも入らない worker session は未分類として並べる。 */
+function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: ReturnType<typeof exerciseRecord>[]) {
+  const calls: Priced[] = listBoardCalls(db).map((call) => ({ group: call.use, key: call.provider, cost_usd: call.usage.estimated_cost_usd }));
+  /** 節の Board call の行(用途ごと)と、節の総和(Provider / Harness ごと)。 */
+  const section = (uses: readonly BoardCallUse[], sessionEntries: readonly Priced[] = []) => {
+    const own = calls.filter((call) => (uses as readonly string[]).includes(call.group));
+    return { total: tally([...own, ...sessionEntries]), board_calls: tallyBy(own) };
+  };
+  const learning = boardTasks.flatMap((task) => {
+    const group = learningGroup(db, task);
+    return group === null ? [] : sessions(db, logDir, task).map((s) => ({ group, key: s.harness, cost_usd: s.cost_usd }));
+  });
+  const onExercise = new Set(exercises.flatMap((e) => e.sessions.map((s) => s.task_id)));
+  return {
+    not_included: "Calls without usage and the usage TUI's startup quota check are not included.",
+    learning: { ...section(SECTION_USES.learning, learning), sessions: tallyBy(learning) },
+    human_surface: section(SECTION_USES.human_surface),
+    observation: section(SECTION_USES.observation),
+    unclassified: boardTasks.filter((task) => !onExercise.has(task.id) && learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task)),
   };
 }
 
@@ -244,6 +304,7 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
   const record = {
     config,
     exercises,
+    spend: spend(db, logDir, boardTasks, exercises),
     decision_rows: boardTasks.flatMap((review) =>
       review.meta_review_subject === null
         ? []
@@ -291,37 +352,47 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
         : [],
     ),
   };
-  return { record, markdown: summary(exercises) };
+  return { record, markdown: summary(exercises, record.spend) };
 }
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)}m`;
 
-/** 課題ごとの表(Markdown)。4プロセスの節は JSON を読む。 */
-function summary(exercises: ReturnType<typeof exerciseRecord>[]): string {
+/** 費用の和と費用の無い数を1セルに(無ければ —)。 */
+function costText({ cost_usd, unpriced }: ReturnType<typeof tally>): string {
+  const parts = [...Object.entries(cost_usd).map(([key, usd]) => `${key} ${usd.toFixed(2)}`), ...Object.entries(unpriced).map(([key, n]) => `${key} ${n} unpriced`)];
+  return parts.length > 0 ? parts.join(", ") : "—";
+}
+
+/** 課題ごとの表と走行の支出の節の1行ずつ(Markdown)。4プロセスの節は JSON を読む。 */
+function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnType<typeof spend>): string {
   const cell = (v: unknown) => (v === null ? "—" : String(v));
-  const rows = exercises.map((e) => {
-    const cost = [
-      ...Object.entries(e.cost_usd_by_harness).map(([harness, usd]) => `${harness} ${usd.toFixed(2)}`),
-      ...Object.entries(e.unpriced_sessions_by_harness).map(([harness, n]) => `${harness} ${n} unpriced`),
-    ];
-    return [
+  const rows = exercises.map((e) =>
+    [
       e.name,
+      e.kind,
       e.handled === null ? "—" : e.handled ? "yes" : "no",
       e.settlement.status,
       cell(e.settlement.review_verdict),
       cell(e.settlement.landing),
-      cost.length > 0 ? cost.join(", ") : "—",
+      costText({ cost_usd: e.cost_usd_by_harness, unpriced: e.unpriced_sessions_by_harness }),
       minutes(e.duration_ms.wall),
       minutes(e.duration_ms.queue),
       minutes(e.duration_ms.human_wait),
       minutes(e.duration_ms.board),
       e.questions.length,
-    ].join(" | ");
-  });
+    ].join(" | "),
+  );
   return [
-    "| exercise | handled | status | review | landing | cost_usd | wall | queue | human wait | board | questions |",
-    "|---|---|---|---|---|---|---|---|---|---|---|",
+    "| exercise | kind | handled | status | review | landing | cost_usd | wall | queue | human wait | board | questions |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows.map((row) => `| ${row} |`),
+    "",
+    `- learning: ${costText(spent.learning.total)}`,
+    `- human surface: ${costText(spent.human_surface.total)}`,
+    `- observation: ${costText(spent.observation.total)}`,
+    `- unclassified: ${spent.unclassified.length} sessions, ${costText(tally(spent.unclassified.map((s) => ({ key: s.harness, cost_usd: s.cost_usd }))))}`,
+    "",
+    spent.not_included,
     "",
   ].join("\n");
 }
