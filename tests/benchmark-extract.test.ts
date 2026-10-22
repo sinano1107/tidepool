@@ -435,6 +435,7 @@ it("最適化の課題(Interview)の行は種類 optimisation と、root・受�
   const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: root.id, test_exit: null }], CONFIG);
 
   expect(record.exercises[0]).toMatchObject({ kind: "optimisation", cost_usd_by_harness: { "claude-code": 3 }, unpriced_sessions_by_harness: { codex: 1 } });
+  expect(record.spend.learning.sessions.rca).toEqual({ cost_usd: { "claude-code": 8 }, unpriced: {} });
 });
 
 it("人間の retry で置き換わった前の Interview の root の木の session は、その課題の行に入り未分類に落ちない", () => {
