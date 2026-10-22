@@ -709,6 +709,7 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
 
 /** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(review 側には配分評価も outcome も無い)で、
  *  受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
+// ponytail: 条件と鍵が episode ごとに段・登録者を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と登録者を1度だけ Map に引く
 const productionSessions = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
   sessions: loadEpisodes(db),
   absent: "is not a session of a work-side task: a review-side session has no allocation review or outcome",
