@@ -27,7 +27,7 @@ runner が受け取った usage を client が捨てていた。判断の段の�
 
 ## 帰結
 
-- 使用量の読み取りの TUI は起動のたびに quota の確かめ(`max_tokens: 1` の `messages.create`、haiku)を1回撃つが、usage をどこにも
+- 使用量の読み取りの TUI は起動のたびに quota の確かめ(`max_tokens: 1` の `messages.create`、binary の読みでは haiku 系)を1回撃つが、usage をどこにも
   報告しないので行にできない(2.1.300 / 2.1.308 で実測、固定版 2.1.286 は未測)。headless の `-p "/usage"` は model を呼ばないので、
   #2010 の置き換えでこの欠けごと消える。
 - ベンチマークの記録は「答えが返らなかった呼び出しと、使用量の読み取りの quota の確かめは含まない」と書く。
