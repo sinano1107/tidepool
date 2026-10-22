@@ -8,10 +8,10 @@ import {
   pinnedModelFlags,
 } from "./claude-worker.js";
 import {
+  CliAuthError,
   execFailureEnvelope,
   isCliAuthFailureEnvelope,
   RowRefusalError,
-  rethrowCliAuthExecFailure,
   rowRefusalCause,
 } from "./cli-auth.js";
 
@@ -76,10 +76,15 @@ function extractJson(text: string): unknown {
   return JSON.parse(start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed);
 }
 
-/** 行の Board call の envelope が行の拒否の証拠なら、撃った行を持つ拒否を投げる(ADR 0202 決定1)。 */
-function throwIfRowRefused(envelope: unknown, { provider, model }: BoardCallSetting): void {
+/** envelope が行の拒否(ADR 0202 決定1)か 401(ADR 0070)の証拠なら投げる。非ゼロ終了の stdout もゼロ終了の
+ *  stdout も通る1か所で、順は拒否が先。どちらも usage があっても行を残さない(ADR 0299 決定3)。 */
+function throwIfRefusedOrUnauthorized(envelope: unknown, { provider, model }: BoardCallSetting): void {
   const cause = rowRefusalCause(envelope);
   if (cause) throw new RowRefusalError(provider, model, cause);
+  if (isCliAuthFailureEnvelope(envelope)) {
+    const { result } = envelope as { result?: unknown };
+    throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
+  }
 }
 
 /** The answer as the model wrote it. */
@@ -119,15 +124,14 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
     );
   } catch (err) {
     const failed = execFailureEnvelope(err);
-    throwIfRowRefused(failed, setting);
-    // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn
-    // and carries it, while a 401 leaves no row (ADR 0299 決定3)
-    const usage = isCliAuthFailureEnvelope(failed) ? undefined : envelopeUsageSchema.safeParse(failed).data;
+    throwIfRefusedOrUnauthorized(failed, setting);
+    // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn and carries it
+    const usage = envelopeUsageSchema.safeParse(failed).data;
     if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage);
-    rethrowCliAuthExecFailure(err);
+    throw err;
   }
   const envelope: unknown = JSON.parse(stdout);
-  throwIfRowRefused(envelope, setting);
+  throwIfRefusedOrUnauthorized(envelope, setting);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
   const usage = envelopeUsageSchema.safeParse(envelope).data;
   // a failure the CLI reported usage for still ran a turn: the error carries it (ADR 0299 決定3)

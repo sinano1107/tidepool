@@ -45,15 +45,6 @@ describe("Claude の Board call runner", () => {
     }
   });
 
-  it("usage つきの 401 は行を残す error にせず CliAuthError のまま投げる(ADR 0299 決定3)", async () => {
-    const unauthorized: ExecFn = async () => {
-      throw Object.assign(new Error("Command failed"), {
-        stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired", ...CLI_ENVELOPE_USAGE }),
-      });
-    };
-    await expect(runClaudeBoardCallJson(call(unauthorized), schema)).rejects.toBeInstanceOf(CliAuthError);
-  });
-
   it("答えの JSON の文字列が ``` を含んでも、包む fence の有無によらず JSON を取り出す(#2414 の 20 断片実測)", async () => {
     const textSchema = z.object({ text: z.string() });
     const answer = JSON.stringify({ text: "```ts\nconst x = 1;\n```" });
@@ -98,6 +89,22 @@ describe("Claude の Board call runner", () => {
       });
     }
   }
+
+  it("401 の封筒は、どちらの経路で届いても CliAuthError で reject する(ADR 0070)", async () => {
+    for (const exec of Object.values(delivered)) {
+      const err = await runClaudeBoardCallJson(call(exec({ is_error: true, api_error_status: 401, result: "expired" })), schema).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(CliAuthError);
+      expect(err).toHaveProperty("message", "expired");
+    }
+  });
+
+  it("usage つきの 401 は行を残す error にせず、どちらの経路でも CliAuthError のまま投げる(ADR 0299 決定3)", async () => {
+    for (const exec of Object.values(delivered)) {
+      const err = await runClaudeBoardCallJson(call(exec({ is_error: true, api_error_status: 401, result: "expired", ...CLI_ENVELOPE_USAGE })), schema).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(CliAuthError);
+      expect(err).not.toBeInstanceOf(BoardCallUsageError);
+    }
+  });
 
   it("非ゼロ終了の 401 は CliAuthError、それ以外の非ゼロ終了は同じ error のまま reject する", async () => {
     const unauthorized: ExecFn = async () => {
