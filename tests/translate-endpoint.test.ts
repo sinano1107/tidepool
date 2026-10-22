@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { TRANSLATION_FRAGMENTS_PER_CALL } from "../src/translation.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { api, bootTidepool, HUMAN_WEBUI, registerQuestion, type Tidepool } from "./harness.js";
 
@@ -42,6 +43,41 @@ it("decision log の一行を翻訳する(type: log_entry)", async () => {
     cached: false,
   });
   expect(translationClient.calls).toEqual([{ fragments: ["decided to use approach A"], language: "Japanese" }]);
+});
+
+it("decision log の複数行を1リクエストで翻訳し、event id ごとの訳を返す(type: log_entries、ADR 0296 決定4)", async () => {
+  const translationClient = new FakeTranslationClient();
+  t = await bootTidepool({ translationClient });
+  const registered = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const ids = ["line a", "line b"].map((line) => logDecision(t.db, registered, line, "tako", t.clock.now(), "worker"));
+
+  const res = await api(t.baseUrl, "POST", "/api/translate", { type: "log_entries", event_ids: ids });
+
+  expect(res.status).toBe(200);
+  expect(res.json).toEqual({
+    status: "translated",
+    entries: [
+      { event_id: ids[0], text: "[translated] line a" },
+      { event_id: ids[1], text: "[translated] line b" },
+    ],
+  });
+});
+
+it("log_entries は上限を超える id の配列を 400、解決できない id を含む配列を 404 で断る", async () => {
+  const translationClient = new FakeTranslationClient();
+  t = await bootTidepool({ translationClient });
+  const registered = registerTask(t.db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
+  const id = logDecision(t.db, registered, "line a", "tako", t.clock.now(), "worker");
+
+  const overLimit = await api(t.baseUrl, "POST", "/api/translate", {
+    type: "log_entries",
+    event_ids: Array.from({ length: TRANSLATION_FRAGMENTS_PER_CALL + 1 }, () => id),
+  });
+  const unresolvable = await api(t.baseUrl, "POST", "/api/translate", { type: "log_entries", event_ids: [id, 999] });
+
+  expect(overLimit.status).toBe(400);
+  expect(unresolvable.status).toBe(404);
+  expect(translationClient.calls).toEqual([]);
 });
 
 it("同じ event_id への2回目の翻訳リクエストはキャッシュから返し、クライアントを再度呼ばない", async () => {

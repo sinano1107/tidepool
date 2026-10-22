@@ -75,9 +75,11 @@ interface TpTriageQuestion extends TpQuestion {
  *  中身は対象ごとに違う欄に載る —— 呼び手が自分の欄だけを読む。 */
 type TpTranslateTarget =
   | { type: 'question' | 'handoff'; task_id: string }
-  | { type: 'log_entry'; event_id: number }
+  | { type: 'log_entries'; event_ids: number[] }
   | { type: 'memory_entry'; entry_id: number }
   | { type: 'to_english' | 'back_translation'; text: string };
+/** 1回の `log_entries` に載せる event id の上限 —— src/translation.ts の同名の定数の写し(超えると 400)。 */
+const TRANSLATION_FRAGMENTS_PER_CALL = 20;
 type TpTranslateFn = (
   target: TpTranslateTarget,
   opts?: { signal?: AbortSignal },
@@ -93,6 +95,8 @@ type TpLogEntry = NonNullable<import('../design-system/components/board/LogEntry
   unread: boolean;
   kind: 'completion' | 'decision';
   handoffPresent: boolean;
+  /** 訳す原文があるか —— 本文の無い完了報告は log_entries に載せると chunk ごと 404 になる。 */
+  translatable: boolean;
   workspace?: string | null;
   pendingObjections?: string[];
   bundledObjections?: string[];
@@ -870,7 +874,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // just unread — keyed by entry id so a fold/reveal never re-requests an
   // entry already translated this session. `renderedLogEntries` mirrors
   // exactly what the two .map calls below actually paint (visible-read +
-  // unread, per group).
+  // unread, per group), minus the rows with no source text to translate.
   const [logTranslateOn, setLogTranslateOn] = React.useState(false);
   const [logTranslations, setLogTranslations] = React.useState<Record<number, TpTranslation>>({});
   const logTranslateRequested = React.useRef(new Set<number>());
@@ -881,7 +885,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
       const hiddenCount = g.readCount - revealed;
       rendered.push(...g.readEntries.slice(hiddenCount), ...g.unreadEntries);
     }
-    return rendered;
+    return rendered.filter((entry) => entry.translatable);
   }, [logGroups, revealedRead]);
   // ADR 0063 決定4: the AbortController's lifecycle is the *toggle*
   // (logTranslateOn alone), not the fanout below — deliberately narrower
@@ -905,28 +909,36 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
     logTranslateAbort.current = controller;
     return () => controller.abort();
   }, [logTranslateOn]);
-  // Toggling off cancels this cycle's not-yet-sent requests (the controller
+  // ADR 0296 決定4: the not-yet-requested rows go out as `log_entries` chunks
+  // of the server's per-call limit, one request each; a chunk's answer fills
+  // its rows (a translated one per event id, any other state the same for
+  // all of them), so the progress number below steps per chunk.
+  // Toggling off cancels this cycle's not-yet-sent chunks (the controller
   // above) — already-dispatched ones ignore it and run to completion
-  // (translateTarget's own gate). The trap: a cancelled key must come back
-  // out of `logTranslateRequested`, or turning the switch back on never
-  // re-requests it and the row stays on 'loading' forever.
+  // (translateTarget's own gate). The trap: a cancelled chunk's keys must come
+  // back out of `logTranslateRequested`, or turning the switch back on never
+  // re-requests them and the rows stay on 'loading' forever.
   React.useEffect(() => {
     if (!logTranslateOn || !onTranslate) return;
     const signal = logTranslateAbort.current!.signal;
-    for (const entry of renderedLogEntries) {
-      const k = entry.id;
-      if (logTranslateRequested.current.has(k)) continue;
-      logTranslateRequested.current.add(k);
-      runTranslate(onTranslate, { type: 'log_entry', event_id: entry.id },
-        (result) => setLogTranslations((prev) => ({ ...prev, [k]: result })),
+    const ids = renderedLogEntries.map((entry) => entry.id).filter((k) => !logTranslateRequested.current.has(k));
+    for (let at = 0; at < ids.length; at += TRANSLATION_FRAGMENTS_PER_CALL) {
+      const chunk = ids.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
+      for (const k of chunk) logTranslateRequested.current.add(k);
+      runTranslate(onTranslate, { type: 'log_entries', event_ids: chunk },
+        (result) => setLogTranslations((prev) => {
+          const next = { ...prev };
+          for (const k of chunk) next[k] = result;
+          if (result.status === 'translated') for (const e of result.entries ?? []) next[e.event_id] = { status: 'translated', text: e.text };
+          return next;
+        }),
         {
           signal,
           onAbort: () => {
-            logTranslateRequested.current.delete(k);
+            for (const k of chunk) logTranslateRequested.current.delete(k);
             setLogTranslations((prev) => {
-              if (!(k in prev)) return prev;
               const next = { ...prev };
-              delete next[k];
+              for (const k of chunk) delete next[k];
               return next;
             });
           },
@@ -939,8 +951,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // unread entries; N identical notes would just be noise).
   const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === 'throttled');
   // ADR 0063 決定3: one number next to the switch, derived from state the
-  // kit already holds — no new wiring. Not a progress bar (7.4s/entry is too
-  // coarse to read as motion, and it can't distinguish "stalled" from "slow").
+  // kit already holds — no new wiring. Not a progress bar (it steps a whole
+  // chunk at a time, too coarse to read as motion, and it can't distinguish
+  // "stalled" from "slow").
   const logTranslateTotal = logTranslateOn
     ? renderedLogEntries.length
     : 0;
