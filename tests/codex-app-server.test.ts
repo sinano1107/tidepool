@@ -28,7 +28,10 @@ function writeCompatibleSchemas(out: string): void {
         },
         {
           required: ["id", "method"],
-          properties: { method: { enum: ["account/rateLimits/read"] }, params: { type: "null" } },
+          properties: {
+            method: { enum: ["account/rateLimits/read"] },
+            params: { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] },
+          },
         },
         {
           required: ["id", "method", "params"],
@@ -219,13 +222,13 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
   ]);
 });
 
-// codex-cli 0.163.0 の生成 schema の形: params は省略可で、object か null。盤面が送る `params: null` はまだ通る
-it("a rate-limits request whose params also admits an object still conforms, since the board sends null", async () => {
+// 盤面は `params: null` を送る —— 生成 schema がそれを受けなくなったら drift(0.163.0 では object か null)
+it("a rate-limits request whose params no longer admits null reads as schema drift", async () => {
   const { command } = fakeCodex({
     drift: (out) => {
       const path = join(out, "ClientRequest.json");
       const requests = JSON.parse(readFileSync(path, "utf8"));
-      requests.oneOf[1].properties.params = { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] };
+      requests.oneOf[1].properties.params = { $ref: "#/definitions/GetAccountRateLimitsParams" };
       writeFileSync(path, JSON.stringify(requests));
     },
   });
@@ -234,7 +237,7 @@ it("a rate-limits request whose params also admits an object still conforms, sin
     new Date(1_000),
   );
 
-  expect(result).toMatchObject({ status: "observed", plan: "plus" });
+  expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
 });
 
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {

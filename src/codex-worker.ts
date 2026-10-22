@@ -608,13 +608,16 @@ export function permissionConfig(
   ];
 }
 
+/** 許可ドメインへの egress を濾す proxy を起こす1行。これが無いと permission profile の network は何も解決しない
+ *  (0.163.0 で実測、#696)。worker の spawn と、それを写す試験(適合試験の到達の行・面接室 canary)が同じここから取る。 */
+export const NETWORK_PROXY_CONFIG = "features.network_proxy=true";
 /** 閉じる名前は導出する(ADR 0135 決定1): snapshot の全名 − 開ける名前 − `=false` が届かない名前。
  *  既定が false のものにも明示的に `=false` を渡す。開ける側を `-c` に書かないのは、それが版の宣言に
  *  当たるからである(ADR 0134 決定2)。 */
 export function closedSurfaceConfig(): string[] {
   const stays = new Set<string>([...OPEN_FEATURES, ...UNSETTABLE_FEATURES]);
   return [
-    "features.network_proxy=true",
+    NETWORK_PROXY_CONFIG,
     ...Object.keys(CODEX_FEATURE_SNAPSHOT)
       .filter((name) => !stays.has(name))
       .map((name) => `features.${name}=false`),

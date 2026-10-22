@@ -39,6 +39,7 @@ import {
   configArgs,
   createCodexCapabilityCheck,
   FORCED_LOGIN_METHOD,
+  NETWORK_PROXY_CONFIG,
   permissionConfig,
   resolveCodexExecutable,
   WORKER_EXEC_FLAGS,
@@ -97,7 +98,7 @@ async function run(spec: Omit<BoardCallSpec, "harness" | "command">) {
 const ALLOWED_DOMAIN = "registry.npmjs.org";
 const egress = (host: string) =>
   inDisposable(async ({ workspace, temp }) => {
-    const config = [...permissionConfig("work", workspace, temp, executable, [ALLOWED_DOMAIN]), "features.network_proxy=true"];
+    const config = [...permissionConfig("work", workspace, temp, executable, [ALLOWED_DOMAIN]), NETWORK_PROXY_CONFIG];
     const result = await run({
       kind: "conformance egress",
       args: ["sandbox", "-P", "tidepool-work", "-C", workspace, ...config.flatMap((entry) => ["-c", entry]), ...egressCurl(host)],

@@ -17,9 +17,8 @@
 #            `autoAllowBashIfSandboxed` at its default), cwd = the room, the real
 #            environment in `sandbox.filesystem.allowRead` and as a `Read` allow.
 #   Codex  — `codex sandbox -P tidepool-work -C <room>` with its `permissionConfig()`
-#            (`--codex`), the real environment "read" in the filesystem map, plus
-#            `features.network_proxy=true` as the worker's closedSurfaceConfig() turns
-#            it on. No model turn.
+#            (`--codex`, which also emits the worker's NETWORK_PROXY_CONFIG line),
+#            the real environment "read" in the filesystem map. No model turn.
 #
 # ROWS, per provider (one session for Claude), run by
 # scripts/interview-room-canary-probe.sh from the room:
@@ -233,15 +232,15 @@ if CODEX=$(realpath "$(command -v codex)" 2>/dev/null); then
     fail "could not emit the Codex permission config from $REPO — is that a checkout with node_modules and the interview type (#2192)?"
     exit 2
   fi
-  CODEX_ARGS=(-c features.network_proxy=true)
+  CODEX_ARGS=()
   while IFS= read -r entry; do CODEX_ARGS+=(-c "$entry"); done < "$WORK/codex.config"
   if ! grep -qF "\"$REAL\"=\"read\"" "$WORK/codex.config"; then
     fail "the emitted Codex config does not open the real environment for reading — $REPO predates it."
     exit 2
   fi
   log "running the probe under codex sandbox (no model turn)…"
-  # The production preflight's argument shape (probePermission in
-  # src/codex-worker.ts) and workerEnv's git and temp settings.
+  # A worker's permission profile and proxy line, emitted above, and workerEnv's
+  # git and temp settings.
   CODEX_OUT=$(cd "$ROOM" && CODEX_HOME="${TIDEPOOL_CODEX_HOME:-$HOME/.tidepool/codex}" TMPDIR="$TASK_TEMP" \
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 \
     "$CODEX" sandbox -P tidepool-work -C "$ROOM" "${CODEX_ARGS[@]}" bash interview-room-canary-probe.sh < /dev/null 2>&1)

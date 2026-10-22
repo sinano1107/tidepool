@@ -207,9 +207,8 @@ function references(schema: any, name: string): boolean {
     schema?.anyOf?.some((entry: any) => references(entry, name));
 }
 
-// 盤面は `params: null` を送る —— 検査するのはその要求がまだ通ること(0.163.0 で object か null に広がった)
-const admitsNull = (schema: any): boolean =>
-  schema?.type === "null" || !!schema?.anyOf?.some((entry: any) => entry?.type === "null");
+// 盤面は `params: null` を送る —— 検査するのはその要求がまだ通ること(0.163.0 の形は object か null の anyOf)
+const admitsNull = (schema: any): boolean => !!schema?.anyOf?.some((entry: any) => entry?.type === "null");
 
 function schemasConform(requests: any, account: any, rateLimits: any, modelList: any): boolean {
   const accountRequest = requestSchema(requests, "account/read");

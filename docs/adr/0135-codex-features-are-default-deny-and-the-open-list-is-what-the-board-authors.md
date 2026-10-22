@@ -2,6 +2,8 @@
 
 **Status 追記: 決定5 は [ADR 0255](0255-codex-model-metadata-is-not-a-floor-because-the-backend-sets-its-values-at-runtime.md) が supersede(2026-10-14)。** model の metadata の値は pin でなく backend が実行時に決めるので、metadata が届く軸では feature の閉じを床に数えず、版ごとの source 読みは各欄の最悪値で別の床が掛かるかを読む。決定1〜4・6 は不変。
 
+**Status 追記: 決定2 の例の `remote_compaction_v2` は codex-cli 0.163.0 で stage `removed`(#696、2026-10-22)。** V1 の compaction は vendor から消え、V2 は provider の能力で選ばれるので、この名前は切り替えるものを持たない。`OPEN_FEATURES` から外した(残すと snapshot の型が `true` を要求する)。線は2本のまま。
+
 2026-09-20 の grilling(issue #571)で決定。ADR 0039 の「既定拒否の allowlist」はツール層の決定で、Codex の features 軸の向きは
 どこにも決まっていなかった。`CLOSED_FEATURES` は名指しで閉じる列挙で、導入元(#453)にも ADR 0098 / 0108 にも選定の根拠が無く、
 stable かつ true のまま列挙の外にいる feature が 23 件あった。vendor source(`rust-v0.147.0`)を feature ごとに読んだ結果と
