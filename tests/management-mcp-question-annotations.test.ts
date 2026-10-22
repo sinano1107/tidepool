@@ -12,6 +12,7 @@ import {
   managementMcpClient,
   mcpClient,
   registerWork,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
 } from "./harness.js";
 
@@ -97,6 +98,7 @@ it("pin した entry を移した memory の提案 question は list_board と g
     "worker",
     t.clock.now(),
   ).entry_id;
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((x) => x.meta_review_subject === "memory");
   const worker = await mcpClient(t.mcpBaseUrl, review.id);

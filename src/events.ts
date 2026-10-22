@@ -942,7 +942,7 @@ export function getEvent(db: Db, id: number): EventRow | undefined {
 }
 
 /** payload を kind で絞った EventRow。 */
-type EventRowOf<K extends EventKind> = EventRow & { payload: Extract<EventPayload, { kind: K }> };
+export type EventRowOf<K extends EventKind> = EventRow & { payload: Extract<EventPayload, { kind: K }> };
 
 /** kind(複数可)で盤面全体の event を id 順に引く。`after` より後(排他)・`upTo` まで(包含)に絞れる。 */
 export function listEventsOfKinds<K extends EventKind>(

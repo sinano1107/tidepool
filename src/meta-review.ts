@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventKind, type EventOrigin, type EventPayload, getEvent, type Judgment, latestEventOfTask, listEventsOfKinds } from "./events.js";
+import { appendEvent, type EventKind, type EventOrigin, type EventPayload, type EventRowOf, getEvent, type Judgment, latestEventOfTask, parseEventRow } from "./events.js";
 import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from "./execution-setting.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -271,30 +271,73 @@ export function completeMetaReview<I, J = I>(
   })();
 }
 
-/** 窓の中の主題の材料の event(id 順)。同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、
- *  review の直接書き込みの activity —— は数えない(ADR 0151)。due の判定と memory meta-review の材料の節が共有する。 */
-export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: MetaReviewWindow) {
-  return listEventsOfKinds(db, kinds, window).filter(({ payload }) => {
-    const mark = payload as { question_id?: string | null; activity?: string; entry?: { author: { activity: string } } };
-    return mark.question_id == null && (mark.activity ?? mark.entry?.author.activity) !== "meta_review";
-  });
+/** 窓の中の主題の材料の event の SQL(ADR 0151): 同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、
+ *  review の直接書き込みの activity(無効化は payload の、作成は entry の書き手の)—— は数えない。材料の述語の唯一の置き場で、
+ *  材料の event の読みと件数の読みが共有する。 */
+function materialSql(select: string, kinds: readonly EventKind[], { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+  return {
+    sql: `SELECT ${select} FROM events WHERE kind IN (${kinds.map(() => "?").join(", ")}) AND id > ? AND id <= ?
+            AND json_extract(payload, '$.question_id') IS NULL
+            AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`,
+    params: [...kinds, after, upTo],
+  };
 }
 
-/** 主題の meta-review を盤面名義で登録する(周期が通る1本、due は見ない)。 */
-export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date): void {
-  db.transaction(() => {
+/** 窓の中の主題の材料の event(id 順)。due の判定と memory meta-review の材料の節が共有する。 */
+export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: MetaReviewWindow): EventRowOf<K>[] {
+  const { sql, params } = materialSql("*", kinds, window);
+  return db.prepare(`${sql} ORDER BY id`).all(...params).map((row) => parseEventRow(row) as EventRowOf<K>);
+}
+
+/** 窓の中の主題の材料の件数と最初の時刻(行を読み込まない —— 盤面の履歴に比例する、ADR 0300 帰結)。 */
+export function countMaterial(db: Db, kinds: readonly EventKind[], window: MetaReviewWindow): { count: number; first_at: string | null } {
+  const { sql, params } = materialSql("COUNT(*) AS count, MIN(created_at) AS first_at", kinds, window);
+  return db.prepare(sql).get(...params) as { count: number; first_at: string | null };
+}
+
+/** 主題の meta-review を盤面名義で登録する(周期と初回の扉が通る1本、due は見ない)。task は盤面名義のまま —— 本文は盤面の指示で
+ *  人間は編集できない(ADR 0198 決定4)。誰が起こしたかは `meta_review_registered` の経路が運ぶ: 盤面か、人間の面(ADR 0300 決定2)。 */
+export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date, origin: "board" | "webui" | "mcp" = "board"): Task {
+  return db.transaction(() => {
     // 盤面自身の判断の段で走る —— 振り返り Board call と1つの設定を共有する(ADR 0200 決定4)
     const review_tier = readExecutionSettings(db).judgementTier;
     const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, review_tier, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {
       taskId: task.id,
-      workerId: BOARD_WORKER_ID,
-      origin: "board",
+      workerId: origin === "board" ? BOARD_WORKER_ID : HUMAN_WORKER_ID,
+      origin,
       payload: { kind: "meta_review_registered", subject, material_watermark: watermark },
       at: now,
     });
+    return task;
   })();
+}
+
+/** 主題の初回の meta-review を人間が起こす扉(ADR 0300 決定2)。門は3つ —— 同主題の登録が無い(取り消された回も含む)・
+ *  盤面の始まりからの材料が1件以上・同主題の未決着が無い。どれかに当たれば何も記録せず拒む。`agents` は周期の登録と同じ registry の一覧。 */
+export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin: "webui" | "mcp", now: Date, agents?: ListAgentTiers): Task {
+  if (latestRegistration(db, subject)) {
+    throw new DomainError(`the first ${subject} meta-review was already registered: every later one is registered by the period`);
+  }
+  if (countMaterial(db, META_REVIEW_SUBJECTS[subject].material, { after: 0 }).count === 0) {
+    throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one change to review`);
+  }
+  if (hasUnsettled(db, subject, now, agents)) {
+    throw new DomainError(`an unsettled ${subject} task or proposal question is open: settle it before starting the first ${subject} meta-review`);
+  }
+  return registerMetaReview(db, subject, now, origin);
+}
+
+/** 同主題の最新の登録(取り消された回も含む)と、その task の状態・watermark。周期の起点(ADR 0193 決定2)で、在れば初回の扉は閉じる
+ *  (ADR 0300 決定3)。 */
+function latestRegistration(db: Db, subject: MetaReviewSubject) {
+  return db
+    .prepare(
+      `SELECT e.created_at, json_extract(e.payload, '$.material_watermark') AS watermark, t.status FROM events e JOIN tasks t ON t.id = e.task_id
+        WHERE e.kind = 'meta_review_registered' AND json_extract(e.payload, '$.subject') = ? ORDER BY e.id DESC LIMIT 1`,
+    )
+    .get(subject) as { created_at: string; watermark: number; status: Task["status"] } | undefined;
 }
 
 /** 周期の既定(日、ADR 0120 決定2)。間隔の下限で、全主題に共通。 */
@@ -306,9 +349,35 @@ export const metaReviewSettingsChangeSchema = z.object({ period_days: z.number()
 }) });
 type MetaReviewSettings = { period_days: number };
 
+/** 初回の扉の入力(WebUI と管理 MCP が共有する)。 */
+export const firstMetaReviewSchema = z.object({ subject: z.enum(["memory", "routing"]) });
+
 export function readMetaReviewSettings(db: Db): MetaReviewSettings {
   const row = db.prepare("SELECT period_days FROM meta_review_defaults WHERE id = 1").get() as { period_days: number | null } | undefined;
   return { period_days: row?.period_days ?? DEFAULT_PERIOD_DAYS };
+}
+
+const periodMs = (db: Db) => readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
+
+/** 人間の面が主題ごとに読む初回の状態(ADR 0300 決定2): 未実施なら盤面の始まりからの材料の件数と最初の材料の時刻、登録済みなら
+ *  前回の登録の時刻・次に周期が立てられる最早の時刻・次の回の窓に入る材料の件数(窓の起点は前回の登録、取り消された回の窓は次の回が
+ *  読むのでその前の完了した回 —— ADR 0193 決定3)。件数は行を読み込まず数える。 */
+export function readMetaReviewStatus(db: Db) {
+  const status = (subject: MetaReviewSubject) => {
+    const { material } = META_REVIEW_SUBJECTS[subject];
+    const last = latestRegistration(db, subject);
+    if (!last) {
+      const { count, first_at } = countMaterial(db, material, { after: 0 });
+      return { first_review: "not_started" as const, material: count, first_material_at: first_at };
+    }
+    return {
+      first_review: "registered" as const,
+      last_registered_at: last.created_at,
+      next_earliest_at: new Date(Date.parse(last.created_at) + periodMs(db)).toISOString(),
+      material_since: countMaterial(db, material, { after: last.status === "cancelled" ? lastDoneWatermark(db, subject, null) : last.watermark }).count,
+    };
+  };
+  return { memory: status("memory"), routing: status("routing") };
 }
 
 /** 周期を書き、盤面スコープの操作イベントとして経路つきで残す(changeMemorySettings と同じ形)。
@@ -334,23 +403,24 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
  *  (前回が無ければ周期は満たす)。材料は meta-review 自身の産物 —— 提案
  *  question への回答が刻んだものと直接書き込み —— を数えない(ADR 0151)。 */
 export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTiers): void {
-  const periodMs = readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
+  const period = periodMs(db);
   for (const subject of Object.keys(META_REVIEW_SUBJECTS) as MetaReviewSubject[]) {
     const { material } = META_REVIEW_SUBJECTS[subject];
-    const last = db
-      .prepare(
-        `SELECT created_at FROM events WHERE kind = 'meta_review_registered' AND json_extract(payload, '$.subject') = ? ORDER BY id DESC LIMIT 1`,
-      )
-      .get(subject) as { created_at: string } | undefined;
-    if (last && Date.parse(last.created_at) + periodMs > now.getTime()) continue;
-    // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
-    if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
-    // 未決着 = 行の主題が同じ未決着の task —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
-    // question(親の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7 / ADR 0283 決定1)。
-    // 提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)
-    // ponytail: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
-    const unsettled = db.prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")}`).pluck().all() as string[];
-    if (unsettled.some((id) => lineageSubjectOf(db, id) === subject)) continue;
-    if (materialEvents(db, material, { after: lastDoneWatermark(db, subject, null) }).length > 0) registerMetaReview(db, subject, now);
+    const last = latestRegistration(db, subject);
+    // 初回は人間が扉で起こす(ADR 0300 決定2)—— 周期は2回目から数える
+    if (!last || Date.parse(last.created_at) + period > now.getTime()) continue;
+    if (hasUnsettled(db, subject, now, agents)) continue;
+    if (countMaterial(db, material, { after: lastDoneWatermark(db, subject, null) }).count > 0) registerMetaReview(db, subject, now);
   }
+}
+
+/** 行の主題が同じ未決着の task があるか —— meta-review 自身と、その系譜の修理子・RCA とその子孫(孫の RCA も)、それらの下の提案
+ *  question(親の状態は問わない)(ADR 0120 決定2・ADR 0279 決定7 / ADR 0283 決定1)。周期の登録と初回の扉が共有する(ADR 0300 決定2)。
+ *  提案の kind では数えない —— routing の meta-review は registry 種別の提案も出す(spec #916 A)。 */
+function hasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: ListAgentTiers): boolean {
+  // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
+  if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
+  // ponytail: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
+  const unsettled = db.prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")}`).pluck().all() as string[];
+  return unsettled.some((id) => lineageSubjectOf(db, id) === subject);
 }

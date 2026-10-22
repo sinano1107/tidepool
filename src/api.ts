@@ -67,7 +67,14 @@ import {
   recordKnowledge,
   restoreMemoryEntry,
 } from "./memory.js";
-import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
+import {
+  changeMetaReviewSettings,
+  firstMetaReviewSchema,
+  metaReviewSettingsChangeSchema,
+  readMetaReviewSettings,
+  readMetaReviewStatus,
+  startFirstMetaReview,
+} from "./meta-review.js";
 import { whyInvalidOffset } from "./pace-offset-rule.js";
 import {
   isKnownPaceOffsetTarget,
@@ -1789,6 +1796,18 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     validatedWrite(metaReviewSettingsChangeSchema, (change) => {
       changeMetaReviewSettings(db, change, "webui", clock.now());
       return readMetaReviewSettings(db) satisfies WireContract["POST /api/settings/meta-review"];
+    }),
+  );
+  // ADR 0300 決定2: 主題の初回の meta-review は人間が面を見て扉で起こす。周期の設定の読み(`{ period_days }`)とは別の応答
+  router.get("/settings/meta-review/status", (_req, res) => {
+    sendJson(res, readMetaReviewStatus(db) satisfies WireContract["GET /api/settings/meta-review/status"]);
+  });
+  router.post(
+    "/settings/meta-review/first",
+    validatedWrite(firstMetaReviewSchema, ({ subject }) => {
+      const { id } = startFirstMetaReview(db, subject, "webui", clock.now(), agentAdmin?.list);
+      pollNow();
+      return { id } satisfies WireContract["POST /api/settings/meta-review/first"];
     }),
   );
   router.post("/settings/memory/knowledge", validatedWrite(humanKnowledgeSchema, (input) => recordKnowledge(db, gatedHumanEntryInput(memoryRefDeps, input), "webui", clock.now())));

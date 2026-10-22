@@ -776,7 +776,7 @@ export function startScheduler(deps: {
     let succeeded = false;
     try {
       // ADR 0120 決定2 / ADR 0119: 周期 meta-review の登録は poll の中なので pickup 契機で、候補の
-      // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前(空の盤面でも登録する)。
+      // 読み取りより前なので同じ pass で拾われる。slot 占有・halt より手前。主題の初回は登録しない —— 人間が扉で起こす(ADR 0300 決定2)。
       // **同期**に保つ —— ADR 0119 決定5 の「最初の await より前に slot を読む」を崩さない。
       registerDueMetaReviews(db, clock.now(), agents);
       // ADR 0164 決定4 / ADR 0169 / ADR 0172: 振り返り Board call の sweep も同じく同期で相乗りし、Board call は待たない

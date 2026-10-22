@@ -78,7 +78,14 @@ import {
   restoreMemoryEntry,
   TOKENIZER,
 } from "./memory.js";
-import { changeMetaReviewSettings, metaReviewSettingsChangeSchema, readMetaReviewSettings } from "./meta-review.js";
+import {
+  changeMetaReviewSettings,
+  firstMetaReviewSchema,
+  metaReviewSettingsChangeSchema,
+  readMetaReviewSettings,
+  readMetaReviewStatus,
+  startFirstMetaReview,
+} from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
@@ -728,6 +735,33 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       changeMetaReviewSettings(deps.db, change, "mcp", deps.clock.now());
       return toolResult(readMetaReviewSettings(deps.db));
     },
+  );
+  server.registerTool(
+    "read_meta_review_status",
+    {
+      description:
+        "Read, per subject (memory and routing), where its meta-reviews stand. The period only registers a subject's meta-reviews after its first " +
+        "meta-review, which the human starts with start_first_meta_review once the material looks enough to judge from. Before that: material, the " +
+        "count of the subject's material since the board started, and first_material_at. After it: last_registered_at, next_earliest_at (when the " +
+        "period can register the next one), and material_since, the count of material the next one will read.",
+    },
+    async () => toolResult(readMetaReviewStatus(deps.db)),
+  );
+  server.registerTool(
+    "start_first_meta_review",
+    {
+      description:
+        "Start the first meta-review of a subject (memory or routing) as the human; from then on the period registers the next ones. " +
+        "Refused when a meta-review of the subject was ever registered (cancelled ones included), when the subject has no material, or while an " +
+        "unsettled task or proposal question of the subject is open. Returns the id of the registered meta-review.",
+      inputSchema: firstMetaReviewSchema.shape,
+    },
+    async ({ subject }) =>
+      domainResult(() => {
+        const { id } = startFirstMetaReview(deps.db, subject, "mcp", deps.clock.now(), deps.agentAdmin?.list);
+        deps.pollNow();
+        return { id };
+      }),
   );
   // spec #586 F / issue #593: the human's memory surface. No approve verb (ADR 0152):
   // wording the human writes here is approved on write, and AI-drafted wording is approved

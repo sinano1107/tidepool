@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeMetaReviews, HUMAN_WEBUI, nextPoll, type Tidepool } from "./harness.js";
+import { api, bootTidepool, completeMetaReviews, HUMAN_WEBUI, nextPoll, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 /** issue #1633: `completeMetaReviews` は slot の持ち主を先に退けてから meta-review を走らせる(`runNow`)。 */
 
@@ -22,6 +22,7 @@ it("work が slot を握っていても completeMetaReviews は open な meta-re
   expect((await list()).find((x) => x.id === work.id).status).toBe("in_progress");
 
   expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
+  await startFirstMetaReviewViaWebui(t, "routing");
   const metaReviews = (await list()).filter((x) => x.meta_review_subject && x.status === "todo").map((x) => x.id as string);
   expect(metaReviews.length).toBeGreaterThan(0);
 

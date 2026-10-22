@@ -156,6 +156,12 @@ interface MemorySettings {
   injection_token_cap: number;
 }
 
+/** 主題ごとの初回の状態(src/meta-review.ts の readMetaReviewStatus、ADR 0300 決定2)。未実施なら盤面の始まりからの材料、
+ *  登録済みなら前回の登録・次に周期が立てられる最早の時刻・次の回の窓に入る材料の件数。 */
+type MetaReviewStatus =
+  | { first_review: "not_started"; material: number; first_material_at: string | null }
+  | { first_review: "registered"; last_registered_at: string; next_earliest_at: string; material_since: number };
+
 /** 周期 meta-review の間隔の下限(日、src/meta-review.ts の MetaReviewSettings)。 */
 interface MetaReviewSettings {
   period_days: number;
@@ -403,6 +409,8 @@ export interface WireContract {
   "POST /api/settings/memory": MemorySettings;
   "GET /api/settings/meta-review": MetaReviewSettings;
   "POST /api/settings/meta-review": MetaReviewSettings;
+  "GET /api/settings/meta-review/status": Record<"memory" | "routing", MetaReviewStatus>;
+  "POST /api/settings/meta-review/first": { id: string };
   "GET /api/settings/memory/entries": {
     entries: Array<{
       id: number;

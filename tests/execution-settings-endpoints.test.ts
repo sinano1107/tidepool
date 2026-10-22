@@ -20,6 +20,7 @@ import {
   mcpClient,
   registerWork,
   runNow,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
 } from "./harness.js";
 
@@ -360,6 +361,7 @@ it("人間の直接の降格は open な降格提案を観測で決着させ、r
   t = await bootTidepool();
   promote();
   await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
+  await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");
   const client = await mcpClient(t.mcpBaseUrl, review.id);

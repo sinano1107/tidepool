@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import { createBehaviorCandidate, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, completeMemoryReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { api, bootTidepool, completeMemoryReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -27,10 +27,13 @@ async function openMetaReviews(tp: Tidepool): Promise<any[]> {
   return ((await api(tp.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "memory");
 }
 
-it("前回登録が無く材料があれば、poll が盤面名義で memory meta-review を登録し、同じ pass で pickup する(issue #618)", async () => {
+it("前回登録が無ければ材料があっても poll は登録せず、扉で起こした初回は盤面名義で登録されて pickup され、登録の経路は人間(issue #618 / ADR 0300 決定2)", async () => {
   t = await bootTidepool();
   material(t, "Use Node 22");
+  await t.clock.advance(HOUR);
+  expect(await openMetaReviews(t)).toEqual([]);
 
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
 
   const [{ id }] = await openMetaReviews(t);
@@ -47,7 +50,7 @@ it("前回登録が無く材料があれば、poll が盤面名義で memory met
   expect(t.worker.started.map((task) => task.id)).toEqual([id]);
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
   expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([
-    { worker_id: BOARD_WORKER_ID, payload: { subject: "memory", material_watermark: expect.any(Number) } },
+    { worker_id: HUMAN_WORKER_ID, origin: "webui", payload: { subject: "memory", material_watermark: expect.any(Number) } },
   ]);
 });
 
@@ -64,6 +67,7 @@ it("同主題の open な task があれば登録せず、周期は間隔の下�
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   material(t, "first");
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const [first] = await openMetaReviews(t);
 
@@ -103,6 +107,7 @@ it("同主題の open な提案 question があれば、meta-review が完了し
     "worker",
     t.clock.now(),
   ).entry_id;
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const [first] = await openMetaReviews(t);
   const client = await mcpClient(t.mcpBaseUrl, first.id);

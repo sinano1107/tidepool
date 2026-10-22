@@ -39,6 +39,7 @@ import {
   registerQuestion,
   runNow,
   servedQuarantineQuestion,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -401,6 +402,8 @@ it("監査の pickup は読む面接室を remote へ追従させない —— �
 it("面接室の quarantine が開いている間、root 配下の監査と root の行への異議の RCA はキューで外れ、slot が空いても拾われず、回答で解けると監査が拾われて走る(issue #2265 / ADR 0273 追記)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  await startFirstMetaReviewViaWebui(t, "routing");
   const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
   await api(t.baseUrl, "POST", "/api/triage/start");
   await object(t, taskDecisionLog(t.db, root.id)[0]!.id, "the probe names the answer");
@@ -425,6 +428,8 @@ it("面接室の quarantine が開いている間、root 配下の監査と root
 it("(Harness, 面接室)の封じ込めの組が開いている間、root 配下の監査はキューで外れる(issue #2265 / ADR 0273 追記)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  await startFirstMetaReviewViaWebui(t, "routing");
   const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
 
   registerQuarantine(t.db, "workspaceContainment", workspaceContainmentValue("claude-code", root.id), "its settings widen the floor", t.clock.now());
@@ -972,10 +977,16 @@ async function lastExaminee() {
       interview_targets: [opus46, sonnet55, haiku45],
     })
   ).json;
+  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べる
+  await startFirstMetaReviewViaWebui(t, "routing");
   await callAsTask(t, root.id, "log_decision", { line: `chose the parser probe over the lexer one ${ROOT_MARK}` });
   const rootKnowledge = { path: "parser", title: `parser ${TREE_MEMORY}`, text: `the parser ${TREE_MEMORY}`, source: { commit: "0a46a46" } };
   const rootEntry = JSON.parse((await callAsTask(t, root.id, "record_knowledge", rootKnowledge)).content[0].text).entry_id;
-  const [done, cancelled, reader] = (await poseThroughAudit(t, root.id, SWEEP_POSE)) as [string, string, string];
+  // root の書き込みは記憶の材料 —— 出題の後、root が slot を空ける前に初回の memory meta-review を起こし、監査の後ろに並べる
+  const [done, cancelled, reader] = (await poseThroughAudit(t, root.id, SWEEP_POSE, async (taskId) => {
+    if (taskId === root.id) await startFirstMetaReviewViaWebui(t, "memory");
+    t.worker.exit(taskId);
+  })) as [string, string, string];
   const posed = listEvents(t.db, root.id).find((e) => e.payload.kind === "decision_logged" && e.payload.interview_probe)!.id;
   const exemplar = await api(t.baseUrl, "POST", "/api/settings/memory/exemplars", {
     workspace: getTask(t.db, root.id)!.workspace,

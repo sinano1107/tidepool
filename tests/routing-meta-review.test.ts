@@ -6,7 +6,7 @@ import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { WORKER_MEMORY_VERBS } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -18,6 +18,7 @@ import {
   QUIET_EXIT,
   readFollowingNext,
   registerWork,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -40,11 +41,13 @@ async function openRoutingReviews(tp: Tidepool): Promise<any[]> {
   return ((await api(tp.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "routing");
 }
 
-it("前回登録が無く routing の材料があれば、poll が盤面名義で routing meta-review を frontier・assignee null・workspace null で登録する", async () => {
+it("前回登録が無ければ routing の材料があっても poll は登録せず、扉で起こした初回は盤面名義で frontier・assignee null・workspace null で登録され、登録の経路は人間(ADR 0300 決定2)", async () => {
   t = await bootTidepool();
   await material(t);
-
   await t.clock.advance(HOUR);
+  expect(await openRoutingReviews(t)).toEqual([]);
+
+  await startFirstMetaReviewViaWebui(t, "routing");
 
   const [{ id }] = await openRoutingReviews(t);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json).toMatchObject({
@@ -57,7 +60,7 @@ it("前回登録が無く routing の材料があれば、poll が盤面名義�
   });
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
   expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([
-    { worker_id: BOARD_WORKER_ID, payload: { subject: "routing", material_watermark: expect.any(Number) } },
+    { worker_id: HUMAN_WORKER_ID, origin: "webui", payload: { subject: "routing", material_watermark: expect.any(Number) } },
   ]);
 });
 
@@ -73,8 +76,8 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
     payload: WORKER_SPAWNED,
   });
 
-  await t.clock.advance(HOUR);
-
+  // 材料0件の門に当たる
+  expect((await api(t.baseUrl, "POST", "/api/settings/meta-review/first", { subject: "routing" })).status).toBe(400);
   expect(await openRoutingReviews(t)).toEqual([]);
 });
 
@@ -82,6 +85,7 @@ it("同主題の open な task があれば登録せず、完了後は前回 wat
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   await material(t);
+  await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
 
@@ -98,6 +102,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
   await material(t);
+  await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
   const candidate = createBehaviorCandidate(
@@ -123,6 +128,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
 async function boardWithRoutingReview() {
   t = await bootTidepool();
   await material(t);
+  await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [review] = await openRoutingReviews(t);
   const client = await mcpClient(t.mcpBaseUrl, review.id);

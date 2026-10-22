@@ -2340,8 +2340,8 @@ function ResponseFloorsCard({ rows }) {
   const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
   return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "reads cut at the response budget"), rows ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("p", { style: muted }, "these reads returned more than the response budget, so the board cut the response and the reader got an incomplete body. this is a tidepool defect: report it so the read can be fixed."), rows.map((row) => /* @__PURE__ */ React.createElement("p", { key: `${row.surface}:${row.verb}`, style: { ...muted, fontFamily: "var(--font-mono)", borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, row.surface, " \xB7 ", row.verb, " \xB7 ", row.count, "\xD7 \xB7 up to ", row.max_bytes, " bytes \xB7 last ", new Date(row.last_at).toLocaleString(), row.last_task_id && ` \xB7 task ${row.last_task_id}`))) : /* @__PURE__ */ React.createElement(FieldRow, { label: "reads", kind: "unset", unsetLabel: cutReadsUnavailable }));
 }
-function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
-  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }) {
+  const { Button, Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = "board:meta-review";
   const open = edit.isOpen(id);
   const period = String(settings.period_days);
@@ -2363,7 +2363,30 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(period)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "meta-review")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "period", kind: "mono", value: `${period} days` }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", error: reason, mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
+  const startFirst = async (subject) => {
+    setBusy(true);
+    try {
+      await api("POST /api/settings/meta-review/first", { body: { subject } });
+      say("success", `first ${subject} meta-review started`, "the period counts from it");
+      await onSaved();
+    } catch (err) {
+      say("danger", `first ${subject} meta-review not started`, String(err.message || err));
+    }
+    setBusy(false);
+  };
+  const muted = { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" };
+  return /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(RecordCardHead, { editing: open, onEdit: () => edit.open(id, () => setDraft(period)) }, /* @__PURE__ */ React.createElement("span", { style: settingsCardLabel }, "meta-review")), !open && /* @__PURE__ */ React.createElement(FieldRow, { label: "period", kind: "mono", value: `${period} days` }), !open && ["memory", "routing"].map((subject) => {
+    const row = status[subject];
+    return row.first_review === "not_started" ? /* @__PURE__ */ React.createElement("div", { key: subject, style: { display: "flex", flexDirection: "column", gap: 4, borderTop: "1px solid var(--border-default)", paddingTop: 10 } }, /* @__PURE__ */ React.createElement(FieldRow, { label: subject, kind: "mono", value: `first not started \xB7 ${row.material} material${row.first_material_at ? ` since ${new Date(row.first_material_at).toLocaleString()}` : ""}` }), /* @__PURE__ */ React.createElement("p", { style: muted }, "the period only registers this subject's meta-reviews after its first one. start it once the material looks enough to judge from."), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: busy || row.material === 0, onClick: () => startFirst(subject) }, "Start first ", subject, " meta-review"))) : /* @__PURE__ */ React.createElement(
+      FieldRow,
+      {
+        key: subject,
+        label: subject,
+        kind: "mono",
+        value: `last ${new Date(row.last_registered_at).toLocaleString()} \xB7 next from ${new Date(row.next_earliest_at).toLocaleString()} \xB7 ${row.material_since} material since`
+      }
+    );
+  }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", error: reason, mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: { margin: 0, fontSize: "var(--text-xs)", color: "var(--text-muted)" } }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers the next one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(
     EditActions,
     {
       dirty,
@@ -3521,10 +3544,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
     loadMemorySettings();
   }, []);
   const [metaReviewSettings, setMetaReviewSettings] = React.useState(null);
+  const [metaReviewStatus, setMetaReviewStatus] = React.useState(null);
   const [metaReviewFailed, setMetaReviewFailed] = React.useState(false);
   const loadMetaReviewSettings = async () => {
     try {
-      setMetaReviewSettings(await api("GET /api/settings/meta-review"));
+      const [settings, status] = await Promise.all([api("GET /api/settings/meta-review"), api("GET /api/settings/meta-review/status")]);
+      setMetaReviewSettings(settings);
+      setMetaReviewStatus(status);
     } catch {
       setMetaReviewFailed(true);
     }
@@ -3865,7 +3891,7 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }) {
         edit,
         focus: boardLoaded ? memoryFocus : null
       }
-    ), metaReviewFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "meta-review", says: metaReviewUnavailable }) : metaReviewSettings && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || githubLoginFailed || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), (githubLoggedIn !== null || githubLoginFailed) && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
+    ), metaReviewFailed ? /* @__PURE__ */ React.createElement(UnavailableSettingsCard, { title: "meta-review", says: metaReviewUnavailable }) : metaReviewSettings && metaReviewStatus && /* @__PURE__ */ React.createElement(MetaReviewSettingsCard, { settings: metaReviewSettings, status: metaReviewStatus, say, onSaved: loadMetaReviewSettings, edit }), !boardLoaded && /* @__PURE__ */ React.createElement(Card, { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)" } }, "loading\u2026"), /* @__PURE__ */ React.createElement("p", { style: settingsFootnote }, "applies to every task the board picks up"), (githubLoggedIn !== null || githubLoginFailed || translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement("p", { style: settingsCardLabel }, "board state"), (githubLoggedIn !== null || githubLoginFailed) && /* @__PURE__ */ React.createElement(GitHubLoginCard, { loggedIn: githubLoggedIn }), (translateUsage !== null || translateUsageFailed) && /* @__PURE__ */ React.createElement(TranslateUsageCard, { records: translateUsage }));
   } else if (!sec) {
     body = /* @__PURE__ */ React.createElement(ScreenHeader, { title: "Settings", backLabel: "Settings", onBack: () => go([]) });
   } else if (recordName === void 0) {
