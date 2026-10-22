@@ -467,7 +467,7 @@ export interface WireContract {
     | { decisions: string[]; handoff: string | null; result: string | null };
   "POST /api/settings/display-language": { language: string };
   "GET /api/settings/github": { loggedIn: boolean };
-  /** 翻訳の呼び出し1回 = 1行(src/translation-cache.ts の listTranslationUsage、ADR 0296 決定5)。created_at の古い順、同時刻は記録順。 */
+  /** 翻訳の呼び出し1回 = 1行(src/board-call-usage.ts の listTranslationUsage、ADR 0296 決定5 / ADR 0299 決定2)。created_at の古い順、同時刻は記録順。 */
   "GET /api/translate/usage": {
     records: Array<{
       usage: {

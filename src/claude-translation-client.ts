@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BoardCallUsageError } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { GlossaryEntry } from "./glossary.js";
@@ -163,12 +164,11 @@ export class ClaudeTranslationClient implements TranslationClient {
       },
       answerSchema,
     );
-    if (!usage) throw new Error("translation CLI response missing usage");
     // ids are the fragments' indexes: a missing, duplicate or extra id fails the whole call,
-    // so a wrong pairing never reaches the cache (ADR 0296 決定4)
+    // so a wrong pairing never reaches the cache (ADR 0296 決定4) — the turn still ran, so the usage rides along (ADR 0299 決定3)
     const byId = new Map(output.items.map(({ id, text }) => [id, text]));
     if (output.items.length !== fragments.length || fragments.some((_, id) => !byId.has(id))) {
-      throw new Error("translation answer ids do not match the fragments sent");
+      throw new BoardCallUsageError("translation answer ids do not match the fragments sent", TRANSLATION_SETTING, usage);
     }
     return { texts: fragments.map((_, id) => byId.get(id)!), usage, setting: TRANSLATION_SETTING };
   }

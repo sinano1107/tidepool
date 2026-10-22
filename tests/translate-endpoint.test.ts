@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { recordBoardCall } from "../src/board-call-usage.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { TRANSLATION_FRAGMENTS_PER_CALL } from "../src/translation.js";
@@ -228,7 +229,7 @@ it("不正なリクエストボディは 400 を返す", async () => {
   expect(res.status).toBe(400);
 });
 
-it("GET /api/translate/usage は翻訳の呼び出し1回を1件として返し、測れない費用は null のまま届く(ADR 0296 決定5)", async () => {
+it("GET /api/translate/usage は翻訳の呼び出し1回を1件として返し、測れない費用は null のまま届き、翻訳以外の Board call は返さない(ADR 0296 決定5 / ADR 0299)", async () => {
   const translationClient = new FakeTranslationClient();
   translationClient.scriptUsage({
     input_tokens: 120,
@@ -246,6 +247,13 @@ it("GET /api/translate/usage は翻訳の呼び出し1回を1件として返し�
     question: [{ title: "merge now?", options: ["merge", "hold"], recommendation: "merge" }],
   });
   await api(t.baseUrl, "POST", "/api/translate", { type: "question", task_id: question.id });
+  recordBoardCall(
+    t.db,
+    "allocation_review",
+    { provider: "anthropic", model: "claude-opus-5-5", effort: "high" },
+    { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.01 },
+    new Date(),
+  );
 
   const res = await api(t.baseUrl, "GET", "/api/translate/usage");
 

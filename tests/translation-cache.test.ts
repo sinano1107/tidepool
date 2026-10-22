@@ -1,26 +1,11 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import {
-  getCachedTranslation,
-  hashSource,
-  listTranslationUsage,
-  recordTranslationCall,
-  saveTranslation,
-} from "../src/translation-cache.js";
+import { getCachedTranslation, hashSource, saveTranslation } from "../src/translation-cache.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
 afterEach(() => db?.close());
-
-const USAGE = {
-  input_tokens: 506,
-  output_tokens: 16,
-  cache_read_tokens: 0,
-  cache_creation_tokens: 0,
-  estimated_cost_usd: 0.000586,
-};
-const SETTING = { provider: "anthropic", model: "haiku", effort: "low" } as const;
 
 async function freshDb(): Promise<Db> {
   const dir = await tempDir("tidepool-translation-cache-");
@@ -65,20 +50,4 @@ it("同じ source_hash+language への2回目の保存は例外を投げない(�
   expect(() => saveTranslation(db, hash, "Japanese", "別訳", now)).not.toThrow();
   // first writer wins — the row is never silently corrupted by the loser
   expect(getCachedTranslation(db, hash, "Japanese")).toBe("決着");
-});
-
-it("同一の created_at を持つ呼び出しの記録は保存順で返る(issue #688)", async () => {
-  const db = await freshDb();
-  const now = new Date("2026-07-21T00:00:00Z");
-  for (const input_tokens of [1, 2, 3]) recordTranslationCall(db, SETTING, 1, { ...USAGE, input_tokens }, now);
-
-  expect(listTranslationUsage(db).map((r) => r.usage.input_tokens)).toEqual([1, 2, 3]);
-});
-
-it("created_at が異なる呼び出しの記録は created_at の昇順で返る(先に新しい行を保存しても古い行が先頭)", async () => {
-  const db = await freshDb();
-  recordTranslationCall(db, SETTING, 1, { ...USAGE, input_tokens: 9 }, new Date("2026-07-21T00:00:01Z"));
-  recordTranslationCall(db, SETTING, 1, { ...USAGE, input_tokens: 1 }, new Date("2026-07-21T00:00:00Z"));
-
-  expect(listTranslationUsage(db).map((r) => r.usage.input_tokens)).toEqual([1, 9]);
 });

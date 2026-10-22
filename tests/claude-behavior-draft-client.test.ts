@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
 import type { BehaviorDraftInput } from "../src/retrospective.js";
-import { boardCallSystemPrompt } from "./fakes.js";
+import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,
@@ -20,7 +20,7 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ result: JSON.stringify(draft) });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -42,7 +42,7 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ result: JSON.stringify(draft) });
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -58,7 +58,7 @@ it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する
     JSON.stringify({ ...draft, text: "" }),
     "spell it out, I guess",
   ]) {
-    const client = new ClaudeBehaviorDraftClient({ exec: async () => JSON.stringify({ result }) });
+    const client = new ClaudeBehaviorDraftClient({ exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result }) });
     await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
   }
 });

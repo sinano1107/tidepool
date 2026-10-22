@@ -1,10 +1,11 @@
+import { BoardCallUsageError, recordBoardCall } from "./board-call-usage.js";
 import type { Db } from "./db.js";
 import { getEvent } from "./events.js";
 import { listMemoryEntries } from "./memory.js";
 import { getTask, splitHandoffMarkdown } from "./tasks.js";
 import { isAnthropicBoardCallBlocked } from "./throttle.js";
 import type { TranslationClient } from "./translate.js";
-import { getCachedTranslation, hashSource, recordTranslationCall, saveTranslation } from "./translation-cache.js";
+import { getCachedTranslation, hashSource, saveTranslation } from "./translation-cache.js";
 
 /** Raised when a translation request names a target that doesn't resolve to
  *  translatable source text — an unknown event id, an event that isn't a
@@ -27,12 +28,13 @@ export type TranslationOutcome =
 /** One display target's fragments, cache-first (issue #47 / ADR 0296 決定4):
  *  only the fragments not yet cached go out, in calls of at most
  *  TRANSLATION_FRAGMENTS_PER_CALL; each fragment is cached and each call
- *  leaves one `translation_calls` row. A cache hit never touches the client
+ *  leaves one `translation` row in `board_calls`. A cache hit never touches the client
  *  or the throttle gate (an already-paid-for translation costs nothing to
  *  show again, even while throttled); a call is skipped while the Anthropic
  *  Board call is unavailable (`isAnthropicBoardCallBlocked`), and then the
  *  whole target reports throttled — a target reads as one coherent unit,
- *  never a partly translated blob. A call that fails writes nothing. */
+ *  never a partly translated blob. A call that fails caches nothing, but
+ *  still leaves its row when the CLI reported usage (ADR 0299 決定3). */
 async function translateFragments(
   db: Db,
   client: TranslationClient,
@@ -49,12 +51,15 @@ async function translateFragments(
   for (let at = 0; at < misses.length; at += TRANSLATION_FRAGMENTS_PER_CALL) {
     if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
     const chunk = misses.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
-    const { texts, usage, setting } = await client.translate(chunk, language);
+    const { texts, usage, setting } = await client.translate(chunk, language).catch((err: unknown) => {
+      if (err instanceof BoardCallUsageError) recordBoardCall(db, "translation", err.setting, err.usage, now, chunk.length);
+      throw err;
+    });
     chunk.forEach((source, i) => {
       saveTranslation(db, hashSource(source), language, texts[i]!, now);
       translated.set(source, texts[i]!);
     });
-    recordTranslationCall(db, setting, chunk.length, usage, now);
+    recordBoardCall(db, "translation", setting, usage, now, chunk.length);
   }
   return { status: "translated", texts: sources.map((source) => translated.get(source)!), cached: misses.length === 0 };
 }

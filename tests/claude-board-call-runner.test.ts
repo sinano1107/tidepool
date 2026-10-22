@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
+import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
@@ -7,12 +8,42 @@ import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
 const schema = z.object({ ok: z.boolean() });
+const ENVELOPE_USAGE = {
+  total_cost_usd: 0.000586,
+  usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
+};
+const USAGE = { input_tokens: 506, output_tokens: 16, cache_read_tokens: 3, cache_creation_tokens: 4, estimated_cost_usd: 0.000586 };
+/** usage を報告した封筒 */
+const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...ENVELOPE_USAGE });
 
 describe("Claude の Board call runner", () => {
-  it("JSON の答えは result から JSON を取り出して schema で検証し、usage が無ければ usage を返さない", async () => {
+  it("JSON の答えは result から JSON を取り出して schema で検証し、封筒の usage と一緒に返す", async () => {
     await expect(
-      runClaudeBoardCallJson(call(async () => JSON.stringify({ result: "```json\n{\"ok\":true}\n```" })), schema),
-    ).resolves.toEqual({ output: { ok: true }, usage: undefined });
+      runClaudeBoardCallJson(call(answered({ result: "```json\n{\"ok\":true}\n```" })), schema),
+    ).resolves.toEqual({ output: { ok: true }, usage: USAGE });
+  });
+
+  it("答えを取りに行く呼び出しの封筒に usage が無ければ、呼び出しの失敗にする(ADR 0299 決定4)", async () => {
+    await expect(
+      runClaudeBoardCallJson(call(async () => JSON.stringify({ result: '{"ok":true}' })), schema),
+    ).rejects.toThrow("test CLI response missing usage");
+  });
+
+  it("usage を報告した封筒の答えが schema に合わなければ、撃った行と usage を運ぶ error を投げる(ADR 0299 決定3)", async () => {
+    for (const result of ['{"ok":1}', "not json"]) {
+      const err = await runClaudeBoardCallJson(call(answered({ result })), schema).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BoardCallUsageError);
+      expect(err).toMatchObject({ setting: ROW, usage: USAGE });
+    }
+  });
+
+  it("usage つきの is_error は、result の本文と usage を運ぶ error を投げる(ADR 0299 決定3)", async () => {
+    const err = await runClaudeBoardCallJson(
+      call(answered({ is_error: true, result: "You've hit your session limit" })),
+      schema,
+    ).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BoardCallUsageError);
+    expect(err).toMatchObject({ message: "You've hit your session limit", setting: ROW, usage: USAGE });
   });
 
   it("答えの JSON の文字列が ``` を含んでも、包む fence の有無によらず JSON を取り出す(#2414 の 20 断片実測)", async () => {
@@ -20,8 +51,8 @@ describe("Claude の Board call runner", () => {
     const answer = JSON.stringify({ text: "```ts\nconst x = 1;\n```" });
     for (const result of [answer, `\`\`\`json\n${answer}\n\`\`\``]) {
       await expect(
-        runClaudeBoardCallJson(call(async () => JSON.stringify({ result })), textSchema),
-      ).resolves.toEqual({ output: { text: "```ts\nconst x = 1;\n```" }, usage: undefined });
+        runClaudeBoardCallJson(call(answered({ result })), textSchema),
+      ).resolves.toEqual({ output: { text: "```ts\nconst x = 1;\n```" }, usage: USAGE });
     }
   });
 

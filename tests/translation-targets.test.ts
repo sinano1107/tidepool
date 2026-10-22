@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { listTranslationUsage } from "../src/board-call-usage.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { recordKnowledge } from "../src/memory.js";
@@ -18,7 +19,7 @@ import {
   translateMemoryEntry,
   translateQuestion,
 } from "../src/translation.js";
-import { getCachedTranslation, hashSource, listTranslationUsage } from "../src/translation-cache.js";
+import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
 import { FakeTranslationClient } from "./fakes.js";
 import { decomposeTaskViaWorker, HUMAN_WEBUI } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
