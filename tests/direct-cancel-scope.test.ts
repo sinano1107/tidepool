@@ -451,6 +451,43 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
   expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
 });
 
+const APPROVAL_QUESTION = {
+  type: "question" as const,
+  title: "authorize child registration: fix",
+  purpose: "p",
+  completion_criteria: "c",
+  question: [{ title: "authorize child registration: fix", options: ["approve", "reject"], recommendation: "approve" }],
+  question_kind: { kind: "approval" as const, pending_child: { title: "fix", purpose: "p", completion_criteria: "c" } },
+};
+
+it("cancelled の work の祖先を挟む task を親にした人間の review 子と承認 question の登録も、cancelled の祖先を名指して拒まれる(ADR 0301 決定2)", () => {
+  db = openDb(":memory:");
+  const { target, child, rcas } = doneChildrenWithAttachments(db);
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  const discarded = new RegExp(`^no (review|question) task grows here: the cancel of ancestor "A" \\(${target.id}\\) discarded`);
+
+  for (const parent of [child, getTask(db, rcas[0]!.id)!]) {
+    const before = listChildren(db, parent.id).length;
+    expect(() => registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI)).toThrow(discarded);
+    expect(() => registerTask(db, { ...APPROVAL_QUESTION, parent_id: parent.id }, NOW, "deckhand", "worker")).toThrow(discarded);
+    expect(listChildren(db, parent.id)).toHaveLength(before);
+  }
+});
+
+it("cancelled の work でない親(人間が直接 cancel した review 子)の下への work・承認 question の登録は、cancelled の親の題と id を名指して拒まれる —— 祖先の work は生きている(ADR 0268 決定3 / ADR 0301 決定1)", () => {
+  db = openDb(":memory:");
+  const parent = registerTask(db, { type: "work", title: "A", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  markPickedUp(db, parent.id, NOW);
+  const review = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, ...HUMAN_WEBUI);
+  cancelTaskDirectly(db, review, null, NOW, {}, "webui");
+  expect(getTask(db, parent.id)!.status).not.toBe("cancelled");
+  const cancelledParent = `its parent "second look" (${review.id}) is cancelled, so no repair can land`;
+
+  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: review.id }, NOW, BOARD_WORKER_ID, "board")).toThrow(`no work task grows here: ${cancelledParent}`);
+  expect(() => registerTask(db, { ...APPROVAL_QUESTION, parent_id: review.id }, NOW, "deckhand", "worker")).toThrow(`no question task grows here: ${cancelledParent}`);
+  expect(listChildren(db, review.id)).toEqual([]);
+});
+
 it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にした %s の登録は、祖先の cancel の後でも帰り先の床に当たらず通る —— 床が拒むのは宛先がブランチに依存する task だけ(ADR 0272 決定6 / ADR 0279 決定4 / ADR 0301 決定2)", (type) => {
   db = openDb(":memory:");
   const { target, child, rcas } = doneChildrenWithAttachments(db);

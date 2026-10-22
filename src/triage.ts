@@ -28,10 +28,10 @@ import {
   latestPosedProbe,
   listBoard,
   moveTask,
-  noReturnDestination,
   type RegisterTaskInput,
   type RepairType,
   registerTask,
+  whyNoReturnDestination,
 } from "./tasks.js";
 import {
   BOARD_WORKER_ID,
@@ -428,7 +428,7 @@ function bundleObjections(
     const routingRows = pairs.filter((pair) => judges(pair, "routing"));
     const decisionRows = pairs.filter((pair) => isDecisionRow(pair.entry));
     // 判断の行の work の修理子は異議された task の子 —— その子に帰り先が無ければ立てない(ADR 0301 決定3)。帰責と RCA は立つ
-    if (decisionRows.length > 0 && noReturnDestination(db, taskId) === undefined) {
+    if (decisionRows.length > 0 && whyNoReturnDestination(db, taskId) === undefined) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
     if (memoryRows.length > 0) {
@@ -755,10 +755,10 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   // Interview ごとに1回だけ引く —— 同じ root の行は同じグループ
   const groups = new Map<string, NonNullable<LogEntry["interview"]>>();
   // task ごとに1回だけ系譜を読む
-  const destinations = new Map<string, boolean>();
+  const withoutDestination = new Map<string, boolean>();
   const noDestination = (taskId: string) => {
-    if (!destinations.has(taskId)) destinations.set(taskId, noReturnDestination(db, taskId) !== undefined);
-    return destinations.get(taskId)!;
+    if (!withoutDestination.has(taskId)) withoutDestination.set(taskId, whyNoReturnDestination(db, taskId) !== undefined);
+    return withoutDestination.get(taskId)!;
   };
   const interviewGroup = (rootId: string) => {
     let group = groups.get(rootId);

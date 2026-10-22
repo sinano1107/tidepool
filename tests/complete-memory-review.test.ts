@@ -16,9 +16,9 @@ import {
   recordMetaReviewMaterial,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
-import { completeTask, escalateTask, getTask, listChildren, type Task, taskVerbSwap } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listChildren, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { decomposeTaskViaWorker, FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows, objectedJudgment } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
@@ -59,7 +59,7 @@ it("memory meta-review の verb の差し替えは complete_task と分解の ve
   expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_memory_review"] });
 });
 
-it("memory meta-review も、その判断の行への異議から立った RCA も分解できない —— verb を伏せ、worker の decompose も人間の decompose も系譜のルートを名指して拒み、何も登録しない(#2505 測定 G / ADR 0301 決定3)", () => {
+it("memory meta-review も、その判断の行への異議から立った RCA も分解できない —— verb を伏せ、worker の decompose も人間の decompose も直接の work の登録も系譜のルートを名指して拒み、何も登録しない(#2505 測定 G / ADR 0301 決定3)", () => {
   const { db, review } = cycle();
   const entry = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "keep entry 3" } });
   startTriage(db, at);
@@ -72,6 +72,8 @@ it("memory meta-review も、その判断の行への異議から立った RCA �
   for (const parent of [review, rca]) {
     expect(() => decomposeTaskViaWorker(db, parent, split, "auditor", at)).toThrow(/root is a memory meta-review/);
     expect(() => humanDecomposeTaskViaWebui(db, parent, split, at)).toThrow(/root is a memory meta-review/);
+    // 直接の登録も同じ床に当たる
+    expect(() => registerTask(db, { type: "work", ...split.children[0]!, parent_id: parent.id }, at, BOARD_WORKER_ID, "board")).toThrow(/^no work task grows here: this lineage's root is a memory meta-review/);
   }
   expect(listChildren(db, rca.id)).toEqual([]);
   expect(listChildren(db, review.id).map((child) => child.title)).toEqual([`rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);

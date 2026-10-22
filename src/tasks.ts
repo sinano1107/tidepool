@@ -670,17 +670,17 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
     };
   }
   // 帰り先の無い task(その task を親として問う)は分解の verb を伏せる —— 床が拒む分解を見せない(ADR 0301 決定3)
-  const split = noReturnDestination(db, taskId) === undefined ? [] : (["decompose", "redecompose"] as const);
+  const splitVerbs = whyNoReturnDestination(db, taskId) === undefined ? [] : (["decompose", "redecompose"] as const);
   if (isRca(db, taskId)) {
     // 行の主題を持つ RCA は親の主題の読み手で、worker の pull verb と新規の記憶の書き込みを持たない(ADR 0283 追記1)
     const reader = lineageSubjectOf(db, taskId) === null ? [] : (["record_knowledge", "define_memory_branch", ...WORKER_PULL_VERBS] as const);
-    return { withheld: [...split, "complete_task", ...reader], added: ["complete_rca"] };
+    return { withheld: [...splitVerbs, "complete_task", ...reader], added: ["complete_rca"] };
   }
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
-  if (isIntegrationReview(db, taskId)) return { withheld: [...split, "complete_task"], added: ["complete_integration_review"] };
+  if (isIntegrationReview(db, taskId)) return { withheld: [...splitVerbs, "complete_task"], added: ["complete_integration_review"] };
   // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
-  if (task?.meta_review_subject) return { withheld: [...split, "complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
-  return { withheld: split, added: [] };
+  if (task?.meta_review_subject) return { withheld: [...splitVerbs, "complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
+  return { withheld: splitVerbs, added: [] };
 }
 
 /** Interview の root の対象の一覧。対象を持たない task は null。 */
@@ -1443,7 +1443,7 @@ export function finishTask(
       at: now,
     });
     // 帰り先の無い系譜で走り終えた task(祖先の cancel の前に立った)には完了時レビューを立てない —— 床が拒む子(ADR 0301 決定2・3)
-    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null }) && noReturnDestination(db, task.id) === undefined) {
+    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null }) && whyNoReturnDestination(db, task.id) === undefined) {
       for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
         registerTask(
           db,
@@ -3693,7 +3693,7 @@ function discardingAncestor(db: Db, taskId: string): Task | undefined {
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
  *  問わない、ADR 0268 決定3)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
  *  知りたい読み手もその task を親として問う。 */
-export function noReturnDestination(db: Db, parentId: string): string | undefined {
+export function whyNoReturnDestination(db: Db, parentId: string): string | undefined {
   const parent = getTask(db, parentId);
   if (!parent) return undefined;
   const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
@@ -3715,7 +3715,7 @@ export function noReturnDestination(db: Db, parentId: string): string | undefine
 
 /** 宛先がブランチに依存する task か(ADR 0301 決定2 の表の1列目): work、完了時レビュー・統合レビュー・人間の review 子(review の
  *  うち RCA と出題の監査以外のすべて)、承認すると work を立てる question。帰り先の無い系譜には立たない。 */
-export function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objection_event_ids" | "audited_probe" | "question_kind">): boolean {
+function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objection_event_ids" | "audited_probe" | "question_kind">): boolean {
   switch (input.type) {
     case "work":
       return true;
@@ -3731,7 +3731,7 @@ export function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objecti
 /** ADR 0301 決定2・3: 帰り先の無い親の下に、宛先がブランチに依存する task は生えない(扉を問わず)。 */
 function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "objection_event_ids" | "audited_probe" | "question_kind">): void {
   if (input.parent_id === undefined || !dependsOnBranch(input)) return;
-  const reason = noReturnDestination(db, input.parent_id);
+  const reason = whyNoReturnDestination(db, input.parent_id);
   if (reason) throw new DomainError(`no ${input.type} task grows here: ${reason}`);
 }
 

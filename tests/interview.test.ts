@@ -9,7 +9,7 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, noReturnDestination, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget, whyNoReturnDestination } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
@@ -1015,7 +1015,7 @@ it("受験者を親にした work と review の登録は扉を問わず拒ま�
   expect(listChildren(db, child.id)).toEqual([]);
   expect(failureQuestion(db, child.id, new Date(0)).parent_id).toBe(child.id);
   // 述語の上でも受験者は帰り先が無い(ADR 0301 決定1)
-  expect(noReturnDestination(db, child.id)).toMatch(/root is an Interview's answer task/);
+  expect(whyNoReturnDestination(db, child.id)).toMatch(/root is an Interview's answer task/);
   markPickedUp(db, root.id, new Date(0));
   expect(() => registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI)).toThrow(/root is an Interview/);
 });
