@@ -680,7 +680,7 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   if (isIntegrationReview(db, taskId)) return { withheld: [...split, "complete_task"], added: ["complete_integration_review"] };
   // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
   if (task?.meta_review_subject) return { withheld: [...split, "complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
-  return { withheld: [...split], added: [] };
+  return { withheld: split, added: [] };
 }
 
 /** Interview の root の対象の一覧。対象を持たない task は null。 */
