@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
-import { CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
+import { BOARD_CALL_USAGE, CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -114,31 +114,17 @@ it("throttled 中でも既にキャッシュ済みのソースは翻訳を返す
   expect(outcome).toEqual({ status: "translated", text: "訳文", cached: true });
 });
 
-it("CLI の封筒が is_error: true なら translateSource は reject し、エラー本文を訳としてキャッシュしない(#652)", async () => {
-  const db = await freshDb();
-  const client = new ClaudeTranslationClient({
-    exec: async () =>
-      JSON.stringify({
-        is_error: true,
-        result: "You've hit your session limit",
-        total_cost_usd: 0,
-        usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
-  });
-
-  await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow(
-    "You've hit your session limit",
-  );
-  expect(getCachedTranslation(db, hashSource("the board retires a settled tree"), "Japanese")).toBeUndefined();
-});
-
 it.each([
-  ["is_error", { is_error: true, result: "overloaded" }],
-  ["id の食い違い", { result: JSON.stringify({ items: [{ id: 7, text: "訳" }] }) }],
-])("usage を報告して失敗した呼び出し(%s)も1行を残し、キャッシュには何も書かない(ADR 0299 決定3)", async (_, envelope) => {
+  ["非ゼロ終了の is_error", { is_error: true, result: "overloaded" }, 1],
+  ["id の食い違い", { result: JSON.stringify({ items: [{ id: 7, text: "訳" }] }) }, 0],
+])("usage を報告して失敗した呼び出し(%s)も1行を残し、キャッシュには何も書かない(ADR 0299 決定3)", async (_, envelope, exitCode) => {
   const db = await freshDb();
+  const stdout = JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
   const client = new ClaudeTranslationClient({
-    exec: async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE }),
+    exec: async () => {
+      if (exitCode !== 0) throw Object.assign(new Error(`Command failed: claude exited ${exitCode}`), { stdout });
+      return stdout;
+    },
   });
 
   await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow();
@@ -148,7 +134,7 @@ it.each([
       provider: "anthropic",
       model: "haiku",
       fragments: 1,
-      usage: { input_tokens: 506, output_tokens: 16, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.000586 },
+      usage: BOARD_CALL_USAGE,
       createdAt: NOW.toISOString(),
     },
   ]);

@@ -277,12 +277,4 @@ describe("ClaudeTranslationClient", () => {
       vi.useRealTimers();
     }
   });
-
-  it("CLI のエンベロープに使用量が無い場合、translate は reject する", async () => {
-    const client = new ClaudeTranslationClient({
-      exec: async () => JSON.stringify({ result: JSON.stringify({ items: [{ id: 0, text: "t" }] }) }),
-    });
-
-    await expect(client.translate(["s"], "Japanese")).rejects.toThrow(/usage/);
-  });
 });

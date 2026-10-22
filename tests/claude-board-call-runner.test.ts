@@ -4,13 +4,11 @@ import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
-import { CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
 const schema = z.object({ ok: z.boolean() });
-/** CLI_ENVELOPE_USAGE の盤面の形 */
-const USAGE = { input_tokens: 506, output_tokens: 16, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.000586 };
 /** usage を報告した封筒 */
 const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
 
@@ -35,13 +33,25 @@ describe("Claude の Board call runner", () => {
     }
   });
 
-  it("usage つきの is_error は、result の本文と usage を運ぶ error を投げる(ADR 0299 決定3)", async () => {
-    const err = await runClaudeBoardCallJson(
-      call(answered({ is_error: true, result: "You've hit your session limit" })),
-      schema,
-    ).catch((e: unknown) => e);
-    expect(err).toBeInstanceOf(BoardCallUsageError);
-    expect(err).toMatchObject({ message: "You've hit your session limit", setting: ROW, usage: USAGE });
+  it("usage つきの is_error は、非ゼロ終了で届いても撃った行と usage を運ぶ error を投げる(ADR 0299 決定3、#652)", async () => {
+    const envelope = JSON.stringify({ is_error: true, result: "You've hit your session limit", ...CLI_ENVELOPE_USAGE });
+    const exited: ExecFn = async () => {
+      throw Object.assign(new Error("Command failed: claude exited 1"), { stdout: envelope });
+    };
+    for (const exec of [exited, async () => envelope]) {
+      const err = await runClaudeBoardCallJson(call(exec), schema).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(BoardCallUsageError);
+      expect(err).toMatchObject({ setting: ROW, usage: USAGE });
+    }
+  });
+
+  it("usage つきの 401 は行を残す error にせず CliAuthError のまま投げる(ADR 0299 決定3)", async () => {
+    const unauthorized: ExecFn = async () => {
+      throw Object.assign(new Error("Command failed"), {
+        stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired", ...CLI_ENVELOPE_USAGE }),
+      });
+    };
+    await expect(runClaudeBoardCallJson(call(unauthorized), schema)).rejects.toBeInstanceOf(CliAuthError);
   });
 
   it("答えの JSON の文字列が ``` を含んでも、包む fence の有無によらず JSON を取り出す(#2414 の 20 断片実測)", async () => {

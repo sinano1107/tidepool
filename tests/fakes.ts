@@ -1268,6 +1268,15 @@ export const CLI_ENVELOPE_USAGE = {
   usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
 };
 
+/** CLI_ENVELOPE_USAGE を盤面の usage の形で */
+export const BOARD_CALL_USAGE = {
+  input_tokens: 506,
+  output_tokens: 16,
+  cache_read_tokens: 0,
+  cache_creation_tokens: 0,
+  estimated_cost_usd: 0.000586,
+};
+
 /** 用途を名指さない Board call が runner から受け取る `--system-prompt` の文面(ADR 0296 決定6)。用途ごとの
  *  client がこれと同じ文面を撃つことを、文面の写しも export も持たずに言うための読み口。 */
 export async function boardCallSystemPrompt(): Promise<string> {

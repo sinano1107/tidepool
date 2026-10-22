@@ -7,7 +7,13 @@ import {
   emptyToolSurfaceFlags,
   pinnedModelFlags,
 } from "./claude-worker.js";
-import { execFailureEnvelope, RowRefusalError, rethrowCliAuthExecFailure, rowRefusalCause } from "./cli-auth.js";
+import {
+  execFailureEnvelope,
+  isCliAuthFailureEnvelope,
+  RowRefusalError,
+  rethrowCliAuthExecFailure,
+  rowRefusalCause,
+} from "./cli-auth.js";
 import type { TranslationUsage } from "./translate.js";
 
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
@@ -118,7 +124,12 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<ClaudeBoar
       reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
     );
   } catch (err) {
-    throwIfRowRefused(execFailureEnvelope(err), setting);
+    const failed = execFailureEnvelope(err);
+    throwIfRowRefused(failed, setting);
+    // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn
+    // and carries it, while a 401 leaves no row (ADR 0299 決定3)
+    const usage = isCliAuthFailureEnvelope(failed) ? undefined : envelopeUsageSchema.safeParse(failed).data;
+    if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage);
     rethrowCliAuthExecFailure(err);
   }
   const envelope: unknown = JSON.parse(stdout);
