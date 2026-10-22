@@ -15,10 +15,10 @@
  *  `--task-temp` は必須(ADR 0257 決定2)。吐いた settings で走らせる `claude -p` には、同じ dir を
  *  `TMPDIR` と `CLAUDE_CODE_TMPDIR` に載せて渡す —— 載せないと許可ドメインに届かない。
  *
- *  `--codex` を付けると、Codex の worker が spawn で渡す permission の `-c` 値(`permissionConfig()`)を1行1つで
- *  吐く(issue #2197 の面接室 canary)。executable は盤面と同じく PATH 上の `codex` の実体。skill は取らない。 */
+ *  `--codex` を付けると、Codex の worker が spawn で渡す permission の `-c` 値(`permissionConfig()`)と proxy の1行
+ *  (`NETWORK_PROXY_CONFIG`)を1行1つで吐く(issue #2197 の面接室 canary)。executable は盤面と同じく PATH 上の `codex` の実体。skill は取らない。 */
 import { existsSync } from "node:fs";
-import { permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js";
+import { NETWORK_PROXY_CONFIG, permissionConfig, resolveCodexExecutable } from "../src/codex-worker.js";
 import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE =
@@ -67,7 +67,8 @@ if (!taskTemp) {
 
 if (codex) {
   const { executable } = resolveCodexExecutable();
-  console.log(permissionConfig(taskType, workspacePath, taskTemp, executable, allowedDomains, readPaths).join("\n"));
+  const config = permissionConfig(taskType, workspacePath, taskTemp, executable, allowedDomains, readPaths);
+  console.log([...config, NETWORK_PROXY_CONFIG].join("\n"));
   process.exit(0);
 }
 

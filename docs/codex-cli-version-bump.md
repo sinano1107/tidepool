@@ -65,11 +65,12 @@ it. Name any opened surface without a floor.
 
 **Features that `apply_map` skips** (ADR 0135 決定4). `=false` does not reach a feature that the
 vendor's `apply_map` skips by a hand-written list before `disable()`. `UNSETTABLE_FEATURES` in
-`src/codex-worker.ts` copies that list. Machines catch only part of a change. A name added to the
-list fails the type of `CODEX_FEATURE_SNAPSHOT` only if its default is `true`, because then it shows
-up as `true` in step 3's snapshot. A name taken off the list fails nothing. Read the list at the
-new version, update `UNSETTABLE_FEATURES` in the VM checkout if it moved, and put the list as
-read, with what changed, in the PR.
+`src/codex-worker.ts` holds only the names on that list whose default is `true`: a skipped name
+whose default is `false` stays `false` anyway. Machines catch only part of a change. A name added
+to the list fails the type of `CODEX_FEATURE_SNAPSHOT` only if its default is `true`, because then
+it shows up as `true` in step 3's snapshot. A name taken off the list fails nothing. Read the list
+at the new version, update `UNSETTABLE_FEATURES` in the VM checkout if its default-`true` names
+moved, and put the whole list as read, with what changed, in the PR.
 
 ## 5. Start the board and see the containment preflight hold
 
@@ -179,7 +180,7 @@ nothing checks is left to the board's fail-closed handling.
 | The `exec --json` events: `turn.completed` with usage, and `turn.failed` | ADR 0187 決定4, ADR 0261 | Conformance seed rows (step 7). The 429 `turn.failed` of a usage cap is not checked |
 | `turn.completed.usage` always carries `input_tokens`, `cached_input_tokens`, `cache_write_input_tokens` and `output_tokens` (codex fills `cache_write_input_tokens` with a serde default) | #2410 | Conformance seed rows (step 7) |
 | A turn that received no usage report writes an all-zero `turn.completed.usage` (`Usage::default()`), which the board reads as missing | #2426 | Conformance seed rows (step 7): the worker's usage normalization fails them |
-| `turn.completed.usage` sums the parent thread's turn sampling responses only: subagent (child thread) consumption, remote compaction V2 calls and the websocket prewarm are not in it, and V1 compaction (`remote_compaction_v2=false`) gets 404 from the ChatGPT backend | ADR 0297 決定1 (#2427, #2430) | Not checked: it needs a model run that compacts and spawns a subagent. #2430's comment has the run |
+| `turn.completed.usage` sums the parent thread's turn sampling responses only: subagent (child thread) consumption, remote compaction V2 calls and the websocket prewarm are not in it. V1 compaction is gone: V2 is chosen by provider capability, and `remote_compaction_v2` is stage `removed` | ADR 0297 決定1 (#2427, #2430) | Not checked: it needs a model run that compacts and spawns a subagent. #2430's comment has the run |
 | The worker's exec flags: `--ask-for-approval never`, `exec --json --ephemeral --ignore-user-config --ignore-rules --strict-config --dangerously-bypass-hook-trust` | ADR 0098 決定3 | Conformance row `skill closure` runs them without `--dangerously-bypass-hook-trust`; the seed rows run part of them (step 7) |
 | Every spawn `-c` key parses under `--strict-config` | ADR 0142 決定1 | The containment preflight (step 5) |
 | The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |

@@ -28,7 +28,10 @@ function writeCompatibleSchemas(out: string): void {
         },
         {
           required: ["id", "method"],
-          properties: { method: { enum: ["account/rateLimits/read"] }, params: { type: "null" } },
+          properties: {
+            method: { enum: ["account/rateLimits/read"] },
+            params: { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] },
+          },
         },
         {
           required: ["id", "method", "params"],
@@ -90,9 +93,9 @@ function writeCompatibleSchemas(out: string): void {
         },
         PlanType: {
           enum: [
-            "free", "go", "plus", "pro", "prolite", "team",
+            "free", "go", "plus", "pro", "prolite", "promax", "team",
             "self_serve_business_prolite", "self_serve_business_usage_based", "business", "ent26",
-            "enterprise_cbp_automation", "enterprise_cbp_usage_based", "enterprise", "edu", "unknown",
+            "enterprise_cbp_automation", "enterprise_cbp_usage_based", "enterprise", "edu", "edu_plus", "edu_pro", "unknown",
           ],
         },
       },
@@ -217,6 +220,24 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
     { id: 3, method: "account/rateLimits/read", params: null },
     { id: 4, method: "model/list", params: { includeHidden: true } },
   ]);
+});
+
+// 盤面は `params: null` を送る —— 生成 schema がそれを受けなくなったら drift(0.163.0 では object か null)
+it("a rate-limits request whose params no longer admits null reads as schema drift", async () => {
+  const { command } = fakeCodex({
+    drift: (out) => {
+      const path = join(out, "ClientRequest.json");
+      const requests = JSON.parse(readFileSync(path, "utf8"));
+      requests.oneOf[1].properties.params = { $ref: "#/definitions/GetAccountRateLimitsParams" };
+      writeFileSync(path, JSON.stringify(requests));
+    },
+  });
+
+  const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
+    new Date(1_000),
+  );
+
+  expect(result).toMatchObject({ status: "unobservable", reason: "required App Server method or response schema drifted" });
 });
 
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {

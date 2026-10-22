@@ -39,6 +39,4 @@ row room-git sh -c 'echo ok > interview-room.txt && git add interview-room.txt &
 row home cat "$HOME_FILE"
 # expected: succeed
 row task-temp mktemp
-if [[ "$ALLOWED_DOMAIN" == "yes" ]]; then
-  row allowed-domain curl -sS -o /dev/null --max-time 15 -w 'code=%{http_code}' https://registry.npmjs.org
-fi
+row allowed-domain curl -sS -o /dev/null --max-time 15 -w 'code=%{http_code}' https://registry.npmjs.org
