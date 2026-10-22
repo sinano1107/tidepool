@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_CALL_SYSTEM_PROMPT } from "../src/claude-board-call-runner.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { reportProviderUsage } from "../src/throttle.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const db = openDb(":memory:");
 const NOW = new Date("2026-10-02T00:00:00Z");
@@ -424,7 +424,7 @@ describe("ClaudeDraftClient", () => {
     await client.inspectIssue({ title: "t", body: "b", comments: [] });
 
     expect(calls).toHaveLength(2);
-    for (const args of calls) expect(args[args.indexOf("--system-prompt") + 1]).toBe(BOARD_CALL_SYSTEM_PROMPT);
+    for (const args of calls) expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
   });
 
   it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {

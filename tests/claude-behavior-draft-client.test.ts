@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
-import { BOARD_CALL_SYSTEM_PROMPT } from "../src/claude-board-call-runner.js";
 import type { BehaviorDraftInput } from "../src/retrospective.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,
@@ -49,7 +49,7 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
   await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(draft);
 
   const { args } = calls[0]!;
-  expect(args[args.indexOf("--system-prompt") + 1]).toBe(BOARD_CALL_SYSTEM_PROMPT);
+  expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
 });
 
 it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する(未検証の model 出力を店に載せない)", async () => {

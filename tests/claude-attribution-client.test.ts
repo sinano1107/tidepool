@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
-import { BOARD_CALL_SYSTEM_PROMPT } from "../src/claude-board-call-runner.js";
 import type { AttributionInput } from "../src/retrospective.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const input: AttributionInput = {
   entry_id: 7,
@@ -49,7 +49,7 @@ it("帰責の判定は、用途に依らない盤面の system prompt を --syst
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 
   const { args } = calls[0]!;
-  expect(args[args.indexOf("--system-prompt") + 1]).toBe(BOARD_CALL_SYSTEM_PROMPT);
+  expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
 });
 
 it("語彙の外の cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {

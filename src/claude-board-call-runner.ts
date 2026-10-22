@@ -13,7 +13,7 @@ import type { TranslationUsage } from "./translate.js";
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
  *  user prompt が持つ。翻訳は ADR 0062 決定3 の自前の文面を `systemPrompt` で渡す。Codex の runner(#2417)も
  *  同じ文面を置換の鍵に書く。 */
-export const BOARD_CALL_SYSTEM_PROMPT = [
+const BOARD_CALL_SYSTEM_PROMPT = [
   "You answer a single one-shot question from the board.",
   "Do exactly what the user message instructs, and reply with only the JSON it asks for.",
   "No tools, no follow-up turns, no prose around the JSON.",

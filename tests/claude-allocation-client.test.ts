@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { AllocationReviewInput } from "../src/allocation-review.js";
 import { ClaudeAllocationClient } from "../src/claude-allocation-client.js";
-import { BOARD_CALL_SYSTEM_PROMPT } from "../src/claude-board-call-runner.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const input: AllocationReviewInput = {
   verdict: "accepted",
@@ -72,7 +72,7 @@ it("配分評価は、用途に依らない盤面の system prompt を --system-
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toEqual(judgment);
 
   const { args } = calls[0]!;
-  expect(args[args.indexOf("--system-prompt") + 1]).toBe(BOARD_CALL_SYSTEM_PROMPT);
+  expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
 });
 
 it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定5)", async () => {

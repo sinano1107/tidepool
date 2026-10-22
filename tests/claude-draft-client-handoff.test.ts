@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { BOARD_CALL_SYSTEM_PROMPT } from "../src/claude-board-call-runner.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { openDb } from "../src/db.js";
+import { boardCallSystemPrompt } from "./fakes.js";
 
 const db = openDb(":memory:");
 
@@ -68,6 +68,6 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
     await client.draftHandoff("mounted the sensor", "English");
 
     const args = calls[0]!;
-    expect(args[args.indexOf("--system-prompt") + 1]).toBe(BOARD_CALL_SYSTEM_PROMPT);
+    expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
   });
 });
