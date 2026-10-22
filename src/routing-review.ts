@@ -1,7 +1,7 @@
 import { type AgentView, agentViewProviders } from "./agent-create.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { type EventOrigin, type EventPayload, getEvent, listEventsOfKinds } from "./events.js";
+import { type EventOrigin, type EventPayload, type EventRow, getEvent, listEventsOfKinds } from "./events.js";
 import {
   assertPosition,
   assertRowFits,
@@ -305,23 +305,16 @@ function requireRepairReach(db: Db, repairId: string, proposal: RoutingProposal 
 export const routingRepairVerbs = (db: Db, taskId: string): string[] => (repairJudgments(db, taskId, "routing").length === 0 ? [] : [...ROUTING_META_REVIEW_VERBS]);
 
 /** 材料の記録の後に誰であれ対象を変えた event(ADR 0278 追記4・追記5): 行は表の行の書き込みと削除(提案の approve の適用も)、agent は registry
- *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない)、学習器は昇格 / 降格。段の event は名前で名指すので、
- *  注入した名前から改名をたどって id に引く。 */
-function actedSince(db: Db, recordId: number, injectedTiers: ReadonlyMap<TierId, Tier>): RoutingObject[] {
-  const tierIds = new Map([...injectedTiers].map(([id, name]) => [name, id]));
-  return listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
+ *  への段の書き込み、段は説明の書き換え(位置の移動・段の追加・改名は段の定義を変えない —— 段の説明の最後の変更と同じ読み)、学習器は昇格 / 降格。 */
+function actedSince(db: Db, recordId: number, injectedTiers: Iterable<TierId>): RoutingObject[] {
+  const acted = listEventsOfKinds(db, ["execution_settings_changed", "agent_tier_changed"], { after: recordId }).flatMap(({ payload: p }): RoutingObject[] => {
     if (p.kind === "agent_tier_changed") return [{ agent: p.agent }];
     if (p.setting === "row") return [{ row: p.row }, ...(p.key ? [{ row: p.key }] : [])];
     if (p.setting === "delete_row") return [{ row: p }];
-    if (p.setting === "learner_promoted") return [{ learner: true }];
-    const id = "name" in p ? tierIds.get(p.name) : undefined;
-    if (id === undefined) return [];
-    if (p.setting === "rename_tier") {
-      tierIds.delete(p.name);
-      tierIds.set(p.to, id);
-    }
-    return p.setting === "edit_tier" && p.description !== undefined ? [{ tier_id: id }] : [];
+    return p.setting === "learner_promoted" ? [{ learner: true }] : [];
   });
+  const described = [...injectedTiers].filter((id) => (lastDescriptionChange(db, tierNameOf(db, id)) ?? 0) > recordId);
+  return [...acted, ...described.map((tier_id) => ({ tier_id }))];
 }
 
 /** routing meta-review の完了(ADR 0278 決定2〜5・追記4・追記5): 注入した一覧のうち、今も項目で、この review の提案も記録の後の誰かの
@@ -344,7 +337,7 @@ export function completeRoutingReview(
   const injectedTiers = new Map(record.items.flatMap((item) => ("tier_id" in item ? [[item.tier_id, item.tier] as const] : [])));
   const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
     itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
-  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers)].map(key));
+  const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers.keys())].map(key));
   const open = routingMaterial(db, metaReviewWindow(db, review.id), precedents, agents).parts.items.filter((item) => !judged.has(key(item)));
   return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
@@ -485,7 +478,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   const { lines, cited } = sessionEvidence(
     db,
     evidence,
-    productionSessions(
+    productionPopulation(
       db,
       [
         [(e) => e.agent === name, () => `is not a worker_spawned event of ${name}`],
@@ -497,7 +490,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   );
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
   for (const e of cited) {
-    const row = table.find((r) => matchesRowKey(r, e.cell));
+    const row = tableRowOf(table, e);
     if (!row) throw new DomainError(`evidence ${e.worker_spawned_event_id} ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`);
     rows.set(`${row.provider}/${row.model}/${row.effort}`, { provider: row.provider, model: row.model, tier: tierIdOf(db, row.tier), effort: row.effort });
   }
@@ -530,7 +523,7 @@ function addTierProposal(
   const { lines } = sessionEvidence(
     db,
     evidence,
-    productionSessions(
+    productionPopulation(
       db,
       [
         [(e) => table.some((r) => r.tier === row.tier && matchesRowKey(r, e.cell)), (e) => `ran on ${rowName(e.cell)}, which is not a row of tier ${row.tier}, the tier of ${rowName(row)}`],
@@ -568,7 +561,7 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   const { lines } = sessionEvidence(
     db,
     evidence,
-    productionSessions(
+    productionPopulation(
       db,
       [
         [(e) => e.source.tier === "task", (e) => `took its tier from ${e.source.tier}, not from its task's request`],
@@ -615,12 +608,12 @@ function interviewProposal(
   assertKnownTier(db, "tier", tier);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
   const table = loadExecutionSettingTable(db);
-  const rowOf = (e: RoutingEpisode) => table.find((r) => matchesRowKey(r, e.cell));
+  const rowOf = (e: RoutingEpisode) => tableRowOf(table, e);
   // 母集団(ADR 0302): 根拠の各行で、今の段で走った本番 session、全期間
   const { lines, cited } = sessionEvidence(
     db,
     evidence,
-    productionSessions(
+    productionPopulation(
       db,
       [[(e) => rowOf(e) !== undefined, (e) => `ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`], inCurrentTier(db, table)],
       (e) => [["row", rowName(rowOf(e)!)], workspaceOf(e)],
@@ -666,8 +659,8 @@ type Condition<S> = readonly [holds: (s: S) => boolean, reason: (s: S) => string
  *  組の鍵と、引用の外を数える範囲の追加の絞り(引用から決まる範囲 —— Interview の根拠の行、学習器のフラグの変更以降)だけ。 */
 interface Population<S> {
   sessions: readonly S[];
-  /** worker_spawned の id が sessions のどれでもないときの理由。 */
-  absent: string;
+  /** worker_spawned の event が sessions のどれでもないときの理由。 */
+  absent: (spawned: EventRow) => string;
   conditions: readonly Condition<S>[];
   key: (s: S) => Array<readonly [label: string, value: string]>;
   within?: (cited: readonly S[]) => (s: S) => boolean;
@@ -681,9 +674,10 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
   const cited = new Set<S>();
   for (const id of evidence) {
     // 根拠の種類はどの op も worker_spawned の event id(#2489 —— この拒否文の出所はここだけ)
-    if (getEvent(db, id)?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
+    const spawned = getEvent(db, id);
+    if (spawned?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
     const session = sessions.find((s) => s.worker_spawned_event_id === id);
-    if (!session) throw new DomainError(`evidence ${id} ${absent}`);
+    if (!session) throw new DomainError(`evidence ${id} ${absent(spawned)}`);
     const reason = outside(session);
     if (reason !== undefined) throw new DomainError(`evidence ${id} ${reason}`);
     cited.add(session);
@@ -707,20 +701,23 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
   };
 }
 
-/** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(review 側には配分評価も outcome も無い)で、
- *  受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
+/** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root などには配分評価も
+ *  outcome も無い)で、受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
 // ponytail: 条件と鍵が episode ごとに段・登録者を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と登録者を1度だけ Map に引く
-const productionSessions = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
+const productionPopulation = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
   sessions: loadEpisodes(db),
-  absent: "is not a session of a work-side task: a review-side session has no allocation review or outcome",
+  absent: (spawned) => `is a session of a task of type ${getTask(db, spawned.task_id!)?.type}; only a work-side task's session has an outcome and allocation reviews`,
   conditions: [[(e) => !e.interview, () => "is not a worker_spawned event of a production work session: it is an Interview examinee's session"], ...conditions],
   key,
   within,
 });
 
+/** session が走った表の行(行の鍵で引く —— 消えた行なら undefined)。 */
+const tableRowOf = (table: ExecutionSettingTable, e: RoutingEpisode) => table.find((r) => matchesRowKey(r, e.cell));
+
 /** 行の今の世代(ADR 0210 決定2): 走った行の今の段で走ったか。走った行が表にあることは前の条件が見る。 */
 function inCurrentTier(db: Db, table: ExecutionSettingTable): Condition<RoutingEpisode> {
-  const rowOf = (e: RoutingEpisode) => table.find((r) => matchesRowKey(r, e.cell))!;
+  const rowOf = (e: RoutingEpisode) => tableRowOf(table, e)!;
   return [(e) => e.tier_id === tierIdOf(db, rowOf(e).tier), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${rowOf(e).tier}, the current tier of ${rowName(rowOf(e))}`];
 }
 
@@ -761,7 +758,7 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
   const inSpan = new Set(span.map((row) => row.id));
   const { cited, outsideLine } = citeFromPopulation<Row>(db, evidence, {
     sessions: shadowRows(db, { after: 0 }),
-    absent: "is not the session of any shadow row: only a work task's pickup writes one",
+    absent: () => "is not the session of any shadow row: only a work task's pickup writes one",
     conditions: [
       [(row) => row.diverged, () => "is the session of a shadow row where the learner recommended the cell that ran"],
       [
@@ -930,7 +927,7 @@ export function proposeRoutingChange(
     const { lines: evidenceLines } = sessionEvidence(
       db,
       evidence,
-      productionSessions(db, [[(e) => matchesRowKey(pin, e.cell), (e) => `ran on ${rowName(e.cell)}, not on ${rowName(pin)}`], inCurrentTier(db, table)], (e) => [workspaceOf(e)]),
+      productionPopulation(db, [[(e) => matchesRowKey(pin, e.cell), (e) => `ran on ${rowName(e.cell)}, not on ${rowName(pin)}`], inCurrentTier(db, table)], (e) => [workspaceOf(e)]),
       `production sessions on ${rowName(pin)} in its current tier ${pin.tier}, over all time`,
     );
     proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, evidence, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };

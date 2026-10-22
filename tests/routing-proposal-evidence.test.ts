@@ -6,14 +6,15 @@ import { applyExecutionSettingsChange, type RowKey } from "../src/execution-sett
 import { registerMetaReview } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
-import { tierIdOf } from "../src/tier.js";
+import { readTiers, tierIdOf } from "../src/tier.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
-import { DECKHAND_AGENT, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の提案の根拠は op の対象が決める母集団の部分集合で、検査・組・引用の外は盤面が母集団から組む(ADR 0302、issue #2485)の
  *  ドメイン層。昇格 / 降格の detail は tests/learner-promotion-evidence.test.ts、MCP の inputSchema はサーバ境界の各テストが言う。 */
 const at = new Date("2026-10-23T00:00:00.000Z");
 const OPUS = "anthropic / claude-opus-5-5 at effort high";
+const SOL = { provider: "openai" as const, model: "gpt-5.6-sol", effort: "high" };
 
 function board() {
   const db = openDb(":memory:");
@@ -24,7 +25,8 @@ function board() {
   return { db, review, propose };
 }
 
-/** setup のみ: work task(段 `requested` を要求、`writer` が登録)の session を1つ、行 `row` で段 `tier` に刻み、worker_spawned の id を返す。 */
+/** setup のみ: work task(段 `requested` を要求、`writer` が登録)の session を1つ、行 `row` で段 `tier` に刻み、worker_spawned の id を返す。
+ *  行の今の段で走る既定どおりの session は harness の rowSession。 */
 function session(
   db: Db,
   options: { row?: RowKey; tier?: string; workspace?: string; agent?: string; source?: "task" | "agent"; requested?: string; writer?: readonly [string, "webui" | "mcp"] } = {},
@@ -59,7 +61,7 @@ const detailLines = (db: Db, questionId: string) => getTask(db, questionId)!.que
 
 it("行の提案は根拠が無いと拒まれ、その行で今の段で走った本番 session を根拠にすると question が立ち、question_proposal に evidence が残り pin は行の全欄のまま", () => {
   const { db, propose } = board();
-  const evidence = [session(db)];
+  const evidence = [rowSession(db, OPUS_ROW, at)];
 
   expect(() => propose({ op: "row", row: OPUS_ROW, change: { tier: "frontier" } })).toThrow(/op row names .* at least one evidence worker_spawned event id/);
   const { question_id } = propose({ op: "row", row: OPUS_ROW, change: { tier: "frontier" }, evidence });
@@ -75,22 +77,23 @@ it("行の提案は根拠が無いと拒まれ、その行で今の段で走っ�
 });
 
 it.each(["row", "interview"] as const)(
-  "op %s の根拠は、worker_spawned でない event・review 側の session・Interview の受験者の session・別の行の session・行が前の段にいた頃の session をそれぞれ理由を名指して拒み、question は立たない",
+  "op %s の根拠は、work 側でない task(review・Interview の root)の session・Interview の受験者の session・別の行の session・行が前の段にいた頃の session をそれぞれ理由を名指して拒み、question は立たない",
   (op) => {
     const { db, review, propose } = board();
-    const registered = latestEventOfTask(db, review, "task_registered")!.id;
     const reviewSide = spawnOn(db, review);
-    const examinee = spawnOn(db, interviewExaminee(db, at).id);
-    const sonnet = session(db, { row: { ...OPUS_ROW, model: "claude-sonnet-5-5" }, tier: "economy" });
-    const earlier = session(db);
+    const examineeTask = interviewExaminee(db, at);
+    const examinee = spawnOn(db, examineeTask.id);
+    const root = spawnOn(db, examineeRootId(db, examineeTask.id));
+    const sonnet = rowSession(db, { ...OPUS_ROW, model: "claude-sonnet-5-5" }, at);
+    const earlier = rowSession(db, OPUS_ROW, at);
     moveRow(db, OPUS_ROW, "frontier");
     const proposeOn = (evidence: number[]) =>
       op === "row"
         ? propose({ op, row: OPUS_ROW, change: { effort: "max" }, evidence })
         : propose({ op, hypothesis: "h", tier: "frontier", targets: [{ ...OPUS_ROW, effort: "max" }], workspace: "reef", evidence });
 
-    expect(() => proposeOn([registered])).toThrow(`evidence ${registered} is not a worker_spawned event`);
-    expect(() => proposeOn([reviewSide])).toThrow(`evidence ${reviewSide} is not a session of a work-side task`);
+    expect(() => proposeOn([reviewSide])).toThrow(`evidence ${reviewSide} is a session of a task of type review; only a work-side task's session has an outcome and allocation reviews`);
+    expect(() => proposeOn([root])).toThrow(`evidence ${root} is a session of a task of type interview; only a work-side task's session has an outcome and allocation reviews`);
     expect(() => proposeOn([examinee])).toThrow(`evidence ${examinee} is not a worker_spawned event of a production work session: it is an Interview examinee's session`);
     if (op === "row") expect(() => proposeOn([sonnet])).toThrow(`evidence ${sonnet} ran on anthropic / claude-sonnet-5-5 at effort high, not on ${OPUS}`);
     expect(() => proposeOn([earlier])).toThrow(`evidence ${earlier} ran in tier standard, not in frontier, the current tier of ${OPUS}`);
@@ -100,8 +103,8 @@ it.each(["row", "interview"] as const)(
 
 it("行の提案の detail は根拠を workspace ごとに1行にまとめ、件数・task id・outcome の内訳・配分評価の allocation × cause の内訳と未評価の数を出し、引用の外の1行に母集団の総数・組の数・引用した数・引用されなかった組ごとの件数を出す", () => {
   const { db, propose } = board();
-  const overpowered = session(db);
-  const underpowered = session(db);
+  const overpowered = rowSession(db, OPUS_ROW, at);
+  const underpowered = rowSession(db, OPUS_ROW, at);
   allocate(db, overpowered, "overpowered", "uncertain");
   allocate(db, underpowered, "underpowered", "capability");
   const lagoon = session(db, { workspace: "lagoon" });
@@ -125,14 +128,13 @@ it("行の提案の detail は根拠を workspace ごとに1行にまとめ、�
 
 it("段を足す提案の根拠は、移す行の今の段にある全行のその段の session を通し(組は走った行と workspace)、他の段の行の session と移す行が前の段にいた頃の session を拒む", () => {
   const { db, propose } = board();
-  const SOL = { provider: "openai" as const, model: "gpt-5.6-sol", effort: "high" };
   moveRow(db, OPUS_ROW, "frontier");
-  const earlier = session(db, { tier: "frontier" });
+  const earlier = rowSession(db, OPUS_ROW, at);
   moveRow(db, OPUS_ROW, "standard");
-  const opus = session(db);
-  const sol = session(db, { row: SOL });
+  const opus = rowSession(db, OPUS_ROW, at);
+  const sol = rowSession(db, SOL, at);
   session(db, { row: SOL, workspace: "lagoon" });
-  const sonnet = session(db, { row: { ...OPUS_ROW, model: "claude-sonnet-5-5" }, tier: "economy" });
+  const sonnet = rowSession(db, { ...OPUS_ROW, model: "claude-sonnet-5-5" }, at);
   const proposeWith = (evidence: number[]) => propose({ op: "add_tier", tier: "careful", description: "Careful work.", position: 2, row: OPUS_ROW, evidence });
 
   expect(() => proposeWith([sonnet])).toThrow(`evidence ${sonnet} ran on anthropic / claude-sonnet-5-5 at effort high, which is not a row of tier standard, the tier of ${OPUS}`);
@@ -154,13 +156,13 @@ it("agent の段の提案の根拠は、その agent の段の出所が agent �
   const { db, review, propose } = board();
   const reviewSide = spawnOn(db, review, { source: "agent" });
   const scout = session(db, { agent: "scout", source: "agent" });
-  const requested = session(db);
+  const requested = rowSession(db, OPUS_ROW, at);
   const standard = session(db, { source: "agent" });
   const frontier = session(db, { tier: "frontier", row: { ...OPUS_ROW, model: "claude-fable-5-1" }, source: "agent" });
   session(db, { source: "agent", workspace: "lagoon" });
   const proposeWith = (evidence: number[]) => propose({ op: "agent_tier", agent: "deckhand", to: "economy", evidence });
 
-  expect(() => proposeWith([reviewSide])).toThrow(`evidence ${reviewSide} is not a session of a work-side task`);
+  expect(() => proposeWith([reviewSide])).toThrow(`evidence ${reviewSide} is a session of a task of type review`);
   expect(() => proposeWith([scout])).toThrow(`evidence ${scout} is not a worker_spawned event of deckhand`);
   expect(() => proposeWith([requested])).toThrow(`evidence ${requested} took its tier from task, not from deckhand's default tier`);
   const { question_id } = proposeWith([standard, frontier]);
@@ -178,9 +180,9 @@ it("agent の段の提案の根拠は、その agent の段の出所が agent �
 
 it("段の説明の提案の根拠は、説明が最後に変わった後にその段を要求した task の出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は workspace と task の書き手で、書き手が人間の task も数える", () => {
   const { db, propose } = board();
-  const before = session(db);
+  const before = rowSession(db, OPUS_ROW, at);
   const edited = applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Work that needs a plan." }, "webui", at)!;
-  const byHuman = session(db);
+  const byHuman = rowSession(db, OPUS_ROW, at);
   applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", position: 0 }, "webui", at);
   const byScout = session(db, { writer: ["scout", "mcp"] });
   const fromAgent = session(db, { source: "agent" });
@@ -222,7 +224,7 @@ it("worker_spawned でない event を根拠にすると、どの op も同じ1�
   for (const input of inputs) {
     expect(() => propose(input)).toThrow(new DomainError(reason));
   }
-  db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
+  applyExecutionSettingsChange(db, { setting: "learner_promoted", value: true }, "webui", at);
   expect(() => propose({ op: "demote", evidence })).toThrow(new DomainError(reason));
 });
 
@@ -246,11 +248,44 @@ it("routing repair の行の提案も根拠を要し、同じ母集団の検査�
 
 it("説明が一度も変わっていない段の説明の提案は、全期間の session を母集団にする", () => {
   const { db, propose } = board();
-  const cited = session(db);
+  const cited = rowSession(db, OPUS_ROW, at);
 
   const { question_id } = propose({ op: "tier_description", tier: "standard", description: "Work that needs a plan.", evidence: [cited] });
 
   expect(detailLines(db, question_id)).toContain(
     "All production sessions of tasks that requested tier standard (tier source task), over all time (its description never changed): 1 in 1 line(s), 1 cited; lines not cited: none.",
   );
+});
+
+it("今と同じ説明に位置の変更を添えた段の編集は、説明の変更ではないので段の説明の提案の範囲を切らない", () => {
+  const { db, propose } = board();
+  const cited = rowSession(db, OPUS_ROW, at);
+  const standard = readTiers(db).find((tier) => tier.name === "standard")!;
+  applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: standard.description, position: 0 }, "webui", at);
+
+  const { question_id } = propose({ op: "tier_description", tier: "standard", description: "Work that needs a plan.", evidence: [cited] });
+
+  expect(detailLines(db, question_id)).toContain(
+    "All production sessions of tasks that requested tier standard (tier source task), over all time (its description never changed): 1 in 1 line(s), 1 cited; lines not cited: none.",
+  );
+});
+
+it("Interview の提案の detail は根拠を走った行と workspace ごとに1行にまとめ、引用の外は根拠の行の session だけを数える", () => {
+  const { db, propose } = board();
+  const cited = rowSession(db, OPUS_ROW, at);
+  allocate(db, cited, "underpowered", "capability");
+  session(db, { workspace: "lagoon" });
+  rowSession(db, SOL, at);
+
+  const { question_id } = propose({ op: "interview", hypothesis: "h", tier: "standard", targets: [{ ...OPUS_ROW, effort: "max" }], workspace: "reef", evidence: [cited] });
+
+  const lines = detailLines(db, question_id);
+  for (const line of [
+    `Rows the evidence ran on (pinned): ${OPUS} (standard)`,
+    "Evidence: 1 cited worker session(s), one line per row, workspace:",
+    `- row ${OPUS}, workspace reef: 1 session(s) (tasks ${taskOf(db, cited)}); outcomes 0 accepted, 1 rejected, 0 excluded; allocation reviews underpowered/capability 1; 0 session(s) not yet reviewed`,
+    `All production sessions on the evidence rows in their current tiers, over all time: 2 in 2 line(s), 1 cited; lines not cited: row ${OPUS}, workspace lagoon: 1.`,
+  ]) {
+    expect(lines).toContain(line);
+  }
 });
