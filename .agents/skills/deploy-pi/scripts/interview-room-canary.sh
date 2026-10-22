@@ -11,12 +11,15 @@
 # read-floor-canary.sh does, whose verdict functions this script sources.
 #
 # THE COMBINATION, emitted from the checkout's code, never hand-written: the
-# `interview` type's floor (`emit-sandbox-settings.ts interview <room> --read <real env>`).
+# `interview` type's floor (`emit-sandbox-settings.ts interview <room> --read <real env>
+# --allowed-domain registry.npmjs.org`).
 #   Claude — its profile and the work spawn shape (`acceptEdits`,
 #            `autoAllowBashIfSandboxed` at its default), cwd = the room, the real
 #            environment in `sandbox.filesystem.allowRead` and as a `Read` allow.
 #   Codex  — `codex sandbox -P tidepool-work -C <room>` with its `permissionConfig()`
-#            (`--codex`), the real environment "read" in the filesystem map. No model turn.
+#            (`--codex`), the real environment "read" in the filesystem map, plus
+#            `features.network_proxy=true` as the worker's closedSurfaceConfig() turns
+#            it on. No model turn.
 #
 # ROWS, per provider (one session for Claude), run by
 # scripts/interview-room-canary-probe.sh from the room:
@@ -30,18 +33,16 @@
 #                        by the OS: the settings were applied, and the added read
 #                        entry did not open more than it names
 #       task-temp      — `mktemp` lands in the task temp
+#       allowed-domain — the emitted allowlist's one domain answers 200. Codex
+#                        reaches it only through the proxy that
+#                        `features.network_proxy=true` starts: without it nothing
+#                        resolves (codex-cli 0.163.0, VM)
 #   Claude only, by the session's own file tools rather than the probe (#2192):
 #       read-tool      — the Read tool returns the token of a second file in the
 #                        real environment: the `Read(//<real env>/**)` allow opened
 #                        the permission layer, which `allowRead` alone does not
 #       write-tool     — the Write tool's file in the real environment is not on
 #                        disk: the Read allow did not open writing there
-#       allowed-domain — Claude only: the emitted allowlist's one domain answers
-#                        200. Under `codex sandbox` (codex-cli 0.147.0, VM) no
-#                        host was reachable, listed or not — with the work
-#                        config nothing resolved, and with
-#                        `features.network_proxy=true` added the connection was
-#                        reset — so this row cannot be a control there.
 # (a) and (c) are judged by what only a working read or write can produce — the
 # hash and token, and the commit on disk. A control that did not succeed is
 # VACUOUS, never a pass; a refusal in the harness's own words is a FAIL. Both
@@ -172,7 +173,7 @@ REAL_ENV='$REAL'
 REAL_FILE='$REAL_FILE'
 REAL_WRITE='$REAL/written-by-$cli.txt'
 HOME_FILE='$HOME_TARGET'
-ALLOWED_DOMAIN='$([[ "$cli" == claude ]] && echo yes || echo no)'
+ALLOWED_DOMAIN='yes'
 EOF
 }
 
@@ -219,11 +220,9 @@ judge() {
   [[ "$made" == "$TASK_TEMP"/* && -f "$made" ]] && ok=yes || ok=no
   record "$cli" task-temp "-" "$line" "$(control_verdict "$ok")"
 
-  if [[ "$cli" == claude ]]; then
-    line=$(line_of allowed-domain)
-    [[ "$line" == "rc=0 code=200"* ]] && ok=yes || ok=no
-    record "$cli" allowed-domain "-" "$line" "$(control_verdict "$ok")"
-  fi
+  line=$(line_of allowed-domain)
+  [[ "$line" == "rc=0 code=200"* ]] && ok=yes || ok=no
+  record "$cli" allowed-domain "-" "$line" "$(control_verdict "$ok")"
 }
 
 # ═══════════════════════════════════ Codex ══════════════════════════════════
@@ -231,11 +230,11 @@ if CODEX=$(realpath "$(command -v codex)" 2>/dev/null); then
   log "codex: $("$CODEX" --version 2>&1)"
   prepare codex
   if ! (cd "$REPO" && ./node_modules/.bin/tsx scripts/emit-sandbox-settings.ts interview "$ROOM" \
-          --task-temp "$TASK_TEMP" --read "$REAL" --codex > "$WORK/codex.config"); then
+          --task-temp "$TASK_TEMP" --read "$REAL" --allowed-domain registry.npmjs.org --codex > "$WORK/codex.config"); then
     fail "could not emit the Codex permission config from $REPO — is that a checkout with node_modules and the interview type (#2192)?"
     exit 2
   fi
-  CODEX_ARGS=()
+  CODEX_ARGS=(-c features.network_proxy=true)
   while IFS= read -r entry; do CODEX_ARGS+=(-c "$entry"); done < "$WORK/codex.config"
   if ! grep -qF "\"$REAL\"=\"read\"" "$WORK/codex.config"; then
     fail "the emitted Codex config does not open the real environment for reading — $REPO predates it."

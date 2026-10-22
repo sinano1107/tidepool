@@ -90,9 +90,9 @@ function writeCompatibleSchemas(out: string): void {
         },
         PlanType: {
           enum: [
-            "free", "go", "plus", "pro", "prolite", "team",
+            "free", "go", "plus", "pro", "prolite", "promax", "team",
             "self_serve_business_prolite", "self_serve_business_usage_based", "business", "ent26",
-            "enterprise_cbp_automation", "enterprise_cbp_usage_based", "enterprise", "edu", "unknown",
+            "enterprise_cbp_automation", "enterprise_cbp_usage_based", "enterprise", "edu", "edu_plus", "edu_pro", "unknown",
           ],
         },
       },
@@ -217,6 +217,34 @@ it("fixed Codex app-server stdio returns authenticated, normalized primary and s
     { id: 3, method: "account/rateLimits/read", params: null },
     { id: 4, method: "model/list", params: { includeHidden: true } },
   ]);
+});
+
+// codex-cli 0.163.0 の生成 schema の形: params は省略可で、object か null。盤面が送る `params: null` はまだ通る
+it("a rate-limits request whose params also admits an object still conforms, since the board sends null", async () => {
+  const { command } = fakeCodex({
+    drift: (out) => {
+      const path = join(out, "ClientRequest.json");
+      const requests = JSON.parse(readFileSync(path, "utf8"));
+      requests.oneOf[1] = {
+        required: ["id", "method"],
+        properties: {
+          method: { enum: ["account/rateLimits/read"] },
+          params: { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] },
+        },
+      };
+      requests.definitions.GetAccountRateLimitsParams = {
+        properties: { excludeResetCreditDetails: { type: "boolean" }, supportsLunaReserve: { type: "boolean" } },
+        type: "object",
+      };
+      writeFileSync(path, JSON.stringify(requests));
+    },
+  });
+
+  const result = await createCodexAppServerProbe({ executable: "/opt/tidepool/bin/codex", codexHome: "/tmp/codex", command })(
+    new Date(1_000),
+  );
+
+  expect(result).toMatchObject({ status: "observed", plan: "plus" });
 });
 
 it("version or generated response-schema drift fails closed before App Server usage is trusted", async () => {

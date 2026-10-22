@@ -5,7 +5,7 @@ import { z } from "zod";
 import { atNeutralCwd, type BoardCall, readOutput } from "./board-call.js";
 import type { ContainmentCapability } from "./containment.js";
 
-export const CODEX_APP_SERVER_VERSION = "codex-cli 0.147.0";
+export const CODEX_APP_SERVER_VERSION = "codex-cli 0.163.0";
 
 export interface CodexCliCommandResult {
   exitCode: number | null;
@@ -81,6 +81,7 @@ const PLAN_VALUES = [
   "plus",
   "pro",
   "prolite",
+  "promax",
   "team",
   "self_serve_business_prolite",
   "self_serve_business_usage_based",
@@ -90,6 +91,8 @@ const PLAN_VALUES = [
   "enterprise_cbp_usage_based",
   "enterprise",
   "edu",
+  "edu_plus",
+  "edu_pro",
   "unknown",
 ] as const;
 
@@ -204,6 +207,10 @@ function references(schema: any, name: string): boolean {
     schema?.anyOf?.some((entry: any) => references(entry, name));
 }
 
+// 盤面は `params: null` を送る —— 検査するのはその要求がまだ通ること(0.163.0 で object か null に広がった)
+const admitsNull = (schema: any): boolean =>
+  schema?.type === "null" || !!schema?.anyOf?.some((entry: any) => entry?.type === "null");
+
 function schemasConform(requests: any, account: any, rateLimits: any, modelList: any): boolean {
   const accountRequest = requestSchema(requests, "account/read");
   const rateRequest = requestSchema(requests, "account/rateLimits/read");
@@ -216,7 +223,7 @@ function schemasConform(requests: any, account: any, rateLimits: any, modelList:
   const window = rateLimits.definitions?.RateLimitWindow;
   return !!(
     accountRequest?.required?.includes("params") &&
-    rateRequest?.properties?.params?.type === "null" &&
+    admitsNull(rateRequest?.properties?.params) &&
     account.title === "GetAccountResponse" &&
     account.required?.includes("requiresOpenaiAuth") &&
     account.properties?.requiresOpenaiAuth?.type === "boolean" &&
