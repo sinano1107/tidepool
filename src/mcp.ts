@@ -919,12 +919,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Complete this Interview once every child has settled, in one call: score each done child against the rubric you " +
-          "posed with its probe, from its handoff alone — the board withholds which agent and model ran it — and write your " +
-          "findings in handoff.outcome. scores lists every done child exactly once: child_id is the id the child carries in " +
+          "posed with its probe, as written — not against the best answer you saw, and not against each other — from its " +
+          "handoff alone. The board withholds which agent and model ran it; do not guess one. Write your findings in " +
+          "handoff.outcome, naming for each answer what decided its score: the deliverable and its evidence, not the " +
+          "confidence of the prose. scores lists every done child exactly once: child_id is the id the child carries in " +
           "get_current_task's history, and outcome is accepted when the deliverable meets the rubric, rejected when it does " +
           "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
-          "and nothing is recorded. If the answers show the probe itself was broken, do not score them: report it with " +
-          "report_broken_probe instead. The handoff " +
+          "and nothing is recorded. Do not bend the rubric after reading the answers: if they show the probe or rubric " +
+          "itself was broken, report it with report_broken_probe instead of scoring them. The handoff " +
           `takes the same fields as complete_task (${describeHandoffFields()}); only outcome is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {

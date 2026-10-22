@@ -148,7 +148,8 @@ it("組み込みの Interviewer suzumedai も、ファイルが無ければ印�
   const builtIn = loadRegistry(dir, "purely-local");
 
   expect(builtIn.agents.suzumedai).toMatchObject({ name: "suzumedai", builtin: true, skills: ["@workspace"], icon: "🐠" });
-  expect(builtIn.agents.suzumedai!.systemPrompt).not.toBe("");
+  // ADR 0275 決定3: 規律は盤面が運ぶので本文は空(旧本文は履歴表に残る)
+  expect(builtIn.agents.suzumedai!.systemPrompt).toBe("");
   expect(resolveExecutionAgent(builtIn, "deckhand", "suzumedai", seedTierNames, "review").profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
   expect(registryAtCommit(dir, "HEAD")?.agents.suzumedai).toMatchObject({ builtin: true });
 

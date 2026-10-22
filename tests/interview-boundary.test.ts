@@ -191,6 +191,25 @@ it("worker MCP の tool 一覧は type で決まる —— interview の root �
   expect(await tools(childId)).toEqual(unsplit.filter((name) => name !== "record_knowledge" && name !== "define_memory_branch"));
 });
 
+it("root の tools/list の complete_interview の説明は、旧本文の採点の規律(rubric どおり・名を推測しない・rubric を曲げない・答案ごとの決め手)を運ぶ(ADR 0275 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const client = await mcpClient(t.mcpBaseUrl, root.id);
+  try {
+    const description = (await client.listTools()).tools.find((tool) => tool.name === "complete_interview")?.description ?? "";
+    for (const text of [
+      "as written — not against the best answer you saw, and not against each other",
+      "The board withholds which agent and model ran it; do not guess one.",
+      "naming for each answer what decided its score: the deliverable and its evidence, not the confidence of the prose.",
+      "Do not bend the rubric after reading the answers: if they show the probe or rubric itself was broken",
+    ]) {
+      expect(description).toContain(text);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
 it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインを構造で載せる(ADR 0273 決定9)", async () => {
   const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"], review_allowed_commands: ["npm test"] };
   t = await boot({ workspace });
