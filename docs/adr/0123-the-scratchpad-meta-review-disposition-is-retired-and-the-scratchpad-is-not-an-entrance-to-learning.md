@@ -1,5 +1,7 @@
 # scratchpad の meta-review 振り分けは廃止し、memory meta-review の入口は周期だけにする
 
+**Status 追記: 決定2 の「入口は周期だけ」は、前回の無い初回に限って ADR 0300 が改めた** —— 主題ごとの初回は人間が扉で起こし、以後は周期だけ。扉は決定3 のとおり未決着の門を通す(2026-10-22 の grilling、issue #2437)。
+
 2026-09-17 の grilling(issue #628)で決定。#618 は ADR 0120 決定2 の「scratchpad の `meta_review` 振り分けは主題 `memory`
 の手動登録になる」を spec #615 D の「due 判定は通らない」のとおり実装し、未決着1本の門も通らず、行本文は捨てていた(#618
 以前は行本文が review の title)。この振り分けは 2026-07-08(issue #6)に「苛立ちを instruction / authority の diff に蒸留する
