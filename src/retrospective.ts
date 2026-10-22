@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
+import { type BoardCallAnswer, type BoardCallSetting, recordedAnswer } from "./board-call-usage.js";
 import { type AgentDefinitionThen, agentDefinitionThen } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
@@ -71,8 +72,8 @@ export type InitialJudgment = GatedJudgment & { decision_log_through?: number };
 export interface AttributionClient {
   judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
-  ): Promise<AttributionJudgment>;
+    setting: BoardCallSetting,
+  ): Promise<BoardCallAnswer<AttributionJudgment>>;
 }
 
 /** Behavior candidate 起草の Board call に渡す入力(ADR 0120 決定1(b)(c)): 帰責と同じ材料に、
@@ -91,7 +92,7 @@ export interface BehaviorDraft {
 
 /** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
-  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BehaviorDraft>;
+  draft(input: BehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>>;
 }
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
@@ -233,7 +234,8 @@ export async function attributeObjections(
       };
       const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
-        judgments.set(o.entry.id, { ...gate(await call.client.judge(input, call.setting), input), decision_log_through: through });
+        const judgment = await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting));
+        judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through });
       } catch (err) {
         if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
         const payload = {
@@ -297,7 +299,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     const input = secondRoundInput(db, deps.registryDir, objectedId, source);
     let judgment: GatedJudgment;
     try {
-      judgment = gate(await call.client.judge(input, call.setting), input);
+      judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting)), input);
     } catch (err) {
       if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
       const payload = {
@@ -349,9 +351,9 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
     let judgment: AllocationJudgment;
     try {
-      judgment = await call.client.judge(input, call.setting);
+      judgment = await recordedAnswer(db, "allocation_review", now, call.client.judge(input, call.setting));
     } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "allocation review", reviewed_task_id, now)) return;
+      if (quarantineBoardCallRefusal(db, err, "allocation_review", reviewed_task_id, now)) return;
       record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
       return;
     }
@@ -530,7 +532,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
     const index = memoryIndex(db, task, scope, entry.worker_id, query).section;
     try {
-      const { addressee, ...fields } = await call.client.draft({ ...input, index }, call.setting);
+      const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, call.client.draft({ ...input, index }, call.setting));
       createBehaviorCandidate(
         db,
         {
@@ -544,7 +546,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
         now,
       );
     } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "memory draft", taskId, now)) return;
+      if (quarantineBoardCallRefusal(db, err, "behavior_draft", taskId, now)) return;
       appendEvent(db, {
         taskId,
         workerId: BOARD_WORKER_ID,

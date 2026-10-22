@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { BoardCallAnswer } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import type { Db } from "./db.js";
@@ -177,27 +178,27 @@ export class ClaudeDraftClient implements DraftClient {
     dump: string,
     language: string,
     context?: ChildDraftContext,
-  ): Promise<TaskDraft> {
-    return (await this.run(buildPrompt(dump, language, this.candidates, context), taskDraftSchema)) as TaskDraft;
+  ): Promise<BoardCallAnswer<TaskDraft>> {
+    return (await this.run(buildPrompt(dump, language, this.candidates, context), taskDraftSchema)) as BoardCallAnswer<TaskDraft>;
   }
 
-  async draftHandoff(dump: string, language: string): Promise<HandoffDraft> {
+  async draftHandoff(dump: string, language: string): Promise<BoardCallAnswer<HandoffDraft>> {
     return this.run(buildHandoffPrompt(dump, language), handoffDraftSchema);
   }
 
-  async inspectIssue(issue: Issue): Promise<IssueInspection> {
+  async inspectIssue(issue: Issue): Promise<BoardCallAnswer<IssueInspection>> {
     return this.run(buildInspectionPrompt(issue), issueInspectionSchema);
   }
 
   // runs on the board default tier's cheapest runnable anthropic row whose window is open (ADR 0192 / ADR 0200 決定4 /
   // #1445): no such row fails with the reason, never falls back outside the table
-  private async run<T>(prompt: string, schema: z.ZodType<T>): Promise<T> {
+  private async run<T>(prompt: string, schema: z.ZodType<T>): Promise<BoardCallAnswer<T>> {
     let row;
     try {
       row = boardCallRow(this.db, boardDefaultTier(this.db));
     } catch (err) {
       throw new Error(`draft not made: ${(err as Error).message}`);
     }
-    return (await runClaudeBoardCallJson({ exec: this.exec, label: "draft", prompt, setting: row, reasoning: true }, schema)).output;
+    return runClaudeBoardCallJson({ exec: this.exec, label: "draft", prompt, setting: row, reasoning: true }, schema);
   }
 }

@@ -8,7 +8,7 @@ import {
 import { listTranslationUsage } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
 import { ADVISOR_CEILINGS } from "./claude-model-alias.js";
-import { quarantineBoardCallRefusal, quarantineCliAuthFailure } from "./cli-auth.js";
+import { quarantineCliAuthFailure } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { whyInvalidClockTime } from "./clock-time.js";
 import type { Db } from "./db.js";
@@ -19,7 +19,7 @@ import {
   setDisplayLanguage,
 } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
-import type { ChildDraftContext, DraftClient } from "./draft.js";
+import { type ChildDraftContext, type DraftClient, draftHandoff, draftTask } from "./draft.js";
 import { advanceLogCursor, getLogCursor, listEvents } from "./events.js";
 import { changeExecutionSettings, executionSettingsChangeSchema, interviewTargetSchema, readExecutionSettingsWithQuarantine } from "./execution-setting.js";
 import { type GitHubClient, OPEN_ISSUES_LIMIT } from "./github.js";
@@ -1294,7 +1294,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           decomposeReason: parsed.data.decompose_reason,
         };
       }
-      const draft = await draftClient.draftTask(parsed.data.dump, getDisplayLanguage(db), context);
+      const draft = await draftTask(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), context }, clock.now());
       sendJson(res, draft satisfies WireContract["POST /api/tasks/draft"]);
     } catch (err) {
       // deliberate departure from this file's usual DomainError-only-maps-to-4xx
@@ -1303,7 +1303,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       // "unreachable" signal as no client configured. AC3 (issue #12) is that
       // draft failures never block registration, only push the user to the
       // plain form, so every draftTask() failure gets 503 here, not 500.
-      quarantineBoardCallRefusal(db, err, "task draft", undefined, clock.now());
       sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });
@@ -1543,13 +1542,12 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     try {
-      const draft = await draftClient.draftHandoff(parsed.data.dump, getDisplayLanguage(db));
+      const draft = await draftHandoff(db, draftClient, { dump: parsed.data.dump, language: getDisplayLanguage(db), taskId: task.id }, clock.now());
       const missing = HANDOFF_FIELDS.filter((f) => draft[f] === undefined || whyBlank(draft[f]));
       sendJson(res, { ...draft, missing } satisfies WireContract["POST /api/tasks/:id/complete/draft"]);
     } catch (err) {
       // same "any failure = unreachable" 503 fallback /tasks/draft uses
       // (AC3: a draft failure never blocks completion, only the assist)
-      quarantineBoardCallRefusal(db, err, "handoff draft", task.id, clock.now());
       sendJson(res.status(503), { error: err instanceof Error ? err.message : "draft failed" });
     }
   });

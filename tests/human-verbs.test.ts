@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
@@ -31,7 +32,7 @@ import {
 import { commitTriage, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -414,6 +415,45 @@ it("人間の登録 door は exec が投げた完全な LLM 診断もログに�
     failure: { kind: "inspection_unavailable", error: `${fullError} See server logs for full details.` },
   });
   expect(warn).toHaveBeenCalledWith("[issue inspection] LLM inspection failed", fullError);
+});
+
+/** issue 189 を検査して登録する人間の登録 door(`draftClient` が検査の Board call)。 */
+async function registerIssueThroughDoor(draftClient: FakeDraftClient) {
+  db = openDb(":memory:");
+  const github = new FakeGitHubClient();
+  github.scriptIssue(189, { title: "issue", body: "body", comments: [] });
+  return registerThroughHumanDoor(
+    { db, pollNow: () => {}, github, draftClient, workspace: { name: "tidepool", path: "/workspaces/tidepool" } },
+    { type: "work", github_issue_number: 189, workspace: "tidepool" },
+    () => NOW,
+    "webui",
+  );
+}
+
+it("人間の登録 door の issue 検査は、撃った行で issue_inspection の行を1つ残す(ADR 0299 決定1)", async () => {
+  const draftClient = new FakeDraftClient();
+
+  expect(await registerIssueThroughDoor(draftClient)).toMatchObject({ ok: true });
+
+  expect(listBoardCalls(db)).toEqual([
+    { use: "issue_inspection", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
+  ]);
+});
+
+it("usage を報告して失敗した issue 検査も issue_inspection の行を残し、登録は今どおり inspection_unavailable で返る(ADR 0299 決定3)", async () => {
+  const draftClient = new FakeDraftClient();
+  draftClient.scriptInspectionFailure(new BoardCallUsageError("answer did not match the schema", draftClient.setting, BOARD_CALL_USAGE));
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+
+  const result = await registerIssueThroughDoor(draftClient);
+
+  expect(result).toEqual({
+    ok: false,
+    failure: { kind: "inspection_unavailable", error: "answer did not match the schema See server logs for full details." },
+  });
+  expect(listBoardCalls(db)).toEqual([
+    { use: "issue_inspection", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
+  ]);
 });
 
 it("人間の登録 door は work child を人間 decompose として登録する", async () => {

@@ -1,14 +1,5 @@
+import type { BoardCallUsage } from "./board-call-usage.js";
 import type { Provider } from "./provider.js";
-
-/** Token usage for one translation call, same granularity as claude-worker.ts's
- *  worker_exited usage (issue #47). A null cost is "not measurable", never 0 (ADR 0296 決定5). */
-export interface TranslationUsage {
-  input_tokens: number;
-  output_tokens: number;
-  cache_read_tokens: number;
-  cache_creation_tokens: number;
-  estimated_cost_usd: number | null;
-}
 
 /** What one translation call ran on, in the pin's spelling (`haiku` / `low`) — not the concrete id that answered. */
 export interface TranslationSetting {
@@ -22,7 +13,7 @@ export interface TranslationResult {
   /** one per fragment, in the fragments' order */
   texts: string[];
   /** the whole call's usage — a batched call carries no per-fragment usage (ADR 0296 決定5) */
-  usage: TranslationUsage;
+  usage: BoardCallUsage;
   setting: TranslationSetting;
 }
 

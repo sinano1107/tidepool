@@ -13,10 +13,10 @@ const schema = z.object({ ok: z.boolean() });
 const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
 
 describe("Claude の Board call runner", () => {
-  it("JSON の答えは result から JSON を取り出して schema で検証し、封筒の usage と一緒に返す", async () => {
+  it("JSON の答えは result から JSON を取り出して schema で検証し、封筒の usage と撃った行と一緒に返す", async () => {
     await expect(
       runClaudeBoardCallJson(call(answered({ result: "```json\n{\"ok\":true}\n```" })), schema),
-    ).resolves.toEqual({ output: { ok: true }, usage: USAGE });
+    ).resolves.toEqual({ output: { ok: true }, usage: USAGE, setting: ROW });
   });
 
   it("答えを取りに行く呼び出しの封筒に usage が無ければ、呼び出しの失敗にする(ADR 0299 決定4)", async () => {
@@ -60,7 +60,7 @@ describe("Claude の Board call runner", () => {
     for (const result of [answer, `\`\`\`json\n${answer}\n\`\`\``]) {
       await expect(
         runClaudeBoardCallJson(call(answered({ result })), textSchema),
-      ).resolves.toEqual({ output: { text: "```ts\nconst x = 1;\n```" }, usage: USAGE });
+      ).resolves.toHaveProperty("output", { text: "```ts\nconst x = 1;\n```" });
     }
   });
 
@@ -115,9 +115,12 @@ describe("Claude の Board call runner", () => {
         total_cost_usd: 0.000586,
         usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
       });
-    await expect(runClaudeBoardCallJson(call(exec), schema)).resolves.toEqual({
-      output: { ok: true },
-      usage: { input_tokens: 506, output_tokens: 16, cache_read_tokens: 3, cache_creation_tokens: 4, estimated_cost_usd: 0.000586 },
+    await expect(runClaudeBoardCallJson(call(exec), schema)).resolves.toHaveProperty("usage", {
+      input_tokens: 506,
+      output_tokens: 16,
+      cache_read_tokens: 3,
+      cache_creation_tokens: 4,
+      estimated_cost_usd: 0.000586,
     });
   });
 });

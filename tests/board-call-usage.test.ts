@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { listBoardCalls, listTranslationUsage, recordBoardCall } from "../src/board-call-usage.js";
+import { BoardCallUsageError, listBoardCalls, listTranslationUsage, recordBoardCall, recordedAnswer } from "../src/board-call-usage.js";
+import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
@@ -59,4 +60,36 @@ it("翻訳の usage の読み口は用途 translation の行だけを返す(ADR 
   expect(listTranslationUsage(db)).toEqual([
     { provider: "anthropic", model: "haiku", fragments: 2, usage: USAGE, createdAt: now.toISOString() },
   ]);
+});
+
+it("答えが返った Board call は行を書き、答えを返す(ADR 0299 決定1)", async () => {
+  const db = await freshDb();
+  const now = new Date("2026-10-22T00:00:00Z");
+
+  const output = await recordedAnswer(db, "attribution", now, Promise.resolve({ output: { ok: true }, usage: USAGE, setting: SETTING }));
+
+  expect(output).toEqual({ ok: true });
+  expect(listBoardCalls(db)).toEqual([{ use: "attribution", ...SETTING, fragments: null, usage: USAGE, createdAt: now.toISOString() }]);
+});
+
+it("usage を報告して失敗した Board call は行を書き、失敗をそのまま投げる(ADR 0299 決定3)", async () => {
+  const db = await freshDb();
+  const now = new Date("2026-10-22T00:00:00Z");
+  const failed = new BoardCallUsageError("answer did not match the schema", SETTING, USAGE);
+
+  await expect(recordedAnswer(db, "attribution", now, Promise.reject(failed))).rejects.toBe(failed);
+
+  expect(listBoardCalls(db)).toEqual([{ use: "attribution", ...SETTING, fragments: null, usage: USAGE, createdAt: now.toISOString() }]);
+});
+
+it.each([
+  ["行の拒否", new RowRefusalError("anthropic", "haiku", "api_404")],
+  ["401", new CliAuthError("Invalid API key")],
+  ["usage の無い失敗", new Error("claude CLI timed out")],
+])("%s で終わった Board call は行を書かず、失敗をそのまま投げる(ADR 0299 決定3)", async (_, refusal) => {
+  const db = await freshDb();
+
+  await expect(recordedAnswer(db, "attribution", new Date("2026-10-22T00:00:00Z"), Promise.reject(refusal))).rejects.toBe(refusal);
+
+  expect(listBoardCalls(db)).toEqual([]);
 });

@@ -1,14 +1,16 @@
 import { afterEach, expect, it } from "vitest";
 import { type AllocationTarget, allocationInput, allocationTargets, buildAllocationReviewInput } from "../src/allocation-review.js";
+import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { changeExecutionSettings } from "../src/execution-setting.js";
+import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import { completeIntegrationReview, completeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FakeAllocationClient } from "./fakes.js";
+import { BOARD_CALL_USAGE, FakeAllocationClient, noRetrospectiveCalls } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -134,6 +136,41 @@ it("verdict と findings は統合レビューの判断の行から読み、後�
   const [target] = allocationTargets(db);
 
   expect(allocationInput(db, target!)).toMatchObject({ verdict: "no_findings", findings: "the deliverable holds up" });
+});
+
+/** 統合点レビューが完了した work task を1つ持つ盤面で、配分評価の Board call を sweep から撃つ。 */
+async function reviewAllocationOnBoard(allocationClient: FakeAllocationClient) {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-19T00:00:00.000Z");
+  const work = registerTask(db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  appendEvent(db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: spawned });
+  completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
+  const review = listChildren(db, work.id).find((child) => child.type === "review")!;
+  completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
+  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, allocationClient }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+  return { db, work, at };
+}
+
+/** 判定の段の Board call が撃つ行(種の表の judgement tier)で残る、配分評価1回の行。 */
+const allocationRow = (at: Date) => ({ use: "allocation_review", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, usage: BOARD_CALL_USAGE, createdAt: at.toISOString() });
+
+it("配分評価は、撃った行の Provider / model / effort で allocation_review の行を1つ残す(ADR 0299 決定1)", async () => {
+  const { db, at } = await reviewAllocationOnBoard(new FakeAllocationClient());
+
+  expect(listBoardCalls(db)).toEqual([allocationRow(at)]);
+});
+
+it("配分評価の答えが schema に合わなくても allocation_review の行は残り、失敗は今どおり allocation_review_failed に残る(ADR 0299 決定3)", async () => {
+  const allocationClient = new FakeAllocationClient();
+  allocationClient.scriptFailure(new BoardCallUsageError("answer did not match the schema", { provider: "anthropic", model: "claude-fable-5-1", effort: "high" }, BOARD_CALL_USAGE));
+
+  const { db, work, at } = await reviewAllocationOnBoard(allocationClient);
+
+  expect(listBoardCalls(db)).toEqual([allocationRow(at)]);
+  expect(listEvents(db, work.id).filter((e) => e.payload.kind === "allocation_review_failed").map((e) => e.payload)).toEqual([
+    expect.objectContaining({ reason: "answer did not match the schema" }),
+  ]);
 });
 
 /** A root work task with one recorded worker session (spawn + exit), completed

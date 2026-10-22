@@ -19,7 +19,7 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
 
     await expect(
       client.draftHandoff("mounted the sensor on the north wall, used the spare bracket", "English"),
-    ).resolves.toEqual({
+    ).resolves.toHaveProperty("output", {
       outcome: "sensor mounted and reading",
       deliverables: "greenhouse, north wall",
       resume_context: "spare bracket left in the shed if it falls again",
