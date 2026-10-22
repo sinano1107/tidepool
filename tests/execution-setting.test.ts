@@ -844,8 +844,6 @@ it("存在しない行の削除は何も変えないので、操作イベント�
   expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model", effort: "high" }, "webui", new Date())).toBeNull();
 });
 
-/** 盤面設定の3つの表の生の行 —— 列が NULL のまま(= コードの既定)かまで比べる。 */
-const rawSettings = (db: Db) => ["execution_defaults", "execution_settings", "tiers"].map((name) => db.prepare(`SELECT * FROM ${name} ORDER BY rowid`).all());
 const settingsChangedCount = (db: Db) => listEventsOfKinds(db, ["execution_settings_changed"]).length;
 type Settings = ReturnType<typeof readExecutionSettings>;
 
@@ -867,21 +865,28 @@ it.each<[string, (db: Db) => void, (settings: Settings) => ExecutionSettingsChan
   const db = openDb(":memory:");
   setup(db);
   const change = build(readExecutionSettings(db));
-  const before = { raw: rawSettings(db), events: settingsChangedCount(db) };
+  const before = { settings: readExecutionSettings(db), events: settingsChangedCount(db) };
 
   expect(applyExecutionSettingsChange(db, change, "webui", new Date())).toBeNull();
-  expect({ raw: rawSettings(db), events: settingsChangedCount(db) }).toEqual(before);
+  expect({ settings: readExecutionSettings(db), events: settingsChangedCount(db) }).toEqual(before);
 });
 
-it("値の変わる変更は従来どおり操作イベントを書き、その event id を返す", () => {
+it.each<[string, (settings: Settings) => ExecutionSettingsChange, (settings: Settings) => unknown]>([
+  ["優先順位", () => ({ setting: "priority", value: "cost" }), (s) => s.priority],
+  ["盤面既定の段", (s) => ({ setting: "default_tier", value: s.tiers.find((tier) => tier.name !== s.defaultTier)!.name }), (s) => s.defaultTier],
+  ["判断の段", (s) => ({ setting: "judgement_tier", value: s.tiers.find((tier) => tier.name !== s.judgementTier)!.name }), (s) => s.judgementTier],
+  // 6欄のうち最後の1欄だけ違う行 —— 比べる欄の取りこぼしを見る
+  ["price_out だけ違う行の編集", (s) => ({ setting: "row", key: s.table[1]!, row: { ...s.table[1]!, price_out: s.table[1]!.price_out + 1 } }), (s) => s.table[1]!.price_out],
+  ["説明だけ違う段の編集", (s) => ({ setting: "edit_tier", name: s.tiers[1]!.name, description: `${s.tiers[1]!.description} (edited)` }), (s) => s.tiers[1]!.description],
+])("値の変わる変更(%s)は従来どおり操作イベントを書き、その event id を返す", (_, build, read) => {
   const db = openDb(":memory:");
-  const before = settingsChangedCount(db);
+  const before = { value: read(readExecutionSettings(db)), events: settingsChangedCount(db) };
 
-  const id = applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", new Date());
+  const id = applyExecutionSettingsChange(db, build(readExecutionSettings(db)), "webui", new Date());
 
-  expect(settingsChangedCount(db)).toBe(before + 1);
+  expect(settingsChangedCount(db)).toBe(before.events + 1);
   expect(id).toBe(listEventsOfKinds(db, ["execution_settings_changed"]).at(-1)!.id);
-  expect(readExecutionSettings(db).priority).toBe("cost");
+  expect(read(readExecutionSettings(db))).not.toEqual(before.value);
 });
 
 // ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にならない。advisor は行でないので Quarantine を見ない(ADR 0200 決定6) ──
