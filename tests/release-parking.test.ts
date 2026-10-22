@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
-import { prepareWorkspaceAtPickup } from "../src/workspace.js";
+import { prepareWorkspaceAtPickup, refreshProtectedBranch, releaseWorkspace } from "../src/workspace.js";
 import {
   api,
   bootTidepool,
@@ -16,6 +16,7 @@ import {
   makeRemoteBackedWorkspace,
   makeWorkspace,
   mcpClient,
+  quarantineQuestion,
   registerWork,
   servedQuarantineQuestion,
   type Tidepool,
@@ -79,6 +80,31 @@ it("remote 正本を宣言した workspace では、休止位置がリモート�
     git(workspace.path, "rev-parse", "refs/remotes/origin/main"),
   );
   expect(git(workspace.path, "show", "main:merged.txt")).toBe("landed on the remote");
+});
+
+// ADR 0243 決定4: 解放の休止位置の ff も口を通る —— ローカルの保護ブランチの行は ff 先の1値に畳まれる
+it("remote-backed の解放が休止位置の ff でローカルの保護ブランチを進めると、基準のその行は ff 先の1値になる", async () => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
+  const db = openDb(":memory:");
+  const now = new Date("2026-10-22T00:00:00.000Z");
+  const task = registerTask(db, { type: "work", title: "work", purpose: "release while the remote moves", completion_criteria: "released" }, now, ...HUMAN_WEBUI);
+  await prepareWorkspaceAtPickup(db, workspace, task);
+  const pickedUp = git(workspace.path, "rev-parse", "main");
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  // 写しは口を通して進める(後始末の fetch の代わり)
+  await refreshProtectedBranch(db, workspace, undefined);
+  commitWork(workspace.path, "notes.txt", "work\n");
+  releaseWorkspace(db, workspace, task, now);
+  const parked = git(workspace.path, "rev-parse", "main");
+  expect(parked).not.toBe(pickedUp);
+
+  // 同じ基準で解放をやり直す: 行が ff 先の1値なら、pickup の位置へ戻したローカルの保護ブランチは ff 先の値から動いたと名指しされる
+  git(workspace.path, "checkout", `task/${task.id}`);
+  git(workspace.path, "update-ref", "refs/heads/main", pickedUp);
+  releaseWorkspace(db, workspace, task, now);
+
+  expect(quarantineQuestion(db, "workspace", workspace.name)?.purpose).toContain(`was: ${parked} refs/heads/main`);
+  db.close();
 });
 
 // ff できない = 帯域外の手作業でローカルの保護ブランチが分岐している。盤面はそれを

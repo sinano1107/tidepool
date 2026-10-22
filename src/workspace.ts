@@ -337,6 +337,14 @@ function writeMergeTree(
   }
 }
 
+/** ADR 0103 決定3 / ADR 0243 決定4: `first` と `second` の merge commit を、ref を書く**前に**作る —— index も worktree も
+ *  HEAD も使わずに結果ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、親をこの順に持つ Tidepool 名義の commit に
+ *  する。undefined は conflict で、中断状態はどこにも残らない。 */
+function mergeCommit(workspace: WorkspaceConfig, first: string, second: string, message: string): string | undefined {
+  const tree = writeMergeTree(workspace, first, second);
+  return tree && git(workspace.path, "commit-tree", tree, "-p", first, "-p", second, "-m", message);
+}
+
 /** ADR 0105: the content effect of merging `source` into `candidate`.
  *  History convergence stays as the cheap first answer; divergent history
  *  needs merge-tree so squash/rebase landing reads the same as a merge commit.
@@ -1132,16 +1140,20 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
  *  決定7 が求めるのは「追従していること」なので、ff のあと HEAD がリモートの ref と
  *  同じコミットを指していることまで要求する。分岐(両側に差がある)は merge 自身が
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
- *  `releaseWorkspace` と pickup の鮮度の段 `freshenPlaceAtPickup` が受ける)。 */
-function parkOnProtectedBranch(workspace: WorkspaceConfig): void {
+ *  `releaseWorkspace` と pickup の鮮度の段 `freshenPlaceAtPickup` が受ける)。
+ *
+ *  後始末と受理のやり直しは ff を口に通す(`writeRef`、ADR 0243 決定4)。pickup の鮮度の段は通さない —— 直後の全撮りが
+ *  基準を作り直し、読む場所には基準が無い。 */
+function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter = (_ref, _sha, write) => write()): void {
   const branch = protectedBranch(workspace);
   git(workspace.path, "checkout", branch);
   if (!isRemoteBacked(workspace)) return;
   const ref = protectedBranchRef(workspace);
+  const remoteSha = git(workspace.path, "rev-parse", ref);
   // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
   // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
-  git(workspace.path, "merge", "--ff-only", ref);
-  if (git(workspace.path, "rev-parse", "HEAD") === git(workspace.path, "rev-parse", ref)) return;
+  writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
+  if (git(workspace.path, "rev-parse", "HEAD") === remoteSha) return;
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +
       "commits were never pushed, so parking here would show a state the remote does not have",
@@ -1350,18 +1362,33 @@ export function releaseWorkspace(
       refreshWorkspace(workspace, githubAuth);
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
-    if (target) mergeBackInto(workspace, target, task.id);
-    parkOnProtectedBranch(workspace);
+    if (target) mergeBackInto(db, workspace, target, task.id);
+    parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);
   }
 }
 
-/** 後始末の merge back の一歩 —— 帰り先を checkout して merge する。workspace の quarantine の受理の検査も同じ一歩を踏む
- *  (ADR 0240 決定4)。 */
-function mergeBackInto(workspace: WorkspaceConfig, target: string, taskId: string): void {
+/** 後始末の merge back の一歩 —— 帰り先を checkout し、届いていなければ ff 先か merge commit を先に作って、口を通して
+ *  `merge --ff-only` で checkout ごと進める(ADR 0243 決定4)。conflict は merge-tree の段階で分かり、checkout は帰り先の
+ *  tip のまま何も残さない —— 出口を2つ示して投げる(ADR 0239 帰結)。それ以外の失敗(dirty なツリーを ff が拒む等)は
+ *  git の理由のまま投げる。workspace の quarantine の受理の検査も同じ一歩を踏む(ADR 0240 決定4)。 */
+function mergeBackInto(db: Db, workspace: WorkspaceConfig, target: string, taskId: string): void {
+  const source = taskBranch(taskId);
+  const ref = `refs/heads/${target}`;
   git(workspace.path, "checkout", target);
-  git(workspace.path, "merge", taskBranch(taskId));
+  if (isAncestor(workspace, source, ref)) return;
+  const sha = isAncestor(workspace, ref, source)
+    ? git(workspace.path, "rev-parse", `refs/heads/${source}`)
+    : mergeCommit(workspace, ref, `refs/heads/${source}`, `Merge ${source} into ${target}`);
+  if (sha === undefined) {
+    throw new Error(
+      `${source} does not merge cleanly into '${target}' — either merge it there by hand in workspace ` +
+        `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
+        "then answer again",
+    );
+  }
+  boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "merge", "--ff-only", sha));
 }
 
 /** ADR 0240 決定4: 内容が帰り先(lineage が指す祖先のタスクブランチ)に届いていない done の work と、その帰り先。
@@ -1388,9 +1415,8 @@ function undeliveredMergeBacks(
 
 /** ADR 0240 決定4: workspace の quarantine の受理の検査がやり直す merge back。届いていない done の work が無ければ何もしない
  *  (ネットワークにも出ない)。あれば、走っている session(後始末が未了のものを含む)が無いことを読んでから(ADR 0064)、
- *  後始末と同じ fetch → 帰り先へ merge → 休止位置へ戻す、を踏む。conflict は merge を取り消して休止位置へ戻し、出口を
- *  2つ示して投げる(ADR 0239 帰結)。merge は checkout を動かす書き込みなので口を通らず、基準にも触らない —— 次の
- *  pickup の全撮りが作り直す(ADR 0243 決定4)。 */
+ *  後始末と同じ fetch → 帰り先へ merge back → 休止位置へ戻す、を踏む。どの書き込みも口を通り、基準の行は書いた値に
+ *  畳まれる(ADR 0243 決定4)。conflict は中断状態を残さないので、休止位置へ戻して出口の文のまま投げる。 */
 export async function redoMergeBacks(
   db: Db,
   workspace: WorkspaceConfig,
@@ -1414,28 +1440,13 @@ export async function redoMergeBacks(
     for (;;) {
       const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
       if (!next) break;
-      const source = taskBranch(next.taskId);
-      try {
-        mergeBackInto(workspace, next.target, next.taskId);
-      } catch (err) {
-        // 始まる前に落ちた merge は中断状態を作らず `--abort` が拒む —— そのときは git の理由をそのまま返す
-        try {
-          git(workspace.path, "merge", "--abort");
-        } catch {
-          throw err;
-        }
-        throw new Error(
-          `${source} does not merge cleanly into '${next.target}' — either merge it there by hand in workspace ` +
-            `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
-            "then answer again",
-        );
-      }
+      mergeBackInto(db, workspace, next.target, next.taskId);
     }
   } catch (error) {
     failure = { error };
   }
   try {
-    parkOnProtectedBranch(workspace);
+    parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (parkError) {
     if (!failure) throw parkError;
   }
@@ -1479,26 +1490,14 @@ export function catchUpTaskBranch(db: Db, workspace: WorkspaceConfig, taskId: st
   const ref = `refs/heads/${branch}`;
   const protectedRef = protectedBranchRef(workspace);
   if (isAncestor(workspace, protectedRef, ref)) return;
-  const tree = writeMergeTree(workspace, ref, protectedRef);
-  if (tree === undefined) {
+  const taskSha = git(workspace.path, "rev-parse", ref);
+  const merged = mergeCommit(workspace, taskSha, protectedRef, `Merge ${protectedRef} into ${branch}`);
+  if (merged === undefined) {
     throw new Error(
       `workspace ${workspace.name}: ${protectedRef} does not merge cleanly into '${branch}' — ` +
         "resolve it by hand, then retry PR promotion",
     );
   }
-  const taskSha = git(workspace.path, "rev-parse", ref);
-  const protectedSha = git(workspace.path, "rev-parse", protectedRef);
-  const merged = git(
-    workspace.path,
-    "commit-tree",
-    tree,
-    "-p",
-    taskSha,
-    "-p",
-    protectedSha,
-    "-m",
-    `Merge ${protectedRef} into ${branch}`,
-  );
   boardRefWriter(db, workspace)(ref, merged, () => git(workspace.path, "update-ref", ref, merged, taskSha));
 }
 
@@ -1508,26 +1507,6 @@ function landingConflict(workspace: WorkspaceConfig, branch: string, task: strin
   return new Error(
     `workspace ${workspace.name}: ${task} does not merge cleanly into '${branch}' — ` +
       "resolve it by hand, then answer the landing question again",
-  );
-}
-
-/** ADR 0103 決定3 / ADR 0243 決定4: 着地の merge commit を、ref を書く**前に**作る —— index も worktree も HEAD も
- *  使わずに merge の結果ツリーだけを作り(`merge-tree --write-tree`、git ≥ 2.38)、Tidepool 名義の commit にする。
- *  コンフリクトは `merge-tree` の非零終了で分かるので、中断状態はどこにも残らない。 */
-function landingMergeCommit(workspace: WorkspaceConfig, branch: string, protectedSha: string, task: string): string {
-  const tree = writeMergeTree(workspace, branch, task);
-  if (tree === undefined) throw landingConflict(workspace, branch, task);
-  const taskSha = git(workspace.path, "rev-parse", `refs/heads/${task}`);
-  return git(
-    workspace.path,
-    "commit-tree",
-    tree,
-    "-p",
-    protectedSha,
-    "-p",
-    taskSha,
-    "-m",
-    `Merge ${task} into ${branch}`,
   );
 }
 
@@ -1559,7 +1538,8 @@ export function mergeTaskToProtected(db: Db, workspace: WorkspaceConfig, taskId:
   const fastForward = isAncestor(workspace, ref, task);
   const landed = fastForward
     ? git(workspace.path, "rev-parse", `refs/heads/${task}`)
-    : landingMergeCommit(workspace, branch, protectedSha, task);
+    : mergeCommit(workspace, protectedSha, `refs/heads/${task}`, `Merge ${task} into ${branch}`);
+  if (landed === undefined) throw landingConflict(workspace, branch, task);
   // 着地は人間面から入るので、同じ workspace で**別のタスクが走っている最中**に来る
   // (ADR 0064 決定4 が挙げる並行そのもの)。checkout はその worker の作業ツリーを
   // 奪い、走っているセッションは自分のタスクブランチの外で終わって tree rule に撃たれる
