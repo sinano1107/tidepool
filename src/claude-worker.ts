@@ -1531,7 +1531,7 @@ const ANSWER_CALL_LIMIT_MS = 300_000;
 /** `ExecFn` の本番の実装: 1回を Board call の口に通す(ADR 0136 決定2)。`kind` は回収の
  *  不成立を人間が読むときの呼び出しの名前。
  *
- *  非ゼロ終了は `stdout` を付けて reject する —— `rethrowCliAuthExecFailure` がその
+ *  非ゼロ終了は `stdout` を付けて reject する —— `runClaudeBoardCallJson` がその
  *  stdout の 401 envelope を読んで provider quarantine を撃つ(ADR 0070)。口が答えを
  *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。 */
 export const execThrough =
