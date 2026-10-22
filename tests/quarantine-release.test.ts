@@ -108,11 +108,11 @@ it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象�
   await expect(checks.interviewTarget!("moonshot/kimi-k2-5")).rejects.toThrow("still cannot run");
 
   const createdAt = clock.now().toISOString();
-  expect(listBoardCalls(db).map(({ use, provider, model, effort, usage, createdAt }) => ({ use, provider, model, effort, usage, createdAt }))).toEqual([
-    { use: "cli_auth_probe", provider: "anthropic", model: "haiku", effort: "low", usage: BOARD_CALL_USAGE, createdAt },
-    { use: "cli_auth_probe", provider: "moonshot", model: "kimi-k3[1m]", effort: null, usage: BOARD_CALL_USAGE, createdAt },
-    { use: "model_probe", provider: "anthropic", model: "claude-fable-5-1", effort: "low", usage: BOARD_CALL_USAGE, createdAt },
-    { use: "model_probe", provider: "moonshot", model: "kimi-k2-5", effort: null, usage: BOARD_CALL_USAGE, createdAt },
+  expect(listBoardCalls(db)).toEqual([
+    { use: "cli_auth_probe", provider: "anthropic", model: "haiku", effort: "low", fragments: null, usage: BOARD_CALL_USAGE, createdAt },
+    { use: "cli_auth_probe", provider: "moonshot", model: "kimi-k3[1m]", effort: null, fragments: null, usage: BOARD_CALL_USAGE, createdAt },
+    { use: "model_probe", provider: "anthropic", model: "claude-fable-5-1", effort: "low", fragments: null, usage: BOARD_CALL_USAGE, createdAt },
+    { use: "model_probe", provider: "moonshot", model: "kimi-k2-5", effort: null, fragments: null, usage: BOARD_CALL_USAGE, createdAt },
   ]);
 });
 

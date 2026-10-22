@@ -254,12 +254,13 @@ it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその 
 
 /** model turn を立てる probe は、envelope が usage を持つときだけ status と一緒に usage と撃った設定を返す(ADR 0299 決定1・3・4)。
  *  401 / 行の拒否 / envelope 無しは usage を返さず、status の読み方は変わらない。 */
-const PROBE_ENVELOPES: Array<[string, number, object | null]> = [
-  ["成功", 0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
-  ["予算の上限", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, subtype: "error_max_budget_usd" }],
-  ["401", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 401 }],
-  ["行の拒否", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 404 }],
-  ["envelope 無し", 1, null],
+const PROBE_ENVELOPES: Array<[number, object | null]> = [
+  // 成功・予算の上限・401・行の拒否・envelope 無し
+  [0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, subtype: "error_max_budget_usd" }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 401 }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 404 }],
+  [1, null],
 ];
 const probeCommand = (exitCode: number, envelope: object | null) => async () => ({
   exitCode,
@@ -268,7 +269,7 @@ const probeCommand = (exitCode: number, envelope: object | null) => async () => 
 
 it("Claude の認証 probe は成功と予算の上限で usage と anthropic / haiku / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
   const results = [];
-  for (const [, exitCode, envelope] of PROBE_ENVELOPES) results.push(await createClaudeCliAuthCheck(probeCommand(exitCode, envelope))());
+  for (const [exitCode, envelope] of PROBE_ENVELOPES) results.push(await createClaudeCliAuthCheck(probeCommand(exitCode, envelope))());
 
   const boardCall = { setting: { provider: "anthropic", model: "haiku", effort: "low" }, usage: BOARD_CALL_USAGE };
   expect(results).toEqual([
@@ -282,7 +283,7 @@ it("Claude の認証 probe は成功と予算の上限で usage と anthropic / 
 
 it("Claude の model probe は成功と予算の上限で usage と anthropic / その id / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
   const results = [];
-  for (const [, exitCode, envelope] of PROBE_ENVELOPES) {
+  for (const [exitCode, envelope] of PROBE_ENVELOPES) {
     results.push(await createClaudeModelProbe(probeCommand(exitCode, envelope))("claude-fable-5-1", "high"));
   }
 
@@ -300,7 +301,7 @@ it("Moonshot の model probe は成功と予算の上限で usage と moonshot /
   const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
   writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
   const results = [];
-  for (const [, exitCode, envelope] of PROBE_ENVELOPES) results.push(await createMoonshotModelProbe(keyFile, probeCommand(exitCode, envelope))("kimi-k2-5"));
+  for (const [exitCode, envelope] of PROBE_ENVELOPES) results.push(await createMoonshotModelProbe(keyFile, probeCommand(exitCode, envelope))("kimi-k2-5"));
 
   const boardCall = { setting: { provider: "moonshot", model: "kimi-k2-5", effort: null }, usage: BOARD_CALL_USAGE };
   expect(results).toEqual([
