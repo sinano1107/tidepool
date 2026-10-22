@@ -113,3 +113,9 @@ memory meta-review の判断の行には meta-review の読み口と書き込み
 
 追記5 の面は meta-review の下の RCA にも当たる —— worker の pull verb と新規書き込み(`record_knowledge` / `define_memory_branch`)を
 持たず、`read_memory_entries` を持つ。RCA の学びの書き込みは `propose_from_objection`(ADR 0280)。
+
+## 追記7(2026-10-22 の grilling、issue #2505 / ADR 0301)
+
+決定6 の「Interview の root の下にも cancelled の床の下にも通る —— どちらも拒むのは work だけ」は、ADR 0301 決定2 で「宛先がブランチに依存する
+task(work・完了時レビュー・統合レビュー・人間の review 子・承認で work を立てる question)を拒む」に広がる。修理子の type は宛先が記憶の店と routing の
+判断でブランチに依存しないので、今どおり通る。
