@@ -312,7 +312,7 @@ instances() {
 # The steps before the first line matching $1 (an extended regex over the step names).
 steps_before() { steps | awk -v stop="$1" '$0 ~ stop { exit } { print }'; }
 
-INPUT() { jq -c "${1:-.}" "$CASE_DIR/bench/input.json"; }
+input_json() { jq -c "${1:-.}" "$CASE_DIR/bench/input.json"; }
 
 # --- a new run ------------------------------------------------------------------
 # The Interview is declared first and waits one poll; the work exercise is registered only after it settled.
@@ -389,7 +389,7 @@ check "new run: what a resume needs and the board does not hold is saved under ~
 check "new run: the sequence is copied next to its exercises" "$(cat "$CASE_DIR/run.json")" "$(cat "$CASE_DIR/bench/run.json")"
 check "new run: the extraction gets the configuration, the root ids and test exits in sequence order, and the human steps" \
   '{"config":{"tidepool_commit":"tidepoolsha","cli_pins":{"claude":"2.1.289","codex":"0.147.0"},"table_rows":[{"provider":"anthropic","tier":"standard","model":"claude-opus-5-5","effort":"high","price_in":5,"price_out":25}],"registry_commit":"template@tidepoolsha"},"exercises":[{"dir":"exercises/a-interview","task_id":"root1","test_exit":null},{"dir":"exercises/b-work","task_id":"root2","test_exit":0}],"human_steps":[]}' \
-  "$(INPUT)"
+  "$(input_json)"
 check "new run: nothing deletes the run's state after the extraction" "" \
   "$(sed -n '/extract.ts run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
 check "new run: the record lands in results/<date>-<label> and its path is printed" "1" \
@@ -464,7 +464,7 @@ sequence '{"exercise": "b-work"}'
 printf 'held\n' > "$CASE_DIR/state/status/root1"
 TEST_EXIT=1
 run_harness
-check "held land question: the run settles and records the failing test" "0 1" "$rc $(INPUT '.exercises[0].test_exit')"
+check "held land question: the run settles and records the failing test" "0 1" "$rc $(input_json '.exercises[0].test_exit')"
 
 # The human retries the Interview root mid-wait: the old root reads cancelled, current-root names the new one.
 reset_case
@@ -478,7 +478,7 @@ run_harness
 check "Interview retry: exits 0" "0" "$rc"
 check "Interview retry: keeps waiting on the new root, not the cancelled old one" "3" "$(grep -c '^sleep' <<< "$log")"
 check "Interview retry: the old root is not read again once the retry is seen" "1" "$(grep -c 'curl GET http://127.0.0.1:4700 /tasks/root1 *$' <<< "$log")"
-check "Interview retry: the extraction gets the new root's id" '"root9"' "$(INPUT '.exercises[0].task_id')"
+check "Interview retry: the extraction gets the new root's id" '"root9"' "$(input_json '.exercises[0].task_id')"
 
 # Hours of waiting meet transient failures: spend-down refused after a window reset, a current-root read that fails.
 reset_case
@@ -487,7 +487,7 @@ printf 'todo\ntodo\nlanded\n' > "$CASE_DIR/state/status/root1"
 printf 'FAIL\nroot1\n' > "$CASE_DIR/state/root/root1"
 printf 'ok\nrefuse\nok\n' > "$CASE_DIR/state/spend-down"
 run_harness
-check "transient failures in the wait: the run still settles and extracts" '0 "root1"' "$rc $(INPUT '.exercises[0].task_id')"
+check "transient failures in the wait: the run still settles and extracts" '0 "root1"' "$rc $(input_json '.exercises[0].task_id')"
 check "transient failures in the wait: the open questions are listed once" "1" "$(grep -c 'land completed task: Fix it' <<< "$output")"
 
 # The retry lands between the two reads of one poll: current-root still names the old root, which then reads
@@ -502,7 +502,7 @@ printf 'done\n' > "$CASE_DIR/state/status/root9"
 run_harness
 check "retry between the reads: exits 0" "0" "$rc"
 check "retry between the reads: the cancelled old root does not end the wait" "2" "$(grep -c '^sleep' <<< "$log")"
-check "retry between the reads: the extraction gets the new root's id" '"root9"' "$(INPUT '.exercises[0].task_id')"
+check "retry between the reads: the extraction gets the new root's id" '"root9"' "$(input_json '.exercises[0].task_id')"
 
 # The first spend-down, while the board is configured, is refused: the run goes on to register its exercises.
 reset_case
@@ -534,7 +534,7 @@ reset_case
 sequence '{"exercise": "b-work"}'
 ARGS="--new --registry https://example.com/registry.git#v1"
 run_harness
-check "given registry: the record names its ref's commit" '0 "givensha"' "$rc $(INPUT .config.registry_commit)"
+check "given registry: the record names its ref's commit" '0 "givensha"' "$rc $(input_json .config.registry_commit)"
 
 # --- human steps ------------------------------------------------------------------
 
@@ -566,7 +566,7 @@ record-step
 register Fix more" "$(steps | sed -n '/^register Fix it$/,/^register Fix more$/p')"
 check "first meta-review: the step is recorded as done, waiting on the review's root" \
   '{"item":1,"human":"first_meta_review","subject":"memory","outcome":"done","waited_on":"mr1"}' \
-  "$(INPUT '.human_steps[0] | del(.prompted_at, .finished_at)')"
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
 
 # (a) with the door closed: no material for routing yet, so the step is recorded and passed without waiting.
 reset_case
@@ -576,7 +576,7 @@ run_harness
 check "closed door: exits 0 without prompting or waiting" "0 0 0" \
   "$rc $(grep -c 'Start first' <<< "$output" || true) $(grep -c '^sleep' <<< "$log" || true)"
 check "closed door: recorded apart from a human skip" '{"item":1,"human":"first_meta_review","subject":"routing","outcome":"door_closed","waited_on":null}' \
-  "$(INPUT '.human_steps[0] | del(.prompted_at, .finished_at)')"
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
 
 # (b) Free text: the run waits for the human's done, then for the board to have no unsettled task.
 reset_case
@@ -589,7 +589,7 @@ check "free-text step: prints the instructions" "1" "$(grep -c 'Object to the wr
 check "free-text step: after done, the next exercise waits for the board's open task to settle" "1 1" \
   "$(steps_before '^register Fix more$' | grep -c '^sleep$') $(steps | grep -c '^register Fix more$')"
 check "free-text step: recorded as done, having waited on the board" '{"item":1,"human":"step","outcome":"done","waited_on":"board"}' \
-  "$(INPUT '.human_steps[0] | del(.prompted_at, .finished_at)')"
+  "$(input_json '.human_steps[0] | del(.prompted_at, .finished_at)')"
 
 # The control run: the human types skip at both human steps, and the run flows to the end with the skips recorded.
 reset_case
@@ -600,7 +600,7 @@ run_harness
 check "control run: exits 0 and extracts" "0 1" "$rc $(steps | grep -c '^extract$')"
 check "control run: both human steps recorded as the human's skip, waiting on nothing" \
   '[{"item":1,"human":"first_meta_review","subject":"memory","outcome":"human_skip","waited_on":null},{"item":2,"human":"step","outcome":"human_skip","waited_on":null}]' \
-  "$(INPUT '.human_steps | map(del(.prompted_at, .finished_at))')"
+  "$(input_json '.human_steps | map(del(.prompted_at, .finished_at))')"
 check "control run: no poll was waited out" "0" "$(grep -c '^sleep' <<< "$log" || true)"
 check "control run: the record lands under its label" "1" "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-control" <<< "$output")"
 
@@ -660,7 +660,7 @@ check "resume: neither the done step nor the started meta-review is prompted aga
 check "resume: nothing is deleted" "" "$(grep -E 'rm -rf|reset-failed' <<< "$log" || true)"
 check "resume: the extraction gets the run's own configuration and every exercise and human step" \
   '{"commit":"oldsha","tasks":["root7","root1"],"steps":[1,2]}' \
-  "$(INPUT '{commit: .config.tidepool_commit, tasks: [.exercises[].task_id], steps: [.human_steps[].item]}')"
+  "$(input_json '{commit: .config.tidepool_commit, tasks: [.exercises[].task_id], steps: [.human_steps[].item]}')"
 check "resume: the record lands under the run's label" "1" "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-week1" <<< "$output")"
 
 # No run in the VM: a resume stops and says how to start one, and nothing is created or reset.

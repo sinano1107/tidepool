@@ -134,7 +134,8 @@ it starts.
   landing, `cost_usd` per Harness (Codex is unpriced, ADR 0297), wall time split into pickup queue, human wait and
   board time, the number of questions raised, and what the agents did: `children` (tasks resting on a
   decomposition decision), `depth` (the decomposition decision rows), `objections`, `repairs` by type (`work`,
-  `memory_repair`, `routing_repair`) and `retries` (failure questions answered `retry` and Interview root retries). An exercise's cost is its tree's worker sessions (root,
+  `memory_repair`, `routing_repair`) and `retries` (failure questions answered `retry` and Interview root retries).
+  An exercise's cost is its tree's worker sessions (root,
   descendants, Interview examinees, the landing questions naming the tree, and the trees of Interview roots a
   retry replaced) minus the sessions that learn from the record: RCA reviews, `memory_repair` and `routing_repair`.
   A work repair child stays on the row. The replaced roots add to the cost only: wall time, settlement and

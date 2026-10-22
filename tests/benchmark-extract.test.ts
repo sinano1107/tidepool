@@ -32,6 +32,7 @@ import {
   QUIET_EXIT,
   routedOpusSessions,
   routingJudgmentRepairTask,
+  settleReview,
   settleReviews,
   WORKER_SPAWNED,
 } from "./harness.js";
@@ -223,6 +224,7 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
       { exercise: exercise("codex"), task_id: codexTask, test_exit: 1 },
     ],
     CONFIG,
+    [],
   );
 
   const [claude, codex] = record.exercises;
@@ -254,7 +256,7 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
 it("transcript が無い session は verb 列が null で、行は落とさない", () => {
   const { db, claudeTask } = claudeAndCodexBoard();
 
-  const { record } = extract(db, scratch(), [{ exercise: exercise("claude"), task_id: claudeTask, test_exit: 0 }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: exercise("claude"), task_id: claudeTask, test_exit: 0 }], CONFIG, []);
 
   expect(record.exercises[0]!.sessions).toMatchObject([{ agent: "tako", verbs: null }]);
 });
@@ -322,6 +324,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
       { exercise: interviewExercise("interview"), task_id: root.id, test_exit: null },
     ],
     CONFIG,
+    [],
   );
 
   expect(record.config).toEqual(CONFIG);
@@ -383,6 +386,7 @@ it("同じディレクトリに .stderr.log を置いても抽出はそれを開
       { exercise: exercise("codex"), task_id: codexTask, test_exit: 0 },
     ],
     CONFIG,
+    [],
   );
 
   const opened = [fs.readFileSync, fs.openSync, fs.createReadStream].flatMap((f) => vi.mocked(f).mock.calls.map(([path]) => String(path)));
@@ -421,7 +425,7 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   // 120 分に人間が判断ログを見た —— 仕事の時間ではない
   appendEvent(db, { taskId: work.id, workerId: "human", origin: "webui", at: minute(120), payload: { kind: "log_entry_displayed", entry_id: 1 } });
 
-  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG);
+  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG, []);
 
   expect(record.exercises[0]!.duration_ms).toEqual({ wall: 90 * 60_000, queue: 5 * 60_000, human_wait: 63 * 60_000, board: 22 * 60_000 });
   expect(record.exercises[0]!.questions).toEqual(["escalation", "escalation", "escalation", "local_merge"]);
@@ -452,6 +456,7 @@ it("人間の段の初回の meta-review は、人間が扉で起こした主題
 
   const review = registerMetaReview(db, "routing", AT, "webui");
   expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: false });
+  settleReview(db, getTask(db, review.id)!, "auditor", AT);
   // root が閉じても、配下の提案 question が開いている間は決着していない
   const proposal = registerTask(
     db,
@@ -460,7 +465,6 @@ it("人間の段の初回の meta-review は、人間が扉で起こした主題
     "auditor",
     "worker",
   );
-  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(review.id);
   expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: false });
   answerQuestionViaWebui(db, proposal, ["yes"], AT);
   expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: true });
@@ -542,7 +546,7 @@ it("仕事の課題の行は種類 work を持ち、費用から RCA と記憶�
   session(db, childTitled(db, work.id, "rca (auditor)").id, "fugu", "claude-code", 8);
   session(db, childTitled(db, work.id, "memory repair:").id, "deckhand", "codex", null);
 
-  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG, []);
 
   expect(record.exercises[0]).toMatchObject({ kind: "work", cost_usd_by_harness: { "claude-code": 3 } });
   expect(record.exercises[0]!.unpriced_sessions_by_harness).toEqual({});
@@ -563,11 +567,34 @@ it("課題の行は記録から導く agent の動きの列を持つ: 分けた�
   answerQuestionViaWebui(db, failureQuestion(db, first.id, AT), ["retry"], AT);
   answerQuestionViaWebui(db, failureQuestion(db, root.id, AT), ["abandon"], AT);
 
-  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: root.id, test_exit: 0 }], CONFIG);
+  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: root.id, test_exit: 0 }], CONFIG, []);
 
   expect(record.exercises[0]).toMatchObject({ children: 3, depth: 2, objections: 2, repairs_by_type: { work: 1, memory_repair: 1 }, retries: 1 });
   expect(markdown).toContain("| questions | children | depth | objections | repairs | retries |");
   expect(markdown).toMatch(/\| 3 \| 2 \| 2 \| work 1, memory_repair 1 \| 1 \|\n/);
+});
+
+it("権限外の子の承認 question は子に数えず、承認で実体化した子だけを数える(却下した子の分解判断は数えない)", () => {
+  const db = openDb(":memory:");
+  const root = getTask(db, workTask(db, "the exercise"))!;
+  const authority = { name: "standard", guidance: "", assignable_to: ["deckhand"] };
+  const outside = (title: string) => ({ title, purpose: "p", completion_criteria: "c", assignee: "fugu" });
+  const question = (parent: Task) => listChildren(db, parent.id).find((t) => t.type === "question")!;
+  // 分解判断1つ目: 権限内の子1つと、承認する権限外の子1つ
+  const [inside] = decomposeTaskViaWorker(db, root, { reason: "one in, one approved", children: [{ title: "in", purpose: "p", completion_criteria: "c" }, outside("approved")] }, "deckhand", AT, { authority }) as [Task];
+  answerQuestionViaWebui(db, question(root), ["approve"], AT);
+  // 分解判断2つ目: 却下する権限外の子だけ
+  decomposeTaskViaWorker(db, inside, { reason: "rejected", children: [outside("rejected")] }, "deckhand", AT, { authority });
+  answerQuestionViaWebui(db, question(inside), ["reject"], AT, { comment: "not needed" });
+
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: root.id, test_exit: 0 }], CONFIG, []);
+
+  expect(record.exercises[0]).toMatchObject({ children: 2, depth: 1 });
+});
+
+it("リポジトリの run.json は新しい宣言の形で読め、slugify の課題を持つ", () => {
+  const sequence = loadSequence(join(import.meta.dirname, "../docs/experiments/benchmark/run.json"));
+  expect(sequence.items.map((item) => ("exercise" in item ? item.exercise.name : item.human))).toContain("slugify");
 });
 
 it("最適化の課題(Interview)の行は種類 optimisation と、root・受験者・出題の監査の費用を持ち、root への異議から立った RCA は持たない", () => {
@@ -581,7 +608,7 @@ it("最適化の課題(Interview)の行は種類 optimisation と、root・受�
   auditorRcaOn(db, root, AT);
   session(db, childTitled(db, root.id, "rca (auditor)").id, "fugu", "claude-code", 8);
 
-  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: root.id, test_exit: null }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: root.id, test_exit: null }], CONFIG, []);
 
   expect(record.exercises[0]).toMatchObject({ kind: "optimisation", cost_usd_by_harness: { "claude-code": 3 }, unpriced_sessions_by_harness: { codex: 1 } });
   expect(record.spend.learning.sessions.rca).toEqual({ cost_usd: { "claude-code": 8 }, unpriced: {} });
@@ -601,7 +628,7 @@ it("人間の retry で置き換わった前の Interview の root の木の ses
   const third = retryInterviewRoot(db, getTask(db, second.id)!, undefined, AT, {}, "webui");
   session(db, third.id, "auditor", "claude-code", 8);
 
-  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: third.id, test_exit: null }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: interviewExercise("interview"), task_id: third.id, test_exit: null }], CONFIG, []);
 
   expect(record.exercises[0]!.cost_usd_by_harness).toEqual({ "claude-code": 15 });
   expect(record.spend.unclassified).toEqual([]);
@@ -616,7 +643,7 @@ it("どの課題の木にもどの節にも入らない worker session は未分
   const stray = workTask(db, "registered by hand during the run");
   session(db, stray, "deckhand", "codex", null);
 
-  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG, []);
 
   expect(record.spend.unclassified).toEqual([{ task_id: stray, agent: "deckhand", harness: "codex", cost_usd: null, verbs: null }]);
 });
@@ -648,7 +675,7 @@ it("走行の3つの節が Board call の行を用途・Provider ごとに、記
   session(db, routingRepair.parent_id!, "auditor", "codex", null);
   session(db, routingRepair.id, "auditor", "claude-code", 4);
 
-  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG);
+  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG, []);
 
   const { learning, human_surface, observation } = record.spend;
   expect(learning).toEqual({
@@ -709,6 +736,7 @@ it("記録は含まないものの一文を持ち、Markdown の要約は課題�
       { exercise: interviewExercise("interview"), task_id: root.id, test_exit: null },
     ],
     CONFIG,
+    [],
   );
 
   expect(record.spend.not_included).toBe("Calls without usage and the usage TUI's startup quota check are not included.");

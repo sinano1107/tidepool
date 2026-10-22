@@ -146,12 +146,11 @@ save_state() {
 # ponytail: a --rows file is not copied back, so a resume checks the Codex / Moonshot logins against the exercises' rows only
 restore_state() {
   vm 'test -f ~/bench/state.json' || fail "no run in $BENCH_VM's ~/bench to resume: start one with --new"
-  local dir
   { read -r TIDEPOOL_COMMIT; read -r CLI_PINS; read -r REGISTRY_COMMIT; read -r LABEL; } \
     <<< "$(vm 'cat ~/bench/state.json' | jq -r '.tidepool_commit, (.cli_pins | tojson), .registry_commit, .label')"
-  dir="$(mktemp -d)"
-  limactl copy -r "$BENCH_VM:bench/exercises" "$BENCH_VM:bench/run.json" "$dir/"
-  SEQUENCE="$dir/run.json"
+  RESUME_DIR="$(mktemp -d)"
+  limactl copy -r "$BENCH_VM:bench/exercises" "$BENCH_VM:bench/run.json" "$RESUME_DIR/"
+  SEQUENCE="$RESUME_DIR/run.json"
 }
 
 # The registry's origin is a bare repo in the VM: the template seed, or the given URL#REF. One workspace per exercise, seeded here.
@@ -334,6 +333,7 @@ human_step() { # item, instructions
     fi
     poll
   done
+  # ponytail: settled is isSettled's statuses (src/task-status.ts) — add a settled status there, add it here
   until api GET /tasks | jq -e 'all(.[]; .status == "done" or .status == "cancelled")' > /dev/null; do
     poll
     sleep 60
@@ -437,6 +437,7 @@ main() {
   extract_record
   trap - EXIT
   stop_board
+  [[ -z "${RESUME_DIR:-}" ]] || rm -rf "$RESUME_DIR"
   log "Run record: $OUT"
 }
 

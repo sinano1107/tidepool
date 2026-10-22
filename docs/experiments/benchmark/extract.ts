@@ -105,7 +105,7 @@ export function loadSequence(file: string) {
     items: parsed.data.items.map((item) => (item.human === undefined ? { exercise: loadExercise(join(exercises, item.exercise)) } : item)),
   };
 }
-export type SequenceItem = ReturnType<typeof loadSequence>["items"][number];
+type SequenceItem = ReturnType<typeof loadSequence>["items"][number];
 
 /** 走行の構成: 4つの軸(tidepool の commit・CLI の pin・表の行・registry の commit、ADR 0298 決定4)。 */
 export const runConfigSchema = z
@@ -149,7 +149,7 @@ const humanStepSchema = z
     waited_on: requiredTextSchema.nullable(),
   })
   .strict();
-export type HumanStep = z.infer<typeof humanStepSchema>;
+type HumanStep = z.infer<typeof humanStepSchema>;
 
 /** 再開の位置(#2503): 列の項目ごとに、盤面の記録から済んだところを導く。課題は harness が登録した root(親を持たず retry の後継でない)を
  *  登録順に宣言の題で対応づけ、retry の後の今の root を返す —— harness の id の控えに頼らないので、登録と控えの間で止まっても2度登録しない。
@@ -314,6 +314,7 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     replaced.push(...subtree(db, earlier));
     prev = latestEventOfTask(db, earlier.id, "interview_retried")?.payload.previous_root_id;
   }
+  const decomposed = tree.flatMap((t) => (t.type !== "question" && t.based_on_decision !== null ? [{ based_on_decision: t.based_on_decision }] : []));
   // 修理子は異議の束ねが立てる子(登録の記録が異議を運ぶ)のうち RCA でないもの —— 題では見分けない(ADR 0171)
   const repairs: Record<string, number> = {};
   for (const task of tree) {
@@ -336,8 +337,9 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     unpriced_sessions_by_harness: unpriced,
     questions: tasks.filter((t) => t.type === "question").map((q) => questionKindOf(q).kind),
     // agent の動き(ADR 0298 追記 #2449 決定4): 分解判断に載る子と分解判断の行の数、異議、修理子、retry(failure question と Interview の root)
-    children: tree.filter((t) => t.based_on_decision !== null).length,
-    depth: new Set(tree.flatMap((t) => (t.based_on_decision === null ? [] : [t.based_on_decision]))).size,
+    // 権限外の子の承認 question も分解判断を持つ —— 子として数えるのは承認で実体化した子だけ
+    children: decomposed.length,
+    depth: new Set(decomposed.map((t) => t.based_on_decision)).size,
     objections: listEventsOfKinds(db, ["objection_raised"]).filter((e) => e.task_id !== null && ids.has(e.task_id)).length,
     repairs_by_type: repairs,
     retries:
@@ -396,7 +398,7 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
 }
 
 /** 走行の記録: 課題ごとの列と、4プロセスの判断・人間の段を人間が読む走行ごとの節。 */
-export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: RunConfig, humanSteps: readonly HumanStep[] = []) {
+export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: RunConfig, humanSteps: readonly HumanStep[]) {
   // 盤面の task すべて(一覧の読み口は決着した木を落とすので、登録の event から引く)
   const boardTasks = listEventsOfKinds(db, ["task_registered"]).flatMap((e) => (e.task_id === null ? [] : [getTask(db, e.task_id)!]));
   const exercises = runs.map((run) => exerciseRecord(db, logDir, boardTasks, run));
