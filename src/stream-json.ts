@@ -102,6 +102,13 @@ export function readInitAutoMemoryPath(parsed: Record<string, unknown> | null): 
  *  `claude-sonnet-5` for a `--model sonnet` spawn (issue #33, measured). Only
  *  used to decide whether the advisor's own usage is separable from the main
  *  model's. Scalar, hence not `readInitField`'s array read. */
+/** The init line's `output_style` — the style the CLI resolved across the settings tiers (ADR 0303 決定4). */
+export function readInitOutputStyle(parsed: Record<string, unknown> | null): string | null {
+  if (!isInitLine(parsed)) return null;
+  const style = (parsed as Record<string, unknown>).output_style;
+  return typeof style === "string" ? style : null;
+}
+
 export function readInitModel(parsed: Record<string, unknown> | null): string | null {
   if (!isInitLine(parsed)) return null;
   const model = (parsed as Record<string, unknown>).model;

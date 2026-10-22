@@ -54,7 +54,7 @@ export interface WorkerSessionSettings {
   /** ADR 0156: see `AUTO_MEMORY_CLOSED`. */
   autoMemoryEnabled: false;
   autoMemoryDirectory: string;
-  /** ADR 0303 決定2: see `HARNESS_PROSE_PINNED`. */
+  /** ADR 0303 決定2: see `LANGUAGE_AND_OUTPUT_STYLE_PINNED`. */
   language: "english";
   outputStyle: "default";
   sandbox: {
@@ -271,9 +271,9 @@ export const AUTO_MEMORY_CLOSED = {
 /** ADR 0303 決定2: the keys that would otherwise let the repo's (or host's) settings move the
  *  language and style a worker writes its records in, shared by the worker settings and the
  *  containment probe like `AUTO_MEMORY_CLOSED`. Each is a single value the flag tier replaces
- *  outright (measured, #2454), so `workspaceSettingsDisposition` overrides them rather than
- *  refusing a workspace that carries them. */
-export const HARNESS_PROSE_PINNED = {
+ *  outright (measured, #2454), so `workspaceSettingsDisposition` does not inspect these keys —
+ *  a workspace that carries them is overridden, not refused. */
+export const LANGUAGE_AND_OUTPUT_STYLE_PINNED = {
   language: "english",
   outputStyle: "default",
 } as const;
@@ -482,7 +482,7 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       ...(readPaths.length > 0 && { allow: readPaths.map((path) => `Read(/${path}/**)`) }),
     },
     ...AUTO_MEMORY_CLOSED,
-    ...HARNESS_PROSE_PINNED,
+    ...LANGUAGE_AND_OUTPUT_STYLE_PINNED,
     sandbox: {
       enabled: true,
       allowUnsandboxedCommands: false,

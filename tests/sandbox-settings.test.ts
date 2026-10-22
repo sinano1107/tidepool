@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import {
   buildSandboxSettings,
-  HARNESS_PROSE_PINNED,
+  LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   skillReadPaths,
   workspaceSettingsDisposition,
 } from "../src/sandbox.js";
@@ -410,14 +410,14 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
  *  値1つのキーなので flag tier が丸ごと置き換え(#2454 の実測)、拒否ではなく上書きで閉じる。 */
 describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () => {
   it("worker 設定の両プロファイルと tool-surface probe の inline --settings は、同じ盤面の定数から2キーを載せる", () => {
-    expect(HARNESS_PROSE_PINNED).toEqual({ language: "english", outputStyle: "default" });
+    expect(LANGUAGE_AND_OUTPUT_STYLE_PINNED).toEqual({ language: "english", outputStyle: "default" });
     for (const taskType of ["work", "review"] as const) {
       expect(
         buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", permittedSkills: "all", ...HOST }),
-      ).toMatchObject(HARNESS_PROSE_PINNED);
+      ).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
     }
     const { args } = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral");
-    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toMatchObject(HARNESS_PROSE_PINNED);
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   });
 
   it("workspace の .claude/settings.json が language / outputStyle を持っていても拒否しない", () => {

@@ -34,7 +34,7 @@ import {
 import {
   AUTO_MEMORY_CLOSED,
   buildSandboxSettings,
-  HARNESS_PROSE_PINNED,
+  LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   workspaceSettingsDisposition,
 } from "./sandbox.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
@@ -1348,7 +1348,7 @@ export type EnumerateToolsFn = () => Promise<{
 // strict が dynamic を落とすと読んではならない。
 //
 // inline の `--settings` は auto-memory を閉じる2キー(`AUTO_MEMORY_CLOSED`)と言語・出力様式を
-// 固定する2キー(`HARNESS_PROSE_PINNED`、ADR 0303 決定2)**だけ**を運ぶ。
+// 固定する2キー(`LANGUAGE_AND_OUTPUT_STYLE_PINNED`、ADR 0303 決定2)**だけ**を運ぶ。
 // これも `--strict-mcp-config` と同じく**姿勢であってタスク単位の生成物ではない**ので
 // (固定パスと固定値で workspace を含まない)、上の線に抵触しない(ADR 0108 決定3 と同じ理屈、
 // ADR 0156 決定3)。worker 設定と同じ定数から作るので閉じ方が食い違わず、CLI がキーを
@@ -1365,7 +1365,7 @@ const TOOL_SURFACE_PROBE_ARGS = [
   "project",
   "--strict-mcp-config",
   "--settings",
-  JSON.stringify({ ...AUTO_MEMORY_CLOSED, ...HARNESS_PROSE_PINNED }),
+  JSON.stringify({ ...AUTO_MEMORY_CLOSED, ...LANGUAGE_AND_OUTPUT_STYLE_PINNED }),
   "--tools",
   // 測るのはホストの CLI であって agent の形ではない — `Skill` を含む面で撃つ(ADR 0185)
   spawnTools("work", false).join(","),

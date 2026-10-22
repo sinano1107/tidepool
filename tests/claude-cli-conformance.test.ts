@@ -7,13 +7,12 @@ import {
   boardCallOneTurnArgs,
   type ConformanceObservations,
   judgeConformance,
-  LANGUAGE_SHOTS,
   workerOneTurnArgs,
 } from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { openDb } from "../src/db.js";
-import { HARNESS_PROSE_PINNED } from "../src/sandbox.js";
+import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "../src/sandbox.js";
 import { composeTerminalScreen } from "../src/usage.js";
 import { CLI_ENVELOPE_USAGE } from "./fakes.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
@@ -35,7 +34,8 @@ const ROW_REFUSAL_ENVELOPE = JSON.stringify({
 const PI_CAPTURED_AT = new Date("2026-08-14T00:00:00.000Z");
 
 /** language の問いに1ターンで答えた stream-json の result 行。 */
-const answered = (answer: string) => `${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer })}\n`;
+const answered = (answer: string) =>
+  `${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, ...CLI_ENVELOPE_USAGE })}\n`;
 
 /** 8つの面がどれも今の盤面の読み取り関数で読める観測。 */
 function passingObservations(): ConformanceObservations {
@@ -158,7 +158,7 @@ it("Board call の形の1ターンは runner と同じフラグの定数から�
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
   const args = workerOneTurnArgs("q");
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
-  expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(HARNESS_PROSE_PINNED);
+  expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
   expect(args[args.indexOf("-p") + 1]).toBe("q");
 });
 
@@ -185,13 +185,12 @@ it("language の面は形ごとに3回撃ち、1回でも答えに japanese(大�
       languageShot: async (shape) => {
         shots.push(shape);
         const nth = shots.filter((s) => s === shape).length;
-        return answered(shape === "board call" && nth === LANGUAGE_SHOTS ? "Always respond in Japanese." : "NONE");
+        return answered(shape === "board call" && nth === 3 ? "Always respond in Japanese." : "NONE");
       },
     },
     PI_CAPTURED_AT,
   );
 
-  expect(LANGUAGE_SHOTS).toBe(3);
   expect(shots.filter((s) => s === "worker")).toHaveLength(3);
   expect(shots.filter((s) => s === "board call")).toHaveLength(3);
   const failed = rows.filter((row) => !row.pass);
@@ -209,4 +208,16 @@ it("language の面は result 行の答えが読めなければ不合格にな�
 
   expect(rows.filter((row) => !row.pass).map((row) => row.surface)).toEqual(["language"]);
   expect(ok).toBe(false);
+});
+
+it.each([
+  ["Always respond in english", true],
+  ["常に日本語で回答してください", false],
+])("language の面は答え %j を、日本語の指示の引用でなければ合格に読む(worker の形は盤面の english を引用しうる)", async (answer, pass) => {
+  const { rows } = await judgeConformance(
+    { ...passingObservations(), languageShot: async () => answered(answer) },
+    PI_CAPTURED_AT,
+  );
+
+  expect(rows.find((row) => row.surface === "language")!.pass).toBe(pass);
 });

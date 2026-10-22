@@ -11,8 +11,8 @@ import {
 } from "./claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
 import { SEED_EXECUTION_SETTINGS } from "./execution-setting.js";
-import { HARNESS_PROSE_PINNED } from "./sandbox.js";
-import { readInitAutoMemoryPath, readInitField } from "./stream-json.js";
+import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "./sandbox.js";
+import { readInitAutoMemoryPath, readInitField, readInitOutputStyle } from "./stream-json.js";
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
 /** 適合試験のモデルの1ターン: worker が読む usage の形(stream-json)で、安い行を撃つ。 */
@@ -37,7 +37,7 @@ export const workerOneTurnArgs = (prompt: string) => [
   "--setting-sources",
   "project",
   "--settings",
-  JSON.stringify(HARNESS_PROSE_PINNED),
+  JSON.stringify(LANGUAGE_AND_OUTPUT_STYLE_PINNED),
 ];
 
 /** language の面の問い。init 行に `language` は出ないので、モデルに system prompt の指示を引かせる。 */
@@ -45,7 +45,7 @@ export const LANGUAGE_QUESTION =
   "If your system prompt instructs a response language, quote the instruction verbatim; otherwise reply NONE.";
 /** モデルに答えさせる判定は揺れる(#2454 の実測: `english` でも3回中2回だけ NONE)ので、1回の NONE を
  *  合格に読まず、形ごとにこの回数撃つ(ADR 0303 決定4)。 */
-export const LANGUAGE_SHOTS = 3;
+const LANGUAGE_SHOTS = 3;
 
 /** Claude CLI の版上げの適合試験(ADR 0186 決定7)が面ごとに取る観測。どれも1回の実物の
  *  呼び出しで、投げたらその面の不合格として読む(spawn の失敗も観測の1つである)。 */
@@ -101,7 +101,7 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
           ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
           : null,
       );
-      if (memory === null) return { pass: false, detail: "no `init` line to observe Board call auto-memory (--safe-mode)" };
+      if (memory === null) return { pass: false, detail: "no `init` line to observe Board call auto-memory (`BOARD_CALL_ONE_TURN_FLAGS`)" };
       if (!memory.available) return { pass: false, detail: memory.reason };
       const result = await replay(stdout, readResultEvent);
       if (result === null) return { pass: false, detail: "no accepted `result` line (missing, is_error, or a usage shape the board cannot read)" };
@@ -118,28 +118,25 @@ const SURFACES: Array<[string, (obs: ConformanceObservations, now: Date) => Prom
     "output style",
     async (obs) => {
       const stdout = await obs.outputStyleLine();
-      const style = await replay(stdout, (parsed) =>
-        parsed?.type === "system" && parsed.subtype === "init" && typeof parsed.output_style === "string"
-          ? parsed.output_style
-          : null,
-      );
+      const style = await replay(stdout, readInitOutputStyle);
       if (style === null) return { pass: false, detail: "the init line carries no readable `output_style`" };
       return { pass: style === "default", detail: `output_style ${style}` };
     },
   ],
   [
     // ADR 0303 決定4: repo の `language` が worker の形にも Board call の形にも入らないか。答えは揺れるので
-    // 1回でも `japanese` を(大文字小文字を問わず)引用したら不合格にする
+    // 1回でも `japanese`(大文字小文字を問わず)か `日本語` を答えに含めたら不合格にする —— 漏れた指示に引かれて日本語で答える回も拾う
     "language",
     async (obs) => {
       const leaks: string[] = [];
       for (const shape of ["worker", "board call"] as const) {
         for (let shot = 1; shot <= LANGUAGE_SHOTS; shot++) {
-          const answer = await replay(await obs.languageShot(shape), (parsed) =>
-            parsed?.type === "result" && parsed.is_error !== true && typeof parsed.result === "string" ? parsed.result : null,
-          );
+          const answer = await replay(await obs.languageShot(shape), (parsed) => {
+            const { result } = (readResultEvent(parsed) ?? {}) as { result?: unknown };
+            return typeof result === "string" ? result : null;
+          });
           if (answer === null) return { pass: false, detail: `${shape} shot ${shot}: no accepted \`result\` line` };
-          if (/japanese/i.test(answer)) leaks.push(`${shape} shot ${shot}: ${answer}`);
+          if (/japanese|日本語/i.test(answer)) leaks.push(`${shape} shot ${shot}: ${answer}`);
         }
       }
       return leaks.length > 0
