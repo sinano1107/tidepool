@@ -3689,7 +3689,7 @@ function discardingAncestor(db: Db, taskId: string): Task | undefined {
 }
 
 /** これから立つ子に帰り先が無い理由(ADR 0301 決定1)、帰り先があれば undefined。親と祖先を `parent_id` だけでたどって読む ——
- *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)でない(新しいルートの種類も
+ *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
  *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
  *  問わない、ADR 0268 決定3)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
  *  知りたい読み手もその task を親として問う。 */
@@ -3698,7 +3698,8 @@ export function noReturnDestination(db: Db, parentId: string): string | undefine
   if (!parent) return undefined;
   const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
   const root = rootId === undefined ? parent : getTask(db, rootId)!;
-  if (!((root.type === "work" && root.interview_target_id === null) || (root.type === "review" && root.meta_review_subject === null))) {
+  // ルートの question も帰り先あり —— 人間の判断の行への異議は human 宛ての work の修理子を立てる(ADR 0237 決定3 / #2377)
+  if (!((root.type === "work" && root.interview_target_id === null) || (root.type === "review" && root.meta_review_subject === null) || root.type === "question")) {
     const kind =
       root.interview_target_id !== null ? "an Interview's answer task"
       : root.type === "interview" ? "an Interview"

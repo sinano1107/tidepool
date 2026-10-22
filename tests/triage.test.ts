@@ -954,8 +954,6 @@ it.each([
 ] as const)("%s で閉じても question の人間の判断への異議から立つ修理子の宛先は human で、slot に出ない(ADR 0237 / #2377)", (_, close) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
-  // 帰り先のある系譜(work のルートの木)の question —— ルートの question の下には修理子が立たない(ADR 0301 決定1)
-  const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", workspace: "sandbox" }, at, ...HUMAN_WEBUI);
   const question = registerTask(
     db,
     {
@@ -963,7 +961,7 @@ it.each([
       title: "retry?",
       purpose: "p",
       completion_criteria: "c",
-      parent_id: parent.id,
+      workspace: "sandbox",
       question: [{ title: "retry?", options: ["retry", "abandon promotion"], recommendation: "retry" }],
     },
     at,
@@ -983,8 +981,29 @@ it.each([
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
   const rca = children.find((child) => child.type === "review")!;
   expect(rca.title).toBe("rca (auditor): retry?");
-  // RCA と親の work は正当に slot に来るので候補から外し、残りに修理子が無いことを見る
-  expect(nextSlotTask(db, "sandbox", "deckhand", "fugu", undefined, [rca.id, parent.id])).toBeUndefined();
+  // RCA は正当に slot の先頭に来るので候補から外し、残りに修理子が無いことを見る
+  expect(nextSlotTask(db, "sandbox", "deckhand", "fugu", undefined, [rca.id])).toBeUndefined();
+});
+
+it("ルートの question の人間の判断の行は帰り先がある —— 異議は human 宛ての work の修理子を立て、流し読みの no_work_repair は false(ADR 0237 決定3 / #2377 / ADR 0301 決定1)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const question = registerTask(
+    db,
+    { type: "question", title: "merge?", purpose: "p", completion_criteria: "c", question: [{ title: "merge?", options: ["merge", "hold"], recommendation: "merge" }] },
+    at,
+    BOARD_WORKER_ID,
+    "board",
+  );
+  answerQuestionViaWebui(db, question, ["hold"], at);
+  const entry = logDecision(db, getTask(db, question.id)!, "hold", HUMAN_WORKER_ID, at, "webui");
+
+  expect(listLog(db).find((e) => e.id === entry)!.no_work_repair).toBe(false);
+  startTriage(db, at);
+  raiseObjection(db, entry, "merge it", at);
+  commitTriage(db, at);
+
+  expect(listChildren(db, question.id).filter((child) => child.type === "work").map((repair) => [repair.title, repair.assignee])).toEqual([["repair: merge?", HUMAN_WORKER_ID]]);
 });
 
 it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
