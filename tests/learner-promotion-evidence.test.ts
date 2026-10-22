@@ -13,6 +13,12 @@ import { divergedSession, executionSetting, HUMAN_WEBUI, routingJudgmentRepairTa
  *  inputSchema が evidence を通すことと flag の直接の変更での決着はサーバ境界(tests/routing-proposal-question.test.ts)が言う。 */
 const at = new Date("2026-10-22T00:00:00.000Z");
 
+const record = (board: [number, number], workspace: [number, number], seed: TrackRecord["seed"] = null): TrackRecord => ({
+  board: { accepted: board[0], rejected: board[1] },
+  workspace: { accepted: workspace[0], rejected: workspace[1] },
+  seed,
+});
+
 function board() {
   const db = openDb(":memory:");
   registerMetaReview(db, "routing", at);
@@ -37,7 +43,7 @@ it("根拠は乖離した shadow 行の session の worker_spawned に限る —
   // review の session: pickup に shadow 行を書かない
   const reviewSession = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
   const run = executionSetting("anthropic", "claude-opus-5-5");
-  const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
+  const none = record([0, 0], [0, 0]);
   recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: none, actual_record: none, candidates: 2 }, at);
   const matched = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 
@@ -57,11 +63,6 @@ it("昇格の根拠は出所が学習器でない行(昇格前)、降格の根�
   expect(() => propose("demote", [before])).toThrow(`evidence ${before} ran on the table's choice: op demote rests on rows where the promoted learner's choice ran`);
 });
 
-const record = (board: [number, number], workspace: [number, number], seed: TrackRecord["seed"] = null): TrackRecord => ({
-  board: { accepted: board[0], rejected: board[1] },
-  workspace: { accepted: workspace[0], rejected: workspace[1] },
-  seed,
-});
 const taskOf = (db: Db, spawned: number) => getEvent(db, spawned)!.task_id!;
 const detailOf = (db: Db, questionId: string) => getTask(db, questionId)!.question_items![0]!.detail!;
 const SONNET = "anthropic / claude-sonnet-5-5 at effort high";

@@ -1228,17 +1228,17 @@ export function routedOpusSessions(db: Db, at: Date): number[] {
 const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
 /** setup のみ: 段 standard の work task(workspace は既定 reef)の pickup で学習器と表が分かれた shadow 行を書き、その pickup が開いた
- *  session を刻んで worker_spawned の id を返す。昇格前の行(`learner` 無し)は表のセル(既定 OPUS_ROW の model)が走り、昇格後の行は
+ *  session を刻んで worker_spawned の id を返す。昇格前の行(`learner` 無し)は表のセル(OPUS_ROW の model)が走り、昇格後の行は
  *  学習器のセル(既定 sonnet)が出所 learner で走る(ADR 0150 決定3)。実績は既定で空。 */
 export function divergedSession(
   db: Db,
   at: Date,
-  options: { learner?: boolean; workspace?: string; learnerModel?: string; tableModel?: string; learnerRecord?: TrackRecord; tableRecord?: TrackRecord } = {},
+  options: { learner?: boolean; workspace?: string; learnerModel?: string; learnerRecord?: TrackRecord; tableRecord?: TrackRecord } = {},
 ): number {
-  const { learner = false, workspace = "reef", learnerModel = "claude-sonnet-5-5", tableModel = OPUS_ROW.model, learnerRecord = NO_RECORD, tableRecord = NO_RECORD } = options;
+  const { learner = false, workspace = "reef", learnerModel = "claude-sonnet-5-5", learnerRecord = NO_RECORD, tableRecord = NO_RECORD } = options;
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace }, at, ...HUMAN_WEBUI).id;
   const tier_id = tierIdOf(db, "standard");
-  const table = executionSetting("anthropic", tableModel, { tier_id, source: { tier: "task", provider: "rank" } });
+  const table = executionSetting("anthropic", OPUS_ROW.model, { tier_id, source: { tier: "task", provider: "rank" } });
   const chosen = executionSetting("anthropic", learnerModel, { tier_id, source: { tier: "task", provider: learner ? "learner" : "rank" } });
   const [recommended, actual] = learner ? [table, chosen] : [chosen, table];
   const [recommended_record, actual_record] = learner ? [tableRecord, learnerRecord] : [learnerRecord, tableRecord];

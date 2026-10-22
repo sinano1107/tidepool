@@ -287,9 +287,8 @@ it("同じ行の提案 A の承認は open な提案 B を観測で決着させ�
 });
 
 const learnerPromoted = async () => (await api(t.baseUrl, "GET", "/api/settings/execution")).json.learnerPromoted as boolean;
-/** 昇格 / 降格の根拠(setup): 乖離した shadow 行の session の worker_spawned(昇格前 / 昇格後の行)。 */
+/** 昇格の根拠(setup): 昇格前の乖離した shadow 行の session の worker_spawned。 */
 const beforePromotion = () => divergedSession(t.db, t.clock.now());
-const afterPromotion = () => divergedSession(t.db, t.clock.now(), { learner: true });
 
 it("昇格の提案はフラグが寝ている間だけ立ち、pin にフラグの現在値を焼く —— 立っている間の昇格と寝ている間の降格は断られる", async () => {
   const { review, client, call } = await boardWithRoutingReview();
@@ -326,7 +325,7 @@ it("昇格の reject ではフラグは立たず、降格の approve でフラ�
 
     const promoted = (await call("propose_routing_change", { op: "promote", evidence: [beforePromotion()], rationale: "r" })).question_id;
     expect((await answer(promoted, { answers: ["approve"] })).status).toBe(200);
-    const evidence = afterPromotion();
+    const evidence = divergedSession(t.db, t.clock.now(), { learner: true });
     const demoted = (await call("propose_routing_change", { op: "demote", evidence: [evidence], rationale: "the learner misrouted migrations." })).question_id;
     expect((await task(demoted)).question_proposal).toEqual({ kind: "routing", op: "demote", evidence: [evidence], pin: { promoted: true } });
     expect((await answer(demoted, { answers: ["approve"] })).status).toBe(200);
