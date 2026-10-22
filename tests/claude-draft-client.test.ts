@@ -436,7 +436,7 @@ describe("ClaudeDraftClient", () => {
     for (const args of calls) expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
   });
 
-  it("--safe-mode を指定し、ボードの起動ディレクトリの CLAUDE.md/skills/MCP を拾わない", async () => {
+  it("draftTask / draftHandoff / inspectIssue は --safe-mode と --setting-sources \"\" を指定し、ボードの起動ディレクトリと host の設定の層を拾わない(ADR 0303 決定1)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeDraftClient({
       db,
@@ -444,14 +444,20 @@ describe("ClaudeDraftClient", () => {
         calls.push(args);
         return JSON.stringify({
           ...CLI_ENVELOPE_USAGE,
-          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
+          result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
       },
     });
 
     await client.draftTask("set up the greenhouse sensor", "English");
+    await client.draftHandoff("set up the greenhouse sensor", "English");
+    await client.inspectIssue({ title: "t", body: "b", comments: [] });
 
-    expect(calls[0]!.join(" ")).toContain("--safe-mode");
+    expect(calls).toHaveLength(3);
+    for (const args of calls) {
+      expect(args).toContain("--safe-mode");
+      expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
+    }
   });
 
   it("draftTask: 子の文脈(親の title/purpose/completion_criteria・兄弟 title・分解理由)がプロンプトに注入される(issue #129)", async () => {

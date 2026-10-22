@@ -220,13 +220,16 @@ async function probeWithInit(init: Record<string, unknown>) {
   return { result: await result, args: spawn.calls[0]!.args };
 }
 
-it("ping は auto-memory を閉じる設定だけを inline の --settings で運ぶ", async () => {
+it("ping は auto-memory を閉じる設定と言語・出力様式の固定だけを inline の --settings で運ぶ", async () => {
   const { args } = await probeWithInit({});
   const settings = JSON.parse(args[args.indexOf("--settings") + 1]!);
-  // 期待値は独立した literal: #881 の実測で閉じた2キー(deny は書きの話で init に出ない)
+  // 期待値は独立した literal: #881 の実測で閉じた2キー(deny は書きの話で init に出ない)と、
+  // #2454 の実測で flag tier が置き換えた2キー(ADR 0303 決定2)
   expect(settings).toEqual({
     autoMemoryEnabled: false,
     autoMemoryDirectory: `${homedir()}/.tidepool/claude-auto-memory`,
+    language: "english",
+    outputStyle: "default",
   });
 });
 

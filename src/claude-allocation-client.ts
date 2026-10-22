@@ -50,7 +50,7 @@ function buildPrompt(input: AllocationReviewInput): string {
     "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
     "worker's judgment was sound given what it had; preference and requirement_change are the human's " +
     "taste or a requirement changed after the fact; use uncertain when the evidence does not " +
-    'decide it), and "evidence" (string — the concrete observations your judgment rests on).\n\n' +
+    'decide it), and "evidence" (string — the concrete observations your judgment rests on, in English).\n\n' +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

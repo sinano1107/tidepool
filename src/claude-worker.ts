@@ -31,7 +31,12 @@ import {
   type Registry,
   type RegistrySource,
 } from "./registry.js";
-import { AUTO_MEMORY_CLOSED, buildSandboxSettings, workspaceSettingsDisposition } from "./sandbox.js";
+import {
+  AUTO_MEMORY_CLOSED,
+  buildSandboxSettings,
+  HARNESS_PROSE_PINNED,
+  workspaceSettingsDisposition,
+} from "./sandbox.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
 import {
   isRootAssistant,
@@ -1342,12 +1347,14 @@ export type EnumerateToolsFn = () => Promise<{
 // honor されているか」と「`-p` の門がまだ立っているか」を同時に見ており、
 // strict が dynamic を落とすと読んではならない。
 //
-// inline の `--settings` は auto-memory を閉じる2キー(`AUTO_MEMORY_CLOSED`)**だけ**を運ぶ。
+// inline の `--settings` は auto-memory を閉じる2キー(`AUTO_MEMORY_CLOSED`)と言語・出力様式を
+// 固定する2キー(`HARNESS_PROSE_PINNED`、ADR 0303 決定2)**だけ**を運ぶ。
 // これも `--strict-mcp-config` と同じく**姿勢であってタスク単位の生成物ではない**ので
-// (固定パスで workspace を含まない)、上の線に抵触しない(ADR 0108 決定3 と同じ理屈、
+// (固定パスと固定値で workspace を含まない)、上の線に抵触しない(ADR 0108 決定3 と同じ理屈、
 // ADR 0156 決定3)。worker 設定と同じ定数から作るので閉じ方が食い違わず、CLI がキーを
 // 改名すれば init 報告に `memory_paths.auto` が現れて pickup の前に不成立になる。書きの
-// deny は init に出ないので運ばない(deploy 時の canary の仕事)。
+// deny は init に出ないので運ばない(deploy 時の canary の仕事)。言語・出力様式は床ではない
+// ので、この probe では判定しない —— 改名の検出は適合試験の面(ADR 0303 決定4)の仕事。
 //
 // `/usage` ping の引数ごと1本にする: 適合試験(ADR 0186 決定7)も `toolSurfaceProbeSpec` で同じフラグを撃つ。
 const TOOL_SURFACE_PROBE_ARGS = [
@@ -1358,7 +1365,7 @@ const TOOL_SURFACE_PROBE_ARGS = [
   "project",
   "--strict-mcp-config",
   "--settings",
-  JSON.stringify(AUTO_MEMORY_CLOSED),
+  JSON.stringify({ ...AUTO_MEMORY_CLOSED, ...HARNESS_PROSE_PINNED }),
   "--tools",
   // 測るのはホストの CLI であって agent の形ではない — `Skill` を含む面で撃つ(ADR 0185)
   spawnTools("work", false).join(","),
@@ -1533,12 +1540,13 @@ const ANSWER_CALL_LIMIT_MS = 300_000;
  *
  *  非ゼロ終了は `stdout` を付けて reject する —— `runClaudeBoardCallJson` がその
  *  stdout の 401 envelope を読んで provider quarantine を撃つ(ADR 0070)。口が答えを
- *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。 */
+ *  返さなかった(上限・spawn 失敗・容器の前提不成立)ときは stdout 無しで reject する。
+ *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。 */
 export const execThrough =
-  (call: BoardCall, kind: string): ExecFn =>
+  (call: BoardCall, kind: string, cwd?: string): ExecFn =>
   async (command, args, env) => {
     const output = await call(
-      { kind, harness: "claude-code", command, args, cwd: process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
+      { kind, harness: "claude-code", command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
       readOutput,
     );
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);

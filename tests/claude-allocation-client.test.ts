@@ -37,6 +37,9 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(argLine).toContain("--effort high");
   expect(argLine).toContain("--max-turns 1");
   expect(args[args.indexOf("--tools") + 1]).toBe("");
+  // ADR 0303 決定1: host / repo の設定の層を1つも読まない
+  expect(args).toContain("--safe-mode");
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   // the input rides in the prompt — the verdict and the setting under judgment
   expect(args[1]).toContain("accepted");
@@ -88,6 +91,20 @@ it("配分評価の prompt の cause の候補に agent_definition / workspace_d
 
   expect(prompts[0]).not.toContain("agent_definition");
   expect(prompts[0]).not.toContain("workspace_document");
+});
+
+it("配分評価の prompt は evidence を英語で書かせる(ADR 0303 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAllocationClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
 });
 
 it("語彙の外の allocation / cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {

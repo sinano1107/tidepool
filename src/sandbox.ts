@@ -54,6 +54,9 @@ export interface WorkerSessionSettings {
   /** ADR 0156: see `AUTO_MEMORY_CLOSED`. */
   autoMemoryEnabled: false;
   autoMemoryDirectory: string;
+  /** ADR 0303 決定2: see `HARNESS_PROSE_PINNED`. */
+  language: "english";
+  outputStyle: "default";
   sandbox: {
     enabled: true;
     /** ADR 0033: the vendor's fail-open hatch — a command that fails inside the
@@ -265,6 +268,16 @@ export const AUTO_MEMORY_CLOSED = {
   autoMemoryDirectory: CLAUDE_AUTO_MEMORY_DIR,
 } as const;
 
+/** ADR 0303 決定2: the keys that would otherwise let the repo's (or host's) settings move the
+ *  language and style a worker writes its records in, shared by the worker settings and the
+ *  containment probe like `AUTO_MEMORY_CLOSED`. Each is a single value the flag tier replaces
+ *  outright (measured, #2454), so `workspaceSettingsDisposition` overrides them rather than
+ *  refusing a workspace that carries them. */
+export const HARNESS_PROSE_PINNED = {
+  language: "english",
+  outputStyle: "default",
+} as const;
+
 /** The write half of ADR 0156. `Edit(...)` for the same reason as
  *  `SETTINGS_TOOL_DENY`. An absolute path must be spelled `//path` — a single
  *  leading `/` is read relative to the settings file and is silently inert
@@ -469,6 +482,7 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
       ...(readPaths.length > 0 && { allow: readPaths.map((path) => `Read(/${path}/**)`) }),
     },
     ...AUTO_MEMORY_CLOSED,
+    ...HARNESS_PROSE_PINNED,
     sandbox: {
       enabled: true,
       allowUnsandboxedCommands: false,

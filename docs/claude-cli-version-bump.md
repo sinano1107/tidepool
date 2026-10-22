@@ -78,8 +78,13 @@ functions. It prints one row per surface as a Markdown table:
 - the init line (`tools` / `mcp_servers` / `memory_paths` / `skills`), taken with the containment
   probe's flags
 - the result line's `usage` and, from the same one-turn stdout, Board call auto-memory closure:
-  the init line has no `memory_paths.auto` with `--safe-mode` from the board's checkout cwd.
+  the init line has no `memory_paths.auto` with the Board call's flags from the board's checkout cwd.
   A path, an unreadable value, or a missing init line fails the `result line usage` row
+- the output style: the containment probe run from a neutral cwd whose `.claude/settings.json` sets
+  `outputStyle`, and the init line still reports `output_style: default`
+- the language: from a neutral cwd whose `.claude/settings.json` sets `language: japanese`, three
+  turns each in the worker's shape and the Board call's shape ask the model to quote any
+  response-language instruction. Any answer containing `japanese` fails the row
 - a nonexistent model id read as a row refusal (404)
 - the usage screen read as numbers
 - one draft-client call and one translation-client call

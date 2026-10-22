@@ -23,9 +23,9 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "later — from the objected entry, the steering, and the task's decision log as it stood at the " +
     "time. When the input carries rca_findings, the task's root-cause reviews have settled: draft " +
     "from what they found. Respond with ONLY a single JSON object (no markdown fences, no prose) " +
-    'with these fields: "path" (string — a "/"-separated hierarchy such as build/tests; place it ' +
+    'with these fields: "path" (string — a "/"-separated hierarchy in English, such as build/tests; place it ' +
     "under an existing branch of the index when one fits), " +
-    '"title" (string — a short name for the rule), "text" (string — the rule itself, in English, ' +
+    '"title" (string — a short name for the rule, in English), "text" (string — the rule itself, in English, ' +
     'stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for the ' +
     'worker who wrote the entry, "all" when every agent should follow it). ' +
     `${TIER_DEFINITION_RULE} The index is the ` +

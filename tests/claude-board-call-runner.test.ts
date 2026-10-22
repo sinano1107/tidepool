@@ -135,6 +135,17 @@ describe("Claude の Board call runner", () => {
     await expect(runClaudeBoardCallJson(call(async () => { throw failed; }), schema)).rejects.toBe(failed);
   });
 
+  it("--safe-mode に加えて --setting-sources \"\" を渡し、設定の層を1つも読まない(ADR 0303 決定1)", async () => {
+    const calls: string[][] = [];
+    const exec: ExecFn = async (_command, args) => {
+      calls.push(args);
+      return JSON.stringify({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
+    };
+    await runClaudeBoardCallJson(call(exec), schema);
+    expect(calls[0]).toContain("--safe-mode");
+    expect(calls[0]![calls[0]!.indexOf("--setting-sources") + 1]).toBe("");
+  });
+
   it("封筒の usage と total_cost_usd を盤面の usage の形で返す", async () => {
     const exec = async () =>
       JSON.stringify({
