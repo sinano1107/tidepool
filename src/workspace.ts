@@ -1370,7 +1370,7 @@ export function releaseWorkspace(
       refreshWorkspace(workspace, githubAuth);
     }
     const target = mergeBack && lineageTaskBranch(db, workspace, task);
-    if (target) mergeBackInto(db, workspace, target, task.id);
+    if (target) mergeBackInto(db, workspace, target, task.id, "then answer");
     parkOnProtectedBranch(workspace, boardRefWriter(db, workspace));
   } catch (err) {
     quarantineWorkspace(db, workspace.name, err, now);
@@ -1380,8 +1380,15 @@ export function releaseWorkspace(
 /** 後始末の merge back の一歩 —— 帰り先を checkout し、届いていなければ ff 先か merge commit を先に作って、口を通して
  *  `merge --ff-only` で checkout ごと進める(ADR 0243 決定4)。conflict は merge-tree の段階で分かり、checkout は帰り先の
  *  tip のまま何も残さない —— 出口を2つ示して投げる(ADR 0239 帰結)。それ以外の失敗(dirty なツリーを ff が拒む等)は
- *  git の理由のまま投げる。workspace の quarantine の受理の検査も同じ一歩を踏む(ADR 0240 決定4)。 */
-function mergeBackInto(db: Db, workspace: WorkspaceConfig, target: string, taskId: string): void {
+ *  git の理由のまま投げる。workspace の quarantine の受理の検査も同じ一歩を踏む(ADR 0240 決定4)。出口の文の結びだけが
+ *  呼び手で違う —— 後始末の文はまだ答えていない quarantine の question に載る。 */
+function mergeBackInto(
+  db: Db,
+  workspace: WorkspaceConfig,
+  target: string,
+  taskId: string,
+  thenAnswer: "then answer" | "then answer again",
+): void {
   const source = taskBranch(taskId);
   const ref = `refs/heads/${target}`;
   git(workspace.path, "checkout", target);
@@ -1393,7 +1400,7 @@ function mergeBackInto(db: Db, workspace: WorkspaceConfig, target: string, taskI
     throw new Error(
       `${source} does not merge cleanly into '${target}' — either merge it there by hand in workspace ` +
         `${workspace.name} and commit, or, to discard it, record it there with \`git merge -s ours ${source}\`; ` +
-        "then answer again",
+        thenAnswer,
     );
   }
   boardRefWriter(db, workspace)(ref, sha, () => git(workspace.path, "merge", "--ff-only", sha));
@@ -1449,7 +1456,7 @@ export async function redoMergeBacks(
     for (;;) {
       const [next] = undeliveredMergeBacks(db, workspace, defaultWorkspaceName);
       if (!next) break;
-      mergeBackInto(db, workspace, next.target, next.taskId);
+      mergeBackInto(db, workspace, next.target, next.taskId, "then answer again");
     }
   } catch (error) {
     failure = { error };

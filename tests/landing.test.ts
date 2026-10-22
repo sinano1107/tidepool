@@ -3595,7 +3595,8 @@ it("merge back が conflict して後始末が閉じても、修理の内容が 
 it("後始末の merge back が conflict しても、MERGE_HEAD を残さず作業ツリーは帰り先の tip のまま quarantine に落ちる", async () => {
   const { workspace, work, question } = await quarantinedByMergeBackConflict("merge-back-conflict-leaves-nothing", "escalate");
 
-  expect(question).toBeDefined();
+  // まだ答えていない question なので、出口の文は「答え直す」と結ばない
+  expect(question.purpose).toContain("`; then answer. ");
   expect(() => git(workspace.path, "rev-parse", "--verify", "--quiet", "MERGE_HEAD")).toThrow();
   expect(head(workspace)).toBe(`task/${work.id}`);
   expect(git(workspace.path, "rev-parse", "HEAD")).toBe(originHead(workspace, work.id));
