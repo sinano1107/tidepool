@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -287,12 +287,14 @@ it("同じ行の提案 A の承認は open な提案 B を観測で決着させ�
 });
 
 const learnerPromoted = async () => (await api(t.baseUrl, "GET", "/api/settings/execution")).json.learnerPromoted as boolean;
+/** 昇格の根拠(setup): 昇格前の乖離した shadow 行の session の worker_spawned。 */
+const beforePromotion = () => divergedSession(t.db, t.clock.now());
 
 it("昇格の提案はフラグが寝ている間だけ立ち、pin にフラグの現在値を焼く —— 立っている間の昇格と寝ている間の降格は断られる", async () => {
   const { review, client, call } = await boardWithRoutingReview();
   try {
     expect(await call("propose_routing_change", { op: "demote", rationale: "r" })).toMatchObject({ error: expect.stringContaining("not promoted") });
-    const { question_id } = await call("propose_routing_change", { op: "promote", rationale: "the learner beat the table on 9 of 11 diverged episodes." });
+    const { question_id } = await call("propose_routing_change", { op: "promote", evidence: [beforePromotion()], rationale: "the learner beat the table on 9 of 11 diverged episodes." });
 
     const question = await task(question_id);
     expect(question).toMatchObject({
@@ -317,14 +319,15 @@ it("昇格の提案はフラグが寝ている間だけ立ち、pin にフラグ
 it("昇格の reject ではフラグは立たず、降格の approve でフラグが寝る", async () => {
   const { client, call } = await boardWithRoutingReview();
   try {
-    const rejected = (await call("propose_routing_change", { op: "promote", rationale: "r" })).question_id;
+    const rejected = (await call("propose_routing_change", { op: "promote", evidence: [beforePromotion()], rationale: "r" })).question_id;
     expect((await answer(rejected, { answers: ["reject"], comment: "not yet" })).status).toBe(200);
     expect(await learnerPromoted()).toBe(false);
 
-    const promoted = (await call("propose_routing_change", { op: "promote", rationale: "r" })).question_id;
+    const promoted = (await call("propose_routing_change", { op: "promote", evidence: [beforePromotion()], rationale: "r" })).question_id;
     expect((await answer(promoted, { answers: ["approve"] })).status).toBe(200);
-    const demoted = (await call("propose_routing_change", { op: "demote", rationale: "the learner misrouted migrations." })).question_id;
-    expect((await task(demoted)).question_proposal).toEqual({ kind: "routing", op: "demote", pin: { promoted: true } });
+    const evidence = divergedSession(t.db, t.clock.now(), { learner: true });
+    const demoted = (await call("propose_routing_change", { op: "demote", evidence: [evidence], rationale: "the learner misrouted migrations." })).question_id;
+    expect((await task(demoted)).question_proposal).toEqual({ kind: "routing", op: "demote", evidence: [evidence], pin: { promoted: true } });
     expect((await answer(demoted, { answers: ["approve"] })).status).toBe(200);
     expect(await learnerPromoted()).toBe(false);
   } finally {
@@ -335,7 +338,7 @@ it("昇格の reject ではフラグは立たず、降格の approve でフラ�
 it("昇格 / 降格の approve に添えた修正値は回答ごと断られ、フラグは変わらない(ADR 0150 決定2)", async () => {
   const { client, call } = await boardWithRoutingReview();
   try {
-    const questionId = (await call("propose_routing_change", { op: "promote", rationale: "r" })).question_id;
+    const questionId = (await call("propose_routing_change", { op: "promote", evidence: [beforePromotion()], rationale: "r" })).question_id;
 
     expect((await answer(questionId, { answers: ["approve"], amendment: { tier: "frontier" } })).status).toBe(409);
 

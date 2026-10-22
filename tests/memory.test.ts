@@ -2055,7 +2055,7 @@ it("移動の注釈は移された pin ごとに旧 id と末尾の id・path・
   ]);
 
   expect(movedPins(db, null)).toEqual([]);
-  expect(movedPins(db, { kind: "routing", op: "promote", pin: { promoted: false } })).toEqual([]);
+  expect(movedPins(db, { kind: "routing", op: "promote", evidence: [1], pin: { promoted: false } })).toEqual([]);
 });
 
 /** 重ねた1本の木の門(ADR 0178 決定2〜5): 盤面全体のエントリを種別と状態・宛先を変えて path に置く。 */
