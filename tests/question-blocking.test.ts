@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
 import { quarantineCliAuthForProvider } from "../src/cli-auth.js";
 import { createBehaviorCandidate } from "../src/memory.js";
-import { api, bootTidepool, HOUR, mcpClient, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, registerWork, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 // question 行の `blocking` は、その question が塞いでいる親の id(塞がなければ null)。
 // 判定は ADR 0049 の awaitedChildSql 1か所 — 付帯子の提案 question は親を塞がない
@@ -33,6 +33,7 @@ it("付帯子の提案 question は親を持っても blocking が null", async 
     "worker",
     t.clock.now(),
   );
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((x) => x.meta_review_subject === "memory");
   const client = await mcpClient(t.mcpBaseUrl, review.id);

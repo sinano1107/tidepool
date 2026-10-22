@@ -15,6 +15,7 @@ import {
   mcpClient,
   memoryEntries,
   registryOf,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
@@ -45,6 +46,7 @@ function candidate(tp: Tidepool, title: string, scope: string | null = null, sou
 async function boardWithMetaReview(titles = ["Keep migrations in their own commit"], options: BootOptions = {}) {
   t = await bootTidepool(options);
   const ids = titles.map((title) => candidate(t, title));
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "memory");
   const client = await mcpClient(t.mcpBaseUrl, review.id);

@@ -1472,14 +1472,17 @@ function ResponseFloorsCard({ rows }: { rows: WireContract['GET /api/settings/re
 }
 
 // Meta-review (issue #924) as a record card: the one period shared by every
-// subject's periodic meta-review (memory and routing).
-function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
+// subject's periodic meta-review (memory and routing), and per subject where its
+// meta-reviews stand: the period only counts from the first one, which the human
+// starts here once the material looks enough to judge from (ADR 0300).
+function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }: {
   settings: WireContract['GET /api/settings/meta-review'];
+  status: WireContract['GET /api/settings/meta-review/status'];
   say: AppSay;
   onSaved: () => Promise<void> | void;
   edit: SettingsEditSlot;
 }) {
-  const { Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
+  const { Button, Card, FieldRow, Input } = window.TidepoolDesignSystem_8a0ead;
   const id = 'board:meta-review';
   const open = edit.isOpen(id);
   const period = String(settings.period_days);
@@ -1502,6 +1505,18 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
     }
     setBusy(false);
   };
+  const startFirst = async (subject: keyof typeof status) => {
+    setBusy(true);
+    try {
+      await api('POST /api/settings/meta-review/first', { body: { subject } });
+      say('success', `first ${subject} meta-review started`, 'the period counts from it');
+      await onSaved();
+    } catch (err) {
+      say('danger', `first ${subject} meta-review not started`, String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+  const muted = { margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' };
 
   return (
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1509,11 +1524,26 @@ function MetaReviewSettingsCard({ settings, say, onSaved, edit }: {
         <span style={settingsCardLabel}>meta-review</span>
       </RecordCardHead>
       {!open && <FieldRow label="period" kind="mono" value={`${period} days`} />}
+      {!open && (Object.keys(status) as Array<keyof typeof status>).map((subject) => {
+        const row = status[subject];
+        return row.first_review === 'not_started' ? (
+          <div key={subject} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
+            <FieldRow label={subject} kind="mono" value={`first not started · ${row.material} material${row.first_material_at ? ` since ${new Date(row.first_material_at).toLocaleString()}` : ''}`} />
+            <p style={muted}>the period only registers this subject's meta-reviews after its first one. start it once the material looks enough to judge from.</p>
+            <div>
+              <Button variant="secondary" size="sm" disabled={busy || row.material === 0} onClick={() => startFirst(subject)}>Start first {subject} meta-review</Button>
+            </div>
+          </div>
+        ) : (
+          <FieldRow key={subject} label={subject} kind="mono"
+            value={`last ${new Date(row.last_registered_at).toLocaleString()} · next from ${new Date(row.next_earliest_at).toLocaleString()} · ${row.material_since} material since`} />
+        );
+      })}
       {open && (
         <React.Fragment>
           <Input label="Period (days)" error={reason} mono value={draft} onChange={(e) => setDraft(e.target.value)} placeholder={period} />
-          <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers one as soon as there is something new to review.
+          <p style={muted}>
+            the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers the next one as soon as there is something new to review.
           </p>
           <EditActions dirty={dirty} ok={ok} busy={busy} saveLabel="Save meta-review settings"
             onSave={save} onCancel={() => edit.close()} />
@@ -2913,10 +2943,13 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
   React.useEffect(() => { loadMemorySettings(); }, []);
 
   const [metaReviewSettings, setMetaReviewSettings] = React.useState<WireContract['GET /api/settings/meta-review'] | null>(null); // null → still loading
+  const [metaReviewStatus, setMetaReviewStatus] = React.useState<WireContract['GET /api/settings/meta-review/status'] | null>(null);
   const [metaReviewFailed, setMetaReviewFailed] = React.useState(false);
   const loadMetaReviewSettings = async () => {
     try {
-      setMetaReviewSettings(await api('GET /api/settings/meta-review'));
+      const [settings, status] = await Promise.all([api('GET /api/settings/meta-review'), api('GET /api/settings/meta-review/status')]);
+      setMetaReviewSettings(settings);
+      setMetaReviewStatus(status);
     } catch {
       setMetaReviewFailed(true);
     }
@@ -3287,8 +3320,8 @@ function SettingsScreen({ say, memoryFocus, registerLeaveGuard }: {
           <MemoryEntriesCard workspaceNames={workspaceNames} agentNames={agentNames} language={displayLanguageFailed ? 'English' : displayLanguage}
             say={say} edit={edit} focus={boardLoaded ? memoryFocus : null} />
         )}
-        {metaReviewFailed ? <UnavailableSettingsCard title="meta-review" says={metaReviewUnavailable} /> : metaReviewSettings && (
-          <MetaReviewSettingsCard settings={metaReviewSettings} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
+        {metaReviewFailed ? <UnavailableSettingsCard title="meta-review" says={metaReviewUnavailable} /> : metaReviewSettings && metaReviewStatus && (
+          <MetaReviewSettingsCard settings={metaReviewSettings} status={metaReviewStatus} say={say} onSaved={loadMetaReviewSettings} edit={edit} />
         )}
         {!boardLoaded && (
           <Card style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>loading…</Card>

@@ -18,6 +18,7 @@ import {
   RESPONSE_BUDGET_BYTES,
   readFollowingNext,
   registerWork,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
 } from "./harness.js";
 import { makeRegistryAgentCheck } from "./registry-fixture.js";
@@ -51,6 +52,7 @@ async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) 
     "worker",
     t.clock.now(),
   ).entry_id;
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const tasks = (await api(t.baseUrl, "GET", "/api/tasks")).json as any[];
   const review = tasks.find((task) => task.meta_review_subject === "memory");

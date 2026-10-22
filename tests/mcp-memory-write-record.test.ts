@@ -24,6 +24,7 @@ import {
   registerWork,
   routingJudgmentRepairTask,
   runNow,
+  startFirstMetaReviewViaWebui,
   type Tidepool,
 } from "./harness.js";
 
@@ -73,6 +74,7 @@ it("meta-review の define_memory / fold_memory / move_memory / move_memory_bran
     "worker",
     t.clock.now(),
   ).entry_id;
+  await startFirstMetaReviewViaWebui(t, "memory");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "memory");
   const client = await mcpClient(t.mcpBaseUrl, review.id);

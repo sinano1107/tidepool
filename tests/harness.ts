@@ -29,7 +29,7 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
-import { registerMetaReview } from "../src/meta-review.js";
+import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
@@ -1330,6 +1330,13 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
     const result = await completeIntegrationReviewViaMcp(t, review.id);
     if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
   }
+}
+
+/** 主題の初回の meta-review を人間の扉(WebUI)で起こす(setup)。周期の登録は初回を立てない(ADR 0300 決定2)ので、材料を書いて
+ *  meta-review を立てる setup はこれを通す。扉は登録で pickup を促す。 */
+export async function startFirstMetaReviewViaWebui(t: Tidepool, subject: MetaReviewSubject): Promise<void> {
+  const started = await api(t.baseUrl, "POST", "/api/settings/meta-review/first", { subject });
+  expect(started.status, JSON.stringify(started.json)).toBe(200);
 }
 
 /** 帰責の event は memory の、worker_exited と実行設定の変更は routing の meta-review の材料なので、盤面が登録して queue に
