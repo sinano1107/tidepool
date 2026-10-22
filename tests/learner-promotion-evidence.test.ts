@@ -118,6 +118,18 @@ it("引用の外の乖離も盤面が1行で見せる —— フラグの最後�
   );
 });
 
+it("値の変わらない降格(未昇格のまま)はフラグの変更ではないので、引用の外の範囲を切らない", () => {
+  const { db, propose } = board();
+  applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at);
+  const cited = divergedSession(db, at);
+
+  const { question_id } = propose("promote", [cited]);
+
+  expect(detailOf(db, question_id).split("\n")).toContain(
+    "All diverged pickups where the table's choice ran, over all time (the learner flag never changed): 1 in 1 line(s), 1 cited; lines not cited: none. Pickups with two or more candidates in that span: 1.",
+  );
+});
+
 it("昇格後の降格の提案は、走った学習器のセルと推薦に回った表のセルを出所で呼び分け(列の反転)、組ごとに session の outcome の内訳を出す", () => {
   const { db, promote, propose } = board();
   promote();

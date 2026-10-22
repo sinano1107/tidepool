@@ -844,6 +844,51 @@ it("存在しない行の削除は何も変えないので、操作イベント�
   expect(applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "no-such-model", effort: "high" }, "webui", new Date())).toBeNull();
 });
 
+const settingsChangedCount = (db: Db) => listEventsOfKinds(db, ["execution_settings_changed"]).length;
+type Settings = ReturnType<typeof readExecutionSettings>;
+
+it.each<[string, (db: Db) => void, (settings: Settings) => ExecutionSettingsChange]>([
+  ["未昇格の学習器の降格", () => {}, () => ({ setting: "learner_promoted", value: false })],
+  ["昇格済みの学習器の昇格", (db) => db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run(), () => ({ setting: "learner_promoted", value: true })],
+  ["今と同じ advisor の上限", () => {}, (s) => ({ setting: "advisor_ceiling", value: s.advisorCeiling })],
+  ["書いた値と同じ優先順位", (db) => applyExecutionSettingsChange(db, { setting: "priority", value: "cost" }, "webui", new Date()), () => ({ setting: "priority", value: "cost" })],
+  ["種の盤面(列が NULL)へのコードの既定の優先順位", () => {}, () => ({ setting: "priority", value: BOARD_DEFAULT_PRIORITY })],
+  ["種の盤面へのコードの既定の review の優先順位", () => {}, () => ({ setting: "review_priority", value: BOARD_DEFAULT_PRIORITY })],
+  ["種の盤面へのコードの既定の Provider 順位", () => {}, () => ({ setting: "provider_rank", value: [...PROVIDER_VALUES] })],
+  ["今と同じ盤面既定の段", () => {}, (s) => ({ setting: "default_tier", value: s.defaultTier })],
+  ["今と同じ判断の段", () => {}, (s) => ({ setting: "judgement_tier", value: s.judgementTier })],
+  ["6欄とも既存行と同じ行の編集", () => {}, (s) => ({ setting: "row", key: s.table[1]!, row: { ...s.table[1]! } })],
+  ["今と同じ説明と位置の段の編集", () => {}, (s) => ({ setting: "edit_tier", name: s.tiers[1]!.name, description: s.tiers[1]!.description, position: 1 })],
+  ["今と同じ説明だけの段の編集", () => {}, (s) => ({ setting: "edit_tier", name: s.tiers[1]!.name, description: s.tiers[1]!.description })],
+  ["今と同じ位置だけの段の編集", () => {}, (s) => ({ setting: "edit_tier", name: s.tiers[2]!.name, position: 2 })],
+])("値の変わらない変更(%s)は何も書かず、操作イベントを残さず null を返す", (_, setup, build) => {
+  const db = openDb(":memory:");
+  setup(db);
+  const change = build(readExecutionSettings(db));
+  const before = { settings: readExecutionSettings(db), events: settingsChangedCount(db) };
+
+  expect(applyExecutionSettingsChange(db, change, "webui", new Date())).toBeNull();
+  expect({ settings: readExecutionSettings(db), events: settingsChangedCount(db) }).toEqual(before);
+});
+
+it.each<[string, (settings: Settings) => ExecutionSettingsChange, (settings: Settings) => unknown]>([
+  ["優先順位", () => ({ setting: "priority", value: "cost" }), (s) => s.priority],
+  ["盤面既定の段", (s) => ({ setting: "default_tier", value: s.tiers.find((tier) => tier.name !== s.defaultTier)!.name }), (s) => s.defaultTier],
+  ["判断の段", (s) => ({ setting: "judgement_tier", value: s.tiers.find((tier) => tier.name !== s.judgementTier)!.name }), (s) => s.judgementTier],
+  // 6欄のうち最後の1欄だけ違う行 —— 比べる欄の取りこぼしを見る
+  ["price_out だけ違う行の編集", (s) => ({ setting: "row", key: s.table[1]!, row: { ...s.table[1]!, price_out: s.table[1]!.price_out + 1 } }), (s) => s.table[1]!.price_out],
+  ["説明だけ違う段の編集", (s) => ({ setting: "edit_tier", name: s.tiers[1]!.name, description: `${s.tiers[1]!.description} (edited)` }), (s) => s.tiers[1]!.description],
+])("値の変わる変更(%s)は従来どおり操作イベントを書き、その event id を返す", (_, build, read) => {
+  const db = openDb(":memory:");
+  const before = { value: read(readExecutionSettings(db)), events: settingsChangedCount(db) };
+
+  const id = applyExecutionSettingsChange(db, build(readExecutionSettings(db)), "webui", new Date());
+
+  expect(settingsChangedCount(db)).toBe(before.events + 1);
+  expect(id).toBe(listEventsOfKinds(db, ["execution_settings_changed"]).at(-1)!.id);
+  expect(read(readExecutionSettings(db))).not.toEqual(before.value);
+});
+
 // ── 行の拒否(ADR 0184 決定2): 表の行の Quarantine が開いている行は候補にならない。advisor は行でないので Quarantine を見ない(ADR 0200 決定6) ──
 
 /** 盤面の表(種)に行を足し、指定した (provider, model) の行の Quarantine を開く。 */
