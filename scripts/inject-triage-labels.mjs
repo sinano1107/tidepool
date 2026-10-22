@@ -7,8 +7,10 @@
 // repeats, and the SessionStart hook (compact / clear) removes it, since compaction can summarize the
 // injected text away.
 // The one combination that keeps slipping — `needs-info` without a `verify:*` label — is denied before it
-// runs, once per command in a session: a needs-info issue observed in CI or the Lima VM goes through
-// when the same command is run again.
+// runs, once per issue in a session: a needs-info issue observed in CI or the Lima VM goes through
+// when it is filed again. The issue is its title (create) or number (edit), not the command text — a
+// denied agent rewrites the command (splits off the body heredoc, reorders labels, edits the body), and
+// a hash of the text denied the same issue three times (2026-10-21).
 
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,12 +21,19 @@ const FILES_OR_LABELS = [/\bgh\s+issue\s+create\b/, /\bgh\s+(?:issue|pr)\s+(?:cr
 const MARKERS = join(tmpdir(), 'tidepool-triage-labels-injected');
 const ISSUE_LABELS = /\bgh\s+issue\s+(?:create|edit)\b/;
 const LABEL_VALUES = /\s--(?:add-)?label(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/g;
+const ISSUE_KEY = /\bgh\s+issue\s+edit\s+#?(\d+)\b|\s(?:--title|-t)(?:=|\s+)(?:"([^"]*)"|'([^']*)'|(\S+))/;
 const VERIFY_REASON =
   'This command gives `needs-info` without a `verify:*` label. A needs-info issue waits on an observation, ' +
   'and docs/agents/triage-labels.md labels it by where that observation can happen. If only a running ' +
   'board can give it (the confirmation of a merged change, or whether something hurts in real use), add ' +
-  '`verify:production`. If the venue is CI or the Lima VM, run the same command again unchanged: this ' +
-  'check stops each command once per session.';
+  '`verify:production`. If the venue is CI or the Lima VM, run the command again: this check stops each ' +
+  'issue (its title, or the number it edits) once per session.';
+
+/** What makes two commands the same issue: the edited number or the title, else the whole command. */
+function issueKey(command) {
+  const m = command.match(ISSUE_KEY);
+  return m ? (m[1] ? `#${m[1]}` : (m[2] ?? m[3] ?? m[4])) : command;
+}
 
 /** The labels a `gh issue create / edit` command adds (`--label` / `--add-label`, comma-separated or repeated). */
 function addedLabels(command) {
@@ -49,7 +58,7 @@ process.stdin.on('end', () => {
   if (!FILES_OR_LABELS.some((pattern) => pattern.test(command))) return;
   const added = ISSUE_LABELS.test(command) ? addedLabels(command) : [];
   if (event.session_id && added.includes('needs-info') && !added.some((l) => l.startsWith('verify:'))) {
-    const hash = createHash('sha256').update(command).digest('hex').slice(0, 16);
+    const hash = createHash('sha256').update(issueKey(command)).digest('hex').slice(0, 16);
     const denied = join(MARKERS, `${encodeURIComponent(String(event.session_id))}.verify.${hash}`);
     if (!existsSync(denied)) {
       mkdirSync(MARKERS, { recursive: true });
