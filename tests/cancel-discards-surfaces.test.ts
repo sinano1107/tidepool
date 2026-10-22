@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import {
   answerQuestionViaWebui,
@@ -57,7 +57,7 @@ it("GET /api/tasks/:id・question の読み・管理MCP の get_task / list_boar
   }
 });
 
-it("祖先の cancel の下の RCA の worker MCP は tools/list に分解の verb を出さず、get_current_task は成果が捨てられた旨の1行を運ぶ —— 祖先の cancel の前は今どおり(ADR 0271 決定2)", async () => {
+it("祖先の cancel の下の RCA の worker MCP は tools/list に分解の verb を出さず、complete_rca の説明は repair task と decompose に触れず、get_current_task は捨てた成果の欄を持たない —— 祖先の cancel の前は今どおり(ADR 0271 決定2 / ADR 0301 決定5)", async () => {
   t = await bootTidepool();
   const now = t.clock.now();
   const root = registerTask(t.db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
@@ -71,18 +71,23 @@ it("祖先の cancel の下の RCA の worker MCP は tools/list に分解の ve
   const tools = async () => {
     const client = await mcpClient(t.mcpBaseUrl, rca.id);
     try {
-      return (await client.listTools()).tools.map((tool) => tool.name).sort();
+      return (await client.listTools()).tools.sort((a, b) => a.name.localeCompare(b.name));
     } finally {
       await client.close();
     }
   };
-  const live = await tools();
+  const completeRcaDescription = async () => (await tools()).find((tool) => tool.name === "complete_rca")!.description;
+  const live = (await tools()).map((tool) => tool.name);
   expect(live).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
+  expect(await completeRcaDescription()).toContain("and the repair tasks you filed with decompose (every repair task is listed on every finding; call this once each has settled)");
 
   cancelTaskDirectly(t.db, getTask(t.db, root.id)!, null, t.clock.now(), {}, "webui");
   await nextPoll(t);
 
-  expect(await tools()).toEqual(live.filter((name) => name !== "decompose" && name !== "redecompose"));
+  expect((await tools()).map((tool) => tool.name)).toEqual(live.filter((name) => name !== "decompose" && name !== "redecompose"));
+  const withheld = await completeRcaDescription();
+  expect(withheld).toContain("lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries. Only a finding");
+  expect(withheld).not.toMatch(/repair task|decompose/);
   expect(t.worker.started.at(-1)!.id).toBe(rca.id);
-  expect(JSON.parse((await callAsTask(t, rca.id, "get_current_task", {})).content[0].text).artifact_discarded).toBe(ARTIFACT_DISCARDED_NOTICE);
+  expect(JSON.parse((await callAsTask(t, rca.id, "get_current_task", {})).content[0].text)).not.toHaveProperty("artifact_discarded");
 });

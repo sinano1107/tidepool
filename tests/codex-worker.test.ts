@@ -16,7 +16,7 @@ import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
 import type { ContainerSpawn } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -900,14 +900,6 @@ describe("CodexWorker (ADR 0098)", () => {
       `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n## Roster\n\ndeckhand — General work agent for the tidepool board\n\n## Board doctrine`,
     );
     expect(review).not.toContain("Prefer reversible actions.");
-  });
-
-  it("祖先の cancel の下の RCA の developer_instructions は、reviewer の Authority の文を変えずその直後に成果が捨てられた旨の1行を置く(ADR 0271 決定2)", async () => {
-    const f = await fixture();
-    await f.start(discardedRca(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(
-      `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${ARTIFACT_DISCARDED_NOTICE}\n\n## Roster`,
-    );
   });
 
   it("当事者レビューは当時版の定義を証拠として持ち、節は 定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory の順に並ぶ(ADR 0020 part 4 / ADR 0157 決定1)", async () => {

@@ -60,7 +60,6 @@ import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
 import { createStatelessMcpRouter, floorEveryResponse, rejectUnknownArguments } from "./stateless-mcp.js";
 import {
-  ARTIFACT_DISCARDED_NOTICE,
   assertPosable,
   assertTargetsRunnable,
   assigneeNeedsApproval,
@@ -80,11 +79,9 @@ import {
   HANDOFF_FIELDS,
   type HistoryRow,
   HUMAN_ROSTER_AGENT,
-  INTERVIEW_AUDIT_NOTICE,
   interviewFields,
   interviewRoomPath,
   interviewTargets,
-  isArtifactDiscarded,
   isRepairType,
   isSubjectReaderRca,
   joinHistory,
@@ -438,8 +435,7 @@ function auditedProbeEnvelope(deps: McpDeps, task: Task) {
   const posedId = auditedPosedEventId(deps.db, task.id);
   if (posedId === undefined) return undefined;
   const { head, root_id } = posedProbe(deps.db, posedId);
-  // ADR 0271 決定2 の形: reviewer の guidance の行き先を言い直す1行(spawn の文面と同じ)
-  return { interview_audit: { notice: INTERVIEW_AUDIT_NOTICE, head, interview_room: interviewRoomPath(deps.db, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
+  return { interview_audit: { head, interview_room: interviewRoomPath(deps.db, root_id), ...interviewEnvelope(deps, getTask(deps.db, root_id)!) } };
 }
 
 /** 出題の root が自分では直せない拒否の結び —— 人間に渡す出口を指す。 */
@@ -605,10 +601,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
             ...auditedProbeEnvelope(deps, task),
-            // ADR 0272 決定3 / ADR 0279 決定4 / ADR 0271 決定2: verb を伏せた理由(spawn の文面と同じ1行)。修理子は祖先の cancel の下でも修理の1行
-            ...(isRepairType(task.type)
-              ? { [task.type]: REPAIR_NOTICES[task.type] }
-              : isArtifactDiscarded(deps.db, task.id) && { artifact_discarded: ARTIFACT_DISCARDED_NOTICE }),
+            // ADR 0272 決定3 / ADR 0279 決定4: 修理子の verb を伏せた理由(spawn の文面と同じ1行)。帰り先の無い task には何も足さない(ADR 0301 決定5)
+            ...(isRepairType(task.type) && { [task.type]: REPAIR_NOTICES[task.type] }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
@@ -899,8 +893,12 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this RCA, in one call. findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
           "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
           "repeated or non-material entry is refused, named by id, and nothing is recorded. The board records one decision line per finding " +
-          "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries, and the repair " +
-          "tasks you filed with decompose (every repair task is listed on every finding; call this once each has settled). Only a finding " +
+          "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries" +
+          // decompose を伏せた RCA には分解の修理を言わない(ADR 0301 決定5)
+          (withheld.includes("decompose")
+            ? ". "
+            : ", and the repair tasks you filed with decompose (every repair task is listed on every finding; call this once each has settled). ") +
+          "Only a finding " +
           "without an act needs no_proposal: true, and without it the call is refused; on a finding with an act it is harmless and records " +
           `nothing. The handoff takes the same fields as complete_task (${describeHandoffFields()}); none is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
