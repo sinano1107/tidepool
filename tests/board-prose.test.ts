@@ -118,8 +118,8 @@ async function selfRcaProse(db: Db, objected: Task, at: Date) {
   return reviewProse(db, registryDir, rca, spawn(db, rca, at));
 }
 
-/** review の task の spawn `spawnedEventId` の文面(registry は `registryDir` の main)。 */
-function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: number) {
+/** reviewer の authority で走る task の spawn `spawnedEventId` の文面(registry は `registryDir` の main、定義本文は `systemPrompt`)。 */
+function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: number, systemPrompt = "") {
   const verbs = taskVerbSwap(db, task.id);
   return boardProse({
     db,
@@ -127,7 +127,7 @@ function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: nu
     registry: loadRegistry(registryDir, "purely-local"),
     task,
     spawnedEventId,
-    systemPrompt: "",
+    systemPrompt,
     profile: REVIEWER_AUTHORITY_PROFILE,
     doctrine: boardDoctrine(CLAUDE, verbs),
     verbs,
@@ -253,24 +253,6 @@ it("2つの spawn で Executor が違っても描いた Roster が同じなら�
   expect(prose).not.toContain("Roster as it stood then");
 });
 
-/** `task` を `worker` が本文 `systemPrompt` で走らせる spawn の文面(registry は fixture の main)。 */
-async function interviewProse(db: Db, task: Task, at: Date, systemPrompt: string, worker = "suzumedai") {
-  const verbs = taskVerbSwap(db, task.id);
-  return boardProse({
-    db,
-    registryDir: "",
-    registry: loadRegistry(await makeRegistry(), "purely-local"),
-    task,
-    spawnedEventId: spawn(db, task, at, worker),
-    systemPrompt,
-    profile: REVIEWER_AUTHORITY_PROFILE,
-    doctrine: boardDoctrine(CLAUDE, verbs),
-    verbs,
-    allowedDomains: undefined,
-    memorySection: null,
-  });
-}
-
 /** suzumedai が pickup した Interview の root。 */
 const interviewRoot = (db: Db, at: Date) =>
   pickupTask(
@@ -294,17 +276,18 @@ const INTERVIEW_DISCIPLINE_LINES = [
 ];
 
 it.each([
-  ["本文が空の組み込み suzumedai", async () => loadRegistry(await makeRegistry(), "purely-local").agents.suzumedai!.systemPrompt],
-  ["本文を持つ registry の agent", async () => "You are my interviewer."],
+  ["本文が空の組み込み suzumedai", (registryDir: string) => loadRegistry(registryDir, "purely-local").agents.suzumedai!.systemPrompt],
+  ["本文を持つ registry の agent", () => "You are my interviewer."],
 ])("Interview の root の spawn の文面は、%s でも出題前・出題後とも Interview の規律の節を持つ(ADR 0275 決定3)", async (_, body) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-22T00:00:00.000Z");
+  const registryDir = await makeRegistry();
   const root = interviewRoot(db, at);
-  const systemPrompt = await body();
+  const systemPrompt = body(registryDir);
 
-  const beforePose = await interviewProse(db, root, at, systemPrompt);
+  const beforePose = reviewProse(db, registryDir, root, spawn(db, root, at, "suzumedai"), systemPrompt);
   poseAccepted(db, root, PROBE, "suzumedai", at, "worker", "0".repeat(40));
-  const afterPose = await interviewProse(db, root, at, systemPrompt);
+  const afterPose = reviewProse(db, registryDir, root, spawn(db, root, at, "suzumedai"), systemPrompt);
 
   for (const prose of [beforePose, afterPose]) for (const line of INTERVIEW_DISCIPLINE_LINES) expect(prose).toContain(line);
 });
@@ -312,8 +295,9 @@ it.each([
 it("Interview の root の spawn の文面は reviewer の Authority の直後に、修理 task は立たず findings は complete_interview の handoff に書くという1行を置く(#2211 / ADR 0271 決定2 の形)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-22T00:00:00.000Z");
+  const root = interviewRoot(db, at);
 
-  const prose = await interviewProse(db, interviewRoot(db, at), at, "");
+  const prose = reviewProse(db, await makeRegistry(), root, spawn(db, root, at, "suzumedai"));
 
   expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_ROOT_NOTICE}\n\n`);
   expect(INTERVIEW_ROOT_NOTICE).toBe("This task runs an Interview: no repair task stands here, so write your findings in complete_interview's handoff.");
@@ -322,14 +306,15 @@ it("Interview の root の spawn の文面は reviewer の Authority の直後�
 it("Interview の受験者・監査 review・suzumedai が取った memory_repair の spawn の文面には Interview の規律の節が無い(ADR 0275 決定3)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-22T00:00:00.000Z");
+  const registryDir = await makeRegistry();
   const root = interviewRoot(db, at);
   const audit = poseProbe(db, root, PROBE, "suzumedai", at, "worker", "0".repeat(40));
-  const auditProse = await interviewProse(db, audit, at, "", "fugu");
   completeAudit(db, audit, { verdict: "accepted", findings: "ok" }, "fugu", at, "worker");
   const [examinee] = listExaminees(db, root.id);
   const repair = registerTask(db, { type: "memory_repair", title: "repair", purpose: "p", completion_criteria: "c", parent_id: root.id, assignee: "suzumedai" }, at, ...HUMAN_WEBUI);
+  const proseOf = (task: Task, worker: string) => reviewProse(db, registryDir, task, spawn(db, task, at, worker));
 
-  for (const prose of [auditProse, await interviewProse(db, examinee!, at, "", "deckhand"), await interviewProse(db, repair, at, "")]) {
+  for (const prose of [proseOf(audit, "fugu"), proseOf(examinee!, "deckhand"), proseOf(repair, "suzumedai")]) {
     expect(prose).not.toContain("Interview discipline");
     expect(prose).not.toContain("anonymised reproduction");
   }
