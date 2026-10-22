@@ -1,5 +1,12 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { api, bootTidepool, queueWork, type Tidepool } from "./harness.js";
+import { listBoardCalls } from "../src/board-call-usage.js";
+import { openDb } from "../src/db.js";
+import { startScheduler } from "../src/scheduler.js";
+import { implicitTaskExecutionCandidates } from "../src/server-options.js";
+import { Slot } from "../src/slot.js";
+import { registerTask } from "../src/tasks.js";
+import { BOARD_CALL_USAGE, FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
+import { api, bootTidepool, HUMAN_WEBUI, queueWork, type Tidepool } from "./harness.js";
 
 const ANTHROPIC_AUTH_QUESTION_TITLE =
   "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
@@ -61,4 +68,36 @@ it("checkUsage のnullを追加probeでも分類できなければ anthropic の
     "[cli-auth] usage failure could not be classified",
     "probe did not return a JSON envelope",
   );
+});
+
+/** 行には production の読み口がまだ無いので、server 境界の `t.db` でなく scheduler を直に組んで言う(ADR 0154 決定1・2)。 */
+it("使用量を読めない poll が撃った認証 probe は、usage を返せば cli_auth_probe の1行を残す(ADR 0299 決定1・6)", async () => {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const worker = new ScriptedWorker(clock);
+  worker.scriptUsage(null);
+  const boardCall = { setting: { provider: "anthropic" as const, model: "haiku", effort: "low" }, usage: BOARD_CALL_USAGE };
+  const scheduler = startScheduler({
+    retrospectiveCalls: noRetrospectiveCalls,
+    converge: async () => [],
+    db,
+    clock,
+    slot: new Slot(),
+    worker,
+    containers: fakeContainers(),
+    onSpawnFailed: () => {},
+    onRecordContainerFailed: () => {},
+    onPickupStopped: () => {},
+    taskExecutionCandidates: implicitTaskExecutionCandidates(db),
+    cliAuth: async () => ({ status: "unknown", reason: "probe hit its budget cap before returning an authentication verdict", boardCall }),
+  });
+  registerTask(db, { type: "work", title: "waits while usage is ambiguous", purpose: "p", completion_criteria: "c" }, clock.now(), ...HUMAN_WEBUI);
+
+  await scheduler.rerunPoll();
+  scheduler.stop();
+
+  expect(listBoardCalls(db)).toEqual([
+    { use: "cli_auth_probe", ...boardCall.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: clock.now().toISOString() },
+  ]);
 });
