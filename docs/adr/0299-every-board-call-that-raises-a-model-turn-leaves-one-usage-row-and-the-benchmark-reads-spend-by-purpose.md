@@ -49,3 +49,14 @@ runner が受け取った usage を client が捨てていた。判断の段の�
 決定5 の「記録から学ぶもの」は task 自身の種別で判定し、祖先では判定しない。RCA・学びの task の下に立つ work の修理子(RCA の所見の行への
 異議が立てるものも、RCA が行為として立てるものも)は、最も近い work の祖先のブランチから fork してそこへ帰る(ADR 0283 決定2)ので、成果物を
 直す対処として課題の行に残る。祖先で外すと、RCA が対処として立てる修理子まで学びの支出に入る。
+
+## 追記(2026-10-23 の triage、issue #2486)
+
+決定3 の「usage の無い呼び出し」は封筒に usage の欄が無いことではなく、**turn が走らなかった構造化された証拠**(行の拒否の 404 /
+`claude_code_version_too_old`・401・上限到達による中断の 429)で判定する。404 と 401 の封筒は usage の欄を 0 で埋めて届くが行にしない
+(実装済み)。429 も同じ族で、ADR 0104 決定2 が認める確定的な証拠(`api_error_status: 429`)であり、答えを取りに行く呼び出しも probe も
+行を書かない。全 0 の usage や `num_turns` の値からは判定しない(ADR 0104 の線)。行を残す案は退ける —— 表の定義は model turn を立てた
+呼び出しで、429 の封筒は `duration_api_ms: 0`(2.1.241 の実測 fixture)で turn が走っていない。worker 側が 429 session の
+`worker_exited.usage` に 0 を書くのは別の記録(slot を握った session の消費、途中の 429 は前の turn の消費を運ぶ)で、先例にしない。
+固定版 2.1.286 の `-p --output-format json` の 429 封筒は未観測で、binary の構造(result の object は1箇所で組まれ `api_error_status`
+を載せ、headless の loop は `json` と `stream-json` を同じ流れから読む)からの推論である。
