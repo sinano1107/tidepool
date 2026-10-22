@@ -951,8 +951,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
   // unread entries; N identical notes would just be noise).
   const logThrottled = logTranslateOn && Object.values(logTranslations).some((v) => v && v.status === 'throttled');
   // ADR 0063 決定3: one number next to the switch, derived from state the
-  // kit already holds — no new wiring. Not a progress bar (7.4s/entry is too
-  // coarse to read as motion, and it can't distinguish "stalled" from "slow").
+  // kit already holds — no new wiring. Not a progress bar (it steps a whole
+  // chunk at a time, too coarse to read as motion, and it can't distinguish
+  // "stalled" from "slow").
   const logTranslateTotal = logTranslateOn
     ? renderedLogEntries.length
     : 0;

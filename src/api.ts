@@ -480,8 +480,10 @@ const displayLanguageSchema = z.object({
 
 // display-time translation (issue #47 / ADR 0015): a discriminated union over
 // the 3 UX surfaces (CONTEXT.md's toggles) — triage log skim (log_entry,
-// covering both a decision-log line and a completion report by event id;
-// log_entries is the skim's chunk of them, ADR 0296 決定4), question card, handoff expansion — plus memory (issue #593): an agent-written
+// any decision-log row by event id: a decision line, a completion report, a
+// premise breach, a memory write; log_entries is the skim's chunk of them,
+// ADR 0296 決定4), question card, handoff expansion — plus memory (issue
+// #593): an agent-written
 // entry's text for the settings list, and the write form's free text (a
 // human's original into English, and that English back into the display
 // language). Neither free-text result is stored on the entry.
