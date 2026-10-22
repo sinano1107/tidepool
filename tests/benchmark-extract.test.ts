@@ -3,19 +3,21 @@ import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
-import { currentRoot, type Exercise, extract, loadExercise, type RunConfig } from "../docs/experiments/benchmark/extract.js";
+import { currentRoot, type Exercise, extract, firstMetaReview, loadExercise, loadSequence, type RunConfig, sequencePosition } from "../docs/experiments/benchmark/extract.js";
 import { type BoardCallUse, recordBoardCall } from "../src/board-call-usage.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { registerLocalMergeQuestion } from "../src/landing.js";
 import { createBehaviorCandidate, defineMemoryByMetaReview, invalidateMemoryByMetaReview, proposeMemoryChange, recordKnowledge } from "../src/memory.js";
+import { registerMetaReview } from "../src/meta-review.js";
 import { questionKindOf } from "../src/question-kind.js";
-import { completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, registerTask, retryInterviewRoot, settleQuestionAsObserved } from "../src/tasks.js";
+import { completeInterview, completeTask, getTask, listBoard, listChildren, logDecision, registerTask, retryInterviewRoot, settleQuestionAsObserved, type Task } from "../src/tasks.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
 import {
   answerQuestionViaWebui,
   auditorRcaOn,
   completedWork,
+  decomposeTaskViaWorker,
   examineeRootId,
   FULL_HANDOFF,
   failureQuestion,
@@ -122,9 +124,53 @@ it("Interview の課題は人間が出せる登録欄を持ち、期待解のテ
   ).toThrow(/→ at interview\.targets\[0\]\.model/);
 });
 
+/** 走行の宣言 run.json と、その隣の exercises/ に課題を置き、run.json の path を返す。 */
+function sequenceFile(sequence: unknown, exercises: Record<string, unknown> = { slugify: WORK_EXERCISE }): string {
+  const dir = scratch();
+  for (const [name, declaration] of Object.entries(exercises)) {
+    mkdirSync(join(dir, "exercises", name), { recursive: true });
+    writeFileSync(join(dir, "exercises", name, "exercise.json"), JSON.stringify(declaration));
+  }
+  writeFileSync(join(dir, "run.json"), JSON.stringify(sequence));
+  return join(dir, "run.json");
+}
+
+it("走行の宣言の loader は列を宣言の順に読み、課題は隣の exercises/ の宣言で、人間の段はそのまま返す", () => {
+  const file = sequenceFile({
+    period_days: 1,
+    items: [
+      { human: "step", instructions: "Object to the meta-review's write row" },
+      { exercise: "slugify" },
+      { human: "first_meta_review", subject: "memory" },
+    ],
+  });
+
+  expect(loadSequence(file)).toMatchObject({
+    period_days: 1,
+    items: [
+      { human: "step", instructions: "Object to the meta-review's write row" },
+      { exercise: { name: "slugify", ...WORK_EXERCISE } },
+      { human: "first_meta_review", subject: "memory" },
+    ],
+  });
+});
+
+it("走行の宣言の loader は欠けた欄・未知の値・未知の課題を名指して拒否する", () => {
+  expect(() => loadSequence(sequenceFile({ items: [{ exercise: "slugify" }, { human: "first_meta_review", subject: "vibes" }] }))).toThrow(/→ at items\[1\]\.subject/);
+  expect(() => loadSequence(sequenceFile({ items: [{ human: "step" }] }))).toThrow(/→ at items\[0\]\.instructions/);
+  expect(() => loadSequence(sequenceFile({ items: [{ human: "interview" }] }))).toThrow(/→ at items\[0\]\.human/);
+  expect(() => loadSequence(sequenceFile({ items: [] }))).toThrow(/→ at items/);
+  expect(() => loadSequence(sequenceFile({ period_days: 0.5, items: [{ exercise: "slugify" }] }))).toThrow(/→ at period_days/);
+  // 列の課題の宣言も同じ loader で検査され、どの課題のどの欄かが出る
+  expect(() => loadSequence(sequenceFile({ items: [{ exercise: "slugify" }] }, { slugify: { ...WORK_EXERCISE, readings: ["vibes"] } }))).toThrow(
+    /slugify[\\/]exercise\.json[\s\S]*→ at readings\[0\]/,
+  );
+  expect(() => loadSequence(sequenceFile({ items: [{ exercise: "missing" }] }))).toThrow(/missing/);
+});
+
 const AT = new Date("2026-10-22T00:00:00.000Z");
-/** 走行の構成(4つの軸と #2437 の状態)。 */
-const CONFIG: RunConfig = { tidepool_commit: "abc123", cli_pins: { claude: "2.1.289", codex: "0.147.0" }, table_rows: [ROW], registry_commit: "def456", issue_2437: "undecided" };
+/** 走行の構成(4つの軸)。 */
+const CONFIG: RunConfig = { tidepool_commit: "abc123", cli_pins: { claude: "2.1.289", codex: "0.147.0" }, table_rows: [ROW], registry_commit: "def456" };
 
 /** 宣言の形だけを持つ課題(loader を通さない —— 抽出の入力は読み込み済みの宣言)。 */
 const exercise = (name: string, over: Partial<Exercise> = {}): Exercise => ({ name, ...WORK_EXERCISE, readings: ["work"], ...over }) as Exercise;
@@ -396,6 +442,88 @@ it("Interview の root を人間が retry しても、harness が登録で受け
   expect(currentRoot(db, plain)).toBe(plain);
 });
 
+it("人間の段の初回の meta-review は、人間が扉で起こした主題の root と、root とその配下がすべて決着したかで読む", () => {
+  const db = openDb(":memory:");
+  expect(firstMetaReview(db, "routing")).toEqual({ root: null, settled: false });
+  // 盤面が起こした回と別の主題の回は、その主題の人間の段の root ではない
+  registerMetaReview(db, "routing", AT);
+  registerMetaReview(db, "memory", AT, "webui");
+  expect(firstMetaReview(db, "routing")).toEqual({ root: null, settled: false });
+
+  const review = registerMetaReview(db, "routing", AT, "webui");
+  expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: false });
+  // root が閉じても、配下の提案 question が開いている間は決着していない
+  const proposal = registerTask(
+    db,
+    { type: "question", title: "adopt", purpose: "p", completion_criteria: "answered", parent_id: review.id, question: [{ title: "adopt it", options: ["yes", "no"], recommendation: "yes" }] },
+    AT,
+    "auditor",
+    "worker",
+  );
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(review.id);
+  expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: false });
+  answerQuestionViaWebui(db, proposal, ["yes"], AT);
+  expect(firstMetaReview(db, "routing")).toEqual({ root: review.id, settled: true });
+});
+
+it("再開の位置は盤面の記録から導く: 課題は登録順に題で root を対応づけて retry の後の今の root を、人間の段は記録した結果と起こされた初回の root を返す", () => {
+  const db = openDb(":memory:");
+  // 1つ目の課題(Interview): 登録され、人間が root を retry した
+  const first = getTask(db, examineeRootId(db, interviewExaminee(db, AT).id))!;
+  const retried = retryInterviewRoot(db, first, undefined, AT, {}, "webui");
+  // 盤面が起こした meta-review・人間が手で登録した別の題の root は、どの課題にも対応しない
+  registerMetaReview(db, "routing", AT);
+  workTask(db, "registered by hand");
+  // 人間の段の初回の memory meta-review は起こされたが、記録には書かれる前(決着を待つ間に止まった)
+  const review = registerMetaReview(db, "memory", AT, "webui");
+  // 同じ課題を2度宣言し、登録されたのは1度目だけ
+  const work = workTask(db, WORK_EXERCISE.task.title);
+  const steps = [{ item: 1, human: "step" as const, outcome: "human_skip" as const, prompted_at: "2026-10-22T00:00:00Z", finished_at: "2026-10-22T00:01:00Z", waited_on: null }];
+
+  const position = sequencePosition(
+    db,
+    [
+      { exercise: { ...interviewExercise("interview"), title: "interview" } },
+      { human: "step", instructions: "object to the write row" },
+      { human: "first_meta_review", subject: "memory" },
+      { exercise: exercise("work") },
+      { human: "step", instructions: "not reached" },
+      { exercise: exercise("work") },
+    ],
+    steps,
+  );
+
+  expect(position).toEqual([
+    { root: retried.id, outcome: null },
+    { root: null, outcome: "human_skip" },
+    { root: review.id, outcome: null },
+    { root: work, outcome: null },
+    { root: null, outcome: null },
+    { root: null, outcome: null },
+  ]);
+});
+
+it("記録の走行の節は人間の段を、いつ促し何を待ったかと結果(済み・人間の skip・扉が閉じていた)で持ち、要約に1行ずつ出す", () => {
+  const db = openDb(":memory:");
+  const work = workTask(db, "the exercise");
+  const steps = [
+    { item: 0, human: "first_meta_review" as const, subject: "routing" as const, outcome: "door_closed" as const, prompted_at: "2026-10-22T00:00:00Z", finished_at: "2026-10-22T00:00:00Z", waited_on: null },
+    { item: 2, human: "first_meta_review" as const, subject: "memory" as const, outcome: "done" as const, prompted_at: "2026-10-22T01:00:00Z", finished_at: "2026-10-22T02:00:00Z", waited_on: "t-review" },
+    { item: 3, human: "step" as const, outcome: "human_skip" as const, prompted_at: "2026-10-22T03:00:00Z", finished_at: "2026-10-22T03:05:00Z", waited_on: null },
+  ];
+
+  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG, steps);
+
+  expect(record.human_steps).toEqual(steps);
+  expect(markdown).toContain(
+    [
+      "- human step 0 (first_meta_review routing): door_closed, prompted 2026-10-22T00:00:00Z, finished 2026-10-22T00:00:00Z, waited on —",
+      "- human step 2 (first_meta_review memory): done, prompted 2026-10-22T01:00:00Z, finished 2026-10-22T02:00:00Z, waited on t-review",
+      "- human step 3 (step): human_skip, prompted 2026-10-22T03:00:00Z, finished 2026-10-22T03:05:00Z, waited on —",
+    ].join("\n"),
+  );
+});
+
 /** 子のうち題が prefix で始まるもの(異議の束ねが立てる修理子・RCA の題)。 */
 const childTitled = (db: Db, parentId: string, prefix: string) => listChildren(db, parentId).find((child) => child.title.startsWith(prefix))!;
 
@@ -418,6 +546,28 @@ it("仕事の課題の行は種類 work を持ち、費用から RCA と記憶�
 
   expect(record.exercises[0]).toMatchObject({ kind: "work", cost_usd_by_harness: { "claude-code": 3 } });
   expect(record.exercises[0]!.unpriced_sessions_by_harness).toEqual({});
+});
+
+it("課題の行は記録から導く agent の動きの列を持つ: 分けた子の数・分解判断の行の数・異議の数・type 別の修理子の数・retry の数", () => {
+  const db = openDb(":memory:");
+  const root = getTask(db, workTask(db, "the exercise"))!;
+  // 分解判断2つ: root を2つに、その1つ目をさらに1つに
+  const [first] = decomposeTaskViaWorker(db, root, { reason: "two deliverables", children: [{ title: "a", purpose: "p", completion_criteria: "c" }, { title: "b", purpose: "p", completion_criteria: "c" }] }, "deckhand", AT) as [Task];
+  decomposeTaskViaWorker(db, first, { reason: "one more", children: [{ title: "a1", purpose: "p", completion_criteria: "c" }] }, "deckhand", AT);
+  // 判断の行への異議(work の修理子と RCA)と、記憶の書き込みの行への異議(memory_repair)
+  auditorRcaOn(db, getTask(db, root.id)!, AT, "deckhand");
+  const written = recordKnowledge(db, { scope: null, path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: { activity: "worker_verb", name: "deckhand" } }, "worker", AT, root.id);
+  raiseObjection(db, written.event_id, "undo it", AT);
+  commitTriage(db, AT);
+  // failure question: 1つは retry、1つは abandon
+  answerQuestionViaWebui(db, failureQuestion(db, first.id, AT), ["retry"], AT);
+  answerQuestionViaWebui(db, failureQuestion(db, root.id, AT), ["abandon"], AT);
+
+  const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: root.id, test_exit: 0 }], CONFIG);
+
+  expect(record.exercises[0]).toMatchObject({ children: 3, depth: 2, objections: 2, repairs_by_type: { work: 1, memory_repair: 1 }, retries: 1 });
+  expect(markdown).toContain("| questions | children | depth | objections | repairs | retries |");
+  expect(markdown).toMatch(/\| 3 \| 2 \| 2 \| work 1, memory_repair 1 \| 1 \|\n/);
 });
 
 it("最適化の課題(Interview)の行は種類 optimisation と、root・受験者・出題の監査の費用を持ち、root への異議から立った RCA は持たない", () => {
@@ -455,6 +605,8 @@ it("人間の retry で置き換わった前の Interview の root の木の ses
 
   expect(record.exercises[0]!.cost_usd_by_harness).toEqual({ "claude-code": 15 });
   expect(record.spend.unclassified).toEqual([]);
+  // 人間の retry 2度は課題の行の retry の数
+  expect(record.exercises[0]!.retries).toBe(2);
 });
 
 it("どの課題の木にもどの節にも入らない worker session は未分類に並ぶ", () => {

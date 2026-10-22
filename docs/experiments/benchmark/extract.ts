@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { type BoardCallUse, listBoardCalls } from "../../../src/board-call-usage.js";
@@ -7,10 +7,12 @@ import type { Db } from "../../../src/db.js";
 import { latestEventOfTask, listEvents, listEventsOfKinds } from "../../../src/events.js";
 import { executionSettingsChangeSchema, interviewTargetSchema } from "../../../src/execution-setting.js";
 import { settledByObservation } from "../../../src/landing.js";
+import { firstMetaReviewSchema, type MetaReviewSubject, metaReviewSettingsChangeSchema } from "../../../src/meta-review.js";
 import { EXTRACTOR_VERSION, projectEpisode } from "../../../src/precedent.js";
 import { questionKindOf } from "../../../src/question-kind.js";
 import { requiredTextSchema } from "../../../src/required-text-schema.js";
 import { listRoutingShadow } from "../../../src/routing-review.js";
+import { isSettled } from "../../../src/task-status.js";
 import { getTask, interviewRoomPath, isRca, isRepairType, latestPosedProbe, listChildren, listExaminees, type Task } from "../../../src/tasks.js";
 
 /** 実行設定の表の1行。綴りは盤面の表の行を足す変更(`setting: "row"`)の row で、検査もその schema に任せる。 */
@@ -24,7 +26,7 @@ const tableRowSchema = z.record(z.string(), z.unknown()).superRefine((row, ctx) 
 const exerciseSchema = z
   .object({
     title: requiredTextSchema,
-    readings: z.array(z.enum(["work", "interview", "memory", "routing", "learner"])).min(1),
+    readings: z.array(z.enum(["work", "interview", "memory", "routing", "learner", "decompose", "repair"])).min(1),
     /** 着地した保護ブランチの workspace で走らせる期待解のテスト。task の課題には必須。 */
     test: requiredTextSchema.optional(),
     task: z
@@ -76,14 +78,42 @@ export function loadExercise(dir: string): Exercise {
   return { name: basename(dir), ...parsed.data };
 }
 
-/** 走行の構成: 4つの軸(tidepool の commit・CLI の pin・表の行・registry の commit)と #2437 の状態(ADR 0298 決定4・9)。 */
+/** 走行の宣言(`run.json`): 順序を持つ列(ADR 0298 追記 #2449 決定2)。項目は課題(隣の `exercises/` のディレクトリ名)か人間の段 ——
+ *  主題の初回の meta-review を起こす(ADR 0300)か、自由文の段。`period_days` は走行の前に盤面へ入れる meta-review の周期。 */
+const sequenceSchema = z
+  .object({
+    period_days: metaReviewSettingsChangeSchema.shape.period_days.optional(),
+    items: z
+      .array(
+        z.discriminatedUnion("human", [
+          z.object({ human: z.undefined().optional(), exercise: requiredTextSchema }).strict(),
+          z.object({ human: z.literal("first_meta_review"), subject: firstMetaReviewSchema.shape.subject }).strict(),
+          z.object({ human: z.literal("step"), instructions: requiredTextSchema }).strict(),
+        ]),
+      )
+      .min(1),
+  })
+  .strict();
+
+/** 走行の宣言を読み、課題の項目は `exercises/<name>` の宣言に置き換える。欄名を名指して拒否するのは loadExercise と同じ。 */
+export function loadSequence(file: string) {
+  const parsed = sequenceSchema.safeParse(JSON.parse(readFileSync(file, "utf8")));
+  if (!parsed.success) throw new Error(`${file}:\n${z.prettifyError(parsed.error)}`);
+  const exercises = join(dirname(file), "exercises");
+  return {
+    ...parsed.data,
+    items: parsed.data.items.map((item) => (item.human === undefined ? { exercise: loadExercise(join(exercises, item.exercise)) } : item)),
+  };
+}
+export type SequenceItem = ReturnType<typeof loadSequence>["items"][number];
+
+/** 走行の構成: 4つの軸(tidepool の commit・CLI の pin・表の行・registry の commit、ADR 0298 決定4)。 */
 export const runConfigSchema = z
   .object({
     tidepool_commit: requiredTextSchema,
     cli_pins: z.record(z.string(), requiredTextSchema),
     table_rows: z.array(tableRowSchema),
     registry_commit: requiredTextSchema,
-    issue_2437: requiredTextSchema,
   })
   .strict();
 export type RunConfig = z.infer<typeof runConfigSchema>;
@@ -103,6 +133,49 @@ export function currentRoot(db: Db, taskId: string): string {
   let id = taskId;
   for (let next = successor(id); next !== null; next = successor(id)) id = next;
   return id;
+}
+
+/** harness が書く人間の段の記録の1行(`~/bench/human-steps.jsonl`、段が終わったときに書く)。結果は3つ: 人間が済ませた(`done`)、
+ *  人間が harness に skip と伝えた(`human_skip`、対照走行)、扉の門が閉じていて待たずに進んだ(`door_closed`、材料 0 件 —— ADR 0300 決定2)。
+ *  `waited_on` は済んだ後に待ったもの(初回の meta-review の root、自由文の段なら `board`)。 */
+const humanStepSchema = z
+  .object({
+    item: z.number().int().nonnegative(),
+    human: z.enum(["first_meta_review", "step"]),
+    subject: firstMetaReviewSchema.shape.subject.optional(),
+    outcome: z.enum(["done", "human_skip", "door_closed"]),
+    prompted_at: requiredTextSchema,
+    finished_at: requiredTextSchema,
+    waited_on: requiredTextSchema.nullable(),
+  })
+  .strict();
+export type HumanStep = z.infer<typeof humanStepSchema>;
+
+/** 再開の位置(#2503): 列の項目ごとに、盤面の記録から済んだところを導く。課題は harness が登録した root(親を持たず retry の後継でない)を
+ *  登録順に宣言の題で対応づけ、retry の後の今の root を返す —— harness の id の控えに頼らないので、登録と控えの間で止まっても2度登録しない。
+ *  人間の段は記録した結果と、初回の meta-review なら人間が起こした root。 */
+export function sequencePosition(db: Db, items: readonly SequenceItem[], steps: readonly HumanStep[]): Array<{ root: string | null; outcome: HumanStep["outcome"] | null }> {
+  const roots = listEventsOfKinds(db, ["task_registered"]).flatMap((e) => {
+    const task = e.task_id === null ? undefined : getTask(db, e.task_id);
+    return task && task.parent_id === null && !latestEventOfTask(db, task.id, "interview_retried") ? [task] : [];
+  });
+  return items.map((item, index) => {
+    if ("exercise" in item) {
+      const title = item.exercise.task?.title ?? item.exercise.title;
+      const at = roots.findIndex((task) => task.title === title);
+      return { root: at === -1 ? null : currentRoot(db, roots.splice(at, 1)[0]!.id), outcome: null };
+    }
+    const outcome = steps.find((step) => step.item === index)?.outcome ?? null;
+    return { root: item.human === "first_meta_review" ? firstMetaReview(db, item.subject).root : null, outcome };
+  });
+}
+
+/** 人間の段「初回の meta-review を起こす」の待ち(ADR 0300 決定2): 人間が扉で起こした主題の root(盤面の周期の回ではない —— 経路で
+ *  見分ける)と、root とその配下(修理子・RCA・提案 question)がすべて決着したか。起こされていなければ root は null。 */
+export function firstMetaReview(db: Db, subject: MetaReviewSubject): { root: string | null; settled: boolean } {
+  const registered = listEventsOfKinds(db, ["meta_review_registered"]).find((e) => e.origin !== "board" && e.payload.subject === subject);
+  if (registered?.task_id == null) return { root: null, settled: false };
+  return { root: registered.task_id, settled: subtree(db, getTask(db, registered.task_id)!).every((task) => isSettled(task.status)) };
 }
 
 const VERB_PREFIX = "mcp__tidepool__";
@@ -235,10 +308,16 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
   const tasks = [...tree, ...landingQuestions];
   // 人間の retry で置き換わった前の root の木も費用に入れる(`interview_retried` を遡る)。所要時間・決着は今の root の木で読む
   const replaced: Task[] = [];
-  for (let prev = latestEventOfTask(db, root.id, "interview_retried")?.payload.previous_root_id; prev !== undefined; ) {
+  let interviewRetries = 0;
+  for (let prev = latestEventOfTask(db, root.id, "interview_retried")?.payload.previous_root_id; prev !== undefined; interviewRetries++) {
     const earlier = getTask(db, prev)!;
     replaced.push(...subtree(db, earlier));
     prev = latestEventOfTask(db, earlier.id, "interview_retried")?.payload.previous_root_id;
+  }
+  // 修理子は異議の束ねが立てる子(登録の記録が異議を運ぶ)のうち RCA でないもの —— 題では見分けない(ADR 0171)
+  const repairs: Record<string, number> = {};
+  for (const task of tree) {
+    if (latestEventOfTask(db, task.id, "task_registered")?.payload.objection_event_ids?.length && !isRca(db, task.id)) repairs[task.type] = (repairs[task.type] ?? 0) + 1;
   }
   // 記録から学ぶ task(RCA review と記憶・routing の修理子)は走行の節に置き、課題の行の費用から外す
   const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task));
@@ -256,6 +335,16 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     cost_usd_by_harness: cost_usd,
     unpriced_sessions_by_harness: unpriced,
     questions: tasks.filter((t) => t.type === "question").map((q) => questionKindOf(q).kind),
+    // agent の動き(ADR 0298 追記 #2449 決定4): 分解判断に載る子と分解判断の行の数、異議、修理子、retry(failure question と Interview の root)
+    children: tree.filter((t) => t.based_on_decision !== null).length,
+    depth: new Set(tree.flatMap((t) => (t.based_on_decision === null ? [] : [t.based_on_decision]))).size,
+    objections: listEventsOfKinds(db, ["objection_raised"]).filter((e) => e.task_id !== null && ids.has(e.task_id)).length,
+    repairs_by_type: repairs,
+    retries:
+      interviewRetries +
+      [...tasks, ...replaced].filter(
+        (q) => q.type === "question" && questionKindOf(q).kind === "failure" && latestEventOfTask(db, q.id, "question_answered")?.payload.answers[0]?.answer === "retry",
+      ).length,
     sessions: treeSessions,
   };
 }
@@ -306,14 +395,15 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
   };
 }
 
-/** 走行の記録: 課題ごとの列と、4プロセスの判断を人間が読む走行ごとの節。 */
-export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: RunConfig) {
+/** 走行の記録: 課題ごとの列と、4プロセスの判断・人間の段を人間が読む走行ごとの節。 */
+export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: RunConfig, humanSteps: readonly HumanStep[] = []) {
   // 盤面の task すべて(一覧の読み口は決着した木を落とすので、登録の event から引く)
   const boardTasks = listEventsOfKinds(db, ["task_registered"]).flatMap((e) => (e.task_id === null ? [] : [getTask(db, e.task_id)!]));
   const exercises = runs.map((run) => exerciseRecord(db, logDir, boardTasks, run));
   const record = {
     config,
     exercises,
+    human_steps: humanSteps,
     spend: spend(db, logDir, boardTasks, exercises),
     decision_rows: boardTasks.flatMap((review) =>
       review.meta_review_subject === null
@@ -362,7 +452,7 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
         : [],
     ),
   };
-  return { record, markdown: summary(exercises, record.spend) };
+  return { record, markdown: summary(exercises, record.spend, humanSteps) };
 }
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)}m`;
@@ -374,7 +464,7 @@ function costText({ cost_usd, unpriced }: ReturnType<typeof tally>): string {
 }
 
 /** 課題ごとの表と走行の支出の節の1行ずつ(Markdown)。4プロセスの節は JSON を読む。 */
-function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnType<typeof spend>): string {
+function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnType<typeof spend>, humanSteps: readonly HumanStep[]): string {
   const cell = (v: unknown) => (v === null ? "—" : String(v));
   const rows = exercises.map((e) =>
     [
@@ -390,11 +480,16 @@ function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnTy
       minutes(e.duration_ms.human_wait),
       minutes(e.duration_ms.board),
       e.questions.length,
+      e.children,
+      e.depth,
+      e.objections,
+      Object.entries(e.repairs_by_type).map(([type, n]) => `${type} ${n}`).join(", ") || "0",
+      e.retries,
     ].join(" | "),
   );
   return [
-    "| exercise | kind | handled | status | review | landing | cost_usd | wall | queue | human wait | board | questions |",
-    "|---|---|---|---|---|---|---|---|---|---|---|---|",
+    "| exercise | kind | handled | status | review | landing | cost_usd | wall | queue | human wait | board | questions | children | depth | objections | repairs | retries |",
+    "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ...rows.map((row) => `| ${row} |`),
     "",
     `- learning: ${costText(spent.learning.total)}`,
@@ -402,42 +497,73 @@ function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnTy
     `- observation: ${costText(spent.observation.total)}`,
     `- unclassified sessions: ${spent.unclassified.length}, ${costText(tally(spent.unclassified.map(priced)))}`,
     "",
+    ...humanSteps.map(
+      (step) =>
+        `- human step ${step.item} (${[step.human, step.subject].filter(Boolean).join(" ")}): ${step.outcome}, prompted ${step.prompted_at}, finished ${step.finished_at}, waited on ${cell(step.waited_on)}`,
+    ),
+    ...(humanSteps.length > 0 ? [""] : []),
     spent.not_included,
     "",
   ].join("\n");
 }
 
-/** `run` の input.json: 構成と、課題ごとの宣言のディレクトリ・root の task id・期待解のテストの exit。 */
+/** `run` の input.json: 構成と、課題ごとの宣言のディレクトリ・root の task id・期待解のテストの exit、人間の段の記録。 */
 const runInputSchema = z
   .object({
     config: runConfigSchema,
     exercises: z.array(z.object({ dir: requiredTextSchema, task_id: requiredTextSchema, test_exit: z.number().int().nullable() }).strict()),
+    human_steps: z.array(humanStepSchema),
   })
   .strict();
 
-/** `tsx extract.ts check <exercise-dir>...` は宣言を検査するだけ(harness が走行の前に呼ぶ)。
- *  `tsx extract.ts current-root <db> <task-id>` は retry の後の今の root の id を印字する(harness が決着待ちの poll ごとに呼ぶ)。
- *  `tsx extract.ts run <db> <worker-logs> <input.json> <out-dir>` は record.json と summary.md を書く。盤面と同じ commit の
- *  checkout から走らせる。 */
+/** harness の人間の段の記録(1行1段)。まだ無ければ空。 */
+function readHumanSteps(path: string): HumanStep[] {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf8")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => humanStepSchema.parse(JSON.parse(line)));
+}
+
+const USAGE = [
+  "extract.ts check <run.json>",
+  "extract.ts current-root <db> <task-id>",
+  "extract.ts position <run.json> <db> <human-steps.jsonl>",
+  "extract.ts first-meta-review <db> <subject>",
+  "extract.ts run <db> <worker-logs> <input.json> <out-dir>",
+].join(" | ");
+
+/** 読むだけ —— 盤面の読み口が書き込みに触れたら、ここで落ちる。 */
+const readOnly = (path: string) => new Database(path, { readonly: true, fileMustExist: true });
+
+/** `tsx extract.ts check <run.json>` は走行の宣言とその課題を検査するだけ(harness が走行の前に呼ぶ)。
+ *  `current-root` は retry の後の今の root の id を印字する(harness が決着待ちの poll ごとに呼ぶ)。
+ *  `position` は列の項目ごとの再開の位置を JSON で印字する(harness が列を始める前に呼ぶ)。
+ *  `first-meta-review` は人間の段の初回の meta-review の root と決着を JSON で印字する(harness がその段の poll ごとに呼ぶ)。
+ *  `run` は record.json と summary.md を書く。どれも盤面と同じ commit の checkout から走らせる。 */
 function main([command, ...args]: string[]): void {
-  if (command === "check") {
-    for (const dir of args) loadExercise(dir);
+  if (command === "check" && args.length === 1) {
+    loadSequence(args[0]!);
     return;
   }
   if (command === "current-root" && args.length === 2) {
-    const db = new Database(args[0]!, { readonly: true, fileMustExist: true });
-    console.log(currentRoot(db, args[1]!));
+    console.log(currentRoot(readOnly(args[0]!), args[1]!));
     return;
   }
-  if (command !== "run" || args.length !== 4)
-    throw new Error("usage: extract.ts check <exercise-dir>... | extract.ts current-root <db> <task-id> | extract.ts run <db> <worker-logs> <input.json> <out-dir>");
+  if (command === "position" && args.length === 3) {
+    console.log(JSON.stringify(sequencePosition(readOnly(args[1]!), loadSequence(args[0]!).items, readHumanSteps(args[2]!))));
+    return;
+  }
+  if (command === "first-meta-review" && args.length === 2) {
+    console.log(JSON.stringify(firstMetaReview(readOnly(args[0]!), firstMetaReviewSchema.shape.subject.parse(args[1]))));
+    return;
+  }
+  if (command !== "run" || args.length !== 4) throw new Error(`usage: ${USAGE}`);
   const [dbPath, logDir, inputPath, outDir] = args as [string, string, string, string];
   const parsed = runInputSchema.safeParse(JSON.parse(readFileSync(inputPath, "utf8")));
   if (!parsed.success) throw new Error(`${inputPath}:\n${z.prettifyError(parsed.error)}`);
-  // 読むだけ —— 盤面の読み口が書き込みに触れたら、ここで落ちる
-  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
   const runs = parsed.data.exercises.map(({ dir, task_id, test_exit }) => ({ exercise: loadExercise(dir), task_id, test_exit }));
-  const { record, markdown } = extract(db, logDir, runs, parsed.data.config);
+  const { record, markdown } = extract(readOnly(dbPath), logDir, runs, parsed.data.config, parsed.data.human_steps);
   mkdirSync(outDir, { recursive: true });
   writeFileSync(join(outDir, "record.json"), `${JSON.stringify(record, null, 2)}\n`);
   writeFileSync(join(outDir, "summary.md"), markdown);
