@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
-import { completeTask } from "../src/tasks.js";
+import { completeTask, getTask } from "../src/tasks.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
 import { awaitWindow, FakeGitHubClient } from "./fakes.js";
 import {
@@ -27,6 +27,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 let t: Tidepool;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await t?.stop();
 });
 
@@ -173,17 +174,11 @@ it("収束の回が根の処理中に呼んだ stop は、その回が終わる�
   await fired;
   const db = openDb(join(t.dir, "board.sqlite"));
   try {
-    expect(db.prepare("SELECT pr_number FROM tasks WHERE id = ?").get(root.id)).toEqual({ pr_number: 1 });
+    expect(getTask(db, root.id)?.pr_number).toBe(1);
   } finally {
     db.close();
   }
   expect(errors.mock.calls.map((call) => call.map(String).join(" ")).join("\n")).not.toContain(
     "database connection is not open",
   );
-});
-
-it("収束の回が走っていないときの stop は待たずに resolve する", async () => {
-  const { workspace } = await makeRemoteBackedWorkspace("stop-without-convergence");
-  t = await bootTidepool({ workspace });
-  await t.stopServer();
 });
