@@ -58,6 +58,6 @@ pickup され、`decompose` で修理 work を立て、修理は pickup され�
 決定2 の床と決定3 の cascade は同じ問いに別々に答えていた: 床は祖先をたどって RCA の下も「捨てられた」と判定し、cascade は生き延びる
 RCA で止まってその下を丸ごと残した —— cancel の前に RCA が分解で立てた work は倒れずに pickup され、その下の承認 question は approve で
 床に当たる(#2177)。決定1 の判定は ADR 0301 決定1 の帰り先の述語の (b) になり、床・cascade・cancel の面(決定4)は同じ表(宛先がブランチに
-依存する task —— 同 決定2)を読む。決定3 の線は1段ずつ引かれ、生き延びた RCA の下の work は倒れる。決定2 の注入の1行は、spawn 時の
-Authority 節の置き換えになる(同 決定5)。床は別 workspace への分解子(registry の編集の提案)も拒んでいたが、これは検討されていなかった
+依存する task —— 同 決定2)を読む。決定3 の線は1段ずつ引かれ、生き延びた RCA の下の work は倒れる。決定2 の注入の1行は外れ、そこで
+走る RCA は Authority 節も Roster 節も持たない(同 決定5)。床は別 workspace への分解子(registry の編集の提案)も拒んでいたが、これは検討されていなかった
 (#2510)。
