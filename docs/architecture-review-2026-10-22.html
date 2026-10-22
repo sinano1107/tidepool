@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — tidepool</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.4.1/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({ startOnLoad: true, theme: "neutral", securityLevel: "loose", flowchart: { useMaxWidth: true } });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .lbl { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+      .diagram { min-height: 300px; }
+      pre.mermaid { background: transparent; }
+      code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans">
+    <main class="max-w-6xl mx-auto px-4 sm:px-6 py-12 space-y-14">
+      <!-- ============ HEADER ============ -->
+      <header class="space-y-4">
+        <p class="text-xs uppercase tracking-wider text-slate-500">Architecture review · 3回目(前回 2026-09-16)</p>
+        <h1 class="font-serif text-4xl">tidepool</h1>
+        <p class="text-sm text-slate-600">2026-10-22 · HEAD e15c4d4a · 範囲: 2026-09-16 以降の hot spot(tasks / memory / mcp / human-verbs / workspace / landing / 2つの worker adapter)</p>
+        <div class="flex flex-wrap gap-4 text-xs text-slate-600 pt-2">
+          <span class="flex items-center gap-2"><span class="inline-block w-5 h-4 border border-slate-500 bg-white"></span>module</span>
+          <span class="flex items-center gap-2"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#64748b" stroke-width="2" class="seam"/></svg>seam</span>
+          <span class="flex items-center gap-2"><svg width="28" height="8"><line x1="0" y1="4" x2="28" y2="4" stroke="#dc2626" stroke-width="2"/></svg>leak / 写し</span>
+          <span class="flex items-center gap-2"><span class="inline-block w-5 h-4 deep border-2 border-slate-900"></span>deep module</span>
+        </div>
+        <nav class="text-sm pt-2 flex flex-wrap gap-x-4 gap-y-1 text-indigo-700">
+          <a href="#c1">1 セッションの面</a><a href="#c2">2 merge の門</a><a href="#c3">3 worker session の生涯</a><a href="#c4">4 修理子の射程</a><a href="#c5">5 走る場所</a><a href="#c6">6 当時版の別綴り</a><a href="#c7">7 type の性質</a><a href="#c8">8 Precedent の行</a><a href="#remeasure">再計測</a><a href="#notcarded">カードにしなかったもの</a><a href="#top">Top</a>
+        </nav>
+      </header>
+
+      <section id="candidates" class="space-y-12">
+        <!-- ============ CARD 1 ============ -->
+        <article id="c1" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">1. セッションの面を task ごとに1回で決める</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2462" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2462</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Strong</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-indigo-50 text-indigo-700">#663(b) を包む</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/tasks.ts:640-683 taskVerbSwap(9枝)· :626 WORKER_PULL_VERBS · :3657 REPAIR_NOTICES</li>
+            <li>src/memory.ts:793-808 memoryRepairKinds / Verbs · :2486 buildMemoryInjection</li>
+            <li>src/routing-review.ts:303 routingRepairVerbs · src/meta-review.ts:14-42</li>
+            <li>src/mcp.ts:548-1252 buildMcpServer(門27、自前の述語5)</li>
+            <li>src/codex-worker.ts:1264-1279 enabledTools · :67-83 BOARD_VERBS</li>
+            <li>src/board-prose.ts:55,64,123</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">Before — 材料8つ、読み手3つがそれぞれ組む</p>
+              <pre class="mermaid">
+flowchart LR
+  T["taskVerbSwap"]:::m
+  MR["memoryRepairVerbs"]:::m
+  RR["routingRepairVerbs"]:::m
+  SR["isSubjectReaderRca"]:::m
+  MS["META_REVIEW_SUBJECTS"]:::m
+  GP["GUIDANCE_PREAMBLE / REPAIR_NOTICES"]:::m
+  MCP["mcp.ts 登録"]:::r
+  CX["codex enabledTools"]:::r
+  INJ["注入の文"]:::r
+  T --> MCP & CX
+  MR --> MCP & CX
+  RR --> MCP & CX
+  SR --> MCP & CX
+  MS --> MCP & CX
+  GP --> INJ
+  INJ -. 一致を誰も固定しない .-> MCP
+  classDef m fill:#fff,stroke:#64748b;
+  classDef r fill:#fef2f2,stroke:#dc2626;
+  linkStyle 11 stroke:#dc2626,stroke-dasharray:4 4;
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">After — 1つの値を3つが読む</p>
+              <pre class="mermaid">
+flowchart LR
+  TASK["task"] --> S
+  S["セッションの面<br/>verb の集合 · 注入の節 · notice"]:::deep
+  S --> MCP["mcp.ts 登録"]
+  S --> CX["codex enabledTools"]
+  S --> INJ["注入の文"]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:3px;
+              </pre>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>「この session に何の verb・どの注入の節・どの notice を渡すか」を3つの読み手が材料8つから組み直し、注入の文と verb の面の一致はどのテストも固定していない。実害3件: #2303(routing_repair の INDEX が伏せた verb を名指す)、#2342(指針の節を受けるのに <code>read_memory_entries</code> が無い — 直しは3ファイル)、#2201 open(memory_repair の tools/list に <code>propose_from_objection</code>)。ADR 0122 決定2 は3通りに綴られ、09-16 以降 mcp と codex を同時に触った commit は7本。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>task を受けてその session の面(verb の集合・注入の節・notice)を1つの値で返す module を置き、MCP 登録・Codex の宣言・注入の文はその値を読むだけにする。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>locality: 新しい task type は1箇所</li>
+                <li>leverage: 1つの interface、読み手3つ</li>
+                <li>注入と verb の一致が1つの interface で言える</li>
+                <li><code>BOARD_VERBS</code> の手打ちが消える(#663(b))</li>
+                <li>ADR 0125 の17行の表が domain seam へ降りる</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0122 決定2 / 0125 決定2 / 0283 決定3・追記1 の決定は変えない。変わるのは決定を写す場所の数だけ。</p>
+        </article>
+
+        <!-- ============ CARD 2 ============ -->
+        <article id="c2" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">2. merge の門を1回だけ組み立てる</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2463" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2463</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Strong</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">local-substitutable(git)+ mock(GitHub)</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/landing.ts:1377-1470 無人 merge の tick</li>
+            <li>src/human-verbs.ts:1134-1205 pr_merge 回答</li>
+            <li>src/human-verbs.ts:1095-1125 local_merge 回答(3つ目、部分)</li>
+            <li>src/landing.ts:281 landingAnnotation</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-2">Before — 同じ約10段を2回、違う順で</p>
+              <div class="grid grid-cols-2 gap-3 text-[11px]">
+                <div class="space-y-1">
+                  <p class="lbl text-slate-500">tick(landing.ts)</p>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">処理中の印</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">landingBlock</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">PR の読み · observePrHead</div>
+                  <div class="h-6 border-l-4 border-rose-500 bg-rose-50 px-2 flex items-center">① CI の猶予</div>
+                  <div class="h-6 border-l-4 border-rose-500 bg-rose-50 px-2 flex items-center">② 積み残し(.catch→null)</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">外の push の notice</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">head への固定</div>
+                </div>
+                <div class="space-y-1">
+                  <p class="lbl text-slate-500">回答(human-verbs.ts)</p>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">処理中の印</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">landingBlock</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">PR の読み · observePrHead</div>
+                  <div class="h-6 border-l-4 border-rose-500 bg-rose-50 px-2 flex items-center">① 積み残し(DomainError)</div>
+                  <div class="h-6 border-l-4 border-rose-500 bg-rose-50 px-2 flex items-center">② CI の猶予</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">外の push の notice</div>
+                  <div class="h-6 border-l-4 border-slate-400 bg-slate-50 px-2 flex items-center">head への固定</div>
+                </div>
+              </div>
+              <p class="text-[11px] text-rose-700 mt-2">fail-closed の書き方4通り · 両ファイル同時の commit 10本</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram flex flex-col">
+              <p class="lbl text-slate-500 mb-2">After — 段は1回、呼び手は執行者だけ持つ</p>
+              <div class="flex-1 flex flex-col justify-center gap-3">
+                <div class="flex gap-3 justify-center text-xs">
+                  <div class="border border-slate-400 bg-white px-3 py-2">tick</div>
+                  <div class="border border-slate-400 bg-white px-3 py-2">pr_merge 回答</div>
+                  <div class="border border-slate-400 bg-white px-3 py-2">local_merge 回答</div>
+                </div>
+                <svg height="18" class="w-full"><line x1="10%" y1="9" x2="90%" y2="9" stroke="#64748b" stroke-width="2" class="seam"/></svg>
+                <div class="deep text-white rounded px-4 py-5 border-4 border-slate-900">
+                  <p class="lbl text-slate-300">merge の門(landing module)</p>
+                  <p class="text-[11px] text-slate-400 mt-2 leading-5">印 → landingBlock → PR の読み → 積み残し → CI → 外の push → head 固定 · fail-closed 1通り</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>ADR 0231 決定1・3 / ADR 0242 決定1 が1つの門と名指す merge の門を、tick と人間の回答がそれぞれ約10段手で組み、順序(CI→積み残し / 積み残し→CI)と比べられないときの扱いが食い違う。テストも偏る: 積み残しの assert は landing.test 25件、human-verbs.test 1件、外の push の文は回答側0件。<code>landingAnnotation</code> は積み残しを読まない(#1779)。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>門の段の並びを landing module の中に1回だけ書き、tick と回答は「誰の名義で執行するか」と結果の扱いだけを持つ。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>locality: 門の変更は1ファイル</li>
+                <li>段の順序の食い違いが消える</li>
+                <li>fail-closed が1つの書き方</li>
+                <li>回答側も tick と同じ interface でテスト</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0106(着地は verdict を返す1つの module)と同じ向き。人間側を human-verbs に置くと決めた ADR は grep で見つからない。関連: #2121、#2354(#676 は帳簿の残りで別件)。</p>
+        </article>
+
+        <!-- ============ CARD 3 ============ -->
+        <article id="c3" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">3. worker session の生涯を adapter の外へ出す</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/664" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#664</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-emerald-100 text-emerald-800">Strong</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process + local-substitutable</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-rose-50 text-rose-700">#664 再計測 — 拡大・写し漏れ2件</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/claude-worker.ts:1749-2472 ClaudeCodeWorker.start</li>
+            <li>src/codex-worker.ts:1200-1488 CodexWorker.start</li>
+            <li>src/scheduler.ts:526, 587(3つ目の持ち手)</li>
+            <li>src/claude-worker.ts:734 workerSpawnEnv · src/codex-worker.ts:1076 workerEnv</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-2">Before — 段の並びが2つの adapter に写る</p>
+              <svg viewBox="0 0 320 260" class="w-full h-[260px]">
+                <text x="40" y="14" font-size="10" fill="#475569">claude start(724行)</text>
+                <rect x="40" y="20" width="90" height="230" fill="#fff" stroke="#64748b"/>
+                <rect x="40" y="20" width="90" height="120" fill="#fee2e2" stroke="none"/>
+                <text x="190" y="14" font-size="10" fill="#475569">codex start(289行)</text>
+                <rect x="190" y="20" width="90" height="92" fill="#fff" stroke="#64748b"/>
+                <rect x="190" y="20" width="90" height="56" fill="#fee2e2" stroke="none"/>
+                <line x1="130" y1="48" x2="190" y2="40" stroke="#dc2626" stroke-width="1.5"/>
+                <line x1="130" y1="100" x2="190" y2="66" stroke="#dc2626" stroke-width="1.5"/>
+                <text x="192" y="132" font-size="10" fill="#b91c1c">近似一致 52% → 61%</text>
+                <text x="192" y="146" font-size="10" fill="#b91c1c">逐語 54 → 95行</text>
+                <text x="192" y="160" font-size="10" fill="#b91c1c">同時 commit 53本</text>
+                <text x="192" y="190" font-size="10" fill="#0f172a">写し漏れ:</text>
+                <text x="192" y="204" font-size="10" fill="#0f172a">· ADR 0020 の検査 ✗</text>
+                <text x="192" y="218" font-size="10" fill="#0f172a">· 資格情報の env 除去 ✗</text>
+                <text x="44" y="80" font-size="9" fill="#7f1d1d">12段の写し</text>
+                <text x="44" y="180" font-size="9" fill="#475569">Harness 固有</text>
+              </svg>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram flex flex-col">
+              <p class="lbl text-slate-500 mb-2">After — 生涯1つ、adapter は起動だけ</p>
+              <div class="flex-1 flex flex-col justify-center gap-3">
+                <div class="deep text-white rounded px-4 py-5 border-4 border-slate-900">
+                  <p class="lbl text-slate-300">worker session の生涯</p>
+                  <p class="text-[11px] text-slate-400 mt-2 leading-5">走る場所の解決 · registry の検査 · env の床 · spawn / exit の記録 · 記憶の注入の記録 · transcript · Precedent の投影</p>
+                </div>
+                <svg height="18" class="w-full"><line x1="10%" y1="9" x2="90%" y2="9" stroke="#64748b" stroke-width="2" class="seam"/></svg>
+                <div class="flex gap-3 justify-center text-xs">
+                  <div class="border border-slate-400 bg-white px-3 py-2">Claude adapter<br/><span class="text-[10px] text-slate-500">CLI 起動 · PTY</span></div>
+                  <div class="border border-slate-400 bg-white px-3 py-2">Codex adapter<br/><span class="text-[10px] text-slate-500">TOML -c · hook</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>12段の並びが2つの adapter に写され、09-16 から写しは増え、写し漏れが2件実在する。(1) <code>guardRegistryDefaultBranch</code>(ADR 0020 の origin/HEAD 検査)を呼ぶのは <code>claude-worker.ts:1759</code> だけ。(2) Codex は <code>SECRET_ENV</code> 7本を消し <code>GIT_CONFIG_GLOBAL=/dev/null</code> を置くが、Claude の <code>workerSpawnEnv</code> は <code>...process.env</code> から組み <code>GH_TOKEN</code> / <code>GITHUB_TOKEN</code> / <code>OPENAI_API_KEY</code> / <code>CODEX_API_KEY</code> を消さない(host が export しているかは未測定)。<code>agentGitIdentityEnv</code> の adapter 間 import も残る。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>Harness に依らない段を1つの module が持ち、adapter は CLI の起動と Harness 固有の設定だけを渡す。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>写し漏れが構造で起きない</li>
+                <li>env の床が両 Harness に1度で効く</li>
+                <li>adapter 間の import が消える</li>
+                <li>生涯のテストは ScriptedWorker で1回</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0098 の Claude / Codex の分割はそのまま。問題は分割でなく、生涯の複製。写し漏れ2件は <a class="underline" href="https://github.com/sinano1107/tidepool/issues/2469">#2469</a>(high)/ <a class="underline" href="https://github.com/sinano1107/tidepool/issues/2470">#2470</a> で起票済み。二重記録の防ぎ <code>recorded</code> は辿った結果、形の差で欠陥ではない(#664 のコメント)。</p>
+        </article>
+
+        <!-- ============ CARD 4 ============ -->
+        <article id="c4" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">4. 修理子の射程を書き手ごとに1回だけ計算する</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2464" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2464</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/memory.ts:740-890 門の関数 約10本</li>
+            <li>呼び口 :427, 428, 493, 504, 709-713, 731-732, 1254-1258, 1459</li>
+            <li>src/mcp.ts:1254-1269 射程の英語の文 · MEMORY_REPAIR_NOTICE</li>
+            <li>src/routing-review.ts:291, 650(routing 側の同じ役)</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-2">Before — 6 verb × 門が編み込まれる</p>
+              <div class="grid grid-cols-7 gap-1 text-[10px] text-center">
+                <div></div><div class="lbl">keeps<br/>scope</div><div class="lbl">widen</div><div class="lbl">covers</div><div class="lbl">branch</div><div class="lbl">op</div><div class="lbl">notice</div>
+                <div class="text-left">define</div><div class="bg-rose-200 h-5"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div>
+                <div class="text-left">fold</div><div class="bg-rose-200 h-5"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div>
+                <div class="text-left">move</div><div class="bg-rose-200 h-5"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div>
+                <div class="text-left">move_br</div><div class="bg-rose-200 h-5"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div>
+                <div class="text-left">invalidate</div><div class="bg-slate-100 h-5"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div>
+                <div class="text-left">propose</div><div class="bg-slate-100 h-5"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-rose-200"></div><div class="bg-slate-100"></div>
+                <div class="text-left">mcp 文</div><div class="bg-slate-100 h-5"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-slate-100"></div><div class="bg-rose-400"></div>
+              </div>
+              <p class="text-[11px] text-slate-500 mt-3">模式図(セルの位置は概略)。実測: 呼び口約11、<code>type === "memory_repair"</code> 4回、<code>objectedWrites</code> を1呼び出しで2〜3回組み直す、順序の不変条件はコメントが守る。</p>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram flex flex-col">
+              <p class="lbl text-slate-500 mb-2">After — verb は射程に問い合わせるだけ</p>
+              <div class="flex-1 flex flex-col justify-center gap-3">
+                <div class="flex flex-wrap gap-2 justify-center text-[11px]">
+                  <span class="border border-slate-400 px-2 py-1 bg-white">define</span><span class="border border-slate-400 px-2 py-1 bg-white">fold</span><span class="border border-slate-400 px-2 py-1 bg-white">move</span><span class="border border-slate-400 px-2 py-1 bg-white">move_branch</span><span class="border border-slate-400 px-2 py-1 bg-white">invalidate</span><span class="border border-slate-400 px-2 py-1 bg-white">propose</span><span class="border border-slate-400 px-2 py-1 bg-white">mcp 文</span>
+                </div>
+                <svg height="18" class="w-full"><line x1="10%" y1="9" x2="90%" y2="9" stroke="#64748b" stroke-width="2" class="seam"/></svg>
+                <div class="deep text-white rounded px-4 py-5 border-4 border-slate-900">
+                  <p class="lbl text-slate-300">修理子の射程</p>
+                  <p class="text-[11px] text-slate-400 mt-2">触った · 名指された · scope 固定 — 書き手ごとに1回計算、順序は内側</p>
+                </div>
+                <div class="relative mx-auto w-2/3 h-16 mt-1 opacity-60">
+                  <div class="absolute inset-0 grid grid-cols-5 gap-1">
+                    <div class="bg-slate-200"></div><div class="bg-slate-200"></div><div class="bg-slate-200"></div><div class="bg-slate-200"></div><div class="bg-slate-200"></div>
+                  </div>
+                  <p class="absolute inset-0 flex items-center justify-center text-[10px] text-slate-600">内側の門(テスト用の internal seam)</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>修理子の射程が共有の meta-review verb 6本の本体に約11箇所で編み込まれ、<code>requireRepairKeepsScope</code> を先に見るという順序の不変条件をコメントが守っている。2026-10-20 の1日に #2304 / #2329 / #2330 が射程を3回変え、eeebcadb は MCP の文と門のずれの直しだった。テストは domain export だけ(<code>memory-repair.test.ts</code> 509行)。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>書き手の射程を1度だけ計算する module を置き、6本の verb と MCP の文はそこへ問い合わせる。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>順序の不変条件が implementation の内側へ</li>
+                <li>locality: 射程の変更は1箇所</li>
+                <li>文と門が同じ出所</li>
+                <li>routing 側と同じ形に揃う余地(推論)</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0252 決定4 / 0281 / 0285 の射程の決定は変えない。候補1と接する(修理子の verb の面は候補1、門の中身はこちら)。</p>
+        </article>
+
+        <!-- ============ CARD 5 ============ -->
+        <article id="c5" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">5. 走る場所を1つの module にする(素性と休止状態への戻し)</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2465" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2465</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process + local-substitutable(git)</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/workspace.ts:256-279 taskRunPlace / examineeRunPlace · :639 recordedPlaceOf · :828 snapshotKey · :1322 releaseWorkspace</li>
+            <li>src/tasks.ts:3772 openedPlaceNamesSql</li>
+            <li>src/human-verbs.ts:594-623, 766 resolveWorkspaceForAnswer</li>
+            <li>src/quarantine.ts:243-247 · src/teardown.ts:202, 248-262</li>
+            <li>src/claude-worker.ts:1716-1734, 1836-1843(sparse の戻し)</li>
+            <li>src/server.ts:419, 565(起動時の復旧2本)</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">Before — 素性3つ、導き直し5箇所、戻し3箇所</p>
+              <pre class="mermaid">
+flowchart TB
+  P["taskRunPlace"]:::m
+  P -.- R1["recordedPlaceOf<br/>逆向き"]:::r
+  P -.- R2["openedPlaceNamesSql<br/>SQL の双子"]:::r
+  P -.- R3["resolveWorkspaceForAnswer<br/>規約から"]:::r
+  P -.- R4["quarantine の文面"]:::r
+  P -.- R5["teardown の枝"]:::r
+  B1["releaseWorkspace"]:::m
+  B2["Claude adapter<br/>sparse の戻し"]:::r
+  B3["起動時の列挙 ×2"]:::r
+  classDef m fill:#fff,stroke:#64748b;
+  classDef r fill:#fef2f2,stroke:#dc2626;
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">After — 名前 · 鍵 · 在り処 · 戻しを1つが持つ</p>
+              <pre class="mermaid">
+flowchart TB
+  RP["走る場所<br/>名前 · 鍵 · 在り処 · 休止状態への戻し"]:::deep
+  Q["quarantine"] --> RP
+  TD["後始末"] --> RP
+  SU["起動時の復旧"] --> RP
+  HV["回答の検査"] --> RP
+  W["worker session"] --> RP
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:3px;
+              </pre>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>走る場所の素性が3つ(Quarantine の名前 = root id、<code>workspace_state</code> の鍵 = 受験者の id、在り処 = event の path)あり、<code>taskRunPlace</code> の外で5箇所が導き直し、休止状態への戻しは後始末・Claude adapter・起動時の2本の列挙に分かれる。workspace.ts の 09-16 以降の commit 84本のうち面接室の場所が30本、1b8e22e7 は規則1つに5ファイル、#2379(high)は起動時の列挙の漏れ。鍵はキャストで、型にしない理由は「テスト約40箇所が変わる」。Quarantine の回答の検査は sparse の戻しをやり直さない(回答後も settings.json が隠れたままになる疑い、#2471)。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>走る場所の名前・鍵・在り処と休止状態へ戻す手順を1つの module が持ち、quarantine・後始末・起動時の復旧・回答の検査はそこへ問い合わせる。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>起動時の列挙が1本</li>
+                <li>鍵が型で強いられる</li>
+                <li>新しい場所の種類は1箇所</li>
+                <li>テストが open の interface を通れる</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0009(使うたびに解決し直す)、0273 決定8、0276 決定3、0277、0293 は前提。harness の <code>openTestExamineeCheckout</code> が open を通らず event を直接書くのも、この seam が無い症状。</p>
+        </article>
+
+        <!-- ============ CARD 6 ============ -->
+        <article id="c6" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">6. 当時版の周辺に残る別綴りを畳む</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2466" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2466</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-amber-100 text-amber-800">Worth exploring</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/events.ts:1016 sessionSpawnOf</li>
+            <li>src/board-prose.ts:371 historicalDefinitionSection</li>
+            <li>src/meta-review.ts:213 objectedRowIds · src/retrospective.ts:663 rcaMaterial</li>
+            <li>src/tasks.ts:3042-3051 executionEvent · :1796 cancelDiscards · src/triage.ts:389</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-3">Before — 同じ事実に綴りが複数</p>
+              <div class="space-y-3 text-[11px]">
+                <div><p class="font-semibold">entry を書いた session の spawn</p><div class="flex gap-2 mt-1"><span class="border border-slate-400 px-2 py-1">sessionSpawnOf</span><span class="border border-rose-500 bg-rose-50 px-2 py-1">board-prose の自前 filter(窓を見ない)</span></div></div>
+                <div><p class="font-semibold">RCA の材料の entry</p><div class="flex gap-2 mt-1"><span class="border border-slate-400 px-2 py-1">objectedRowIds</span><span class="border border-rose-500 bg-rose-50 px-2 py-1">rcaMaterial(ほぼ同文)</span><span class="border border-rose-500 bg-rose-50 px-2 py-1">self RCA の全 objection</span></div></div>
+                <div><p class="font-semibold">Executor の測り方</p><div class="flex gap-2 mt-1"><span class="border border-slate-400 px-2 py-1">executionEvent</span><span class="border border-rose-500 bg-rose-50 px-2 py-1">triage.ts:389</span><span class="border border-rose-500 bg-rose-50 px-2 py-1">cancelDiscards SQL</span></div></div>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram flex flex-col">
+              <p class="lbl text-slate-500 mb-3">After — 「session S の spawn 時点の X」は1つの読み口</p>
+              <div class="flex-1 flex flex-col justify-center gap-3">
+                <div class="deep text-white rounded px-4 py-5 border-4 border-slate-900">
+                  <p class="lbl text-slate-300">当時版の読み口(events の側)</p>
+                  <p class="text-[11px] text-slate-400 mt-2">spawn · 材料の entry · Executor</p>
+                </div>
+                <svg height="18" class="w-full"><line x1="10%" y1="9" x2="90%" y2="9" stroke="#64748b" stroke-width="2" class="seam"/></svg>
+                <div class="flex gap-2 justify-center text-[11px]"><span class="border border-slate-400 px-2 py-1">帰責</span><span class="border border-slate-400 px-2 py-1">self RCA</span><span class="border border-slate-400 px-2 py-1">meta-review の材料</span><span class="border border-slate-400 px-2 py-1">triage</span></div>
+              </div>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>Executor の読みは <code>executionEvent</code> 1本に集まったが、その周りで3つの事実がそれぞれ2〜3通りに綴られている。<code>historicalDefinitionSection</code> は <code>worker_id === assignee</code> で絞り session の窓を見ない(答えが割れる場面は未構成 — 推論)。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>「session S の spawn の時点の X」を答える読み口を events の側に1つ置き、帰責・self RCA・meta-review の材料・triage はそれを通す。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>self RCA と帰責が同じ読み</li>
+                <li>locality: 当時版の規則は1箇所</li>
+                <li>割れる場面が1つの interface で言える</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0292 / 0295 の時点の決定は変えない。<code>cancelDiscards</code> は ADR 0271 決定4 で #2406 の範囲外。</p>
+        </article>
+
+        <!-- ============ CARD 7 ============ -->
+        <article id="c7" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">7. task type の性質に名前を与える</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2467" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2467</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-200 text-slate-700">Speculative</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/tasks.ts type 判定 約50 · :65 isRepairType · :71 carriesReadOnly · :972 isWorkSide</li>
+            <li>他24ファイル 約64 · <code>type === "interview"</code> 20回 / 10ファイル</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-2">Before — 新しい type が触ったファイル数</p>
+              <div class="space-y-3 text-[11px]">
+                <div><p>routing_repair(2da24ac9)</p><div class="flex flex-wrap gap-1 mt-1">
+                  <span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span></div><p class="text-slate-500">15ファイル</p></div>
+                <div><p>interview(ccfd9f43)</p><div class="flex flex-wrap gap-1 mt-1">
+                  <span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span><span class="w-4 h-4 bg-rose-400"></span></div><p class="text-slate-500">19ファイル</p></div>
+                <p class="text-slate-600">取りこぼし: #2179(学習器の3箇所が work だけ)· #1490 · #1501 · #2274 open</p>
+              </div>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-2">After — 性質の表に1行</p>
+              <table class="w-full text-[11px] border border-slate-300">
+                <thead class="bg-slate-900 text-white"><tr><th class="px-2 py-1 text-left">type</th><th>時間リミット</th><th>読み取り専用</th><th>work 側</th><th>修理</th></tr></thead>
+                <tbody class="text-center">
+                  <tr class="border-t"><td class="text-left px-2">work</td><td>○</td><td></td><td>○</td><td></td></tr>
+                  <tr class="border-t"><td class="text-left px-2">review</td><td>○</td><td>○</td><td></td><td></td></tr>
+                  <tr class="border-t"><td class="text-left px-2">memory_repair</td><td>○</td><td></td><td></td><td>○</td></tr>
+                  <tr class="border-t"><td class="text-left px-2">routing_repair</td><td>○</td><td></td><td></td><td>○</td></tr>
+                  <tr class="border-t"><td class="text-left px-2">interview</td><td>…</td><td>…</td><td>…</td><td></td></tr>
+                </tbody>
+              </table>
+              <p class="text-[11px] text-slate-500 mt-2">表の値は模式(実際の性質の列は grilling で決める)</p>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd>type ごとの性質が名前付きの述語と裸の literal 比較に混ざり、新しい type を足すたびに15〜19ファイルを触り、取りこぼしが bug として出る。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>type ごとの性質を1つの表が持ち、各地は性質の名前で問う。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>新しい type は表の1行</li>
+                <li>取りこぼしが表の欠けとして見える</li>
+                <li>候補1の一部がここに乗る</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">ADR 0272 決定2 / 0279 決定4 が退けたのは type の共有。性質を1箇所に集める案は退けた案に無い。#352 と重なるのは WebUI への写しだけ。</p>
+        </article>
+
+        <!-- ============ CARD 8 ============ -->
+        <article id="c8" class="rounded-xl border border-slate-200 bg-white shadow-sm p-6 space-y-5">
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="font-serif text-2xl mr-2">8. Precedent の行と meta-review の材料を memory.ts から出す</h2>
+            <a href="https://github.com/sinano1107/tidepool/issues/2468" class="px-2 py-0.5 rounded text-xs bg-indigo-600 text-white">#2468</a>
+            <span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-200 text-slate-700">Speculative</span>
+            <span class="px-2 py-0.5 rounded text-xs bg-slate-100 text-slate-700">in-process</span>
+          </div>
+          <ul class="font-mono text-sm text-slate-700 grid sm:grid-cols-2 gap-x-6">
+            <li>src/memory.ts:2229-2260 precedentRows · :2668 buildMetaReviewMaterial · :2679 routingPrecedents · :2842-2895</li>
+            <li>src/routing-review.ts:329-336 completeRoutingReview · src/mcp.ts:889 · tests/harness.ts:1238, 1346</li>
+          </ul>
+          <div class="grid md:grid-cols-2 gap-4">
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">Before — 循環と素通しの引数</p>
+              <pre class="mermaid">
+flowchart LR
+  M["memory.ts"] --> RR["routing-review.ts"]
+  M --> TR["triage.ts"] --> RE["retrospective.ts"] --> M
+  C1["mcp.ts:889"] -->|"routingPrecedents(db, id)"| RR
+  C2["harness ×2"] -->|"同じ式"| RR
+  C3["test"] -->|"同じ式"| RR
+  linkStyle 3 stroke:#dc2626,stroke-width:2px
+              </pre>
+            </div>
+            <div class="rounded-lg border border-slate-200 p-3 diagram">
+              <p class="lbl text-slate-500 mb-1">After — 完了が自分で precedents を引く</p>
+              <pre class="mermaid">
+flowchart LR
+  PR["Precedent の行<br/>meta-review の材料"]:::deep
+  RR["routing の完了"] --> PR
+  MR["memory の完了"] --> PR
+  M["memory.ts"]
+  classDef deep fill:#0f172a,color:#fff,stroke:#0f172a,stroke-width:3px;
+              </pre>
+            </div>
+          </div>
+          <dl class="grid md:grid-cols-[8rem_1fr] gap-x-4 gap-y-2 text-sm">
+            <dt class="font-semibold">Problem</dt>
+            <dd><code>precedentRows</code> は memory.ts の内部に触れないのに memory.ts に住み、import の向きのせいで <code>completeRoutingReview</code> は precedents を引数で受け、呼び手4箇所がすべて同じ式を渡す。memory → triage → retrospective → memory の循環もある。</dd>
+            <dt class="font-semibold">Solution</dt>
+            <dd>Precedent の行と材料の振り分けを precedent / meta-review の側へ移し、routing の完了は自分で precedents を引く。</dd>
+            <dt class="font-semibold">Wins</dt>
+            <dd>
+              <ul class="list-disc pl-5 space-y-0.5">
+                <li>素通しの引数が消える</li>
+                <li>import の循環が消える</li>
+                <li>テストが完了の内側の値を知らない</li>
+              </ul>
+            </dd>
+          </dl>
+          <p class="text-sm rounded bg-amber-50 border border-amber-200 px-3 py-2">材料の振り分け全体がきれいに移るかは推論。隣: #2064(open)。</p>
+        </article>
+      </section>
+
+      <!-- ============ RE-MEASURE ============ -->
+      <section id="remeasure" class="space-y-4">
+        <h2 class="font-serif text-2xl">09-16 の open 4件の再計測</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm border border-slate-200 bg-white">
+            <thead class="bg-slate-100 text-left"><tr><th class="px-3 py-2 w-28">issue</th><th class="px-3 py-2 w-40">今</th><th class="px-3 py-2">実測</th></tr></thead>
+            <tbody class="align-top">
+              <tr class="border-t"><td class="px-3 py-2 font-mono">#663(a)</td><td class="px-3 py-2">open · 広がった</td><td class="px-3 py-2">登録の欄: HTTP 16→20、管理MCP 15→19(Interview の4欄を同じ commit で両面に)。分解の子 11 / 11 は不変。3つ目の面 <code>propose_routing_change</code> の op interview(<code>mcp.ts:1496-1517</code>)。question item 4欄は逐語一致のまま、正整数の superRefine は4回。応答の形は <code>wire-contract.ts</code>(ADR 0138)に集まるが、要求の形に当たる場所は無い。</td></tr>
+              <tr class="border-t"><td class="px-3 py-2 font-mono">#663(b)</td><td class="px-3 py-2">open · 悪化 → <a href="#c1" class="text-indigo-700">候補1</a> に包む</td><td class="px-3 py-2"><code>BOARD_VERBS</code> は手打ちのまま。task type ごとの差が入り、順序まで固定する写しはテストに2本残る。</td></tr>
+              <tr class="border-t"><td class="px-3 py-2 font-mono">#664</td><td class="px-3 py-2">open · 拡大 → <a href="#c3" class="text-indigo-700">候補3</a></td><td class="px-3 py-2">逐語 54→95 行、近似込み 52%→61%、同時 commit 53本、写し漏れ2件。</td></tr>
+              <tr class="border-t"><td class="px-3 py-2 font-mono">#665</td><td class="px-3 py-2">open · 形が変わった</td><td class="px-3 py-2"><code>pickupBlocked</code>(<code>scheduler.ts:437-466</code>)は slot / halt / containment だけになり、harness containment・usage と entry 除外・registry 到達性・issue の門は <code>poll</code> の heads ループ(:857-930)へ移った。<code>PollOutcome</code>(ADR 0294)が理由を運ぶのは <code>pickupBlocked</code> の分だけで、他の門は <code>SUCCEEDED</code>(:932/:937/:939)を返し pickup 成功・空の queue と区別がつかない。訂正: <code>startScheduler</code> はテストから直接16回(10ファイル)呼ばれており、本文の「bootTidepool しかない」は 09-16 時点でも不正確。</td></tr>
+              <tr class="border-t"><td class="px-3 py-2 font-mono">#670</td><td class="px-3 py-2">open · 脇に広がった</td><td class="px-3 py-2"><code>worker.ts:78-82</code> は claude-code 固定・閉じた #454 を指すまま。Codex の usage は別の口 <code>usageProbe</code>(ADR 0261)で受け、OpenAI の probe の配線は4箇所、「満杯」の判定は2箇所(<code>throttle.ts:231</code> / <code>codex-worker.ts:1156</code>)。認証・model probe・資格の不在は Provider ごとの map、usage だけが違う形。</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="text-sm space-y-1">
+          <p class="font-semibold">closed の取りこぼし</p>
+          <ul class="list-disc pl-5 space-y-1">
+            <li><span class="font-mono">#662</span>(→ #2472): Board call の CLI 原語(<code>boardCallEnv</code> / <code>pinnedModelFlags</code> / <code>emptyToolSurfaceFlags</code>)は今も <code>claude-worker.ts</code> にあり、<code>claude-board-call-runner.ts:3-7</code> がそこから引く。</li>
+            <li><span class="font-mono">#2380</span>(→ #2473): <code>workspace-sparse-hooks.test.ts:324 / 363 / 395-403</code> が <code>workspace_state</code> を直接読み書きする(8e43bdd3 で外した17分後に 71136940 が戻した)。「消えた」の assert は <code>projectSettingsHiddenByBoard</code> で答えられる。</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- ============ FILED ============ -->
+      <section id="filed" class="space-y-3">
+        <h2 class="font-serif text-2xl">起票</h2>
+        <ul class="text-sm list-disc pl-5 space-y-1">
+          <li>候補: #2462(1)· #2463(2)· #2464(4)· #2465(5)· #2466(6)· #2467(7)· #2468(8)—— すべて <code>needs-triage</code> / <code>priority:low</code>。候補3 は #664 にコメント</li>
+          <li>欠陥: <b>#2469</b>(Claude worker の env が資格情報を消さない疑い、<code>priority:high</code>、#1879 の blocked-by)· #2470(Codex が ADR 0020 の検査を通らない、low)· #2471(回答の検査が sparse の戻しをやり直さない疑い、medium)</li>
+          <li>取りこぼし: #2472(#662)· #2473(#2380 / #2379)· #2474(<code>approvedMemoryEntries</code>)</li>
+          <li>再計測のコメント: #663 · #664 · #665 · #670</li>
+        </ul>
+      </section>
+
+      <!-- ============ NOT CARDED ============ -->
+      <section id="notcarded" class="space-y-3">
+        <h2 class="font-serif text-2xl">計測したが、カードにしなかったもの</h2>
+        <ul class="text-sm list-disc pl-5 space-y-1">
+          <li><b>積み残しの述語</b> — <code>landing.ts:189-256</code> の核1つ、呼び手7箇所の candidate 選択は ADR 0242 どおり。痛みは組み立て側で、<a href="#c2" class="text-indigo-700">候補2</a> に入れた。</li>
+          <li><b>付帯子 review の workspace の導出</b> — 8箇所すべて <code>derivedWorkspaceSql</code> / その TS の対 / <code>followsAncestorWorkspace</code> を通る。</li>
+          <li><b>当時版の Executor</b> — <code>reviewedTaskExecutor</code> → <code>executionEvent</code> 1本に ADR 0295 決定3 の読み手すべてが乗る。</li>
+          <li><b>承認済み記憶の seam(09-16 の再確認)</b> — #930 で <code>approveMemoryProposal</code> に置き換え済み、tests の <code>UPDATE memory_entries</code> は0件。<code>approvedMemoryEntries</code> は src の呼び手0のテスト専用 export(ADR 0107 決定5、#2474)。</li>
+          <li><b>記憶の生死の述語</b> — 視界は <code>liveTo</code> 1本、再掲は <code>branchRows</code> 共有で構造で一致。鎖の末尾を約6箇所で組み直すのは弱い。</li>
+          <li><b>question への回答の効果(最大5箇所)</b> — I/O を記録より前に置く分離は ADR 0288 決定2 の必然。集約できるのは routing の op の分岐の二重だけで小さい。</li>
+          <li><b>Codex の usage 正規化 / Board call の runner</b> — <code>codexTokenUsage</code> 1つ、<code>runClaudeBoardCallJson</code> 1本に集約済み。</li>
+          <li><b>workspace の解決の手渡し(<code>buildWorkspaceResolver</code> 33 / <code>resolveOrQuarantine</code> 22)</b> — ADR 0041 / 0009 どおり。</li>
+        </ul>
+      </section>
+
+      <!-- ============ TOP ============ -->
+      <section id="top" class="rounded-2xl deep text-white p-8 space-y-3">
+        <p class="lbl text-slate-400">Top recommendation</p>
+        <h2 class="font-serif text-3xl"><a href="#c1" class="underline decoration-emerald-400 underline-offset-4">1. セッションの面を task ごとに1回で決める</a></h2>
+        <p class="text-slate-300 max-w-3xl">依存は in-process だけ、写しが実害を3件(1件は open)産み、今週いちばん動いた場所(#2341 / #2342)で、決定はすべて ADR にあり決めるのは module の形だけ。#663(b) もここで畳める。次は <a href="#c2" class="underline">候補2</a>(ADR が既に1つの門と名指していて、同時 commit 10本)。<a href="#c3" class="underline">候補3</a> は最大だが Harness の設計判断が要る —— 写し漏れ2件は #2469(high)/ #2470 で別に塞ぐ。</p>
+      </section>
+    </main>
+  </body>
+</html>
