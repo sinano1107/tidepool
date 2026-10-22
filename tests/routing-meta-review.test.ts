@@ -139,7 +139,7 @@ async function boardWithRoutingReview() {
   return { review, client, call };
 }
 
-it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb と complete_task を除き読み口4本と list_precedents と提案 verb と指針の節の id 読み(read_memory_entries、ADR 0279 決定2)と complete_routing_review を足したもの(Codex の enabled_tools との集合一致は tests/codex-worker.test.ts)", async () => {
+it("主題 routing の task の接続は、普通の task の一覧から worker の memory verb と complete_task と分解の verb(ADR 0301 決定3)を除き読み口4本と list_precedents と提案 verb と指針の節の id 読み(read_memory_entries、ADR 0279 決定2)と complete_routing_review を足したもの(Codex の enabled_tools との集合一致は tests/codex-worker.test.ts)", async () => {
   const { client } = await boardWithRoutingReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -151,7 +151,7 @@ it("主題 routing の task の接続は、普通の task の一覧から worker
     expect(worker.filter((name) => [...ROUTING_READS, "list_precedents", "propose_routing_change", "complete_routing_review"].includes(name))).toEqual([]);
     expect(routing.sort()).toEqual(
       [
-        ...worker.filter((name) => !memory.includes(name) && name !== "complete_task"),
+        ...worker.filter((name) => !memory.includes(name) && !["complete_task", "decompose", "redecompose"].includes(name)),
         ...ROUTING_READS,
         "list_precedents",
         "propose_routing_change",

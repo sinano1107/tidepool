@@ -198,6 +198,13 @@ function objectDecisionAt(
   return entryId;
 }
 
+/** `taskId` の判断の行1つと、それへの異議を置き、異議の event id を返す(setup)。 */
+function objectionOn(db: Db, taskId: string): number {
+  const at = new FakeClock().now();
+  const entryId = appendEvent(db, { taskId, workerId: "deckhand", origin: "worker", payload: { kind: "decision_logged", line: "accepted" }, at });
+  return appendEvent(db, { taskId, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: entryId, comment: "too loose", session_id: 1 }, at });
+}
+
 /** A git runner pinned to the registry fixture clone, identity flags inlined
  *  so fixture commits need no global config. */
 function registryGit(cwd: string) {
@@ -1447,7 +1454,14 @@ describe("ClaudeCodeWorker", () => {
     const task =
       reviewer === "監査 review"
         ? audit
-        : registerTask(db, { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id }, new Date(0), BOARD_WORKER_ID, "board");
+        : registerTask(
+            db,
+            // 異議の id を運ぶ RCA —— 帰り先の無い系譜にも立つ(ADR 0301 決定2)
+            { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id, objection_event_ids: [objectionOn(db, audit.id)] },
+            new Date(0),
+            BOARD_WORKER_ID,
+            "board",
+          );
     slot.occupy(task.id);
     worker.start(task, setting(task));
 

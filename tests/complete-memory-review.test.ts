@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { listEvents, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   buildMetaReviewMaterial,
   completeMemoryReview,
@@ -16,9 +16,10 @@ import {
   recordMetaReviewMaterial,
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
-import { completeTask, getTask, type Task, taskVerbSwap } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, listChildren, type Task, taskVerbSwap } from "../src/tasks.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows, objectedJudgment } from "./harness.js";
+import { decomposeTaskViaWorker, FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows, objectedJudgment } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
 
@@ -52,10 +53,28 @@ function cycle(db = openDb(":memory:")) {
   return { db, written, ...injectedReview(db) };
 }
 
-it("memory meta-review の verb の差し替えは complete_task を伏せ complete_memory_review を足す", () => {
+it("memory meta-review の verb の差し替えは complete_task と分解の verb を伏せ complete_memory_review を足す —— 帰り先の無い系譜(ADR 0301 決定3)", () => {
   const { db, review } = cycle();
 
-  expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["complete_task"], added: ["complete_memory_review"] });
+  expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_memory_review"] });
+});
+
+it("memory meta-review も、その判断の行への異議から立った RCA も分解できない —— verb を伏せ、worker の decompose も人間の decompose も系譜のルートを名指して拒み、何も登録しない(#2505 測定 G / ADR 0301 決定3)", () => {
+  const { db, review } = cycle();
+  const entry = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "keep entry 3" } });
+  startTriage(db, at);
+  raiseObjection(db, entry, "drop entry 3", at);
+  commitTriage(db, at, [], new Map());
+  const rca = listChildren(db, review.id).find((child) => child.title.startsWith("rca (auditor)"))!;
+  const split = { reason: "fix it", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] };
+
+  expect(taskVerbSwap(db, rca.id).withheld).toEqual(expect.arrayContaining(["decompose", "redecompose"]));
+  for (const parent of [review, rca]) {
+    expect(() => decomposeTaskViaWorker(db, parent, split, "auditor", at)).toThrow(/root is a memory meta-review/);
+    expect(() => humanDecomposeTaskViaWebui(db, parent, split, at)).toThrow(/root is a memory meta-review/);
+  }
+  expect(listChildren(db, rca.id)).toEqual([]);
+  expect(listChildren(db, review.id).map((child) => child.title)).toEqual([`rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
 });
 
 it.each([
@@ -370,7 +389,7 @@ it("据え置いた項目ごとに対象を名指す型つきの decision_logged
 
 it("完了が拒まれれば判断の行も書かれない —— 行と完了は1つの transaction", () => {
   const { db, written, review } = cycle();
-  humanDecomposeTaskViaWebui(db, review, { reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at);
+  escalateTask(db, review, { context: "c", questions: [{ title: "which scope?", options: ["a", "b"], recommendation: "a" }] }, "auditor", at, "worker");
 
   expect(() => completeMemoryReview(db, getTask(db, review.id)!, { judgments: [{ entry: written }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker")).toThrow(
     "unfinished children",

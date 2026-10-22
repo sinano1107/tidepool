@@ -451,7 +451,7 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
   expect(decomposeTaskViaWorker(db, live, split, "deckhand", NOW)).toHaveLength(1);
 });
 
-it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にした %s の登録は、祖先の cancel の後でも ADR 0271 決定2 の床に当たらず通る —— 床が拒むのは work だけ(ADR 0272 決定6 / ADR 0279 決定4)", (type) => {
+it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にした %s の登録は、祖先の cancel の後でも帰り先の床に当たらず通る —— 床が拒むのは宛先がブランチに依存する task だけ(ADR 0272 決定6 / ADR 0279 決定4 / ADR 0301 決定2)", (type) => {
   db = openDb(":memory:");
   const { target, child, rcas } = doneChildrenWithAttachments(db);
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
@@ -471,6 +471,18 @@ it.each(REPAIR_TYPES)("親の無い %s の登録は扉を問わず DomainError �
   expect(listBoard(db)).toEqual([]);
 });
 
+it("祖先の cancel の後に完了する、生き延びた RCA の下の review_flag の work は、完了時レビューを立てずに完了する —— 盤面の規則も床が拒む子を登録しにいかない(ADR 0301 決定3)", () => {
+  db = openDb(":memory:");
+  const { target, rcas } = doneChildrenWithAttachments(db);
+  const rca = pickupTask(db, getTask(db, rcas[1]!.id)!, "fugu", NOW)!;
+  const [repair] = decomposeTaskViaWorker(db, rca, { reason: "fix", children: [{ title: "R", purpose: "p", completion_criteria: "c", review_flag: true }] }, "fugu", NOW);
+  const running = pickupTask(db, repair!, "deckhand", NOW)!;
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+
+  expect(completeTask(db, getTask(db, running.id)!, FULL_HANDOFF, "deckhand", NOW, "worker").status).toBe("done");
+  expect(listChildren(db, running.id)).toEqual([]);
+});
+
 it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "R", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
@@ -485,7 +497,7 @@ it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最
   );
 });
 
-it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2)", () => {
+it("task ごとの verb の差し替えは、cancelled の work の祖先を挟む task(祖先の cancel の下・cancelled の task の下の RCA)と cancelled の task 自身で分解の verb を伏せ、生きた系譜の task では何も変えない(ADR 0271 決定2 / ADR 0301 決定3)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);
 
@@ -501,7 +513,9 @@ it("task ごとの verb の差し替えは、cancelled の work の祖先を挟�
   expect(underCancel.map((task) => task.title)).toEqual(["rca (self): B", "rca (auditor): B", "rca (self): X", "rca (auditor): X"]);
   for (const rca of underCancel) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_rca"] });
   const { parent, done, review } = doneSiblingOfFailed(db);
-  for (const task of [target, cancelled, parent, done]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
+  // cancelled の task 自身も、その子に帰り先が無いので分解の verb を伏せる(ADR 0301 決定1)
+  for (const task of [target, cancelled]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: ["decompose", "redecompose"], added: [] });
+  for (const task of [parent, done]) expect(taskVerbSwap(db, task.id)).toEqual({ withheld: [], added: [] });
   // 生きた系譜の統合レビューは分解の verb を伏せず、自分の完了の差し替え(ADR 0278 決定1)だけを持つ
   expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["complete_task"], added: ["complete_integration_review"] });
 });
@@ -529,7 +543,7 @@ it("task ごとの verb の差し替えは、meta-review の下の memory_repair
   });
 });
 
-it("task ごとの verb の差し替えは、meta-review の下の RCA(self / auditor)とその子孫の RCA では worker の pull verb と新規の記憶の書き込みも伏せる —— 両主題とも親の主題の読み手(ADR 0283 追記1)", () => {
+it("task ごとの verb の差し替えは、meta-review の下の RCA(self / auditor)とその子孫の RCA では worker の pull verb と新規の記憶の書き込みも伏せる —— 両主題とも親の主題の読み手(ADR 0283 追記1)。帰り先の無い系譜なので分解の verb も伏せる(ADR 0301 決定3)", () => {
   db = openDb(":memory:");
   const memoryRepair = judgmentRepairTask(db, NOW);
   const memoryRcas = listChildren(db, memoryRepair.parent_id!).filter((child) => child.title.startsWith("rca ("));
@@ -539,7 +553,7 @@ it("task ごとの verb の差し替えは、meta-review の下の RCA(self / au
   expect(memoryRcas.map((rca) => rca.title)).toEqual([expect.stringMatching(/^rca \(self\)/), expect.stringMatching(/^rca \(auditor\)/)]);
   for (const rca of rcas) {
     expect(taskVerbSwap(db, rca.id)).toEqual({
-      withheld: ["complete_task", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"],
+      withheld: ["decompose", "redecompose", "complete_task", "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory"],
       added: ["complete_rca"],
     });
   }

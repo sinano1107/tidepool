@@ -235,7 +235,7 @@ it("the log is a filtered view of the event stream, not a copy in its own table"
     ["decision_logged", "task_completed"].includes(e.kind),
   );
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
-  expect(log.entries.map(({ workspace, unread, objections, cause, entries, evidence, session_event_id, interview, ...rest }: any) => rest)).toEqual(
+  expect(log.entries.map(({ workspace, unread, objections, cause, entries, evidence, session_event_id, interview, no_work_repair, ...rest }: any) => rest)).toEqual(
     humanFacing,
   );
   expect(humanFacing.length).toBeGreaterThan(0);

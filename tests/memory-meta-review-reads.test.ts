@@ -501,15 +501,16 @@ it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指
 function lineages() {
   const b = board();
   const { db, task } = b;
-  const register = (input: { meta_review_subject?: "routing"; parent_id?: string }) =>
+  // meta-review の子は修理子の位置 —— work は帰り先の無い系譜に立たない(ADR 0301 決定2)
+  const register = (input: { meta_review_subject?: "routing"; parent_id?: string; type?: "memory_repair" | "routing_repair" }) =>
     registerTask(db, { type: input.meta_review_subject ? "review" : "work", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI).id;
   const objected = (taskId: string, i: number) => objectedDecision({ db, task: getTask(db, taskId)! }, i).decision;
   const routing = register({ meta_review_subject: "routing" });
   const rows = {
     memory: objected(task.id, 1),
-    memoryChild: objected(register({ parent_id: task.id }), 2),
+    memoryChild: objected(register({ parent_id: task.id, type: "memory_repair" }), 2),
     routing: objected(routing, 3),
-    routingChild: objected(register({ parent_id: routing }), 4),
+    routingChild: objected(register({ parent_id: routing, type: "routing_repair" }), 4),
     worker: objected(register({}), 5),
   };
   return { ...b, routing, rows, register };

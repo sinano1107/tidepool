@@ -193,7 +193,8 @@ it("異議つき判断は読み手 memory の list_precedents の行と同じ �
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const routing = register(db, "routing", true);
-  const work = (parent_id?: string) => registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
+  // meta-review の子は修理子 —— work は帰り先の無い系譜に立たない(ADR 0301 決定2)
+  const work = (parent_id?: string) => registerTask(db, { type: parent_id ? "memory_repair" : "work", title: "w", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
   [previous, work(previous), routing, work(routing), work()].forEach((taskId, i) => bundledObjection(db, taskId, objectedDecision(db, taskId, i + 1), at));
   const review = register(db, "memory");
 
