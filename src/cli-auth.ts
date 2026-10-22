@@ -139,18 +139,6 @@ export function isCliAuthBudgetCapEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "subtype" in value && value.subtype === "error_max_budget_usd";
 }
 
-/** `execFile` rejects on the same non-zero exit that carries Claude's JSON
- * error envelope. Preserve that structured stdout instead of falling back to
- * an error-message substring. */
-export function rethrowCliAuthExecFailure(err: unknown): never {
-  const envelope = execFailureEnvelope(err);
-  if (isCliAuthFailureEnvelope(envelope)) {
-    const { result } = envelope as { result?: unknown };
-    throw new CliAuthError(typeof result === "string" ? result : "Claude API returned 401");
-  }
-  throw err;
-}
-
 /** 非ゼロ終了の `execFile` の reject が運ぶ stdout の JSON envelope。読めなければ undefined。 */
 export function execFailureEnvelope(err: unknown): unknown {
   const stdout =
