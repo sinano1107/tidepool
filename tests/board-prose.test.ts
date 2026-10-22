@@ -6,11 +6,11 @@ import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, INTERVIEW_AUDIT_NOTICE, isArtifactDiscarded, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
+import { ARTIFACT_DISCARDED_NOTICE, cancelTaskDirectly, completeAudit, INTERVIEW_AUDIT_NOTICE, INTERVIEW_ROOT_NOTICE,isArtifactDiscarded, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 
 
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 // Board doctrine の文面(ADR 0157 決定3)。adapter への配線は claude-worker.test.ts / codex-worker.test.ts が言う。
@@ -251,4 +251,86 @@ it("2つの spawn で Executor が違っても描いた Roster が同じなら�
   expect(prose).toContain("## Definition under review (as it stood when you ran the objected task)");
   expect(prose).not.toContain("### Live for your objected");
   expect(prose).not.toContain("Roster as it stood then");
+});
+
+/** `task` を `worker` が本文 `systemPrompt` で走らせる spawn の文面(registry は fixture の main)。 */
+async function interviewProse(db: Db, task: Task, at: Date, systemPrompt: string, worker = "suzumedai") {
+  const verbs = taskVerbSwap(db, task.id);
+  return boardProse({
+    db,
+    registryDir: "",
+    registry: loadRegistry(await makeRegistry(), "purely-local"),
+    task,
+    spawnedEventId: spawn(db, task, at, worker),
+    systemPrompt,
+    profile: REVIEWER_AUTHORITY_PROFILE,
+    doctrine: boardDoctrine(CLAUDE, verbs),
+    verbs,
+    allowedDomains: undefined,
+    memorySection: null,
+  });
+}
+
+/** suzumedai が pickup した Interview の root。 */
+const interviewRoot = (db: Db, at: Date) =>
+  pickupTask(
+    db,
+    registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] }, at, ...HUMAN_WEBUI),
+    "suzumedai",
+    at,
+    { assignee: "suzumedai" },
+  )!;
+const PROBE = { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" };
+
+/** Interview の規律の節のうち旧本文から移した行(#2192 の匿名化の段落と ADR 0276 決定2 の1行は、文を変えずに移した)。 */
+const INTERVIEW_DISCIPLINE_LINES = [
+  "## Interview discipline",
+  "- Compose the environment in your working directory, the interview room, not in the real environment you read: an anonymised reproduction of the work the probe needs, not a copy of the real environment. Each target solves the probe in its own fresh checkout of the room as it stands when you pose the probe.",
+  "- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.",
+  "- Do not list in .gitignore anything you want the targets to have: ignored files never reach their environment.",
+  "- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.",
+  "- Make the probe self-contained in the environment you composed. A target that fails because the probe was ambiguous measures the probe, not the target.",
+  "- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.",
+];
+
+it.each([
+  ["本文が空の組み込み suzumedai", async () => loadRegistry(await makeRegistry(), "purely-local").agents.suzumedai!.systemPrompt],
+  ["本文を持つ registry の agent", async () => "You are my interviewer."],
+])("Interview の root の spawn の文面は、%s でも出題前・出題後とも Interview の規律の節を持つ(ADR 0275 決定3)", async (_, body) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+  const root = interviewRoot(db, at);
+  const systemPrompt = await body();
+
+  const beforePose = await interviewProse(db, root, at, systemPrompt);
+  poseAccepted(db, root, PROBE, "suzumedai", at, "worker", "0".repeat(40));
+  const afterPose = await interviewProse(db, root, at, systemPrompt);
+
+  for (const prose of [beforePose, afterPose]) for (const line of INTERVIEW_DISCIPLINE_LINES) expect(prose).toContain(line);
+});
+
+it("Interview の root の spawn の文面は reviewer の Authority の直後に、修理 task は立たず findings は complete_interview の handoff に書くという1行を置く(#2211 / ADR 0271 決定2 の形)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+
+  const prose = await interviewProse(db, interviewRoot(db, at), at, "");
+
+  expect(prose).toContain(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n${INTERVIEW_ROOT_NOTICE}\n\n`);
+  expect(INTERVIEW_ROOT_NOTICE).toBe("This task runs an Interview: no repair task stands here, so write your findings in complete_interview's handoff.");
+});
+
+it("Interview の受験者・監査 review・suzumedai が取った memory_repair の spawn の文面には Interview の規律の節が無い(ADR 0275 決定3)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+  const root = interviewRoot(db, at);
+  const audit = poseProbe(db, root, PROBE, "suzumedai", at, "worker", "0".repeat(40));
+  const auditProse = await interviewProse(db, audit, at, "", "fugu");
+  completeAudit(db, audit, { verdict: "accepted", findings: "ok" }, "fugu", at, "worker");
+  const [examinee] = listExaminees(db, root.id);
+  const repair = registerTask(db, { type: "memory_repair", title: "repair", purpose: "p", completion_criteria: "c", parent_id: root.id, assignee: "suzumedai" }, at, ...HUMAN_WEBUI);
+
+  for (const prose of [auditProse, await interviewProse(db, examinee!, at, "", "deckhand"), await interviewProse(db, repair, at, "")]) {
+    expect(prose).not.toContain("Interview discipline");
+    expect(prose).not.toContain("anonymised reproduction");
+  }
 });

@@ -922,7 +922,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "posed with its probe, from its handoff alone — the board withholds which agent and model ran it — and write your " +
           "findings in handoff.outcome. scores lists every done child exactly once: child_id is the id the child carries in " +
           "get_current_task's history, and outcome is accepted when the deliverable meets the rubric, rejected when it does " +
-          "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
+          "not. In handoff.outcome, name for each answer what decided its score: the deliverable and its evidence, not the " +
+          "confidence of the prose. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
           "and nothing is recorded. If the answers show the probe itself was broken, do not score them: report it with " +
           "report_broken_probe instead. The handoff " +
           `takes the same fields as complete_task (${describeHandoffFields()}); only outcome is required. ` +

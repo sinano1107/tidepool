@@ -3594,7 +3594,8 @@ describe("ClaudeCodeWorker", () => {
       "objected-12",
       DEFAULT_INTERVIEWER_NAME,
       registryGit(registryDir)("rev-parse", "main"),
-      builtInVersion(registryDir, DEFAULT_INTERVIEWER_NAME),
+      // 本文を持っていた旧版(ADR 0270 決定2 の履歴表の行)
+      "fc043e28dba56c77",
     );
 
     const rca: Task = { ...makeTask("rca-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "objected-12" };

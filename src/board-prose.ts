@@ -21,6 +21,7 @@ import {
   getTask,
   HUMAN_ROSTER_AGENT,
   INTERVIEW_AUDIT_NOTICE,
+  INTERVIEW_ROOT_NOTICE,
   isArtifactDiscarded,
   isRepairType,
   REPAIR_NOTICES,
@@ -43,6 +44,21 @@ handoff what remains.`;
 const POSE_PROBE = `This task is not split by you: pose its probe with the tidepool
 MCP's pose_probe instead, and once its audit accepts the probe the board
 registers one child per target.`;
+
+/** Interview の root の session すべてに盤面が運ぶ規律(ADR 0275 決定3 / ADR 0017・0180 の線): session を通して守るものだけ。
+ *  verb を呼ぶ瞬間に要るもの(採点)は complete_interview の説明が持つ。agent の本文によらない —— 人間が root に名指した
+ *  別の agent にも届く(ADR 0269 決定2)。doctrine には入れない(ADR 0247 決定3: doctrine は Interview と書かない)。 */
+const INTERVIEW_DISCIPLINE = `## Interview discipline
+
+Composing the environment:
+- Compose the environment in your working directory, the interview room, not in the real environment you read: an anonymised reproduction of the work the probe needs, not a copy of the real environment. Each target solves the probe in its own fresh checkout of the room as it stands when you pose the probe.
+- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.
+- Do not list in .gitignore anything you want the targets to have: ignored files never reach their environment.
+
+Writing the probe and rubric:
+- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
+- Make the probe self-contained in the environment you composed. A target that fails because the probe was ambiguous measures the probe, not the target.
+- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.`;
 
 // injected into every spawned session's system prompt (issue #31 / ADR
 // 0010), regardless of agent or profile — a board-wide doctrine copied into
@@ -436,7 +452,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task): s
 /** Authority 節の本文・Roster の元・その直後の1行を type で選ぶ。修理子の type は Authority 節が
  *  REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。review / interview は reviewer の
  *  guidance で、roster は review なら Executor 1名(ADR 0056)、interview は空(`reviewedTaskExecutor` は review にしか
- *  引かない)。guidance の文は変えず直後に盤面が1行足す(ADR 0271 決定2 / ADR 0273 決定4)。それ以外は実行 agent の profile のまま。 */
+ *  引かない)。guidance の文は変えず直後に盤面が1行足す(ADR 0271 決定2 / ADR 0273 決定4、Interview の root は #2211)。それ以外は実行 agent の profile のまま。 */
 function authorityByType(
   db: Db,
   task: Task,
@@ -445,6 +461,7 @@ function authorityByType(
 ): { guidance: string; rosterAssignableTo: string[] | undefined; notice: string | undefined } {
   const notice =
     isRepairType(task.type) ? undefined
+    : task.type === "interview" ? INTERVIEW_ROOT_NOTICE
     : auditedPosedEventId(db, task.id) !== undefined ? INTERVIEW_AUDIT_NOTICE
     : isArtifactDiscarded(db, task.id) ? ARTIFACT_DISCARDED_NOTICE : undefined;
   return { ...guidanceByType(db, task, profile, spawnedEventId)!, notice };
@@ -467,7 +484,7 @@ function guidanceByType(
 }
 
 /** 盤面が書いた文面の全体(ADR 0157 決定1)。節の順序は Harness を問わず
- *  定義本文 → authority → roster → doctrine → protocol → 当時版 → Memory。
+ *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → Memory。
  *  doctrine は adapter が自分の語彙で組んで渡す(決定2)。review task は registry の
  *  profile でなく reviewer の authority と、被レビュー task の executor 1名の roster を
  *  持つ(ADR 0056)。修理子の type は Authority 節が REPAIR_NOTICES の1行だけで roster を
@@ -490,5 +507,6 @@ export function boardProse(input: {
   const { db, task } = input;
   const { guidance, rosterAssignableTo, notice } = authorityByType(db, task, input.profile, input.spawnedEventId);
   const injected = notice ? `\n\n${notice}` : "";
-  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  const interview = task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : "";
+  return `${input.systemPrompt}${authoritySection(guidance)}${injected}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${interview}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task)}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
 }

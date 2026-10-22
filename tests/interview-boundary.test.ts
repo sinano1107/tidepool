@@ -191,6 +191,18 @@ it("worker MCP の tool 一覧は type で決まる —— interview の root �
   expect(await tools(childId)).toEqual(unsplit.filter((name) => name !== "record_knowledge" && name !== "define_memory_branch"));
 });
 
+it("root の tools/list の complete_interview の説明は、答案ごとに採点の決め手を成果物とその証拠で書けと言う(ADR 0275 決定3)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const client = await mcpClient(t.mcpBaseUrl, root.id);
+  try {
+    const description = (await client.listTools()).tools.find((tool) => tool.name === "complete_interview")?.description ?? "";
+    expect(description).toContain("In handoff.outcome, name for each answer what decided its score: the deliverable and its evidence, not the confidence of the prose.");
+  } finally {
+    await client.close();
+  }
+});
+
 it("root の get_current_task は仮説・測る仕事・根拠の id・測る段の名前と説明・実環境の許可ドメインを構造で載せる(ADR 0273 決定9)", async () => {
   const workspace = { ...(await makeWorkspace("reef")), allowed_domains: ["registry.npmjs.org"], review_allowed_commands: ["npm test"] };
   t = await boot({ workspace });

@@ -259,8 +259,9 @@ const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
  *  旧本文を残して末尾に足す —— self RCA が記録の hash で当時の本文を引く。 */
 const BUILT_IN_BODY_HISTORY: Record<string, readonly string[]> = {
   [DEFAULT_AUDITOR_NAME]: [""],
-  // 組み込みの Interviewer(ADR 0269 決定1): 本文に観点(probe・rubric・採点)だけを持つ。
-  // 手順(出題・採点完了の呼び方)は verb の説明が運ぶので書かない(ADR 0017)。
+  // 組み込みの Interviewer(ADR 0269 決定1): 現在の本文は空(ADR 0275 決定3・4)。規律は session を通すものを
+  // `interview` type の spawn 注入(board-prose.ts)が、verb を呼ぶ瞬間のものを verb の説明が運ぶ。旧本文は self RCA が
+  // 記録の hash で引くので残す(ADR 0270 決定2)。
   [DEFAULT_INTERVIEWER_NAME]: [
     `You run Interviews: one probe that every target solves, and a score for each answer.
 
@@ -312,6 +313,8 @@ Scoring:
 - Answers carry no agent or model name; do not guess one.
 - Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
 - Name, for each answer, what decided its score.`,
+    // ADR 0275 決定3: 規律は盤面が運ぶ(#2211)
+    "",
   ],
 };
 
