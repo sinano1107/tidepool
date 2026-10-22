@@ -48,6 +48,7 @@ export const SKILL_CLOSURE_MARKERS = {
   /** 読める skill(description と本文に書く)。閉じなければ request に載る。 */
   readable: {
     flat: "TIDEPOOL_CONFORMANCE_SKILL_FLAT",
+    root: "TIDEPOOL_CONFORMANCE_SKILL_ROOT",
     nested: "TIDEPOOL_CONFORMANCE_SKILL_NESTED",
     linked: "TIDEPOOL_CONFORMANCE_SKILL_LINKED",
     ancestor: "TIDEPOOL_CONFORMANCE_SKILL_ANCESTOR",

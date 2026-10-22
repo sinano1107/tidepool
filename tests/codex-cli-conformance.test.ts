@@ -265,7 +265,7 @@ it.each<[string, string, Partial<ConformanceObservations>, string]>([
   [
     "skills.config を外した exec の request に、読める skill の marker が載らない —— 閉じた側に無いことが閉鎖の証拠にならない",
     "skill closure",
-    withSkillClosure({ openRequest: requestBody(readable.flat, readable.nested, readable.linked, readable.codexHome) }),
+    withSkillClosure({ openRequest: requestBody(readable.flat, readable.root, readable.nested, readable.linked, readable.codexHome) }),
     readable.ancestor,
   ],
   [

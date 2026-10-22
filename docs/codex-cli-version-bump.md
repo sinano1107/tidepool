@@ -122,8 +122,8 @@ functions. It prints one row per surface as a Markdown table:
   workspace, `codex debug prompt-input -c project_doc_max_bytes=0` carries exactly one
   `# AGENTS.md instructions` heading. The containment preflight looks for this heading (ADR 0148).
   The board's own `CODEX_HOME` is not touched
-- skill closure (ADR 0259 決定2・3): in a workspace with flat, nested, symlinked and ancestor
-  skills, a skill in a disposable `CODEX_HOME`, and two unreadable `SKILL.md` files, the board's
+- skill closure (ADR 0259 決定2・3): in a workspace with flat, nested, symlinked, root-level
+  (`.agents/skills/SKILL.md` itself) and ancestor skills, a skill in a disposable `CODEX_HOME`, and two unreadable `SKILL.md` files, the board's
   own enumeration and observation close every skill. `codex exec` with the worker's flags is
   pointed at a fake Responses endpoint, and its first request is captured twice: without the
   board's `skills.config` every readable skill's marker is in it, and with it no skill is listed
