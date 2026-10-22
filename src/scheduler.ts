@@ -1,6 +1,5 @@
-import { recordBoardCall } from "./board-call-usage.js";
 import { boardHalts } from "./board-halt.js";
-import { type CliAuthCheck, quarantineCliAuthForProvider } from "./cli-auth.js";
+import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type CodexAppServerProbe, type CodexAppServerProbeResult, whyRowUnlisted } from "./codex-app-server.js";
 import {
@@ -226,7 +225,7 @@ async function readClaudeUsage(
   if (resultText === null && cliAuth) {
     try {
       const auth = await cliAuth();
-      if (auth.boardCall) recordBoardCall(db, "cli_auth_probe", auth.boardCall.setting, auth.boardCall.usage, clock.now());
+      recordProbeBoardCall(db, "cli_auth_probe", auth, clock.now());
       if (auth.status === "unauthorized") quarantineCliAuthForProvider(db, "anthropic", clock.now());
       else if (auth.status === "unknown") {
         console.warn("[cli-auth] usage failure could not be classified", auth.reason);

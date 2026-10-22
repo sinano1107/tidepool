@@ -1,4 +1,4 @@
-import type { BoardCallSetting } from "./board-call-usage.js";
+import { type BoardCallSetting, recordBoardCall } from "./board-call-usage.js";
 import type { Db } from "./db.js";
 import type { RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
@@ -14,6 +14,11 @@ export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expire
  *  envelope carried usage (ADR 0299 決定3・4); the Provider-neutral caller writes the row (決定6). */
 export interface ProbeBoardCall {
   boardCall?: { setting: BoardCallSetting; usage: TranslationUsage };
+}
+
+/** Writes the probe's row when it raised a model turn — the Provider-neutral callers' one step (ADR 0299 決定3・6). */
+export function recordProbeBoardCall(db: Db, use: "cli_auth_probe" | "model_probe", { boardCall }: ProbeBoardCall, now: Date): void {
+  if (boardCall) recordBoardCall(db, use, boardCall.setting, boardCall.usage, now);
 }
 
 export type CliAuthResult = (

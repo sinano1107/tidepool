@@ -4,9 +4,14 @@ import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
-import { recordBoardCall } from "./board-call-usage.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarantineCliAuthForProvider } from "./cli-auth.js";
+import {
+  type CliAuthCheck,
+  type ModelProbe,
+  quarantineBoardCallRefusal,
+  quarantineCliAuthForProvider,
+  recordProbeBoardCall,
+} from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import type { ContainmentCheck } from "./containment.js";
 import type { Db } from "./db.js";
@@ -556,7 +561,8 @@ export interface QuarantineCheckDeps {
   /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0184 決定5: 行の Quarantine の probe。その Provider の口が無い行への回答は拒む。
-   *  `clock` は probe が 401 を返したとき Provider 認証の経路へ落とす時刻。 */
+   *  `clock` は probe が 401 を返したとき Provider 認証の経路へ落とす時刻と、probe の行(ADR 0299)の時刻 ——
+   *  無ければ providerAuth と行の回答の検査は map に載らない。 */
   modelProbes?: Partial<Record<Provider, ModelProbe>>;
   clock?: Clock;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
@@ -584,7 +590,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
     const result = await probe(model, effort ?? undefined);
     // the turn ran whether or not the answer is accepted (ADR 0299 決定3・6)
-    if (result.boardCall) recordBoardCall(deps.db, "model_probe", result.boardCall.setting, result.boardCall.usage, presentClock.now());
+    recordProbeBoardCall(deps.db, "model_probe", result, presentClock.now());
     if (result.status === "runs") return;
     if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
     throw new DomainError(`${row} still cannot run: ${result.reason}`);
@@ -721,7 +727,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         const check = providerCliAuth[provider];
         if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
         const result = await check();
-        if (result.boardCall) recordBoardCall(deps.db, "cli_auth_probe", result.boardCall.setting, result.boardCall.usage, clock.now());
+        recordProbeBoardCall(deps.db, "cli_auth_probe", result, clock.now());
         if (result.status !== "authenticated") {
           throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
         }

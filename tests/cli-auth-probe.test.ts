@@ -9,7 +9,15 @@ import {
 } from "../src/claude-cli-auth.js";
 import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { BOARD_CALL_USAGE, CLI_ENVELOPE_USAGE, containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import {
+  BOARD_CALL_USAGE,
+  containerHarness,
+  FakeClock,
+  FakeContainerRuntime,
+  PROBE_ENVELOPES,
+  probeCommand,
+  recordingSpawn,
+} from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 it("JSON envelope の api_error_status: 401 だけを確定的な認証失敗に分類する(ADR 0070)", async () => {
@@ -254,19 +262,6 @@ it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその 
 
 /** model turn を立てる probe は、envelope が usage を持つときだけ status と一緒に usage と撃った設定を返す(ADR 0299 決定1・3・4)。
  *  401 / 行の拒否 / envelope 無しは usage を返さず、status の読み方は変わらない。 */
-const PROBE_ENVELOPES: Array<[number, object | null]> = [
-  // 成功・予算の上限・401・行の拒否・envelope 無し
-  [0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
-  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, subtype: "error_max_budget_usd" }],
-  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 401 }],
-  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 404 }],
-  [1, null],
-];
-const probeCommand = (exitCode: number, envelope: object | null) => async () => ({
-  exitCode,
-  stdout: envelope === null ? "not json" : JSON.stringify(envelope),
-});
-
 it("Claude の認証 probe は成功と予算の上限で usage と anthropic / haiku / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
   const results = [];
   for (const [exitCode, envelope] of PROBE_ENVELOPES) results.push(await createClaudeCliAuthCheck(probeCommand(exitCode, envelope))());

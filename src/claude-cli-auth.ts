@@ -107,13 +107,15 @@ export function createMoonshotCliAuthCheck(
  *  `--model` を付ける。予算は認証 probe と同じ値で足りる —— 上限はターンが走った後に判定され、
  *  上限で止まっても「走った」と読む(`runModelProbe`)ので、#466 の解除不能はここでは起きない。 */
 export function createClaudeModelProbe(command: CliAuthCommand): ModelProbe {
-  return (model) =>
-    runModelProbe(
+  return (model) => {
+    const setting: BoardCallSetting = { provider: "anthropic", model, effort: "low" };
+    return runModelProbe(
       command,
-      { provider: "anthropic", model, effort: "low" },
-      [...pinnedModelFlags(model, "low"), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
+      setting,
+      [...pinnedModelFlags(setting.model, setting.effort), "--max-turns", "1", "--max-budget-usd", "0.025", "--safe-mode"],
       boardCallEnv(),
     );
+  };
 }
 
 /** moonshot の双子。model は worker の spawn と同じく `--model` と `ANTHROPIC_MODEL` の両方に載せる
@@ -127,10 +129,11 @@ export function createMoonshotModelProbe(keyFile: string | undefined, command: C
       if (err instanceof MoonshotApiKeyMissingError) return { status: "unauthorized", reason: err.message };
       throw err;
     }
+    const setting: BoardCallSetting = { provider: "moonshot", model, effort: null };
     return runModelProbe(
       command,
-      { provider: "moonshot", model, effort: null },
-      ["--model", model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
+      setting,
+      ["--model", setting.model, "--max-turns", "1", "--max-budget-usd", "0.25", "--safe-mode"],
       env,
     );
   };
@@ -149,16 +152,16 @@ async function runModelProbe(
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<ModelProbeResult> {
-  const { exitCode, envelope, ...turn } = await probeEnvelope(command, setting, extraArgs, env);
+  const { exitCode, envelope, ...probeCall } = await probeEnvelope(command, setting, extraArgs, env);
   if (envelope === null) return { status: "unknown", reason: "probe did not return a JSON envelope" };
   if (isCliAuthFailureEnvelope(envelope)) return { status: "unauthorized", reason: "API returned 401" };
   const refusal = rowRefusalCause(envelope);
   if (refusal !== null) return { status: "refused", reason: MODEL_PROBE_REFUSAL_REASON[refusal] };
   // 予算上限はターンが走った後に判定される(2026-10-01 実測: $0.0001 でも1ターン走って
   // error_max_budget_usd)—— 上限で止まったなら、その id は走った
-  if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs", ...turn };
-  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") return { status: "runs", ...turn };
-  return { status: "unknown", reason: "probe did not return a successful result", ...turn };
+  if (isCliAuthBudgetCapEnvelope(envelope)) return { status: "runs", ...probeCall };
+  if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") return { status: "runs", ...probeCall };
+  return { status: "unknown", reason: "probe did not return a successful result", ...probeCall };
 }
 
 /** `boardCall` is set only when the envelope reported usage and is neither a 401 nor a row refusal —
@@ -191,7 +194,7 @@ async function runAuthProbe(
   extraArgs: string[],
   env: NodeJS.ProcessEnv,
 ): Promise<CliAuthResult> {
-  const { exitCode, envelope, ...turn } = await probeEnvelope(command, setting, extraArgs, env);
+  const { exitCode, envelope, ...probeCall } = await probeEnvelope(command, setting, extraArgs, env);
   if (envelope === null) {
     return { status: "unknown", reason: "probe did not return a JSON envelope" };
   }
@@ -204,11 +207,11 @@ async function runAuthProbe(
     return {
       status: "unknown",
       reason: "probe hit its budget cap before returning an authentication verdict",
-      ...turn,
+      ...probeCall,
     };
   }
   if (exitCode === 0 && envelope.is_error !== true && typeof envelope.result === "string") {
-    return { status: "authenticated", ...turn };
+    return { status: "authenticated", ...probeCall };
   }
-  return { status: "unknown", reason: "probe did not return a successful authentication result", ...turn };
+  return { status: "unknown", reason: "probe did not return a successful authentication result", ...probeCall };
 }
