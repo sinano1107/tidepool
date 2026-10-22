@@ -4,6 +4,9 @@ import type { InjectionQuery } from "./memory.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import type { Task } from "./tasks.js";
 
+/** worker session に継承させない host の資格情報 env。Harness を問わず spawn env から消す —— host が export しても worker に届かない(ADR 0024 決定3)。 */
+export const HOST_CREDENTIAL_ENVS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"] as const;
+
 /** root process の exit の観測(ADR 0145)。証拠は `worker_exited` そのものなので、その部分集合。
  *  `model_swaps` は `usage.model_swaps` の写し(ADR 0215 決定5)で、差し替えが無ければ欠ける —— usage 側と違い
  *  常には置かない(読み手は文面の節だけ)。 */

@@ -21,7 +21,7 @@ import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
-import type { WorkerExit } from "../src/worker.js";
+import { HOST_CREDENTIAL_ENVS, type WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
@@ -346,6 +346,18 @@ describe("CodexWorker (ADR 0098)", () => {
       harness: "codex",
       cli_version: CLI_VERSION,
     });
+  });
+
+  // Claude の worker spawn env と同じ定数から引く(issue #2469、ADR 0024 決定3)
+  it("host の資格情報 env の共有一覧をすべて worker env から消す", async () => {
+    const f = await fixture();
+    for (const name of HOST_CREDENTIAL_ENVS) vi.stubEnv(name, "must-not-leak");
+    try {
+      await f.start(task(f.db));
+      for (const name of HOST_CREDENTIAL_ENVS) expect(f.process.calls[0]!.env[name]).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {

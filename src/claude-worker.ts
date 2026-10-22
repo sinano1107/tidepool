@@ -57,7 +57,7 @@ import { tierNames } from "./tier.js";
 import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import type { WorkerAdapter, WorkerExit } from "./worker.js";
+import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
@@ -715,6 +715,10 @@ export interface ProviderRouting extends ExecutionSetting {
  *  7. `PIN_OVERRIDE_ENVS` — always deleted (#2351): the host's effort env beats
  *     `--effort` and its alias remaps beat `--advisor <alias>`, so leaving them
  *     would put a pin in `worker_spawned` that the session did not run under.
+ *  8. `HOST_CREDENTIAL_ENVS` — always deleted (ADR 0024 決定3): the CLI passes
+ *     every env but its own credentials through to Bash (ADR 0070's
+ *     measurement), so a host-exported GitHub / OpenAI token would reach the
+ *     worker.
  *
  *  The env is built **per provider** (ADR 0097 決定4 / issue #445), scrubbed in
  *  both directions: an anthropic spawn never inherits the Moonshot injection
@@ -749,6 +753,7 @@ export function workerSpawnEnv(
   for (const name of SWAP_DISABLE_ENVS) delete env[name];
   for (const name of SUBAGENT_MODEL_ENVS) delete env[name];
   for (const name of PIN_OVERRIDE_ENVS) delete env[name];
+  for (const name of HOST_CREDENTIAL_ENVS) delete env[name];
   if (routing.provider === "moonshot") {
     if (routing.moonshotApiKey === undefined) {
       // start() resolves the key before launch and refuses the pickup without
