@@ -10,7 +10,7 @@ import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js"
 import { divergedSession, executionSetting, HUMAN_WEBUI, NO_RECORD, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
 
 /** 学習器の昇格 / 降格の提案の根拠(ADR 0181 追記 #2438)のドメイン層: 根拠の検査と、盤面が根拠の shadow 行から組む detail。MCP の
- *  inputSchema が evidence を通すことと flag の直接の変更での決着はサーバ境界(tests/routing-proposal-question.test.ts と tests/execution-settings-endpoints.test.ts)が言う。 */
+ *  inputSchema が evidence を通すことはサーバ境界の tests/routing-proposal-question.test.ts、flag の直接の変更での決着は tests/execution-settings-endpoints.test.ts が言う。 */
 const at = new Date("2026-10-22T00:00:00.000Z");
 
 const record = (board: [number, number], workspace: [number, number], seed: TrackRecord["seed"] = null): TrackRecord => ({
@@ -93,7 +93,7 @@ it("昇格前の昇格の提案は、根拠を (段, workspace, 学習器のセ�
   );
 });
 
-it("引用の外の乖離も盤面が1行で見せる —— フラグの最後の変更以降の同じ向きの乖離行の総数・組の数・うち引用した数・引用されなかった組ごとの件数と、候補が2行以上の pickup の数。変更より前の行と逆の向きの行は数えない", () => {
+it("引用の外の乖離も盤面が1行で見せる —— フラグの最後の変更以降の同じ向きの乖離行の総数・組の数・うち引用した数・引用されなかった組ごとの件数と、候補が2行以上の pickup の数。変更より前の行と逆の向きの行は数えない。候補が2行以上の pickup は向きを問わず同じ範囲で数える", () => {
   const { db, propose } = board();
   divergedSession(db, at);
   // 昇格の承認の適用と同じ書き方(扉の schema を通さない)—— フラグの変更が2回あり、数えるのは最後の変更以降
@@ -114,7 +114,7 @@ it("引用の外の乖離も盤面が1行で見せる —— フラグの最後�
   const { question_id } = propose("promote", [cited]);
 
   expect(detailOf(db, question_id).split("\n")).toContain(
-    `All diverged pickups where the table's choice ran, since the learner flag last changed (event ${change}): 3 in 2 line(s), 1 cited; lines not cited: tier standard, workspace reef, learner anthropic / claude-haiku-5-5 at effort high, table ${OPUS}: 1. Pickups with two or more candidates in that span: 4.`,
+    `All diverged pickups where the table's choice ran, since the learner flag last changed (event ${change}): 3 in 2 line(s), 1 cited; lines not cited: tier standard, workspace reef, learner anthropic / claude-haiku-5-5 at effort high, table ${OPUS}: 1. Pickups with two or more candidates in that span: 5.`,
   );
 });
 

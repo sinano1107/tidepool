@@ -650,8 +650,9 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
   });
   // 引用の外(ADR 0181 追記 決定3): フラグの最後の変更以降(無ければ全期間)の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
   const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
-  const span = shadowRows(db, { after: change ?? 0 }).filter((r) => (r.source.provider === "learner") === learnerRan);
-  const diverged = span.filter((r) => r.diverged);
+  // 候補が2行以上の pickup は向きで絞らない —— 昇格は向きを問わず全 pickup に効く
+  const span = shadowRows(db, { after: change ?? 0 });
+  const diverged = span.filter((r) => r.diverged && (r.source.provider === "learner") === learnerRan);
   const divergedGroups = group(diverged);
   const uncited = [...divergedGroups].filter(([, members]) => !members.some((r) => cited.has(r.id)));
   return [
