@@ -120,11 +120,6 @@ export function assertTierDescription(description: string): void {
   if (whyBlank(description) || /[\r\n]/.test(normalizeText(description))) throw new DomainError("a tier's description is one non-empty line");
 }
 
-/** 生きている段の id を順序どおりに。 */
-function liveTierIds(db: Db): number[] {
-  return (db.prepare("SELECT id FROM tiers WHERE position IS NOT NULL ORDER BY position").all() as { id: number }[]).map((row) => row.id);
-}
-
 /** 一覧の位置は生きている段の中の添字で、`max` までを受ける。 */
 export function assertPosition(position: number, max: number): void {
   if (position > max) throw new DomainError(`a tier position is an index into the board's list, 0 to ${max}`);
@@ -176,7 +171,8 @@ function applyTierChange(
   change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>,
   listAgents?: ListAgentTiers,
 ): boolean {
-  const ids = liveTierIds(db);
+  const tiers = liveTierRows(db);
+  const ids = tiers.map((tier) => tier.id);
   if (change.setting === "insert_tier") {
     assertTierName(db, change.name);
     assertTierDescription(change.description);
@@ -201,7 +197,7 @@ function applyTierChange(
   if (change.description !== undefined) assertTierDescription(change.description);
   if (change.position !== undefined) assertPosition(change.position, ids.length - 1);
   const index = ids.indexOf(id);
-  const { description } = liveTierRows(db)[index]!;
+  const { description } = tiers[index]!;
   if ((change.description ?? description) === description && (change.position ?? index) === index) return false;
   if (change.description !== undefined) db.prepare("UPDATE tiers SET description = ? WHERE id = ?").run(change.description, id);
   if (change.position !== undefined) placeTier(db, ids.filter((other) => other !== id), id, change.position);
