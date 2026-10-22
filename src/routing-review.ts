@@ -666,7 +666,6 @@ type Condition<S> = readonly [holds: (s: S) => boolean, reason: (s: S) => string
  *  組の鍵と、引用の外を数える範囲の追加の絞り(引用から決まる範囲 —— Interview の根拠の行、学習器のフラグの変更以降)だけ。 */
 interface Population<S> {
   sessions: readonly S[];
-  spawnedId: (s: S) => number | null;
   /** worker_spawned の id が sessions のどれでもないときの理由。 */
   absent: string;
   conditions: readonly Condition<S>[];
@@ -676,14 +675,14 @@ interface Population<S> {
 
 /** 根拠の検査と組(ADR 0302 決定2): 引用した id が母集団に入らなければ外れた条件を名指して拒み、引用を鍵で組み、母集団から引用を除いた
  *  残りを同じ鍵で畳んだ引用の外の1行(`outsideLine` に母集団を名指す句を渡す)を返す。 */
-function citeFromPopulation<S>(db: Db, evidence: readonly number[], population: Population<S>) {
-  const { sessions, spawnedId, absent, conditions, key, within } = population;
+function citeFromPopulation<S extends { worker_spawned_event_id: number | null }>(db: Db, evidence: readonly number[], population: Population<S>) {
+  const { sessions, absent, conditions, key, within } = population;
   const outside = (s: S) => conditions.find(([holds]) => !holds(s))?.[1](s);
   const cited = new Set<S>();
   for (const id of evidence) {
     // 根拠の種類はどの op も worker_spawned の event id(#2489 —— この拒否文の出所はここだけ)
     if (getEvent(db, id)?.payload.kind !== "worker_spawned") throw new DomainError(`evidence ${id} is not a worker_spawned event`);
-    const session = sessions.find((s) => spawnedId(s) === id);
+    const session = sessions.find((s) => s.worker_spawned_event_id === id);
     if (!session) throw new DomainError(`evidence ${id} ${absent}`);
     const reason = outside(session);
     if (reason !== undefined) throw new DomainError(`evidence ${id} ${reason}`);
@@ -712,11 +711,10 @@ function citeFromPopulation<S>(db: Db, evidence: readonly number[], population: 
  *  受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
 const productionSessions = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
   sessions: loadEpisodes(db),
-  spawnedId: (e) => e.worker_spawned_event_id,
   absent: "is not a session of a work-side task: a review-side session has no allocation review or outcome",
   conditions: [[(e) => !e.interview, () => "is not a worker_spawned event of a production work session: it is an Interview examinee's session"], ...conditions],
   key,
-  ...(within && { within }),
+  within,
 });
 
 /** 行の今の世代(ADR 0210 決定2): 走った行の今の段で走ったか。走った行が表にあることは前の条件が見る。 */
@@ -732,7 +730,7 @@ function sessionEvidence(db: Db, evidence: readonly number[], population: Popula
   const lines = [...cited].map(([key, members]) => {
     const count = (outcome: RoutingEpisode["outcome"]) => members.filter((e) => e.outcome === outcome).length;
     const reviews = new Map<string, number>();
-    for (const { allocation, cause } of members.flatMap((e) => e.allocations)) reviews.set(`${allocation}/${cause}`, (reviews.get(`${allocation}/${cause}`) ?? 0) + 1);
+    for (const k of members.flatMap((e) => e.allocations.map(({ allocation, cause }) => `${allocation}/${cause}`))) reviews.set(k, (reviews.get(k) ?? 0) + 1);
     return (
       `- ${key}: ${members.length} session(s) (tasks ${members.map((e) => e.task_id).join(", ")}); ` +
       `outcomes ${count("accepted")} accepted, ${count("rejected")} rejected, ${count("excluded")} excluded; ` +
@@ -762,7 +760,6 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
   const inSpan = new Set(span.map((row) => row.id));
   const { cited, outsideLine } = citeFromPopulation<Row>(db, evidence, {
     sessions: shadowRows(db, { after: 0 }),
-    spawnedId: (row) => row.worker_spawned_event_id,
     absent: "is not the session of any shadow row: only a work task's pickup writes one",
     conditions: [
       [(row) => row.diverged, () => "is the session of a shadow row where the learner recommended the cell that ran"],

@@ -1253,15 +1253,15 @@ export function divergedSession(
 
 /** setup のみ: 表の行 `row` で、その行の今の段で走った本番の work session を1つ刻み、worker_spawned の id を返す —— 行・段を足す・Interview の
  *  提案の根拠の母集団に入る(ADR 0302)。task はその段を要求し人間が登録するので、出所 task なら段の説明の提案の根拠にもなる。 */
-export function rowSession(db: Db, row: { provider: string; model: string; effort: string | null }, at: Date, { agent = "deckhand", source = "task", workspace = "reef" }: { agent?: string; source?: "task" | "agent"; workspace?: string } = {}): number {
+export function rowSession(db: Db, row: { provider: string; model: string; effort: string | null }, at: Date, agent = "deckhand"): number {
   const tier = readExecutionSettings(db).table.find((r) => matchesRowKey(r, row))!.tier;
-  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace }, at, ...HUMAN_WEBUI).id;
+  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace: "reef" }, at, ...HUMAN_WEBUI).id;
   return appendEvent(db, {
     taskId: work,
     workerId: agent,
     origin: "board",
     at,
-    payload: { ...WORKER_SPAWNED, ...row, provider: row.provider as Provider, advisor: null, tier_id: tierIdOf(db, tier), source: { tier: source, provider: "rank" } },
+    payload: { ...WORKER_SPAWNED, ...row, provider: row.provider as Provider, advisor: null, tier_id: tierIdOf(db, tier), source: { tier: "task", provider: "rank" } },
   });
 }
 

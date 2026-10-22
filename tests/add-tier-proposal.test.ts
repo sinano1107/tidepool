@@ -32,7 +32,7 @@ async function boardWithAddTierProposal() {
 
 /** 根拠の episode(setup): 表の opus の行で走った worker_spawned。 */
 function spawned(): number {
-  return rowSession(t.db, OPUS_KEY, t.clock.now(), { agent: "fugu" });
+  return rowSession(t.db, OPUS_KEY, t.clock.now(), "fugu");
 }
 
 const task = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json;
