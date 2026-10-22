@@ -225,17 +225,7 @@ it("a rate-limits request whose params also admits an object still conforms, sin
     drift: (out) => {
       const path = join(out, "ClientRequest.json");
       const requests = JSON.parse(readFileSync(path, "utf8"));
-      requests.oneOf[1] = {
-        required: ["id", "method"],
-        properties: {
-          method: { enum: ["account/rateLimits/read"] },
-          params: { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] },
-        },
-      };
-      requests.definitions.GetAccountRateLimitsParams = {
-        properties: { excludeResetCreditDetails: { type: "boolean" }, supportsLunaReserve: { type: "boolean" } },
-        type: "object",
-      };
+      requests.oneOf[1].properties.params = { anyOf: [{ $ref: "#/definitions/GetAccountRateLimitsParams" }, { type: "null" }] };
       writeFileSync(path, JSON.stringify(requests));
     },
   });
