@@ -4492,6 +4492,8 @@ describe("advisor capability (issue #33)", () => {
 });
 
 describe("provider 別の spawn env(issue #445 / ADR 0096・0097)", () => {
+  // 期待値は独立した literal(実装の定数を import しない)
+  const HOST_CREDENTIAL_ENVS = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
   /** `provider: moonshot` の agent 定義(fixture)。ベンダー知識(URL・モデル)は
    *  書かせない — registry が宣言するのは provider 名だけ(ADR 0005 / 0097)。 */
   const MOONSHOT_AGENT_MD = `---
@@ -4546,6 +4548,8 @@ You are Kipper, the tidepool board's Kimi work agent.
       delete expected.ANTHROPIC_BASE_URL;
       delete expected.ANTHROPIC_AUTH_TOKEN;
       delete expected.ANTHROPIC_MODEL;
+      // host の GitHub / OpenAI の資格情報も載らない(issue #2469)—— 開発者の shell に GH_TOKEN があっても落ちない
+      for (const name of HOST_CREDENTIAL_ENVS) delete expected[name];
       expect(calls[0]!.env).toEqual(expected);
       // 従来通りの認証継承: Claude のサブスク資格情報は残る
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
@@ -4590,6 +4594,27 @@ You are Kipper, the tidepool board's Kimi work agent.
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
       // それ以外の盤面 env は従来通り継承される(PATH 等で子プロセスが死なない)
       expect(env.PATH).toBe(process.env.PATH);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // ADR 0024 決定3: Claude CLI は自分の資格情報以外を Bash の子 process に素通しする(ADR 0070 の実測)ので、
+  // host の GitHub / OpenAI の資格情報は向き先の provider に依らず spawn env に載せない(issue #2469)
+  it("host の GitHub / OpenAI の資格情報 env 4つは anthropic も moonshot も spawn env から消え、anthropic の Claude のサブスク資格情報は残る", async () => {
+    for (const name of HOST_CREDENTIAL_ENVS) vi.stubEnv(name, "host-secret");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "claude-subscription-token");
+    try {
+      const keyFile = await makeMoonshotKeyFile();
+      const { start, calls } = await makeWorker(
+        { "agents/kipper.md": MOONSHOT_AGENT_MD },
+        { moonshotApiKeyFile: keyFile },
+      );
+      start("task-claude");
+      start("task-kimi", null, "kipper");
+      expect(calls).toHaveLength(2);
+      for (const call of calls) for (const name of HOST_CREDENTIAL_ENVS) expect(call.env[name]).toBeUndefined();
+      expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
     } finally {
       vi.unstubAllEnvs();
     }

@@ -55,7 +55,7 @@ import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupSt
 import { tierNames } from "./tier.js";
 import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import type { WorkerAdapter, WorkerExit } from "./worker.js";
+import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit } from "./worker.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -338,10 +338,7 @@ export const CODEX_FEATURE_SNAPSHOT: Readonly<
   } & Record<string, "true" | "false">
 > = FEATURE_STATES;
 const SECRET_ENV = [
-  "OPENAI_API_KEY",
-  "CODEX_API_KEY",
-  "GITHUB_TOKEN",
-  "GH_TOKEN",
+  ...HOST_CREDENTIAL_ENVS,
   "CLAUDE_CODE_OAUTH_TOKEN",
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",

@@ -348,6 +348,19 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
+  // Claude の worker spawn env と同じ4本(issue #2469)。期待値は独立した literal(実装の定数を import しない)
+  it("host の GitHub / OpenAI の資格情報 env 4つを worker env から消す", async () => {
+    const credentialEnvs = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
+    const f = await fixture();
+    for (const name of credentialEnvs) vi.stubEnv(name, "must-not-leak");
+    try {
+      await f.start(task(f.db));
+      for (const name of credentialEnvs) expect(f.process.calls[0]!.env[name]).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("allowed_domains を持たない workspace では network の許可は 127.0.0.1 だけのまま(issue #763)", async () => {
     const f = await fixture(undefined, "");
     await f.start(task(f.db));
