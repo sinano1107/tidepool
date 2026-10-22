@@ -1484,7 +1484,10 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         `tier (one of the board's tiers) and/or effort (${EFFORT_LEVELS.join(" / ")}) of one existing execution-setting row, named by provider, model and effort; ` +
         "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. Some Claude models take no effort or run `xhigh` / `max` as `high`; the refusal names the value to write. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
-        "is only accepted while it is promoted; neither takes row, change, or an amendment. op agent_tier lowers a non-built-in " +
+        "is only accepted while it is promoted; neither takes row, change, or an amendment. Both take evidence (required): the worker_spawned " +
+        "event ids of sessions of diverged shadow rows (the shadow rows' worker_spawned_event_id) — for promote rows from before promotion, for " +
+        "demote rows where the promoted learner's choice ran. The board shows the human, for each tier, workspace, learner cell and table cell " +
+        "you cite, the count and both cells' track records, and the diverged pickups since the learner flag last changed that you did not cite. op agent_tier lowers a non-built-in " +
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
         "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
         "on; it is refused when the execution-setting table has no runnable row (one not under a row quarantine) at the target tier for any of the agent's providers. The " +
@@ -1513,7 +1516,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         evidence: z
           .array(z.number().int())
           .optional()
-          .describe("op agent_tier, tier_description, add_tier and interview only: worker_spawned event ids of the sessions your case rests on."),
+          .describe("op promote, demote, agent_tier, tier_description, add_tier and interview only: worker_spawned event ids of the sessions your case rests on."),
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name. op interview: the tier measured."),
         hypothesis: z.string().optional().describe("op interview only: the claim the Interview tests."),
         measured_work: z.string().optional().describe("op interview only, optional: the kind of work to measure."),
