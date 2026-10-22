@@ -21,7 +21,7 @@ import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
-import { HOST_CREDENTIAL_ENVS, type WorkerExit } from "../src/worker.js";
+import type { WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
@@ -348,13 +348,14 @@ describe("CodexWorker (ADR 0098)", () => {
     });
   });
 
-  // Claude の worker spawn env と同じ定数から引く(issue #2469、ADR 0024 決定3)
-  it("host の資格情報 env の共有一覧をすべて worker env から消す", async () => {
+  // Claude の worker spawn env と同じ4本(issue #2469)。期待値は独立した literal(実装の定数を import しない)
+  it("host の GitHub / OpenAI の資格情報 env 4つを worker env から消す", async () => {
+    const credentialEnvs = ["GH_TOKEN", "GITHUB_TOKEN", "OPENAI_API_KEY", "CODEX_API_KEY"];
     const f = await fixture();
-    for (const name of HOST_CREDENTIAL_ENVS) vi.stubEnv(name, "must-not-leak");
+    for (const name of credentialEnvs) vi.stubEnv(name, "must-not-leak");
     try {
       await f.start(task(f.db));
-      for (const name of HOST_CREDENTIAL_ENVS) expect(f.process.calls[0]!.env[name]).toBeUndefined();
+      for (const name of credentialEnvs) expect(f.process.calls[0]!.env[name]).toBeUndefined();
     } finally {
       vi.unstubAllEnvs();
     }

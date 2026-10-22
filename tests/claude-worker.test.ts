@@ -4612,6 +4612,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       );
       start("task-claude");
       start("task-kimi", null, "kipper");
+      expect(calls).toHaveLength(2);
       for (const call of calls) for (const name of HOST_CREDENTIAL_ENVS) expect(call.env[name]).toBeUndefined();
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
     } finally {

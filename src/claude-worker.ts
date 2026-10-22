@@ -715,8 +715,8 @@ export interface ProviderRouting extends ExecutionSetting {
  *  7. `PIN_OVERRIDE_ENVS` — always deleted (#2351): the host's effort env beats
  *     `--effort` and its alias remaps beat `--advisor <alias>`, so leaving them
  *     would put a pin in `worker_spawned` that the session did not run under.
- *  8. `HOST_CREDENTIAL_ENVS` — always deleted (ADR 0024 決定3): the CLI passes
- *     every env but its own credentials through to Bash (ADR 0070's
+ *  8. `HOST_CREDENTIAL_ENVS` — always deleted (ADR 0024 決定3 / ADR 0098): the
+ *     CLI passes every env but its own credentials through to Bash (ADR 0070's
  *     measurement), so a host-exported GitHub / OpenAI token would reach the
  *     worker.
  *
