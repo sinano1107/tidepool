@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { agentNeedsHuman } from "../src/agent.js";
+import { listBoardCalls } from "../src/board-call-usage.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
@@ -7,7 +8,7 @@ import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import { openQuarantineQuestion, QUARANTINES, type QuarantineChecks, quarantineAgent, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { answerQuestion, getTask, nextSlotTask, registerTask, settleQuestionAsObserved } from "../src/tasks.js";
 import { quarantineWorkspace, workspaceNeedsHuman } from "../src/workspace.js";
-import { awaitWindow, FakeClock, unusedLanding } from "./fakes.js";
+import { awaitWindow, BOARD_CALL_USAGE, FakeClock, unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 /** 解除の門と受理後は表から引く(ADR 0137 決定4・5)。表を総なめするので、1行足せば
@@ -79,6 +80,55 @@ it("起動時の照合の契機(anthropic / moonshot の行)の effort の Quara
     await expect(checks.tableRowEffort!(value)).rejects.toThrow("only a table edit settles this question");
   }
   expect(probe).not.toHaveBeenCalled();
+});
+
+/** 確認の回答の再検査が立てた model turn は、受理・拒否の前に1行を残す(ADR 0299 決定3・6)。usage の無い結果は行を残さない。 */
+it("Provider 認証の再検査は cli_auth_probe、行と Interview の対象の再検査は model_probe の1行を Provider つきで残し、拒否でも残す", async () => {
+  const db = openDb(":memory:");
+  const clock = new FakeClock();
+  const turn = (provider: "anthropic" | "moonshot", model: string, effort: string | null) => ({
+    boardCall: { setting: { provider, model, effort }, usage: BOARD_CALL_USAGE },
+  });
+  const checks = quarantineChecks({
+    db,
+    clock,
+    providerCliAuth: {
+      anthropic: async () => ({ status: "authenticated", ...turn("anthropic", "haiku", "low") }),
+      moonshot: async () => ({ status: "unknown", reason: "budget cap", ...turn("moonshot", "kimi-k3[1m]", null) }),
+    },
+    modelProbes: {
+      anthropic: async (model) => ({ status: "runs", ...turn("anthropic", model, "low") }),
+      moonshot: async (model) => ({ status: "unknown", reason: "no result", ...turn("moonshot", model, null) }),
+    },
+  });
+
+  await checks.providerAuth!("anthropic");
+  await expect(checks.providerAuth!("moonshot")).rejects.toThrow("moonshot authentication is still unavailable");
+  await checks.tableRow!("anthropic/claude-fable-5-1");
+  await expect(checks.interviewTarget!("moonshot/kimi-k2-5")).rejects.toThrow("still cannot run");
+
+  const createdAt = clock.now().toISOString();
+  expect(listBoardCalls(db).map(({ use, provider, model, effort, usage, createdAt }) => ({ use, provider, model, effort, usage, createdAt }))).toEqual([
+    { use: "cli_auth_probe", provider: "anthropic", model: "haiku", effort: "low", usage: BOARD_CALL_USAGE, createdAt },
+    { use: "cli_auth_probe", provider: "moonshot", model: "kimi-k3[1m]", effort: null, usage: BOARD_CALL_USAGE, createdAt },
+    { use: "model_probe", provider: "anthropic", model: "claude-fable-5-1", effort: "low", usage: BOARD_CALL_USAGE, createdAt },
+    { use: "model_probe", provider: "moonshot", model: "kimi-k2-5", effort: null, usage: BOARD_CALL_USAGE, createdAt },
+  ]);
+});
+
+it("usage の無い再検査の結果は行を残さない", async () => {
+  const db = openDb(":memory:");
+  const checks = quarantineChecks({
+    db,
+    clock: new FakeClock(),
+    providerCliAuth: { anthropic: async () => ({ status: "unauthorized", reason: "API returned 401" }) },
+    modelProbes: { anthropic: async () => ({ status: "refused", reason: "API returned 404 for this model id" }) },
+  });
+
+  await expect(checks.providerAuth!("anthropic")).rejects.toThrow(DomainError);
+  await expect(checks.tableRow!("anthropic/claude-fable-5-1")).rejects.toThrow(DomainError);
+
+  expect(listBoardCalls(db)).toEqual([]);
 });
 
 describe("question が回答済みなら、その資源のタスクは pickup される", () => {

@@ -4,6 +4,7 @@ import { z } from "zod";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
+import { recordBoardCall } from "./board-call-usage.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { type CliAuthCheck, type ModelProbe, quarantineBoardCallRefusal, quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -582,6 +583,8 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     const probe = presentProbes[provider];
     if (!probe) throw new DomainError(`this board cannot verify that ${row} runs`);
     const result = await probe(model, effort ?? undefined);
+    // the turn ran whether or not the answer is accepted (ADR 0299 決定3・6)
+    if (result.boardCall) recordBoardCall(deps.db, "model_probe", result.boardCall.setting, result.boardCall.usage, presentClock.now());
     if (result.status === "runs") return;
     if (result.status === "unauthorized") quarantineCliAuthForProvider(deps.db, provider, presentClock.now());
     throw new DomainError(`${row} still cannot run: ${result.reason}`);
@@ -712,12 +715,13 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
     }),
     // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
     // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
-    ...(providerCliAuth && {
+    ...(providerCliAuth && clock && {
       providerAuth: async (value) => {
         const provider = value as Provider;
         const check = providerCliAuth[provider];
         if (!check) throw new DomainError(`${provider} authentication cannot be verified`);
         const result = await check();
+        if (result.boardCall) recordBoardCall(deps.db, "cli_auth_probe", result.boardCall.setting, result.boardCall.usage, clock.now());
         if (result.status !== "authenticated") {
           throw new DomainError(`${provider} authentication is still unavailable: ${result.reason}`);
         }

@@ -9,7 +9,7 @@ import {
 } from "../src/claude-cli-auth.js";
 import { isCapInterruptionEnvelope, isCliAuthFailureEnvelope, rowRefusalCause } from "../src/cli-auth.js";
 import { ProcessContainers } from "../src/process-container.js";
-import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import { BOARD_CALL_USAGE, CLI_ENVELOPE_USAGE, containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 it("JSON envelope の api_error_status: 401 だけを確定的な認証失敗に分類する(ADR 0070)", async () => {
@@ -250,4 +250,64 @@ it("moonshot の行の probe は --model と ANTHROPIC_MODEL の両方にその 
   expect(await probe("kimi-k2-5")).toEqual({ status: "runs" });
   expect(observed!.args.join(" ")).toContain("--model kimi-k2-5");
   expect(observed!.env.ANTHROPIC_MODEL).toBe("kimi-k2-5");
+});
+
+/** model turn を立てる probe は、envelope が usage を持つときだけ status と一緒に usage と撃った設定を返す(ADR 0299 決定1・3・4)。
+ *  401 / 行の拒否 / envelope 無しは usage を返さず、status の読み方は変わらない。 */
+const PROBE_ENVELOPES: Array<[string, number, object | null]> = [
+  ["成功", 0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
+  ["予算の上限", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, subtype: "error_max_budget_usd" }],
+  ["401", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 401 }],
+  ["行の拒否", 1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 404 }],
+  ["envelope 無し", 1, null],
+];
+const probeCommand = (exitCode: number, envelope: object | null) => async () => ({
+  exitCode,
+  stdout: envelope === null ? "not json" : JSON.stringify(envelope),
+});
+
+it("Claude の認証 probe は成功と予算の上限で usage と anthropic / haiku / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
+  const results = [];
+  for (const [, exitCode, envelope] of PROBE_ENVELOPES) results.push(await createClaudeCliAuthCheck(probeCommand(exitCode, envelope))());
+
+  const boardCall = { setting: { provider: "anthropic", model: "haiku", effort: "low" }, usage: BOARD_CALL_USAGE };
+  expect(results).toEqual([
+    { status: "authenticated", boardCall },
+    { status: "unknown", reason: "probe hit its budget cap before returning an authentication verdict", boardCall },
+    { status: "unauthorized", reason: "API returned 401" },
+    { status: "unknown", reason: "probe did not return a successful authentication result" },
+    { status: "unknown", reason: "probe did not return a JSON envelope" },
+  ]);
+});
+
+it("Claude の model probe は成功と予算の上限で usage と anthropic / その id / low を返し、401・行の拒否・envelope 無しでは返さない", async () => {
+  const results = [];
+  for (const [, exitCode, envelope] of PROBE_ENVELOPES) {
+    results.push(await createClaudeModelProbe(probeCommand(exitCode, envelope))("claude-fable-5-1", "high"));
+  }
+
+  const boardCall = { setting: { provider: "anthropic", model: "claude-fable-5-1", effort: "low" }, usage: BOARD_CALL_USAGE };
+  expect(results).toEqual([
+    { status: "runs", boardCall },
+    { status: "runs", boardCall },
+    { status: "unauthorized", reason: "API returned 401" },
+    { status: "refused", reason: "API returned 404 for this model id" },
+    { status: "unknown", reason: "probe did not return a JSON envelope" },
+  ]);
+});
+
+it("Moonshot の model probe は成功と予算の上限で usage と moonshot / その id / effort null を返し、401・行の拒否・envelope 無しでは返さない", async () => {
+  const keyFile = join(await tempDir("tidepool-moonshot-key-"), "moonshot-api-key");
+  writeFileSync(keyFile, "sk-moonshot-test-key\n", { mode: 0o600 });
+  const results = [];
+  for (const [, exitCode, envelope] of PROBE_ENVELOPES) results.push(await createMoonshotModelProbe(keyFile, probeCommand(exitCode, envelope))("kimi-k2-5"));
+
+  const boardCall = { setting: { provider: "moonshot", model: "kimi-k2-5", effort: null }, usage: BOARD_CALL_USAGE };
+  expect(results).toEqual([
+    { status: "runs", boardCall },
+    { status: "runs", boardCall },
+    { status: "unauthorized", reason: "API returned 401" },
+    { status: "refused", reason: "API returned 404 for this model id" },
+    { status: "unknown", reason: "probe did not return a JSON envelope" },
+  ]);
 });
