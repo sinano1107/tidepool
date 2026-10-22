@@ -267,13 +267,14 @@ export interface InterviewProposal<T extends TierRef = TierId> {
   pin: { rows: RowAt<T>[] };
 }
 
-/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値。 */
+/** routing の提案(ADR 0150 決定1): 表の1行、段の追加、段の説明、Interview、または学習器の昇格 / 降格。昇格 / 降格の pin はフラグの現在値で、
+ *  根拠(乖離した shadow 行の session の `worker_spawned` の event id)は pin の外(ADR 0181 追記 #2438)。 */
 export type RoutingProposal<T extends TierRef = TierId> =
   | RoutingRowProposal<T>
   | RoutingAddTierProposal<T>
   | TierDescriptionProposal<T>
   | InterviewProposal<T>
-  | { kind: "routing"; op: "promote" | "demote"; pin: { promoted: boolean } };
+  | { kind: "routing"; op: "promote" | "demote"; evidence: number[]; pin: { promoted: boolean } };
 
 /** agent の既定 tier を1段下げる提案(issue #920 / ADR 0150 決定1・5)。承認は registry へ commit する。pin = agent の tier の
  *  現在値と、根拠(`worker_spawned` の event id)の episode が走った表の行。 */

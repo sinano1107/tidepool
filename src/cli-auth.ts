@@ -1,4 +1,4 @@
-import type { QuarantinableBoardCallUse } from "./board-call-usage.js";
+import { type BoardCallSetting, type BoardCallUsage, type QuarantinableBoardCallUse, recordBoardCall } from "./board-call-usage.js";
 import type { Db } from "./db.js";
 import type { RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
@@ -9,18 +9,31 @@ import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expires soon";
 
-export type CliAuthResult =
+/** A probe that raised a model turn: what it ran on and the usage its envelope reported. Present only when the
+ *  envelope carried usage (ADR 0299 決定3・4); the Provider-neutral caller writes the row (決定6). */
+export interface ProbeBoardCall {
+  boardCall?: { setting: BoardCallSetting; usage: BoardCallUsage };
+}
+
+/** Writes the probe's row when it raised a model turn — the Provider-neutral callers' one step (ADR 0299 決定3・6). */
+export function recordProbeBoardCall(db: Db, use: "cli_auth_probe" | "model_probe", { boardCall }: ProbeBoardCall, now: Date): void {
+  if (boardCall) recordBoardCall(db, use, boardCall.setting, boardCall.usage, now);
+}
+
+export type CliAuthResult = (
   | { status: "authenticated" }
-  | { status: "unauthorized" | "unknown"; reason: string };
+  | { status: "unauthorized" | "unknown"; reason: string }
+) & ProbeBoardCall;
 
 export type CliAuthCheck = () => Promise<CliAuthResult>;
 
 /** 行の Quarantine の解除の門(ADR 0184 決定5): その model id を検査し直した判定。Claude CLI を喋る
  *  Provider は最小の1ターン(`refused` は行の拒否の証拠、`unauthorized` は 401)、openai は model 一覧の読み直し
  *  (`refused` は一覧に無い)。 */
-export type ModelProbeResult =
+export type ModelProbeResult = (
   | { status: "runs" }
-  | { status: "refused" | "unauthorized" | "unknown"; reason: string };
+  | { status: "refused" | "unauthorized" | "unknown"; reason: string }
+) & ProbeBoardCall;
 
 /** `effort` を渡せばその effort でも検査する(ADR 0218 決定2)—— 今それを読むのは openai の一覧の読み直しだけ。 */
 export type ModelProbe = (model: string, effort?: string) => Promise<ModelProbeResult>;

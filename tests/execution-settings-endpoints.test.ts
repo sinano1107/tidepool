@@ -14,6 +14,7 @@ import {
   callAsTask,
   completeIntegrationReviews,
   completeMetaReviews,
+  divergedSession,
   FULL_HANDOFF,
   HOUR,
   managementMcpClient,
@@ -365,7 +366,8 @@ it("人間の直接の降格は open な降格提案を観測で決着させ、r
   const client = await mcpClient(t.mcpBaseUrl, review.id);
   let questionId: string;
   try {
-    const result: any = await client.callTool({ name: "propose_routing_change", arguments: { op: "demote", rationale: "the learner routed worse than the table." } });
+    const evidence = divergedSession(t.db, t.clock.now(), { learner: true });
+    const result: any = await client.callTool({ name: "propose_routing_change", arguments: { op: "demote", evidence: [evidence], rationale: "the learner routed worse than the table." } });
     questionId = JSON.parse(result.content[0].text).question_id;
   } finally {
     await client.close();

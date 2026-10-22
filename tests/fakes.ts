@@ -1263,6 +1263,20 @@ export const CLI_ENVELOPE_USAGE = {
   usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
 };
 
+/** model turn を立てる probe の5つの envelope(成功・予算の上限・401・行の拒否・envelope 無し)を `[exitCode, envelope]` で(ADR 0299 決定3・4) */
+export const PROBE_ENVELOPES: Array<[number, object | null]> = [
+  [0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, subtype: "error_max_budget_usd" }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 401 }],
+  [1, { ...CLI_ENVELOPE_USAGE, is_error: true, api_error_status: 404 }],
+  [1, null],
+];
+/** PROBE_ENVELOPES の1つを返す probe の command */
+export const probeCommand = (exitCode: number, envelope: object | null) => async () => ({
+  exitCode,
+  stdout: envelope === null ? "not json" : JSON.stringify(envelope),
+});
+
 /** CLI_ENVELOPE_USAGE を盤面の usage の形で */
 export const BOARD_CALL_USAGE = {
   input_tokens: 506,

@@ -10,7 +10,7 @@ import { getTask, listBoard, listChildren, registerTask, type Task, taskHistoryR
 import { tierIdOf } from "../src/tier.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
 import { unusedLanding } from "./fakes.js";
-import { DECKHAND_AGENT, HUMAN_WEBUI, judgedRoutingReview, OPUS_ROW, routedOpusSessions, routingJudgmentRepairTask } from "./harness.js";
+import { DECKHAND_AGENT, divergedSession, HUMAN_WEBUI, judgedRoutingReview, OPUS_ROW, routedOpusSessions, routingJudgmentRepairTask } from "./harness.js";
 
 /** routing meta-review の判断の行への異議の修理子 routing_repair(ADR 0279 決定4 / ADR 0278 決定5、issue #2305)のドメイン層。tool の
  *  登録と Codex の宣言はサーバ境界(tests/mcp-memory-write-record.test.ts・tests/codex-worker.test.ts)が言う。 */
@@ -87,7 +87,7 @@ const proposals: Array<[op: string, covers: (db: Db) => RoutingObject, other: Ro
     "tier standard",
     (db, repair, evidence) => proposeRoutingChange(db, repair.id, { op: "tier_description", tier: "standard", description: "Work that needs care.", evidence: [evidence[1]!], rationale: "r" }, "auditor", at),
   ],
-  ["promote", () => ({ learner: true }), { row: OPUS_ROW }, "the learner", (db, repair) => proposeRoutingChange(db, repair.id, { op: "promote", rationale: "r" }, "auditor", at)],
+  ["promote", () => ({ learner: true }), { row: OPUS_ROW }, "the learner", (db, repair, evidence) => proposeRoutingChange(db, repair.id, { op: "promote", evidence: [evidence[0]!], rationale: "r" }, "auditor", at)],
   [
     "demote",
     () => ({ learner: true }),
@@ -96,7 +96,7 @@ const proposals: Array<[op: string, covers: (db: Db) => RoutingObject, other: Ro
     (db, repair) => {
       // 昇格は承認の適用だけが書き、公開の扉は降格しか受けない(executionSettingsChangeSchema の learner_promoted)
       db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
-      return proposeRoutingChange(db, repair.id, { op: "demote", rationale: "r" }, "auditor", at);
+      return proposeRoutingChange(db, repair.id, { op: "demote", evidence: [divergedSession(db, at, { learner: true })], rationale: "r" }, "auditor", at);
     },
   ],
   [

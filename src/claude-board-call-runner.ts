@@ -39,9 +39,9 @@ export interface ClaudeBoardCall {
   reasoning: boolean;
 }
 
-// the CLI's `-p --output-format json` usage (vendor-specific, kept private to this adapter — ADR 0005):
-// the same total_cost_usd/usage shape claude-worker.ts's stream-json result event carries
-const envelopeUsageSchema = z
+// the CLI's `-p --output-format json` usage (vendor-specific, kept to the Claude adapter side — ADR 0005; the
+// probes in claude-cli-auth.ts read it too): the same total_cost_usd/usage shape claude-worker.ts's stream-json result event carries
+export const envelopeUsageSchema = z
   .object({
     total_cost_usd: z.number(),
     usage: z.object({
