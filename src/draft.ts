@@ -1,4 +1,6 @@
-import type { BoardCallAnswer } from "./board-call-usage.js";
+import { type BoardCallAnswer, recordedAnswer } from "./board-call-usage.js";
+import { quarantineBoardCallRefusal } from "./cli-auth.js";
+import type { Db } from "./db.js";
 import type { Issue } from "./github.js";
 import type { HandoffDoc } from "./tasks.js";
 
@@ -61,4 +63,37 @@ export interface DraftClient {
   draftTask(dump: string, language: string, context?: ChildDraftContext): Promise<BoardCallAnswer<TaskDraft>>;
   draftHandoff(dump: string, language: string): Promise<BoardCallAnswer<HandoffDraft>>;
   inspectIssue(issue: Issue): Promise<BoardCallAnswer<IssueInspection>>;
+}
+
+/** The task draft Board call (issue #12): its row is `child_draft` when a parent's context steers it, `task_draft` otherwise
+ *  (ADR 0299 決定1). A refused call raises its Quarantine (ADR 0202); every failure is rethrown, so the caller answers it
+ *  with the plain-form fallback. */
+export async function draftTask(
+  db: Db,
+  client: DraftClient,
+  { dump, language, context }: { dump: string; language: string; context?: ChildDraftContext },
+  now: Date,
+): Promise<TaskDraft> {
+  const use = context === undefined ? "task_draft" : "child_draft";
+  try {
+    return await recordedAnswer(db, use, now, client.draftTask(dump, language, context));
+  } catch (err) {
+    quarantineBoardCallRefusal(db, err, use, undefined, now);
+    throw err;
+  }
+}
+
+/** The handoff draft Board call for a human task (issue #13): one `handoff_draft` row, failures handled as draftTask's. */
+export async function draftHandoff(
+  db: Db,
+  client: DraftClient,
+  { dump, language, taskId }: { dump: string; language: string; taskId: string },
+  now: Date,
+): Promise<HandoffDraft> {
+  try {
+    return await recordedAnswer(db, "handoff_draft", now, client.draftHandoff(dump, language));
+  } catch (err) {
+    quarantineBoardCallRefusal(db, err, "handoff_draft", taskId, now);
+    throw err;
+  }
 }

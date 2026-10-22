@@ -1,8 +1,7 @@
 import { z } from "zod";
-import type { BoardCallAnswer } from "./board-call-usage.js";
+import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import type { ExecutionSettingRow } from "./execution-setting.js";
 import { TIER_DEFINITION_RULE } from "./meta-review.js";
 import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput } from "./retrospective.js";
 
@@ -45,7 +44,7 @@ export class ClaudeBehaviorDraftClient implements BehaviorDraftClient {
     this.exec = options.exec;
   }
 
-  async draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BoardCallAnswer<BehaviorDraft>> {
+  async draft(input: BehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>> {
     return runClaudeBoardCallJson(
       { exec: this.exec, label: "behavior draft", prompt: buildPrompt(input), setting, reasoning: true },
       draftSchema,

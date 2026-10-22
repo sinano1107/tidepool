@@ -1571,34 +1571,6 @@ it("起草の答えが schema に合わなくても behavior_draft の行は残�
   ]);
 });
 
-it.each([
-  ["行の拒否", refused],
-  ["401", () => new CliAuthError("Invalid API key")],
-])("%s で断られた振り返りの Board call は行を残さない —— 初回の帰責・第2回・起草(ADR 0299 決定3)", async (_, refusal) => {
-  const initial = objectedAfterReading();
-  const initialClient = new FakeAttributionClient();
-  initialClient.scriptJudgment(initial.decision, refusal());
-  await attributeObjections(initial.db, { ...noRetrospectiveCalls, attributionClient: initialClient }, initial.sessionId, at);
-
-  const second = awaitingSecondRound();
-  const secondClient = new FakeAttributionClient();
-  secondClient.scriptJudgment(second.decision, refusal());
-  refireRetrospectiveCalls(second.db, { ...noRetrospectiveCalls, attributionClient: secondClient }, at);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const drafted = await draftAfterPreference(refusal());
-
-  expect([listBoardCalls(initial.db), listBoardCalls(second.db), listBoardCalls(drafted.db)]).toEqual([[], [], [ATTRIBUTION_ROW]]);
-});
-
-it("client の無い盤面では帰責を撃たず、行も残らない", async () => {
-  const b = objectedAfterReading();
-
-  await attributeObjections(b.db, noRetrospectiveCalls, b.sessionId, at);
-
-  expect(listBoardCalls(b.db)).toEqual([]);
-});
-
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
 

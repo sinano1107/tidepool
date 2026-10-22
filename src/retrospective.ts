@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
-import { type BoardCallAnswer, recordedAnswer } from "./board-call-usage.js";
+import { type BoardCallAnswer, type BoardCallSetting, recordedAnswer } from "./board-call-usage.js";
 import { type AgentDefinitionThen, agentDefinitionThen } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
@@ -72,7 +72,7 @@ export type InitialJudgment = GatedJudgment & { decision_log_through?: number };
 export interface AttributionClient {
   judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
+    setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AttributionJudgment>>;
 }
 
@@ -92,7 +92,7 @@ export interface BehaviorDraft {
 
 /** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
-  draft(input: BehaviorDraftInput, setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">): Promise<BoardCallAnswer<BehaviorDraft>>;
+  draft(input: BehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>>;
 }
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に

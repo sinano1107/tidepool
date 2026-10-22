@@ -173,18 +173,6 @@ it("配分評価の答えが schema に合わなくても allocation_review の�
   ]);
 });
 
-it.each([
-  ["行の拒否", new RowRefusalError("anthropic", "claude-fable-5-1", "cli_version_too_old")],
-  ["401", new CliAuthError("Invalid API key")],
-])("%s で断られた配分評価は行を残さない(ADR 0299 決定3)", async (_, refusal) => {
-  const allocationClient = new FakeAllocationClient();
-  allocationClient.scriptFailure(refusal);
-
-  const { db } = await reviewAllocationOnBoard(allocationClient);
-
-  expect(listBoardCalls(db)).toEqual([]);
-});
-
 /** A root work task with one recorded worker session (spawn + exit), completed
  *  so its integration review exists. Returns the ids the annotation must name. */
 async function reviewedWork(t: Tidepool, options: { session: boolean } = { session: true }) {

@@ -1,4 +1,4 @@
-import type { BoardCallUse } from "./board-call-usage.js";
+import type { QuarantinableBoardCallUse } from "./board-call-usage.js";
 import type { Db } from "./db.js";
 import type { RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
@@ -111,7 +111,7 @@ export function quarantineRefusedRow(db: Db, refusal: RefusedRow, subject: strin
 /** Board call が断られたら Quarantine を立て、true を返す(ADR 0202 決定2・5 / ADR 0205): 行の拒否は行の Quarantine、
  *  401 は anthropic の Provider 認証の Quarantine(Board call は anthropic 固定)。true のとき呼び手は失敗に数えず
  *  (ADR 0202 決定3)、対象の側には何も書かない。 */
-export function quarantineBoardCallRefusal(db: Db, err: unknown, use: BoardCallUse, taskId: string | undefined, now: Date): boolean {
+export function quarantineBoardCallRefusal(db: Db, err: unknown, use: QuarantinableBoardCallUse, taskId: string | undefined, now: Date): boolean {
   const subject = `The ${use.replaceAll("_", " ")} Board call${taskId === undefined ? "" : ` for task ${taskId}`}`;
   if (err instanceof CliAuthError) quarantineCliAuthForProvider(db, "anthropic", now, `${subject} ended with an authentication failure`);
   else if (err instanceof RowRefusalError) quarantineRefusedRow(db, err, subject, now);

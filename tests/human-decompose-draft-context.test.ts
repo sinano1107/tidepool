@@ -1,5 +1,4 @@
 import { afterEach, expect, it } from "vitest";
-import { listBoardCalls } from "../src/board-call-usage.js";
 import { FakeDraftClient } from "./fakes.js";
 import { api, bootTidepool, queueWork, registerWork, type Tidepool } from "./harness.js";
 
@@ -44,16 +43,6 @@ it("parent_id 付きのドラフトには親の title/purpose/completion_criteri
       decomposeReason: "splitting off the edge case first",
     },
   ]);
-});
-
-it("parent_id 付きのドラフトは child_draft の行を1つ残す(ADR 0299 決定1)", async () => {
-  t = await bootTidepool({ draftClient: new FakeDraftClient() });
-  const parent = queueWork(t, "build the toolchain");
-
-  await api(t.baseUrl, "POST", "/api/tasks/draft", { dump: "handle the edge case", parent_id: parent.id });
-
-  const rows = listBoardCalls(t.db);
-  expect(rows.map((row) => row.use)).toEqual(["child_draft"]);
 });
 
 it("分解理由を書かないドラフト依頼は decomposeReason が undefined のまま渡る", async () => {

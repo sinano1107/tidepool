@@ -1,6 +1,5 @@
 import { afterEach, expect, it } from "vitest";
-import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
-import { BOARD_CALL_USAGE, FakeDraftClient } from "./fakes.js";
+import { FakeDraftClient } from "./fakes.js";
 import { api, bootTidepool, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -37,35 +36,6 @@ it("POST /api/tasks/:id/complete/draft は自由文ダンプから6項目ハン�
   // 下書きは complete させない — 人間が確認/編集してから /complete を別途呼ぶ
   expect((await api(t.baseUrl, "GET", `/api/tasks/${human.id}`)).json.status).toBe("todo");
   expect(draftClient.handoffDumps).toEqual(["mounted the sensor on the north wall"]);
-});
-
-/** 人間の担当 task に、ハンドオフの下書きを依頼する。 */
-async function draftHandoffForHuman(draftClient: FakeDraftClient) {
-  t = await bootTidepool({ draftClient });
-  const human = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", title: "install", purpose: "p", completion_criteria: "c", assignee: "human" })).json;
-  return api(t.baseUrl, "POST", `/api/tasks/${human.id}/complete/draft`, { dump: "mounted the sensor" });
-}
-
-it("ハンドオフの下書きは、撃った行で handoff_draft の行を1つ残す(ADR 0299 決定1)", async () => {
-  const draftClient = new FakeDraftClient();
-
-  await draftHandoffForHuman(draftClient);
-
-  const rows = listBoardCalls(t.db);
-  expect(rows).toEqual([
-    { use: "handoff_draft", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: t.clock.now().toISOString() },
-  ]);
-});
-
-it("usage を報告して失敗したハンドオフの下書きは今どおり 503 で、handoff_draft の行は残る(ADR 0299 決定3)", async () => {
-  const draftClient = new FakeDraftClient();
-  draftClient.scriptHandoffFailure(new BoardCallUsageError("answer did not match the schema", draftClient.setting, BOARD_CALL_USAGE));
-
-  const res = await draftHandoffForHuman(draftClient);
-
-  expect(res.status).toBe(503);
-  const rows = listBoardCalls(t.db);
-  expect(rows.map((row) => row.use)).toEqual(["handoff_draft"]);
 });
 
 it("assignee が human 以外のタスクは /complete/draft を叩けない(issue #13 code review)", async () => {

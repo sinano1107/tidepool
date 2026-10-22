@@ -14,6 +14,9 @@ export type BoardCallUse =
   | "cli_auth_probe"
   | "model_probe";
 
+/** The uses whose refusal raises a Quarantine — translation and the probes never do (ADR 0202 帰結). */
+export type QuarantinableBoardCallUse = Exclude<BoardCallUse, "translation" | "cli_auth_probe" | "model_probe">;
+
 /** Token usage for one Board call, same granularity as claude-worker.ts's worker_exited usage (issue #47).
  *  A null cost is "not measurable", never 0 (ADR 0296 決定5). */
 export interface BoardCallUsage {

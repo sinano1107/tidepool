@@ -1,9 +1,8 @@
 import { z } from "zod";
-import type { BoardCallAnswer } from "./board-call-usage.js";
+import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import type { ExecutionSettingRow } from "./execution-setting.js";
 import type { AttributionClient, AttributionInput, AttributionJudgment } from "./retrospective.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
@@ -67,7 +66,7 @@ export class ClaudeAttributionClient implements AttributionClient {
 
   async judge(
     input: AttributionInput,
-    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
+    setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AttributionJudgment>> {
     return runClaudeBoardCallJson(
       { exec: this.exec, label: "attribution", prompt: buildPrompt(input), setting, reasoning: true },

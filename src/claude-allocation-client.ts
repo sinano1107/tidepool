@@ -5,11 +5,10 @@ import {
   type AllocationJudgment,
   type AllocationReviewInput,
 } from "./allocation-review.js";
-import type { BoardCallAnswer } from "./board-call-usage.js";
+import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import type { ExecutionSettingRow } from "./execution-setting.js";
 
 // mirrors AllocationJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the episode as a judgment
@@ -73,7 +72,7 @@ export class ClaudeAllocationClient implements AllocationClient {
 
   async judge(
     input: AllocationReviewInput,
-    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
+    setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AllocationJudgment>> {
     return runClaudeBoardCallJson(
       { exec: this.exec, label: "allocation review", prompt: buildPrompt(input), setting, reasoning: true },

@@ -1,8 +1,7 @@
-import type { BoardCallAnswer } from "./board-call-usage.js";
+import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
 import { type EventPayload, getEvent, listEvents } from "./events.js";
-import type { ExecutionSettingRow } from "./execution-setting.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { type Tier, tierNameOf } from "./tier.js";
 
@@ -40,7 +39,7 @@ export interface AllocationReviewInput {
 export interface AllocationClient {
   judge(
     input: AllocationReviewInput,
-    setting: Pick<ExecutionSettingRow, "provider" | "model" | "effort">,
+    setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AllocationJudgment>>;
 }
 
