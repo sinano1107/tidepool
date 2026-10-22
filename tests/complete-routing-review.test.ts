@@ -150,7 +150,14 @@ it.each([
       appendEvent(db, { taskId: null, workerId: "human", origin: "webui", at, payload: { kind: "agent_tier_changed", agent: "deckhand", from: "standard", to: "economy", question_id: "q", registry_commit: "c0ffee" } }),
   ],
   ["人間が段の説明を書き換えた", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Rewritten." }, "webui", at)],
-  ["人間が学習器を降格した", (db: Db) => applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at)],
+  [
+    "人間が学習器を降格した",
+    (db: Db) => {
+      // 昇格は承認の適用だけが書き、公開の扉は降格しか受けない(executionSettingsChangeSchema の learner_promoted)
+      db.prepare("UPDATE execution_defaults SET learner_promoted = 1").run();
+      return applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at);
+    },
+  ],
 ] as const)("注入の後に%sら、その対象は行為済みで、注入した一覧どおりの値は受け取られ、その行は書かれない", (_, act) => {
   const { db, review, injected } = cycle();
   act(db);

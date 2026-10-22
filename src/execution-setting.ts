@@ -170,12 +170,12 @@ function tierDeletionBlockers(db: Db, id: number, name: Tier, listAgents?: ListA
   return reasons;
 }
 
-/** 段の1つの操作を書く(挿入・説明と位置の編集・改名・論理削除)。 */
+/** 段の1つの操作を書く(挿入・説明と位置の編集・改名・論理削除)。false = 編集が説明も位置も変えないので何も書かなかった。 */
 function applyTierChange(
   db: Db,
   change: Extract<ExecutionSettingsChange, { setting: "insert_tier" | "edit_tier" | "rename_tier" | "delete_tier" }>,
   listAgents?: ListAgentTiers,
-): void {
+): boolean {
   const ids = liveTierIds(db);
   if (change.setting === "insert_tier") {
     assertTierName(db, change.name);
@@ -183,29 +183,29 @@ function applyTierChange(
     assertPosition(change.position, ids.length);
     const id = Number(db.prepare("INSERT INTO tiers (name, description) VALUES (?, ?)").run(change.name, change.description).lastInsertRowid);
     placeTier(db, ids, id, change.position);
-    return;
+    return true;
   }
   assertKnownTier(db, "tier", change.name);
   const id = tierIdOf(db, change.name);
   if (change.setting === "rename_tier") {
     assertTierName(db, change.to);
     db.prepare("UPDATE tiers SET name = ? WHERE id = ?").run(change.to, id);
-    return;
+    return true;
   }
   if (change.setting === "delete_tier") {
     const reasons = tierDeletionBlockers(db, id, change.name, listAgents);
     if (reasons.length > 0) throw new DomainError(`tier "${change.name}" cannot be deleted: ${reasons.join("; ")}`);
     db.prepare("UPDATE tiers SET position = NULL WHERE id = ?").run(id);
-    return;
+    return true;
   }
-  if (change.description !== undefined) {
-    assertTierDescription(change.description);
-    db.prepare("UPDATE tiers SET description = ? WHERE id = ?").run(change.description, id);
-  }
-  if (change.position !== undefined) {
-    assertPosition(change.position, ids.length - 1);
-    placeTier(db, ids.filter((other) => other !== id), id, change.position);
-  }
+  if (change.description !== undefined) assertTierDescription(change.description);
+  if (change.position !== undefined) assertPosition(change.position, ids.length - 1);
+  const index = ids.indexOf(id);
+  const { description } = liveTierRows(db)[index]!;
+  if ((change.description ?? description) === description && (change.position ?? index) === index) return false;
+  if (change.description !== undefined) db.prepare("UPDATE tiers SET description = ? WHERE id = ?").run(change.description, id);
+  if (change.position !== undefined) placeTier(db, ids.filter((other) => other !== id), id, change.position);
+  return true;
 }
 
 /** 配布される種の表。`/implementation-delegation` §4 / §5 の表と**同じ内容・同じ
@@ -801,10 +801,12 @@ export function applyExecutionSettingsChange(
         const { key } = change;
         if (key && change.seed) throw new DomainError("start as observed (seed) applies only when adding a row, not when editing one");
         const table = loadExecutionSettingTable(db);
-        if (key && !table.some((row) => matchesRowKey(row, key))) {
+        const current = key && table.find((row) => matchesRowKey(row, key));
+        if (key && !current) {
           throw new DomainError(`the execution-setting table has no row ${rowName(key)} to edit`);
         }
         assertRowFits(table, change.row, key);
+        if (current && (["provider", "tier", "model", "effort", "price_in", "price_out"] as const).every((field) => current[field] === change.row[field])) return null;
         if (key) {
           db.prepare(
             `UPDATE execution_settings SET provider = ?, tier_id = ${liveTierId("?")}, model = ?, effort = ?, price_in = ?, price_out = ?
@@ -820,13 +822,14 @@ export function applyExecutionSettingsChange(
       case "default_tier":
       case "judgement_tier":
         assertKnownTier(db, change.setting, change.value);
+        if (loadExecutionDefaults(db)[change.setting === "default_tier" ? "defaultTier" : "judgementTier"] === change.value) return null;
         db.prepare(`UPDATE execution_defaults SET ${change.setting}_id = ${liveTierId("?")}`).run(change.value);
         break;
       case "insert_tier":
       case "edit_tier":
       case "rename_tier":
       case "delete_tier":
-        applyTierChange(db, change, listAgents);
+        if (!applyTierChange(db, change, listAgents)) return null;
         break;
       case "delete_row":
         // 消す行が無ければ何も変わっていないので、操作イベントも残さない
@@ -834,6 +837,10 @@ export function applyExecutionSettingsChange(
         break;
       default: {
         const column = change.setting;
+        // 読み口の値で比べる —— 列が NULL(= コードの既定)でも、既定と同じ値なら何も変わらない
+        const defaults = loadExecutionDefaults(db);
+        const current = { advisor_ceiling: defaults.advisorCeiling, provider_rank: defaults.providerRank, priority: defaults.priority, review_priority: defaults.reviewPriority, learner_promoted: defaults.learnerPromoted }[column];
+        if (JSON.stringify(current) === JSON.stringify(change.value)) return null;
         const value =
           typeof change.value === "boolean" ? Number(change.value)
           : change.setting === "provider_rank" ? JSON.stringify(change.value) : change.value;
