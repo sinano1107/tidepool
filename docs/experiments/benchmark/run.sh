@@ -146,12 +146,9 @@ save_state() {
 # ponytail: a --rows file is not copied back, so a resume checks the Codex / Moonshot logins against the exercises' rows only
 restore_state() {
   vm 'test -f ~/bench/state.json' || fail "no run in $BENCH_VM's ~/bench to resume: start one with --new"
-  local state dir
-  state="$(vm 'cat ~/bench/state.json')"
-  TIDEPOOL_COMMIT="$(jq -r .tidepool_commit <<< "$state")"
-  CLI_PINS="$(jq -c .cli_pins <<< "$state")"
-  REGISTRY_COMMIT="$(jq -r .registry_commit <<< "$state")"
-  LABEL="$(jq -r .label <<< "$state")"
+  local dir
+  { read -r TIDEPOOL_COMMIT; read -r CLI_PINS; read -r REGISTRY_COMMIT; read -r LABEL; } \
+    <<< "$(vm 'cat ~/bench/state.json' | jq -r '.tidepool_commit, (.cli_pins | tojson), .registry_commit, .label')"
   dir="$(mktemp -d)"
   limactl copy -r "$BENCH_VM:bench/exercises" "$BENCH_VM:bench/run.json" "$dir/"
   SEQUENCE="$dir/run.json"

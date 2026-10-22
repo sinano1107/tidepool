@@ -525,14 +525,6 @@ function readHumanSteps(path: string): HumanStep[] {
     .map((line) => humanStepSchema.parse(JSON.parse(line)));
 }
 
-const USAGE = [
-  "extract.ts check <run.json>",
-  "extract.ts current-root <db> <task-id>",
-  "extract.ts position <run.json> <db> <human-steps.jsonl>",
-  "extract.ts first-meta-review <db> <subject>",
-  "extract.ts run <db> <worker-logs> <input.json> <out-dir>",
-].join(" | ");
-
 /** 読むだけ —— 盤面の読み口が書き込みに触れたら、ここで落ちる。 */
 const readOnly = (path: string) => new Database(path, { readonly: true, fileMustExist: true });
 
@@ -558,7 +550,9 @@ function main([command, ...args]: string[]): void {
     console.log(JSON.stringify(firstMetaReview(readOnly(args[0]!), firstMetaReviewSchema.shape.subject.parse(args[1]))));
     return;
   }
-  if (command !== "run" || args.length !== 4) throw new Error(`usage: ${USAGE}`);
+  if (command !== "run" || args.length !== 4) throw new Error(
+      "usage: extract.ts check <run.json> | current-root <db> <task-id> | position <run.json> <db> <human-steps.jsonl> | first-meta-review <db> <subject> | run <db> <worker-logs> <input.json> <out-dir>",
+    );
   const [dbPath, logDir, inputPath, outDir] = args as [string, string, string, string];
   const parsed = runInputSchema.safeParse(JSON.parse(readFileSync(inputPath, "utf8")));
   if (!parsed.success) throw new Error(`${inputPath}:\n${z.prettifyError(parsed.error)}`);
