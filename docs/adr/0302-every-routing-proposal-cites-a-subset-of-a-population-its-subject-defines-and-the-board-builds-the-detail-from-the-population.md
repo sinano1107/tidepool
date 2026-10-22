@@ -10,7 +10,8 @@
 
 1. **routing の提案の根拠は、op の対象が決める母集団の部分集合である。** 対象は提案が動かすもの —— 表の行、agent、段、
    学習器のフラグ、Interview の対象。母集団は「その対象について配分評価や outcome が語る本番の session」で、対象の**今の世代**に
-   限る: 行は今の段で走った session(学習器が数える世代と同じ、ADR 0210 決定2)、学習器のフラグは最後の変更以降の同じ向きの
+   限る: 行は今の段で走った session(学習器が数える世代と同じ、ADR 0210 決定2。段を足して行を移す提案は、移す行の段の全行 ——
+   主張が段の中の対比だから、ADR 0200 決定8)、学習器のフラグは最後の変更以降の同じ向きの
    乖離行(ADR 0181 追記 決定1)、段の説明は最後の説明の編集以降にその段を要求した task の session、agent は `source.tier` が
    `agent` の session の全期間(registry に変更の event が無い、ADR 0150 決定1)。review 側の session は配分評価を持たないので
    どの母集団にも入らない。根拠は全 op で必須、種類は `worker_spawned` の event id で揃える。pin には入れない。
@@ -27,7 +28,8 @@ op ごとの帰結(決定1・2 から導いたもので、独立の決定では�
 
 | op | 対象 | 母集団 | 組の鍵 |
 | --- | --- | --- | --- |
-| `row` / `add_tier` | 行 | その行で、今の段で走った本番 session | workspace |
+| `row` | 行 | その行で、今の段で走った本番 session | workspace |
+| `add_tier` | 移す行 | 移す行の今の段にある全行で、その段で走った本番 session(ADR 0200 決定8 の主張は段の中の対比) | 走った行, workspace |
 | `interview` | 対象(表に無い) | 根拠の各行で、今の段で走った本番 session | 走った行, workspace |
 | `agent_tier` | agent | その agent の `source.tier = agent` の本番 session、全期間 | 走った行, 段, workspace |
 | `tier_description` | 段 | 最後の `edit_tier` 以降にその段を要求した task の本番 session | workspace, task の書き手 |
