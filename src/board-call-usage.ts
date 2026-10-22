@@ -25,9 +25,8 @@ export class BoardCallUsageError extends Error {
     message: string,
     readonly setting: BoardCallSetting,
     readonly usage: TranslationUsage,
-    options?: ErrorOptions,
   ) {
-    super(message, options);
+    super(message);
   }
 }
 

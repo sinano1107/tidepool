@@ -4,17 +4,15 @@ import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
+import { CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
 const schema = z.object({ ok: z.boolean() });
-const ENVELOPE_USAGE = {
-  total_cost_usd: 0.000586,
-  usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },
-};
-const USAGE = { input_tokens: 506, output_tokens: 16, cache_read_tokens: 3, cache_creation_tokens: 4, estimated_cost_usd: 0.000586 };
+/** CLI_ENVELOPE_USAGE の盤面の形 */
+const USAGE = { input_tokens: 506, output_tokens: 16, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.000586 };
 /** usage を報告した封筒 */
-const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...ENVELOPE_USAGE });
+const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
 
 describe("Claude の Board call runner", () => {
   it("JSON の答えは result から JSON を取り出して schema で検証し、封筒の usage と一緒に返す", async () => {

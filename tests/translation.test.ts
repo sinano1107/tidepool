@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
-import { FakeTranslationClient } from "./fakes.js";
+import { CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -138,12 +138,7 @@ it.each([
 ])("usage を報告して失敗した呼び出し(%s)も1行を残し、キャッシュには何も書かない(ADR 0299 決定3)", async (_, envelope) => {
   const db = await freshDb();
   const client = new ClaudeTranslationClient({
-    exec: async () =>
-      JSON.stringify({
-        ...envelope,
-        total_cost_usd: 0.0002,
-        usage: { input_tokens: 30, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
+    exec: async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE }),
   });
 
   await expect(translateSource(db, client, "the board retires a settled tree", "Japanese", NOW)).rejects.toThrow();
@@ -153,7 +148,7 @@ it.each([
       provider: "anthropic",
       model: "haiku",
       fragments: 1,
-      usage: { input_tokens: 30, output_tokens: 7, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.0002 },
+      usage: { input_tokens: 506, output_tokens: 16, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.000586 },
       createdAt: NOW.toISOString(),
     },
   ]);

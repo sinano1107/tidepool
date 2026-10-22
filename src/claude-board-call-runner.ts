@@ -140,6 +140,6 @@ export async function runClaudeBoardCallJson<T>(call: ClaudeBoardCall, schema: z
   try {
     return { output: schema.parse(extractJson(output)), usage };
   } catch (err) {
-    throw new BoardCallUsageError(err instanceof Error ? err.message : String(err), call.setting, usage, { cause: err });
+    throw new BoardCallUsageError((err as Error).message, call.setting, usage);
   }
 }
