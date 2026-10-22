@@ -470,7 +470,8 @@ it("Objected decisions は読み手 routing の list_precedents の行を載せ�
   const { db, work } = board();
   const memory = register(db, true, "memory");
   const previous = register(db, true);
-  const child = (parent_id: string) => registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
+  // meta-review の子は修理子 —— work は帰り先の無い系譜に立たない(ADR 0301 決定2)
+  const child = (parent_id: string) => registerTask(db, { type: "memory_repair", title: "repair", purpose: "p", completion_criteria: "c", parent_id }, at, ...HUMAN_WEBUI).id;
   [memory, child(memory), previous, child(previous), work("w")].forEach((taskId, i) => objectedDecision(db, taskId, i + 1));
   const review = register(db);
   const material = routingMaterialOf(db, review);

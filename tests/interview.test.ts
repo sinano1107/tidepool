@@ -9,7 +9,7 @@ import { taskIdsAwaitingLanding, taskIdsAwaitingLandingInWorkspace } from "../sr
 import type { Provider } from "../src/provider.js";
 import { buildMorningDigest } from "../src/push.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
-import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget } from "../src/tasks.js";
+import { abandonConsequence, cancelTaskDirectly, completeAudit, completeInterview, completeTask, countUnsettledTasksReferencing, declarePremiseBreach, escalateTask, getRegistrant, getTask, type InterviewFields, interviewFields, interviewTargets, listBoard, listChildren, listExaminees, logDecision, nextSlotTask, openedPlaceNames, pickupTask, poseProbe, presentTask, redecompose, registerTask, reportBrokenProbe, resolveTaskAgent, retryInterviewRoot, type Task, taskHistoryRows, taskVerbSwap, unrowedTarget, whyNoReturnDestination } from "../src/tasks.js";
 import { tierIdOf, tierNameOf, tierNames } from "../src/tier.js";
 import { commitTriage, entryObjections, listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { registerFailureQuestion } from "../src/watchdog.js";
@@ -579,7 +579,7 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   const { root } = registerInterview(db, [opusHigh], { workspace: "reef", evidence_task_ids: [evidence.id, plain.id] });
   const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   const audit = listChildren(db, root.id).find((child) => child.type === "review")!;
-  const nested = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  const nested = rcaOf(db, audit.id, new Date(0));
   const again = retryRoot(db, root);
   const names = (task: Task) => openedPlaceNames(db, task.id, "sandbox").sort();
 
@@ -589,10 +589,10 @@ it("task が開く場所の名前は、受験者は面接室(root id)だけ、ro
   for (const review of [audit, nested]) expect(names(review)).toEqual(["reef", root.id, evidence.id].sort());
   expect(names(plain)).toEqual(["sandbox"]);
   // review の鎖は review でない祖先で切れる(`taskRunPlace` と同じ辿り方)
-  const workUnderAudit = registerTask(db, { type: "work", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
-  markPickedUp(db, workUnderAudit.id, new Date(0));
-  const reviewUnderWork = registerTask(db, { type: "review", ...PLAIN, workspace: "reef", parent_id: workUnderAudit.id }, new Date(0), ...HUMAN_WEBUI);
-  for (const task of [workUnderAudit, reviewUnderWork]) expect(names(task)).toEqual(["reef"]);
+  const repairUnderAudit = registerTask(db, { type: "memory_repair", ...PLAIN, workspace: "reef", parent_id: audit.id }, new Date(0), ...HUMAN_WEBUI);
+  logDecision(db, repairUnderAudit, "drop entry 3", "tako", new Date(0), "worker");
+  const reviewUnderRepair = rcaOf(db, repairUnderAudit.id, new Date(0));
+  for (const task of [repairUnderAudit, reviewUnderRepair]) expect(names(task)).toEqual(["reef"]);
 });
 
 it("workspace を指定しない付帯子の review が開く場所の名前は、既定でなく最も近い固定済みの祖先の名前(ADR 0290 決定5)", () => {
@@ -890,11 +890,12 @@ it("前の出題の監査が未決着のあいだの出題は拒まれる。監�
   expect(listExaminees(db, root.id)).toEqual([]);
 });
 
-it("監査の完了は監査でない task(root を親にした人間登録の review・root)と空の findings を拒み、何も記録しない(ADR 0273 決定3)", () => {
+it("監査の完了は監査でない task(root の下の RCA・root)と空の findings を拒み、何も記録しない(ADR 0273 決定3)", () => {
   const { db, root } = registerInterview();
   const audit = poseProbe(db, root, POSE, POSER, new Date(0), "worker", POSED_HEAD);
   markPickedUp(db, root.id, new Date(0));
-  const review = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: root.id }, new Date(0), ...HUMAN_WEBUI);
+  logDecision(db, getTask(db, root.id)!, "the probe is sound", "suzumedai", new Date(0), "worker");
+  const review = rcaOf(db, root.id, new Date(0));
 
   for (const task of [review, getTask(db, root.id)!]) expect(() => audited(db, task, "accepted")).toThrow("only an Interview's audit completes with complete_audit");
   expect(() => audited(db, audit, "accepted", "  ")).toThrow(DomainError);
@@ -1003,17 +1004,98 @@ it("朝の digest の新着ログ数は受験者の行を数えない(ADR 0268 �
   expect(buildMorningDigest(db).logCount).toBe(3);
 });
 
-it("受験者を親にした work と review の登録は扉を問わず拒まれ、question は通る —— root を親にした review は通る(ADR 0268 決定5)", () => {
+it("受験者を親にした work と review の登録は扉を問わず拒まれ、question は通る —— root を親にした review も帰り先が無いので拒まれる(ADR 0268 決定5 / ADR 0301 決定2)", () => {
   const { db, root } = registerInterview();
   const [child] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
   const doors = [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const;
   for (const type of ["work", "review"] as const) {
-    for (const [workerId, origin] of doors) expect(() => registerTask(db, { type, ...CHILD, parent_id: child.id }, new Date(0), workerId, origin)).toThrow(DomainError);
+    // 受験者の床(question だけ)が先に当たり、その理由を言う
+    for (const [workerId, origin] of doors) expect(() => registerTask(db, { type, ...CHILD, parent_id: child.id }, new Date(0), workerId, origin)).toThrow("an Interview's answer task takes no children other than a question");
   }
   expect(listChildren(db, child.id)).toEqual([]);
   expect(failureQuestion(db, child.id, new Date(0)).parent_id).toBe(child.id);
+  // 述語の上でも受験者は帰り先が無い(ADR 0301 決定1)
+  expect(whyNoReturnDestination(db, child.id)).toMatch(/root is an Interview's answer task/);
   markPickedUp(db, root.id, new Date(0));
-  expect(registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI).parent_id).toBe(root.id);
+  expect(() => registerTask(db, { type: "review", ...CHILD, parent_id: root.id }, new Date(0), ...HUMAN_WEBUI)).toThrow(/root is an Interview/);
+});
+
+/** その task の最後の行への異議を commit して立つ auditor の RCA。 */
+function rcaOf(db: Db, taskId: string, at = new Date(1)): Task {
+  const entry = taskDecisionLog(db, taskId).at(-1)!.id;
+  startTriage(db, at);
+  raiseObjection(db, entry, "the call is wrong", at);
+  commitTriage(db, at, [], new Map());
+  return listChildren(db, taskId).find((child) => child.title.startsWith("rca (auditor)"))!;
+}
+
+/** Interview の木の task —— root・出題の監査・root の下の RCA・監査の下の RCA。どれも帰り先の無い系譜(ADR 0301 決定1)。 */
+function interviewTree() {
+  const { db, root } = registerInterview();
+  poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
+  const audit = listChildren(db, root.id).find((child) => child.title.startsWith("audit:"))!;
+  return { db, root: getTask(db, root.id)!, audit: getTask(db, audit.id)!, rootRca: rcaOf(db, root.id), auditRca: rcaOf(db, audit.id) };
+}
+
+const APPROVAL_QUESTION = {
+  type: "question" as const,
+  ...CHILD,
+  question: [{ title: "authorize child registration: probe", options: ["approve", "reject"], recommendation: "approve" }],
+  question_kind: { kind: "approval" as const, pending_child: CHILD },
+};
+
+it("Interview の木の task を親にした work・review・承認 question の登録は扉を問わず拒まれ、拒否文は系譜のルートが Interview だと名指す —— RCA・記憶 / routing の修理子・failure と escalate の question は通る(ADR 0301 決定1・2)", async () => {
+  const { db, root, audit, rootRca, auditRca } = interviewTree();
+  const doors = [HUMAN_WEBUI, ["auditor", "worker"], [BOARD_WORKER_ID, "board"]] as const;
+  for (const parent of [root, audit, rootRca, auditRca]) {
+    const before = listChildren(db, parent.id).length;
+    for (const input of [{ type: "work" as const, ...CHILD }, { type: "review" as const, ...CHILD }, APPROVAL_QUESTION]) {
+      for (const [workerId, origin] of doors) {
+        expect(() => registerTask(db, { ...input, parent_id: parent.id }, new Date(2), workerId, origin)).toThrow(/^no (work|review|question) task grows here: this lineage's root is an Interview/);
+      }
+    }
+    const humanDoor = await registerThroughHumanDoor({ db, pollNow: () => {} }, { type: "review", ...CHILD, parent_id: parent.id }, () => new Date(2), "webui");
+    expect(humanDoor).toMatchObject({ ok: false, failure: { error: expect.stringMatching(/root is an Interview/) } });
+    expect(listChildren(db, parent.id)).toHaveLength(before);
+    for (const type of ["memory_repair", "routing_repair"] as const) {
+      expect(registerTask(db, { type, ...CHILD, parent_id: parent.id }, new Date(2), ...HUMAN_WEBUI).parent_id).toBe(parent.id);
+    }
+    expect(failureQuestion(db, parent.id, new Date(2)).parent_id).toBe(parent.id);
+    const question = [{ title: "which tier?", options: ["a", "b"], recommendation: "a" }];
+    expect(escalateTask(db, getTask(db, parent.id)!, { context: "c", questions: question }, "auditor", new Date(2), "worker").parent_id).toBe(parent.id);
+  }
+  // RCA の下の RCA も立つ
+  logDecision(db, rootRca, "the cause is the rubric", "fugu", new Date(3), "worker");
+  expect(rcaOf(db, rootRca.id, new Date(3)).parent_id).toBe(rootRca.id);
+});
+
+it.each(["root の下の RCA", "監査の下の RCA", "retry で cancelled になった root の下に残る RCA"] as const)("%sの行への異議は帰責と RCA を立て、work の修理子を立てない(#2505 測定 A・B・C / ADR 0301 決定3)", (where) => {
+  const { db, root, rootRca, auditRca } = interviewTree();
+  if (where === "retry で cancelled になった root の下に残る RCA") {
+    retryRoot(db, root);
+    expect([getTask(db, root.id)!.status, getTask(db, rootRca.id)!.status]).toEqual(["cancelled", "todo"]);
+  }
+  const rca = where === "監査の下の RCA" ? auditRca : rootRca;
+  const entry = logDecision(db, rca, "the cause is the rubric", "fugu", new Date(2), "worker");
+  startTriage(db, new Date(2));
+  raiseObjection(db, entry, "the cause is the tier", new Date(2));
+
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+
+  expect(listChildren(db, rca.id).map((child) => [child.type, child.title])).toEqual([
+    ["review", `rca (self): ${rca.title}`],
+    ["review", `rca (auditor): ${rca.title}`],
+  ]);
+  expect(listEvents(db, rca.id).flatMap(({ payload }) => (payload.kind === "objection_attributed" ? [payload.entry_id] : []))).toEqual([entry]);
+});
+
+it("Interview の root の下の RCA は worker の decompose でも人間の decompose でも分けられず、何も登録されない —— 分解の verb も見えない(#2505 測定 D / ADR 0301 決定3)", () => {
+  const { db, rootRca, auditRca } = interviewTree();
+  for (const rca of [rootRca, auditRca]) expect(taskVerbSwap(db, rca.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_rca"] });
+  const split = { reason: "fix the rubric", children: [CHILD] };
+  expect(() => decomposeTaskViaWorker(db, rootRca, split, "fugu", new Date(2))).toThrow(/root is an Interview/);
+  expect(() => humanDecomposeTaskViaWebui(db, rootRca, split, new Date(2))).toThrow(/root is an Interview/);
+  expect(listChildren(db, rootRca.id)).toEqual([]);
 });
 
 // 記憶の修理子(ADR 0272)。立てるのは異議の束ね(#2175)で、ここでは束ねと同じ人間の名義の registerTask で立てる

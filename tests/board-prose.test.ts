@@ -113,8 +113,9 @@ async function selfRcaProse(db: Db, objected: Task, at: Date) {
   const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
   appendEvent(db, { taskId: objected.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
   const entryId = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
-  appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  const objection = appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  // 異議の id を運ぶ RCA —— 帰り先の無い系譜(Interview の root)にも立つ(ADR 0301 決定2)
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
   return reviewProse(db, registryDir, rca, spawn(db, rca, at));
 }
 

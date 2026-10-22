@@ -6,8 +6,9 @@ import { completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, repairRe
 import { registerMetaReview } from "../src/meta-review.js";
 import { completeRca, type GatedJudgment } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
-import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
+import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, listLog, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
+import { resolveTaskBranchLineage } from "../src/workspace.js";
 import {
   answerQuestionViaWebui,
   api,
@@ -23,6 +24,8 @@ import {
   injectMemoryMaterial,
   interviewExaminee,
   loggedEntry,
+  makeWorkspace,
+  markPickedUp,
   mcpClient,
   queueWork,
   rcaFindings,
@@ -982,6 +985,27 @@ it.each([
   expect(nextSlotTask(db, "sandbox", "deckhand", "fugu", undefined, [rca.id])).toBeUndefined();
 });
 
+it("ルートの question の人間の判断の行は帰り先がある —— 異議は human 宛ての work の修理子を立て、流し読みの no_work_repair は false(ADR 0237 決定3 / #2377 / ADR 0301 決定1)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const question = registerTask(
+    db,
+    { type: "question", title: "merge?", purpose: "p", completion_criteria: "c", question: [{ title: "merge?", options: ["merge", "hold"], recommendation: "merge" }] },
+    at,
+    BOARD_WORKER_ID,
+    "board",
+  );
+  answerQuestionViaWebui(db, question, ["hold"], at);
+  const entry = logDecision(db, getTask(db, question.id)!, "hold", HUMAN_WORKER_ID, at, "webui");
+
+  expect(listLog(db).find((e) => e.id === entry)!.no_work_repair).toBe(false);
+  startTriage(db, at);
+  raiseObjection(db, entry, "merge it", at);
+  commitTriage(db, at);
+
+  expect(listChildren(db, question.id).filter((child) => child.type === "work").map((repair) => [repair.title, repair.assignee])).toEqual([["repair: merge?", HUMAN_WORKER_ID]]);
+});
+
 it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
@@ -1278,6 +1302,78 @@ it("meta-review の下の memory_repair の記憶の書き込みの行への異�
 
   expect(listChildren(db, subjectRepair.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["memory_repair"]);
   for (const task of [workerRepair, workerRca]) expect(listChildren(db, task.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["work"]);
+});
+
+it("人間が登録した root の review(独立監査)の判断の行と、その RCA の判断の行への異議は、work の修理子を保護ブランチ基点で立てる —— work の祖先が無いことは帰り先が無い理由にならない(#2505 測定 E / ADR 0301 決定1)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+  const workspace = await makeWorkspace("independent-audit");
+  const audit = registerTask(db, { type: "review", title: "review main", purpose: "p", completion_criteria: "c", workspace: workspace.name }, at, ...HUMAN_WEBUI);
+  spawnedAs(db, audit, "fugu", at);
+  const rca = auditorRcaOn(db, audit, at, "fugu");
+  auditorRcaOn(db, rca, at, "auditor");
+
+  for (const objected of [audit, rca]) {
+    const repairs = listChildren(db, objected.id).filter((child) => child.type === "work");
+    expect(repairs.map((repair) => repair.title)).toEqual([`repair: ${objected.title}`]);
+    expect(resolveTaskBranchLineage(db, workspace, repairs[0]!).branch).toBeUndefined();
+  }
+});
+
+it("人間が直接 cancel した review 子と、cancelled の work の祖先を挟む RCA の判断の行への異議は、帰責と RCA だけを立て work の修理子を立てない(ADR 0268 決定3 / ADR 0271 決定1 / ADR 0301 決定3)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+  const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTask(db, root, { reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at, undefined, "webui");
+  markPickedUp(db, child!.id, at);
+  const reviewChild = registerTask(db, { type: "review", title: "second look", purpose: "p", completion_criteria: "c", parent_id: child!.id }, at, ...HUMAN_WEBUI);
+  const rca = auditorRcaOn(db, child!, at, "deckhand");
+  const objectRow = (objected: Task, worker: string) => {
+    const row = logDecision(db, objected, `${worker}'s call`, worker, at, "worker");
+    startTriage(db, at);
+    raiseObjection(db, row, "redo it", at);
+    commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  };
+  // review 子だけを cancel する —— 祖先の work は生きている(今の捨てた成果の判定には当たらない)
+  cancelTaskDirectly(db, reviewChild, null, at, {}, "webui");
+  expect(getTask(db, child!.id)!.status).toBe("todo");
+  objectRow(reviewChild, "fugu");
+  cancelTaskDirectly(db, getTask(db, root.id)!, null, at, {}, "webui");
+  expect([child!, rca].map((task) => getTask(db, task.id)!.status)).toEqual(["cancelled", "todo"]);
+  objectRow(rca, "auditor");
+
+  for (const objected of [reviewChild, rca]) {
+    expect(listChildren(db, objected.id).map((c) => c.title)).toEqual([expect.stringMatching(/^rca \(self\)/), `rca (auditor): ${objected.title}`]);
+    expect(listEvents(db, objected.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
+  }
+});
+
+it("流し読みのエントリの no_work_repair は、帰り先の無い task の判断の行(Interview の root・その下の RCA・meta-review の自由文の行・cancelled の task)で true、独立監査とその RCA・普通の work の判断の行・記憶の書き込みの行・meta-review の型つきの判断の行では false(ADR 0301 決定6)", () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-22T00:00:00.000Z");
+  const root = interviewRoot(db, at);
+  spawnedAs(db, root, "suzumedai", at);
+  const rootRow = logDecision(db, root, "the rubric is fair", "suzumedai", at, "worker");
+  const rootMemoryRow = recordNote(db, at, root.id).event_id;
+  const rootRca = auditorRcaOn(db, root, at, "suzumedai");
+  const rootRcaRow = logDecision(db, rootRca, "the cause is X", "auditor", at, "worker");
+  const metaReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
+  const metaRow = logDecision(db, metaReview, "keep entry 3", "fugu", at, "worker");
+  const typedRow = appendEvent(db, { taskId: metaReview.id, workerId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "left_as_is", judgment: { kind: "memory", entry: 1, value: "left_as_is" } } });
+  const cancelled = registerTask(db, { type: "work", title: "dropped", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const cancelledRow = logDecision(db, cancelled, "split it", "deckhand", at, "worker");
+  cancelTaskDirectly(db, cancelled, null, at, {}, "webui");
+  const audit = registerTask(db, { type: "review", title: "review main", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const auditRow = logDecision(db, audit, "main is fine", "fugu", at, "worker");
+  const auditRca = auditorRcaOn(db, audit, at, "fugu");
+  const auditRcaRow = logDecision(db, auditRca, "the cause is Y", "auditor", at, "worker");
+  const work = registerTask(db, { type: "work", title: "plain", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const workRow = logDecision(db, work, "use a lexer", "deckhand", at, "worker");
+
+  const noWorkRepair = new Map(listLog(db).map((entry) => [entry.id, entry.no_work_repair]));
+
+  for (const row of [rootRow, rootRcaRow, metaRow, cancelledRow]) expect(noWorkRepair.get(row)).toBe(true);
+  for (const row of [rootMemoryRow, typedRow, auditRow, auditRcaRow, workRow]) expect(noWorkRepair.get(row)).toBe(false);
 });
 
 const interviewRoot = (db: Db, at: Date, assignee?: string) =>

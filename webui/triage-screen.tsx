@@ -101,6 +101,7 @@ type TpLogEntry = NonNullable<import('../design-system/components/board/LogEntry
   pendingObjections?: string[];
   bundledObjections?: string[];
   interview?: WireContract['GET /api/log']['entries'][number]['interview'];
+  noWorkRepair?: boolean;
 };
 /** scratchpad の1行(サーバが id を振る)。 */
 interface TpScratchLine {
@@ -739,6 +740,8 @@ const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], ope
   pendingObjections: e.objections.filter((o) => o.session_id === openSessionId).map((o) => o.comment),
   bundledObjections: e.objections.filter((o) => o.session_id !== openSessionId).map((o) => o.comment),
   interview: e.interview,
+  // 異議しても work の修理子が立たない判断の行(ADR 0301 決定6)
+  noWorkRepair: e.no_work_repair,
 });
 
 // The entry keys with a commit-pending objection (ADR 0085): the union of
@@ -1105,9 +1108,9 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
                   )}
                 </div>
               )}
-              {objecting === k && l.interview && !l.memoryEntries && (
+              {objecting === k && l.noWorkRepair && (
                 <div style={{ padding: '10px 12px 0', background: 'var(--coral-1)', fontSize: 'var(--text-xs)', color: 'var(--text-secondary)' }}>
-                  An Interview entry: objecting raises no repair task — only attribution and an RCA.
+                  No repair task can land here: objecting raises only attribution and an RCA.
                 </div>
               )}
               {objecting === k && (
@@ -1215,7 +1218,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
           <div>
             {nObjections > 0 && (
               <p style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)', margin: 0 }}>
-                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle at commit — one repair task per objected task at the queue tail for its decision entries (none for an Interview root or a cancelled task) and one memory repair for its memory writes, whatever its state
+                {nObjections} objection{nObjections > 1 ? 's' : ''} bundle at commit — one repair task per objected task at the queue tail for its decision entries (none where a repair could not land) and one memory repair for its memory writes, whatever its state
               </p>
             )}
             {scratch.length > 0 && (

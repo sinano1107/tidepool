@@ -64,7 +64,7 @@ async function boardWithMetaReview(agentRegistered?: (name: string) => boolean) 
   return { review, client, call, material };
 }
 
-it("主題 memory の task の接続の tool 一覧は、普通の task の一覧から worker の memory verb と complete_task を除き専用 verb と complete_memory_review を足したもの(Codex の enabled_tools と同じ定数)", async () => {
+it("主題 memory の task の接続の tool 一覧は、普通の task の一覧から worker の memory verb と complete_task と分解の verb(ADR 0301 決定3)を除き専用 verb と complete_memory_review を足したもの(Codex の enabled_tools と同じ定数)", async () => {
   const { client } = await boardWithMetaReview();
   const work = await registerWork(t, "index the tide charts");
   const workClient = await mcpClient(t.mcpBaseUrl, work.id);
@@ -74,7 +74,7 @@ it("主題 memory の task の接続の tool 一覧は、普通の task の一�
     const worker = await names(workClient);
     expect(worker).toEqual(expect.arrayContaining([...WORKER_MEMORY, "get_current_task", "log_decision", "complete_task"]));
     expect(worker.filter((name) => META_REVIEW_MEMORY.includes(name))).toEqual([]);
-    expect(metaReview.sort()).toEqual([...worker.filter((name) => !WORKER_MEMORY.includes(name) && name !== "complete_task"), ...META_REVIEW_MEMORY, "complete_memory_review"].sort());
+    expect(metaReview.sort()).toEqual([...worker.filter((name) => !WORKER_MEMORY.includes(name) && !["complete_task", "decompose", "redecompose"].includes(name)), ...META_REVIEW_MEMORY, "complete_memory_review"].sort());
   } finally {
     await client.close();
     await workClient.close();

@@ -630,13 +630,13 @@ const WORKER_PULL_VERBS = ["browse_memory", "search_memory", "read_memory"] as c
  *  受験者は分解の verb と記憶を書く verb を伏せる(ADR 0245 決定1 / ADR 0268 決定2)。interview の root の一覧は type で決まり(ADR 0273
  *  決定2・9): 出題・採点完了・破綻の報告・escalate・log_decision・記憶の verb・routing の読み口と、根拠があれば根拠の history の読み口。
  *  出題の前後の拒否は domain が持つ(ADR 0253 決定4・5 / ADR 0251 決定1・2)。
- *  成果が捨てられた task(そこで走るのは RCA と修理子の type で、修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2)。
+ *  帰り先の無い task(RCA・meta-review など。修理子の type は下の自分の差し替えが先に当たる)は分解の verb を伏せる —— 登録の床が拒む分解を見せない(ADR 0271 決定2 / ADR 0301 決定3)。
  *  memory_repair は分解の verb と新規の記憶の書き込みを伏せ(ADR 0272 決定3)、行の主題を持てば worker の pull verb も伏せる(ADR 0283 決定3)
  *  —— 祖先の cancel の下でも同じなので先に見る。
  *  routing_repair は基本の面(get_current_task / log_decision / escalate / complete_task)の外の worker の verb を伏せる(ADR 0279 決定4 ——
  *  routing の判断の行を運ぶ修理子の読み口と提案 verb は routingRepairVerbs が足す)。
  *  統合レビューは complete_task を伏せ、判断を値で運ぶ complete_integration_review を足す(ADR 0278 決定1)。meta-review も同じ形で
- *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— RCA は祖先の cancel の下でも走るので、捨てられた成果の伏せと重ねる。
+ *  主題ごとの complete_memory_review / complete_routing_review を足し、RCA は complete_rca を足す —— どれも帰り先の無い系譜で走りうるので、分解の verb の伏せと重ねる。
  *  行の主題を持つ RCA は worker の pull verb と新規の記憶の書き込みも伏せる(ADR 0283 追記1 —— 指針の節の id 読みは isSubjectReaderRca で別に登録する)。 */
 export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
   const task = getTask(db, taskId);
@@ -669,18 +669,18 @@ export function taskVerbSwap(db: Db, taskId: string): TaskVerbSwap {
       probeAccepted: probeAccepted(db, taskId),
     };
   }
-  const discarded = isArtifactDiscarded(db, taskId);
+  // 帰り先の無い task(その task を親として問う)は分解の verb を伏せる —— 床が拒む分解を見せない(ADR 0301 決定3)
+  const splitVerbs = whyNoReturnDestination(db, taskId) === undefined ? [] : (["decompose", "redecompose"] as const);
   if (isRca(db, taskId)) {
     // 行の主題を持つ RCA は親の主題の読み手で、worker の pull verb と新規の記憶の書き込みを持たない(ADR 0283 追記1)
     const reader = lineageSubjectOf(db, taskId) === null ? [] : (["record_knowledge", "define_memory_branch", ...WORKER_PULL_VERBS] as const);
-    return { withheld: [...(discarded ? (["decompose", "redecompose"] as const) : []), "complete_task", ...reader], added: ["complete_rca"] };
+    return { withheld: [...splitVerbs, "complete_task", ...reader], added: ["complete_rca"] };
   }
-  if (discarded) return { withheld: ["decompose", "redecompose"], added: [] };
   // 統合レビュー(ADR 0278 決定1): 判断を値で運ぶ専用の完了 verb
-  if (isIntegrationReview(db, taskId)) return { withheld: ["complete_task"], added: ["complete_integration_review"] };
+  if (isIntegrationReview(db, taskId)) return { withheld: [...splitVerbs, "complete_task"], added: ["complete_integration_review"] };
   // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
-  if (task?.meta_review_subject) return { withheld: ["complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
-  return { withheld: [], added: [] };
+  if (task?.meta_review_subject) return { withheld: [...splitVerbs, "complete_task"], added: [META_REVIEW_COMPLETION[task.meta_review_subject]] };
+  return { withheld: splitVerbs, added: [] };
 }
 
 /** Interview の root の対象の一覧。対象を持たない task は null。 */
@@ -1133,7 +1133,7 @@ export function registerTask(
   assertReviewByDistinct(input.review_by);
   assertInterviewFields(db, input);
   assertNoExamineeChild(db, input);
-  assertArtifactNotDiscarded(db, input);
+  assertReturnDestination(db, input);
   assertRepairHasParent(input);
   assertReviewChildHasExecutor(db, input, workerId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
@@ -1442,7 +1442,8 @@ export function finishTask(
       },
       at: now,
     });
-    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null })) {
+    // 帰り先の無い系譜で走り終えた task(祖先の cancel の前に立った)には完了時レビューを立てない —— 床が拒む子(ADR 0301 決定2・3)
+    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null }) && whyNoReturnDestination(db, task.id) === undefined) {
       for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
         registerTask(
           db,
@@ -3113,8 +3114,8 @@ export function decomposeTask(
   if (openPremiseBreachChildId(db, parent.id) !== undefined) {
     throw new DomainError("a child's premise breach is open — the decomposition's author judges it first (redecompose or continue_decomposition)");
   }
-  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2)
-  assertArtifactNotDiscarded(db, { type: "work", parent_id: parent.id });
+  // 承認 question に包む子も、承認の時でなくここで拒む(ADR 0271 決定2 / ADR 0301 決定3)
+  assertReturnDestination(db, { type: "work", parent_id: parent.id });
   input = {
     ...input,
     children: input.children.map((child) => {
@@ -3687,13 +3688,51 @@ function discardingAncestor(db: Db, taskId: string): Task | undefined {
   return id === undefined ? undefined : getTask(db, id);
 }
 
-/** ADR 0271 決定2: 成果が捨てられた task の下に work は生えない(扉を問わず、ADR 0268 決定5 と同じ形)。 */
-function assertArtifactNotDiscarded(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">): void {
-  if (input.parent_id === undefined || input.type !== "work") return;
-  const ancestor = discardingAncestor(db, input.parent_id);
-  if (ancestor) {
-    throw new DomainError(`no work task grows here: the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`);
+/** これから立つ子に帰り先が無い理由(ADR 0301 決定1)、帰り先があれば undefined。親と祖先を `parent_id` だけでたどって読む ——
+ *  (a) 系譜のルートが保護ブランチを対象にする仕事(受験者でない work か、主題の無い review = 独立監査)か question でない(新しいルートの種類も
+ *  既定でこちら)、(b) cancelled の work が祖先にある(root に最も近いものを名指す、ADR 0271 決定1)か、親自身が cancelled(型を
+ *  問わない、ADR 0268 決定3)。work の祖先の有無は理由にしない —— 独立監査の修理子は保護ブランチから切られる。走っている task について
+ *  知りたい読み手もその task を親として問う。 */
+export function whyNoReturnDestination(db: Db, parentId: string): string | undefined {
+  const parent = getTask(db, parentId);
+  if (!parent) return undefined;
+  const rootId = db.prepare(`${ancestorsSql("?")} SELECT id FROM ancestors WHERE id IS NOT NULL ORDER BY depth DESC LIMIT 1`).pluck().get(parentId) as string | undefined;
+  const root = rootId === undefined ? parent : getTask(db, rootId)!;
+  // ルートの question も帰り先あり —— 人間の判断の行への異議は human 宛ての work の修理子を立てる(ADR 0237 決定3 / #2377)
+  if (!((root.type === "work" && root.interview_target_id === null) || (root.type === "review" && root.meta_review_subject === null) || root.type === "question")) {
+    const kind =
+      root.interview_target_id !== null ? "an Interview's answer task"
+      : root.type === "interview" ? "an Interview"
+      : root.meta_review_subject ? `a ${root.meta_review_subject} meta-review`
+      : `a ${root.type} task`;
+    return `this lineage's root is ${kind}, not work aimed at the protected branch, so no repair can land`;
   }
+  const ancestor = discardingAncestor(db, parentId);
+  if (ancestor) return `the cancel of ancestor "${ancestor.title}" (${ancestor.id}) discarded this task's artifact, so no repair can land`;
+  if (parent.status === "cancelled") return `its parent "${parent.title}" (${parent.id}) is cancelled, so no repair can land`;
+  return undefined;
+}
+
+/** 宛先がブランチに依存する task か(ADR 0301 決定2 の表の1列目): work、完了時レビュー・統合レビュー・人間の review 子(review の
+ *  うち RCA と出題の監査以外のすべて)、承認すると work を立てる question。帰り先の無い系譜には立たない。 */
+function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objection_event_ids" | "audited_probe" | "question_kind">): boolean {
+  switch (input.type) {
+    case "work":
+      return true;
+    case "review":
+      return !input.objection_event_ids?.length && input.audited_probe === undefined;
+    case "question":
+      return input.question_kind?.kind === "approval";
+    default:
+      return false;
+  }
+}
+
+/** ADR 0301 決定2・3: 帰り先の無い親の下に、宛先がブランチに依存する task は生えない(扉を問わず)。 */
+function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "objection_event_ids" | "audited_probe" | "question_kind">): void {
+  if (input.parent_id === undefined || !dependsOnBranch(input)) return;
+  const reason = whyNoReturnDestination(db, input.parent_id);
+  if (reason) throw new DomainError(`no ${input.type} task grows here: ${reason}`);
 }
 
 /** The parent this row is holding up, or NULL — `listYourTasks` and `questionBlocking` share it. */

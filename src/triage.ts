@@ -21,19 +21,17 @@ import type { MetaReviewSubject } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import type { GatedJudgment, InitialJudgment } from "./retrospective.js";
 import {
-  auditedPosedEventId,
   type BoardTask,
   derivedWorkspaceSql,
   getTask,
-  isArtifactDiscarded,
   isAuditSql,
   latestPosedProbe,
-  lineageSubjectOf,
   listBoard,
   moveTask,
   type RegisterTaskInput,
   type RepairType,
   registerTask,
+  whyNoReturnDestination,
 } from "./tasks.js";
 import {
   BOARD_WORKER_ID,
@@ -151,6 +149,11 @@ export function raiseObjection(
     payload: { kind: "objection_raised", entry_id: entryId, comment: normalizeText(comment), session_id: open.id },
     at: now,
   });
+}
+
+/** 判断の行 —— 記憶の書き込みでも meta-review の型つきの判断でもない行。異議は work の修理子に束ねる(ADR 0272 決定1・2 / ADR 0279 決定3・4)。 */
+function isDecisionRow({ payload }: DecisionLogEntry): boolean {
+  return payload.kind !== "memory_written" && !(payload.kind === "decision_logged" && (payload.judgment?.kind === "memory" || payload.judgment?.kind === "routing"));
 }
 
 /** One objected log entry with every direction comment raised against it this
@@ -423,11 +426,9 @@ function bundleObjections(
     const judgesMemory = (pair: ObjectionPair) => judges(pair, "memory");
     const memoryRows = pairs.filter((pair) => pair.entry.kind === "memory_written" || judgesMemory(pair));
     const routingRows = pairs.filter((pair) => judges(pair, "routing"));
-    const decisionRows = pairs.filter((pair) => !memoryRows.includes(pair) && !routingRows.includes(pair));
-    // Interview の監査の判断の行も修理子を持たない —— 出題を直すのは root の出題し直しで、監査の成果は残らない(ADR 0273 決定3)
-    // 行の主題を持つ task(meta-review、その下の主題の修理子・RCA とその子孫)の判断の行も work の修理子を持たない —— 主題 verb は work に
-    // 登録されず、直すブランチも無い(ADR 0279 決定3・4 / ADR 0283 決定2)
-    if (decisionRows.length > 0 && objected.type !== "interview" && lineageSubjectOf(db, taskId) === null && auditedPosedEventId(db, taskId) === undefined && objected.status !== "cancelled" && !isArtifactDiscarded(db, taskId)) {
+    const decisionRows = pairs.filter((pair) => isDecisionRow(pair.entry));
+    // 判断の行の work の修理子は異議された task の子 —— その子に帰り先が無ければ立てない(ADR 0301 決定3)。帰責と RCA は立つ
+    if (decisionRows.length > 0 && whyNoReturnDestination(db, taskId) === undefined) {
       registerRepair("work", "repair", "decisions", decisionRows);
     }
     if (memoryRows.length > 0) {
@@ -720,6 +721,8 @@ export interface LogEntry extends DecisionLogEntry {
   /** Interview のグループ(ADR 0273 決定10、ADR 0268 決定6 の印の昇格): root と監査 review の行だけが運ぶ —— 鍵は root の id、見出しは
    *  最新の出題の題(出題前は root の題)と実環境の名前。受験者の行は一覧に出ない(ADR 0268 決定1)。 */
   interview: { root_id: string; title: string; workspace: string | null } | null;
+  /** 異議しても work の修理子が立たない行か(ADR 0301 決定6): 判断の行で、task を親として読んで帰り先が無い。triage 画面の予告が読む。 */
+  no_work_repair: boolean;
 }
 
 export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
@@ -751,6 +754,12 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited"]);
   // Interview ごとに1回だけ引く —— 同じ root の行は同じグループ
   const groups = new Map<string, NonNullable<LogEntry["interview"]>>();
+  // task ごとに1回だけ系譜を読む
+  const withoutDestination = new Map<string, boolean>();
+  const noDestination = (taskId: string) => {
+    if (!withoutDestination.has(taskId)) withoutDestination.set(taskId, whyNoReturnDestination(db, taskId) !== undefined);
+    return withoutDestination.get(taskId)!;
+  };
   const interviewGroup = (rootId: string) => {
     let group = groups.get(rootId);
     if (!group) {
@@ -766,6 +775,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
     return {
       ...entry,
       interview: interview_root_id ? interviewGroup(interview_root_id) : null,
+      no_work_repair: isDecisionRow(entry) && noDestination(entry.task_id),
       objections: objectionsByEntry.get(entry.id) ?? [],
       cause: attribution?.cause ?? null,
       entries: attribution?.entries ?? null,

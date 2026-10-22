@@ -5,10 +5,10 @@ import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { routingPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, proposeRoutingChange } from "../src/routing-review.js";
-import { completeTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
+import { completeTask, escalateTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
-import { DECKHAND_AGENT, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
 
@@ -36,10 +36,10 @@ function cycle() {
 const complete = (db: Db, review: Task, judgments: Parameters<typeof completeRoutingReview>[2]["judgments"]) =>
   completeRoutingReview(db, getTask(db, review.id)!, { judgments }, "auditor", at, "worker", routingPrecedents(db, review.id), [DECKHAND_AGENT]);
 
-it("routing meta-review の verb の差し替えは complete_task を伏せ complete_routing_review を足す", () => {
+it("routing meta-review の verb の差し替えは complete_task と分解の verb を伏せ complete_routing_review を足す —— 帰り先の無い系譜(ADR 0301 決定3)", () => {
   const { db, review } = cycle();
 
-  expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["complete_task"], added: ["complete_routing_review"] });
+  expect(taskVerbSwap(db, review.id)).toEqual({ withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_routing_review"] });
 });
 
 it.each([
@@ -235,7 +235,7 @@ it("no_change の対象ごとに対象を名指す型つきの decision_logged �
 
 it("完了が拒まれれば判断の行も書かれない —— 行と完了は1つの transaction", () => {
   const { db, review, injected } = cycle();
-  humanDecomposeTaskViaWebui(db, review, { reason: "split", children: [{ title: "child", purpose: "p", completion_criteria: "c" }] }, at);
+  escalateTask(db, review, { context: "c", questions: [{ title: "which agent?", options: ["a", "b"], recommendation: "a" }] }, "auditor", at, "worker");
 
   expect(() => complete(db, review, injected)).toThrow("unfinished children");
   expect(judgmentRows(db, review.id)).toEqual([]);

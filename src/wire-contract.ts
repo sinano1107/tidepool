@@ -274,6 +274,8 @@ export interface WireContract {
       session_event_id: number | null;
       /** Interview のグループ(src/triage.ts の LogEntry、ADR 0273 決定10): root と監査の行だけ。鍵は root_id、見出しは title と workspace。 */
       interview: { root_id: string; title: string; workspace: string | null } | null;
+      /** 異議しても work の修理子が立たない判断の行か(src/triage.ts の LogEntry、ADR 0301 決定6)—— triage 画面の予告が読む。 */
+      no_work_repair: boolean;
     }>;
     cursor: number;
   };
