@@ -65,14 +65,17 @@ The next run deletes `~/bench`.
   board time, and the number of questions raised. An exercise's cost is its tree's worker sessions (root,
   descendants, Interview examinees, the landing questions naming the tree, and the trees of Interview roots a
   retry replaced) minus the sessions that learn from the record: RCA reviews, `memory_repair` and `routing_repair`.
-  A work repair child stays on the row. Below the table, one line each sums the run-level spend by Provider or
+  A work repair child stays on the row. The replaced roots add to the cost only: wall time, settlement and
+  questions read the current root's tree. Below the table, one line each sums the run-level spend by Provider or
   Harness (ADR 0299 決定5): learning (Board calls `allocation_review` / `attribution` / `behavior_draft`, and the
-  meta-review, RCA and repair sessions), human surface (the four draft uses and `translation`), observation
+  meta-review, RCA and repair sessions), human surface (Board calls `task_draft` / `child_draft` / `handoff_draft` / `issue_inspection` /
+  `translation`), observation
   (`cli_auth_probe` / `model_probe`), and the unclassified sessions that fall in no exercise tree and no section.
   Unpriced calls and sessions are counted, never summed. Calls without usage and the usage TUI's startup quota
   check are not included.
 - `record.json` holds the same rows with each session's agent and board-verb sequence, and the run-level sections:
-  `spend` (each section by use, subject or task type, with its total; the unclassified sessions listed),
+  `spend` (each section by use, subject or task type, with its total; the learning and unclassified sessions listed
+  with their agent and board-verb sequence),
   `decision_rows`, `proposals`, `shadow`, `memory_writes`, `interviews`.
 - Compare two records only when their `config` blocks differ in the axis you mean to compare.
 

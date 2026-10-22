@@ -128,6 +128,14 @@ const CONFIG: RunConfig = { tidepool_commit: "abc123", cli_pins: { claude: "2.1.
 
 /** 宣言の形だけを持つ課題(loader を通さない —— 抽出の入力は読み込み済みの宣言)。 */
 const exercise = (name: string, over: Partial<Exercise> = {}): Exercise => ({ name, ...WORK_EXERCISE, readings: ["work"], ...over }) as Exercise;
+/** Interview の宣言を持つ課題(task は持たない)。 */
+const interviewExercise = (name: string): Exercise =>
+  ({
+    name,
+    title: "Interview the parser tier",
+    readings: ["interview"],
+    interview: { hypothesis: "h", tier: "standard", targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
+  }) as Exercise;
 
 /** fixture の transcript を、盤面の TranscriptStore と同じ名前(`<task>.<worker_spawned の id>.stream.jsonl`)で worker-logs に置く。 */
 function placeTranscript(logs: string, fixture: string, taskId: string, spawnedId: number): void {
@@ -265,7 +273,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
     scratch(),
     [
       { exercise: exercise("work"), task_id: work.id, test_exit: 0 },
-      { exercise: exercise("interview", { readings: ["interview"] }), task_id: root.id, test_exit: null },
+      { exercise: interviewExercise("interview"), task_id: root.id, test_exit: null },
     ],
     CONFIG,
   );
@@ -412,15 +420,6 @@ it("仕事の課題の行は種類 work を持ち、費用から RCA と記憶�
   expect(record.exercises[0]!.unpriced_sessions_by_harness).toEqual({});
 });
 
-/** Interview の宣言を持つ課題(task は持たない)。 */
-const interviewExercise = (name: string): Exercise =>
-  ({
-    name,
-    title: "Interview the parser tier",
-    readings: ["interview"],
-    interview: { hypothesis: "h", tier: "standard", targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
-  }) as Exercise;
-
 it("最適化の課題(Interview)の行は種類 optimisation と、root・受験者・出題の監査の費用を持ち、root への異議から立った RCA は持たない", () => {
   const db = openDb(":memory:");
   const examinee = interviewExaminee(db, AT);
@@ -436,6 +435,8 @@ it("最適化の課題(Interview)の行は種類 optimisation と、root・受�
 
   expect(record.exercises[0]).toMatchObject({ kind: "optimisation", cost_usd_by_harness: { "claude-code": 3 }, unpriced_sessions_by_harness: { codex: 1 } });
   expect(record.spend.learning.sessions.rca).toEqual({ cost_usd: { "claude-code": 8 }, unpriced: {} });
+  // 課題の行から外した session も agent ごとに記録に残る
+  expect(record.spend.learning.worker_sessions).toEqual([expect.objectContaining({ group: "rca", agent: "fugu", harness: "claude-code", cost_usd: 8 })]);
 });
 
 it("人間の retry で置き換わった前の Interview の root の木の session は、その課題の行に入り未分類に落ちない", () => {
@@ -513,7 +514,11 @@ it("走行の3つの節が Board call の行を用途・Provider ごとに、記
       routing_repair: { cost_usd: { "claude-code": 4 }, unpriced: {} },
     },
     total: { cost_usd: { anthropic: 1, "claude-code": 31 }, unpriced: { openai: 1, "claude-code": 2, codex: 1 } },
+    // 置き場ごとの和に入った session は1本ずつ並ぶ
+    worker_sessions: expect.any(Array),
   });
+  // RCA 2・memory meta-review 2(helper の1本を含む)・memory_repair 1・routing meta-review 2(同)・routing_repair 1
+  expect(learning.worker_sessions).toHaveLength(8);
   expect(human_surface).toEqual({
     board_calls: {
       task_draft: { cost_usd: { anthropic: 0.125 }, unpriced: {} },
@@ -561,6 +566,6 @@ it("記録は含まないものの一文を持ち、Markdown の要約は課題�
   expect(markdown).toContain("- learning: anthropic 0.50, claude-code 2.00, openai 1 unpriced\n");
   expect(markdown).toContain("- human surface: anthropic 0.25\n");
   expect(markdown).toContain("- observation: moonshot 0.13\n");
-  expect(markdown).toContain("- unclassified: 1 sessions, codex 1 unpriced\n");
+  expect(markdown).toContain("- unclassified sessions: 1, codex 1 unpriced\n");
   expect(markdown).toContain("Calls without usage and the usage TUI's startup quota check are not included.");
 });

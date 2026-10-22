@@ -151,6 +151,9 @@ function tally(entries: ReadonlyArray<{ key: string; cost_usd: number | null }>)
   return { cost_usd, unpriced };
 }
 
+/** session を Harness の費用1件として tally に渡す形。 */
+const priced = (s: { harness: string; cost_usd: number | null }) => ({ key: s.harness, cost_usd: s.cost_usd });
+
 /** group ごとの tally。 */
 type Priced = { group: string; key: string; cost_usd: number | null };
 const tallyBy = (entries: readonly Priced[]) =>
@@ -239,7 +242,7 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
   }
   // 記録から学ぶ task(RCA review と記憶・routing の修理子)は走行の節に置き、課題の行の費用から外す
   const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task));
-  const { cost_usd, unpriced } = tally(treeSessions.map((s) => ({ key: s.harness, cost_usd: s.cost_usd })));
+  const { cost_usd, unpriced } = tally(treeSessions.map(priced));
   return {
     name: exercise.name,
     title: exercise.title,
@@ -264,25 +267,41 @@ function learningGroup(db: Db, task: Task): string | null {
   return isRepairType(task.type) ? task.type : null;
 }
 
+/** Board call の用途が載る走行の節(ADR 0299 決定5)。`satisfies` で用途を足したら節を決めるまで型が通らない。 */
+const SECTION_OF_USE = {
+  allocation_review: "learning",
+  attribution: "learning",
+  behavior_draft: "learning",
+  task_draft: "human_surface",
+  child_draft: "human_surface",
+  handoff_draft: "human_surface",
+  issue_inspection: "human_surface",
+  translation: "human_surface",
+  cli_auth_probe: "observation",
+  model_probe: "observation",
+} as const satisfies Record<BoardCallUse, "learning" | "human_surface" | "observation">;
+
 /** 走行の支出の節(ADR 0299 決定5): Board call の行は用途ごとに Provider で、記録から学ぶ session は置き場ごとに Harness で足す。
  *  どの課題の木にも、どの節にも入らない worker session は未分類として並べる。 */
 function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: ReturnType<typeof exerciseRecord>[]) {
-  const calls: Priced[] = listBoardCalls(db).map((call) => ({ group: call.use, key: call.provider, cost_usd: call.usage.estimated_cost_usd }));
+  const calls = listBoardCalls(db);
   /** 節の Board call の行(用途ごと)と、節の総和(Provider / Harness ごと)。 */
-  const section = (uses: readonly BoardCallUse[], sessionEntries: readonly Priced[] = []) => {
-    const own = calls.filter((call) => (uses as readonly string[]).includes(call.group));
+  const section = (name: (typeof SECTION_OF_USE)[BoardCallUse], sessionEntries: readonly Priced[] = []) => {
+    const own = calls.filter((call) => SECTION_OF_USE[call.use] === name).map((call) => ({ group: call.use, key: call.provider, cost_usd: call.usage.estimated_cost_usd }));
     return { total: tally([...own, ...sessionEntries]), board_calls: tallyBy(own) };
   };
-  const learning = boardTasks.flatMap((task) => {
+  // agent と verb の列は課題の行と同じく session ごとに残す —— 課題の行の sessions は行の費用と一致させるので、ここに並べる
+  const learningSessions = boardTasks.flatMap((task) => {
     const group = learningGroup(db, task);
-    return group === null ? [] : sessions(db, logDir, task).map((s) => ({ group, key: s.harness, cost_usd: s.cost_usd }));
+    return group === null ? [] : sessions(db, logDir, task).map((s) => ({ group, ...s }));
   });
+  const learning = learningSessions.map((s) => ({ group: s.group, ...priced(s) }));
   const onExercise = new Set(exercises.flatMap((e) => e.sessions.map((s) => s.task_id)));
   return {
     not_included: "Calls without usage and the usage TUI's startup quota check are not included.",
-    learning: { ...section(["allocation_review", "attribution", "behavior_draft"], learning), sessions: tallyBy(learning) },
-    human_surface: section(["task_draft", "child_draft", "handoff_draft", "issue_inspection", "translation"]),
-    observation: section(["cli_auth_probe", "model_probe"]),
+    learning: { ...section("learning", learning), sessions: tallyBy(learning), worker_sessions: learningSessions },
+    human_surface: section("human_surface"),
+    observation: section("observation"),
     unclassified: boardTasks.filter((task) => !onExercise.has(task.id) && learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task)),
   };
 }
@@ -381,7 +400,7 @@ function summary(exercises: ReturnType<typeof exerciseRecord>[], spent: ReturnTy
     `- learning: ${costText(spent.learning.total)}`,
     `- human surface: ${costText(spent.human_surface.total)}`,
     `- observation: ${costText(spent.observation.total)}`,
-    `- unclassified: ${spent.unclassified.length} sessions, ${costText(tally(spent.unclassified.map((s) => ({ key: s.harness, cost_usd: s.cost_usd }))))}`,
+    `- unclassified sessions: ${spent.unclassified.length}, ${costText(tally(spent.unclassified.map(priced)))}`,
     "",
     spent.not_included,
     "",
