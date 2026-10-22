@@ -10,6 +10,7 @@ import {
   cancelTaskDirectly,
   carriesHumanWords,
   completeTask,
+  directCancelDiscards,
   editTask,
   getTask,
   isArtifactDiscarded,
@@ -18,6 +19,7 @@ import {
   logDecision,
   nextSlotTask,
   pickupTask,
+  questionCancelDiscards,
   registerTask,
   type Task,
   taskHistoryRows,
@@ -346,6 +348,70 @@ it.each((["直接 cancel", "自身の failure question の abandon"] as const).f
   },
 );
 
+// cascade は生き延びる RCA で止まらず、帰り先の無い親の下のブランチに依存する task を倒す(ADR 0301 決定4)
+
+/** doneChildrenWithAttachments に、祖先の cancel の前に auditor の RCA が立てた子(分解の work・承認 question・escalate の
+ *  question)と、B の下の主題の修理子を足す。 */
+function rcaWithChildren(db: Db) {
+  const tree = doneChildrenWithAttachments(db);
+  const rca = pickupTask(db, tree.rcas.find((review) => review.assignee === null)!, "fugu", NOW)!;
+  const [split] = decomposeTaskViaWorker(db, rca, { reason: "fix", children: [{ title: "R", purpose: "p", completion_criteria: "c" }] }, "fugu", NOW);
+  const approval = registerTask(db, { ...APPROVAL_QUESTION, parent_id: rca.id }, NOW, "fugu", "worker");
+  const question = { title: "which fix?", options: ["a", "b"], recommendation: "a" };
+  const escalation = registerTask(db, { type: "question", title: "which fix?", purpose: "p", completion_criteria: "answered", parent_id: rca.id, question: [question] }, NOW, "fugu", "worker");
+  const repairs = REPAIR_TYPES.map((type) => registerTask(db, { type, title: `${type}: B`, purpose: "p", completion_criteria: "c", parent_id: tree.child.id }, NOW, ...HUMAN_WEBUI));
+  return { ...tree, rca, split: split!, approval, escalation, repairs };
+}
+
+it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
+  "祖先の%sで、生き延びる RCA の分解の work と承認 question は cancelled で pickup されず、RCA・その escalate の question・主題の修理子は todo のまま、直下の付帯子は今どおり倒れる(ADR 0301 決定4)",
+  (path) => {
+    db = openDb(":memory:");
+    const { target, completionReview, humanReview, runningReview, repair, rca, split, approval, escalation, repairs } = rcaWithChildren(db);
+
+    if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+    else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
+
+    expect([target, completionReview, humanReview, runningReview, repair, split, approval].map((task) => getTask(db, task.id)!.status)).toEqual(Array(7).fill("cancelled"));
+    expect([rca, escalation, ...repairs].map((task) => getTask(db, task.id)!.status)).toEqual(Array(4).fill("todo"));
+    const picked: string[] = [];
+    for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "tako", NOW)!.id);
+    expect(picked).not.toContain(split.id);
+    expect(picked).toEqual(expect.arrayContaining(repairs.map((task) => task.id)));
+  },
+);
+
+it("分解の work が祖先の cancel で倒れた RCA は再び pickup され、complete_rca で完了できる(ADR 0301 決定4)", () => {
+  db = openDb(":memory:");
+  const { target, rca, approval, escalation } = rcaWithChildren(db);
+  answerQuestionViaWebui(db, escalation, ["a"], NOW);
+  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  expect(getTask(db, approval.id)!.status).toBe("cancelled");
+
+  const picked: Task[] = [];
+  for (let next = nextSlotTask(db); next; next = nextSlotTask(db)) picked.push(pickupTask(db, next, "fugu", NOW)!);
+  const resumed = picked.find((task) => task.id === rca.id)!;
+  expect(settleReview(db, resumed, "fugu", NOW).status).toBe("done");
+});
+
+it("直接 cancel の確認と abandon の question は、生き延びる RCA の下の done の work を捨てるものに数える —— cascade と同じ範囲(ADR 0301 決定4 / ADR 0271 決定4)", () => {
+  db = openDb(":memory:");
+  const { target, split } = rcaWithChildren(db);
+  completeTask(db, pickupTask(db, split, "deckhand", NOW)!, FULL_HANDOFF, "deckhand", NOW, "worker");
+
+  expect(directCancelDiscards(db, target, undefined).map((discard) => discard.id)).toContain(split.id);
+  expect(questionCancelDiscards(db, failureQuestion(db, target.id, NOW)).map((discard) => discard.id)).toContain(split.id);
+});
+
+it("生き延びる RCA の分解の work の下の開いた failure question は、祖先の直接 cancel を塞ぐ —— cascade と同じ範囲(ADR 0301 決定4)", () => {
+  db = openDb(":memory:");
+  const { target, split } = rcaWithChildren(db);
+  failureQuestion(db, split.id, NOW);
+
+  expect(() => cancelTaskDirectly(db, target, null, NOW, {}, "webui")).toThrow(DomainError);
+  expect(getTask(db, target.id)!.status).toBe("todo");
+});
+
 /** 人間の root P を agent が同じ判断で S1・S2 に分解し(S1 は review_flag)、S1 だけ done にする。 */
 function doneSiblingOfFailed(db: Db) {
   const parent = registerTask(db, { type: "work", title: "P", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
@@ -508,16 +574,16 @@ it.each(REPAIR_TYPES)("親の無い %s の登録は扉を問わず DomainError �
   expect(listBoard(db)).toEqual([]);
 });
 
-it("祖先の cancel の後に完了する、生き延びた RCA の下の review_flag の work は、完了時レビューを立てずに完了する —— 盤面の規則も床が拒む子を登録しにいかない(ADR 0301 決定3)", () => {
+it("祖先の cancel の前から生き延びる RCA の下で走っていた work も cancel で倒れる —— 帰り先の無い系譜に未決着の work は残らない(ADR 0301 決定4)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);
   const rca = pickupTask(db, getTask(db, rcas[1]!.id)!, "fugu", NOW)!;
   const [repair] = decomposeTaskViaWorker(db, rca, { reason: "fix", children: [{ title: "R", purpose: "p", completion_criteria: "c", review_flag: true }] }, "fugu", NOW);
   const running = pickupTask(db, repair!, "deckhand", NOW)!;
+
   cancelTaskDirectly(db, target, null, NOW, {}, "webui");
 
-  expect(completeTask(db, getTask(db, running.id)!, FULL_HANDOFF, "deckhand", NOW, "worker").status).toBe("done");
-  expect(listChildren(db, running.id)).toEqual([]);
+  expect(getTask(db, running.id)!.status).toBe("cancelled");
 });
 
 it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {

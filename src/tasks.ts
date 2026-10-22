@@ -1442,8 +1442,7 @@ export function finishTask(
       },
       at: now,
     });
-    // 帰り先の無い系譜で走り終えた task(祖先の cancel の前に立った)には完了時レビューを立てない —— 床が拒む子(ADR 0301 決定2・3)
-    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null }) && whyNoReturnDestination(db, task.id) === undefined) {
+    if (completionReviewFires({ ...task, examinee: task.interview_target_id !== null })) {
       for (const assignee of task.review_by?.length ? task.review_by : [undefined]) {
         registerTask(
           db,
@@ -1601,10 +1600,10 @@ export function escalateTask(
 /** The unfinished-descendants sweep shared by both cancel paths (ADR 0006 /
  *  issue #130): collect the target and every one of its unfinished descendants
  *  and mark each cancelled, appending `payload` (built by the caller to name
- *  why — an abandon answer or a human's direct cancel) to each. An attached
- *  RCA review and everything below it is spared (`survivesParentCancelSql`,
- *  ADR 0271 決定3); a completion review or human-registered review under a `done`
- *  descendant falls. `done` descendants are descended through but left untouched
+ *  why — an abandon answer or a human's direct cancel) to each. What falls is
+ *  `cancelScope` (ADR 0301 決定4): an attached RCA review and a repair-type child
+ *  are spared, but the branch-dependent tasks beneath them fall; a completion review or
+ *  human-registered review under a `done` descendant falls. `done` descendants are descended through but left untouched
  *  (nothing degrades a completed record);
  *  `cancelled` counts as finished for the blocked derivation, which is what
  *  lets the cancelled tree's own parent return to `todo` and pick up work
@@ -1621,20 +1620,7 @@ function cancelUnsettledSubtree(
   origin: EventOrigin,
 ): void {
   // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
-  const rows = db
-    .prepare(
-      `WITH RECURSIVE subtree(id) AS (
-         SELECT ?
-         UNION
-         SELECT c.id FROM tasks c LEFT JOIN interview_targets it ON it.id = c.interview_target_id
-           JOIN subtree s ON s.id = COALESCE(c.parent_id, it.task_id)
-           WHERE NOT ${survivesParentCancelSql("c")}
-       )
-       SELECT subtree.id FROM subtree JOIN tasks ON tasks.id = subtree.id
-       WHERE ${unsettledSql("tasks.status")}`,
-    )
-    .all(rootTaskId) as Array<{ id: string }>;
-  for (const { id } of rows) {
+  for (const { id } of cancelScope(db, [rootTaskId], true).filter((task) => !isSettled(task.status))) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
     appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
@@ -1707,20 +1693,19 @@ export interface CancelDefaults {
  *
  *  The subtree follows `parent_id` only, so an Interview root's examinees and their
  *  questions do not gate it: the root's cancel cancels them along (ADR 0267 決定3).
- *  Like the cascade, it stops at a surviving RCA review: what stands under one is not
- *  cancelled, so it gates nothing; what stands under a falling review gates (ADR 0271 決定3). The quarantine
+ *  It reads the cascade's felled range (`cancelScope`, ADR 0301 決定4): what the cancel leaves standing gates
+ *  nothing; what it fells gates, including the work beneath a surviving RCA. The quarantine
  *  half reads only unsettled rows, as the cascade marks only those: a settled review holds no resource. */
 function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults): void {
-  const subtree = subtreeSql("@root", `NOT ${survivesParentCancelSql("c")}`);
+  const felled = JSON.stringify(cancelScope(db, [taskId], false).map((task) => task.id));
   const failure = db
     .prepare(
-      `${subtree}
-       SELECT 1 FROM tasks q
+      `SELECT 1 FROM tasks q
        WHERE q.type = 'question' AND q.status = 'todo'
          AND q.question_cancel_option IS NOT NULL
-         AND q.parent_id IN (SELECT id FROM subtree) LIMIT 1`,
+         AND q.id IN (SELECT value FROM json_each(?)) LIMIT 1`,
     )
-    .get({ root: taskId });
+    .get(felled);
   if (failure) {
     throw new DomainError(
       "cannot directly cancel while an open Tidepool question with a cancel option (a failure or premise breach question) " +
@@ -1730,15 +1715,14 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
   const fallback = typeAwareDefaultAgentSql("x");
   const quarantine = db
     .prepare(
-      `${subtree}
-       SELECT 1 FROM tasks x
-       WHERE x.id IN (SELECT id FROM subtree) AND ${unsettledSql("x.status")}
+      `SELECT 1 FROM tasks x
+       WHERE x.id IN (SELECT value FROM json_each(@felled)) AND ${unsettledSql("x.status")}
          AND (COALESCE(${derivedWorkspaceSql("x")}, @defaultWorkspaceName) IN (SELECT value FROM json_each(@workspaces))
            OR COALESCE(x.assignee, ${fallback}) IN (SELECT value FROM json_each(@assignees)))
        LIMIT 1`,
     )
     .get({
-      root: taskId,
+      felled,
       defaultWorkspaceName: defaults.defaultWorkspaceName ?? null,
       defaultAgentName: defaults.defaultAgentName ?? null,
       auditorName: defaults.auditorName ?? null,
@@ -1785,6 +1769,50 @@ export function cancelTaskDirectly(
   });
 }
 
+/** cancel が倒す範囲の1件。done は範囲に入っても触らない(捨てるものとして数える)。 */
+interface Felled {
+  id: string;
+  type: Task["type"];
+  status: TaskStatus;
+  /** 先の cancel で cancelled になった task の下か —— その成果はもう捨てられている(捨てるものの数えが降りない)。 */
+  underCancelled: boolean;
+}
+
+/** cancel が倒す範囲(ADR 0301 決定4)—— cascade・直接 cancel の門・捨てるものの数えが読む1本。根から木全体を歩き、生き延びる付帯子で
+ *  止まらない。倒れる task の子は宛先が親の生死に依れば倒れ(`survivesParentCancelSql` の補集合、ADR 0271 決定3)、倒れない task の子は、
+ *  その task にこの cancel の後で帰り先が無く(ADR 0301 決定1: 根の外の理由、自身が cancelled、cancelled の work —— 今 cancelled か、この
+ *  cancel で cancelled になるもの —— を挟む)、宛先がブランチに依存すれば倒れる。`examinees` は Interview の root から対象を経て受験者へ
+ *  降りる(cascade だけ —— 受験者は門も捨てるものの数えも持たない、ADR 0267 決定3)。 */
+function cancelScope(db: Db, rootIds: string[], examinees: boolean): Felled[] {
+  const rows = db
+    .prepare(
+      `WITH RECURSIVE walk(id, up) AS (
+         SELECT value, NULL FROM json_each(@roots)
+         UNION
+         SELECT c.id, w.id FROM tasks c LEFT JOIN interview_targets it ON it.id = c.interview_target_id
+           JOIN walk w ON w.id = ${examinees ? "COALESCE(c.parent_id, it.task_id)" : "c.parent_id"})
+       SELECT t.id, w.up, t.type, t.status, ${survivesParentCancelSql("t")} AS survives, ${rcaSql("t")} AS rca, ${isAuditSql("t.id")} AS audit,
+         t.question_pending_child IS NOT NULL AS approval
+       FROM walk w JOIN tasks t ON t.id = w.id`,
+    )
+    .all({ roots: JSON.stringify(rootIds) }) as Array<{ id: string; up: string | null; type: Task["type"]; status: TaskStatus; survives: number; rca: number; audit: number; approval: number }>;
+  const below = new Map<string | null, typeof rows>();
+  for (const row of rows) below.set(row.up, [...(below.get(row.up) ?? []), row]);
+  const felled: Felled[] = [];
+  const walk = (row: (typeof rows)[number], falls: boolean, noReturnAbove: boolean, workGoneAbove: boolean, underCancelled: boolean): void => {
+    const cancelled = row.status === "cancelled";
+    if (falls) felled.push({ id: row.id, type: row.type, status: row.status, underCancelled });
+    const workGone = workGoneAbove || (row.type === "work" && (cancelled || (falls && !isSettled(row.status))));
+    for (const child of below.get(row.id) ?? []) {
+      const branch = { type: child.type, rca: child.rca === 1, audit: child.audit === 1, approval: child.approval === 1 };
+      const childFalls = falls ? child.survives === 0 : (noReturnAbove || cancelled || workGone) && dependsOnBranch(branch);
+      walk(child, childFalls, noReturnAbove, workGone, underCancelled || cancelled);
+    }
+  };
+  for (const root of below.get(null) ?? []) walk(root, true, whyNoReturnDestination(db, root.id) !== undefined, false, false);
+  return felled;
+}
+
 /** 捨てられる done の work の1件(ADR 0271 決定4)。 */
 export interface Discard {
   id: string;
@@ -1792,19 +1820,19 @@ export interface Discard {
 }
 
 /** ADR 0271 決定4: cancel が cancelled にする根たちの配下で、成果が捨てられる done の work —— agent が実行したもの(Executor が
- *  人間でない)だけを盤面の順で。範囲は cascade と同じ述語(`survivesParentCancelSql` の付帯子の下へは降りない)で、
+ *  人間でない)だけを盤面の順で。範囲は cascade と同じ `cancelScope`(ADR 0301 決定4)で、
  *  先の cancel で cancelled になった子の下へも降りない(その成果はもう捨てられている)。受験者は親を持たないので parent_id の
  *  系譜に入らない。表示時に読み、保存しない。 */
 function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
+  const done = cancelScope(db, rootIds, false).filter((task) => task.type === "work" && task.status === "done" && !task.underCancelled);
   const rows = db
     .prepare(
-      `${subtreeSql("value FROM json_each(@roots)", `NOT ${survivesParentCancelSql("c")} AND c.status <> 'cancelled'`)}
-       SELECT t.id, t.title, t.github_issue_number FROM tasks t JOIN subtree s ON s.id = t.id
-       WHERE t.type = 'work' AND t.status = 'done'
+      `SELECT t.id, t.title, t.github_issue_number FROM tasks t
+       WHERE t.id IN (SELECT value FROM json_each(@felled))
          AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.worker_id = @human)
        ORDER BY t.sort_key`,
     )
-    .all({ roots: JSON.stringify(rootIds), human: HUMAN_WORKER_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
+    .all({ felled: JSON.stringify(done.map((task) => task.id)), human: HUMAN_WORKER_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
   return rows.map((row) => ({ id: row.id, title: row.title ?? issueRefPlaceholder(row.github_issue_number!) }));
 }
 
@@ -3715,14 +3743,14 @@ export function whyNoReturnDestination(db: Db, parentId: string): string | undef
 
 /** 宛先がブランチに依存する task か(ADR 0301 決定2 の表の1列目): work、完了時レビュー・統合レビュー・人間の review 子(review の
  *  うち RCA と出題の監査以外のすべて)、承認すると work を立てる question。帰り先の無い系譜には立たない。 */
-function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objection_event_ids" | "audited_probe" | "question_kind">): boolean {
-  switch (input.type) {
+function dependsOnBranch(task: { type: Task["type"]; rca: boolean; audit: boolean; approval: boolean }): boolean {
+  switch (task.type) {
     case "work":
       return true;
     case "review":
-      return !input.objection_event_ids?.length && input.audited_probe === undefined;
+      return !task.rca && !task.audit;
     case "question":
-      return input.question_kind?.kind === "approval";
+      return task.approval;
     default:
       return false;
   }
@@ -3730,7 +3758,8 @@ function dependsOnBranch(input: Pick<RegisterTaskInput, "type" | "objection_even
 
 /** ADR 0301 決定2・3: 帰り先の無い親の下に、宛先がブランチに依存する task は生えない(扉を問わず)。 */
 function assertReturnDestination(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id" | "objection_event_ids" | "audited_probe" | "question_kind">): void {
-  if (input.parent_id === undefined || !dependsOnBranch(input)) return;
+  const branch = { type: input.type, rca: !!input.objection_event_ids?.length, audit: input.audited_probe !== undefined, approval: input.question_kind?.kind === "approval" };
+  if (input.parent_id === undefined || !dependsOnBranch(branch)) return;
   const reason = whyNoReturnDestination(db, input.parent_id);
   if (reason) throw new DomainError(`no ${input.type} task grows here: ${reason}`);
 }
