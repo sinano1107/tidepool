@@ -1208,13 +1208,14 @@ export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-
 /** registry の agent deckhand(組み込みでなく段 standard —— agent_tier で1段下げられる)。 */
 export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], systemPrompt: "p" };
 
+const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
+
 /** setup のみ: standard を求めた task の opus の行の session が2つ走る —— 1つは乖離した shadow 行の pickup で段の出所が agent、もう1つは
  *  段の出所が task で、どちらにも配分評価が付く。routing meta-review の窓の中なら項目は opus の行・agent deckhand・段 standard・学習器。
  *  返り値は2つの worker_spawned の id(出所 agent、task の順)。 */
 export function routedOpusSessions(db: Db, at: Date): number[] {
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
-  const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
-  recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: none, actual_record: none, candidates: 2 }, at);
+  recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
   const spawn = (tier: "agent" | "task") =>
     appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
   const evidence = [spawn("agent"), spawn("task")];
@@ -1224,8 +1225,6 @@ export function routedOpusSessions(db: Db, at: Date): number[] {
   }
   return evidence;
 }
-
-const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
 /** setup のみ: 段 standard の work task(workspace は既定 reef)の pickup で学習器と表が分かれた shadow 行を書き、その pickup が開いた
  *  session を刻んで worker_spawned の id を返す。昇格前の行(`learner` 無し)は表のセル(OPUS_ROW の model)が走り、昇格後の行は

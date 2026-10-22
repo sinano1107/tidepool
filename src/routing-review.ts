@@ -655,7 +655,7 @@ function learnerEvidence(db: Db, op: "promote" | "demote", evidence: number[]): 
   const divergedGroups = group(diverged);
   const uncited = [...divergedGroups].filter(([, of]) => !of.some((r) => cited.has(r.id)));
   return [
-    `Evidence: ${evidence.length} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
+    `Evidence: ${cited.size} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
     ...lines,
     `All diverged pickups where the ${learnerRan ? "learner's" : "table's"} choice ran, ${change === undefined ? "over all time (the learner flag never changed)" : `since the learner flag last changed (event ${change})`}: ` +
       `${diverged.length} in ${divergedGroups.size} line(s), ${diverged.filter((r) => cited.has(r.id)).length} cited; ` +
