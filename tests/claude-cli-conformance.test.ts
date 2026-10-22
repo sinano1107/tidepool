@@ -1,11 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { BOARD_CALL_ONE_TURN_FLAGS } from "../src/claude-board-call-runner.js";
 import { createClaudeModelProbe } from "../src/claude-cli-auth.js";
-import { type ConformanceObservations, judgeConformance } from "../src/claude-cli-conformance.js";
+import {
+  boardCallOneTurnArgs,
+  type ConformanceObservations,
+  judgeConformance,
+  workerOneTurnArgs,
+} from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { openDb } from "../src/db.js";
+import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "../src/sandbox.js";
 import { composeTerminalScreen } from "../src/usage.js";
 import { CLI_ENVELOPE_USAGE } from "./fakes.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
@@ -26,11 +33,17 @@ const ROW_REFUSAL_ENVELOPE = JSON.stringify({
 });
 const PI_CAPTURED_AT = new Date("2026-08-14T00:00:00.000Z");
 
-/** 6つの面がどれも今の盤面の読み取り関数で読める観測。 */
+/** language の問いに1ターンで答えた stream-json の result 行。 */
+const answered = (answer: string) =>
+  `${JSON.stringify({ type: "result", subtype: "success", is_error: false, result: answer, ...CLI_ENVELOPE_USAGE })}\n`;
+
+/** 8つの面がどれも今の盤面の読み取り関数で読める観測。 */
 function passingObservations(): ConformanceObservations {
   return {
     initLine: async () => WORKER_STREAM,
     resultLine: async () => WORKER_STREAM,
+    outputStyleLine: async () => WORKER_STREAM,
+    languageShot: async () => answered("NONE"),
     unknownModel: () =>
       createClaudeModelProbe(async () => ({ exitCode: 1, stdout: ROW_REFUSAL_ENVELOPE }))(
         "claude-conformance-no-such-model",
@@ -54,12 +67,14 @@ function passingObservations(): ConformanceObservations {
   };
 }
 
-it("6つの面がどれも盤面の読み取り関数で読めれば、全行が合格で試験は通る", async () => {
+it("8つの面がどれも盤面の読み取り関数で読めれば、全行が合格で試験は通る", async () => {
   const { rows, ok } = await judgeConformance(passingObservations(), PI_CAPTURED_AT);
 
   expect(rows.map((row) => [row.surface, row.pass])).toEqual([
     ["init line", true],
     ["result line usage", true],
+    ["output style", true],
+    ["language", true],
     ["unknown model id → row refusal", true],
     ["usage screen", true],
     ["draft client", true],
@@ -127,9 +142,82 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
     PI_CAPTURED_AT,
   );
 
-  expect(rows).toHaveLength(6);
+  expect(rows).toHaveLength(8);
   const failed = rows.filter((row) => !row.pass);
   expect(failed.map((row) => row.surface)).toEqual(["usage screen"]);
   expect(failed[0]!.detail).toContain("spawn claude ENOENT");
   expect(ok).toBe(false);
+});
+
+it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
+  const args = boardCallOneTurnArgs("q");
+  expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
+  expect(args[args.indexOf("-p") + 1]).toBe("q");
+});
+
+it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
+  const args = workerOneTurnArgs("q");
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
+  expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
+  expect(args[args.indexOf("-p") + 1]).toBe("q");
+});
+
+it("output style の面は init 行の output_style が既定でなければ、または読めなければ不合格になる", async () => {
+  const [init, ...rest] = WORKER_STREAM.split("\n");
+  const withStyle = (style: unknown) => [JSON.stringify({ ...JSON.parse(init!), output_style: style }), ...rest].join("\n");
+  for (const [stdout, detail] of [
+    [withStyle("Explanatory"), "Explanatory"],
+    [withStyle(undefined), "output_style"],
+  ] as const) {
+    const { rows, ok } = await judgeConformance({ ...passingObservations(), outputStyleLine: async () => stdout }, PI_CAPTURED_AT);
+    const failed = rows.filter((row) => !row.pass);
+    expect(failed.map((row) => row.surface)).toEqual(["output style"]);
+    expect(failed[0]!.detail).toContain(detail);
+    expect(ok).toBe(false);
+  }
+});
+
+it("language の面は形ごとに3回撃ち、1回でも答えに japanese(大文字小文字を問わない)が含まれれば不合格になる", async () => {
+  const shots: string[] = [];
+  const { rows, ok } = await judgeConformance(
+    {
+      ...passingObservations(),
+      languageShot: async (shape) => {
+        shots.push(shape);
+        const nth = shots.filter((s) => s === shape).length;
+        return answered(shape === "board call" && nth === 3 ? "Always respond in Japanese." : "NONE");
+      },
+    },
+    PI_CAPTURED_AT,
+  );
+
+  expect(shots.filter((s) => s === "worker")).toHaveLength(3);
+  expect(shots.filter((s) => s === "board call")).toHaveLength(3);
+  const failed = rows.filter((row) => !row.pass);
+  expect(failed.map((row) => row.surface)).toEqual(["language"]);
+  expect(failed[0]!.detail).toContain("board call");
+  expect(failed[0]!.detail).toContain("Always respond in Japanese.");
+  expect(ok).toBe(false);
+});
+
+it("language の面は result 行の答えが読めなければ不合格になる —— 答えの無い1回を合格に読まない", async () => {
+  const { rows, ok } = await judgeConformance(
+    { ...passingObservations(), languageShot: async () => WORKER_STREAM.split("\n")[0]! },
+    PI_CAPTURED_AT,
+  );
+
+  expect(rows.filter((row) => !row.pass).map((row) => row.surface)).toEqual(["language"]);
+  expect(ok).toBe(false);
+});
+
+it.each([
+  ["Always respond in english", true],
+  ["常に日本語で回答してください", false],
+])("language の面は答え %j を、日本語の指示の引用でなければ合格に読む(worker の形は盤面の english を引用しうる)", async (answer, pass) => {
+  const { rows } = await judgeConformance(
+    { ...passingObservations(), languageShot: async () => answered(answer) },
+    PI_CAPTURED_AT,
+  );
+
+  expect(rows.find((row) => row.surface === "language")!.pass).toBe(pass);
 });

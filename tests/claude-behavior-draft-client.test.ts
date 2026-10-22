@@ -32,6 +32,9 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   expect(argLine).toContain("--effort high");
   expect(argLine).toContain("--max-turns 1");
   expect(args[args.indexOf("--tools") + 1]).toBe("");
+  // ADR 0303 決定1: host / repo の設定の層を1つも読まない
+  expect(args).toContain("--safe-mode");
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   expect(args[1]).toContain("always spell it --dry-run");
   expect(args[1]).toContain("how command-line flags are named");
@@ -50,6 +53,22 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
 
   const { args } = calls[0]!;
   expect(args[args.indexOf("--system-prompt") + 1]).toBe(await boardCallSystemPrompt());
+});
+
+it("prompt は path / title / text を英語で書かせる —— 索引の階層に英語以外を混ぜない(ADR 0303 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+
+  await client.draft(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain('"path" (string — a "/"-separated hierarchy in English, such as build/tests;');
+  expect(prompts[0]).toContain('"title" (string — a short name for the rule, in English)');
+  expect(prompts[0]).toContain('"text" (string — the rule itself, in English,');
 });
 
 it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する(未検証の model 出力を店に載せない)", async () => {

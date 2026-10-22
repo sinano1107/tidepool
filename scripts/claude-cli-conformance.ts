@@ -5,26 +5,26 @@
  *  サブスクリプションの認証が要るので CI では回さない。Lima VM で `Delegate=yes` の scope の
  *  中から走らせる(手順は docs/claude-cli-version-bump.md)。口の版の門(ADR 0186 決定3)には
  *  常に一致を返す検査を渡して外す —— 試すのはまだ固定していない版であり、門を外す印の無い
- *  注文(result 行・404 の probe・使用量画面・下書き・翻訳)も撃つからである。
+ *  注文(result 行・language の1ターン・404 の probe・使用量画面・下書き・翻訳)も撃つからである。
  *
  *  使い方: systemd-run --user --scope -p Delegate=yes -- npx tsx scripts/claude-cli-conformance.ts */
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { platform } from "node:process";
 import { createBoardCalls, readOutput } from "../src/board-call.js";
 import { containerRuntimeFor } from "../src/cgroup-container.js";
 import { cliAuthCommandThrough, createClaudeModelProbe } from "../src/claude-cli-auth.js";
-import { judgeConformance, judgeSeedRows } from "../src/claude-cli-conformance.js";
+import {
+  boardCallOneTurnArgs,
+  judgeConformance,
+  judgeSeedRows,
+  LANGUAGE_QUESTION,
+  workerOneTurnArgs,
+} from "../src/claude-cli-conformance.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
-import {
-  boardCallEnv,
-  checkUsageThrough,
-  execThrough,
-  pinnedModelFlags,
-  toolSurfaceProbeSpec,
-} from "../src/claude-worker.js";
+import { boardCallEnv, checkUsageThrough, execThrough, toolSurfaceProbeSpec } from "../src/claude-worker.js";
 import { SystemClock } from "../src/clock.js";
 import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -44,11 +44,22 @@ const { call } = createBoardCalls({
   checkCliVersion: async () => ({ available: true }),
   onCliVersionMismatch: () => {},
 });
-const scratch = mkdtempSync(join(tmpdir(), "tidepool-conformance-"));
+/** neutral cwd。`settings` を渡せば、その repo の `.claude/settings.json` を置く(ADR 0303 決定4)。 */
+const neutralCwd = (settings?: object) => {
+  const dir = mkdtempSync(join(tmpdir(), "tidepool-conformance-"));
+  if (settings) {
+    mkdirSync(join(dir, ".claude"));
+    writeFileSync(join(dir, ".claude", "settings.json"), JSON.stringify(settings));
+  }
+  return dir;
+};
+const scratch = neutralCwd();
+const outputStyleCwd = neutralCwd({ outputStyle: "Explanatory" });
+const languageCwd = neutralCwd({ language: "japanese" });
 
 // init 行は封じ込めの probe と同じ注文で撃つ(neutral cwd で撃つのも同じ)
-const probeStdout = () =>
-  call(toolSurfaceProbeSpec(scratch), readOutput).then((output) => {
+const probeStdout = (cwd: string) =>
+  call(toolSurfaceProbeSpec(cwd), readOutput).then((output) => {
     if (output === null) throw new Error("the Board call produced no answer (limit, spawn failure, or no container)");
     return output.stdout;
   });
@@ -56,26 +67,21 @@ const probeStdout = () =>
 // result 行は、モデルの1ターンを実際に走らせた stream-json から読む —— `/usage` ping は
 // ターンを起こさない(cost 0)ので、worker が読む usage の形を試せない
 const oneTurnStdout = () =>
-  execThrough(call, "conformance result line")(
+  execThrough(call, "conformance result line")("claude", boardCallOneTurnArgs("Reply with the single word OK."), boardCallEnv());
+
+const languageShot = (shape: "worker" | "board call") =>
+  execThrough(call, `conformance language (${shape})`, languageCwd)(
     "claude",
-    [
-      "-p",
-      "Reply with the single word OK.",
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      ...pinnedModelFlags("haiku", "low"),
-      "--max-turns",
-      "1",
-      "--safe-mode",
-    ],
+    (shape === "worker" ? workerOneTurnArgs : boardCallOneTurnArgs)(LANGUAGE_QUESTION),
     boardCallEnv(),
   );
 
 const { rows } = await judgeConformance(
   {
-    initLine: probeStdout,
+    initLine: () => probeStdout(scratch),
     resultLine: oneTurnStdout,
+    outputStyleLine: () => probeStdout(outputStyleCwd),
+    languageShot,
     unknownModel: () =>
       createClaudeModelProbe(cliAuthCommandThrough(call, "conformance model probe"))("claude-conformance-no-such-model"),
     usageScreen: () => checkUsageThrough(call, scratch),

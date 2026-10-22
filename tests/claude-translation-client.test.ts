@@ -123,7 +123,7 @@ describe("ClaudeTranslationClient", () => {
     expect(envs[0]!.MAX_THINKING_TOKENS).toBe("0");
   });
 
-  it("--max-turns 1 と --safe-mode を指定する(MCPツールを持たない単発呼び出し)", async () => {
+  it("--max-turns 1 と --safe-mode / --setting-sources \"\" を指定する(MCPツールを持たない単発呼び出し、ADR 0303 決定1)", async () => {
     const calls: string[][] = [];
     const client = new ClaudeTranslationClient({
       exec: async (_command, args) => {
@@ -137,6 +137,7 @@ describe("ClaudeTranslationClient", () => {
     const argLine = calls[0]!.join(" ");
     expect(argLine).toContain("--max-turns 1");
     expect(argLine).toContain("--safe-mode");
+    expect(calls[0]![calls[0]!.indexOf("--setting-sources") + 1]).toBe("");
   });
 
   // ADR 0062 決定3: 翻訳の要求は自前のシステムプロンプトが持ち、user prompt は

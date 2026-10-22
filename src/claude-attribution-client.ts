@@ -41,7 +41,7 @@ function buildPrompt(input: AttributionInput): string {
     "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
     "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
     "it — name it only when the decision log cites that document; use uncertain when the evidence does " +
-    'not decide it), "evidence" (string — the concrete observations your judgment rests on), and "entries" ' +
+    'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "entries" ' +
     "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
     "read before the decision; never answer memory when memory_read is empty). When the input carries " +
     "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +

@@ -31,6 +31,9 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(argLine).toContain("--effort high");
   expect(argLine).toContain("--max-turns 1");
   expect(args[args.indexOf("--tools") + 1]).toBe("");
+  // ADR 0303 決定1: host / repo の設定の層を1つも読まない
+  expect(args).toContain("--safe-mode");
+  expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   // the input rides in the prompt — the objected entry, its steering, the log
   expect(args[1]).toContain("chose plan B");
@@ -81,6 +84,20 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
   expect(prompts[0]).toContain("memory is when a memory entry the worker read before the decision, and followed, was itself wrong");
   expect(prompts[0]).toContain('"entries"');
   expect(prompts[0]).toContain("Squash before merge.");
+});
+
+it("prompt は evidence を英語で書かせる —— 記録に残る欄の言語を入力や設定に動かさせない(ADR 0303 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
 });
 
 it("memory 以外の判定が entries を null で返しても判定は失われず、entries の無い判定として届く", async () => {

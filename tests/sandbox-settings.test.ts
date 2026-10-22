@@ -1,7 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { homedir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildSandboxSettings, skillReadPaths } from "../src/sandbox.js";
+import { toolSurfaceProbeSpec } from "../src/claude-worker.js";
+import {
+  buildSandboxSettings,
+  LANGUAGE_AND_OUTPUT_STYLE_PINNED,
+  skillReadPaths,
+  workspaceSettingsDisposition,
+} from "../src/sandbox.js";
 
 /** 呼び出し側が渡すホストの事実(ADR 0257): task temp のパスと `/lib64` の有無。関数は純粋なまま、
  *  在るかの判定は呼び出し側が持つ。 */
@@ -394,6 +402,32 @@ describe("buildSandboxSettings の auto-memory(ADR 0156)", () => {
       expect(settings.autoMemoryEnabled).toBe(false);
       expect(settings.autoMemoryDirectory).toBe(fixed);
       expect(settings.permissions.deny).toContain(`Edit(/${fixed}/**)`);
+    }
+  });
+});
+
+/** ADR 0303 決定2: worker の記録の言語を repo / host の `language` / `outputStyle` に動かさせない。
+ *  値1つのキーなので flag tier が丸ごと置き換え(#2454 の実測)、拒否ではなく上書きで閉じる。 */
+describe("Harness の language / outputStyle の固定(ADR 0303 決定2)", () => {
+  it("worker 設定の両プロファイルと tool-surface probe の inline --settings は、同じ盤面の定数から2キーを載せる", () => {
+    expect(LANGUAGE_AND_OUTPUT_STYLE_PINNED).toEqual({ language: "english", outputStyle: "default" });
+    for (const taskType of ["work", "review"] as const) {
+      expect(
+        buildSandboxSettings({ taskType, workspacePath: "/home/pi/work/tidepool", permittedSkills: "all", ...HOST }),
+      ).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
+    }
+    const { args } = toolSurfaceProbeSpec("/tmp/tidepool-tools-neutral");
+    expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toMatchObject(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
+  });
+
+  it("workspace の .claude/settings.json が language / outputStyle を持っていても拒否しない", () => {
+    const workspace = mkdtempSync(join(tmpdir(), "tidepool-prose-keys-"));
+    mkdirSync(join(workspace, ".claude"));
+    writeFileSync(join(workspace, ".claude", "settings.json"), JSON.stringify({ language: "japanese", outputStyle: "Explanatory" }));
+    try {
+      expect(workspaceSettingsDisposition(workspace)).toMatchObject({ overriding: [], excludeProjectSettings: false });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
     }
   });
 });
