@@ -1482,29 +1482,33 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
       description:
         "Propose a routing change to the human as one approve / reject question attached to this task. op row replaces the " +
         `tier (one of the board's tiers) and/or effort (${EFFORT_LEVELS.join(" / ")}) of one existing execution-setting row, named by provider, model and effort; ` +
-        "change takes only those two fields, and the human may amend them when approving. A change that would give the model a second row in one tier, or the same effort twice, is refused. Some Claude models take no effort or run `xhigh` / `max` as `high`; the refusal names the value to write. op promote makes work tasks run on the " +
+        "change takes only those two fields, and the human may amend them when approving. evidence (required) lists the worker_spawned event ids of production sessions that ran on that row in its current tier (the shadow rows' worker_spawned_event_id). A change that would give the model a second row in one tier, or the same effort twice, is refused. Some Claude models take no effort or run `xhigh` / `max` as `high`; the refusal names the value to write. op promote makes work tasks run on the " +
         "learner's recommendation and is only accepted while the learner is not promoted; op demote returns them to the table and " +
         "is only accepted while it is promoted; neither takes row, change, or an amendment. Both take evidence (required): the worker_spawned " +
         "event ids of sessions of diverged shadow rows (the shadow rows' worker_spawned_event_id) — for promote rows from before promotion, for " +
         "demote rows where the promoted learner's choice ran. The board shows the human, for each tier, workspace, learner cell and table cell " +
         "you cite, the count and both cells' track records, and the diverged pickups since the learner flag last changed that you did not cite. op agent_tier lowers a non-built-in " +
         "agent's default tier by exactly one step (an agent with no tier runs at the board default tier): agent names it, " +
-        "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's sessions your case rests " +
-        "on; it is refused when the execution-setting table has no runnable row (one not under a row quarantine) at the target tier for any of the agent's providers. The " +
+        "to is the tier one step below, and evidence lists the worker_spawned event ids of that agent's production sessions whose tier came " +
+        "from its default tier; it is refused when the execution-setting table has no runnable row (one not under a row quarantine) at the target tier for any of the agent's providers. The " +
         "human may amend to with any lower tier when approving, and approval commits the new tier to the registry. op tier_description rewrites " +
         "the description of one of the board's tiers (tier) to description, one line: a tier's description defines it for everyone who requests it, " +
         "so propose it when requests for that tier across workspaces or writers show its definition is off. evidence lists the worker_spawned event ids " +
-        "of sessions whose tier source is task on tasks that requested that tier (list_allocations, tier source task); the human may amend the " +
+        "of production sessions of tasks that requested that tier, whose tier source is task, since its description last changed (rows of " +
+        "list_routing_shadow whose source.tier is task); the human may amend the " +
         "description when approving. op add_tier adds a tier named tier, with description as its one-line description, to the board's list at " +
         "position (an index into the list, lowest first; 0 puts it at the bottom) and moves the row named by provider, model and effort into " +
-        "it, both at once; evidence lists the worker_spawned event ids your case rests on, and the human may amend the tier's name, " +
+        "it, both at once; evidence lists the worker_spawned event ids of production sessions on the rows of the moved row's tier that ran in " +
+        "that tier, and the human may amend the tier's name, " +
         "description and position when approving. op interview proposes measuring targets before any row changes: hypothesis is the claim to test, " +
         "measured_work (optional) the kind of work to measure, tier the one tier measured, and targets one or more (provider, model, effort) of that tier — " +
         "each another effort or tier of a model already in the table, never a row of the table in that tier. evidence (required) lists the worker_spawned " +
-        "event ids of the production sessions your case rests on (the shadow rows' worker_spawned_event_id); workspace is the real environment the " +
+        "event ids of the production sessions your case rests on, each in its row's current tier (the shadow rows' worker_spawned_event_id); workspace is the real environment the " +
         "Interview's root reads, a registered workspace that one of those sessions ran in (the shadow rows' workspace). Approval registers the Interview " +
-        "in the human's name; the human may amend the hypothesis, measured_work, the targets' efforts and the workspace. rationale is your evidence summary " +
-        "(episode count, tier source, period) and is shown with the diff. The board applies the answer itself, so you can complete " +
+        "in the human's name; the human may amend the hypothesis, measured_work, the targets' efforts and the workspace. For op row, agent_tier, " +
+        "tier_description, add_tier and interview, the board shows the human the sessions you cite, grouped with their count, task ids, outcomes and " +
+        "allocation reviews, and the sessions of the same kind you did not cite; an evidence id outside those sessions is refused with the reason. " +
+        "rationale is your reading of the evidence and is shown with the diff. The board applies the answer itself, so you can complete " +
         "this task without waiting for it. Returns the question id. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
@@ -1516,7 +1520,7 @@ function registerRoutingMetaReviewVerbs(server: McpServer, deps: McpDeps, run: M
         evidence: z
           .array(z.number().int())
           .optional()
-          .describe("every op but row: worker_spawned event ids of the sessions your case rests on. op promote and demote: the worker_spawned_event_id of diverged shadow rows."),
+          .describe("required for every op: worker_spawned event ids of the production sessions your case rests on, of the kind the tool description names for the op. op promote and demote: the worker_spawned_event_id of diverged shadow rows."),
         tier: z.string().optional().describe("op tier_description: the tier whose description to rewrite. op add_tier: the new tier's name. op interview: the tier measured."),
         hypothesis: z.string().optional().describe("op interview only: the claim the Interview tests."),
         measured_work: z.string().optional().describe("op interview only, optional: the kind of work to measure."),

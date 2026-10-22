@@ -65,7 +65,7 @@ it("routing_repair の verb は、routing の判断の行を運べば routing �
 
 /** op ごとに、提案が写す対象(異議して修理子に運ばせる判断の行)、写さない対象、拒否文が名指す綴り、修理子からの提案(ADR 0278 決定5)。 */
 const proposals: Array<[op: string, covers: (db: Db) => RoutingObject, other: RoutingObject, named: string, propose: (db: Db, repair: Task, evidence: number[]) => unknown]> = [
-  ["row", () => ({ row: OPUS_ROW }), { learner: true }, "anthropic / claude-opus-5-5 at effort high", (db, repair) => proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, rationale: "r" }, "auditor", at)],
+  ["row", () => ({ row: OPUS_ROW }), { learner: true }, "anthropic / claude-opus-5-5 at effort high", (db, repair, evidence) => proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, evidence: [evidence[0]!], rationale: "r" }, "auditor", at)],
   [
     "add_tier",
     () => ({ row: OPUS_ROW }),
@@ -131,13 +131,13 @@ it.each(proposals)("修理子の op %s の提案は、運ぶ判断の行が写�
 });
 
 it("修理子の下の提案 question は open な間は次の routing meta-review の登録を止め、承認で盤面が表に適用し、次の周期の材料の Settled proposals に載る(ADR 0279 決定4・7)", async () => {
-  const { db, review, row } = board();
+  const { db, evidence, review, row } = board();
   const objected = row({ row: OPUS_ROW });
   raiseObjection(db, objected, "move it to frontier", at);
   // RCA の要らない cause —— 開いた RCA の子が登録を止めない
   commitTriage(db, at, [], new Map([[objected, { cause: "preference", evidence: "the human wants frontier", entries: null }]]));
   const repair = listChildren(db, review.id).find((child) => child.type === "routing_repair")!;
-  const { question_id } = proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, rationale: "r" }, "auditor", at);
+  const { question_id } = proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, evidence: [evidence[0]!], rationale: "r" }, "auditor", at);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair.id);
   // 次の周期の材料(人間が変えた行)—— 材料が無ければ open な question が無くても登録されず、門の釘にならない
   applyExecutionSettingsChange(db, { setting: "row", row: { provider: "anthropic", tier: "standard", model: "claude-opus-5", effort: "high", price_in: 5, price_out: 25 } }, "mcp", at);

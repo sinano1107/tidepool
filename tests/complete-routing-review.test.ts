@@ -89,7 +89,7 @@ it("窓で異議された前の判断の行が名指す行・agent・段は項�
 
 /** 提案の op ごとに、その提案が覆う対象(ADR 0278 決定5)。 */
 const proposals: Array<[op: string, covers: object, propose: (db: Db, review: Task, evidence: number[]) => unknown]> = [
-  ["row", { row: OPUS_ROW }, (db, review) => proposeRoutingChange(db, review.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, rationale: "r" }, "auditor", at)],
+  ["row", { row: OPUS_ROW }, (db, review, evidence) => proposeRoutingChange(db, review.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, evidence: [evidence[0]!], rationale: "r" }, "auditor", at)],
   [
     "add_tier",
     { row: OPUS_ROW },

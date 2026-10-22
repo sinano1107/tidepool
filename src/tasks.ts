@@ -226,6 +226,8 @@ export interface RoutingRowProposal<T extends TierRef = TierId> {
   /** 行の鍵(ADR 0200 決定5)。承認はこの行を編集する。 */
   row: Pick<ExecutionSettingRow, "provider" | "model" | "effort">;
   change: Omit<RoutingRowChange, "tier"> & { tier?: T };
+  /** 根拠(`worker_spawned` の event id)。pin の外(ADR 0150 決定1 / ADR 0302 決定1)。 */
+  evidence: number[];
   pin: RowAt<T>;
 }
 

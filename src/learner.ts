@@ -203,6 +203,8 @@ export interface RoutingEpisode extends LearnerEpisode {
   worker_exited_event_id: number | null;
   agent: string;
   source: Spawned["payload"]["source"];
+  /** この session への配分評価(reviewer ごとに1件、routing の提案の detail が数える —— ADR 0302 決定3)。 */
+  allocations: { allocation: Allocation; cause: Cause }[];
 }
 
 /** 盤面境界の読み口: work 側の task(`workSideTypeSql`、判定者は外 —— ADR 0272 決定4 の追記)の worker session を1つ1 episode に(codex の
@@ -264,6 +266,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,
       duration_ms: exited ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,
+      allocations,
     };
   });
 }

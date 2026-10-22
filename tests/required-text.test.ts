@@ -9,7 +9,7 @@ import { proposeRoutingChange } from "../src/routing-review.js";
 import { answerQuestion, assertAnswerable, completeTask, decomposeTask, editTask, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
 import { raiseObjection } from "../src/triage.js";
 import { unusedLanding } from "./fakes.js";
-import { HUMAN_WEBUI, WORKER_SPAWNED } from "./harness.js";
+import { HUMAN_WEBUI, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 it("required text trims surrounding whitespace and refuses text with no visible content", () => {
   expect(normalizeText(" \tfirst\nsecond\n ")).toBe("first\nsecond");
@@ -116,7 +116,8 @@ it("routing row proposals normalize their required row key and rationale before 
   const db = openDb(":memory:");
   try {
     const review = registerTask(db, { type: "review", title: "routing review", purpose: "purpose", completion_criteria: "criteria", meta_review_subject: "routing" }, new Date(0), ...HUMAN_WEBUI);
-    const input = { op: "row" as const, row: { provider: " anthropic ", model: " claude-opus-5-5\n", effort: " high " }, change: { tier: " frontier " }, rationale: " evidence\n" };
+    const evidence = [rowSession(db, { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, new Date(0))];
+    const input = { op: "row" as const, row: { provider: " anthropic ", model: " claude-opus-5-5\n", effort: " high " }, change: { tier: " frontier " }, evidence, rationale: " evidence\n" };
     const { question_id } = proposeRoutingChange(db, review.id, input, "worker", new Date(0));
     expect(getTask(db, question_id)?.question_proposal).toMatchObject({ row: { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } });
     expect(getTask(db, question_id)?.question_items?.[0]?.detail).toContain("Rationale: evidence\n");
@@ -147,8 +148,7 @@ it("routing tier-description and add-tier proposals normalize required tier name
   const db = openDb(":memory:");
   try {
     const review = registerTask(db, { type: "review", title: "routing review", purpose: "purpose", completion_criteria: "criteria", meta_review_subject: "routing" }, new Date(0), ...HUMAN_WEBUI);
-    const task = registerTask(db, { type: "work", title: "evidence", purpose: "purpose", completion_criteria: "criteria", tier: "standard" }, new Date(0), ...HUMAN_WEBUI);
-    const evidence = [appendEvent(db, { taskId: task.id, workerId: "worker", origin: "board", at: new Date(0), payload: { ...WORKER_SPAWNED, model: "claude-opus-5-5" } })];
+    const evidence = [rowSession(db, { provider: "anthropic", model: "claude-opus-5-5", effort: "high" }, new Date(0))];
     const { question_id } = proposeRoutingChange(db, review.id, { op: "tier_description", tier: " standard ", description: " new definition\n", evidence, rationale: "evidence" }, "worker", new Date(0));
     expect(getTask(db, question_id)?.question_proposal).toMatchObject({ description: "new definition" });
     expect(getTask(db, question_id)?.title).toBe("Rewrite tier standard's description");

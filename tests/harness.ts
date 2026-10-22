@@ -24,7 +24,7 @@ import { type CodexAppServerProbe, codexLoginAbsence } from "../src/codex-app-se
 import { type Db, openDb } from "../src/db.js";
 import type { DraftClient } from "../src/draft.js";
 import { appendEvent, type EventPayload, type EventRow, getEvent, type Judgment, latestEventOfTask, listEvents } from "../src/events.js";
-import type { ExecutionSetting } from "../src/execution-setting.js";
+import { type ExecutionSetting, matchesRowKey, readExecutionSettings } from "../src/execution-setting.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import { recordShadow, type TrackRecord } from "../src/learner.js";
@@ -1248,6 +1248,20 @@ export function divergedSession(
     origin: "board",
     at,
     payload: { ...WORKER_SPAWNED, provider: "anthropic", model: actual.model, effort: actual.effort, advisor: null, tier_id, source: actual.source },
+  });
+}
+
+/** setup のみ: 表の行 `row` で、その行の今の段で走った本番の work session を1つ刻み、worker_spawned の id を返す —— 行・段を足す・Interview の
+ *  提案の根拠の母集団に入る(ADR 0302)。task はその段を要求し人間が登録するので、出所 task なら段の説明の提案の根拠にもなる。 */
+export function rowSession(db: Db, row: { provider: string; model: string; effort: string | null }, at: Date, { agent = "deckhand", source = "task", workspace = "reef" }: { agent?: string; source?: "task" | "agent"; workspace?: string } = {}): number {
+  const tier = readExecutionSettings(db).table.find((r) => matchesRowKey(r, row))!.tier;
+  const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace }, at, ...HUMAN_WEBUI).id;
+  return appendEvent(db, {
+    taskId: work,
+    workerId: agent,
+    origin: "board",
+    at,
+    payload: { ...WORKER_SPAWNED, ...row, provider: row.provider as Provider, advisor: null, tier_id: tierIdOf(db, tier), source: { tier: source, provider: "rank" } },
   });
 }
 

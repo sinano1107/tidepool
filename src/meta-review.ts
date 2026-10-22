@@ -125,7 +125,8 @@ export const META_REVIEW_SUBJECTS = {
         "source and agent (an overpowered verdict under an agent's default tier is not a registrant's declaration), those under tier source task " +
         "also by the tier the task requested, and " +
         "judged_by_same_model counts those whose judge ran on the worker's own model. " +
-        "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change. " +
+        "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change, naming as evidence the sessions " +
+        "that ran on that row in its current tier: the board shows the human their outcomes and allocation reviews, and that row's sessions you did not cite. " +
         "When rows in the same tier split in their results and no existing tier fits the split, propose adding a tier and moving one " +
         "row into it (op add_tier); write the new tier's description as the work that the tier below is not enough for and this tier is. " +
         "When the evidence raises a doubt that another effort or tier of a model in the table would do, propose measuring it before any row changes " +
