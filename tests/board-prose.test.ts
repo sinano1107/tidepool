@@ -6,11 +6,11 @@ import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 
 
-import { cancelTaskDirectly, completeAudit, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
+import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
 
 
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { decomposeTaskViaWorker, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
+import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
 /** 帰り先の無い系譜で走った task の当時版が Authority 節の代わりに写す1文(ADR 0301 決定5)。 */
@@ -277,13 +277,15 @@ it("Interview の受験者・監査 review・suzumedai が取った memory_repai
   }
 });
 
-/** 分解された work の root(`root` —— 人間が cancel できる)、その子の work(deckhand が pickup 済み)と、その子の下の RCA を deckhand が
+/** 分解された work の root(`root` —— 人間が cancel できる)、その子の work(deckhand が完了済み)と、その子の下の RCA を deckhand が
  *  pickup したもの。 */
 function rcaUnderWork(db: Db, at: Date) {
   const root = registerTask(db, { type: "work", title: "root", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const [child] = decomposeTaskViaWorker(db, root, { reason: "split", children: [{ title: "w", purpose: "p", completion_criteria: "c" }] }, "deckhand", at);
   const work = pickupTask(db, child!, "deckhand", at, { assignee: "deckhand" })!;
-  return { root, work, rca: pickupTask(db, rcaOf(db, work, at, "deckhand", "deckhand"), "deckhand", at)! };
+  const rca = rcaOf(db, work, at, "deckhand", "deckhand");
+  const done = completeTask(db, work, FULL_HANDOFF, "deckhand", at, "worker");
+  return { root, work: done, rca: pickupTask(db, rca, "deckhand", at)! };
 }
 
 /** 帰り先の無い系譜で reviewer の文を持って走る task(ADR 0301 決定5)。 */
