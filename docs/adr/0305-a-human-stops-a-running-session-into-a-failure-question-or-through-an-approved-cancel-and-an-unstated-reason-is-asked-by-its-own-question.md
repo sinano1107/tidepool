@@ -17,14 +17,18 @@
      承認を付けて cancel し直すと、cascade(X も cancelled、理由は cancel の reason)と X の session の後始末の印を1 transaction で行う。
      failure question は立たない —— それは人間の判断なしに盤面が session を殺したときに次を訊く器で、ここでは次は決まっている。承認は対象
      自身にも効く(走っている root の直接 cancel)。拒否と再試行の間に別の task が走り始めていれば承認は合わず、もう一度拒む。
-2. **理由は止める時には任意。空なら、盤面が別の自由記述の question「why did you stop X?」を同じ transaction で X の子に立てる。**
+2. **理由は止める時には任意。空なら、盤面が同じ transaction で自由記述の question「why did you stop X?」を盤面名義の root として立てる。**
    本当に危険なときは理由を書く余裕が無いが、理由は後の学習の材料なので一度は必ず訊く。failure question の answer の comment(ADR 0179 の
-   操舵 channel)に理由を担わせない —— 別のもの。この question は宛先が親の生死に依らない(ADR 0271 決定3 / ADR 0301 決定4 の表の
-   RCA・記憶の修理子の側)ので、abandon の cascade を生き延びる —— 捨てた task ほど理由が要る。question の子なので X の pickup は塞ぎ、
-   retry と答えても理由を書くまで再開しない(塞がない形は痛みが出てから)。停止承認の cancel では理由は cancel の reason に載るので立てない。
+   操舵 channel)に理由を担わせない —— 別のもの。root なので X の cascade の範囲に入らず(abandon で消えない —— 捨てた task ほど理由が要る)、
+   X の pickup も塞がない(retry の後いつ答えてもよい)。X との結びつきは question の種類(`stop_reason`、X の id を持つ —— quarantine の
+   確認 question が資源を指すのと同型)と、停止の event が持つ question の id の両側で持つ。停止承認の cancel では理由は cancel の reason に
+   載るので立てない。
+   **理由は停止の事実の隣に読める。** 読み口は1つ: 停止の event の reason → 無ければ理由 question の答え → 未回答ならその旨。X の history を
+   読むものすべて(次の session の briefing・`get_current_task`・meta-review・記憶・WebUI)がこの読み口で停止の行を描く。`task_cancelled` の
+   `origin_question_id` を `cancelOrigin` が辿るのと同じ型で、question の行を読みに行く読み手を作らない。
 3. **止められるのは人間だけ、対象は slot を握るどの session でも。** agent には開かない(Pause と同じ「自己停止の経路を開かない」の線)。
    型は問わない —— 受験者を止めれば受験者の failure question(ADR 0263 決定9)が立つ。slot が空、または既に後始末中なら DomainError で拒む。
-4. **記録と面。** 停止の事実は event(`session_stopped_by_human`、理由があれば載せる)で両出口が共有する。失敗 question の題は
+4. **記録と面。** 停止の事実は event(`session_stopped_by_human`、理由があればそれを、無ければ理由 question の id を載せる)で両出口が共有する。失敗 question の題は
    `stopped by human: <title>`(cap の `watchdog killed task:` と並ぶ)。畳んでいる間は slot 行の後始末中の表示に「人間の停止」と理由を足し、
    新しい状態は作らない。
 
@@ -34,3 +38,4 @@
 - **理由を必須にする**: 緊急時に手を止めさせる。代わりに決定2 で後から訊く。
 - **failure question の answer の comment を理由の代用にする(空なら必須化)**: 別の channel の統合。
 - **停止理由を後から足す追記 event**: 既存の自由記述 question で足りる。
+- **理由 question を X の子にして pickup を塞ぐ**: 親が待つ子は定義上 cancel を生き延びない(ADR 0271 決定3)ので、生き延びさせるには表に例外行が要る。

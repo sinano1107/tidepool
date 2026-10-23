@@ -651,7 +651,7 @@ Provider ごとのアカウント単位(エージェント単位ではない)の
 
 ## 人間の停止(Human stop)
 
-人間が走行中の worker session を1つ止める操作(2026-10-23 の grilling、issue #2527 から派生 / ADR 0305)。Pause(盤面全体、新規 pickup だけ)とも資源の停止(Quarantine)とも別で、対象は slot を握っている session そのもの —— 型は問わない。Watchdog の cap と同じ順(畳み込み停止 → 猶予 → 強制回収 → 回収済み観測 → 後始末)で畳むが、status の決着と後始末の印は要求の時点で置く。出口は2つ: **止めて次を決める**(task の下に failure question —— retry / abandon —— が要求の時点で立ち、subtree は Held)か、**停止承認付きの cancel で止めて捨てる**(Cancel 参照、failure question は立たない)。理由は止める時には任意で、空なら盤面が自由記述の question「why did you stop X?」を task の子に立てて後から訊く —— この question は親の生死に依らず abandon の cascade を生き延び、答えるまで task の pickup を塞ぐ。人間だけの操作で、agent には開かない(Pause と同じ線)。slot が空、または既に後始末中なら拒む。
+人間が走行中の worker session を1つ止める操作(2026-10-23 の grilling、issue #2527 から派生 / ADR 0305)。Pause(盤面全体、新規 pickup だけ)とも資源の停止(Quarantine)とも別で、対象は slot を握っている session そのもの —— 型は問わない。Watchdog の cap と同じ順(畳み込み停止 → 猶予 → 強制回収 → 回収済み観測 → 後始末)で畳むが、status の決着と後始末の印は要求の時点で置く。出口は2つ: **止めて次を決める**(task の下に failure question —— retry / abandon —— が要求の時点で立ち、subtree は Held)か、**停止承認付きの cancel で止めて捨てる**(Cancel 参照、failure question は立たない)。理由は止める時には任意で、空なら盤面が自由記述の question「why did you stop X?」を盤面名義の root として立てて後から訊く —— root なので cascade の範囲に入らず pickup も塞がない。停止の event が question の id を持ち、task の history を読むものはすべて停止の行の隣に理由(または未回答)を読む。人間だけの操作で、agent には開かない(Pause と同じ線)。slot が空、または既に後始末中なら拒む。
 _Avoid_: 中断(cap interruption の語)、kill、強制終了
 
 ## v1 / 0.x
