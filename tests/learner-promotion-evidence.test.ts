@@ -118,6 +118,15 @@ it("引用の外の乖離も盤面が1行で見せる —— フラグの最後�
   );
 });
 
+it("フラグの最後の変更より前の乖離行の session は、変更の event を名指して拒まれる —— 引用できる範囲は引用の外と同じ", () => {
+  const { db, propose } = board();
+  const earlier = divergedSession(db, at);
+  applyExecutionSettingsChange(db, { setting: "learner_promoted", value: true }, "webui", at);
+  const change = applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at)!;
+
+  expect(() => propose("promote", [earlier])).toThrow(`evidence ${earlier} is the session of a shadow row from before the learner flag last changed (event ${change})`);
+});
+
 it("値の変わらない降格(未昇格のまま)はフラグの変更ではないので、引用の外の範囲を切らない", () => {
   const { db, propose } = board();
   applyExecutionSettingsChange(db, { setting: "learner_promoted", value: false }, "webui", at);
