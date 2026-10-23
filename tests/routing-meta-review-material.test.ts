@@ -165,9 +165,13 @@ it("配分評価の分布は窓の中の注釈だけを list_allocations の行�
 
   const { parts, section } = routingMaterialOf(db, review);
 
-  expect(parts.allocations.groups).toEqual([{ source_tier: "agent", tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 }]);
+  expect(parts.allocations.groups).toEqual([
+    { source_tier: "agent", row: "anthropic / opus at effort high", tier: "economy", agent: "reef-crab", workspace: "none", writer: "human", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+  ]);
   expect(parts.allocations.counted).toEqual([counted]);
-  expect(section).toContain('{"source_tier":"agent","tier":"economy","agent":"reef-crab","allocation":"overpowered","cause":"uncertain","count":1,"judged_by_same_model":0}');
+  expect(section).toContain(
+    '{"source_tier":"agent","row":"anthropic / opus at effort high","tier":"economy","agent":"reef-crab","workspace":"none","writer":"human","allocation":"overpowered","cause":"uncertain","count":1,"judged_by_same_model":0}',
+  );
 });
 
 it("新しいセルは初観測が窓の中のものだけ、人間が変えた行は窓の中の直接編集だけで、提案への approve の適用は出ない", () => {
@@ -448,6 +452,11 @@ it("routing meta-review の purpose は材料の節とその7つの部分を名�
   );
   expect(review.purpose).toContain("read the matched rows, and anything before the previous meta-review, with list_routing_shadow, list_allocations and list_routing_cells");
   expect(review.purpose).not.toContain("First read");
+  // 配分評価の組は session の6軸(ADR 0306 決定2)
+  expect(review.purpose).toContain(
+    "The allocation reviews are grouped by tier source, row, tier, agent, workspace and the writer of the task's text (an overpowered verdict under an agent's default tier is not a writer's declaration)",
+  );
+  expect(review.purpose).not.toContain("split by tier source and agent");
   // 昇格の根拠は推薦したセルの実績(ADR 0181 決定1・5・6)
   expect(review.purpose).not.toContain("outcomes of the diverged episodes");
   for (const meaning of [

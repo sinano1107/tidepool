@@ -121,9 +121,9 @@ export const META_REVIEW_SUBJECTS = {
         "listing each item you leave unchanged as no_change (with a reason when it helps). " +
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
         "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
-        "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are split by tier " +
-        "source and agent (an overpowered verdict under an agent's default tier is not a writer's declaration), those under tier source task " +
-        "also by the tier the task requested, and " +
+        "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are grouped by tier " +
+        "source, row, tier, agent, workspace and the writer of the task's text (an overpowered verdict under an agent's default tier is not a " +
+        "writer's declaration), and " +
         "judged_by_same_model counts those whose judge ran on the worker's own model. " +
         "When the evidence says a row's tier or effort is wrong, propose replacing it with propose_routing_change, naming as evidence the sessions " +
         "that ran on that row in its current tier: the board shows the human their outcomes and allocation reviews, and that row's sessions you did not cite. " +
