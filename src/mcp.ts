@@ -1413,7 +1413,8 @@ function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewR
     {
       description:
         "List the learner's shadow rows: for each work pickup, the cell the learner recommended, the cell that actually ran " +
-        "and the selector's source, with that session's worker_spawned_event_id, workspace, agent and outcome (accepted / rejected / excluded, cost, duration). " +
+        "and the selector's source, with that session's worker_spawned_event_id, workspace, agent, tier (the tier it ran in; tier_retired marks a deleted tier) " +
+        "and outcome (accepted / rejected / excluded, cost, duration), all null when the pickup opened no session, and writer, the writer of the task's text (human for a human). " +
         "recommended_record and actual_record are the two cells' track records as of that pickup (accepted and rejected, board and " +
         "workspace stage, production sessions only — Interview examinees are not counted — and seed: null, or the kind (interview: an accepted score of a done Interview; human: a row added as observed) and event_id of the seed that stands in for the table's prior for that cell and tier), and candidates is how many rows the pickup could choose from after exclusions — with one, the two cells always match. " +
         "diverged marks rows where the two cells differ; diverged_only returns only those. When source.provider is learner, the " +
@@ -1428,8 +1429,8 @@ function registerRoutingReads(server: McpServer, deps: McpDeps, run: MetaReviewR
     "list_allocations",
     {
       description:
-        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, tier, agent, " +
-        "allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. tier is the tier " +
+        "List the allocation-review distribution: evaluated annotations counted by the session's tier source, row, tier, agent, workspace " +
+        "(none when the task has none), writer of the task's text (human for a human), allocation and cause, with judged_by_same_model counting those whose judge ran on the worker's own model. tier is the tier " +
         "the session ran in, whatever its tier source; tier_retired marks a deleted tier, counted apart from a live tier of the same name. " +
         "Unevaluated annotations are not counted. " +
         nextDescription("list_allocations", "allocations"),

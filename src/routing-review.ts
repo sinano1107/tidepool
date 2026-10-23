@@ -99,6 +99,7 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
     const session = episodes.find(
       (e) => e.task_id === row.task_id && e.worker_spawned_event_id > row.event_watermark && e.worker_spawned_event_id <= next,
     );
+    const ran: { tier: Tier | null; tier_retired?: true } = session ? tierOf(db, session.tier_id) : { tier: null };
     return [
       {
         id: row.id,
@@ -116,6 +117,9 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
         // 学習器が数える層と同じ値 —— Interview の提案の実環境はここから選ぶ(ADR 0258 決定3)
         workspace: session?.workspace ?? null,
         agent: session?.agent ?? null,
+        // 走った段は session のもの(ADR 0306 決定3)、書き手は行の task から引けるので session が無くても値がある
+        ...ran,
+        writer: getTextAuthor(db, row.task_id),
         outcome: session?.outcome ?? null,
         cost_usd: session?.cost_usd ?? null,
         duration_ms: session?.duration_ms ?? null,
@@ -124,36 +128,71 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
   });
 }
 
-/** 配分評価の分布: 注釈を worker session の (`source.tier`, 段, agent, allocation, cause) で数え、judge の model が
- *  worker のセルの model と同じだった件数を添える(ADR 0150 決定8)。段はどの出所の session にも付き、その session が走った段
- *  (ADR 0210 決定5)。段は id で割り、消した段には `tier_retired` が付く。 */
+/** 段の名前と、消した段なら `tier_retired`(同じ名前で足し直した段と分ける)。 */
+function tierOf(db: Db, id: TierId): { tier: Tier; tier_retired?: true } {
+  const { name, retired } = db.prepare("SELECT name, position IS NULL AS retired FROM tiers WHERE id = ?").get(id) as { name: Tier; retired: number };
+  return { tier: name, ...(retired ? { tier_retired: true as const } : {}) };
+}
+
+/** session の軸(ADR 0306 決定1): 床の出所・走った行・走った段・走った agent・workspace・文面の書き手の6つを、この順の (ラベル, 値) で。
+ *  材料の配分評価の組・shadow 行・提案の detail の組の鍵がここから取る。消した段の値は名前に ` (retired)` を添える。 */
+export type SessionAxis = "tier source" | "row" | "tier" | "agent" | "workspace" | "writer";
+export function sessionAxes(db: Db, e: RoutingEpisode): Array<readonly [label: SessionAxis, value: string]> {
+  const { tier, tier_retired } = tierOf(db, e.tier_id);
+  return [
+    ["tier source", e.source.tier],
+    ["row", rowName(e.cell)],
+    ["tier", tier_retired ? `${tier} (retired)` : tier],
+    ["agent", e.agent],
+    ["workspace", e.workspace ?? "none"],
+    // 文面の書き手(人間も含む。承認で実体化した子は分解した agent)で、走った agent ではない(ADR 0197 決定2・4)
+    ["writer", getTextAuthor(db, e.task_id)],
+  ];
+}
+
+/** 配分評価の分布: 注釈を worker session の6軸(sessionAxes)× (allocation, cause) で数え、judge の model が worker のセルの model と
+ *  同じだった件数を添える(ADR 0150 決定8 / ADR 0306 決定2)。段はどの出所の session にも付き、その session が走った段(ADR 0210 決定5)。 */
 export function listAllocations(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
   const read = readPosition<ReadWindow>("list_allocations", input);
   const { groups, keys } = allocationRows(db, { after: since(db, readerTaskId, read.args) });
-  // 境目の鍵は数える単位そのもの(tier の出所・段の id・agent・allocation・cause)
+  // 境目の鍵は数える単位そのもの(6軸・allocation・cause)
   return packItems(read, "allocations", groups, {}, { keyOf: (_, i) => keys[i]! }) as Packed<{ allocations: typeof groups }>;
 }
 
 /** list_allocations の行(ページ割り前)とその鍵と、数えた allocation_reviewed の event id。 */
 function allocationRows(db: Db, window: MetaReviewWindow) {
   const episodes = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e]));
-  const tierOf = db.prepare("SELECT name, position IS NULL AS retired FROM tiers WHERE id = ?");
   const counted: number[] = [];
   const groups = new Map<
     string,
-    { source_tier: string; tier: Tier; tier_retired?: true; agent: string; allocation: string; cause: string; count: number; judged_by_same_model: number }
+    {
+      source_tier: string;
+      row: string;
+      tier: Tier;
+      tier_retired?: true;
+      agent: string;
+      workspace: string;
+      writer: string;
+      allocation: string;
+      cause: string;
+      count: number;
+      judged_by_same_model: number;
+    }
   >();
   for (const { id, payload: p } of listEventsOfKinds(db, ["allocation_reviewed"], window)) {
     const episode = episodes.get(p.worker_spawned_event_id);
     if (!episode) continue;
     counted.push(id);
-    const key = JSON.stringify([episode.source.tier, episode.tier_id, episode.agent, p.allocation, p.cause]);
-    const tier = tierOf.get(episode.tier_id) as { name: Tier; retired: number };
+    const axes = sessionAxes(db, episode);
+    const key = JSON.stringify([...axes.map(([, value]) => value), p.allocation, p.cause]);
+    const { "tier source": source_tier, row, agent, workspace, writer } = Object.fromEntries(axes) as Record<SessionAxis, string>;
     const group = groups.get(key) ?? {
-      source_tier: episode.source.tier,
-      tier: tier.name,
-      ...(tier.retired ? { tier_retired: true as const } : {}),
-      agent: episode.agent,
+      source_tier,
+      row,
+      ...tierOf(db, episode.tier_id),
+      agent,
+      workspace,
+      writer,
       allocation: p.allocation,
       cause: p.cause,
       count: 0,
@@ -484,7 +523,7 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
         [(e) => e.agent === name, () => `is not a worker_spawned event of ${name}`],
         [(e) => e.source.tier === "agent", (e) => `took its tier from ${e.source.tier}, not from ${name}'s default tier`],
       ],
-      (e) => [["row", rowName(e.cell)], ["tier", tierNameOf(db, e.tier_id)], workspaceOf(e)],
+      ["tier source", "agent"],
     ),
     `production sessions of ${name} whose tier came from its default tier, over all time`,
   );
@@ -529,7 +568,7 @@ function addTierProposal(
         [(e) => table.some((r) => r.tier === row.tier && matchesRowKey(r, e.cell)), (e) => `ran on ${rowName(e.cell)}, which is not a row of tier ${row.tier}, the tier of ${rowName(row)}`],
         inCurrentTier(db, table),
       ],
-      (e) => [["row", rowName(e.cell)], workspaceOf(e)],
+      ["tier"],
     ),
     `production sessions on the rows of tier ${row.tier} in that tier, over all time`,
   );
@@ -568,8 +607,7 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
         [(e) => requested.get(e.task_id, current.id) !== undefined, () => `is a session of a task that did not request ${tier}`],
         [(e) => e.worker_spawned_event_id > (changed ?? 0), () => `ran before tier ${tier}'s description last changed (event ${changed})`],
       ],
-      // 書き手は段を申告した task の文面の書き手(人間も含む。承認で実体化した子は分解した agent)で、走った agent ではない(ADR 0197 決定2・4 / ADR 0302)
-      (e) => [workspaceOf(e), ["writer", getTextAuthor(db, e.task_id)]],
+      ["tier source", "tier"],
     ),
     `production sessions of tasks that requested tier ${tier} (tier source task), ` +
       (changed === undefined ? "over all time (its description never changed)" : `since its description last changed (event ${changed})`),
@@ -616,7 +654,7 @@ function interviewProposal(
     productionPopulation(
       db,
       [[(e) => rowOf(e) !== undefined, (e) => `ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`], inCurrentTier(db, table)],
-      (e) => [["row", rowName(rowOf(e)!)], workspaceOf(e)],
+      [],
       (cited) => {
         const rows = new Set(cited.map((e) => rowOf(e)!));
         return (e) => rows.has(rowOf(e)!);
@@ -702,13 +740,14 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
 }
 
 /** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root などには配分評価も
- *  outcome も無い)で、受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
+ *  outcome も無い)で、受験者の session は本番でない。`conditions` は op の対象が決める残りの条件、`fixed` は op の対象が固定する session の軸
+ *  のラベルで、組の鍵は6軸からそれを落とした残り(ADR 0306 決定4)。 */
 // ponytail: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
-const productionPopulation = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
+const productionPopulation = (db: Db, conditions: readonly Condition<RoutingEpisode>[], fixed: readonly SessionAxis[], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
   sessions: loadEpisodes(db),
   absent: (spawned) => `is a session of a task of type ${getTask(db, spawned.task_id!)?.type}; only a work-side task's session has an outcome and allocation reviews`,
   conditions: [[(e) => !e.interview, () => "is not a worker_spawned event of a production work session: it is an Interview examinee's session"], ...conditions],
-  key,
+  key: (e) => sessionAxes(db, e).filter(([label]) => !fixed.includes(label)),
   within,
 });
 
@@ -738,8 +777,6 @@ function sessionEvidence(db: Db, evidence: readonly number[], population: Popula
   const sessions = [...cited.values()].flat();
   return { lines: [`Evidence: ${sessions.length} cited worker session(s), one line per ${labels.join(", ")}:`, ...lines, outsideLine(scope)], cited: sessions };
 }
-
-const workspaceOf = (e: RoutingEpisode) => ["workspace", e.workspace ?? "none"] as const;
 
 /** 学習器の昇格 / 降格の根拠(ADR 0181 追記 #2438): 各 evidence は乖離した shadow 行の session の worker_spawned(行と session の結び方は
  *  list_routing_shadow と同じ shadowRows)で、昇格なら出所が学習器でない行、降格なら出所が学習器の行。 */
@@ -927,7 +964,7 @@ export function proposeRoutingChange(
     const { lines: evidenceLines } = sessionEvidence(
       db,
       evidence,
-      productionPopulation(db, [[(e) => matchesRowKey(pin, e.cell), (e) => `ran on ${rowName(e.cell)}, not on ${rowName(pin)}`], inCurrentTier(db, table)], (e) => [workspaceOf(e)]),
+      productionPopulation(db, [[(e) => matchesRowKey(pin, e.cell), (e) => `ran on ${rowName(e.cell)}, not on ${rowName(pin)}`], inCurrentTier(db, table)], ["row", "tier"]),
       `production sessions on ${rowName(pin)} in its current tier ${pin.tier}, over all time`,
     );
     proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, evidence, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };

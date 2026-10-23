@@ -101,7 +101,7 @@ it.each(["row", "interview"] as const)(
   },
 );
 
-it("行の提案の detail は根拠を workspace ごとに1行にまとめ、件数・task id・outcome の内訳・配分評価の allocation × cause の内訳と未評価の数を出し、引用の外の1行に母集団の総数・組の数・引用した数・引用されなかった組ごとの件数を出す", () => {
+it("行の提案の detail は根拠を session の軸から行と段を落とした組(出所・agent・workspace・書き手)ごとに1行にまとめ、件数・task id・outcome の内訳・配分評価の allocation × cause の内訳と未評価の数を出し、引用の外の1行に母集団の総数・組の数・引用した数・引用されなかった組ごとの件数を出す", () => {
   const { db, propose } = board();
   const overpowered = rowSession(db, OPUS_ROW, at);
   const underpowered = rowSession(db, OPUS_ROW, at);
@@ -116,17 +116,17 @@ it("行の提案の detail は根拠を workspace ごとに1行にまとめ、�
 
   const lines = detailLines(db, question_id);
   for (const line of [
-    "Evidence: 3 cited worker session(s), one line per workspace:",
-    `- workspace reef: 2 session(s) (tasks ${taskOf(db, overpowered)}, ${taskOf(db, underpowered)}); outcomes 0 accepted, 1 rejected, 1 excluded; allocation reviews overpowered/uncertain 1, underpowered/capability 1; 0 session(s) not yet reviewed`,
-    `- workspace lagoon: 1 session(s) (tasks ${taskOf(db, lagoon)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `All production sessions on ${OPUS} in its current tier standard, over all time: 6 in 4 line(s), 3 cited; lines not cited: workspace atoll: 1; workspace shoal: 2.`,
+    "Evidence: 3 cited worker session(s), one line per tier source, agent, workspace, writer:",
+    `- tier source task, agent deckhand, workspace reef, writer human: 2 session(s) (tasks ${taskOf(db, overpowered)}, ${taskOf(db, underpowered)}); outcomes 0 accepted, 1 rejected, 1 excluded; allocation reviews overpowered/uncertain 1, underpowered/capability 1; 0 session(s) not yet reviewed`,
+    `- tier source task, agent deckhand, workspace lagoon, writer human: 1 session(s) (tasks ${taskOf(db, lagoon)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `All production sessions on ${OPUS} in its current tier standard, over all time: 6 in 4 line(s), 3 cited; lines not cited: tier source task, agent deckhand, workspace atoll, writer human: 1; tier source task, agent deckhand, workspace shoal, writer human: 2.`,
   ]) {
     expect(lines).toContain(line);
   }
   expect(lines.at(-3)).toBe("Rationale: r");
 });
 
-it("段を足す提案の根拠は、移す行の今の段にある全行のその段の session を通し(組は走った行と workspace)、他の段の行の session と移す行が前の段にいた頃の session を拒む", () => {
+it("段を足す提案の根拠は、移す行の今の段にある全行のその段の session を通し(組は session の軸から段を落とした組)、他の段の行の session と移す行が前の段にいた頃の session を拒む", () => {
   const { db, propose } = board();
   moveRow(db, OPUS_ROW, "frontier");
   const earlier = rowSession(db, OPUS_ROW, at);
@@ -143,16 +143,16 @@ it("段を足す提案の根拠は、移す行の今の段にある全行のそ�
 
   const lines = detailLines(db, question_id);
   for (const line of [
-    "Evidence: 2 cited worker session(s), one line per row, workspace:",
-    `- row ${OPUS}, workspace reef: 1 session(s) (tasks ${taskOf(db, opus)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `- row openai / gpt-5.6-sol at effort high, workspace reef: 1 session(s) (tasks ${taskOf(db, sol)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    "All production sessions on the rows of tier standard in that tier, over all time: 3 in 3 line(s), 2 cited; lines not cited: row openai / gpt-5.6-sol at effort high, workspace lagoon: 1.",
+    "Evidence: 2 cited worker session(s), one line per tier source, row, agent, workspace, writer:",
+    `- tier source task, row ${OPUS}, agent deckhand, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, opus)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `- tier source task, row openai / gpt-5.6-sol at effort high, agent deckhand, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, sol)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    "All production sessions on the rows of tier standard in that tier, over all time: 3 in 3 line(s), 2 cited; lines not cited: tier source task, row openai / gpt-5.6-sol at effort high, agent deckhand, workspace lagoon, writer human: 1.",
   ]) {
     expect(lines).toContain(line);
   }
 });
 
-it("agent の段の提案の根拠は、その agent の段の出所が agent の本番 session を全期間通し(組は走った行・段・workspace)、review 側の session・他の agent の session・出所が task の session を拒む", () => {
+it("agent の段の提案の根拠は、その agent の段の出所が agent の本番 session を全期間通し(組は session の軸から出所と agent を落とした組)、review 側の session・他の agent の session・出所が task の session を拒む", () => {
   const { db, review, propose } = board();
   const reviewSide = spawnOn(db, review, { source: "agent" });
   const scout = session(db, { agent: "scout", source: "agent" });
@@ -169,16 +169,16 @@ it("agent の段の提案の根拠は、その agent の段の出所が agent �
 
   const lines = detailLines(db, question_id);
   for (const line of [
-    "Evidence: 2 cited worker session(s), one line per row, tier, workspace:",
-    `- row ${OPUS}, tier standard, workspace reef: 1 session(s) (tasks ${taskOf(db, standard)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `- row anthropic / claude-fable-5-1 at effort high, tier frontier, workspace reef: 1 session(s) (tasks ${taskOf(db, frontier)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `All production sessions of deckhand whose tier came from its default tier, over all time: 3 in 3 line(s), 2 cited; lines not cited: row ${OPUS}, tier standard, workspace lagoon: 1.`,
+    "Evidence: 2 cited worker session(s), one line per row, tier, workspace, writer:",
+    `- row ${OPUS}, tier standard, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, standard)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `- row anthropic / claude-fable-5-1 at effort high, tier frontier, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, frontier)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `All production sessions of deckhand whose tier came from its default tier, over all time: 3 in 3 line(s), 2 cited; lines not cited: row ${OPUS}, tier standard, workspace lagoon, writer human: 1.`,
   ]) {
     expect(lines).toContain(line);
   }
 });
 
-it("段の説明の提案の根拠は、説明が最後に変わった後にその段を要求した task の出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は workspace と task の書き手で、書き手が人間の task も数える", () => {
+it("段の説明の提案の根拠は、説明が最後に変わった後にその段を要求した task の出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は session の軸から出所と段を落とした組(task の書き手を含む)で、書き手が人間の task も数える", () => {
   const { db, propose } = board();
   const before = rowSession(db, OPUS_ROW, at);
   const edited = applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Work that needs a plan." }, "webui", at)!;
@@ -198,10 +198,10 @@ it("段の説明の提案の根拠は、説明が最後に変わった後にそ�
 
   const lines = detailLines(db, question_id);
   for (const line of [
-    "Evidence: 2 cited worker session(s), one line per workspace, writer:",
-    `- workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, byHuman)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `- workspace reef, writer scout: 1 session(s) (tasks ${taskOf(db, byScout)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `All production sessions of tasks that requested tier planned (tier source task), since its description last changed (event ${edited}): 3 in 3 line(s), 2 cited; lines not cited: workspace lagoon, writer human: 1.`,
+    "Evidence: 2 cited worker session(s), one line per row, agent, workspace, writer:",
+    `- row ${OPUS}, agent deckhand, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, byHuman)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `- row ${OPUS}, agent deckhand, workspace reef, writer scout: 1 session(s) (tasks ${taskOf(db, byScout)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `All production sessions of tasks that requested tier planned (tier source task), since its description last changed (event ${edited}): 3 in 3 line(s), 2 cited; lines not cited: row ${OPUS}, agent deckhand, workspace lagoon, writer human: 1.`,
   ]) {
     expect(lines).toContain(line);
   }
@@ -214,7 +214,7 @@ it("段の説明の提案の根拠の書き手は文面の書き手で、agent �
   const { question_id } = propose({ op: "tier_description", tier: "standard", description: "Work that needs a plan.", evidence: [spawnOn(db, child.id)] });
 
   const lines = detailLines(db, question_id);
-  expect(lines).toContain(`- workspace reef, writer scout: 1 session(s) (tasks ${child.id}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`);
+  expect(lines).toContain(`- row ${OPUS}, agent deckhand, workspace reef, writer scout: 1 session(s) (tasks ${child.id}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`);
   expect(lines.some((line) => line.includes("writer human"))).toBe(false);
 });
 
@@ -254,7 +254,7 @@ it("routing repair の行の提案も根拠を要し、同じ母集団の検査�
   const { question_id } = propose(evidence);
 
   expect(getTask(db, question_id)).toMatchObject({ parent_id: repair, question_proposal: { op: "row", evidence } });
-  expect(detailLines(db, question_id)).toContain("Evidence: 2 cited worker session(s), one line per workspace:");
+  expect(detailLines(db, question_id)).toContain("Evidence: 2 cited worker session(s), one line per tier source, agent, workspace, writer:");
 });
 
 it("説明が一度も変わっていない段の説明の提案は、全期間の session を母集団にする", () => {
@@ -281,7 +281,7 @@ it("今と同じ説明に位置の変更を添えた段の編集は、説明の�
   );
 });
 
-it("Interview の提案の detail は根拠を走った行と workspace ごとに1行にまとめ、引用の外は根拠の行の session だけを数える", () => {
+it("Interview の提案の detail は根拠を session の6軸の組ごとに1行にまとめ、引用の外は根拠の行の session だけを数える", () => {
   const { db, propose } = board();
   const cited = rowSession(db, OPUS_ROW, at);
   allocate(db, cited, "underpowered", "capability");
@@ -293,9 +293,9 @@ it("Interview の提案の detail は根拠を走った行と workspace ごと�
   const lines = detailLines(db, question_id);
   for (const line of [
     `Rows the evidence ran on (pinned): ${OPUS} (standard)`,
-    "Evidence: 1 cited worker session(s), one line per row, workspace:",
-    `- row ${OPUS}, workspace reef: 1 session(s) (tasks ${taskOf(db, cited)}); outcomes 0 accepted, 1 rejected, 0 excluded; allocation reviews underpowered/capability 1; 0 session(s) not yet reviewed`,
-    `All production sessions on the evidence rows in their current tiers, over all time: 2 in 2 line(s), 1 cited; lines not cited: row ${OPUS}, workspace lagoon: 1.`,
+    "Evidence: 1 cited worker session(s), one line per tier source, row, tier, agent, workspace, writer:",
+    `- tier source task, row ${OPUS}, tier standard, agent deckhand, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, cited)}); outcomes 0 accepted, 1 rejected, 0 excluded; allocation reviews underpowered/capability 1; 0 session(s) not yet reviewed`,
+    `All production sessions on the evidence rows in their current tiers, over all time: 2 in 2 line(s), 1 cited; lines not cited: tier source task, row ${OPUS}, tier standard, agent deckhand, workspace lagoon, writer human: 1.`,
   ]) {
     expect(lines).toContain(line);
   }

@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, decomposedChild, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -16,6 +16,7 @@ const at = new Date("2026-09-23T00:00:00.000Z");
 
 const opus = executionSetting("anthropic", "claude-opus-5-5");
 const sol = executionSetting("openai", "gpt-5.6-sol");
+const OPUS = "anthropic / claude-opus-5-5 at effort high";
 
 function board() {
   const db = openDb(":memory:");
@@ -102,12 +103,28 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
   const cell = (s: ExecutionSetting) => ({ provider: s.provider, model: s.model, effort: s.effort, advisor: null });
   expect(listRoutingShadow(db, reader, {})).toEqual({
     shadow: [
-      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: null, workspace: null, agent: null, outcome: null, cost_usd: null, duration_ms: null },
-      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, workspace: null, agent: "reef-crab", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
-      { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), workspace: null, agent: "deckhand", outcome: "excluded", cost_usd: null, duration_ms: null },
+      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: null, workspace: null, agent: null, tier: null, writer: "human", outcome: null, cost_usd: null, duration_ms: null },
+      { task_id: diverged.id, recommended: cell(sol), actual: cell(opus), source: opus.source, basis: "prior", recommended_record: none, actual_record: none, candidates: 2, diverged: true, created_at: at.toISOString(), worker_spawned_event_id: second, workspace: null, agent: "reef-crab", tier: "economy", writer: "human", outcome: "rejected", cost_usd: 1.25, duration_ms: 0 },
+      { task_id: agreed.id, recommended: cell(opus), actual: cell(opus), source: opus.source, basis: "data", recommended_record: none, actual_record: none, candidates: 2, diverged: false, created_at: at.toISOString(), worker_spawned_event_id: expect.any(Number), workspace: null, agent: "deckhand", tier: "economy", writer: "human", outcome: "excluded", cost_usd: null, duration_ms: null },
     ],
   });
   expect(listRoutingShadow(db, reader, { diverged_only: true }).shadow.map((r) => r.worker_spawned_event_id)).toEqual([null, second]);
+});
+
+it("shadow 行は session が走った段(消した段なら tier_retired)と文面の書き手を運び、session に辿り着かなかった行の段は null —— 承認で実体化した子の書き手は登録者 human でなく分解した agent(ADR 0306 決定3)", () => {
+  const { db, spawn, routingReview } = board();
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, ...HUMAN_WEBUI);
+  const child = decomposedChild(db, parent, "child", "scout", at);
+  recordShadow(db, child.id, shadow(sol, opus, "prior"), at);
+  recordShadow(db, child.id, shadow(sol, opus, "prior"), at);
+  applyExecutionSettingsChange(db, { setting: "insert_tier", name: "scratch", description: "d", position: 0 }, "webui", at);
+  spawn(child.id, "deckhand", { ...opus, tier_id: tierIdOf(db, "scratch") });
+  applyExecutionSettingsChange(db, { setting: "delete_tier", name: "scratch" }, "webui", at);
+
+  expect(listRoutingShadow(db, routingReview(), {}).shadow.map((r) => [r.tier, r.tier_retired, r.writer])).toEqual([
+    [null, undefined, "scout"],
+    ["scratch", true, "scout"],
+  ]);
 });
 
 it("shadow 行は書いた時点の両セルの受理数・却下数と除外後の候補数を運び、後から episode が増えても行の値は変わらない —— 昇格後の行も同じ欄を持つ(ADR 0181 決定5)", () => {
@@ -169,7 +186,7 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   expect(listRoutingShadow(db, reader, { since_watermark: 0 }).shadow.map((r) => r.task_id)).toEqual([before.id, after.id]);
 });
 
-it("list_allocations は評価された注釈を source.tier × 段 × agent × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— 段はどの出所の注釈にも走った段が付く(ADR 0210 決定5)", () => {
+it("list_allocations は評価された注釈を session の6軸 × allocation × cause で数え、judge の model が worker のセルと同じ件数を添える —— 段はどの出所の注釈にも走った段が付く(ADR 0210 決定5)", () => {
   const { db, work, spawn, allocate, routingReview } = board();
   const task = work("t", "standard");
   // judge と同じ綴りの pin だけが同じ model —— 照合は学習器のセルと同じ完全一致で、前方一致する綴りは数えない(ADR 0182 決定3)
@@ -184,13 +201,38 @@ it("list_allocations は評価された注釈を source.tier × 段 × agent × 
   const deckhand = spawn(task.id, "deckhand", opus);
   allocate(task.id, deckhand, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
 
+  const session = { source_tier: "agent", workspace: "none", writer: "human" };
   expect(listAllocations(db, routingReview(), {})).toEqual({
     allocations: [
-      { source_tier: "agent", tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 3, judged_by_same_model: 1 },
-      { source_tier: "task", tier: "standard", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
-      { source_tier: "agent", tier: "economy", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { ...session, row: "anthropic / claude-fable-5-1 at effort high", tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 1 },
+      { ...session, row: "anthropic / claude-fable-5-1[1m] at effort high", tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { ...session, row: OPUS, tier: "economy", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { ...session, source_tier: "task", row: OPUS, tier: "standard", agent: "reef-crab", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 },
+      { ...session, row: OPUS, tier: "economy", agent: "deckhand", allocation: "appropriate", cause: "uncertain", count: 1, judged_by_same_model: 0 },
     ],
   });
+});
+
+it("list_allocations は出所・段・agent の同じ注釈も、走った行・workspace・文面の書き手のどれかが違えば別の組に数える(ADR 0306 決定2)", () => {
+  const { db, spawn, allocate, routingReview } = board();
+  const reviewed = (run: ExecutionSetting, workspace?: string, writer: readonly [string, "webui" | "mcp"] = HUMAN_WEBUI) => {
+    const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", workspace }, at, ...writer);
+    allocate(task.id, spawn(task.id, "deckhand", run), { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
+  };
+  const sonnet = executionSetting("anthropic", "claude-sonnet-5-5");
+  reviewed(opus);
+  reviewed(opus);
+  reviewed(sonnet);
+  reviewed(opus, "reef");
+  reviewed(opus, undefined, ["scout", "mcp"]);
+
+  const group = { source_tier: "agent", row: OPUS, tier: "economy", agent: "deckhand", workspace: "none", writer: "human", allocation: "overpowered", cause: "uncertain", judged_by_same_model: 0 };
+  expect(listAllocations(db, routingReview(), {}).allocations).toEqual([
+    { ...group, count: 2 },
+    { ...group, row: "anthropic / claude-sonnet-5-5 at effort high", count: 1 },
+    { ...group, workspace: "reef", count: 1 },
+    { ...group, writer: "scout", count: 1 },
+  ]);
 });
 
 it("list_allocations は書き手が人間の task の申告も段ごとに数え、消した段と同じ名前で足し直した段の注釈を混ぜない(ADR 0200 決定7・追記)", () => {
@@ -210,7 +252,7 @@ it("list_allocations は書き手が人間の task の申告も段ごとに数�
   declared("live", "scratch");
   declared("economy", "economy");
 
-  const group = { source_tier: "task", agent: "deckhand", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 };
+  const group = { source_tier: "task", row: OPUS, agent: "deckhand", workspace: "none", writer: "human", allocation: "overpowered", cause: "uncertain", count: 1, judged_by_same_model: 0 };
   expect(listAllocations(db, routingReview(), {}).allocations).toEqual([
     { ...group, tier: "scratch", tier_retired: true },
     { ...group, tier: "scratch" },
