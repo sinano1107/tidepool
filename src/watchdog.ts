@@ -2,7 +2,8 @@ import { quarantineRefusedRow, ROW_REFUSAL_EVIDENCE } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
-import { appendEvent, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
+import { DomainError } from "./domain-error.js";
+import { appendEvent, type EventOrigin, getEvent, latestEventOfTask, type RowRefusal } from "./events.js";
 import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
@@ -18,7 +19,7 @@ import {
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit } from "./worker.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
+import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -58,8 +59,12 @@ export interface PendingReclaim {
   resumeTeardown: () => void;
 }
 
+/** Validate the live slot before recording; only after that transaction succeeds does stopping begin. */
+export type StopSession = (taskId: string, recordStop: () => void) => "nothing running" | "already ending" | undefined;
+
 export interface Watchdog extends PendingReclaim {
   stop: () => void;
+  stopSession: StopSession;
   /** **この session が梯子の底で保留されているか**(ADR 0099 決定3)。回収 timeout で
    *  Containment quarantine に落ちた session の後始末は、確認回答だけが進める ——
    *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
@@ -79,6 +84,7 @@ interface WatchRecord {
   pickup: number;
   stopSentAt?: number;
   forceSentAt?: number;
+  humanStop?: boolean;
   /** 後始末の梯子(`teardownTick`)を、底に落ちた1度で止める。立てるのは梯子の底の2つ
    *  (`onTeardownReclaimTimeout` と、後始末へ入る `onReclaimTimeout`)—— 立たなければ以後の tick ごとに containment の
    *  quarantine を撃ち直す(開いている間は `quarantine_refired` を積み、回答後は question を
@@ -157,6 +163,18 @@ export function registerFailureAndMarkTeardown(
   db.transaction(() => {
     registerFailureQuestion(db, task, title, reason, now);
     markTeardown(db, task.id, now);
+  })();
+}
+
+/** 人間の停止の記録は要求時に一括で置く。容器の回収は transaction の外(ADR 0305)。 */
+export function recordHumanStop(db: Db, taskId: string, reason: string | undefined, now: Date, origin: EventOrigin): void {
+  db.transaction(() => {
+    if (sessionInTeardown(db)?.taskId === taskId) throw new DomainError(`task ${taskId} is already ending`);
+    const task = getTask(db, taskId);
+    if (task?.status !== "in_progress") throw new DomainError(`task ${taskId} is not in progress`);
+    registerFailureQuestion(db, task, `stopped by human: ${task.title}`, `The human stopped this session.${reason === undefined ? "" : `\n\nReason: ${reason}`}`, now);
+    appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reason === undefined ? {} : { reason }) }, at: now });
+    markTeardown(db, taskId, now);
   })();
 }
 
@@ -389,6 +407,10 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
+    if (rec.humanStop) {
+      void runTeardown(teardown, taskId, teardownStep(db, taskId));
+      return;
+    }
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。回収 timeout で
     // 後始末へ入った session に遅れて届いた空の観測もここで外れる —— 外れなければ quarantine へ
     // 倒れた slot を黙って解放する(解放の門は確認 question ただ1つ)。後始末の側に届く観測を
@@ -499,6 +521,42 @@ export function startWatchdog(deps: {
     return record;
   }
 
+  function beginStop(taskId: string, rec: WatchRecord): void {
+    if (rec.stopSentAt !== undefined) return;
+    rec.stopSentAt = clock.now().getTime();
+    worker.gracefulStop(taskId);
+  }
+
+  /** cap と人間の停止は同じ猶予・強制回収・観測の梯子を通る(ADR 0305)。 */
+  function advanceStop(task: Task, rec: WatchRecord, limit: number): void {
+    if (rec.settled) return;
+    const now = clock.now().getTime();
+    if (rec.forceSentAt !== undefined) {
+      if (now - rec.forceSentAt >= reclaimTimeout) {
+        if (rec.humanStop) onTeardownReclaimTimeout(task, rec);
+        else onReclaimTimeout(task, rec, limit);
+      }
+      return;
+    }
+    if (now - rec.stopSentAt! >= config.grace) {
+      rec.forceSentAt = now;
+      containers.forceReclaim(task.id);
+      void containers.reclaimed(task.id).then(() => onReclaimed(task.id, rec, limit));
+    }
+  }
+
+  const stopSession: StopSession = (taskId, recordStop) => {
+    if (slot.currentTaskId !== taskId) return "nothing running";
+    if (slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return "already ending";
+    const rec = syncPickup(taskId);
+    recordStop();
+    slot.enterTeardown();
+    rec.humanStop = true;
+    beginStop(taskId, rec);
+    // A cap may already have sent force reclaim; its existing observation now finishes this stop.
+    return undefined;
+  };
+
   /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末へ
    *  入るので、ここの門で自然に外れる。梯子に入った session は梯子の底の question が受ける
    *  (決定4)—— 梯子の強制回収も決着も畳み込み停止の後ろにしか無いので、停止の送達記録
@@ -538,6 +596,10 @@ export function startWatchdog(deps: {
     const task = getTask(db, taskId);
     if (!task) return;
     const rec = syncPickup(taskId);
+    if (rec.humanStop) {
+      advanceStop(task, rec, 0);
+      return;
+    }
     // cap は in_progress のまま後始末に入る(ADR 0113)。タスク種別の梯子より先に読む。
     if (sessionInTeardown(db)?.taskId === taskId) {
       teardownTick(task, rec);
@@ -548,31 +610,17 @@ export function startWatchdog(deps: {
     if (limit === undefined) return;
 
     const now = clock.now().getTime();
-    if (rec.forceSentAt !== undefined) {
-      // 送達は済んでいる。ここから先を進めるのは観測だけで、tick は timeout を
-      // 数えるためだけに回る。
-      if (now - rec.forceSentAt >= reclaimTimeout) onReclaimTimeout(task, rec, limit);
-      return;
-    }
     if (rec.stopSentAt === undefined) {
-      if (now - rec.pickup >= limit) {
-        worker.gracefulStop(taskId);
-        rec.stopSentAt = now;
-      }
+      if (now - rec.pickup >= limit) beginStop(taskId, rec);
       return;
     }
-    if (now - rec.stopSentAt >= config.grace) {
-      rec.forceSentAt = now;
-      containers.forceReclaim(taskId);
-      // 観測は遅れて届くので、強制回収を送った run の記録を渡す —— その頃 `record` は
-      // 次のタスクのものでありうる(そのときは onReclaimed の枠の門で外れる)
-      void containers.reclaimed(taskId).then(() => onReclaimed(taskId, rec, limit));
-    }
+    advanceStop(task, rec, limit);
   }
 
   const cancel = clock.setInterval(tick, WATCHDOG_TICK);
   return {
     stop: cancel,
+    stopSession,
     heldForContainment,
     onWorkerExited,
     pendingReclaim: () =>

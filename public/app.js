@@ -4265,8 +4265,8 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
     color: "var(--sun-4)",
     taskId: teardown.taskId,
-    line: "session teardown \xB7 nothing new starts",
-    meta: `${TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
+    line: teardown.humanStop ? "stopped by human \xB7 session teardown" : "session teardown \xB7 nothing new starts",
+    meta: `${teardown.humanStop ? teardown.humanStop.reason ?? "no reason given" : TEARDOWN_META[teardown.settlement]} \xB7 since ${fmtTime(teardown.startedAt)}`
   } : { color: "var(--rock-3)", line: "slot free \u2014 nothing running", taskId: null, meta: "concurrency=1" };
   const failure = queueEnvelope.lastPollFailure;
   const pollFailureMeta = failure && `${failure.message} \xB7 at ${fmtTime(failure.at)}`;
@@ -4374,7 +4374,7 @@ function completionReviewLine(task) {
   })) return null;
   return `review \u2192 ${task.review_by?.length ? task.review_by.join(", ") : "board auditor"}`;
 }
-function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
+function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
   const review = completionReviewLine(task);
   const [interview, setInterview] = React.useState(null);
@@ -4387,7 +4387,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }) {
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task")), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -4491,6 +4491,23 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   };
   return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(TpDiscards, { discards }), /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, only the fact of the cancel is recorded" }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
 }
+function StopTaskDialog({ task, onStopped, onClose, say }) {
+  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [reason, setReason] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/tasks/${task.id}/stop`, reason.trim() ? { reason: reason.trim() } : {}, "POST");
+      await onStopped();
+      onClose();
+    } catch (err) {
+      say("danger", "stop failed", String(err.message || err));
+    }
+    setBusy(false);
+  };
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)" } }, "Stop session"), /* @__PURE__ */ React.createElement("p", null, 'Stop "', task.title, '" now. Choose retry or abandon in the question that follows.'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Stop this session"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep running")));
+}
 const HANDOFF_FIELDS = [
   ["outcome", "outcome vs criteria"],
   ["deliverables", "deliverable location"],
@@ -4569,6 +4586,7 @@ function App() {
   const [actionsTask, setActionsTask] = React.useState(null);
   const [editTaskCard, setEditTaskCard] = React.useState(null);
   const [cancelTaskCard, setCancelTaskCard] = React.useState(null);
+  const [stopTaskCard, setStopTaskCard] = React.useState(null);
   const [completeHumanCard, setCompleteHumanCard] = React.useState(null);
   const [deepLinkQuestionId, setDeepLinkQuestionId] = React.useState(
     () => new URLSearchParams(location.search).get("question")
@@ -4892,7 +4910,7 @@ function App() {
   };
   const openTask = (t) => {
     const settled = TidepoolRules.isSettled(t.status);
-    if (settled || t.status === "in_progress") {
+    if (settled) {
       const review = completionReviewLine(t);
       say("info", t.title, /* @__PURE__ */ React.createElement(React.Fragment, null, t.id, " \xB7 ", t.type, review && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("br", null), review)));
       return;
@@ -4974,9 +4992,13 @@ function App() {
         setCancelTaskCard(actionsTask);
         setActionsTask(null);
       },
+      onStop: () => {
+        setStopTaskCard(actionsTask);
+        setActionsTask(null);
+      },
       onClose: () => setActionsTask(null)
     }
-  )), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!editTaskCard, onClose: () => setEditTaskCard(null) }, editTaskCard && /* @__PURE__ */ React.createElement(EditTaskDialog, { taskCard: editTaskCard, say, onSaved: refreshFull, onClose: () => setEditTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!cancelTaskCard, onClose: () => setCancelTaskCard(null) }, cancelTaskCard && /* @__PURE__ */ React.createElement(CancelTaskDialog, { task: cancelTaskCard, say, onCancelled: refreshFull, onClose: () => setCancelTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!completeHumanCard, onClose: () => setCompleteHumanCard(null) }, completeHumanCard && /* @__PURE__ */ React.createElement(CompleteHumanTaskDialog, { task: completeHumanCard, say, onCompleted: refreshFull, onClose: () => setCompleteHumanCard(null) })), /* @__PURE__ */ React.createElement("nav", { style: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 440, display: "flex", background: "var(--surface-card)", borderTop: "1px solid var(--border-hairline)", zIndex: 20 } }, tabs.map((t) => {
+  )), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!editTaskCard, onClose: () => setEditTaskCard(null) }, editTaskCard && /* @__PURE__ */ React.createElement(EditTaskDialog, { taskCard: editTaskCard, say, onSaved: refreshFull, onClose: () => setEditTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!cancelTaskCard, onClose: () => setCancelTaskCard(null) }, cancelTaskCard && /* @__PURE__ */ React.createElement(CancelTaskDialog, { task: cancelTaskCard, say, onCancelled: refreshFull, onClose: () => setCancelTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!stopTaskCard, onClose: () => setStopTaskCard(null) }, stopTaskCard && /* @__PURE__ */ React.createElement(StopTaskDialog, { task: stopTaskCard, say, onStopped: refreshFull, onClose: () => setStopTaskCard(null) })), /* @__PURE__ */ React.createElement(PortalDialog, { open: !!completeHumanCard, onClose: () => setCompleteHumanCard(null) }, completeHumanCard && /* @__PURE__ */ React.createElement(CompleteHumanTaskDialog, { task: completeHumanCard, say, onCompleted: refreshFull, onClose: () => setCompleteHumanCard(null) })), /* @__PURE__ */ React.createElement("nav", { style: { position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 440, display: "flex", background: "var(--surface-card)", borderTop: "1px solid var(--border-hairline)", zIndex: 20 } }, tabs.map((t) => {
     const active = tab === t.key;
     return /* @__PURE__ */ React.createElement(
       "button",

@@ -35,6 +35,7 @@ import {
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
+  stopThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
 import { closedRootOf, type Landing } from "./landing.js";
@@ -125,7 +126,7 @@ import {
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
-import type { PendingReclaim } from "./watchdog.js";
+import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
@@ -164,6 +165,7 @@ export interface ManagementMcpDeps {
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
    *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
+  stopSession?: StopSession;
   /** ADR 0137 決定5: 解除の門の map(WebUI 側と同じ配線)。 */
   quarantineChecks?: QuarantineChecks;
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名 —— 直接 cancel の門が読む
@@ -1022,6 +1024,17 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "mcp",
       );
       return result.ok ? toolResult({ ...taskAck(result.value), discarded }) : toolError(result.failure.error);
+    },
+  );
+  server.registerTool(
+    "stop_task",
+    {
+      description: `Stop the running task's worker session at the human's request. Leaves a failure question for retry or abandon; the reason is optional. ${TASK_ACK_DESCRIPTION}`,
+      inputSchema: { task_id: z.string(), reason: requiredTextSchema.optional() },
+    },
+    async ({ task_id, reason }) => {
+      const result = stopThroughHumanDoor(deps, task_id, reason, () => deps.clock.now(), "mcp");
+      return result.ok ? toolResult(taskAck(result.value)) : toolError(result.failure.error);
     },
   );
   server.registerTool(

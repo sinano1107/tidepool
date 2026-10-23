@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import type { EventKind } from "./events.js";
+import { type EventKind, latestEventOfTask } from "./events.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
@@ -279,19 +279,22 @@ function clearTeardown(db: Db, taskId: string): void {
  *  起動時の復旧・後始末の時限・「今なぜ pickup が起きないか」の読み口が共有する。 */
 export function sessionInTeardown(
   db: Db,
-): { taskId: string; startedAt: string; settlement: Settlement } | undefined {
+): { taskId: string; startedAt: string; settlement: Settlement; humanStop?: { reason: string | null } } | undefined {
   const row = db
     .prepare(
       "SELECT id, status, teardown_started_at FROM tasks WHERE teardown_started_at IS NOT NULL " +
         "ORDER BY teardown_started_at LIMIT 1",
     )
     .get() as { id: string; status: Task["status"]; teardown_started_at: string } | undefined;
+  const stopped = row && latestEventOfTask(db, row.id, "session_stopped_by_human");
+  const pickup = row && latestEventOfTask(db, row.id, "task_picked_up");
   return (
     row && {
       taskId: row.id,
       startedAt: row.teardown_started_at,
       // 読み手が行の status から経路を導き直さないように、ここで写像を1度だけ当てる
       settlement: settlementOf(db, row),
+      ...(stopped && pickup && stopped.id > pickup.id ? { humanStop: { reason: stopped.payload.reason ?? null } } : {}),
     }
   );
 }

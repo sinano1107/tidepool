@@ -435,8 +435,8 @@ function mapData(
         // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
         // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
         color: 'var(--sun-4)', taskId: teardown.taskId,
-        line: 'session teardown · nothing new starts',
-        meta: `${TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
+        line: teardown.humanStop ? 'stopped by human · session teardown' : 'session teardown · nothing new starts',
+        meta: `${teardown.humanStop ? (teardown.humanStop.reason ?? 'no reason given') : TEARDOWN_META[teardown.settlement]} · since ${fmtTime(teardown.startedAt)}`,
       }
     : { color: 'var(--rock-3)', line: 'slot free — nothing running', taskId: null, meta: 'concurrency=1' };
   // ADR 0294 決定1: 最後の poll の失敗は停止でも枠の状態でもない —— slot 行の枝にすると、一撃が投げて枠が塞がったまま
@@ -608,11 +608,12 @@ function completionReviewLine(task: BoardScreenTask): string | null {
 // board-registered non-question root for cancel — ADR 0198 / 0211) are enforced
 // server-side on each action; this sheet only offers them, and each action surfaces the domain
 // error as a toast if the line isn't met.
-function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
+function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose }: {
   task: BoardScreenTask;
   onAddChild: () => void;
   onEdit: () => void;
   onCancel: () => void;
+  onStop: () => void;
   onClose: () => void;
 }) {
   const { Button } = window.TidepoolDesignSystem_8a0ead;
@@ -638,9 +639,13 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onClose }: {
       {review && <p style={meta}>{review}</p>}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
-      <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
-      <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
-      <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
+      {task.status === 'in_progress'
+        ? <Button variant="primary" size="lg" full onClick={onStop}>Stop session</Button>
+        : <>
+          <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
+          <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
+          <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
+        </>}
       <Button variant="ghost" size="lg" full onClick={onClose}>Close</Button>
     </div>
   );
@@ -830,6 +835,37 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
   );
 }
 
+function StopTaskDialog({ task, onStopped, onClose, say }: {
+  task: BoardScreenTask;
+  onStopped: () => Promise<void> | void;
+  onClose: () => void;
+  say: AppSay;
+}) {
+  const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
+  const [reason, setReason] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+  const submit = async () => {
+    setBusy(true);
+    try {
+      await api(`/api/tasks/${task.id}/stop`, reason.trim() ? { reason: reason.trim() } : {}, 'POST');
+      await onStopped();
+      onClose();
+    } catch (err) {
+      say('danger', 'stop failed', String((err as Error).message || err));
+    }
+    setBusy(false);
+  };
+  return <div style={{ padding: '20px 16px' }}>
+    <h1 style={{ fontSize: 'var(--text-xl)' }}>Stop session</h1>
+    <p>Stop "{task.title}" now. Choose retry or abandon in the question that follows.</p>
+    <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Stop this session</Button>
+      <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep running</Button>
+    </Card>
+  </div>;
+}
+
 // The six handoff fields (src/tasks.ts's HANDOFF_FIELDS) under the labels this
 // screen shows them by — the field names are the server's, the wording is not.
 const HANDOFF_FIELDS = [
@@ -940,6 +976,7 @@ function App() {
   const [actionsTask, setActionsTask] = React.useState<BoardScreenTask | null>(null);
   const [editTaskCard, setEditTaskCard] = React.useState<BoardScreenTask | null>(null);
   const [cancelTaskCard, setCancelTaskCard] = React.useState<BoardScreenTask | null>(null);
+  const [stopTaskCard, setStopTaskCard] = React.useState<BoardScreenTask | null>(null);
   // issue #301: the your-tasks row whose completion dialog is open (a row that
   // blocks a parent), or null when closed
   const [completeHumanCard, setCompleteHumanCard] = React.useState<AppData['humanTasks'][number] | null>(null);
@@ -1355,19 +1392,12 @@ function App() {
     }
   };
 
-  // issue #129/#130: a board task-card tap opens the action chooser (add child
-  // / edit / cancel) only for a task the client can already tell is plausibly
-  // eligible — done and in-progress tasks are cheap, always-
-  // correct exclusions from the board's own derived `status`/`assignee`
-  // (CONTEXT.md's Decompose/Edit/Cancel share the same first two conditions);
-  // the remaining conditions (no agent-decomposed child yet for add-child;
-  // human-authored for edit, human-authored or a board-registered
-  // non-question root for cancel) need event history the board payload
-  // doesn't carry, so they're left to the API's own gates to reject on submit.
-  // An ineligible tap keeps the plain info toast this used to always show.
+  // Running cards offer human stop; other unsettled cards offer add/edit/cancel.
+  // Their remaining domain gates need facts the board payload does not carry,
+  // so the API checks them on submit. Settled cards keep the plain info toast.
   const openTask = (t: BoardScreenTask) => {
     const settled = TidepoolRules.isSettled(t.status);
-    if (settled || t.status === 'in_progress') {
+    if (settled) {
       const review = completionReviewLine(t);
       say('info', t.title, <>{t.id} · {t.type}{review && <><br />{review}</>}</>);
       return;
@@ -1504,6 +1534,7 @@ function App() {
             onAddChild={() => { setAddChildParent(actionsTask); setActionsTask(null); }}
             onEdit={() => { setEditTaskCard(actionsTask); setActionsTask(null); }}
             onCancel={() => { setCancelTaskCard(actionsTask); setActionsTask(null); }}
+            onStop={() => { setStopTaskCard(actionsTask); setActionsTask(null); }}
             onClose={() => setActionsTask(null)}
           />
         )}
@@ -1517,6 +1548,9 @@ function App() {
         {cancelTaskCard && (
           <CancelTaskDialog task={cancelTaskCard} say={say} onCancelled={refreshFull} onClose={() => setCancelTaskCard(null)} />
         )}
+      </PortalDialog>
+      <PortalDialog open={!!stopTaskCard} onClose={() => setStopTaskCard(null)}>
+        {stopTaskCard && <StopTaskDialog task={stopTaskCard} say={say} onStopped={refreshFull} onClose={() => setStopTaskCard(null)} />}
       </PortalDialog>
       <PortalDialog open={!!completeHumanCard} onClose={() => setCompleteHumanCard(null)}>
         {completeHumanCard && (

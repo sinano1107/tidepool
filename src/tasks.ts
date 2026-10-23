@@ -4313,6 +4313,7 @@ interface DecisionHistoryEntry {
 type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
+  | { stopped_by_human: { reason: string | null } }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
@@ -4386,6 +4387,11 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
   }
   const examinee = getTask(db, taskId)?.interview_target_id != null;
+  for (const event of listEvents(db, taskId)) {
+    if (event.payload.kind === "session_stopped_by_human") {
+      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human: { reason: event.payload.reason ?? null } } });
+    }
+  }
   for (const child of [...listChildren(db, taskId), ...listExaminees(db, taskId)]) {
     const registered = latestEventOfTask(db, child.id, "task_registered");
     if (!registered) continue;

@@ -1,0 +1,53 @@
+import { afterEach, expect, it } from "vitest";
+import { api, bootTidepool, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, questions, registerWork, type Tidepool } from "./harness.js";
+
+let t: Tidepool;
+afterEach(() => t?.stop());
+const MIN = 60 * 1000;
+
+it("HTTP stop exposes the failure immediately, rejects late worker completion, and retries only after reclaim", async () => {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "running");
+  t.containers.hold(task.id);
+  const next = await registerWork(t, "next");
+  const response = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" });
+  expect(response.status).toBe(200);
+  const [failure] = await questions(t);
+  expect(failure.parent_id).toBe(task.id);
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toMatchObject({ taskId: task.id, humanStop: { reason: "wrong direction" } });
+  const late = await callAsTask(t, task.id, "complete_task", { handoff: FULL_HANDOFF });
+  expect(late.isError).toBe(true);
+  expect(JSON.stringify(late)).toMatch(/session.*over/i);
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] })).status).toBe(200);
+  const queue = (await api(t.baseUrl, "GET", "/api/queue")).json;
+  expect(queue.tasks.map((x: { id: string }) => x.id)).toEqual([task.id, next.id]);
+  await t.clock.advance(MIN);
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id]);
+  t.containers.fireEmpty(task.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  expect(t.worker.started.map((x) => x.id)).toEqual([task.id, task.id]);
+});
+
+it("management stop mirrors HTTP refusal and validation, and the worker has no stop tool", async () => {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "running");
+  const worker = await mcpClient(t.mcpBaseUrl, task.id);
+  expect((await worker.listTools()).tools.map((tool) => tool.name)).not.toContain("stop_task");
+  await worker.close();
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: " \n " })).status).toBe(400);
+  expect((await api(t.baseUrl, "POST", "/api/tasks/missing/stop", {})).status).toBe(404);
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    expect((await management.callTool({ name: "stop_task", arguments: { task_id: task.id, reason: "   " } })).isError).toBe(true);
+    expect((await management.callTool({ name: "stop_task", arguments: { task_id: task.id } })).isError).not.toBe(true);
+    expect((await management.callTool({ name: "stop_task", arguments: { task_id: task.id } })).isError).toBe(true);
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, {})).status).toBe(409);
+    const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
+    expect(events.find((e: { kind: string }) => e.kind === "session_stopped_by_human").origin).toBe("mcp");
+    const next = await registerWork(t, "next");
+    await t.clock.advance(MIN);
+    expect(t.worker.started.map((x) => x.id)).toEqual([task.id, next.id]);
+  } finally {
+    await management.close();
+  }
+});

@@ -36,6 +36,7 @@ import {
   listMemoryEntriesForHuman,
   registerThroughHumanDoor,
   retryInterviewThroughHumanDoor,
+  stopThroughHumanDoor,
   submitAnswer,
 } from "./human-verbs.js";
 import { IssueContentCache, type Live } from "./issue-view.js";
@@ -167,7 +168,7 @@ import {
   TriageError,
   triagePreview,
 } from "./triage.js";
-import type { PendingReclaim } from "./watchdog.js";
+import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
@@ -614,6 +615,7 @@ export interface ApiRouterDeps {
   /** ADR 0099 決定3: 受理された Containment quarantine の確認回答が slot を解放する門。
    *  受理された Harness Containment の確認回答は、再起動を越えた後始末(`resumeTeardown`)だけを走らせる。 */
   reclaim?: Pick<PendingReclaim, "acceptReclaimed" | "resumeTeardown">;
+  stopSession?: StopSession;
   /** ADR 0137 決定5: 解除の門の map。合成 root が組む。 */
   quarantineChecks?: QuarantineChecks;
   /** ADR 0137 決定6: 資源単位の quarantine の値 → agent 名。直接 cancel の門が読む。
@@ -1393,6 +1395,20 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     );
     if (!result.ok) {
       sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
+      return;
+    }
+    sendJson(res, result.value);
+  });
+
+  router.post("/tasks/:id/stop", (req, res) => {
+    const parsed = z.object({ reason: requiredTextSchema.optional() }).safeParse(req.body ?? {});
+    if (!parsed.success) {
+      sendJson(res.status(400), { error: formatValidationError(parsed.error) });
+      return;
+    }
+    const result = stopThroughHumanDoor(deps, req.params.id, parsed.data.reason, () => clock.now(), "webui");
+    if (!result.ok) {
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 409), { error: result.failure.error });
       return;
     }
     sendJson(res, result.value);
