@@ -7,6 +7,7 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { normalizeText, whyBlank } from "../src/required-text.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { answerQuestion, assertAnswerable, completeTask, decomposeTask, editTask, getTask, listChildren, logDecision, registerTask } from "../src/tasks.js";
+import { tierIdOf } from "../src/tier.js";
 import { raiseObjection } from "../src/triage.js";
 import { unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI, rowSession, WORKER_SPAWNED } from "./harness.js";
@@ -132,7 +133,7 @@ it("routing agent-tier proposals normalize supplied agent and target tier names 
   try {
     const review = registerTask(db, { type: "review", title: "routing review", purpose: "purpose", completion_criteria: "criteria", meta_review_subject: "routing" }, new Date(0), ...HUMAN_WEBUI);
     const task = registerTask(db, { type: "work", title: "evidence", purpose: "purpose", completion_criteria: "criteria" }, new Date(0), ...HUMAN_WEBUI);
-    const evidence = [appendEvent(db, { taskId: task.id, workerId: "deckhand", origin: "board", at: new Date(0), payload: { ...WORKER_SPAWNED, model: "claude-opus-5-5", source: { tier: "agent", provider: "only" } } })];
+    const evidence = [appendEvent(db, { taskId: task.id, workerId: "deckhand", origin: "board", at: new Date(0), payload: { ...WORKER_SPAWNED, model: "claude-opus-5-5", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" } } })];
     const agent: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "frontier", skills: ["*"], retiredFields: [], systemPrompt: "prompt" };
     const input = { op: "agent_tier" as const, agent: " deckhand ", to: " standard\n", evidence, rationale: "evidence" };
     const { question_id } = proposeRoutingChange(db, review.id, input, "worker", new Date(0), () => [agent]);

@@ -4,6 +4,7 @@ import { appendEvent } from "../src/events.js";
 import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
+import { tierIdOf } from "../src/tier.js";
 import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・2・5)のサーバ境界: 提案 verb、回答での registry への commit と修正値、
@@ -57,7 +58,7 @@ async function boardWithRoutingReview(registry = fakeRegistry()) {
   return { review, client, call, ...registry };
 }
 
-/** 根拠の episode(setup): agent が表の行 (provider, model) で走った worker_spawned。 */
+/** 根拠の episode(setup): agent が表の行 (provider, model) で、registry の宣言の段 frontier で走った worker_spawned。 */
 function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot", model: string, tierSource: "agent" | "task" = "agent"): number {
   const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
@@ -65,7 +66,7 @@ function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot"
     workerId,
     origin: "board",
     at: tp.clock.now(),
-    payload: { ...WORKER_SPAWNED, provider, model, source: { tier: tierSource, provider: "only" }, harness: "codex" },
+    payload: { ...WORKER_SPAWNED, provider, model, tier_id: tierIdOf(tp.db, "frontier"), source: { tier: tierSource, provider: "only" }, harness: "codex" },
   });
 }
 

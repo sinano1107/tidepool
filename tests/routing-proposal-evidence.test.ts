@@ -152,7 +152,7 @@ it("段を足す提案の根拠は、移す行の今の段にある全行のそ�
   }
 });
 
-it("agent の段の提案の根拠は、その agent の段の出所が agent の本番 session を全期間通し(組は session の軸から出所と agent を落とした組)、review 側の session・他の agent の session・出所が task の session を拒む", () => {
+it("agent の段の提案の根拠は、その agent の段の出所が agent で今の宣言の段で走った本番 session に限り(組は session の軸から出所・agent・段を落とした組)、review 側の session・他の agent の session・出所が task の session・宣言と別の段で走った session を拒む", () => {
   const { db, review, propose } = board();
   const reviewSide = spawnOn(db, review, { source: "agent" });
   const scout = session(db, { agent: "scout", source: "agent" });
@@ -165,20 +165,30 @@ it("agent の段の提案の根拠は、その agent の段の出所が agent �
   expect(() => proposeWith([reviewSide])).toThrow(`evidence ${reviewSide} is a session of a task of type review`);
   expect(() => proposeWith([scout])).toThrow(`evidence ${scout} is not a worker_spawned event of deckhand`);
   expect(() => proposeWith([requested])).toThrow(`evidence ${requested} took its tier from task, not from deckhand's default tier`);
-  const { question_id } = proposeWith([standard, frontier]);
+  expect(() => proposeWith([frontier])).toThrow(`evidence ${frontier} ran in tier frontier, not in standard, the current declared tier of deckhand`);
+  const { question_id } = proposeWith([standard]);
 
   const lines = detailLines(db, question_id);
   for (const line of [
-    "Evidence: 2 cited worker session(s), one line per row, tier, workspace, writer:",
-    `- row ${OPUS}, tier standard, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, standard)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `- row anthropic / claude-fable-5-1 at effort high, tier frontier, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, frontier)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
-    `All production sessions of deckhand whose tier came from its default tier, over all time: 3 in 3 line(s), 2 cited; lines not cited: row ${OPUS}, tier standard, workspace lagoon, writer human: 1.`,
+    "Evidence: 1 cited worker session(s), one line per row, workspace, writer:",
+    `- row ${OPUS}, workspace reef, writer human: 1 session(s) (tasks ${taskOf(db, standard)}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`,
+    `All production sessions of deckhand whose tier came from its default tier, in its current declared tier standard: 2 in 2 line(s), 1 cited; lines not cited: row ${OPUS}, workspace lagoon, writer human: 1.`,
   ]) {
     expect(lines).toContain(line);
   }
 });
 
-it("段の説明の提案の根拠は、説明が最後に変わった後にその段を要求した task の出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は session の軸から出所と段を落とした組(task の書き手を含む)で、書き手が人間の task も数える", () => {
+it("agent の宣言の段を下げた後は、下げる前の宣言の段で走った session を agent の段の提案の根拠に引けない", () => {
+  const { db, review } = board();
+  const earlier = session(db, { tier: "frontier", source: "agent" });
+  const proposeAt = (tier: string, to: string) =>
+    proposeRoutingChange(db, review, { op: "agent_tier", agent: "deckhand", to, evidence: [earlier], rationale: "r" }, "auditor", at, () => [{ ...DECKHAND_AGENT, tier }]);
+
+  expect(() => proposeAt("frontier", "standard")).not.toThrow();
+  expect(() => proposeAt("standard", "economy")).toThrow(`evidence ${earlier} ran in tier frontier, not in standard, the current declared tier of deckhand`);
+});
+
+it("段の説明の提案の根拠は、説明が最後に変わった後にその段で走った出所 task の session に限り(位置だけの編集と改名は範囲を切らない)、組は session の軸から出所と段を落とした組(task の書き手を含む)で、書き手が人間の task も数える", () => {
   const { db, propose } = board();
   const before = rowSession(db, OPUS_ROW, at);
   const edited = applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Work that needs a plan." }, "webui", at)!;
@@ -186,14 +196,14 @@ it("段の説明の提案の根拠は、説明が最後に変わった後にそ�
   applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", position: 0 }, "webui", at);
   const byScout = session(db, { writer: ["scout", "mcp"] });
   const fromAgent = session(db, { source: "agent" });
-  const otherRequest = session(db, { requested: "economy" });
+  const otherRequest = session(db, { tier: "economy" });
   session(db, { workspace: "lagoon" });
   applyExecutionSettingsChange(db, { setting: "rename_tier", name: "standard", to: "planned" }, "webui", at);
   const proposeWith = (evidence: number[]) => propose({ op: "tier_description", tier: "planned", description: "Work that needs a written plan.", evidence });
 
   expect(() => proposeWith([before])).toThrow(`evidence ${before} ran before tier planned's description last changed (event ${edited})`);
   expect(() => proposeWith([fromAgent])).toThrow(`evidence ${fromAgent} took its tier from agent, not from its task's request`);
-  expect(() => proposeWith([otherRequest])).toThrow(`evidence ${otherRequest} is a session of a task that did not request planned`);
+  expect(() => proposeWith([otherRequest])).toThrow(`evidence ${otherRequest} ran in tier economy, not in planned`);
   const { question_id } = proposeWith([byHuman, byScout]);
 
   const lines = detailLines(db, question_id);

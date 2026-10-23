@@ -500,20 +500,12 @@ function agentTierProposal(db: Db, agents: readonly AgentView[], input: { agent?
   assertTierRunnableFor(db, name, agentViewProviders(agent), to);
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
   const table = loadExecutionSettingTable(db);
-  // 母集団(ADR 0302): その agent の、段の出所が agent の本番 session、全期間(registry に段の変更の event が無い)。床を agent の既定ティアが
-  // 決めた episode だけ(ADR 0111 追記2)—— 他の出所の tier は agent の宣言の過剰を言わない
+  // 床を agent の既定ティアが決めた episode だけ(ADR 0111 追記2)—— 他の出所の tier は agent の宣言の過剰を言わない
   const { lines, cited } = sessionEvidence(
     db,
     evidence,
-    productionPopulation(
-      db,
-      [
-        [(e) => e.agent === name, () => `is not a worker_spawned event of ${name}`],
-        [(e) => e.source.tier === "agent", (e) => `took its tier from ${e.source.tier}, not from ${name}'s default tier`],
-      ],
-      ["tier source", "agent"],
-    ),
-    `production sessions of ${name} whose tier came from its default tier, over all time`,
+    productionPopulation(db, { agent: name, "tier source": "agent", tier: agentGeneration(db, agent) }),
+    `production sessions of ${name} whose tier came from its default tier, in its current declared tier ${from}`,
   );
   const rows = new Map<string, RegistryProposal["pin"]["rows"][number]>();
   for (const e of cited) {
@@ -546,18 +538,13 @@ function addTierProposal(
   const table = loadExecutionSettingTable(db);
   const row = table.find((r) => matchesRowKey(r, key));
   if (!row) throw new DomainError(`the execution-setting table has no row for ${rowName(key)}`);
-  // 母集団(ADR 0302): 移す行の今の段にある全行で、その段で走った本番 session、全期間 —— 主張は段の中の対比(ADR 0200 決定8)
+  // 走った行は移す行の今の段の全行(値が1つでない軸)—— 主張は段の中の対比(ADR 0200 決定8)
   const { lines } = sessionEvidence(
     db,
     evidence,
-    productionPopulation(
-      db,
-      [
-        [(e) => table.some((r) => r.tier === row.tier && matchesRowKey(r, e.cell)), (e) => `ran on ${rowName(e.cell)}, which is not a row of tier ${row.tier}, the tier of ${rowName(row)}`],
-        inCurrentTier(db, table),
-      ],
-      ["tier"],
-    ),
+    productionPopulation(db, { tier: rowGeneration(db, table) }, [
+      [(e) => table.some((r) => r.tier === row.tier && matchesRowKey(r, e.cell)), (e) => `ran on ${rowName(e.cell)}, which is not a row of tier ${row.tier}, the tier of ${rowName(row)}`],
+    ]),
     `production sessions on the rows of tier ${row.tier} in that tier, over all time`,
   );
   const proposal: RoutingAddTierProposal = {
@@ -572,7 +559,7 @@ function addTierProposal(
 }
 
 /** 段の説明の提案の門と pin(ADR 0200 決定7): 生きている段の説明を1行の新しい文面へ。根拠は、床を task の申告が決めて
- *  (`source.tier` が task)その task がこの段を要求した worker_spawned だけで、書き手が人間の task も数える。pin は説明のいまの文面。 */
+ *  (`source.tier` が task)この段で走った worker_spawned だけで、書き手が人間の task も数える。pin は説明のいまの文面。 */
 function tierDescriptionProposal(db: Db, input: { tier?: string; description?: string; evidence?: number[] }): [TierDescriptionProposal, string[]] {
   const { tier, description, evidence } = input;
   if (tier === undefined || whyBlank(tier) || description === undefined || !evidence?.length) {
@@ -582,25 +569,22 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
   assertTierDescription(description);
   const current = liveTierRows(db).find((t) => t.name === tier)!;
   if (description === current.description) throw new DomainError(`tier ${tier}'s description already reads: ${current.description}`);
-  const requested = db.prepare("SELECT 1 FROM tasks WHERE id = ? AND tier_id = ?");
-  const changed = lastDescriptionChange(db, tier);
-  // 母集団(ADR 0302): 説明が最後に変わった後(無ければ全期間)に、その段を要求した task の、床を task の申告が決めた本番 session
+  const [changed, generation] = tierGeneration(db, tier);
+  // 床を task の申告が決めた session で、走った段で見る(出所が task なら要求した段と同じ値)
   const { lines } = sessionEvidence(
     db,
     evidence,
-    productionPopulation(
-      db,
-      [
-        [(e) => e.source.tier === "task", (e) => `took its tier from ${e.source.tier}, not from its task's request`],
-        [(e) => requested.get(e.task_id, current.id) !== undefined, () => `is a session of a task that did not request ${tier}`],
-        [(e) => e.worker_spawned_event_id > (changed ?? 0), () => `ran before tier ${tier}'s description last changed (event ${changed})`],
-      ],
-      ["tier source", "tier"],
-    ),
+    productionPopulation(db, { "tier source": "task", tier }, [generation]),
     `production sessions of tasks that requested tier ${tier} (tier source task), ` +
       (changed === undefined ? "over all time (its description never changed)" : `since its description last changed (event ${changed})`),
   );
   return [{ kind: "routing", op: "tier_description", tier: current.id, description, evidence, pin: { description: current.description } }, lines];
+}
+
+/** 段の世代(ADR 0307 決定2): 説明が最後に変わった event(無ければ全期間)と、それより後に走ったかの条件。 */
+function tierGeneration(db: Db, tier: Tier): [changed: number | undefined, Condition<RoutingEpisode>] {
+  const changed = lastDescriptionChange(db, tier);
+  return [changed, [(e) => e.worker_spawned_event_id > (changed ?? 0), () => `ran before tier ${tier}'s description last changed (event ${changed})`]];
 }
 
 /** 段の説明が最後に変わった event(ADR 0302 決定1)。位置だけの編集は数えない(actedSince と同じ読み)。event は段を名前で名指すので、
@@ -635,14 +619,14 @@ function interviewProposal(
   // 根拠の pin は「表にあるか」の照合なので、Quarantine 中の行も含む生の表で引く
   const table = loadExecutionSettingTable(db);
   const rowOf = (e: RoutingEpisode) => tableRowOf(table, e);
-  // 母集団(ADR 0302): 根拠の各行で、今の段で走った本番 session、全期間
+  // 走った行と段は根拠の行の集合とその今の段(値が1つでない軸 —— 鍵に残る)で、母集団を引用から絞る
   const { lines, cited } = sessionEvidence(
     db,
     evidence,
     productionPopulation(
       db,
-      [[(e) => rowOf(e) !== undefined, (e) => `ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`], inCurrentTier(db, table)],
-      [],
+      {},
+      [[(e) => rowOf(e) !== undefined, (e) => `ran on ${rowName(e.cell)}, which is no longer in the execution-setting table`], rowGeneration(db, table)],
       (cited) => {
         const rows = new Set(cited.map((e) => rowOf(e)!));
         return (e) => rows.has(rowOf(e)!);
@@ -682,7 +666,7 @@ function interviewProposal(
 type Condition<S> = readonly [holds: (s: S) => boolean, reason: (s: S) => string];
 
 /** routing の提案の根拠の母集団(ADR 0302 決定1・2): op が持つのは、引ける session の集合と、母集団の述語(条件の順に見る)と、
- *  組の鍵と、引用の外を数える範囲の追加の絞り(引用から決まる範囲 —— Interview の根拠の行、学習器のフラグの変更以降)だけ。 */
+ *  組の鍵と、引用の外を数える範囲の追加の絞り(引用から決まる範囲 —— Interview の根拠の行)だけ。 */
 interface Population<S> {
   sessions: readonly S[];
   /** worker_spawned の event が sessions のどれでもないときの理由。 */
@@ -727,25 +711,49 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
   };
 }
 
-/** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root などには配分評価も
- *  outcome も無い)で、受験者の session は本番でない。`conditions` は op の対象が決める残りの条件、`fixed` は op の対象が固定する session の軸
- *  のラベルで、組の鍵は6軸からそれを落とした残り(ADR 0306 決定4)。 */
+/** op が固定する session の軸(ADR 0307 決定1): 軸 → 対象の今の値。値は軸ごとの一致で見て、外れた理由の文は軸が決める。段の値が session の
+ *  行や agent の宣言から決まるときは世代の条件(rowGeneration / agentGeneration)を値に置く。値が1つでない軸(Interview の根拠の行)はここに
+ *  置かず、母集団を絞る条件にする —— 鍵に残る。 */
+type FixedAxes = { [A in Exclude<SessionAxis, "workspace" | "writer">]?: string | Condition<RoutingEpisode> };
+
+const offAxis: Record<keyof FixedAxes, (e: RoutingEpisode, actual: string, value: string) => string> = {
+  "tier source": (e, actual, value) => `took its tier from ${actual}, not from ${value === "agent" ? `${e.agent}'s default tier` : "its task's request"}`,
+  row: (_, actual, value) => `ran on ${actual}, not on ${value}`,
+  tier: (_, actual, value) => `ran in tier ${actual}, not in ${value}`,
+  agent: (_, __, value) => `is not a worker_spawned event of ${value}`,
+};
+
+/** 学習器でない op の根拠の母集団(ADR 0302 決定1 / ADR 0307 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root
+ *  などには配分評価も outcome も無い)で、受験者の session は本番でない。述語は `conditions`(値が1つでない軸と時間の世代 —— 先に見る)と
+ *  `fixed` の軸ごとの一致で、組の鍵は6軸から `fixed` の軸を落とした残り(ADR 0306 決定4)。 */
 // ponytail: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
-const productionPopulation = (db: Db, conditions: readonly Condition<RoutingEpisode>[], fixed: readonly SessionAxis[], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
-  sessions: loadEpisodes(db),
-  absent: (spawned) => `is a session of a task of type ${getTask(db, spawned.task_id!)?.type}; only a work-side task's session has an outcome and allocation reviews`,
-  conditions: [[(e) => !e.interview, () => "is not a worker_spawned event of a production work session: it is an Interview examinee's session"], ...conditions],
-  key: (e) => sessionAxes(db, e).filter(([label]) => !fixed.includes(label)),
-  within,
-});
+function productionPopulation(db: Db, fixed: FixedAxes, conditions: readonly Condition<RoutingEpisode>[] = [], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> {
+  const axis = (e: RoutingEpisode, label: SessionAxis) => sessionAxes(db, e).find(([l]) => l === label)![1];
+  const equals = Object.entries(fixed).map(([label, value]): Condition<RoutingEpisode> =>
+    typeof value === "string" ? [(e) => axis(e, label as SessionAxis) === value, (e) => offAxis[label as keyof FixedAxes](e, axis(e, label as SessionAxis), value)] : value,
+  );
+  return {
+    sessions: loadEpisodes(db),
+    absent: (spawned) => `is a session of a task of type ${getTask(db, spawned.task_id!)?.type}; only a work-side task's session has an outcome and allocation reviews`,
+    conditions: [[(e) => !e.interview, () => "is not a worker_spawned event of a production work session: it is an Interview examinee's session"], ...conditions, ...equals],
+    key: (e) => sessionAxes(db, e).filter(([label]) => !(label in fixed)),
+    within,
+  };
+}
 
 /** session が走った表の行(行の鍵で引く —— 消えた行なら undefined)。 */
 const tableRowOf = (table: ExecutionSettingTable, e: RoutingEpisode) => table.find((r) => matchesRowKey(r, e.cell));
 
-/** 行の今の世代(ADR 0210 決定2): 走った行の今の段で走ったか。走った行が表にあることは前の条件が見る。 */
-function inCurrentTier(db: Db, table: ExecutionSettingTable): Condition<RoutingEpisode> {
+/** 行の世代(ADR 0307 決定2 / ADR 0210 決定2): 走った行の今の段で走ったか。走った行が表にあることは前の条件が見る。 */
+function rowGeneration(db: Db, table: ExecutionSettingTable): Condition<RoutingEpisode> {
   const rowOf = (e: RoutingEpisode) => tableRowOf(table, e)!;
   return [(e) => e.tier_id === tierIdOf(db, rowOf(e).tier), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${rowOf(e).tier}, the current tier of ${rowName(rowOf(e))}`];
+}
+
+/** agent の世代(ADR 0307 決定2): agent の今の宣言の段で走ったか —— 出所が agent の session は宣言の段で走る(ADR 0210 決定1)。 */
+function agentGeneration(db: Db, agent: RegistryAgent): Condition<RoutingEpisode> {
+  const { from } = tierStep(db, agent);
+  return [(e) => e.tier_id === tierIdOf(db, from), (e) => `ran in tier ${tierNameOf(db, e.tier_id)}, not in ${from}, the current declared tier of ${agent.name}`];
 }
 
 /** 学習器でない op の detail の根拠の節(ADR 0302 決定3): 組ごとに件数・task id・outcome の内訳・配分評価の allocation × cause の件数と
@@ -766,6 +774,13 @@ function sessionEvidence(db: Db, evidence: readonly number[], population: Popula
   return { lines: [`Evidence: ${sessions.length} cited worker session(s), one line per ${labels.join(", ")}:`, ...lines, outsideLine(scope)], cited: sessions };
 }
 
+/** 学習器のフラグの世代(ADR 0307 決定2): フラグが最後に変わった event(無ければ全期間)と、shadow 行がそれ以降に書かれたかの条件。 */
+function learnerGeneration(db: Db): [change: number | undefined, Condition<{ id: number }>] {
+  const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
+  const since = new Set(shadowRows(db, { after: change ?? 0 }).map((row) => row.id));
+  return [change, [(row) => since.has(row.id), () => `is the session of a shadow row from before the learner flag last changed (event ${change})`]];
+}
+
 /** 学習器の昇格 / 降格の根拠(ADR 0181 追記 #2438): 各 evidence は乖離した shadow 行の session の worker_spawned(行と session の結び方は
  *  list_routing_shadow と同じ shadowRows)で、昇格なら出所が学習器でない行、降格なら出所が学習器の行。 */
 function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number[]): string[] {
@@ -775,12 +790,11 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
   // セルは列でなく出所で呼ぶ —— 昇格後は列の意味が反転する(ADR 0150 決定3)
   const bySource = <T>(recommended: T, actual: T) => (learnerRan ? { learner: actual, table: recommended } : { learner: recommended, table: actual });
   const cell = (c: Cell) => `${rowName(c)}${c.advisor ? ` with advisor ${c.advisor}` : ""}`;
-  // 引用の外(ADR 0181 追記 決定3): フラグの最後の変更以降(無ければ全期間)の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
-  const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
-  const span = shadowRows(db, { after: change ?? 0 });
-  const inSpan = new Set(span.map((row) => row.id));
+  const rows = shadowRows(db, { after: 0 });
+  const [change, generation] = learnerGeneration(db);
+  // 引用も引用の外(ADR 0181 追記 決定3)もフラグの世代の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
   const { cited, outsideLine } = citeFromPopulation<Row>(db, evidence, {
-    sessions: shadowRows(db, { after: 0 }),
+    sessions: rows,
     absent: () => "is not the session of any shadow row: only a work task's pickup writes one",
     conditions: [
       [(row) => row.diverged, () => "is the session of a shadow row where the learner recommended the cell that ran"],
@@ -788,14 +802,13 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
         (row) => (row.source.provider === "learner") === learnerRan,
         () => (learnerRan ? "ran on the table's choice: op demote rests on rows where the promoted learner's choice ran" : "ran on the promoted learner's choice: op promote rests on rows from before promotion"),
       ],
+      generation,
     ],
     key: (row) => {
       const { learner, table } = bySource(row.recommended, row.actual);
       // session に辿り着かなかった行は段も workspace も無い
       return [["tier", row.tier ?? "none"], ["workspace", row.workspace ?? "none"], ["learner", cell(learner)], ["table", cell(table)]];
     },
-    // 検査は全期間の行を通し(ADR 0181 追記 決定1)、引用の外だけをフラグの最後の変更以降で数える
-    within: () => (row) => inSpan.has(row.id),
   });
   const record = ({ board, workspace, seed }: TrackRecord) =>
     `board ${board.accepted}/${board.rejected}, workspace ${workspace.accepted}/${workspace.rejected}${seed ? `, seeded by ${seed.kind}` : ""}`;
@@ -808,7 +821,7 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
     return `- ${key}: ${members.length} pickup(s) (tasks ${members.map((r) => r.task_id).join(", ")}); learner ${record(learner)}; table ${record(table)}${outcomes}`;
   });
   // 候補が2行以上の pickup は向きで絞らない —— 昇格は向きを問わず全 pickup に効く
-  const multiCandidate = span.filter((r) => r.candidates > 1).length;
+  const multiCandidate = rows.filter((r) => generation[0](r) && r.candidates > 1).length;
   const since = change === undefined ? "over all time (the learner flag never changed)" : `since the learner flag last changed (event ${change})`;
   return [
     `Evidence: ${[...cited.values()].flat().length} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
@@ -946,11 +959,10 @@ export function proposeRoutingChange(
     // 承認の修正値は回答時に行を書く扉が同じ検査で拒む
     assertRowFits(table, composeRoutingRow({ kind: "routing", op: "row", row, change, evidence, pin }), row);
     const { tier, ...rest } = change;
-    // 母集団(ADR 0302): その行で、今の段で走った本番 session、全期間
     const { lines: evidenceLines } = sessionEvidence(
       db,
       evidence,
-      productionPopulation(db, [[(e) => matchesRowKey(pin, e.cell), (e) => `ran on ${rowName(e.cell)}, not on ${rowName(pin)}`], inCurrentTier(db, table)], ["row", "tier"]),
+      productionPopulation(db, { row: rowName(pin), tier: rowGeneration(db, table) }),
       `production sessions on ${rowName(pin)} in its current tier ${pin.tier}, over all time`,
     );
     proposal = { kind: "routing", op: "row", row, change: { ...rest, ...(tier !== undefined && { tier: tierIdOf(db, tier) }) }, evidence, pin: { ...pin, tier: tierIdOf(db, pin.tier) } };

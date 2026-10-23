@@ -38,7 +38,7 @@ import { RegistryPushFailedError } from "../src/registry-write.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { cancelTaskDirectly, getTask, type InterviewProposal, listBoard, listChildren, metaReviewSubjectOf, type RegistryProposal, type RoutingProposal, type RoutingRowProposal, registerTask, settleQuestionAsObserved, type TierDescriptionProposal } from "../src/tasks.js";
 import { boardCallRow, reportProviderUsage } from "../src/throttle.js";
-import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierNames } from "../src/tier.js";
+import { assertKnownTier, PRIORITIES, readTiers, SEED_TIERS, type Tier, tierIdOf, tierNames } from "../src/tier.js";
 import { awaitWindow, unusedLanding } from "./fakes.js";
 import { HUMAN_WEBUI, rowSession, WORKER_SPAWNED } from "./harness.js";
 
@@ -1211,7 +1211,7 @@ it("tier の提案の approve の registry への commit の await の間に観�
     workerId: "deckhand",
     origin: "board",
     at: now,
-    payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", source: { tier: "agent", provider: "only" }, harness: "codex" },
+    payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },
   });
   const deckhand = { name: "deckhand", provider: "openai", tier: "frontier" } as AgentView;
   const { question_id } = proposeRoutingChange(db, review, { op: "agent_tier", agent: "deckhand", to: "standard", evidence: [evidence], rationale: "r" }, "auditor", now, () => [deckhand]);

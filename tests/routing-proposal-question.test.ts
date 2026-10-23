@@ -2,6 +2,7 @@ import { afterEach, expect, it } from "vitest";
 import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
+import { tierIdOf } from "../src/tier.js";
 import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, rowSession, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
@@ -408,7 +409,7 @@ it("行の提案の変更の段が消されると提案は削除の時点で観�
 
 // 段の説明の書き換えの提案(ADR 0200 決定7): 根拠は床を task の申告が決めた episode。
 
-/** 根拠の episode(setup): 書き手が人間の task が `tier` を要求し、床の出所が `tierSource` の worker_spawned。 */
+/** 根拠の episode(setup): 書き手が人間の task が `tier` を要求し、その段で走った、床の出所が `tierSource` の worker_spawned。 */
 function declaredSession(tp: Tidepool, tier: string, tierSource: "task" | "agent" = "task"): number {
   const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c", tier }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
@@ -416,7 +417,7 @@ function declaredSession(tp: Tidepool, tier: string, tierSource: "task" | "agent
     workerId: "deckhand",
     origin: "board",
     at: tp.clock.now(),
-    payload: { ...WORKER_SPAWNED, source: { tier: tierSource, provider: "rank" } },
+    payload: { ...WORKER_SPAWNED, tier_id: tierIdOf(tp.db, tier), source: { tier: tierSource, provider: "rank" } },
   });
 }
 
@@ -513,7 +514,7 @@ it("段の説明の提案の根拠が task の申告で床を決めていない�
   const { review, client, call } = await boardWithRoutingReview();
   try {
     expect(await proposeTierDescription(call, [declaredSession(t, "standard", "agent")])).toMatchObject({ error: expect.stringContaining("not from its task") });
-    expect(await proposeTierDescription(call, [declaredSession(t, "economy")])).toMatchObject({ error: expect.stringContaining("did not request standard") });
+    expect(await proposeTierDescription(call, [declaredSession(t, "economy")])).toMatchObject({ error: expect.stringContaining("ran in tier economy, not in standard") });
     expect(
       await call("propose_routing_change", { op: "tier_description", tier: "standard", description: await tierDescription("standard"), evidence: [declaredSession(t, "standard")], rationale: "no change" }),
     ).toMatchObject({ error: expect.stringContaining("already reads") });
