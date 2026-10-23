@@ -354,6 +354,19 @@ function examineesWithOpenQuestions(fields: { workspace?: string; review_tier?: 
   return { db, root: getTask(db, root.id)!, done, unsettled: [failing, escalating], questions };
 }
 
+it("走行中の受験者があれば Interview の root の直接 cancel 全体を拒み、記録を保つ(ADR 0304 決定1 / ADR 0267 決定3)", () => {
+  const { db, root } = registerInterview();
+  const [examinee] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD) as [Task];
+  pickupTask(db, examinee, "tako", new Date(0));
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
+
+  expect(() => cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui")).toThrow(DomainError);
+  expect(() => cancelTaskDirectly(db, getTask(db, root.id)!, null, new Date(1), {}, "webui")).toThrow(`"${examinee.title}" (${examinee.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
+});
+
 it("出題済みの root の直接 cancel は、受験者の failure question と escalation が開いていても拒まれず、未決着の受験者とその question を回答なしで root の cancel の理由ごと cancel する —— done の答案は残る(ADR 0267 決定3)", () => {
   const { db, root, done, unsettled, questions } = examineesWithOpenQuestions();
   cancelTaskDirectly(db, root, "measuring the wrong thing", new Date(1), {}, "webui");

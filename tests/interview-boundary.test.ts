@@ -295,6 +295,8 @@ it("root の pickup は面接室を盤面の規約の基点の下に root の id
   expect(detail.workspace).toBe("reef");
   expect(detail.examinee_checkout).toBe(examineeCheckoutOf(childId));
 
+  await callAsTask(t, childId, "escalate", { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
+  t.worker.exit(childId);
   expect((await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {})).status).toBe(200);
   expect((await api(t.baseUrl, "DELETE", "/api/workspaces/reef", { confirm: true })).status).toBe(200);
   expect(deletions.map((references) => references.unsettledTaskCount)).toEqual([0]);
@@ -914,7 +916,9 @@ it("root の retry の扉(WebUI の API・管理MCP の retry_interview)は新�
 
   // 新しい root を拾わせて出題し、管理MCP から retry する
   await runNow(t, viaApi.json.id);
-  await pose(viaApi.json.id);
+  const [secondChild] = await pose(viaApi.json.id);
+  expect((await callAsTask(t, secondChild, "escalate", escalation)).isError).toBeFalsy();
+  t.worker.exit(secondChild);
   const viaMcp: any = await client.callTool({ name: "retry_interview", arguments: { task_id: viaApi.json.id } });
   await client.close();
   expect(viaMcp.isError).toBeFalsy();

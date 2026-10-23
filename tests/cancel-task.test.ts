@@ -1,10 +1,14 @@
 import { afterEach, expect, it } from "vitest";
+import { pickupTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
   FULL_HANDOFF,
   HOUR,
+  HUMAN_WEBUI,
+  humanDecomposeTaskViaWebui,
+  managementMcpClient,
   queueWork,
   registerQuestion,
   registerWork,
@@ -13,6 +17,26 @@ import {
 
 let t: Tidepool;
 afterEach(() => t?.stop());
+
+it("走行中の子による cancel の domain_error は HTTP 400 と管理MCP の tool error に写る(ADR 0304 決定1)", async () => {
+  t = await bootTidepool();
+  const now = t.clock.now();
+  const root = registerTask(t.db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
+  const [child] = humanDecomposeTaskViaWebui(t.db, root, { reason: "split", children: [{ title: "running", purpose: "p", completion_criteria: "c" }] }, now);
+  pickupTask(t.db, child!, "deckhand", now);
+
+  const response = await api(t.baseUrl, "POST", `/api/tasks/${root.id}/cancel`, {});
+  expect(response.status).toBe(400);
+  expect(response.json.error).toContain("cannot cancel while");
+  const client = await managementMcpClient(t.baseUrl);
+  try {
+    const result: any = await client.callTool({ name: "cancel_task", arguments: { task_id: root.id } });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toBe(response.json.error);
+  } finally {
+    await client.close();
+  }
+});
 
 async function addChild(t: Tidepool, parentId: string, title: string, assignee?: string): Promise<any> {
   return (

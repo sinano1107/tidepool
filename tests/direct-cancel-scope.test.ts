@@ -10,15 +10,18 @@ import {
   cancelTaskDirectly,
   carriesHumanWords,
   completeTask,
+  declarePremiseBreach,
   directCancelDiscards,
   editTask,
   getTask,
   listBoard,
   listChildren,
   logDecision,
+  moveTask,
   nextSlotTask,
   pickupTask,
   questionCancelDiscards,
+  redecompose,
   registerTask,
   type Task,
   taskHistoryRows,
@@ -59,6 +62,69 @@ function metaReview(db: Db): Task {
   registerMetaReview(db, "memory", NOW);
   return getTask(db, listBoard(db).find((task) => task.meta_review_subject === "memory")!.id)!;
 }
+
+it("走行中の分解子があれば祖先の直接 cancel は全体を拒み、盤面順の最初の子を題と id で名指す(ADR 0304 決定1)", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "human plan", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const children = humanDecomposeTaskViaWebui(db, root, {
+    reason: "split",
+    children: [
+      { title: "first running child", purpose: "p", completion_criteria: "c" },
+      { title: "second running child", purpose: "p", completion_criteria: "c" },
+    ],
+  }, NOW);
+  for (const child of children) pickupTask(db, child, "deckhand", NOW);
+  moveTask(db, children[1]!, root, NOW, "human", "webui");
+  const before = [root, ...children].map((task) => ({ task: getTask(db, task.id), events: listEvents(db, task.id) }));
+
+  expect(() => cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui")).toThrow(DomainError);
+  expect(() => cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui")).toThrow(
+    `"second running child" (${children[1]!.id}) is running; wait for it to finish, escalate, or hit its time limit`,
+  );
+  expect([root, ...children].map((task) => ({ task: getTask(db, task.id), events: listEvents(db, task.id) }))).toEqual(before);
+});
+
+it("redecompose の範囲に走行中の兄弟があれば、cancel と分解の記録を残さない(ADR 0304 決定1)", () => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [breached, sibling] = decomposeTaskViaWorker(db, root, { reason: "split", children: [
+    { title: "breached", purpose: "p", completion_criteria: "c" },
+    { title: "running sibling", purpose: "p", completion_criteria: "c" },
+  ] }, "deckhand", NOW);
+  pickupTask(db, sibling!, "deckhand", NOW);
+  declarePremiseBreach(db, breached!, "the premise is false", "deckhand", NOW, "worker");
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
+
+  expect(() => redecompose(db, getTask(db, root.id)!, { reason: "replace", children: [{ title: "new child", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW, undefined, undefined, "worker")).toThrow(`"running sibling" (${sibling!.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
+});
+
+it.each(["redecompose", "abandon"] as const)("%s は兄弟の根をまたぐ範囲全体で、盤面順の最初の走行中の子孫を名指す(ADR 0304 決定1)", (path) => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [breached, first, second] = decomposeTaskViaWorker(db, root, { reason: "split", children: [
+    { title: "A", purpose: "p", completion_criteria: "c" },
+    { title: "B", purpose: "p", completion_criteria: "c" },
+    { title: "C", purpose: "p", completion_criteria: "c" },
+  ] }, "deckhand", NOW);
+  const [b] = decomposeTaskViaWorker(db, first!, { reason: "split B", children: [{ title: "B1", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW);
+  const [c] = decomposeTaskViaWorker(db, second!, { reason: "split C", children: [{ title: "C1", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW);
+  pickupTask(db, b!, "deckhand", NOW);
+  pickupTask(db, c!, "deckhand", NOW);
+  moveTask(db, c!, breached!, NOW, "human", "webui");
+  if (path === "redecompose") declarePremiseBreach(db, breached!, "the premise is false", "deckhand", NOW, "worker");
+  const question = path === "abandon" ? failureQuestion(db, breached!.id, NOW) : undefined;
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
+
+  expect(() => question
+    ? answerQuestionViaWebui(db, question, ["abandon"], NOW)
+    : redecompose(db, getTask(db, root.id)!, { reason: "replace", children: [{ title: "new child", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW, undefined, undefined, "worker")).toThrow(`"C1" (${c!.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
+});
 
 it("盤面が登録した todo の meta-review は直接 cancel でき、cancelled になって task_cancelled_directly が残る", () => {
   db = openDb(":memory:");
@@ -277,7 +343,7 @@ it.each(["開いた failure question", "資源の quarantine"] as const)("残る
 // cancel が祖先に届いた done の work の付帯子: 完了時レビューと人間登録の review 子は倒れ、RCA だけ残る(ADR 0271 決定3)
 
 /** 人間の root A を agent が B・C に分解し(どちらも review_flag)、両方 done にする。B には人間登録の review 子と、
- *  B の判断行への異議で修理子と RCA を付ける。C の完了時レビューは走行中にする。 */
+ *  B の判断行への異議で修理子と RCA を付ける。C の完了時レビューも todo のまま。 */
 function doneChildrenWithAttachments(db: Db) {
   const target = registerTask(db, { type: "work", title: "A", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const [child, sibling] = decomposeTaskViaWorker(
@@ -301,29 +367,44 @@ function doneChildrenWithAttachments(db: Db) {
   raiseObjection(db, entry, "redo it", NOW);
   commitTriage(db, NOW, [], new Map());
   const kids = listChildren(db, child!.id);
-  const runningReview = pickupTask(db, listChildren(db, sibling!.id)[0]!, "shako", NOW)!;
+  const siblingReview = listChildren(db, sibling!.id)[0]!;
   return {
     target: getTask(db, target.id)!,
     child: getTask(db, child!.id)!,
     completionReview: kids.find((c) => c.title === "review: B")!,
     humanReview,
-    runningReview,
+    siblingReview,
     repair: kids.find((c) => c.type === "work")!,
     rcas: kids.filter((c) => c.title.startsWith("rca")),
   };
 }
 
+it.each(["直接 cancel", "自身の failure question の abandon"] as const)("走行中の完了時レビューは祖先の%s全体を拒み、何も記録しない(ADR 0304 決定1)", (path) => {
+  db = openDb(":memory:");
+  const { target, siblingReview } = doneChildrenWithAttachments(db);
+  pickupTask(db, siblingReview, "shako", NOW);
+  const question = path === "直接 cancel" ? undefined : failureQuestion(db, target.id, NOW);
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
+
+  expect(() => question
+    ? answerQuestionViaWebui(db, question, ["abandon"], NOW)
+    : cancelTaskDirectly(db, target, null, NOW, {}, "webui")).toThrow(`"review: C" (${siblingReview.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
+});
+
 it.each(["直接 cancel", "自身の failure question の abandon"] as const)(
-  "祖先の%sで、done の子の完了時レビュー・人間登録の review 子・走行中の完了時レビュー・修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0271 決定3)",
+  "祖先の%sで、done の子の完了時レビュー・人間登録の review 子・修理子は cancelled、RCA は todo のまま pickup 候補に残り、親の判断ログを読んで完了できる(ADR 0271 決定3)",
   (path) => {
     db = openDb(":memory:");
-    const { target, child, completionReview, humanReview, runningReview, repair, rcas } = doneChildrenWithAttachments(db);
+    const { target, child, completionReview, humanReview, siblingReview, repair, rcas } = doneChildrenWithAttachments(db);
     expect(rcas).toHaveLength(2);
 
     if (path === "直接 cancel") cancelTaskDirectly(db, target, null, NOW, {}, "webui");
     else answerQuestionViaWebui(db, failureQuestion(db, target.id, NOW), ["abandon"], NOW);
 
-    expect([target, completionReview, humanReview, runningReview, repair].map((task) => getTask(db, task.id)!.status)).toEqual(Array(5).fill("cancelled"));
+    expect([target, completionReview, humanReview, siblingReview, repair].map((task) => getTask(db, task.id)!.status)).toEqual(Array(5).fill("cancelled"));
     expect(getTask(db, child.id)!.status).toBe("done");
     expect(rcas.map((rca) => getTask(db, rca.id)!.status)).toEqual(["todo", "todo"]);
     expect(rcas.map((rca) => rca.id)).toContain(nextSlotTask(db)?.id);
@@ -575,16 +656,19 @@ it.each(REPAIR_TYPES)("親の無い %s の登録は扉を問わず DomainError �
   expect(listBoard(db)).toEqual([]);
 });
 
-it("祖先の cancel の前から生き延びる RCA の下で走っていた work も cancel で倒れる —— 帰り先の無い系譜に未決着の work は残らない(ADR 0301 決定4)", () => {
+it("生き延びる RCA の下でも走行中の work は祖先の cancel 全体を拒む(ADR 0304 決定1 / ADR 0301 決定4)", () => {
   db = openDb(":memory:");
   const { target, rcas } = doneChildrenWithAttachments(db);
   const rca = pickupTask(db, getTask(db, rcas[1]!.id)!, "fugu", NOW)!;
   const [repair] = decomposeTaskViaWorker(db, rca, { reason: "fix", children: [{ title: "R", purpose: "p", completion_criteria: "c", review_flag: true }] }, "fugu", NOW);
   const running = pickupTask(db, repair!, "deckhand", NOW)!;
 
-  cancelTaskDirectly(db, target, null, NOW, {}, "webui");
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
 
-  expect(getTask(db, running.id)!.status).toBe("cancelled");
+  expect(() => cancelTaskDirectly(db, target, null, NOW, {}, "webui")).toThrow(`"R" (${running.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
 });
 
 it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最も root 寄りの祖先を名指す(ADR 0271 決定2)", () => {
