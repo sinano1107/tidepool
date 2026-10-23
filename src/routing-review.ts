@@ -165,19 +165,7 @@ function allocationRows(db: Db, window: MetaReviewWindow) {
   const counted: number[] = [];
   const groups = new Map<
     string,
-    {
-      source_tier: string;
-      row: string;
-      tier: Tier;
-      tier_retired?: true;
-      agent: string;
-      workspace: string;
-      writer: string;
-      allocation: string;
-      cause: string;
-      count: number;
-      judged_by_same_model: number;
-    }
+    { source_tier: string; row: string; tier: Tier; tier_retired?: true; agent: string; workspace: string; writer: string; allocation: string; cause: string; count: number; judged_by_same_model: number }
   >();
   for (const { id, payload: p } of listEventsOfKinds(db, ["allocation_reviewed"], window)) {
     const episode = episodes.get(p.worker_spawned_event_id);
