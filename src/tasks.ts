@@ -1617,14 +1617,14 @@ export function escalateTask(
  *  `withTargetQuestionSweep`, whose sweep reads the events appended here. */
 function cancelUnsettledSubtree(
   db: Db,
-  rootTaskId: string,
+  rootTaskIds: string[],
   workerId: string,
   now: Date,
   payload: TaskScopedPayload,
   origin: EventOrigin,
 ): void {
   // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
-  const scope = cancelScope(db, [rootTaskId], { throughExaminees: true }).filter((task) => !isSettled(task.status));
+  const scope = cancelScope(db, rootTaskIds, { throughExaminees: true }).filter((task) => !isSettled(task.status));
   const running = db.prepare("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status = 'in_progress' ORDER BY sort_key LIMIT 1")
     .get(JSON.stringify(scope.map((task) => task.id))) as { id: string; title: string } | undefined;
   if (running) {
@@ -1637,19 +1637,19 @@ function cancelUnsettledSubtree(
   }
 }
 
-/** Cancel a task and every unfinished descendant via an abandon answer (ADR
+/** Cancel tasks and every unfinished descendant via an abandon answer (ADR
  *  0006), or an Interview root via the answer that ended it (ADR 0247): the
  *  question the answer came from is named on every cancelled task. Internal
  *  only — answerQuestion is the sole caller; no MCP or JSON API surface. */
 function cancelTask(
   db: Db,
-  task: Task,
+  taskIds: string[],
   originQuestionId: string,
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): void {
-  cancelUnsettledSubtree(db, task.id, workerId, now, {
+  cancelUnsettledSubtree(db, taskIds, workerId, now, {
     kind: "task_cancelled",
     origin_question_id: originQuestionId,
   }, origin);
@@ -1771,7 +1771,7 @@ export function cancelTaskDirectly(
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
   withTargetQuestionSweep(db, now, () => {
-    cancelUnsettledSubtree(db, task.id, HUMAN_WORKER_ID, now, {
+    cancelUnsettledSubtree(db, [task.id], HUMAN_WORKER_ID, now, {
       kind: "task_cancelled_directly",
       reason,
     }, origin);
@@ -2118,7 +2118,7 @@ export function answerQuestion(
           break;
         }
         const failed = getTask(db, question.parent_id!)!;
-        for (const id of abandonScopeIds(db, failed.id)) cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
+        cancelTask(db, abandonScopeIds(db, failed.id), question.id, HUMAN_WORKER_ID, now, origin);
         if (failed.parent_id !== null) {
           unblockTarget = getTask(db, failed.parent_id);
           break;
@@ -2126,7 +2126,7 @@ export function answerQuestion(
         // 受験者の abandon が倒すのは受験者だけ。採点できる答案も未決着の答案も残らない Interview は、この答えで終える(ADR 0247 決定1 / ADR 0267 決定3)
         if (failed.interview_target_id !== null) {
           const rootId = interviewRootIdOf(db, failed)!;
-          if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
+          if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_WORKER_ID, now, origin);
         }
         break;
       }
@@ -2171,7 +2171,7 @@ export function answerQuestion(
         }
         // abandon も retry も Interview を終える(ADR 0251 決定2 / ADR 0248 決定2・3)。root の cancel は対象経由で受験者に及び、root は起こさない
         const root = getTask(db, question.parent_id!)!;
-        cancelTask(db, root, question.id, HUMAN_WORKER_ID, now, origin);
+        cancelTask(db, [root.id], question.id, HUMAN_WORKER_ID, now, origin);
         if (answer === "retry") {
           retryInterview(db, root, { reason: kind.reason, comment }, now, origin, runnable, ' — fix the default agent\'s entry and answer "retry" again, or answer "abandon" and register the Interview again');
         }
@@ -2263,9 +2263,9 @@ function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOri
          AND @value = ${refusedTargetValueSql("@kind")}`,
     )
     .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as Array<{ id: string; rootId: string }>;
-  for (const { id } of children) cancelTask(db, getTask(db, id)!, question.id, HUMAN_WORKER_ID, now, origin);
+  cancelTask(db, children.map(({ id }) => id), question.id, HUMAN_WORKER_ID, now, origin);
   for (const rootId of new Set(children.map((child) => child.rootId))) {
-    if (interviewLeftEmpty(db, rootId)) cancelTask(db, getTask(db, rootId)!, question.id, HUMAN_WORKER_ID, now, origin);
+    if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_WORKER_ID, now, origin);
   }
 }
 
@@ -2462,9 +2462,7 @@ export function redecompose(
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return withTargetQuestionSweep(db, now, () => {
-    for (const id of abandonScopeIds(db, declarerId)) {
-      cancelUnsettledSubtree(db, id, workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
-    }
+    cancelUnsettledSubtree(db, abandonScopeIds(db, declarerId), workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
     resolvePremiseBreach(db, declarerId, "redecompose", workerId, now, origin);
     return decomposeTask(db, parent, input, workerId, now, authority, isProtectedWorkspace, origin);
   });
@@ -3301,7 +3299,7 @@ export function carriesHumanWords(db: Db, taskId: string): boolean {
 }
 
 /** Settled tasks cannot act again, shared by the human gates and the completion floor (ADR 0304). */
-export function assertUnsettled(task: Task, verb: string): void {
+function assertUnsettled(task: Task, verb: string): void {
   if (isSettled(task.status)) {
     throw new DomainError(`a settled task cannot be ${verb}`);
   }

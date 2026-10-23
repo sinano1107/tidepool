@@ -84,7 +84,7 @@ it("走行中の分解子があれば祖先の直接 cancel は全体を拒み�
   expect([root, ...children].map((task) => ({ task: getTask(db, task.id), events: listEvents(db, task.id) }))).toEqual(before);
 });
 
-it("redecompose の範囲に走行中の兄弟があれば、先に触った子の cancel と記録も巻き戻す(ADR 0304 決定1)", () => {
+it("redecompose の範囲に走行中の兄弟があれば、cancel と分解の記録を残さない(ADR 0304 決定1)", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
   const [breached, sibling] = decomposeTaskViaWorker(db, root, { reason: "split", children: [
@@ -97,6 +97,31 @@ it("redecompose の範囲に走行中の兄弟があれば、先に触った子�
   const events = before.map((task) => listEvents(db, task.id));
 
   expect(() => redecompose(db, getTask(db, root.id)!, { reason: "replace", children: [{ title: "new child", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW, undefined, undefined, "worker")).toThrow(`"running sibling" (${sibling!.id}) is running`);
+  expect(listBoard(db)).toEqual(before);
+  expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
+});
+
+it.each(["redecompose", "abandon"] as const)("%s は兄弟の根をまたぐ範囲全体で、盤面順の最初の走行中の子孫を名指す(ADR 0304 決定1)", (path) => {
+  db = openDb(":memory:");
+  const root = registerTask(db, { type: "work", title: "plan", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
+  const [breached, first, second] = decomposeTaskViaWorker(db, root, { reason: "split", children: [
+    { title: "A", purpose: "p", completion_criteria: "c" },
+    { title: "B", purpose: "p", completion_criteria: "c" },
+    { title: "C", purpose: "p", completion_criteria: "c" },
+  ] }, "deckhand", NOW);
+  const [b] = decomposeTaskViaWorker(db, first!, { reason: "split B", children: [{ title: "B1", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW);
+  const [c] = decomposeTaskViaWorker(db, second!, { reason: "split C", children: [{ title: "C1", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW);
+  pickupTask(db, b!, "deckhand", NOW);
+  pickupTask(db, c!, "deckhand", NOW);
+  moveTask(db, c!, breached!, NOW, "human", "webui");
+  if (path === "redecompose") declarePremiseBreach(db, breached!, "the premise is false", "deckhand", NOW, "worker");
+  const question = path === "abandon" ? failureQuestion(db, breached!.id, NOW) : undefined;
+  const before = listBoard(db);
+  const events = before.map((task) => listEvents(db, task.id));
+
+  expect(() => question
+    ? answerQuestionViaWebui(db, question, ["abandon"], NOW)
+    : redecompose(db, getTask(db, root.id)!, { reason: "replace", children: [{ title: "new child", purpose: "p", completion_criteria: "c" }] }, "deckhand", NOW, undefined, undefined, "worker")).toThrow(`"C1" (${c!.id}) is running`);
   expect(listBoard(db)).toEqual(before);
   expect(before.map((task) => listEvents(db, task.id))).toEqual(events);
 });
