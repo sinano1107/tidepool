@@ -729,8 +729,8 @@ const offAxis: Record<keyof FixedAxes, (e: RoutingEpisode, actual: string, value
 // ponytail: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
 function productionPopulation(db: Db, fixed: FixedAxes, conditions: readonly Condition<RoutingEpisode>[] = [], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> {
   const axis = (e: RoutingEpisode, label: SessionAxis) => sessionAxes(db, e).find(([l]) => l === label)![1];
-  const equals = Object.entries(fixed).map(([label, value]): Condition<RoutingEpisode> =>
-    typeof value === "string" ? [(e) => axis(e, label as SessionAxis) === value, (e) => offAxis[label as keyof FixedAxes](e, axis(e, label as SessionAxis), value)] : value,
+  const equals = (Object.entries(fixed) as Array<[keyof FixedAxes, string | Condition<RoutingEpisode>]>).map(([label, value]): Condition<RoutingEpisode> =>
+    typeof value === "string" ? [(e) => axis(e, label) === value, (e) => offAxis[label](e, axis(e, label), value)] : value,
   );
   return {
     sessions: loadEpisodes(db),
