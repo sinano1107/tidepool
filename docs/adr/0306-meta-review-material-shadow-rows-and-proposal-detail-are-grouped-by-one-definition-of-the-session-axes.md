@@ -24,6 +24,12 @@ ADR 0302 が根拠の組の鍵を名指したときも、導き直されてい�
    組む。`tier_description` は出所と段を固定する)。引用の外の1行は変わらない。学習器の昇格 / 降格の根拠は shadow 行のセルで
    session の軸ではなく、ADR 0181 追記 決定2 のまま導出の外に置く。
 
+## 帰結
+
+- 人間が見る detail の行は全 op で細かくなる(`row` は1鍵から4鍵)。引用の外の1行と件数の内訳は同じ。
+- `list_allocations` と `list_routing_shadow` の行に欄が増え、同じ読み口を持つ Interview の root と `routing_repair` も同じ形を読む。
+- 判断を prompt に足すとき、材料・shadow 行・detail の鍵は触らない —— 軸が足りなければ、足すのは定義の1か所である。
+
 ## 退けた案
 
 - **材料の組に workspace と書き手だけ足す** —— `row` の判断の「行」が同じ穴に残り、判断を足すたびに prompt・材料の鍵・detail の
