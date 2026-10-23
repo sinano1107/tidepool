@@ -774,8 +774,6 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
   const learnerRan = op === "demote";
   // セルは列でなく出所で呼ぶ —— 昇格後は列の意味が反転する(ADR 0150 決定3)
   const bySource = <T>(recommended: T, actual: T) => (learnerRan ? { learner: actual, table: recommended } : { learner: recommended, table: actual });
-  // 段は session が走った段(shadow 行は段を持たない)。session に辿り着かなかった行は段も workspace も無い
-  const tiers = new Map(loadEpisodes(db).map((e) => [e.worker_spawned_event_id, e.tier_id]));
   const cell = (c: Cell) => `${rowName(c)}${c.advisor ? ` with advisor ${c.advisor}` : ""}`;
   // 引用の外(ADR 0181 追記 決定3): フラグの最後の変更以降(無ければ全期間)の同じ向きの行。根拠は meta-review が選ぶので、引用されない組も人間に見せる
   const change = listEventsOfKinds(db, ["execution_settings_changed"]).filter(({ payload: p }) => p.setting === "learner_promoted").at(-1)?.id;
@@ -792,9 +790,9 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
       ],
     ],
     key: (row) => {
-      const tierId = row.worker_spawned_event_id === null ? undefined : tiers.get(row.worker_spawned_event_id);
       const { learner, table } = bySource(row.recommended, row.actual);
-      return [["tier", tierId === undefined ? "none" : tierNameOf(db, tierId)], ["workspace", row.workspace ?? "none"], ["learner", cell(learner)], ["table", cell(table)]];
+      // session に辿り着かなかった行は段も workspace も無い
+      return [["tier", row.tier ?? "none"], ["workspace", row.workspace ?? "none"], ["learner", cell(learner)], ["table", cell(table)]];
     },
     // 検査は全期間の行を通し(ADR 0181 追記 決定1)、引用の外だけをフラグの最後の変更以降で数える
     within: () => (row) => inSpan.has(row.id),
