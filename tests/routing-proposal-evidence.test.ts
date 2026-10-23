@@ -25,14 +25,14 @@ function board() {
   return { db, review, propose };
 }
 
-/** setup のみ: work task(段 `requested` を要求、`writer` が登録)の session を1つ、行 `row` で段 `tier` に刻み、worker_spawned の id を返す。
+/** setup のみ: work task(段 `tier` を要求、`writer` が登録)の session を1つ、行 `row` で段 `tier` に刻み、worker_spawned の id を返す。
  *  行の今の段で走る既定どおりの session は harness の rowSession。 */
 function session(
   db: Db,
-  options: { row?: RowKey; tier?: string; workspace?: string; agent?: string; source?: "task" | "agent"; requested?: string; writer?: readonly [string, "webui" | "mcp"] } = {},
+  options: { row?: RowKey; tier?: string; workspace?: string; agent?: string; source?: "task" | "agent"; writer?: readonly [string, "webui" | "mcp"] } = {},
 ): number {
-  const { row = OPUS_ROW, tier = "standard", workspace = "reef", agent = "deckhand", source = "task", requested = tier, writer = HUMAN_WEBUI } = options;
-  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: requested, workspace }, at, ...writer).id;
+  const { row = OPUS_ROW, tier = "standard", workspace = "reef", agent = "deckhand", source = "task", writer = HUMAN_WEBUI } = options;
+  const task = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace }, at, ...writer).id;
   return spawnOn(db, task, { row, tier, agent, source });
 }
 

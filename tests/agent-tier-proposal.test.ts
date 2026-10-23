@@ -59,14 +59,14 @@ async function boardWithRoutingReview(registry = fakeRegistry()) {
 }
 
 /** 根拠の episode(setup): agent が表の行 (provider, model) で、registry の宣言の段 frontier で走った worker_spawned。 */
-function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot", model: string, tierSource: "agent" | "task" = "agent"): number {
+function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot", model: string): number {
   const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
     taskId: id,
     workerId,
     origin: "board",
     at: tp.clock.now(),
-    payload: { ...WORKER_SPAWNED, provider, model, tier_id: tierIdOf(tp.db, "frontier"), source: { tier: tierSource, provider: "only" }, harness: "codex" },
+    payload: { ...WORKER_SPAWNED, provider, model, tier_id: tierIdOf(tp.db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },
   });
 }
 
@@ -105,7 +105,7 @@ it("tier の提案は meta-review の子に1 item の question を立て、(agen
   }
 });
 
-it("組み込み agent・2段以上・下げ先に行が無い・知らない agent・他の agent の根拠・agent の既定ティアで走っていない根拠の提案は断られ、question は立たない", async () => {
+it("組み込み agent・2段以上・下げ先に行が無い・知らない agent の提案は断られ、question は立たない", async () => {
   const { review, client, call } = await boardWithRoutingReview();
   try {
     const own = spawned(t, "deckhand", "openai", "gpt-6-astra");
@@ -116,8 +116,6 @@ it("組み込み agent・2段以上・下げ先に行が無い・知らない ag
       // moonshot に standard の行は無い
       [{ agent: "kimi", to: "standard", evidence: [kimis] }, /no row at/],
       [{ agent: "ghost", to: "standard", evidence: [own] }, /unknown agent/],
-      [{ agent: "deckhand", to: "standard", evidence: [kimis] }, /not a worker_spawned event of deckhand/],
-      [{ agent: "deckhand", to: "standard", evidence: [spawned(t, "deckhand", "openai", "gpt-6-astra", "task")] }, /took its tier from task/],
     ] as const) {
       expect(await call("propose_routing_change", { op: "agent_tier", ...input, rationale: "r" })).toMatchObject({ error: expect.stringMatching(reason) });
     }

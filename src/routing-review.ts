@@ -821,7 +821,8 @@ function learnerEvidenceLines(db: Db, op: "promote" | "demote", evidence: number
     return `- ${key}: ${members.length} pickup(s) (tasks ${members.map((r) => r.task_id).join(", ")}); learner ${record(learner)}; table ${record(table)}${outcomes}`;
   });
   // 候補が2行以上の pickup は向きで絞らない —— 昇格は向きを問わず全 pickup に効く
-  const multiCandidate = rows.filter((r) => generation[0](r) && r.candidates > 1).length;
+  const [sinceChange] = generation;
+  const multiCandidate = rows.filter((r) => sinceChange(r) && r.candidates > 1).length;
   const since = change === undefined ? "over all time (the learner flag never changed)" : `since the learner flag last changed (event ${change})`;
   return [
     `Evidence: ${[...cited.values()].flat().length} worker session(s) of diverged shadow rows, one line per tier, workspace, learner cell and table cell, with the track records (accepted/rejected production sessions) of both cells as of the line's latest cited pickup:`,
