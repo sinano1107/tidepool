@@ -1411,24 +1411,26 @@ export function finishTask(
   now: Date,
   origin: EventOrigin,
 ): Task {
-  if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
-    const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
-    if (missing.length > 0) {
-      throw new DomainError(
-        `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
-      );
-    }
-    handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
-  }
-  // completion criteria cover the decomposition tree: a parent completes only
-  // after every child it waits for settles (復帰型 — the resumed session
-  // integrates, then completes)
-  if (hasUnfinishedChildren(db, task.id)) {
-    throw new DomainError("a task with unfinished children cannot complete");
-  }
-  const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
-  const handoffDoc = rendered === "" ? null : rendered;
   db.transaction(() => {
+    task = getTask(db, task.id)!;
+    assertUnsettled(task, "completed");
+    if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
+      const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
+      if (missing.length > 0) {
+        throw new DomainError(
+          `a work task cannot complete without a full handoff doc; missing: ${missing.join(", ")}`,
+        );
+      }
+      handoff = Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, normalizeText(handoff![field]!)]));
+    }
+    // completion criteria cover the decomposition tree: a parent completes only
+    // after every child it waits for settles (復帰型 — the resumed session
+    // integrates, then completes)
+    if (hasUnfinishedChildren(db, task.id)) {
+      throw new DomainError("a task with unfinished children cannot complete");
+    }
+    const rendered = handoff ? renderHandoffMarkdown(handoff) : "";
+    const handoffDoc = rendered === "" ? null : rendered;
     db.prepare("UPDATE tasks SET status = 'done', handoff_doc = ? WHERE id = ?").run(
       handoffDoc,
       task.id,
@@ -1622,7 +1624,13 @@ function cancelUnsettledSubtree(
   origin: EventOrigin,
 ): void {
   // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
-  for (const { id } of cancelScope(db, [rootTaskId], { throughExaminees: true }).filter((task) => !isSettled(task.status))) {
+  const scope = cancelScope(db, [rootTaskId], { throughExaminees: true }).filter((task) => !isSettled(task.status));
+  const running = db.prepare("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status = 'in_progress' ORDER BY sort_key LIMIT 1")
+    .get(JSON.stringify(scope.map((task) => task.id))) as { id: string; title: string } | undefined;
+  if (running) {
+    throw new DomainError(`cannot cancel while "${running.title}" (${running.id}) is running; wait for it to finish, escalate, or hit its time limit, then cancel again`);
+  }
+  for (const { id } of scope) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
     appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
@@ -3292,6 +3300,13 @@ export function carriesHumanWords(db: Db, taskId: string): boolean {
   return getTextAuthor(db, taskId) === HUMAN_WORKER_ID || !!registered.payload.objection_event_ids?.length;
 }
 
+/** Settled tasks cannot act again, shared by the human gates and the completion floor (ADR 0304). */
+export function assertUnsettled(task: Task, verb: string): void {
+  if (isSettled(task.status)) {
+    throw new DomainError(`a settled task cannot be ${verb}`);
+  }
+}
+
 /** The status half of the human-decompose gate (issue #129), split out so the
  *  edit and direct-cancel scope lines (issue #130, ADR 0198) and the human completion door
  *  (issue #964) share the unsettled clause: `task` must be unsettled and not
@@ -3299,9 +3314,7 @@ export function carriesHumanWords(db: Db, taskId: string): boolean {
  *  `todo` until settled and only the settled clause bites it (issue #972). The
  *  `verb` names the action in the error for its caller. */
 export function assertUnsettledNotInProgress(task: Task, verb: string): void {
-  if (isSettled(task.status)) {
-    throw new DomainError(`a settled task cannot be ${verb}`);
-  }
+  assertUnsettled(task, verb);
   if (task.status === "in_progress") {
     throw new DomainError(`an in-progress task cannot be ${verb}`);
   }
