@@ -8,7 +8,7 @@ import { proposeRoutingChange } from "../src/routing-review.js";
 import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
 import { readTiers, tierIdOf } from "../src/tier.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
-import { DECKHAND_AGENT, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { DECKHAND_AGENT, decomposedChild, examineeRootId, HUMAN_WEBUI, interviewExaminee, judgedRoutingReview, OPUS_ROW, routedOpusSessions, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の提案の根拠は op の対象が決める母集団の部分集合で、検査・組・引用の外は盤面が母集団から組む(ADR 0302、issue #2485)の
  *  ドメイン層。昇格 / 降格の detail は tests/learner-promotion-evidence.test.ts、MCP の inputSchema はサーバ境界の各テストが言う。 */
@@ -205,6 +205,17 @@ it("段の説明の提案の根拠は、説明が最後に変わった後にそ�
   ]) {
     expect(lines).toContain(line);
   }
+});
+
+it("段の説明の提案の根拠の書き手は文面の書き手で、agent が decompose し人間が approve して実体化した子の session は登録者の human でなく分解した agent の組に入る", () => {
+  const { db, propose } = board();
+  const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, ...HUMAN_WEBUI);
+  const child = decomposedChild(db, parent, "child", "scout", at, "standard");
+  const { question_id } = propose({ op: "tier_description", tier: "standard", description: "Work that needs a plan.", evidence: [spawnOn(db, child.id)] });
+
+  const lines = detailLines(db, question_id);
+  expect(lines).toContain(`- workspace reef, writer scout: 1 session(s) (tasks ${child.id}); outcomes 0 accepted, 0 rejected, 1 excluded; allocation reviews none; 1 session(s) not yet reviewed`);
+  expect(lines.some((line) => line.includes("writer human"))).toBe(false);
 });
 
 it("worker_spawned でない event を根拠にすると、どの op も同じ1つの文で拒まれる(#2489)", () => {
