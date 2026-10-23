@@ -1518,9 +1518,9 @@ export async function objectedForDraft(
 /** `decomposer` の分解判断に乗る `parent` の子(workspace は parent のもの)。agent の分解は allowed_workspaces の外の子を
  *  承認 question に変え、人間が approve して実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。
  *  人間の分解は子を直接登録する。 */
-export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date): Task {
+export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date, tier?: string): Task {
   const viaApproval = decomposer !== HUMAN_WORKER_ID;
-  const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined };
+  const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined, tier };
   const authority = viaApproval ? { allowed_workspaces: [] } : undefined;
   decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");
   if (viaApproval) {

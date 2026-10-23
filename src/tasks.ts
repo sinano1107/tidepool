@@ -112,7 +112,7 @@ export interface Task {
   review_by: string[] | null;
   review_tier: Tier | null;
   /** The task's execution request (CONTEXT.md「要求」, ADR 0110 決定2): the
-   *  required quality tier, or null when the registrant stated none — the
+   *  required quality tier, or null when the text author stated none — the
    *  selector then falls back to the agent's `tier` and the board default,
    *  and records which of the three decided (`worker_spawned.source.tier`).
    *  Null is "unstated", never "the default was chosen". */

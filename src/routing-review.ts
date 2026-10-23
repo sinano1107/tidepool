@@ -35,8 +35,8 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import {
   assertInterviewFields,
-  getRegistrant,
   getTask,
+  getTextAuthor,
   type HandoffDoc,
   type InterviewProposal,
   type InterviewTarget,
@@ -568,8 +568,8 @@ function tierDescriptionProposal(db: Db, input: { tier?: string; description?: s
         [(e) => requested.get(e.task_id, current.id) !== undefined, () => `is a session of a task that did not request ${tier}`],
         [(e) => e.worker_spawned_event_id > (changed ?? 0), () => `ran before tier ${tier}'s description last changed (event ${changed})`],
       ],
-      // 書き手は段を申告した task の登録者(人間も含む)で、走った agent ではない(ADR 0200 決定7)
-      (e) => [workspaceOf(e), ["writer", getRegistrant(db, e.task_id)]],
+      // 書き手は段を申告した task の文面の書き手(人間も含む。承認で実体化した子は分解した agent)で、走った agent ではない(ADR 0197 決定2・4 / ADR 0302)
+      (e) => [workspaceOf(e), ["writer", getTextAuthor(db, e.task_id)]],
     ),
     `production sessions of tasks that requested tier ${tier} (tier source task), ` +
       (changed === undefined ? "over all time (its description never changed)" : `since its description last changed (event ${changed})`),
@@ -703,7 +703,7 @@ function citeFromPopulation<S extends { worker_spawned_event_id: number | null }
 
 /** 学習器でない op の根拠の母集団(ADR 0302 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root などには配分評価も
  *  outcome も無い)で、受験者の session は本番でない。`conditions` は op の対象が決める残りの条件。 */
-// ponytail: 条件と鍵が episode ごとに段・登録者を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と登録者を1度だけ Map に引く
+// ponytail: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
 const productionPopulation = (db: Db, conditions: readonly Condition<RoutingEpisode>[], key: Population<RoutingEpisode>["key"], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> => ({
   sessions: loadEpisodes(db),
   absent: (spawned) => `is a session of a task of type ${getTask(db, spawned.task_id!)?.type}; only a work-side task's session has an outcome and allocation reviews`,
