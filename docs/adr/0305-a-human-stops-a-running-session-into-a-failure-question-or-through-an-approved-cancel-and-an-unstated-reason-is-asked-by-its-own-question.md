@@ -21,8 +21,9 @@
    本当に危険なときは理由を書く余裕が無いが、理由は後の学習の材料なので一度は必ず訊く。failure question の answer の comment(ADR 0179 の
    操舵 channel)に理由を担わせない —— 別のもの。root なので X の cascade の範囲に入らず(abandon で消えない —— 捨てた task ほど理由が要る)、
    X の pickup も塞がない(retry の後いつ答えてもよい)。X との結びつきは question の種類(`stop_reason`、X の id を持つ —— quarantine の
-   確認 question が資源を指すのと同型)と、停止の event が持つ question の id の両側で持つ。停止承認の cancel では理由は cancel の reason に
-   載るので立てない。
+   確認 question が資源を指すのと同型)と、停止の event が持つ question の id の両側で持つ。**出口を問わない**: 停止承認の cancel でも
+   cancel の reason が無ければ同じ question を立てる —— 根拠は出口でなく「止めた瞬間に人だけが見た挙動は記録から再構成できない」こと。
+   理由の有無は ADR 0212 の required-text の線で読む(欄の省略 = 無し、空白だけは入力面が拒む)。
    **理由は停止の事実の隣に読める。** 読み口は1つ: 停止の event の reason → 無ければ理由 question の答え → 未回答ならその旨。X の history を
    読むものすべて(次の session の briefing・`get_current_task`・meta-review・記憶・WebUI)がこの読み口で停止の行を描く。`task_cancelled` の
    `origin_question_id` を `cancelOrigin` が辿るのと同じ型で、question の行を読みに行く読み手を作らない。
