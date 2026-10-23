@@ -35,8 +35,12 @@ op ごとの帰結(決定1・2 から導いたもので、独立の決定では�
 | `tier_description` | 段 | 最後の説明の編集(position だけの `edit_tier` は数えない)以降にその段を要求した task の本番 session | workspace, task の書き手 |
 | `promote` / `demote` | フラグ | ADR 0181 追記 決定1 のまま | ADR 0181 追記 決定2 のまま |
 
-`tier_description` の書き手は段を申告した task の登録者(`task_registered` の worker_id、人間も含む)で、走った agent ではない ——
-purpose が問うのは「1 workspace / 1 書き手の癖か、段の定義か」である(ADR 0200 決定7)。
+`tier_description` の書き手は段を申告した task の**文面の書き手**(CONTEXT.md の Registrant / ADR 0197 決定2・4: 分解判断に乗る
+task ならその分解判断の書き手、無ければ登録者。人間も含む)で、走った agent ではなく、登録者とも限らない —— purpose が問うのは「1 workspace /
+1 書き手の癖か、段の定義か」で、癖の側は文面の書き手の Behavior に宛たる(ADR 0200 決定7、ADR 0197 決定4)。承認で実体化した子は
+登録者が human でも申告を書いたのは分解した agent で、approve は文面に触れない(ADR 0211)。登録者で組むと、この子の session が
+「書き手 human」の組に入り、人間は自分が書いていない申告の癖を自分の側で直すことになる(#2485 では走った agent との対比だけが
+俎上にあり、承認で実体化した子は検討から漏れていた —— #2524 で訂正)。
 
 ## 退けた案
 
