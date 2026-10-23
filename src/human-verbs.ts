@@ -949,7 +949,7 @@ export function stopThroughHumanDoor(
     if (!deps.stopSession) throw new DomainError("session stopping is unavailable");
     const refusal = deps.stopSession(taskId, () => recordHumanStop(deps.db, taskId, reason, now(), origin));
     if (refusal) throw new DomainError(`cannot stop task ${taskId}: ${refusal}`);
-    return { ok: true, value: presentTask(deps.db, getTask(deps.db, taskId)!, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+    return { ok: true, value: presentTask(deps.db, { id: taskId }, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) return { ok: false, failure: { kind: "domain_error", error: err.message } };
     throw err;
