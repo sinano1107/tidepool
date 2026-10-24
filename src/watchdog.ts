@@ -167,12 +167,13 @@ export function registerFailureAndMarkTeardown(
 }
 
 /** 人間の停止の記録は要求時に一括で置く。容器の回収は transaction の外(ADR 0305)。 */
-export function recordHumanStop(db: Db, taskId: string, reason: string | undefined, now: Date, origin: EventOrigin): void {
+export function recordHumanStop(db: Db, taskId: string, reason: string | undefined, now: Date, origin: EventOrigin, cancel?: () => void): void {
   db.transaction(() => {
     if (sessionInTeardown(db)?.taskId === taskId) throw new DomainError(`task ${taskId} is already ending`);
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") throw new DomainError(`task ${taskId} is not in progress`);
-    registerFailureQuestion(db, task, `stopped by human: ${task.title}`, `The human stopped this session.${reason === undefined ? "" : `\n\nReason: ${reason}`}`, now);
+    if (cancel) cancel();
+    else registerFailureQuestion(db, task, `stopped by human: ${task.title}`, `The human stopped this session.${reason === undefined ? "" : `\n\nReason: ${reason}`}`, now);
     const reasonQuestion = reason === undefined ? registerTask(db, {
       type: "question",
       title: `why did you stop "${task.title}"?`,

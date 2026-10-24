@@ -81,7 +81,6 @@ type ApiOpts<K> = { query?: Record<string, string>; body?: unknown }
 
 /** 契約のエラー行('METHOD /path STATUS')で ApiError の本文を読む —— その status の
  *  ApiError でなければ null。本文から契約型への変換は api() と同じくここ1点(ADR 0138 決定3)。 */
-// biome-ignore lint/correctness/noUnusedVariables: read by webui/settings-screen.tsx — one concatenated bundle
 function apiErrorDetail<K extends Exclude<keyof WireContract, ApiKey>>(err: unknown, key: K): WireContract[K] | null {
   return err instanceof ApiError && err.status === Number(key.split(' ')[2]) ? (err.detail as WireContract[K]) : null;
 }
@@ -648,8 +647,8 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
         : <>
           <Button variant="primary" size="lg" full onClick={onAddChild}>Add child</Button>
           <Button variant="secondary" size="lg" full onClick={onEdit}>Edit</Button>
-          <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
         </>}
+      <Button variant="secondary" size="lg" full onClick={onCancel}>Cancel task</Button>
       <Button variant="ghost" size="lg" full onClick={onClose}>Close</Button>
     </div>
   );
@@ -806,20 +805,25 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const [stopApproval, setStopApproval] = React.useState<{ task_id: string; title: string } | null>(null);
+  const reasonError = reason === '' ? undefined : TidepoolRules.whyBlank(reason);
   // ADR 0271 決定4: 捨てられる done の work は開いた時点で読む(盤面の行は持たない)
   const [discards, setDiscards] = React.useState<TpDiscard[]>([]);
   React.useEffect(() => {
     api('GET /api/tasks/:id', { params: { id: task.id } }).then((t) => setDiscards(t.discards)).catch(() => {});
   }, [task.id]);
   const submit = async () => {
+    if (reasonError) return;
     setBusy(true);
     try {
-      await api(`/api/tasks/${task.id}/cancel`, reason.trim() ? { reason: reason.trim() } : {}, 'POST');
+      await api(`/api/tasks/${task.id}/cancel`, { ...(reason === '' ? {} : { reason }), ...(stopApproval && { stop_approval: stopApproval.task_id }) }, 'POST');
       say('info', 'task cancelled', task.id);
       await onCancelled();
       onClose();
     } catch (err) {
-      say('danger', 'cancel failed', String((err as Error).message || err));
+      const failure = apiErrorDetail(err, 'POST /api/tasks/:id/cancel 400');
+      if (failure?.kind === 'running_task') setStopApproval(failure);
+      else say('danger', 'cancel failed', String((err as Error).message || err));
     }
     setBusy(false);
   };
@@ -831,8 +835,9 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }: {
       </p>
       <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <TpDiscards discards={discards} />
-        <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, only the fact of the cancel is recorded" />
-        <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Cancel this task</Button>
+        <Input label="Reason (optional)" error={reasonError} multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="left blank, a stopped session's reason will be asked afterwards" />
+        {stopApproval && <p>"{stopApproval.title}" ({stopApproval.task_id}) is running. Stop this session and cancel the plan?</p>}
+        <Button variant="primary" size="lg" full disabled={busy || !!reasonError} onClick={submit}>{stopApproval ? `Stop "${stopApproval.title}" and cancel` : 'Cancel this task'}</Button>
         <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep it</Button>
       </Card>
     </div>

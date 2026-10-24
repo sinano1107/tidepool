@@ -164,7 +164,8 @@ export type HumanVerbResult<T> =
       ok: false;
       failure:
         | { kind: "not_found"; error: string }
-        | { kind: "domain_error"; error: string };
+        | { kind: "domain_error"; error: string }
+        | (NonNullable<DomainError["details"]> & { error: string });
     };
 
 export interface DecomposeThroughHumanDoorDeps {
@@ -855,6 +856,7 @@ function promotionRetryError(verdict: LandingVerdict | undefined): string | unde
 export interface CancelThroughHumanDoorDeps {
   db: Db;
   pollNow: () => void;
+  stopSession?: StopSession;
   workspace?: WorkspaceConfig;
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   defaultAgentName?: string;
@@ -963,23 +965,34 @@ export async function cancelThroughHumanDoor(
   reason: string | undefined,
   now: () => Date,
   origin: EventOrigin,
+  stopApproval?: string,
 ): Promise<HumanVerbResult<BoardTask>> {
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
+    const at = now();
     cancelTaskDirectly(
       deps.db,
       task,
       reason ?? null,
-      now(),
+      at,
       humanCancelDefaults(deps),
       origin,
+      undefined,
+      stopApproval === undefined ? undefined : {
+        taskId: stopApproval,
+        stop: (cancel) => {
+          if (!deps.stopSession) throw new DomainError("session stopping is unavailable");
+          const refusal = deps.stopSession(stopApproval, () => recordHumanStop(deps.db, stopApproval, reason, at, origin, cancel));
+          if (refusal) throw new DomainError(`cannot stop task ${stopApproval}: ${refusal}`);
+        },
+      },
     );
     deps.pollNow();
     return { ok: true, value: presentTask(deps.db, task, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
     if (err instanceof DomainError) {
-      return { ok: false, failure: { kind: "domain_error", error: err.message } };
+      return { ok: false, failure: { ...err.details ?? { kind: "domain_error" }, error: err.message } };
     }
     throw err;
   }

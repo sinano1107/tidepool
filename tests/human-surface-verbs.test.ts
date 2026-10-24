@@ -129,7 +129,7 @@ type SettlementVerb = "cancel" | "complete";
 const settlementSpecs = {
   cancel: {
     terminalStatus: "cancelled",
-    rejectedError: "an in-progress task cannot be cancelled",
+    rejectedError: expect.stringMatching(/^cannot cancel while ".+" \(([^)]+)\) is running;.*cancel again with approval \(stop_approval: \1\) to stop this task$/),
     eventKind: "task_cancelled_directly",
   },
   complete: {

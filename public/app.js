@@ -4392,7 +4392,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
     });
   }, [task.id]);
   const meta = { fontSize: "var(--text-2xs)", fontFamily: "var(--font-mono)", color: "var(--text-muted)", margin: "0 0 8px", overflowWrap: "anywhere" };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task")), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px", display: "flex", flexDirection: "column", gap: 10 } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-lg)", margin: "0 0 2px" } }, task.title), /* @__PURE__ */ React.createElement("p", { style: meta }, task.id, " \xB7 ", task.type), review && /* @__PURE__ */ React.createElement("p", { style: meta }, review), humanStops.map((row) => /* @__PURE__ */ React.createElement("p", { key: row.id, style: meta }, "stopped by human \xB7 ", row.reason)), interview && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "interview-room" }, "interview room: ", interview.room, /* @__PURE__ */ React.createElement("br", null), "posed head: ", interview.head), checkout && /* @__PURE__ */ React.createElement("p", { style: meta, "data-testid": "examinee-checkout" }, "checkout: ", checkout), task.status === "in_progress" ? /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onStop }, "Stop session") : /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, onClick: onAddChild }, "Add child"), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onEdit }, "Edit")), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "lg", full: true, onClick: onCancel }, "Cancel task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, onClick: onClose }, "Close"));
 }
 function EditTaskDialog({ taskCard, onSaved, onClose, say }) {
   const { Button, Card, Input, Select, Checkbox } = window.TidepoolDesignSystem_8a0ead;
@@ -4477,24 +4477,29 @@ function CancelTaskDialog({ task, onCancelled, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const [stopApproval, setStopApproval] = React.useState(null);
+  const reasonError = reason === "" ? void 0 : TidepoolRules.whyBlank(reason);
   const [discards, setDiscards] = React.useState([]);
   React.useEffect(() => {
     api("GET /api/tasks/:id", { params: { id: task.id } }).then((t) => setDiscards(t.discards)).catch(() => {
     });
   }, [task.id]);
   const submit = async () => {
+    if (reasonError) return;
     setBusy(true);
     try {
-      await api(`/api/tasks/${task.id}/cancel`, reason.trim() ? { reason: reason.trim() } : {}, "POST");
+      await api(`/api/tasks/${task.id}/cancel`, { ...reason === "" ? {} : { reason }, ...stopApproval && { stop_approval: stopApproval.task_id } }, "POST");
       say("info", "task cancelled", task.id);
       await onCancelled();
       onClose();
     } catch (err) {
-      say("danger", "cancel failed", String(err.message || err));
+      const failure = apiErrorDetail(err, "POST /api/tasks/:id/cancel 400");
+      if (failure?.kind === "running_task") setStopApproval(failure);
+      else say("danger", "cancel failed", String(err.message || err));
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(TpDiscards, { discards }), /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, only the fact of the cancel is recorded" }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)", margin: "0 0 2px" } }, "Cancel task"), /* @__PURE__ */ React.createElement("p", { style: { fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "0 0 16px" } }, 'cancels "', task.title, '" and its unfinished descendants \u2014 the record is kept, never erased'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(TpDiscards, { discards }), /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", error: reasonError, multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value), placeholder: "left blank, a stopped session's reason will be asked afterwards" }), stopApproval && /* @__PURE__ */ React.createElement("p", null, '"', stopApproval.title, '" (', stopApproval.task_id, ") is running. Stop this session and cancel the plan?"), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!reasonError, onClick: submit }, stopApproval ? `Stop "${stopApproval.title}" and cancel` : "Cancel this task"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep it")));
 }
 function StopTaskDialog({ task, onStopped, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;

@@ -312,6 +312,9 @@ export interface WireContract {
   "POST /api/tasks/:id/answer": SettledMark;
   /** 登録の門の 422(src/human-verbs.ts の issue_rejected)。`api()` のキーには出ない。 */
   "POST /api/tasks 422": { missing: string; suggested_comment: string };
+  "POST /api/tasks/:id/cancel 400":
+    | (NonNullable<import("./domain-error.js").DomainError["details"]> & { error: string })
+    | { kind?: undefined; error: string };
   "POST /api/tasks/draft": {
     title: string;
     purpose: string;

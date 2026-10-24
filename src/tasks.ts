@@ -1623,19 +1623,25 @@ function cancelUnsettledSubtree(
   now: Date,
   payload: TaskScopedPayload,
   origin: EventOrigin,
+  approvedStopTaskId?: string,
 ): void {
   // Interview の root の下は対象を経由して受験者とその子孫へ降りる(ADR 0267 決定3)
   const scope = cancelScope(db, rootTaskIds, { throughExaminees: true }).filter((task) => !isSettled(task.status));
-  const running = db.prepare("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status = 'in_progress' ORDER BY sort_key LIMIT 1")
-    .get(JSON.stringify(scope.map((task) => task.id))) as { id: string; title: string } | undefined;
-  if (running) {
-    throw new DomainError(`cannot cancel while "${running.title}" (${running.id}) is running; wait for it to finish, escalate, or hit its time limit, then cancel again`);
-  }
+  assertCancelStopApproval(db, scope, approvedStopTaskId);
   for (const { id } of scope) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
     appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
   }
+}
+
+function assertCancelStopApproval(db: Db, scope: Felled[], approvedStopTaskId?: string): { id: string; title: string } | undefined {
+  const running = db.prepare("SELECT id, title FROM tasks WHERE id IN (SELECT value FROM json_each(?)) AND status = 'in_progress' ORDER BY sort_key LIMIT 1")
+    .get(JSON.stringify(scope.map((task) => task.id))) as { id: string; title: string } | undefined;
+  if (running && running.id !== approvedStopTaskId) {
+    throw new DomainError(`cannot cancel while "${running.title}" (${running.id}) is running; wait for it to finish, escalate, or hit its time limit, then cancel again; or cancel again with approval (stop_approval: ${running.id}) to stop this task`, { kind: "running_task", task_id: running.id, title: running.title });
+  }
+  return running;
 }
 
 /** Cancel tasks and every unfinished descendant via an abandon answer (ADR
@@ -1752,7 +1758,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
 /** The human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
  *  cancel path beside abandon. Its scope line is wider than edit's (ADR 0198,
  *  `assertDirectlyCancellableScope` — human-authored or a board-registered
- *  root other than a question, unsettled, not in_progress), the target and
+ *  root other than a question, unsettled), the target and
  *  its unfinished descendants go cancelled together (道連れ), the reason is optional and kept on every cancelled task's
  *  event. It is refused while a Tidepool question with the subtree as its
  *  subject is still open (`assertNoGatingQuestion`). No "delete" exists — this
@@ -1768,16 +1774,20 @@ export function cancelTaskDirectly(
   origin: EventOrigin,
   /** root の retry の登録(`retryInterviewRoot`)。transaction の終わりの掃除より前に走る —— 写った対象の question は開いたまま(ADR 0199 追記)。 */
   beforeSweep?: () => void,
+  /** The human door validates the live slot, records the stop and teardown with `cancel`, then starts reclaim outside the transaction. */
+  stopApproval?: { taskId: string; stop: (cancel: () => void) => void },
 ): void {
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
-  withTargetQuestionSweep(db, now, () => {
+  const cancel = () => withTargetQuestionSweep(db, now, () => {
     cancelUnsettledSubtree(db, [task.id], HUMAN_WORKER_ID, now, {
       kind: "task_cancelled_directly",
       reason,
-    }, origin);
+    }, origin, stopApproval?.taskId);
     beforeSweep?.();
   });
+  if (stopApproval && assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }), stopApproval.taskId)) stopApproval.stop(cancel);
+  else cancel();
 }
 
 /** cancel が倒す範囲の1件。done は範囲に入っても触らない(捨てるものとして数える)。 */
@@ -3360,7 +3370,7 @@ function assertHumanEditableScope(db: Db, task: Task): void {
 
 /** The direct-cancel scope gate (ADR 0198 / 0211, CONTEXT.md's Cancel): the task must
  *  be human-authored or a root other than a question (an Interview examinee has no
- *  parent but is no root), unsettled, and not in_progress. An agent registers only children (decompose children,
+ *  parent but is no root), unsettled. The cascade's stop-approval gate covers in_progress. An agent registers only children (decompose children,
  *  escalate questions), so a root the human did not register is the board's —
  *  no worker id comparison is needed. A board-named question settles by its
  *  answer, and a board-named attached child (completion review, RCA review)
@@ -3379,7 +3389,7 @@ function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: Closed
         "an Interview examinee, a board-named attached child, and a board-named question are out of scope",
     );
   }
-  assertUnsettledNotInProgress(task, "cancelled");
+  assertUnsettled(task, "cancelled");
 }
 
 /** Human decompose (issue #129): the same mechanics as agent decompose
