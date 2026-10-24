@@ -844,10 +844,12 @@ function StopTaskDialog({ task, onStopped, onClose, say }: {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState('');
   const [busy, setBusy] = React.useState(false);
+  const reasonError = reason === '' ? undefined : TidepoolRules.whyBlank(reason);
   const submit = async () => {
+    if (reasonError) return;
     setBusy(true);
     try {
-      await api(`/api/tasks/${task.id}/stop`, reason.trim() ? { reason: reason.trim() } : {}, 'POST');
+      await api(`/api/tasks/${task.id}/stop`, reason === '' ? {} : { reason }, 'POST');
       await onStopped();
       onClose();
     } catch (err) {
@@ -859,8 +861,8 @@ function StopTaskDialog({ task, onStopped, onClose, say }: {
     <h1 style={{ fontSize: 'var(--text-xl)' }}>Stop session</h1>
     <p>Stop "{task.title}" now. Choose retry or abandon in the question that follows.</p>
     <Card style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <Input label="Reason (optional)" multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
-      <Button variant="primary" size="lg" full disabled={busy} onClick={submit}>Stop this session</Button>
+      <Input label="Reason (optional)" error={reasonError} multiline rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+      <Button variant="primary" size="lg" full disabled={busy || !!reasonError} onClick={submit}>Stop this session</Button>
       <Button variant="ghost" size="lg" full disabled={busy} onClick={onClose}>Keep running</Button>
     </Card>
   </div>;

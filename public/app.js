@@ -4495,10 +4495,12 @@ function StopTaskDialog({ task, onStopped, onClose, say }) {
   const { Button, Card, Input } = window.TidepoolDesignSystem_8a0ead;
   const [reason, setReason] = React.useState("");
   const [busy, setBusy] = React.useState(false);
+  const reasonError = reason === "" ? void 0 : TidepoolRules.whyBlank(reason);
   const submit = async () => {
+    if (reasonError) return;
     setBusy(true);
     try {
-      await api(`/api/tasks/${task.id}/stop`, reason.trim() ? { reason: reason.trim() } : {}, "POST");
+      await api(`/api/tasks/${task.id}/stop`, reason === "" ? {} : { reason }, "POST");
       await onStopped();
       onClose();
     } catch (err) {
@@ -4506,7 +4508,7 @@ function StopTaskDialog({ task, onStopped, onClose, say }) {
     }
     setBusy(false);
   };
-  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)" } }, "Stop session"), /* @__PURE__ */ React.createElement("p", null, 'Stop "', task.title, '" now. Choose retry or abandon in the question that follows.'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy, onClick: submit }, "Stop this session"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep running")));
+  return /* @__PURE__ */ React.createElement("div", { style: { padding: "20px 16px" } }, /* @__PURE__ */ React.createElement("h1", { style: { fontSize: "var(--text-xl)" } }, "Stop session"), /* @__PURE__ */ React.createElement("p", null, 'Stop "', task.title, '" now. Choose retry or abandon in the question that follows.'), /* @__PURE__ */ React.createElement(Card, { style: { display: "flex", flexDirection: "column", gap: 14 } }, /* @__PURE__ */ React.createElement(Input, { label: "Reason (optional)", error: reasonError, multiline: true, rows: 2, value: reason, onChange: (e) => setReason(e.target.value) }), /* @__PURE__ */ React.createElement(Button, { variant: "primary", size: "lg", full: true, disabled: busy || !!reasonError, onClick: submit }, "Stop this session"), /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "lg", full: true, disabled: busy, onClick: onClose }, "Keep running")));
 }
 const HANDOFF_FIELDS = [
   ["outcome", "outcome vs criteria"],
