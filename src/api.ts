@@ -1442,7 +1442,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       parsed.data.stop_approval,
     );
     if (!result.ok) {
-      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), result.failure.kind === "running_task" ? result.failure : { error: result.failure.error });
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), result.failure.kind === "running_task" ? result.failure satisfies WireContract["POST /api/tasks/:id/cancel 400"] : { error: result.failure.error });
       return;
     }
     sendJson(res, result.value);
