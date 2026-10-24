@@ -1779,7 +1779,6 @@ export function cancelTaskDirectly(
 ): void {
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
-  const running = assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }), stopApproval?.taskId);
   const cancel = () => withTargetQuestionSweep(db, now, () => {
     cancelUnsettledSubtree(db, [task.id], HUMAN_WORKER_ID, now, {
       kind: "task_cancelled_directly",
@@ -1787,7 +1786,7 @@ export function cancelTaskDirectly(
     }, origin, stopApproval?.taskId);
     beforeSweep?.();
   });
-  if (running && stopApproval) stopApproval.stop(cancel);
+  if (stopApproval && assertCancelStopApproval(db, cancelScope(db, [task.id], { throughExaminees: true }), stopApproval.taskId)) stopApproval.stop(cancel);
   else cancel();
 }
 
