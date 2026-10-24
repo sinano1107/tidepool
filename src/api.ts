@@ -289,6 +289,7 @@ const editTaskSchema = z.strictObject({
 // the direct-cancel payload (issue #130): reason is optional (理由の記入は任意)
 const cancelTaskSchema = z.object({
   reason: requiredTextSchema.optional(),
+  stop_approval: requiredTextSchema.optional(),
 });
 
 // root の retry の payload(ADR 0267 決定4): コメントは任意
@@ -1432,14 +1433,16 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         auditorName,
         interviewerName,
         quarantineResolvers,
+        stopSession: deps.stopSession,
       },
       req.params.id,
       parsed.data.reason,
       () => clock.now(),
       "webui",
+      parsed.data.stop_approval,
     );
     if (!result.ok) {
-      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), { error: result.failure.error });
+      sendJson(res.status(result.failure.kind === "not_found" ? 404 : 400), result.failure.kind === "running_task" ? result.failure : { error: result.failure.error });
       return;
     }
     sendJson(res, result.value);

@@ -1010,10 +1010,10 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "cancel_task",
     {
-      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. ${TASK_ACK_DESCRIPTION} The ack also carries \`discarded\`: the done agent-executed work (\`id\`, \`title\`) whose artifact this cancel discarded — relay it to the human.`,
-      inputSchema: { task_id: z.string(), reason: z.string().optional() },
+      description: `Cancel a task and its unsettled descendants. The task must be human-authored, a board-registered root other than a question, or a task stranded under a root whose PR was closed outside the board. A running task refuses with its id; after the human explicitly approves stopping it, call again with that id as stop_approval. ${TASK_ACK_DESCRIPTION} The ack also carries \`discarded\`: the done agent-executed work (\`id\`, \`title\`) whose artifact this cancel discarded — relay it to the human.`,
+      inputSchema: { task_id: z.string(), reason: requiredTextSchema.optional(), stop_approval: requiredTextSchema.optional() },
     },
-    async ({ task_id, reason }) => {
+    async ({ task_id, reason, stop_approval }) => {
       // cancel の後は根が cancelled で読みが空になるので先に読む(ADR 0271 決定5)。gate にはしない
       const discarded = getTask(deps.db, task_id) ? discardsOf(task_id) : [];
       const result = await cancelThroughHumanDoor(
@@ -1022,6 +1022,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         reason,
         () => deps.clock.now(),
         "mcp",
+        stop_approval,
       );
       return result.ok ? toolResult({ ...taskAck(result.value), discarded }) : toolError(result.failure.error);
     },
