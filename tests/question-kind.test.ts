@@ -5,6 +5,7 @@ import { type QuestionKind, questionColumns, questionKindOf } from "../src/quest
 
 // 種類で鍵を張るので、union に種類を足すとここが tsc のエラーになり、往復のテストが読む側の腕の書き漏れを捕まえる
 const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }>[] } = {
+  stop_reason: [{ kind: "stop_reason", task_id: "stopped-task" }],
   escalation: [{ kind: "escalation" }],
   failure: [{ kind: "failure", cancel_option: "abandon" }],
   premise_breach: [{ kind: "premise_breach", cancel_option: "abandon", breached_decision: 7 }],

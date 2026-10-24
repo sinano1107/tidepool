@@ -300,6 +300,7 @@ export function landingAnnotation(
     case "pr_promotion_retry":
     case "proposal":
     case "quarantine":
+    case "stop_reason":
     case "cli_auth_expiry_warning":
       return null;
   }

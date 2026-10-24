@@ -176,6 +176,7 @@ export interface Task {
   question_quarantine_value: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
   question_cli_auth_expiry_warning: number | null;
+  question_stop_reason_task_id: string | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
    *  `workspace` doubles as the repo half of the reference for such a task. */
@@ -1203,12 +1204,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
-         question_quarantine_value, question_cli_auth_expiry_warning, github_issue_number, meta_review_subject, interview_target_id, created_at)
+         question_quarantine_value, question_cli_auth_expiry_warning, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
-         @question_quarantine_value, @question_cli_auth_expiry_warning, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
+         @question_quarantine_value, @question_cli_auth_expiry_warning, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -1945,6 +1946,7 @@ export function isLandingQuestion(task: QuestionColumns<TierRef>): boolean {
     case "pr_promotion_retry":
     case "proposal":
     case "quarantine":
+    case "stop_reason":
     case "cli_auth_expiry_warning":
       return false;
   }
@@ -1975,6 +1977,7 @@ export function isFixedChoiceQuestion(question: QuestionColumns<TierRef>): boole
       return true;
     case "escalation":
     case "quarantine":
+    case "stop_reason":
     case "cli_auth_expiry_warning":
       return false;
   }
@@ -1996,6 +1999,7 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
     case "local_merge":
     case "pr_promotion_retry":
     case "quarantine":
+    case "stop_reason":
     case "cli_auth_expiry_warning":
       return [];
   }
@@ -2182,6 +2186,7 @@ export function answerQuestion(
       case "local_merge":
       case "pr_promotion_retry":
       case "proposal":
+      case "stop_reason":
       case "cli_auth_expiry_warning":
         unblockTarget = blockedParent();
         break;
@@ -4011,6 +4016,7 @@ export function approvalAnnotation(
     case "pr_promotion_retry":
     case "proposal":
     case "quarantine":
+    case "stop_reason":
     case "cli_auth_expiry_warning":
       return null;
   }
@@ -4313,10 +4319,15 @@ interface DecisionHistoryEntry {
 type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
-  | { stopped_by_human: { reason: string | null } }
+  | { stopped_by_human: { reason: string } }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
+
+/** Resolve a stop's reason once for history readers (ADR 0305). */
+function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
+  return stop.reason ?? (stop.reason_question_id ? getTask(db, stop.reason_question_id)?.question_answer?.[0] : undefined) ?? "not yet answered";
+}
 
 /** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
 export type HistoryRow = { id: number; decision?: number; entry: TaskHistoryEntry };
@@ -4389,7 +4400,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   const examinee = getTask(db, taskId)?.interview_target_id != null;
   for (const event of listEvents(db, taskId)) {
     if (event.payload.kind === "session_stopped_by_human") {
-      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human: { reason: event.payload.reason ?? null } } });
+      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human: { reason: humanStopReason(db, event.payload) } } });
     }
   }
   for (const child of [...listChildren(db, taskId), ...listExaminees(db, taskId)]) {

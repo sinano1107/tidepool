@@ -102,6 +102,7 @@ function makeTask(
     question_quarantine_kind: null,
     question_quarantine_value: null,
     question_cli_auth_expiry_warning: null,
+    question_stop_reason_task_id: null,
     github_issue_number: null,
     meta_review_subject: null,
     interview_target_id: null,
