@@ -1271,6 +1271,7 @@ export async function submitAnswer(
       case "premise_breach":
       case "broken_probe":
       case "approval":
+      case "stop_reason":
       case "cli_auth_expiry_warning":
         break;
       default:

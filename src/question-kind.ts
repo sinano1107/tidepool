@@ -6,6 +6,8 @@ import type { TierId } from "./tier.js";
 export type QuestionKind<T extends TierRef = TierId> =
   /** agent の escalate(mcp.ts)。種類別の列を持たない。 */
   | { kind: "escalation" }
+  /** ADR 0305: the stopped task; this question is an independent root. */
+  | { kind: "stop_reason"; task_id: string }
   /** watchdog の kill と scheduler の issue-gone(escalateTask 経由、ADR 0006)。cancel_option で答えると分解判断ごとの abandon。 */
   | { kind: "failure"; cancel_option: string }
   /** abandon の範囲は宣言者の分解判断ごと(ADR 0121)。受験者は分解判断に乗らないので宣言できない(ADR 0267 決定7)。 */
@@ -28,6 +30,7 @@ export type QuestionKind<T extends TierRef = TierId> =
   | { kind: "cli_auth_expiry_warning"; expiry: number };
 
 const COLUMNS = [
+  "question_stop_reason_task_id",
   "question_cancel_option",
   "question_breached_decision",
   "question_broken_probe_reason",
@@ -51,6 +54,8 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
   switch (kind.kind) {
     case "escalation":
       return none;
+    case "stop_reason":
+      return { ...none, question_stop_reason_task_id: kind.task_id };
     case "failure":
       return { ...none, question_cancel_option: kind.cancel_option };
     case "premise_breach":
@@ -81,6 +86,8 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
   switch (filled) {
     case "":
       return { kind: "escalation" };
+    case "question_stop_reason_task_id":
+      return { kind: "stop_reason", task_id: q.question_stop_reason_task_id! };
     case "question_cancel_option":
       return { kind: "failure", cancel_option: q.question_cancel_option! };
     case "question_cancel_option + question_breached_decision":

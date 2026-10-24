@@ -51,3 +51,28 @@ it("management stop mirrors HTTP refusal and validation, and the worker has no s
     await management.close();
   }
 });
+
+it.each([
+  { supplied: "wrong direction", answer: undefined, expected: "wrong direction" },
+  { supplied: undefined, answer: undefined, expected: "not yet answered" },
+  { supplied: undefined, answer: "parser was deleting files", expected: "parser was deleting files" },
+])("get_current_task maps the stop reason: $expected", async ({ supplied, answer, expected }) => {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "write parser");
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, supplied ? { reason: supplied } : {});
+  const pending = await questions(t);
+  const failure = pending.find((q) => q.parent_id === task.id)!;
+  const reason = pending.find((q) => q.question_stop_reason_task_id === task.id);
+  if (answer) await api(t.baseUrl, "POST", `/api/tasks/${reason!.id}/answer`, { answers: [answer] });
+  await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["retry"] });
+  await t.clock.advance(MIN);
+  const client = await mcpClient(t.mcpBaseUrl, task.id);
+  try {
+    const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
+    expect(JSON.parse(result.content[0].text).history).toContainEqual({ stopped_by_human: { reason: expected } });
+    const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+    expect(detail.human_stops).toContainEqual({ id: expect.any(Number), reason: expected });
+  } finally {
+    await client.close();
+  }
+});

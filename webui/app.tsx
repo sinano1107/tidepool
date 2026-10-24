@@ -621,14 +621,17 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
   // Interview の root の面接室の在り処と出題の head、受験者の checkout の在り処は詳細だけが運ぶ(ADR 0273 決定1・3 / ADR 0276 決定1 / ADR 0082)
   const [interview, setInterview] = React.useState<{ room: string; head: string } | null>(null);
   const [checkout, setCheckout] = React.useState<string | null>(null);
+  const [humanStops, setHumanStops] = React.useState<WireContract['GET /api/tasks/:id']['human_stops']>([]);
   React.useEffect(() => {
     setInterview(null);
     setCheckout(null);
-    if (task.type !== 'interview' && task.interview_root_id == null) return;
+    setHumanStops([]);
     api('GET /api/tasks/:id', { params: { id: task.id } })
-      .then((full) => task.type === 'interview'
-        ? setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' })
-        : setCheckout(full.examinee_checkout ?? 'not opened yet'))
+      .then((full) => {
+        setHumanStops(full.human_stops);
+        if (task.type === 'interview') setInterview({ room: full.interview_room ?? 'not opened yet', head: full.posed_head ?? 'not posed yet' });
+        else if (task.interview_root_id != null) setCheckout(full.examinee_checkout ?? 'not opened yet');
+      })
       .catch(() => {});
   }, [task.id]);
   const meta = { fontSize: 'var(--text-2xs)', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)', margin: '0 0 8px', overflowWrap: 'anywhere' } as const;
@@ -637,6 +640,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>{task.title}</h1>
       <p style={meta}>{task.id} · {task.type}</p>
       {review && <p style={meta}>{review}</p>}
+      {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}</p>)}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
       {task.status === 'in_progress'

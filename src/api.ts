@@ -137,6 +137,7 @@ import {
   nextSlotTask,
   presentTask,
   type Task,
+  taskHistoryRows,
 } from "./tasks.js";
 import { sessionInTeardown } from "./teardown.js";
 import { getProviderUsage } from "./throttle.js";
@@ -2217,6 +2218,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // push の単体ビューは親の行を持たない — 承認 question・着地 question の判定は一覧と同じくここで載せる
     sendJson(res, {
       ...presented!,
+      human_stops: taskHistoryRows(db, task.id).flatMap(({ id, entry }) => "stopped_by_human" in entry ? [{ id, reason: entry.stopped_by_human.reason }] : []),
       ...(task.type === "question"
         ? questionAnnotations(db, task)
         : { landing_state: landingState(db, task), discards: directCancelDiscards(db, task, closedRoot) }),

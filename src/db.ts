@@ -129,6 +129,8 @@ export function openDb(path: string): Db {
       -- system-internal only (ADR 0075): the configured expiry epoch for
       -- which this advance warning was created. It never halts pickup.
       question_cli_auth_expiry_warning INTEGER,
+      -- ADR 0305: independent root asking why this task was stopped.
+      question_stop_reason_task_id TEXT,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
       -- number this task is a live reference to, or null for an ordinary
       -- task. workspace (already above) doubles as the repo half of the

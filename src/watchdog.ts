@@ -8,7 +8,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
+import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, registerTask, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
   markTeardown,
   resumeUnfinishedTeardown,
@@ -173,7 +173,15 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
     const task = getTask(db, taskId);
     if (task?.status !== "in_progress") throw new DomainError(`task ${taskId} is not in progress`);
     registerFailureQuestion(db, task, `stopped by human: ${task.title}`, `The human stopped this session.${reason === undefined ? "" : `\n\nReason: ${reason}`}`, now);
-    appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reason === undefined ? {} : { reason }) }, at: now });
+    const reasonQuestion = reason === undefined ? registerTask(db, {
+      type: "question",
+      title: `why did you stop "${task.title}"?`,
+      purpose: `Record why you stopped "${task.title}". Choose a suggestion or write the actual reason in free text.`,
+      completion_criteria: "The human has recorded the stop reason",
+      question: [{ title: `why did you stop "${task.title}"?`, options: ["suspicious behavior", "work no longer needed"], recommendation: "suspicious behavior" }],
+      question_kind: { kind: "stop_reason", task_id: taskId },
+    }, now, BOARD_WORKER_ID, "board") : undefined;
+    appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reasonQuestion ? { reason_question_id: reasonQuestion.id } : { reason }) }, at: now });
     markTeardown(db, taskId, now);
   })();
 }
