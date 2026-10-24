@@ -102,7 +102,7 @@ import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
 import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
-import type { PendingReclaim } from "./watchdog.js";
+import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
@@ -932,6 +932,26 @@ export function editThroughHumanDoor(
     if (err instanceof DomainError) {
       return { ok: false, failure: { kind: "domain_error", error: err.message } };
     }
+    throw err;
+  }
+}
+
+/** One human stop door: the handle checks the slot before the domain transaction writes. */
+export function stopThroughHumanDoor(
+  deps: { db: Db; stopSession?: StopSession; defaultAgentName?: string; auditorName?: string; interviewerName?: string },
+  taskId: string,
+  reason: string | undefined,
+  now: () => Date,
+  origin: EventOrigin,
+): HumanVerbResult<BoardTask> {
+  if (!getTask(deps.db, taskId)) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
+  try {
+    if (!deps.stopSession) throw new DomainError("session stopping is unavailable");
+    const refusal = deps.stopSession(taskId, () => recordHumanStop(deps.db, taskId, reason, now(), origin));
+    if (refusal) throw new DomainError(`cannot stop task ${taskId}: ${refusal}`);
+    return { ok: true, value: presentTask(deps.db, { id: taskId }, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
+  } catch (err) {
+    if (err instanceof DomainError) return { ok: false, failure: { kind: "domain_error", error: err.message } };
     throw err;
   }
 }

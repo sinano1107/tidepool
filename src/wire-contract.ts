@@ -20,6 +20,7 @@ export interface Teardown {
   startedAt: string;
   /** 値集合の正本は src/teardown.ts の Settlement(移送は issue #352)。 */
   settlement: "completed" | "released" | "interrupted" | "never_ran";
+  humanStop?: { reason: string | null };
 }
 
 /** 最後の poll の失敗(ADR 0294 決定1)。停止ではないが pickup を待たせているものの2つ目。 */

@@ -739,6 +739,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       // ADR 0099 決定3: 受理された確認回答が tree rule を走らせて slot を解放する
       reclaim,
+      stopSession: watchdog?.stopSession,
       quarantineChecks: checks,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
@@ -775,6 +776,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
       reclaim,
+      stopSession: watchdog?.stopSession,
       quarantineChecks: checks,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,

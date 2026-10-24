@@ -218,6 +218,7 @@ export type EventPayload =
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
   // (CONTEXT.md「上限到達による中断」)。
   | { kind: "cap_interrupted" }
+  | { kind: "session_stopped_by_human"; reason?: string }
   // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
   // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
