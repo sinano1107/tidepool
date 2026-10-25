@@ -437,6 +437,7 @@ export function startWatchdog(deps: {
    *  退避しても、退避そのものが競合する)。tree rule は確認 question の受理まで待つ
    *  (ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)。後始末の印が待ちを再起動の先へ運ぶ。 */
   function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
+    if (rec.humanStop) return;
     if (rec.classification) {
       void rec.classification.then(() => onReclaimTimeout(task, rec, limit));
       return;

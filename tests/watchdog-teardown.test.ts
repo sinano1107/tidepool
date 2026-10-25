@@ -182,11 +182,13 @@ it.each([false, true])("人間の停止後の分類 %s は何も書かない(ADR
   expect(before[0]?.title).toBe("stopped by human: one");
 });
 
-it("人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async () => {
+it.each([false, true])("回収 timeout の予約 %s: 人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async (timeout) => {
   const f = await sessionInTeardown("watchdog");
   await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  if (timeout) await f.clock.advance(CONFIG.reclaimTimeout - 1);
   let classify!: (cap: boolean) => void;
   f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  if (timeout) await f.clock.advance(1);
   f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
   f.runtime.fireEmpty(f.task.id);
   await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
