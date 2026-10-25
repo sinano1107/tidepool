@@ -389,12 +389,12 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
 
 /** 停止の帰責を1停止ぶん撃つ(ADR 0310 決定1〜3): 判断(`uncertain` も判断として)を門に通して `stop_attributed` として止められた
  *  task に追記する。撃てなかったら何も書かず、撃って失敗したら `stop_attribution_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。 */
-async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, stop, spawned }: StopTarget, now: Date): Promise<void> {
+async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, stop, session }: StopTarget, now: Date): Promise<void> {
   await singleFlight(db, `stop:${stop.id}`, async () => {
     if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient?.judgeStop?.bind(deps.attributionClient), deps.containers);
     if ("unavailable" in call) return;
-    const input = stopInput(db, deps.registryDir, stop, spawned);
+    const input = stopInput(db, deps.registryDir, stop, session);
     const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
       appendEvent(db, { taskId: task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
     let judgment: GatedJudgment;
@@ -410,19 +410,18 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
 }
 
 /** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。 */
-function stopInput(db: Db, registryDir: string | undefined, stop: StopTarget["stop"], spawned: EventRow): StopAttributionInput {
-  const { inSession } = sessionWindow(listEvents(db, spawned.task_id!), spawned);
+function stopInput(db: Db, registryDir: string | undefined, stop: StopTarget["stop"], session: Session): StopAttributionInput {
   return {
     human_stop: { reason: humanStopReason(db, stop.payload) },
-    decision_log: taskDecisionLog(db, spawned.task_id!).filter(inSession).map(objectedEntryText),
-    ...sessionReads(db, registryDir, stop),
-    actions: sessionActions(db, spawned.id),
+    decision_log: session.events.filter(isDecisionLogEntry).filter(session.inSession).map(objectedEntryText),
+    ...readsIn(db, registryDir, stop, session),
+    actions: sessionActions(db, session.spawned.id),
   };
 }
 
 /** session の行動列: Episode の行動の index・tool 名・引数・失敗の印と、判断の行の位置の印。Episode が無い・読めない session は null。 */
 function sessionActions(db: Db, spawnedId: number): StopAttributionInput["actions"] {
-  const [episode] = listEpisodes(db, { spawned: spawnedId });
+  const [episode] = listEpisodes(db, { workerSpawnedEventId: spawnedId });
   if (!episode || episode.unrecognizedFormat) return null;
   return {
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
@@ -430,7 +429,10 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
   };
 }
 
-type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; spawned: EventRow };
+/** 1つの worker session: その task の event・開いた spawn・窓の判定。 */
+type Session = { events: EventRow[]; spawned: EventRow; inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean };
+
+type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session };
 
 /** 停止の帰責の対象(ADR 0310 決定1・3・6): 判定の無い人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
  *  worker_exited 観測済み)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
@@ -442,10 +444,12 @@ function stopTargets(db: Db): StopTarget[] {
     if (getTask(db, task_id)?.interview_target_id != null || resolvedStopReason(db, stop.payload) === undefined) return [];
     const events = listEvents(db, task_id);
     const spawned = sessionSpawnOf(events, stop);
-    if (!spawned || !sessionWindow(events, spawned).exited) return [];
+    if (!spawned) return [];
+    const { exited, inSession } = sessionWindow(events, spawned);
+    if (!exited) return [];
     const skip = events.some(({ id, payload: p }) =>
       (p.kind === "task_cancelled_directly" && spawned.id < id && id < stop.id) || (p.kind === "stop_attributed" && p.stop_event_id === stop.id));
-    return skip ? [] : [{ task_id, stop, spawned }];
+    return skip ? [] : [{ task_id, stop, session: { events, spawned, inSession } }];
   });
 }
 
@@ -563,15 +567,19 @@ function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInpu
   return stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
 }
 
-/** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、その entry より前の
- *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
- *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
-function sessionReads(db: Db, registryDir: string | undefined, entry: EventRow): Pick<AttributionInput, "memory_read" | "agent_definition"> {
-  const events = listEvents(db, entry.task_id!);
+/** 異議された entry を含む worker session が読んだもの(`readsIn`)。entry が session の窓の外なら何も読んでいない。 */
+function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition"> {
+  const events = listEvents(db, entry.task_id);
   const spawned = sessionSpawnOf(events, entry);
   if (!spawned) return { memory_read: [], agent_definition: null };
-  const { inSession } = sessionWindow(events, spawned);
-  const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < entry.id && inSession(e) ? [e.payload] : []));
+  return readsIn(db, registryDir, entry, { events, spawned, inSession: sessionWindow(events, spawned).inSession });
+}
+
+/** `anchor`(異議された entry か人間の停止)の session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、anchor より前の
+ *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
+ *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
+function readsIn(db: Db, registryDir: string | undefined, anchor: Pick<EventRow, "id">, { events, spawned, inSession }: Session): Pick<AttributionInput, "memory_read" | "agent_definition"> {
+  const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < anchor.id && inSession(e) ? [e.payload] : []));
   const pulled = readPulls(events, spawned.id, pulls);
   const injected = events.flatMap(({ payload: p }) => (p.kind === "memory_injected" && p.worker_spawned_event_id === spawned.id ? p.entries.map((e) => e.id) : []));
   return {

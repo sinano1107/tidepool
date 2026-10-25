@@ -24,7 +24,7 @@ function buildPrompt(input: AttributionInput): string {
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
-    `as it stood at the time. ${RESPONSE_FIELDS} When the input carries ` +
+    `as it stood at the time. ${OBJECTION_FIELDS} When the input carries ` +
     "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +
     "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
@@ -47,35 +47,43 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
     "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line at its " +
     "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
-    "sequence could not be read: judge from the rest. A behaviour present in actions but absent from decision_log is evidence " +
-    "— a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
-    `changed, is requirement_change. ${RESPONSE_FIELDS}\n\n` +
+    "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
+    "evidence — a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
+    `changed, is requirement_change. ${STOP_FIELDS}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
 
-/** The judgment fields both questions share: the cause vocabulary, evidence and entries. */
-const RESPONSE_FIELDS =
+/** The judgment fields both questions share: the cause vocabulary, evidence and entries. `w` names what is judged —
+ *  the objected entry's decision, or the stopped session's conduct. */
+const responseFields = (w: { reading: string; before: string; sound: string; cites: string }) =>
   "Respond with ONLY a single JSON object (no markdown fences, no " +
-    'prose) with these fields: "cause" (one of ' +
-    `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
-    "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
-    "for the objected reading or omitting a fact the worker needed; environment is the worker's " +
-    "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
-    "worker's judgment was sound given what it had (working around or guessing past such trouble " +
-    "instead of escalating is capability; following the board's own protocol text injected into every session, " +
-    "or a skill bundled with the harness, is environment); preference is the human's taste where the " +
-    "worker's choice was equally valid; requirement_change is a requirement the human changed " +
-    "or introduced after the fact; memory is when a memory entry the worker read before the decision, and followed, " +
-    "was itself wrong — the shortfall is the entry's, not the worker's; agent_definition is when the worker's agent " +
-    "definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and the decision " +
-    "was sound against it — but when agent_definition.builtin is true the body is board code: that is environment; " +
-    "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
-    "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
-    "it — name it only when the decision log cites that document; use uncertain when the evidence does " +
-    'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "entries" ' +
-    "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
-    "read before the decision; never answer memory when memory_read is empty).";
+  'prose) with these fields: "cause" (one of ' +
+  `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
+  "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
+  `for ${w.reading} or omitting a fact the worker needed; environment is the worker's ` +
+  "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
+  "worker's judgment was sound given what it had (working around or guessing past such trouble " +
+  "instead of escalating is capability; following the board's own protocol text injected into every session, " +
+  "or a skill bundled with the harness, is environment); preference is the human's taste where the " +
+  "worker's choice was equally valid; requirement_change is a requirement the human changed " +
+  `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +
+  "was itself wrong — the shortfall is the entry's, not the worker's; agent_definition is when the worker's agent " +
+  `definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and ${w.sound} ` +
+  "was sound against it — but when agent_definition.builtin is true the body is board code: that is environment; " +
+  "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
+  "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
+  `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +
+  'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "entries" ' +
+  "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
+  `read before ${w.before}; never answer memory when memory_read is empty).`;
+const OBJECTION_FIELDS = responseFields({ reading: "the objected reading", before: "the decision", sound: "the decision", cites: "the decision log cites" });
+const STOP_FIELDS = responseFields({
+  reading: "what the worker did",
+  before: "the stop",
+  sound: "the worker's conduct",
+  cites: "the decision log or the action sequence shows the worker reading",
+});
 
 /** The real AttributionClient (issue #574): a headless one-shot `claude -p`
  *  call through the same runner as the draft and allocation clients; the

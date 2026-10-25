@@ -2,11 +2,12 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished } from "vitest";
 import type { BoardCallSetting } from "../src/board-call-usage.js";
-import { openDb } from "../src/db.js";
+import { CliAuthError } from "../src/cli-auth.js";
+import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { humanEntryInput, recordBehavior } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
-import { type AttributionJudgment, listHaltedRefires, markHaltedRefire, refireRetrospectiveCalls, type StopAttributionInput } from "../src/retrospective.js";
+import { type AttributionJudgment, listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireRetrospectiveCalls, type StopAttributionInput } from "../src/retrospective.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { BOARD_CALL_USAGE, FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
@@ -28,19 +29,20 @@ class FakeStopAttributionClient extends FakeAttributionClient {
 const at = new Date("2026-10-25T00:00:00Z");
 const HOUR = 60 * 60 * 1000;
 
-function fixture(task?: Task, spawn: Partial<Extract<EventPayload, { kind: "worker_spawned" }>> = {}) {
+const work = (db: Db) => registerTask(db, { type: "work", title: "parser", purpose: "parse", completion_criteria: "works" }, at, ...HUMAN_WEBUI);
+
+function fixture({ task = work, spawn = {} }: { task?: (db: Db) => Task; spawn?: Partial<Extract<EventPayload, { kind: "worker_spawned" }>> } = {}) {
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
-  const registered = task ?? registerTask(db, { type: "work", title: "parser", purpose: "parse", completion_criteria: "works" }, at, ...HUMAN_WEBUI);
-  const picked = pickupTask(db, registered, "deckhand", at)!;
+  const picked = pickupTask(db, task(db), "deckhand", at)!;
   const spawned = appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...spawn } });
   const entry = logDecision(db, picked, "deleted the fixtures", "deckhand", at, "worker");
   const client = new FakeStopAttributionClient();
-  const deps = { ...noRetrospectiveCalls, attributionClient: client };
-  const exit = () =>
-    appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
-  const sweep = async (now = at) => {
-    refireRetrospectiveCalls(db, deps, now);
+  const deps: RetrospectiveCallDeps = { ...noRetrospectiveCalls, attributionClient: client };
+  const exit = (session = spawned) =>
+    appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
+  const sweep = async (now = at, with_ = deps) => {
+    refireRetrospectiveCalls(db, with_, now);
     await new Promise((resolve) => setImmediate(resolve));
   };
   const stopEvent = () => listEvents(db, picked.id).find((e) => e.kind === "session_stopped_by_human")!;
@@ -80,7 +82,7 @@ it("the judge reads only the stopped session's decisions, not an earlier session
   const retry = appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   logDecision(b.db, getTask(b.db, b.task.id)!, "removed ../other", "deckhand", at, "worker");
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: retry, output_closed: true, usage: null, ...QUIET_EXIT } });
+  b.exit(retry);
 
   await b.sweep();
 
@@ -116,19 +118,39 @@ it("a stop-approved cancel's stop is not judged", async () => {
 });
 
 it("an examinee's stop is not judged", async () => {
-  const db = openDb(":memory:");
-  onTestFinished(() => { db.close(); });
-  const examinee = interviewExaminee(db, at);
-  const picked = pickupTask(db, examinee, "deckhand", at)!;
-  const spawned = appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
-  recordHumanStop(db, picked.id, "deleting unrelated files", at, "webui");
-  appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
-  const client = new FakeStopAttributionClient();
+  const b = fixture({ task: (db) => interviewExaminee(db, at) });
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
 
-  refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
-  await new Promise((resolve) => setImmediate(resolve));
+  await b.sweep();
 
-  expect(client.stopCalls).toEqual([]);
+  expect(b.client.stopCalls).toEqual([]);
+});
+
+it.each([
+  { client: "none", attributionClient: undefined },
+  { client: "one without judgeStop", attributionClient: new FakeAttributionClient() },
+])("a stop the board could not fire for ($client) leaves nothing", async ({ attributionClient }) => {
+  const b = fixture();
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  const before = listEvents(b.db, b.task.id).length;
+
+  await b.sweep(at, { ...b.deps, attributionClient });
+
+  expect(listEvents(b.db, b.task.id).length).toBe(before);
+});
+
+it("a 401 from the stop attribution Board call quarantines the Provider's authentication and leaves no failure event", async () => {
+  const b = fixture();
+  b.client.answer = new CliAuthError("Invalid API key");
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+
+  await b.sweep();
+
+  expect(listBoard(b.db).map((q) => q.title)).toContain("anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped");
+  expect(listEvents(b.db, b.task.id).some((e) => e.kind === "stop_attribution_failed" || e.kind === "stop_attributed")).toBe(false);
 });
 
 const claudeLines = (decision: number) => [
@@ -146,12 +168,8 @@ it.each([
   { harness: "claude-code" as const, tool: "Bash", lines: claudeLines, cli_version: "1" },
   { harness: "codex" as const, tool: "command_execution", lines: codexLines, cli_version: "codex-cli 0.147.0" },
 ])("the judge reads the $harness session's action sequence with the decision's position", async ({ harness, tool, lines, cli_version }) => {
-  const b = fixture(undefined, { harness, cli_version });
-  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
-  b.exit();
-  const transcriptPath = join(await tempDir("tidepool-stop-"), `${b.task.id}.${b.spawned}.stream.jsonl`);
-  writeFileSync(transcriptPath, lines(b.entry).join("\n"));
-  projectAndPersist(b.db, { workerSpawnedEventId: b.spawned, transcriptPath });
+  const b = fixture({ spawn: { harness, cli_version } });
+  await stoppedWithTranscript(b, lines(b.entry));
 
   await b.sweep();
 
@@ -163,6 +181,24 @@ it.each([
     decisions: [{ position: 1, line: "deleted the fixtures" }],
   });
 });
+
+it("a session whose transcript the projector could not read is judged with actions null", async () => {
+  const b = fixture();
+  await stoppedWithTranscript(b, ['{"type":"mystery"}']);
+
+  await b.sweep();
+
+  expect(b.client.stopCalls.map((i) => i.actions)).toEqual([null]);
+});
+
+/** setup: 理由つきで止め、session を閉じ、その transcript を投影する。 */
+async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: string[]) {
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  const transcriptPath = join(await tempDir("tidepool-stop-"), `${b.task.id}.${b.spawned}.stream.jsonl`);
+  writeFileSync(transcriptPath, lines.join("\n"));
+  projectAndPersist(b.db, { workerSpawnedEventId: b.spawned, transcriptPath });
+}
 
 it.each([
   { judgment: { cause: "memory" as const, evidence: "followed a note", entries: [999] }, rejected: "memory attribution rejected: entry 999 was not read before the decision" },

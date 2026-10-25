@@ -190,7 +190,9 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
 
   expect(prompts[0]).toContain("human_stop.reason is the human's testimony");
   expect(prompts[0]).toContain("A reason saying the work is no longer needed, or that what was wanted changed, is requirement_change");
-  expect(prompts[0]).toContain("A behaviour present in actions but absent from decision_log is evidence");
+  expect(prompts[0]).toContain("What the worker did that appears in actions but not in decision_log is evidence");
+  expect(prompts[0]).toContain("memory is when a memory entry the worker read before the stop, and followed, was itself wrong");
+  expect(prompts[0]).not.toContain("objected");
   expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
   expect(prompts[0]).toContain("deleting files outside the workspace");
   expect(prompts[0]).toContain('"args": "rm -rf ../other"');
