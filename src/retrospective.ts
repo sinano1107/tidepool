@@ -417,7 +417,7 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
 function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string, reason: string, now: Date): void {
   const { title } = getTask(db, taskId)!;
   const purpose = `the human stopped the session ${worker} ran on "${title}":\n\n> stop ${stopId}: ${reason}`;
-  if (!isHumanEntry({ worker_id: worker })) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, material: [stopId], assignee: worker }, now);
+  if (worker !== HUMAN_WORKER_ID) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, material: [stopId], assignee: worker }, now);
   registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, material: [stopId] }, now);
 }
 
@@ -785,9 +785,9 @@ function learnedFrom(db: Db, review: Task, entry_id: number): { worker: string; 
   const stop = materialStop(db, review.id);
   if (stop) {
     if (entry_id !== stop.id) throw new DomainError(`entry ${entry_id} is not in this review's material`);
-    const events = listEvents(db, stop.task_id!);
-    const worker = sessionSpawnOf(events, stop)!.worker_id;
-    if (isHumanEntry({ worker_id: worker })) throw new DomainError(`entry ${entry_id} was written by a human`);
+    const { events, spawned } = stoppedSession(db, stop);
+    const worker = spawned.worker_id;
+    if (worker === HUMAN_WORKER_ID) throw new DomainError(`stop ${entry_id} stopped a session a human ran`);
     const judged = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).at(-1);
     return { worker, attribution: judged };
   }
@@ -813,7 +813,13 @@ export function materialStop(db: Db, reviewId: string): EventRowOf<"session_stop
 /** 材料が停止の RCA の get_current_task に注入する、止められた session の行動列(ADR 0310 決定2・4、判事と同じ形)。他の task には欄ごと無い。 */
 export function stopMaterialActions(db: Db, reviewId: string): { actions: StopAttributionInput["actions"] } | undefined {
   const stop = materialStop(db, reviewId);
-  return stop && { actions: sessionActions(db, sessionSpawnOf(listEvents(db, stop.task_id!), stop)!.id) };
+  return stop && { actions: sessionActions(db, stoppedSession(db, stop).spawned.id) };
+}
+
+/** 停止した session: 止められた task の event と、その停止を覆う spawn(停止は必ず spawn の後に書かれる)。 */
+function stoppedSession(db: Db, stop: EventRowOf<"session_stopped_by_human">): { events: EventRow[]; spawned: EventRow } {
+  const events = listEvents(db, stop.task_id!);
+  return { events, spawned: sessionSpawnOf(events, stop)! };
 }
 
 /** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。 */

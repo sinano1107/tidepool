@@ -897,7 +897,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this RCA, in one call. " +
           (stopRca
             ? "Your review was opened on a human stop (its material, quoted in your purpose as \"stop <id>: <reason>\"; get_current_task's actions is " +
-              "that session's action sequence): findings is one finding {entries: [the stop id], root_cause: one line}. A missing, repeated or " +
+              "that session's action sequence — calls are its tool calls in order with a failed mark, decisions place each logged decision among " +
+              "them, and null means the session left no readable sequence): findings is one finding {entries: [the stop id], root_cause: one line}. A missing, repeated or " +
               "other id is refused, named by id, and nothing is recorded. "
             : "findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
               "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +

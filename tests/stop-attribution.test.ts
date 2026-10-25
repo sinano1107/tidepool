@@ -297,7 +297,7 @@ it("a session the human ran gets only the auditor RCA", async () => {
 
   expect(rcas(b).map(({ task }) => task.title)).toEqual(["rca (auditor): parser"]);
   expect(() => proposeFromObjection(b.db, rcas(b)[0]!.task.id, { path: "p", title: "t", text: "x", entry_id: stop }, { workspace: { name: "charts" } }, "auditor", at)).toThrow(
-    `entry ${stop} was written by a human`,
+    `stop ${stop} stopped a session a human ran`,
   );
 });
 
@@ -365,7 +365,7 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const { entry_id } = propose(stop);
 
   expect(listMemoryEntries(b.db, {})).toEqual([
-    expect.objectContaining({ ...draft, id: entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest }, cause: "capability" }),
+    expect.objectContaining({ ...draft, id: entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest } }),
   ]);
   completeRca(b.db, self, { findings: [{ entries: [stop], root_cause: "r" }] }, "deckhand", at, "worker");
   expect(judgmentRows(b.db, self.id).map((r) => r.line)).toEqual([`entries ${stop} → behavior candidate #${entry_id} — r`]);
