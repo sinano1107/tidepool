@@ -6,7 +6,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
 
-import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
@@ -4424,11 +4424,10 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   }
   const examinee = getTask(db, taskId)?.interview_target_id != null;
   const events = listEvents(db, taskId);
-  // 同じ停止では後の判定が有効(ADR 0310 決定4)
-  const stopJudgments = new Map(events.flatMap(({ payload: p }) => (p.kind === "stop_attributed" ? [[p.stop_event_id, p] as const] : [])));
+  const judgments = stopJudgments(events);
   for (const event of events) {
     if (event.payload.kind === "session_stopped_by_human") {
-      const judged = stopJudgments.get(event.id);
+      const judged = judgments.get(event.id)?.payload;
       const stopped_by_human = { reason: humanStopReason(db, event.payload), ...(judged && { cause: judged.cause, evidence: judged.evidence }) };
       timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human } });
     }

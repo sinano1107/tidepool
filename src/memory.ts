@@ -2291,7 +2291,7 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
     return {
       rendered: {
         decisions: decisions.map(objectedEntryText), handoff: session.handoff, result: session.result,
-        ...(stopped?.payload.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stopped.payload) } } : {}),
+        ...humanStopLine(db, stopped?.payload),
       },
       lineIds: decisions.map((e) => e.id),
     };
@@ -2309,11 +2309,15 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
   return {
     rendered: {
       decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result,
-      ...(stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {}),
+      ...humanStopLine(db, stop),
     },
     lineIds: steering.map((s) => s.id),
   };
 }
+
+/** case の停止の行(ADR 0308 決定3): 停止 event なら理由つきで、それ以外は欄が無い。 */
+const humanStopLine = (db: Db, stop: EventPayload | undefined) =>
+  stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
 
 /** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
  *  `worker_spawned` ならその session、そうでなければ anchor より前で最後に開いた同じ task の session ——
