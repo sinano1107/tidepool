@@ -430,7 +430,7 @@ function drafts() {
     const entry_id = logDecision(db, task, line, "deckhand", at, "worker");
     return appendEvent(db, {
       taskId: task.id,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "board",
       payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
       at,

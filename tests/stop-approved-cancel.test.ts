@@ -45,7 +45,7 @@ it("approval of the running descendant cancels every felled task with the reason
     expect(listEvents(db, task.id).find((e) => e.kind === "task_cancelled_directly")!.payload).toEqual({ kind: "task_cancelled_directly", reason: "work no longer needed" });
   }
   expect(listChildren(db, child.id)).toEqual([]);
-  expect(listEvents(db, child.id).find((e) => e.kind === "session_stopped_by_human")).toMatchObject({ worker_id: "human", origin: "webui", payload: { reason: "work no longer needed" } });
+  expect(listEvents(db, child.id).find((e) => e.kind === "session_stopped_by_human")).toMatchObject({ actor_id: "human", origin: "webui", payload: { reason: "work no longer needed" } });
   expect(sessionInTeardown(db)).toMatchObject({ taskId: child.id, humanStop: { reason: "work no longer needed" } });
 });
 

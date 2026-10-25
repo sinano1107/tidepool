@@ -15,7 +15,7 @@ function fixture() {
   onTestFinished(() => { db.close(); });
   const registered = registerTask(db, { type: "work", title: "parser", purpose: "parse", completion_criteria: "works" }, at, ...HUMAN_WEBUI);
   const task = pickupTask(db, registered, "deckhand", at)!;
-  const spawned = appendEvent(db, { taskId: task.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   const entry = logDecision(db, task, "deleted the fixtures", "deckhand", at, "worker");
   const session = startTriage(db, at);
   raiseObjection(db, entry, "keep the fixtures", at);
@@ -40,8 +40,8 @@ it.each(["deleting unrelated files", undefined])("attribution receives the same 
 it("a stop in a later retry session does not enter the first session's attribution", async () => {
   const b = fixture();
   // Setup: the first worker exited, then a retry started on the same task.
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: b.spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: b.spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordHumanStop(b.db, b.task.id, "retry went wrong", at, "webui");
 
   await attributeObjections(b.db, b.deps, b.session.id, at);

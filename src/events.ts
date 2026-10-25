@@ -794,7 +794,7 @@ export interface EventRow {
   id: number;
   /** null は盤面スコープのイベント(`BOARD_SCOPED_KINDS`)。 */
   task_id: string | null;
-  worker_id: string;
+  actor_id: string;
   origin: EventOrigin;
   kind: EventKind;
   payload: EventPayload;
@@ -806,18 +806,18 @@ export interface EventRow {
  *  child pointing at the decision it rests on). */
 export function appendEvent(
   db: Db,
-  event: { workerId: string; origin: EventOrigin; at: Date } & (
+  event: { actorId: string; origin: EventOrigin; at: Date } & (
     | { taskId: null; payload: Extract<EventPayload, { kind: BoardScopedKind }> }
     | { taskId: string; payload: TaskScopedPayload }
   ),
 ): number {
   const { lastInsertRowid } = db
     .prepare(
-      "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO events (task_id, actor_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
     .run(
       event.taskId,
-      event.workerId,
+      event.actorId,
       event.origin,
       event.payload.kind,
       JSON.stringify(event.payload),

@@ -15,7 +15,7 @@ afterEach(() => t?.stop());
 /** task に 1KB の decision_logged を `count` 件積む。 */
 function logLines(taskId: string, count: number) {
   for (let i = 0; i < count; i++)
-    appendEvent(t.db, { taskId, workerId: "human", origin: "mcp", at: t.clock.now(), payload: { kind: "decision_logged", line: `${i} ${"x".repeat(1000)}` } });
+    appendEvent(t.db, { taskId, actorId: "human", origin: "mcp", at: t.clock.now(), payload: { kind: "decision_logged", line: `${i} ${"x".repeat(1000)}` } });
 }
 
 /** 1回の呼び出し。床で切れた応答は目印が JSON の後ろに付くので、JSON.parse が通ることも「続きで読めた」ことの一部 */
@@ -95,13 +95,13 @@ function haltAllocationReviews(count: number) {
   const at = t.clock.now();
   for (let i = 0; i < count; i++) {
     const reviewed = queueWork(t, `reviewed ${i}`);
-    appendEvent(t.db, { taskId: reviewed.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+    appendEvent(t.db, { taskId: reviewed.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
     const review = registerTask(t.db, { type: "review", title: `review ${i}`, purpose: "p", completion_criteria: "c", parent_id: reviewed.id, integration_review: true }, at, "board", "board");
-    const completed = appendEvent(t.db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: { kind: "task_completed", handoff_present: false, result: null } });
+    const completed = appendEvent(t.db, { taskId: review.id, actorId: "deckhand", origin: "board", at, payload: { kind: "task_completed", handoff_present: false, result: null } });
     for (let n = 0; n < 3; n++)
       appendEvent(t.db, {
         taskId: reviewed.id,
-        workerId: "board",
+        actorId: "board",
         origin: "board",
         at,
         payload: { kind: "allocation_review_failed", review_completed_event_id: completed, review_task_id: review.id, reviewed_task_id: reviewed.id, reason: `${i} ${KB}` },
@@ -179,7 +179,7 @@ const reads: Array<{
     key: "decisions",
     pile: async (_, count) => {
       const task = queueWork(t, "a long session");
-      const spawned = appendEvent(t.db, { taskId: task.id, workerId: "deckhand", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+      const spawned = appendEvent(t.db, { taskId: task.id, actorId: "deckhand", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
       logLines(task.id, count);
       return { event_id: spawned };
     },

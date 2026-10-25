@@ -427,7 +427,7 @@ it.each(doors)("Quarantine 中の行の model を新しい行の追加 → 古�
   expect((await api(t.baseUrl, "GET", `/api/tasks/${questionId}`)).json).toMatchObject({ status: "done", question_answer: null });
   const timeline = (await api(t.baseUrl, "GET", `/api/tasks/${questionId}/events`)).json as any[];
   expect(timeline.find((e) => e.kind === "quarantine_released")).toMatchObject({
-    worker_id: "tidepool",
+    actor_id: "tidepool",
     origin: "board",
     payload: { kind: "quarantine_released", quarantine: "tableRow", value: "anthropic/claude-sonnet-5-5", observed_event_id: expect.any(Number) },
   });

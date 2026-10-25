@@ -203,7 +203,7 @@ function sessions(db: Db, logDir: string, task: Task) {
     return [
       {
         task_id: task.id,
-        agent: spawned.worker_id,
+        agent: spawned.actor_id,
         // 欄の無い古い worker_spawned は Claude —— 投影器(projectEpisode)と同じ読み
         harness: spawned.payload.harness ?? "claude-code",
         cost_usd: exited?.kind === "worker_exited" ? (exited.usage?.estimated_cost_usd ?? null) : null,
@@ -412,7 +412,7 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
         ? []
         : listEvents(db, review.id).flatMap((e) =>
             e.payload.kind === "decision_logged"
-              ? [{ review_id: review.id, subject: review.meta_review_subject, event_id: e.id, agent: e.worker_id, line: e.payload.line, judgment: e.payload.judgment ?? null }]
+              ? [{ review_id: review.id, subject: review.meta_review_subject, event_id: e.id, agent: e.actor_id, line: e.payload.line, judgment: e.payload.judgment ?? null }]
               : [],
           ),
     ),

@@ -1,5 +1,7 @@
 # WebUI はサーバーの実行時の規則を、bundle した leaf の入口1本から呼ぶ
 
+**Status 追記: `HUMAN_WORKER_ID` は `HUMAN_ACTOR_ID`、`src/worker-id.ts` は `src/actor-id.ts` に改名済み**(2026-10-26、issue #2581)。leaf を bundle する経路は変わらない。
+
 2026-10-07 の grilling(issue #1514)で決定。WebUI は欄を出すかどうかを決めるために、サーバーの規則を手で写していた
 (review flag の欄の条件、完了時レビューの起票条件)。ADR 0133 決定3 が WebUI に開いた経路は、leaf module の**型**だけを引く
 インライン `import(...)` で、実行時の関数は渡せなかった。#1468 の grilling では、写しが `assignee !== 'human'` の項を落としかけた。

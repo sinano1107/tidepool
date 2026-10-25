@@ -181,7 +181,7 @@ export interface McpDeps {
   /** The board's default agent name (ADR 0012 / issue #36): every MCP call is
    *  attributed to a real agent session (never human — that's the separate
    *  /answer route), so a task's unspecified (null) `assignee` resolves here,
-   *  not to `HUMAN_WORKER_ID`. Required: no default actor (ADR 0194). */
+   *  not to `HUMAN_ACTOR_ID`. Required: no default actor (ADR 0194). */
   defaultAgentName: string;
   /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
    *  as `defaultAgentName` above — the fallback a `review` task's unset
@@ -226,12 +226,12 @@ export interface McpDeps {
 
 /** Every MCP call is attributed to a real agent session (never human — that's
  *  the separate /answer route), so an unspecified (null) assignee resolves to
- *  the board's default agent, not `HUMAN_WORKER_ID` (ADR 0012 / issue #36) —
+ *  the board's default agent, not `HUMAN_ACTOR_ID` (ADR 0012 / issue #36) —
  *  made type-aware for `review` tasks (issue #42 / CONTEXT.md's Auditor): a
  *  review task's unset assignee attributes to the Auditor pointer instead —
  *  or, for an Interview root, to the Interviewer pointer (ADR 0269 決定2) —
  *  neither of which is ever unset (each falls back to its `DEFAULT_*`). */
-function attributedWorkerId(deps: McpDeps, task: Task): string {
+function attributedActorId(deps: McpDeps, task: Task): string {
   return resolveTaskAgent(
     task,
     deps.defaultAgentName,
@@ -359,7 +359,7 @@ const resolveOnly = (): void => {};
 function runReleasingVerb(
   deps: McpDeps,
   attributedTaskId: string | null,
-  verb: (task: Task) => (workerId: string, now: Date) => object,
+  verb: (task: Task) => (actorId: string, now: Date) => object,
   gate?: (task: Task, workspace: WorkspaceConfig) => void,
 ) {
   return runVerb(deps, attributedTaskId, (task) => {
@@ -372,7 +372,7 @@ function runReleasingVerb(
     // 記録と印は同じ transaction(issue #2025)—— 間で落ちると印の無い決着済み session が残る。
     const result = deps.db.transaction(() => {
       const now = deps.clock.now();
-      const recorded = record(attributedWorkerId(deps, task), now);
+      const recorded = record(attributedActorId(deps, task), now);
       // ADR 0274 決定3: 後始末は `done` から「門が workspace を既に観測した」と導く —— 門を渡さずに `done` へ決着させた verb は
       // その導出を偽にするので、記録ごと巻き戻す(門の callback が飛ばされたかではなく、解決が前倒しで走ったかを問う)
       if (!gate && getTask(deps.db, task.id)?.status === "done") {
@@ -562,10 +562,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   const stopRca = attributedTaskId !== null && materialStop(deps.db, attributedTaskId) !== undefined;
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
   const completing =
-    <I>(complete: (db: Db, task: Task, input: I, workerId: string, now: Date, origin: "worker") => Task) =>
+    <I>(complete: (db: Db, task: Task, input: I, actorId: string, now: Date, origin: "worker") => Task) =>
     async (input: I) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-        const done = complete(deps.db, task, input, workerId, now, "worker");
+      runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
+        const done = complete(deps.db, task, input, actorId, now, "worker");
         return { id: done.id, status: done.status };
       }, resolveOnly);
 
@@ -676,8 +676,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(
           deps,
           attributedTaskId,
-          (task) => (workerId, now) => {
-            const done = completeTask(deps.db, task, handoff, workerId, now, "worker");
+          (task) => (actorId, now) => {
+            const done = completeTask(deps.db, task, handoff, actorId, now, "worker");
             return { id: done.id, status: done.status };
           },
           (task, workspace) => assertWorkTreeCommitted(deps, task, workspace),
@@ -701,7 +701,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           deps.db,
           task,
           line,
-          attributedWorkerId(deps, task),
+          attributedActorId(deps, task),
           deps.clock.now(),
           "worker",
         );
@@ -729,8 +729,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(deps, attributedTaskId, (task) => {
           assertChildrenKnown(deps, input.children);
           const authority = attributedAuthorityOrQuarantine(deps, task);
-          return (workerId, now) => {
-            const children = decomposeTask(deps.db, task, input, workerId, now, authority, deps.isProtectedWorkspace, "worker");
+          return (actorId, now) => {
+            const children = decomposeTask(deps.db, task, input, actorId, now, authority, deps.isProtectedWorkspace, "worker");
             return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
           };
         }),
@@ -767,11 +767,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         return runReleasingVerb(
           deps,
           attributedTaskId,
-          (task) => (workerId, now) => {
+          (task) => (actorId, now) => {
             if (head === undefined) {
               throw new DomainError(`this task's workspace cannot be resolved, so the head the probe forks from cannot be recorded${ESCALATE_UNFIXABLE}`);
             }
-            const audit = poseProbe(deps.db, task, input, workerId, now, "worker", head);
+            const audit = poseProbe(deps.db, task, input, actorId, now, "worker", head);
             return { audit_id: audit.id, parent_status: "blocked" };
           },
           (task, room) => {
@@ -883,8 +883,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
-      completing((db, task, input: Parameters<typeof completeRoutingReview>[2], workerId, now, origin) =>
-        completeRoutingReview(db, task, input, workerId, now, origin, routingPrecedents(db, task.id), deps.agentAdmin?.list?.()),
+      completing((db, task, input: Parameters<typeof completeRoutingReview>[2], actorId, now, origin) =>
+        completeRoutingReview(db, task, input, actorId, now, origin, routingPrecedents(db, task.id), deps.agentAdmin?.list?.()),
       ),
     );
   }
@@ -961,8 +961,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: { reason: requiredTextSchema, recommendation: z.enum(["abandon", "retry"]) },
       },
       async (input) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const question = reportBrokenProbe(deps.db, task, input, workerId, now, "worker");
+        runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
+          const question = reportBrokenProbe(deps.db, task, input, actorId, now, "worker");
           return { question_id: question.id, parent_status: "blocked" };
         }),
     );
@@ -993,8 +993,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-        const question = escalateTask(deps.db, task, input, workerId, now, "worker");
+      runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
+        const question = escalateTask(deps.db, task, input, actorId, now, "worker");
         return { question_id: question.id, parent_status: "blocked" };
       }),
   );
@@ -1016,8 +1016,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: { reason: requiredTextSchema },
       },
       async ({ reason }) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          const question = declarePremiseBreach(deps.db, task, reason, workerId, now, "worker");
+        runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
+          const question = declarePremiseBreach(deps.db, task, reason, actorId, now, "worker");
           return { question_id: question?.id ?? null, status: "held" };
         }),
     );
@@ -1037,8 +1037,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: { line: requiredTextSchema },
       },
       async ({ line }) =>
-        runReleasingVerb(deps, attributedTaskId, (task) => (workerId, now) => {
-          continueDecomposition(deps.db, task, line, workerId, now, "worker");
+        runReleasingVerb(deps, attributedTaskId, (task) => (actorId, now) => {
+          continueDecomposition(deps.db, task, line, actorId, now, "worker");
           return { parent_status: "blocked" };
         }),
     );
@@ -1060,8 +1060,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         runReleasingVerb(deps, attributedTaskId, (task) => {
           assertChildrenKnown(deps, input.children);
           const authority = attributedAuthorityOrQuarantine(deps, task);
-          return (workerId, now) => {
-            const children = redecompose(deps.db, task, input, workerId, now, authority, deps.isProtectedWorkspace, "worker");
+          return (actorId, now) => {
+            const children = redecompose(deps.db, task, input, actorId, now, authority, deps.isProtectedWorkspace, "worker");
             return { child_ids: children.map((c) => c.id), parent_status: "blocked" };
           };
         }),
@@ -1096,7 +1096,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             {
               ...input,
               scope: memoryScope(deps, task),
-              author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+              author: { activity: "worker_verb", name: attributedActorId(deps, task) },
             },
             "worker",
             deps.clock.now(),
@@ -1128,7 +1128,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runVerb(deps, attributedTaskId, (task) => proposeFromMaterial(deps.db, task.id, input, deps, attributedWorkerId(deps, task), deps.clock.now())),
+      runVerb(deps, attributedTaskId, (task) => proposeFromMaterial(deps.db, task.id, input, deps, attributedActorId(deps, task), deps.clock.now())),
   );
 
   // ADR 0273 決定2・9: interview の root は routing の読み口と、根拠があれば根拠の history の読み口を持つ
@@ -1197,7 +1197,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
               scope: memoryScope(deps, task),
               path: input.prefix,
               text: input.definition,
-              author: { activity: "worker_verb", name: attributedWorkerId(deps, task) },
+              author: { activity: "worker_verb", name: attributedActorId(deps, task) },
             },
             "worker",
             deps.clock.now(),
@@ -1209,7 +1209,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
 
   // spec #586 D: 記憶の pull。各 pull は memory_pulled を書き、その event id を返す
   // (Precedent の memory マーカーの結合キー)。
-  const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedWorkerId(deps, task) });
+  const reader = (task: Task) => ({ taskId: task.id, scope: memoryScope(deps, task), agent: attributedActorId(deps, task) });
 
   if (!withheld.includes("browse_memory")) server.registerTool(
     "browse_memory",
@@ -1353,7 +1353,7 @@ type MetaReviewRun = (verb: (reader: { taskId: string; agent: string }, now: Dat
 const slotRun =
   (deps: McpDeps, taskId: string | null): MetaReviewRun =>
   (verb) =>
-    runVerb(deps, taskId, (task) => verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now()));
+    runVerb(deps, taskId, (task) => verb({ taskId: task.id, agent: attributedActorId(deps, task) }, deps.clock.now()));
 
 /** meta-review の主題の専用 verb(issue #619・#917 / ADR 0120 決定2・ADR 0122)。tool 一覧は権限の境界ではないので、
  *  呼び出し時の門も持つ。Precedent の読み口は両主題で共有する。 */
@@ -1362,7 +1362,7 @@ function registerMetaReviewVerbs(server: McpServer, deps: McpDeps, attributedTas
     runVerb(deps, attributedTaskId, (task) => {
       // 自身の列: 問いは「この task は meta-review か」で、行の主題ではない(ADR 0283 決定1)
       if (metaReviewSubjectOf(deps.db, task.id) !== subject) throw new DomainError(`${subject} meta-review verbs are only for a ${subject} meta-review task`);
-      return verb({ taskId: task.id, agent: attributedWorkerId(deps, task) }, deps.clock.now());
+      return verb({ taskId: task.id, agent: attributedActorId(deps, task) }, deps.clock.now());
     });
   registerPrecedentRead(server, deps, run);
   registerMemoryEntriesRead(server, deps, run);

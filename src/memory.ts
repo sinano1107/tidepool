@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { countTokens } from "gpt-tokenizer/encoding/o200k_base";
 import { z } from "zod";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
@@ -32,7 +33,6 @@ import { type RegistryAgent, routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, getTask, type HandoffDoc, humanStopReason, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
  *  必須、cause.ts の語彙の3つ(間違っていた / 陳腐化)と、人間が提案 question を reject した `rejected`(issue #620)。 */
@@ -203,7 +203,7 @@ function createEntry(
     const entry: MemoryEntryFields = { ...fields, path, title: normalizeText(fields.title), text: normalizeText(fields.text), source: resolved };
     const id = appendEvent(db, {
       taskId: null,
-      workerId: entry.author.name,
+      actorId: entry.author.name,
       origin,
       payload: { kind: "memory_entry_created", entry, ...mark },
       at,
@@ -338,7 +338,7 @@ function withWriteRecord<T extends object>(db: Db, writer: { taskId: string; age
     const created = events.filter((e) => e.payload.kind === "memory_entry_created").map((e) => e.id);
     const invalidated = events.flatMap((e) => (e.payload.kind === "memory_entry_invalidated" ? [e.payload.entry_id] : []));
     const payload = { kind: "memory_written" as const, line: writeLine(events), created, invalidated };
-    return { ...result, event_id: appendEvent(db, { taskId: writer.taskId, workerId: writer.agent, origin: "worker", payload, at }) };
+    return { ...result, event_id: appendEvent(db, { taskId: writer.taskId, actorId: writer.agent, origin: "worker", payload, at }) };
   })();
 }
 
@@ -578,7 +578,7 @@ function copyBody(
 ): number {
   const { id: _id, version: _version, source: _source, ...body } = old;
   const entry: MemoryEntryFields = { ...body, ...place, source: inheritableSource(old) ?? null };
-  const id = appendEvent(db, { taskId: null, workerId: actor.name, origin, payload: { kind: "memory_entry_created", entry, activity: actor.activity, ...mark }, at });
+  const id = appendEvent(db, { taskId: null, actorId: actor.name, origin, payload: { kind: "memory_entry_created", entry, activity: actor.activity, ...mark }, at });
   insertEntry(db, id, entry, mark.version);
   return id;
 }
@@ -1030,7 +1030,7 @@ export const memoryListFilterSchema = z.object({
 });
 
 /** 人間の面(settings の HTTP / 管理MCP)の書き手・移した者。 */
-export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_WORKER_ID } as const satisfies Actor;
+export const HUMAN_AUTHOR = { activity: "human", name: HUMAN_ACTOR_ID } as const satisfies Actor;
 
 /** 原文は title と text の揃いで持つか持たないか。英語の title を持たない Definition は、英語側と
  *  同じく原文も title = text(ADR 0015 五度目の精密化)。 */
@@ -1178,7 +1178,7 @@ function requireEntry(db: Db, id: number): EntryRow {
 export function invalidateMemoryEntry(
   db: Db,
   input: { entry_id: number; reason: InvalidationReason; successor_id?: number },
-  workerId: string,
+  actorId: string,
   origin: EventOrigin,
   at: Date,
   mark?: { question_id: string } | { activity: MemoryEntryFields["author"]["activity"] },
@@ -1210,7 +1210,7 @@ export function invalidateMemoryEntry(
     markInvalidated(db, entry_id, reason, successor_id ?? null);
     const eventId = appendEvent(db, {
       taskId: null,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "memory_entry_invalidated", entry_id, reason, successor_id: successor_id ?? null, ...mark },
       at,
@@ -1242,7 +1242,7 @@ function requireNotApprovedBehaviorOrExemplar(db: Db, id: number): EntryRow {
 export function invalidateMemoryByMetaReview(
   db: Db,
   input: Parameters<typeof invalidateMemoryEntry>[1],
-  workerId: string,
+  actorId: string,
   origin: EventOrigin,
   at: Date,
   writer: string,
@@ -1250,7 +1250,7 @@ export function invalidateMemoryByMetaReview(
   if (input.reason === "superseded" || input.reason === "path_moved") {
     throw new DomainError(`invalidate_memory does not take ${input.reason}: replace with fold_memory, define_memory's supersedes, move_memory or move_memory_branch`);
   }
-  return withWriteRecord(db, { taskId: writer, agent: workerId }, at, () => {
+  return withWriteRecord(db, { taskId: writer, agent: actorId }, at, () => {
     const reach = entryReach(db, writer, input.entry_id);
     // 書き込みの射程は逆操作: 作ったエントリ(その後に移された複製も)だけを門なしで落とす。移動の複製は移し戻しで戻す(ADR 0252 決定4)
     const row =
@@ -1259,7 +1259,7 @@ export function invalidateMemoryByMetaReview(
         : requireNotApprovedBehaviorOrExemplar(db, input.entry_id);
     // rejected の門はどちらの射程にも掛ける —— 書き込みの射程にも candidate は入りうる(ADR 0281 帰結)
     if (input.reason === "rejected" && row.state !== "candidate") throw new DomainError(`rejected retires only a candidate; memory entry ${row.id} is not one`);
-    return { event_id: invalidateMemoryEntry(db, input, workerId, origin, at, { activity: reach === "meta" ? "meta_review" : "worker_verb" }) };
+    return { event_id: invalidateMemoryEntry(db, input, actorId, origin, at, { activity: reach === "meta" ? "meta_review" : "worker_verb" }) };
   }).event_id;
 }
 
@@ -1343,12 +1343,12 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
   return db.transaction(() => {
     const { named, replaced } = assertProposalFresh(db, proposal);
     const supersede = (ids: number[], successor_id: number) => {
-      for (const id of ids) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, HUMAN_WORKER_ID, origin, at, mark);
+      for (const id of ids) invalidateMemoryEntry(db, { entry_id: id, reason: "superseded", successor_id }, HUMAN_ACTOR_ID, origin, at, mark);
     };
     if (!("candidate_id" in proposal)) {
       // 文言を承認しないので修正値を持たない(ADR 0152 決定2 / ADR 0160)—— 扉の外から呼ばれても黙って捨てず断る
       if (amendment) throw new DomainError("a proposal without a candidate takes no amendment: approve or reject it as proposed");
-      if (proposal.op === "invalidate") return invalidateMemoryEntry(db, { entry_id: named.id, reason: proposal.reason }, HUMAN_WORKER_ID, origin, at, mark);
+      if (proposal.op === "invalidate") return invalidateMemoryEntry(db, { entry_id: named.id, reason: proposal.reason }, HUMAN_ACTOR_ID, origin, at, mark);
       supersede(replaced, named.id);
       return named.id;
     }
@@ -1370,7 +1370,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
     }
     const eventId = appendEvent(db, {
       taskId: null,
-      workerId: HUMAN_WORKER_ID,
+      actorId: HUMAN_ACTOR_ID,
       origin,
       payload: { kind: "memory_entry_approved", entry_id: named.id, question_id: questionId, replaced: proposal.replaces },
       at,
@@ -1385,7 +1385,7 @@ export function approveMemoryProposal(db: Db, proposal: MemoryProposal, question
  *  (consolidate の replaces は残る)、invalidate と既存の後継の consolidate は何もしない。必須の comment の門は回答の側(`needsComment`、ADR 0179 決定4)。 */
 export function rejectMemoryProposal(db: Db, proposal: MemoryProposal, questionId: string, origin: EventOrigin, at: Date): void {
   const { named } = assertProposalFresh(db, proposal);
-  if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: named.id, reason: "rejected" }, HUMAN_WORKER_ID, origin, at, { question_id: questionId });
+  if ("candidate_id" in proposal) invalidateMemoryEntry(db, { entry_id: named.id, reason: "rejected" }, HUMAN_ACTOR_ID, origin, at, { question_id: questionId });
 }
 
 /** 無効化されていない kinds(省略 = 種別を問わない)のどれかで、state を渡せばその state の entry(提案が名指す entry と、書き込みの supersedes)。
@@ -1443,7 +1443,7 @@ export function proposeMemoryChange(
     target_id?: number;
     reason?: Extract<MemoryProposal, { op: "invalidate" }>["reason"];
   },
-  workerId: string,
+  actorId: string,
   now: Date,
 ): { question_id: string } {
   const need = <T>(value: T | undefined, field: string): T => {
@@ -1503,7 +1503,7 @@ export function proposeMemoryChange(
         // replaces が1つの出所を共有するなら新 candidate はそれを継ぐ(rule ↔ case の関係を共有 Episode から導ける)。揃わなければ
         // meta-review の推論のまま
         const shared = sharedSource(replaced);
-        const author = { activity: "meta_review" as const, name: workerId };
+        const author = { activity: "meta_review" as const, name: actorId };
         let created: number;
         if (kind === "exemplar") {
           // text は注釈の英語 text から導く —— 渡されたら黙って捨てず断る
@@ -1561,7 +1561,7 @@ export function proposeMemoryChange(
         question_kind: { kind: "proposal", proposal },
       },
       now,
-      workerId,
+      actorId,
       "worker",
     );
     return { question_id: question.id };
@@ -1673,8 +1673,8 @@ export function listMemoryEntries(
   const path = filter.path === undefined ? undefined : checkedPath(filter.path);
   // エントリの無効化は高々1度(invalidateMemoryEntry の門)なので entry_id で引ける。印は event が正本で列は持たない
   const invalidatedBy = new Map(
-    listEventsOfKinds(db, ["memory_entry_invalidated"]).map(({ worker_id, payload: { entry_id, question_id, activity } }) =>
-      [entry_id, question_id ? { question_id } : activity ? { activity } : { worker: worker_id }] as const,
+    listEventsOfKinds(db, ["memory_entry_invalidated"]).map(({ actor_id, payload: { entry_id, question_id, activity } }) =>
+      [entry_id, question_id ? { question_id } : activity ? { activity } : { worker: actor_id }] as const,
     ),
   );
   const restored = restoredAs(db);
@@ -1798,7 +1798,7 @@ function recordPull<T>(
 ): T & { event_id: number } {
   const event_id = appendEvent(db, {
     taskId: reader.taskId,
-    workerId: reader.agent,
+    actorId: reader.agent,
     origin: "worker",
     payload: { kind: "memory_pulled", ...pull, watermark: memoryWatermark(db) },
     at,
@@ -2646,7 +2646,7 @@ export function recordMemoryInjection(
   const { section: _, ...recorded } = injection;
   return appendEvent(db, {
     taskId,
-    workerId: agent,
+    actorId: agent,
     origin: "board",
     payload: {
       kind: "memory_injected",
@@ -2833,7 +2833,7 @@ export function completeMemoryReview(
   db: Db,
   review: Task,
   input: { judgments: Array<MemoryJudgmentItem & { reason?: string }>; handoff?: Partial<HandoffDoc> },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -2848,7 +2848,7 @@ export function completeMemoryReview(
     input,
     { injected: record.items, open },
     { key: itemName, label: itemName, kind: "memory", value: "left_as_is", object: (item) => item },
-    workerId,
+    actorId,
     now,
     origin,
   );
@@ -2876,7 +2876,7 @@ export function recordMetaReviewMaterial(
   } as const;
   return appendEvent(db, {
     taskId,
-    workerId: agent,
+    actorId: agent,
     origin: "board",
     payload:
       material.subject === "routing"
@@ -2940,7 +2940,7 @@ export function changeMemorySettings(
     ).run(change);
     return appendEvent(db, {
       taskId: null,
-      workerId: HUMAN_WORKER_ID,
+      actorId: HUMAN_ACTOR_ID,
       origin,
       payload: { kind: "memory_settings_changed", ...readMemorySettings(db) },
       at,
@@ -2951,7 +2951,7 @@ export function changeMemorySettings(
 
 /** rebuild(spec #586 G): エントリ表と FTS を消し、memory 系 events を再生して作り直し、
  *  索引の版を今の版に刻む。無効化済みの行(理由コード・後継 id)も再生で戻る。 */
-export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin, at: Date): number {
+export function rebuildMemoryIndex(db: Db, actorId: string, origin: EventOrigin, at: Date): number {
   return db.transaction(() => {
     db.exec(`DELETE FROM memory_entries; DROP TABLE memory_fts; ${MEMORY_FTS_DDL};`);
     for (const { id, payload: event } of storeEvents(db)) {
@@ -2962,7 +2962,7 @@ export function rebuildMemoryIndex(db: Db, workerId: string, origin: EventOrigin
     db.prepare("UPDATE memory_index_version SET tokenizer = ?, preprocess_version = ?").run(MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION);
     return appendEvent(db, {
       taskId: null,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "memory_index_rebuilt", tokenizer: MEMORY_FTS_TOKENIZER, preprocess_version: MEMORY_PREPROCESS_VERSION },
       at,
@@ -2978,5 +2978,5 @@ export function ensureMemoryIndex(db: Db, at: Date): number | null {
     preprocess_version: string;
   };
   if (stored.tokenizer === MEMORY_FTS_TOKENIZER && stored.preprocess_version === MEMORY_PREPROCESS_VERSION) return null;
-  return rebuildMemoryIndex(db, BOARD_WORKER_ID, "board", at);
+  return rebuildMemoryIndex(db, BOARD_ACTOR_ID, "board", at);
 }

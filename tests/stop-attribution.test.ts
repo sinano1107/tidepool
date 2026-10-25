@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { CliAuthError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, latestEventOfTask, listEvents } from "../src/events.js";
@@ -10,7 +11,6 @@ import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromMaterial, 
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
 import { HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -24,13 +24,13 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
   const db = openDb(":memory:");
   onTestFinished(() => { db.close(); });
   const picked = pickupTask(db, task(db), "deckhand", at)!;
-  const spawned = appendEvent(db, { taskId: picked.id, workerId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, ...spawn } });
+  const spawned = appendEvent(db, { taskId: picked.id, actorId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, ...spawn } });
   const entry = logDecision(db, picked, "deleted the fixtures", "deckhand", at, "worker");
   const client = new FakeAttributionClient();
   client.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
   const deps: RetrospectiveCallDeps = { ...noRetrospectiveCalls, attributionClient: client };
   const exit = (session = spawned) =>
-    appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
+    appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
   const sweep = async (now = at, with_ = deps) => {
     refireRetrospectiveCalls(db, with_, now);
     await new Promise((resolve) => setImmediate(resolve));
@@ -44,7 +44,7 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
 it("a stop with a reason is judged once by the sweep after its session closes, from the session window, its reads and no actions", async () => {
   const b = fixture();
   const memory = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "deckhand" }), "webui", at).entry_id;
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "worker", at, payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [memory], watermark: 0 } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "worker", at, payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [memory], watermark: 0 } });
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
 
   await b.sweep();
@@ -70,7 +70,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
 it("the judge reads only the stopped session's decisions, not an earlier session's of the same task", async () => {
   const b = fixture();
   b.exit();
-  const retry = appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const retry = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   logDecision(b.db, getTask(b.db, b.task.id)!, "removed ../other", "deckhand", at, "worker");
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit(retry);
@@ -281,7 +281,7 @@ it.each([
 ])("a $cause stop judgment registers $registered RCAs", async ({ cause, registered }) => {
   const b = fixture();
   const memory = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "deckhand" }), "webui", at).entry_id;
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "worker", at, payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [memory], watermark: 0 } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "worker", at, payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [memory], watermark: 0 } });
   b.client.scriptStopJudgment({ cause, evidence: "e", ...(cause === "memory" && { wrong_memory_entries: [memory] }) });
 
   await stoppedAndJudged(b);
@@ -291,7 +291,7 @@ it.each([
 });
 
 it("a session the human ran gets only the auditor RCA", async () => {
-  const b = fixture({ worker: HUMAN_WORKER_ID });
+  const b = fixture({ worker: HUMAN_ACTOR_ID });
 
   const stop = await stoppedAndJudged(b);
 
@@ -357,7 +357,7 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const latest = appendEvent(b.db, { taskId: b.task.id, workerId: BOARD_WORKER_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null } });
+  const latest = appendEvent(b.db, { taskId: b.task.id, actorId: BOARD_ACTOR_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null } });
   const draft = { path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace." };
   const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 

@@ -1,6 +1,7 @@
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { resolveExecutionAgent } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -34,7 +35,6 @@ import {
 } from "../src/tasks.js";
 import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
@@ -88,11 +88,11 @@ function recordPrOpenedViaWorker(
   db: Db,
   task: Task,
   prNumber: number,
-  workerId: string,
+  actorId: string,
   now: Date,
   { authority, isProtected }: { authority?: Parameters<typeof recordPrOpened>[6]; isProtected?: boolean } = {},
 ): void {
-  recordPrOpened(db, task, prNumber, fakeHead(prNumber), workerId, now, authority, isProtected, "worker");
+  recordPrOpened(db, task, prNumber, fakeHead(prNumber), actorId, now, authority, isProtected, "worker");
 }
 
 function promotionFailures(board: Db, taskId: string) {
@@ -263,7 +263,7 @@ it("保護ブランチへ運ぶ内容が無い work はその事実を返して�
   });
   expect(listEvents(db, task.id)).toContainEqual(
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       payload: { kind: "nothing_to_land", base: "main" },
     }),
@@ -933,7 +933,7 @@ it("GitHub に同じ head の merge 済み PR がある根の着地は、番号�
   expect(github.requests).toEqual([]);
   expect(getTask(db, work.id)?.pr_number).toBe(merged);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: merged } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: merged } },
   ]);
   expect(promotionFailures(db, work.id)).toHaveLength(1);
 });
@@ -1498,7 +1498,7 @@ async function mergeOnGitHub(workspace: WorkspaceConfig, taskId: string) {
 }
 
 function boardMerged(db: Db, clock: FakeClock, taskId: string, prNumber: number) {
-  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: prNumber }, at: clock.now() });
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: prNumber }, at: clock.now() });
 }
 
 it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった事実を1回刻み、次の回からは git も読まない", async () => {
@@ -1509,7 +1509,7 @@ it("merge 済みの PR の根に運ぶ内容が無ければ着地が終わった
 
   await expect(convergeOn(landing, root.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 
   // 読めば壊れていると分かる checkout でも、終わった根は読まれない
@@ -1530,7 +1530,7 @@ it("external の根の PR が外で squash merge されれば、収束の1回目
 
   await expect(convergeOn(landing, work.id)).resolves.toEqual({ kind: "nothing_to_land", base: "refs/remotes/origin/main" });
   expect(boardEvents(db, work.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "content" } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "content" } },
   ]);
 
   // 読めば壊れていると分かる checkout でも、終わった根は読まれない
@@ -1640,7 +1640,7 @@ it.each([
   github.scriptMergedOutside(1);
   await landing.tick(tick, clock.now());
   expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
   ]);
   expect(openMergeQuestions()).toEqual([]);
   expect(boardEvents(db, work.id, "landing_finished")).toHaveLength(1);
@@ -1805,7 +1805,7 @@ it("断念した根の PR が盤面の外で閉じられたと観測されてい
   const { workspace, db, clock, landing, root } = await rootWithOpenedPr("landing-abandoned-then-closed");
   registerPrPromotionFailureQuestion(db, root, "push rejected", clock.now());
   await answerPromotion(db, clock, landing, workspace, promotionFailures(db, root.id)[0]!, "abandon promotion");
-  appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: clock.now() });
+  appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: clock.now() });
   commitWork(workspace.path, "repair.txt", "changed after the abandon\n");
 
   await expect(landing.converge()).resolves.toEqual([]);
@@ -1968,7 +1968,7 @@ it("retry が答えている根を回が撃たなければ、閉じた PR・未�
   });
 
   const done = finish(db, clock, landingWork(db, clock));
-  appendEvent(db, { taskId: done.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "nothing_to_land", base: "main" }, at: clock.now() });
+  appendEvent(db, { taskId: done.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "nothing_to_land", base: "main" }, at: clock.now() });
   registerPrPromotionFailureQuestion(db, done, "stale", clock.now());
   const [stale] = promotionFailures(db, done.id);
   await expect(convergeOn(landing, done.id, stale!.id)).resolves.toMatchObject({ kind: "excluded", reason: "not_a_root" });
@@ -2193,7 +2193,7 @@ function attachUnsettledChild(db: Db, clock: FakeClock, parentId: string) {
 function raiseUnbundledObjection(db: Db, clock: FakeClock, taskId: string) {
   const entryId = appendEvent(db, {
     taskId,
-    workerId: "worker",
+    actorId: "worker",
     origin: "worker",
     payload: { kind: "decision_logged", line: "ship this implementation" },
     at: clock.now(),
@@ -2300,12 +2300,12 @@ it("PR を開いた後の merge question も、CI red で止まった auto-merge
   const registered = listBoard(db)
     .filter((q) => q.question_pending_merge_pr !== null)
     .map((q) => {
-      const { worker_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
-      return [q.question_pending_merge_pr, worker_id, origin];
+      const { actor_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
+      return [q.question_pending_merge_pr, actor_id, origin];
     });
   expect(registered).toEqual([
-    [1, BOARD_WORKER_ID, "board"],
-    [2, BOARD_WORKER_ID, "board"],
+    [1, BOARD_ACTOR_ID, "board"],
+    [2, BOARD_ACTOR_ID, "board"],
   ]);
 });
 
@@ -2330,10 +2330,10 @@ function mergeQuestions(db: Db) {
   return listBoard(db)
     .filter((q) => q.question_pending_merge_pr !== null)
     .map((q) => {
-      const { worker_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
+      const { actor_id, origin } = listEvents(db, q.id).find((e) => e.kind === "task_registered")!;
       return {
         pr: q.question_pending_merge_pr,
-        registrant: [worker_id, origin],
+        registrant: [actor_id, origin],
         recommendation: q.question_items?.[0]?.recommendation,
         purpose: q.purpose,
       };
@@ -2405,7 +2405,7 @@ it("キュー投入の後に risk が付いた PR は、CI 緑でも merge さ�
   expect(mergeQuestions(db)).toEqual([
     {
       pr: 1,
-      registrant: [BOARD_WORKER_ID, "board"],
+      registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "merge",
       purpose:
         '"ship"\'s PR #1 was queued for auto_if_ci_green auto-merge, but its landing surface ' +
@@ -2436,7 +2436,7 @@ it("キュー投入の後にダイヤルが escalate へ取り下げられた PR
   expect(mergeQuestions(db)).toEqual([
     {
       pr: 1,
-      registrant: [BOARD_WORKER_ID, "board"],
+      registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "merge",
       purpose: expect.stringMatching(/queued.*landing surface changed.*escalate/),
     },
@@ -2465,7 +2465,7 @@ it("キュー投入の後に workspace が保護された PR も、CI 緑でも 
   expect(mergeQuestions(db)).toEqual([
     {
       pr: 1,
-      registrant: [BOARD_WORKER_ID, "board"],
+      registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "merge",
       purpose: expect.stringMatching(/queued.*landing surface changed.*protected/),
     },
@@ -2494,10 +2494,10 @@ it("キュー投入の後にダイヤルが external へ取り下げられた PR
   expect(
     listEvents(db, work.id)
       .filter((e) => e.kind === "auto_merge_withdrawn")
-      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
+      .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload })),
   ).toEqual([
     {
-      worker_id: BOARD_WORKER_ID,
+      actor_id: BOARD_ACTOR_ID,
       origin: "board",
       payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
     },
@@ -2559,7 +2559,7 @@ it("CI 赤の PR でダイヤルが escalate へ変わっていたら、推奨 m
   await landing.tick("auto_merge", clock.now());
 
   expect(mergeQuestions(db)).toEqual([
-    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
   ]);
 });
 
@@ -2664,10 +2664,10 @@ it("CI 赤を読んでいる間にダイヤルが external へ取り下げられ
   expect(
     listEvents(db, work.id)
       .filter((e) => e.kind === "auto_merge_withdrawn")
-      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload })),
+      .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload })),
   ).toEqual([
     {
-      worker_id: BOARD_WORKER_ID,
+      actor_id: BOARD_ACTOR_ID,
       origin: "board",
       payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" },
     },
@@ -2698,7 +2698,7 @@ it("CI 赤を読んでいる間にダイヤルが escalate へ取り下げられ
 
   expect(github.ciChecks).toHaveLength(1);
   expect(mergeQuestions(db)).toEqual([
-    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: CI_RED_PURPOSE },
   ]);
 });
 
@@ -2776,11 +2776,11 @@ function autoMerging(db: Db, clock: FakeClock, workspace: WorkspaceConfig, githu
 function boardEvents(db: Db, taskId: string, kind: string) {
   return listEvents(db, taskId)
     .filter((e) => e.kind === kind)
-    .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload }));
+    .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload }));
 }
 
 const closeObserved = (pr_number: number) => [
-  { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number } },
+  { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number } },
 ];
 
 /** キューの行の行方を記録する event — 残っていなければ、PR はキューに残ったまま何も起きていない。 */
@@ -2809,7 +2809,7 @@ it("merge に失敗した開いたままの PR は、tick を落とさずキュ�
   expect(mergeQuestions(db)).toEqual([
     {
       pr: 1,
-      registrant: [BOARD_WORKER_ID, "board"],
+      registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "hold",
       purpose: `"ship"'s auto_if_ci_green auto-merge could not merge PR #1: ${CONFLICT}. Merge once it is fixed, or hold?`,
     },
@@ -2852,7 +2852,7 @@ it.each(["failure", "pending"] as const)("盤面の外で merge 済みの PR は
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
   ]);
 });
 
@@ -2871,7 +2871,7 @@ it("盤面の名義(app/tidepool-board)で merge 済みの PR がキューに残
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
   ]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
@@ -2907,7 +2907,7 @@ it("CI を読んだ後に盤面の外で merge されて merge が失敗した P
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merge_observed", pr_number: 1 } },
   ]);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([]);
 });
@@ -2925,7 +2925,7 @@ it("merge が失敗した後の読み直しで盤面の名義で merge 済みと
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
   ]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
@@ -3024,7 +3024,7 @@ it("merge に失敗した開いたままの PR も、question を立てる直前
   expect(await readOnNextTick(landing, github, clock.now())).toEqual([]);
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "auto_merge_withdrawn")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "auto_merge_withdrawn", pr_number: 1, merge: "external" } },
   ]);
 });
 
@@ -3059,7 +3059,7 @@ it.each([
   expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
   expect(boardEvents(db, question.id, kind)).toEqual([]);
   expect(boardEvents(db, root.id, kind)).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind, pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind, pr_number: 1 } },
   ]);
 });
 
@@ -3076,7 +3076,7 @@ it("遅い走査は、盤面の名義で merge 済みの PR の open な merge q
   expect(getTask(db, question.id)).toMatchObject({ status: "done", question_answer: null });
   expect(listEvents(db, question.id).map((e) => e.kind)).not.toContain("question_answered");
   expect(boardEvents(db, root.id, "pr_merged")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 1 } },
   ]);
   expect(boardEvents(db, root.id, "pr_merge_observed")).toEqual([]);
 });
@@ -3175,7 +3175,7 @@ it("遅い走査が外で閉じたと観測した根の下に走らない子が�
   await landing.converge();
 
   const lines = boardEvents(db, root.id, "decision_logged");
-  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.any(String) } }]);
+  expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.any(String) } }]);
   for (const part of ["PR #1", child.id, "reopen", "merge", "cancel"]) expect(lines[0]!.payload).toMatchObject({ line: expect.stringContaining(part) });
 });
 
@@ -3189,7 +3189,7 @@ it("回答直前のバックストップが外で閉じたと観測した根の�
   await landing.tick("outside_merge", clock.now());
 
   const lines = boardEvents(db, root.id, "decision_logged");
-  expect(lines).toEqual([{ worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
+  expect(lines).toEqual([{ actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "decision_logged", line: expect.stringContaining(child.id) } }]);
 });
 
 it("遅い走査が外で閉じたと観測した根の下に走らない子が無ければ、判断行は流れない", async () => {
@@ -3228,7 +3228,7 @@ it("遅い走査が外で merge されたと観測した根は、収束が GitHu
   expect(github.stateChecks).toHaveLength(stateChecks);
   expect(boardEvents(db, root.id, "pr_merge_observed")).toHaveLength(1);
   expect(boardEvents(db, root.id, "landing_finished")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "landing_finished", pr_number: 1, basis: "merge" } },
   ]);
 });
 
@@ -3336,7 +3336,7 @@ it("猶予の5分を過ぎても check 未報告の PR は、キューを外れ�
   expect(github.merged).toEqual([]);
   expect(github.ciChecks).toHaveLength(1);
   expect(mergeQuestions(db)).toEqual([
-    { pr: 1, registrant: [BOARD_WORKER_ID, "board"], recommendation: "hold", purpose: UNREPORTED_PURPOSE },
+    { pr: 1, registrant: [BOARD_ACTOR_ID, "board"], recommendation: "hold", purpose: UNREPORTED_PURPOSE },
   ]);
 });
 
@@ -3368,7 +3368,7 @@ it("開いている PR への修理の push は盤面の名義の event に残�
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_branch_pushed")).toEqual([
     {
-      worker_id: BOARD_WORKER_ID,
+      actor_id: BOARD_ACTOR_ID,
       origin: "board",
       payload: { kind: "pr_branch_pushed", pr_number: 1, sha: git(workspace.path, "rev-parse", `task/${work.id}`) },
     },
@@ -3415,7 +3415,7 @@ it("PR を開いてから6分後に読んだ盤面の外の head が check 未�
 
   expect(mergeQuestions(db)).toEqual([]);
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
   ]);
 
   await clock.advance(1);
@@ -3442,7 +3442,7 @@ it("check が報告中(pending)の盤面の外の head も、読んだ時点で�
   await landing.tick("auto_merge", clock.now());
 
   expect(boardEvents(db, work.id, "pr_head_observed")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 1, sha: outside } },
   ]);
 });
 
@@ -3988,7 +3988,7 @@ it("別の clone からの force-push で修理が消えた PR は、CI 緑で�
   expect(mergeQuestions(pr.db)).toEqual([
     {
       pr: 1,
-      registrant: [BOARD_WORKER_ID, "board"],
+      registrant: [BOARD_ACTOR_ID, "board"],
       recommendation: "hold",
       purpose: expect.stringContaining(`task/${repair.id}`),
     },
@@ -4397,7 +4397,7 @@ it("ローカル着地の merge 回答が受理されると、保護ブランチ
 
   expect(boardEvents(db, work.id, "local_merge_executed")).toEqual([
     {
-      worker_id: HUMAN_WORKER_ID,
+      actor_id: HUMAN_ACTOR_ID,
       origin: "webui",
       payload: { kind: "local_merge_executed", sha: git(workspace.path, "rev-parse", "main") },
     },
@@ -4415,7 +4415,7 @@ it("ローカル着地の hold 回答が受理されると、その時点のタ�
 
   expect(boardEvents(db, work.id, "local_merge_held")).toEqual([
     {
-      worker_id: BOARD_WORKER_ID,
+      actor_id: BOARD_ACTOR_ID,
       origin: "board",
       payload: { kind: "local_merge_held", head: git(workspace.path, "rev-parse", `task/${work.id}`) },
     },
@@ -4670,7 +4670,7 @@ it("直した registry でダイヤルが escalate に変わっていれば、�
   await landing.tick("auto_merge", clock.now());
 
   expect(github.merged).toEqual([]);
-  expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, registrant: [BOARD_WORKER_ID, "board"] })]);
+  expect(mergeQuestions(db)).toEqual([expect.objectContaining({ pr: 1, registrant: [BOARD_ACTOR_ID, "board"] })]);
 });
 
 it("CI を読んでいる間に profile が解決できなくなっても merge しない — merge の直前の読みも quarantine に落とす", async () => {
@@ -5050,7 +5050,7 @@ it("保護ブランチを checkout した worker の WIP が着地の運ぶフ�
 function deferLanding(board: Db, taskId: string, now: Date): void {
   appendEvent(board, {
     taskId,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },
     at: now,
@@ -5080,7 +5080,7 @@ it("既定 agent の quarantine 回答前の観測は、assignee 未指定の wo
 
   expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(0);
   expect(listEvents(db, work.id).filter((event) => event.payload.kind === "pr_merge_observed")).toMatchObject([
-    { origin: "board", worker_id: BOARD_WORKER_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
+    { origin: "board", actor_id: BOARD_ACTOR_ID, payload: { kind: "pr_merge_observed", pr_number: 7 } },
   ]);
 });
 
@@ -5104,7 +5104,7 @@ it("quarantine 回答前の観測は、盤面の名義で merge 済みのキュ�
 
   expect(taskIdsAwaitingLanding(db, undefined, "tako", "tako")).toHaveLength(0);
   expect(boardEvents(db, work.id, "pr_merged")).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 7 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 7 } },
   ]);
   expect(boardEvents(db, work.id, "pr_merge_observed")).toEqual([]);
 });
@@ -5238,7 +5238,7 @@ it("workspace 名では、abandon 済み・着地済み・別 workspace・worksp
   recordPrOpenedViaWorker(db, completedWorkIn(db, now, "reef"), 7, "tako", now, { authority: { merge: "escalate" } });
   appendEvent(db, {
     taskId: completedWorkIn(db, now, "reef").id,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "nothing_to_land", base: "main" },
     at: now,
@@ -5314,7 +5314,7 @@ function landWithoutPr(board: Db, now: Date, work: Task, form: "nothing_to_land"
   }
   appendEvent(board, {
     taskId: work.id,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "nothing_to_land", base: "main" },
     at: now,
@@ -5815,7 +5815,7 @@ it.each(QUEUE_WINDOWS)("無人 merge の tick の $window に$interruptが割り
   await tick;
 
   expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: outcome, pr_number: 1 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: outcome, pr_number: 1 } },
   ]);
   expect(github.merged).toHaveLength(merges);
 });
@@ -5837,7 +5837,7 @@ it("重なった tick が先に決着させた PR に、止まっていた tick 
   await stalled;
 
   expect(autoMergeOutcomeEvents(db, second.id)).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 2 } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_merged", pr_number: 2 } },
   ]);
   expect(github.merged.filter((ref) => ref.number === 2)).toHaveLength(1);
 });
@@ -5887,7 +5887,7 @@ it.each(TICK_EXITS.flatMap(([exit, script]) => (["観測", "tick"] as const).map
 
     expect(autoMergeOutcomeEvents(db, work.id)).toEqual([
       {
-        worker_id: BOARD_WORKER_ID,
+        actor_id: BOARD_ACTOR_ID,
         origin: "board",
         payload: { kind: next === "観測" ? "pr_merge_observed" : "pr_merged", pr_number: 1 },
       },

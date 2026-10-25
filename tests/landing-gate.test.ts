@@ -51,7 +51,7 @@ it("purely-local: 未決着の付帯子がある間は着地 question を立て�
   expect(review).toBeDefined();
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       kind: "landing_deferred",
       payload: { kind: "landing_deferred", reason: "attached_children", count: 1 },

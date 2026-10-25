@@ -297,7 +297,7 @@ export interface AgentDefinitionThen {
 /** `spawned` の session の当時版の束。本文か、要る profile が引けなければ null。 */
 export function agentDefinitionThen(db: Db, registryDir: string, spawned: EventRow): AgentDefinitionThen | null {
   const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
-  const at = versionAt(registryDir, spawned.worker_id, registry_commit, definition_version);
+  const at = versionAt(registryDir, spawned.actor_id, registry_commit, definition_version);
   if (!at) return null;
   const profile = at.agent.authority === undefined ? undefined : ownEntry(at.registry.authority, at.agent.authority);
   const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile, spawned.id);
@@ -355,7 +355,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
       events
         .filter((e) => e.kind === "objection_raised")
         .map((e) => (e.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id)
-        .filter((entryId) => byId.get(entryId)?.worker_id === task.assignee),
+        .filter((entryId) => byId.get(entryId)?.actor_id === task.assignee),
     ),
   ].sort((a, b) => a - b);
   // per entry: the spawn live when it was written — the latest worker_spawned
@@ -367,7 +367,7 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
   for (const entryId of objectedEntryIds) {
     const spawned = events
       .filter(
-        (e) => e.kind === "worker_spawned" && e.worker_id === task.assignee && e.id <= entryId,
+        (e) => e.kind === "worker_spawned" && e.actor_id === task.assignee && e.id <= entryId,
       )
       .at(-1);
     if (!spawned) {

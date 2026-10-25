@@ -1,5 +1,7 @@
 # レビューの免除が問うのは Assignee ではなく Executor である
 
+**Status 追記: `task_completed` / `task_picked_up` の `worker_id` は `actor_id` に改名済み**(2026-10-26、issue #2581)。Executor を記録から読む意味は変わらない。
+
 **Status 追記(2026-10-21 の grilling、issue #2369 / ADR 0292):** 「列に値があれば両者は一致する」の前提は、実行済みの task が `todo` に戻った窓で Edit が列を書き換えると崩れていた。ADR 0292 決定1 が pickup 済みの task の assignee / workspace の Edit を拒むことで、この前提は門で保証されるものになった。読みの順序は変わらない。
 
 issue #217 で決定。ADR 0013 の免除 —— レビューの修理子は被レビュータスクの実行者を常に名指してよい

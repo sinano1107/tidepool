@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import {
   api,
@@ -143,8 +143,8 @@ it("ツリーがクリーンだと確認されれば question が done になり
   expect(t.worker.started.map((x: any) => x.title)).toEqual(["doomed work", "review: doomed work"]);
 });
 
-// code-review 指摘: 1択緩和を workerId === BOARD_WORKER_ID で判定すると、
-// worker id はオペレータ設定値であり BOARD_WORKER_ID ("tidepool") と偶然
+// code-review 指摘: 1択緩和を actorId === BOARD_ACTOR_ID で判定すると、
+// worker id はオペレータ設定値であり BOARD_ACTOR_ID ("tidepool") と偶然
 // 衝突しうる — その場合、衝突した worker が担当する普通のタスクからの
 // MCP escalate が1択の question を人間の確認なしにすり抜けてしまう
 // (盤面名義の形式的確認で人間を呼ぶ道を開かないという設計合意②に反する)。
@@ -152,13 +152,13 @@ it("ツリーがクリーンだと確認されれば question が done になり
 // ない system-internal フィールド)に変えたことで、この衝突が実害を持た
 // ないことを直接確認する。衝突は worker id の設定次第で起こるため、
 // tests/worker-failure.test.ts と同様に db を直接いじってシミュレートする。
-it("worker id が BOARD_WORKER_ID(\"tidepool\")と衝突しても、MCP 経由の escalate は1択を拒否する", async () => {
+it("worker id が BOARD_ACTOR_ID(\"tidepool\")と衝突しても、MCP 経由の escalate は1択を拒否する", async () => {
   t = await bootTidepool();
   const task = await registerWork(t, "ordinary work");
   await t.clock.advance(HOUR); // picked up — assignee はワーカー自身の id
 
   // ワーカー id が盤面名義と衝突してしまった状態をシミュレート
-  t.db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(BOARD_WORKER_ID, task.id);
+  t.db.prepare("UPDATE tasks SET assignee = ? WHERE id = ?").run(BOARD_ACTOR_ID, task.id);
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   const res: any = await client.callTool({

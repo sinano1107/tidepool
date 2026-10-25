@@ -1,5 +1,7 @@
 # 組み込み agent が取れる type は reviewer 定数の授権で走れる type、参照の列の修理子は走らせた agent へ、Interview の規律は agent の本文ではなく盤面のプロトコル
 
+**Status 追記: 異議されたエントリの `worker_id` は `actor_id` に改名済み**(2026-10-26、issue #2581)。修理子の宛先をエントリの書き手から写さない決定は変わらない。
+
 2026-10-18 の grilling(issue #2209 —— #2175 の `/implement` の前に浮いた問い)で決定。Interview の root(組み込みの Interviewer
 `suzumedai`)が記憶の店に書いた行への異議から立つ `memory_repair` の修理子は、既定 agent に落ちて記録に残らなかった。束ねが
 assignee を写す条件 `type === "work"` は決定ではなく code の写しで、ADR 0237 決定1 が写さないとしたのは空の参照だけである。

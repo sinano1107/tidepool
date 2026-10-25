@@ -112,10 +112,10 @@ You are Fugu.
   expect(
     events
       .filter((event: any) => ["task_picked_up", "worker_spawned"].includes(event.kind))
-      .map((event: any) => ({ kind: event.kind, worker_id: event.worker_id })),
+      .map((event: any) => ({ kind: event.kind, actor_id: event.actor_id })),
   ).toEqual([
-    { kind: "task_picked_up", worker_id: "fugu" },
-    { kind: "worker_spawned", worker_id: "fugu" },
+    { kind: "task_picked_up", actor_id: "fugu" },
+    { kind: "worker_spawned", actor_id: "fugu" },
   ]);
 });
 
@@ -153,5 +153,5 @@ it("startScheduler を直接構築しても、省略された Auditor は既定�
   const pickedUp = listEvents(db, review.id).find((event) => event.kind === "task_picked_up");
   scheduler.stop();
   db.close();
-  expect(pickedUp?.worker_id).toBe(DEFAULT_AUDITOR_NAME);
+  expect(pickedUp?.actor_id).toBe(DEFAULT_AUDITOR_NAME);
 });

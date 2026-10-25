@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -7,7 +8,6 @@ import { listMemoryEntries } from "../src/memory.js";
 import { proposeFromMaterial } from "../src/retrospective.js";
 import { listChildren, logDecision, registerTask, type Task, type TaskType } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { bundledObjection, decomposedChild, markPickedUp } from "./harness.js";
 
 /** RCA の起草 verb `propose_from_material` の門(issue #1077)と成功経路(issue #1092)のドメイン層。
@@ -16,12 +16,12 @@ const at = new Date("2026-09-15T00:00:00.000Z");
 /** 起草の中身(門と導出はこれを見ない)。 */
 const draft = { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures." };
 
-const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_WORKER_ID, parent_id?: string): Task =>
+const task = (db: Db, type: TaskType, title: string, registrant = HUMAN_ACTOR_ID, parent_id?: string): Task =>
   registerTask(db, { type, title, purpose: "p", completion_criteria: "c", workspace: "charts", parent_id }, at, registrant, "webui");
 /** entry に束ね済みの異議群を1つ足し、その異議群に cause を帰責する(呼ぶたびに後の異議群)。 */
 const attribute = (db: Db, taskId: string, entry_id: number, cause: Cause, entries: number[] | null = null): number => {
   const objection = bundledObjection(db, taskId, entry_id, at);
-  return appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" }, at });
+  return appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "objection_attributed", entry_id, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" }, at });
 };
 /** 異議されたエントリに cause を帰責する。親は deckhand が一度 pickup した形にする —— RCA 子(人間名義の登録)が付ける(ADR 0292 決定2)。
  *  pickup は人間に起きないので、エントリの書き手が人間でも pickup の名義は deckhand。 */
@@ -36,7 +36,7 @@ const material = (db: Db, parentId: string): number[] =>
   [...objectionBundles(db).values()].flatMap((bundles) => (bundles.at(-1)!.task_id === parentId ? bundles.at(-1)!.objection_event_ids : []));
 /** 親のいまの異議群を材料にした RCA 子。 */
 const rca = (db: Db, title: string, parent: Task): Task =>
-  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", parent_id: parent.id, opened_on_event_ids: material(db, parent.id) }, at, HUMAN_WORKER_ID, "webui");
+  registerTask(db, { type: "review", title, purpose: "p", completion_criteria: "c", parent_id: parent.id, opened_on_event_ids: material(db, parent.id) }, at, HUMAN_ACTOR_ID, "webui");
 
 it("学習に向かない cause・異議済みで未帰責のエントリ・宛先の agent が無い Behavior・as と based_on_decision の過不足・decision でない / 別の task の decision の based_on_decision・帰責の無い / 他 task の / 存在しない / 人間が書いたエントリ・work task や parent の無い review からの呼び出しは DomainError で拒否され、店には何も載らない", () => {
   const db = openDb(":memory:");
@@ -50,20 +50,20 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
   // memory の帰責は読んだ記憶を名指す(門は cause だけで断るので、entries の中身は見ない)
   const memory = logDecision(db, mixed, "decided as memory", "deckhand", at, "worker");
   attribute(db, mixed.id, memory, "memory", [1]);
-  const unobjected = appendEvent(db, { taskId: mixed.id, workerId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
+  const unobjected = appendEvent(db, { taskId: mixed.id, actorId: "deckhand", origin: "worker", payload: { kind: "task_completed", handoff_present: true, result: null }, at });
   // 異議されたが初回の帰責が無い(撃てなかった / 失敗した)エントリは uncertain と同じに読む(ADR 0168 決定3)
   const objectedUnattributed = logDecision(db, mixed, "decided before the Board call failed", "deckhand", at, "worker");
   bundledObjection(db, mixed.id, objectedUnattributed, at, "keep the fixtures");
-  const byHuman = objected(db, mixed, "capability", HUMAN_WORKER_ID);
+  const byHuman = objected(db, mixed, "capability", HUMAN_ACTOR_ID);
   const notDecision = attribute(db, mixed.id, capability, "capability");
   const otherEntry = objected(db, task(db, "work", "other"), "capability");
   const delegated = task(db, "work", "delegated", "tako");
   const delegatedEntry = objected(db, delegated, "missing_information");
-  const byBoard = task(db, "work", "by the board", BOARD_WORKER_ID);
+  const byBoard = task(db, "work", "by the board", BOARD_ACTOR_ID);
   const byBoardEntry = objected(db, byBoard, "task_ambiguity");
 
   const self = rca(db, "rca (self): mixed", mixed).id;
-  const decision = logDecision(db, task(db, "review", "rca (auditor): mixed", HUMAN_WORKER_ID, mixed.id), "the fixture rule was never written down", "auditor", at, "worker");
+  const decision = logDecision(db, task(db, "review", "rca (auditor): mixed", HUMAN_ACTOR_ID, mixed.id), "the fixture rule was never written down", "auditor", at, "worker");
   const notAgent = "the task's text was not written by an agent: there is no agent to address a behavior to";
   const asRule = 'as ("behavior" or "knowledge") is required for a missing_information entry and only for it';
   const decisionRule = "based_on_decision is required for a knowledge entry and only for it";
@@ -85,7 +85,7 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
     [self, { material_id: unobjected }, `entry ${unobjected} carries no objection`],
     [self, { material_id: otherEntry }, `entry ${otherEntry} is not a decision-log entry of your parent task`],
     [self, { material_id: 999_999 }, "entry 999999 is not a decision-log entry of your parent task"],
-    [task(db, "work", "repair: mixed", HUMAN_WORKER_ID, mixed.id).id, { material_id: capability }, "propose_from_material is only for a review of an objected or stopped task"],
+    [task(db, "work", "repair: mixed", HUMAN_ACTOR_ID, mixed.id).id, { material_id: capability }, "propose_from_material is only for a review of an objected or stopped task"],
     [task(db, "review", "loose review").id, { material_id: capability }, "propose_from_material is only for a review of an objected or stopped task"],
     [self, { material_id: byHuman }, `entry ${byHuman} was written by a human`],
     [rca(db, "rca (auditor): delegated", delegated).id, { material_id: delegatedEntry, as: "behavior", based_on_decision: decision }, decisionRule],
@@ -105,7 +105,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const capabilityEntry = objected(db, mixed, "capability");
   const latest = attribute(db, mixed.id, capabilityEntry, "capability"); // 後の異議群の帰責 —— 出所は最後の異議群の帰責を指す
   const preferenceEntry = objected(db, mixed, "preference", "helmsman");
-  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", parent_id: mixed.id, opened_on_event_ids: material(db, mixed.id) }, at, HUMAN_WORKER_ID, "webui").id;
+  const self = registerTask(db, { type: "review", title: "rca (self): mixed", purpose: "p", completion_criteria: "c", parent_id: mixed.id, opened_on_event_ids: material(db, mixed.id) }, at, HUMAN_ACTOR_ID, "webui").id;
 
   const capabilityResult = proposeFromMaterial(db, self, { ...draft, material_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromMaterial(db, self, { ...draft, material_id: preferenceEntry }, {}, "auditor", at);
@@ -119,7 +119,7 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
 
 it("主題つきの親(meta-review)の行からの Behavior candidate は、盤面に既定 workspace があっても scope null(盤面全体)で作る(ADR 0279 決定1)", () => {
   const db = openDb(":memory:");
-  const review = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_WORKER_ID, "webui");
+  const review = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_ACTOR_ID, "webui");
   const entry = objected(db, review, "capability");
   const auditor = rca(db, "rca (auditor): memory meta-review", review);
 
@@ -132,13 +132,13 @@ it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の�
   const db = openDb(":memory:");
   const board = { workspace: { name: "charts" } };
   const child = (type: TaskType, title: string, parent: Task, workspace?: string) =>
-    registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace }, at, HUMAN_WORKER_ID, "webui");
+    registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace }, at, HUMAN_ACTOR_ID, "webui");
   const proposeOn = (objectedTask: Task) => {
     const entry = objected(db, objectedTask, "capability");
     return proposeFromMaterial(db, rca(db, `rca (auditor): ${objectedTask.title}`, objectedTask).id, { ...draft, material_id: entry }, board, "auditor", at).entry_id;
   };
-  const memoryReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_WORKER_ID, "webui");
-  const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, HUMAN_WORKER_ID, "webui");
+  const memoryReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_ACTOR_ID, "webui");
+  const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, HUMAN_ACTOR_ID, "webui");
   objected(db, memoryReview, "capability");
   const reviewRca = rca(db, "rca (auditor): memory meta-review", memoryReview);
   const work = task(db, "work", "index the tide charts");
@@ -195,7 +195,7 @@ it("承認で実体化した子(Registrant は human)の task_ambiguity と miss
 
 it("人間の分解の子の task_ambiguity は、文面の書き手が人間なので宛先の agent が無く拒否される", () => {
   const db = openDb(":memory:");
-  const child = decomposedChild(db, task(db, "work", "parent"), "child", HUMAN_WORKER_ID, at);
+  const child = decomposedChild(db, task(db, "work", "parent"), "child", HUMAN_ACTOR_ID, at);
   const entry = objected(db, child, "task_ambiguity");
   const auditor = rca(db, "rca (auditor): child", child).id;
 
@@ -236,11 +236,11 @@ it("premise_breached の宣言への異議エントリからも提案できる",
   const db = openDb(":memory:");
   const parent = task(db, "work", "T");
   const based_on_decision = logDecision(db, parent, "split T into A", "deckhand", at, "worker");
-  const child = task(db, "work", "A", HUMAN_WORKER_ID, parent.id);
+  const child = task(db, "work", "A", HUMAN_ACTOR_ID, parent.id);
   markPickedUp(db, child.id, at);
   const entry = appendEvent(db, {
     taskId: child.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "worker",
     payload: { kind: "premise_breached", line: "module M is broken", based_on_decision },
     at,

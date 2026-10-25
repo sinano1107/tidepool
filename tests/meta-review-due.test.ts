@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, composeRoutingRow } from "../src/execution-setting.js";
@@ -16,7 +17,6 @@ import {
 } from "../src/memory.js";
 import { type MetaReviewSubject, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { getTask, listBoard, listChildren, logDecision, registerTask } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, auditorRcaOn, failureQuestion, HUMAN_WEBUI, writerTask } from "./harness.js";
 
 
@@ -109,7 +109,7 @@ it("人間の memory の直接の無効化は材料で、周期が過ぎれば�
   const entry = knowledge(db, "stale");
   previousReview(db, "memory");
 
-  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(1);
@@ -120,7 +120,7 @@ it("停止の帰責は材料で、周期が過ぎれば次の memory meta-review
   const work = writerTask(db);
   previousReview(db, "memory");
 
-  appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: 1, cause: "preference", evidence: "e", wrong_memory_entries: null } });
+  appendEvent(db, { taskId: work, actorId: "board", origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: 1, cause: "preference", evidence: "e", wrong_memory_entries: null } });
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(1);
@@ -140,7 +140,7 @@ it("abandon で取り消された meta-review の直後、周期が経つ前の 
   const db = openDb(":memory:");
   const entry = knowledge(db, "stale");
   previousReview(db, "memory");
-  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   registerMetaReview(db, "memory", afterPeriod);
   abandonLatest(db, afterPeriod);
   knowledge(db, "after the abandon");
@@ -154,7 +154,7 @@ it("取り消された回の窓にだけ材料があり、その後に変更が�
   const db = openDb(":memory:");
   const entry = knowledge(db, "stale");
   previousReview(db, "memory");
-  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   registerMetaReview(db, "memory", afterPeriod);
   abandonLatest(db, afterPeriod);
 

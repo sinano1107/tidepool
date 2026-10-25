@@ -1,4 +1,5 @@
 import { expect, it, onTestFinished } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
@@ -6,7 +7,6 @@ import { questionKindOf } from "../src/question-kind.js";
 import { answerQuestion, getTask, listBoard, listChildren, nextSlotTask, pickupTask, presentTask, registerTask, taskHistoryRows } from "../src/tasks.js";
 import { markTeardown, sessionInTeardown } from "../src/teardown.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { failTeardownMark, HUMAN_WEBUI, interviewExaminee, judgmentRepairTask, routingJudgmentRepairTask } from "./harness.js";
 
 const now = new Date(0);
@@ -25,9 +25,9 @@ it.each(["wrong direction", undefined])("human stop records the board failure qu
   expect(question).toMatchObject({ title: "stopped by human: write parser", question_cancel_option: "abandon", question_items: [{ title: "stopped by human: write parser", options: ["retry", "abandon"], recommendation: "retry" }] });
   expect(questionKindOf(question!)).toEqual({ kind: "failure", cancel_option: "abandon" });
   if (reason) expect(question!.purpose).toContain(reason);
-  expect(listEvents(db, question!.id).find((e) => e.kind === "task_registered")).toMatchObject({ worker_id: BOARD_WORKER_ID, origin: "board" });
+  expect(listEvents(db, question!.id).find((e) => e.kind === "task_registered")).toMatchObject({ actor_id: BOARD_ACTOR_ID, origin: "board" });
   const stop = listEvents(db, task.id).find((e) => e.kind === "session_stopped_by_human");
-  expect(stop).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin: "webui" });
+  expect(stop).toMatchObject({ actor_id: HUMAN_ACTOR_ID, origin: "webui" });
   expect(stop!.payload).toEqual({ kind: "session_stopped_by_human", ...(reason ? { reason } : { reason_question_id: expect.any(String) }) });
   expect(sessionInTeardown(db)).toMatchObject({ taskId: task.id });
   expect(sessionInTeardown(db)).toHaveProperty("humanStop", { reason: reason ?? null });
@@ -87,7 +87,7 @@ it("a reasonless stop asks the human in a separate board root linked to the stop
   const reason = listBoard(db).find((q) => q.title === 'why did you stop "write parser"?')!;
   expect(reason).toMatchObject({ type: "question", parent_id: null, status: "todo" });
   expect(questionKindOf(reason)).toEqual({ kind: "stop_reason", task_id: task.id });
-  expect(listEvents(db, reason.id)[0]).toMatchObject({ worker_id: BOARD_WORKER_ID, origin: "board" });
+  expect(listEvents(db, reason.id)[0]).toMatchObject({ actor_id: BOARD_ACTOR_ID, origin: "board" });
   expect(listEvents(db, task.id).find((e) => e.kind === "session_stopped_by_human")!.payload).toEqual({ kind: "session_stopped_by_human", reason_question_id: reason.id });
 });
 

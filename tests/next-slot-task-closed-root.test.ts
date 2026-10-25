@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { closedRootOf } from "../src/landing.js";
 import { completeTask, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { closedRootTree, commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, settleReviews } from "./harness.js";
 
 /** 盤面の外で閉じられた PR の根に塞がれた子(ADR 0265 決定6)は pickup が飛ばし、キューでは skipped に見える。
@@ -74,7 +74,7 @@ it("付帯子の review は、列が NULL でも導出した祖先の workspace 
   git(reef.path, "checkout", "main");
   completeTask(db, root, FULL_HANDOFF, "deckhand", now, "worker");
   settleReviews(db, now);
-  appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
+  appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
   const review = registerTask(db, { type: "review", title: "second opinion", purpose: "p", completion_criteria: "c", parent_id: root.id }, now, ...HUMAN_WEBUI);
 
   expect(closedRootOf(db, (name) => (name === "reef" ? reef : other))(review)?.task_id).toBe(root.id);

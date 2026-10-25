@@ -4,6 +4,7 @@ import { mkdir, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardDoctrine } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
@@ -23,7 +24,6 @@ import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { RECLAIM_TIMEOUT, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
@@ -553,7 +553,7 @@ describe("CodexWorker (ADR 0098)", () => {
     });
     const at = new Date("2026-08-24T00:00:00.000Z");
     const parent = registerTask(f.db, { type: "work", workspace: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-    const review = registerTask(f.db, { type: "review", assignee: "codex-agent", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
+    const review = registerTask(f.db, { type: "review", assignee: "codex-agent", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_ACTOR_ID, "board");
     duringObservation = () => markPickedUp(f.db, parent.id, at, "codex-agent");
 
     await f.start(review);
@@ -920,21 +920,21 @@ describe("CodexWorker (ADR 0098)", () => {
     markPickedUp(f.db, objected.id, at, "codex-agent");
     appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "codex-agent",
+      actorId: "codex-agent",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
     const decision = appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "codex-agent",
+      actorId: "codex-agent",
       origin: "board",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at,
     });
     appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "human",
+      actorId: "human",
       origin: "webui",
       payload: { kind: "objection_raised", entry_id: decision, comment: "reconsider X", session_id: 1 },
       at,
@@ -978,21 +978,21 @@ describe("CodexWorker (ADR 0098)", () => {
     markPickedUp(f.db, objected.id, at, "codex-agent");
     appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "codex-agent",
+      actorId: "codex-agent",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
     const decision = appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "codex-agent",
+      actorId: "codex-agent",
       origin: "board",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at,
     });
     appendEvent(f.db, {
       taskId: objected.id,
-      workerId: "human",
+      actorId: "human",
       origin: "webui",
       payload: { kind: "objection_raised", entry_id: decision, comment: "reconsider X", session_id: 1 },
       at,

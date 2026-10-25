@@ -1,5 +1,6 @@
 import { json, type RequestHandler, type Response, Router } from "express";
 import { z } from "zod";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
@@ -171,7 +172,6 @@ import {
 } from "./triage.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   GitDirNotADirectoryError,
@@ -1365,7 +1365,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     // parent, a held row, a quarantined workspace/agent, a row whose every
     // entry is excluded) must not swallow the human's first ↑.
     const headBefore = pickableHead()?.id;
-    const moved = moveTask(db, task, after, clock.now(), HUMAN_WORKER_ID, "webui");
+    const moved = moveTask(db, task, after, clock.now(), HUMAN_ACTOR_ID, "webui");
     // "run now" is specifically a todo already at the pickable head, moved to
     // the head again — an explicit immediate-poll trigger (issue #82
     // follow-up). Promoting a *different* task to the head is pure
@@ -1560,7 +1560,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       sendJson(res.status(404), { error: "task not found" });
       return;
     }
-    if (task.assignee !== HUMAN_WORKER_ID) {
+    if (task.assignee !== HUMAN_ACTOR_ID) {
       sendJson(res.status(409), { error: "only a human-assignee task can draft a handoff here" });
       return;
     }
@@ -1643,7 +1643,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       ...entry,
       // A human-authored entry remains in the log and can still be objected
       // to, but it is never new information to that same single human.
-      unread: entry.worker_id !== HUMAN_WORKER_ID && entry.id > cursor,
+      unread: entry.actor_id !== HUMAN_ACTOR_ID && entry.id > cursor,
     }));
     sendJson(res, { entries, cursor } satisfies WireContract["GET /api/log"]);
   });
@@ -1842,7 +1842,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   router.post(
     "/settings/memory/entries/:entry_id/invalidate",
     validatedWrite(invalidationSchema.extend({ entry_id: z.coerce.number().int().positive() }), (input) => ({
-      event_id: invalidateMemoryEntry(db, input, HUMAN_WORKER_ID, "webui", clock.now()),
+      event_id: invalidateMemoryEntry(db, input, HUMAN_ACTOR_ID, "webui", clock.now()),
     })),
   );
   // ADR 0162 決定1: 既にある後継への畳み。畳んだ者(human)は無効化 event の activity に載る

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
@@ -6,7 +7,6 @@ import { listMemoryEntries } from "../src/memory.js";
 import { completeRca, proposeFromMaterial } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, markPickedUp } from "./harness.js";
 
 /** RCA は complete_rca で終わり、propose_from_material の起草は RCA の task に記録を残す(ADR 0278 決定1〜5 の RCA・ADR 0280、issue #2285)。 */
@@ -45,12 +45,12 @@ it("self と auditor の RCA の verb の差し替えは complete_task を伏せ
 
 it.each([
   ["worker", "auditor", "worker"],
-  ["人間", HUMAN_WORKER_ID, "webui"],
-] as const)("RCA への complete_task は %s の扉でも拒まれ、拒否文は complete_rca を指し、何も書かない", (_, workerId, origin) => {
+  ["人間", HUMAN_ACTOR_ID, "webui"],
+] as const)("RCA への complete_task は %s の扉でも拒まれ、拒否文は complete_rca を指し、何も書かない", (_, actorId, origin) => {
   const { db, self } = objected(["capability"]);
   const before = listEvents(db, self.id).length;
 
-  expect(() => completeTask(db, self, FULL_HANDOFF, workerId, at, origin)).toThrow("complete_rca");
+  expect(() => completeTask(db, self, FULL_HANDOFF, actorId, at, origin)).toThrow("complete_rca");
   expect(listEvents(db, self.id)).toHaveLength(before);
   expect(getTask(db, self.id)!.status).toBe("todo");
 });

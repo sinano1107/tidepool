@@ -1,8 +1,8 @@
 import { expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { questionAnnotations } from "../src/memory.js";
 import { type RegisterTaskInput, recordPrNumber, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 // 自由記述を受けるかは盤面が決めて読み口に載せる(issue #1309・ADR 0179 決定4)。門(assertAnswerable)が
@@ -40,7 +40,7 @@ function freeTextOf(kind: keyof typeof QUESTIONS) {
       ...fields,
     },
     at,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "webui",
   );
   return questionAnnotations(db, question).free_text;

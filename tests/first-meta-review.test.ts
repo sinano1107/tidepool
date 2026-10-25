@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEventsOfKinds } from "../src/events.js";
@@ -14,7 +15,6 @@ import {
   startFirstMetaReview,
 } from "../src/meta-review.js";
 import { listBoard, registerTask, type Task } from "../src/tasks.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, api, bootTidepool, failureQuestion, HUMAN_WEBUI, managementMcpClient, settleReview, type Tidepool, writerTask } from "./harness.js";
 
 /** 主題の初回の meta-review(ADR 0300)のドメイン層: 初回は周期では立たず、人間が扉で起こす。以後は周期。 */
@@ -48,13 +48,13 @@ it.each(["memory", "routing"] as const)("扉で起こした初回の %s meta-rev
   const first = startFirstMetaReview(db, subject, "webui", at);
 
   expect(first).toMatchObject({ type: "review", meta_review_subject: subject, status: "todo", assignee: null });
-  expect(registrations(db, subject)).toMatchObject([{ task_id: first.id, worker_id: HUMAN_WORKER_ID, origin: "webui" }]);
+  expect(registrations(db, subject)).toMatchObject([{ task_id: first.id, actor_id: HUMAN_ACTOR_ID, origin: "webui" }]);
   settleReview(db, first, "fugu", at);
   material(db, subject, days(1));
   registerDueMetaReviews(db, days(6));
   expect(registrations(db, subject)).toHaveLength(1);
   registerDueMetaReviews(db, days(8));
-  expect(registrations(db, subject)).toMatchObject([{ task_id: first.id }, { worker_id: BOARD_WORKER_ID, origin: "board" }]);
+  expect(registrations(db, subject)).toMatchObject([{ task_id: first.id }, { actor_id: BOARD_ACTOR_ID, origin: "board" }]);
 });
 
 it("扉で起こした初回の窓は盤面の始まりから自身の登録までで、窓と材料の節の読み口がそのまま読む", () => {
@@ -133,9 +133,9 @@ it("WebUI の面: GET が主題ごとの初回の状態を返し、扉の POST �
 
   expect(started.status).toBe(200);
   const { id } = started.json;
-  expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json).toMatchObject({ type: "review", meta_review_subject: "memory", registrant: BOARD_WORKER_ID, raw_assignee: null });
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json).toMatchObject({ type: "review", meta_review_subject: "memory", registrant: BOARD_ACTOR_ID, raw_assignee: null });
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-  expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([{ worker_id: HUMAN_WORKER_ID, origin: "webui", payload: { subject: "memory" } }]);
+  expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([{ actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { subject: "memory" } }]);
   const edit = await api(t.baseUrl, "PATCH", `/api/tasks/${id}`, { purpose: "my own words" });
   expect(edit).toMatchObject({ status: 400, json: { error: expect.stringContaining("only a human-authored task can be edited") } });
   expect((await api(t.baseUrl, "GET", "/api/settings/meta-review/status")).json.memory).toMatchObject({ first_review: "registered" });
@@ -162,7 +162,7 @@ it("管理MCP: 一覧に初回の状態の読みと扉があり、説明が門�
 
     const { id } = JSON.parse(started.content[0].text);
     const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
-    expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([{ worker_id: HUMAN_WORKER_ID, origin: "mcp" }]);
+    expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([{ actor_id: HUMAN_ACTOR_ID, origin: "mcp" }]);
     const refused = (await client.callTool({ name: "start_first_meta_review", arguments: { subject: "routing" } })) as any;
     expect(refused).toMatchObject({ isError: true, content: [{ text: expect.stringContaining("no routing meta-review material") }] });
   } finally {

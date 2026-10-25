@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID, NON_AGENT_ACTOR_IDS } from "./actor-id.js";
 import type { Cause } from "./cause.js";
 import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-
 import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
-
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
@@ -27,7 +26,6 @@ import {
   whyNoCompletionReview,
   whyReviewFlagIsInert,
 } from "./webui-rules.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker-id.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
  *  no registry definition, but CONTEXT.md's Roster still surfaces it as a
@@ -47,7 +45,7 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID, NON_AGENT_WORKER_IDS } from "./worker
 // asked for: the assignable_to gate guards human attention, not permission, so
 // the roster line itself should steer agents to delegate sparingly.
 export const HUMAN_ROSTER_AGENT: RosterAgent = {
-  name: HUMAN_WORKER_ID,
+  name: HUMAN_ACTOR_ID,
   description:
     "delegate to a human — runs outside the slot in their own task list; " +
     "human attention is scarce, delegate only what genuinely needs a human",
@@ -176,7 +174,7 @@ export interface Task {
   question_quarantine_kind: string | null;
   question_quarantine_value: string | null;
   /** System-internal only (ADR 0075): warned configured-expiry epoch. */
-  question_cli_auth_expiry_warning: number | null;
+  question_cli_auth_expiry: number | null;
   question_stop_reason_task_id: string | null;
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to, or null for an ordinary task.
@@ -487,8 +485,8 @@ export interface InterviewTarget {
 
 /** ADR 0292 決定2: review は親の結果に付く付帯子 —— 人間は Executor(ADR 0054)の引けない親に付けられない。
  *  盤面の付帯子は掛けない(異議由来の auditor RCA は実行前の親にも立つ)。 */
-function assertReviewChildHasExecutor(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">, workerId: string): void {
-  if (workerId === HUMAN_WORKER_ID && input.type === "review" && input.parent_id && !executionEvent(db, input.parent_id)) {
+function assertReviewChildHasExecutor(db: Db, input: Pick<RegisterTaskInput, "type" | "parent_id">, actorId: string): void {
+  if (actorId === HUMAN_ACTOR_ID && input.type === "review" && input.parent_id && !executionEvent(db, input.parent_id)) {
     throw new DomainError(
       "a review child attaches to its parent's result, and this parent has neither been picked up nor completed — " +
         "to have it reviewed later, set its review flag or review_by",
@@ -767,8 +765,8 @@ export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskEx
  *  only the Quarantine module's registration ever does: it asks for a
  *  completion confirmation, not a choice, and a fake second option would be
  *  filler with no effect of its own. This is deliberately keyed on that field
- *  rather than the registering `workerId` (e.g. `=== BOARD_WORKER_ID`): a
- *  worker's id is operator-configured and could collide with BOARD_WORKER_ID
+ *  rather than the registering `actorId` (e.g. `=== BOARD_ACTOR_ID`): a
+ *  worker's id is operator-configured and could collide with BOARD_ACTOR_ID
  *  by accident, which would otherwise let an ordinary agent question sneak
  *  past the 2-4 floor. A question kind is never reachable from MCP or the JSON
  *  API (unlike an assignee/worker id), so this floor can't be gamed the same
@@ -1109,7 +1107,7 @@ export function registerTask(
   db: Db,
   input: RegisterTaskInput,
   now: Date,
-  workerId: string,
+  actorId: string,
   origin: EventOrigin,
 ): Task {
   input = { ...input };
@@ -1147,7 +1145,7 @@ export function registerTask(
   assertNoExamineeChild(db, input);
   assertReturnDestination(db, input);
   assertRepairHasParent(input);
-  assertReviewChildHasExecutor(db, input, workerId);
+  assertReviewChildHasExecutor(db, input, actorId);
   // ADR 0290 決定1・2: 付帯子の review は祖先の workspace に従い、列は pickup まで NULL —— 同じ名前の明示は受けて保存しない
   if (followsAncestorWorkspace(input) && input.workspace !== undefined) {
     const ancestorWorkspace = derivedWorkspace(db, { workspace: null, type: input.type, parent_id: input.parent_id! });
@@ -1213,12 +1211,12 @@ export function registerTask(
          risk_flag, review_flag, review_by, review_tier_id, tier_id, priority, parent_id, based_on_decision, sort_key, handoff_doc, pr_number,
          question_items, question_answer, question_answer_comment, question_cancel_option, question_breached_decision, question_broken_probe_reason,
          question_pending_child, question_proposal, question_pending_merge_pr, question_pending_local_merge_task_id, question_pending_pr_promotion_task_id, question_quarantine_kind,
-         question_quarantine_value, question_cli_auth_expiry_warning, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
+         question_quarantine_value, question_cli_auth_expiry, question_stop_reason_task_id, github_issue_number, meta_review_subject, interview_target_id, created_at)
        VALUES (@id, @type, @status, @assignee, @workspace, @title, @purpose, @completion_criteria,
          @risk_flag, @review_flag, @review_by, ${liveTierId("@review_tier")}, ${liveTierId("@tier")}, @priority, @parent_id, @based_on_decision, @sort_key, @handoff_doc, @pr_number,
          @question_items, @question_answer, @question_answer_comment, @question_cancel_option, @question_breached_decision, @question_broken_probe_reason,
          @question_pending_child, @question_proposal, @question_pending_merge_pr, @question_pending_local_merge_task_id, @question_pending_pr_promotion_task_id, @question_quarantine_kind,
-         @question_quarantine_value, @question_cli_auth_expiry_warning, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
+         @question_quarantine_value, @question_cli_auth_expiry, @question_stop_reason_task_id, @github_issue_number, @meta_review_subject, @interview_target_id, @created_at)`,
     ).run({
       ...task,
       review_by: task.review_by && JSON.stringify(task.review_by),
@@ -1244,7 +1242,7 @@ export function registerTask(
     }
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin,
       payload: {
         kind: "task_registered",
@@ -1329,7 +1327,7 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
  *  resolution of a default — is written onto its column only while that
  *  column is empty, so a set name is never overwritten (ADR 0012 / issue
  *  #36). The event records which columns were filled and with what, since
- *  registration records neither. `workerId` is the event's attribution.
+ *  registration records neither. `actorId` is the event's attribution.
  *
  *  `task` is the head the scheduler chose before awaiting real I/O (issue
  *  #972): if a human door cancelled it or handed it to `human` meanwhile, the
@@ -1338,14 +1336,14 @@ export function splitHandoffMarkdown(doc: string): Array<{ heading: string; body
  *  so a row whose assignee — or named workspace — changed in that window is
  *  abandoned too (issue #973). The fills test the row, not `task`, so a
  *  workspace named in that window onto an empty one is kept. */
-export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill: ResolvedFromDefault = {}): Task | null {
+export function pickupTask(db: Db, task: Task, actorId: string, now: Date, fill: ResolvedFromDefault = {}): Task | null {
   return db.transaction(() => {
     const { changes } = db
       .prepare(
         `UPDATE tasks SET status = 'in_progress' WHERE id = @id AND status = 'todo' AND assignee IS NOT @human
            AND assignee IS @assignee AND (@workspace IS NULL OR workspace = @workspace)`,
       )
-      .run({ id: task.id, human: HUMAN_WORKER_ID, assignee: task.assignee, workspace: task.workspace });
+      .run({ id: task.id, human: HUMAN_ACTOR_ID, assignee: task.assignee, workspace: task.workspace });
     if (changes === 0) return null;
     // ADR 0290 決定4: 付帯子の review の空の workspace は、最も近い固定済みの祖先 → 既定の順で埋める
     const ancestorWorkspace = derivedWorkspace(db, { ...task, workspace: null });
@@ -1360,7 +1358,7 @@ export function pickupTask(db: Db, task: Task, workerId: string, now: Date, fill
     if (fromAncestor) delete filled.workspace;
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin: "board",
       payload: {
         kind: "task_picked_up",
@@ -1388,7 +1386,7 @@ export function completeTask(
   db: Db,
   task: Task,
   handoff: Partial<HandoffDoc> | undefined,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -1406,10 +1404,10 @@ export function completeTask(
   }
   if (isRca(db, task.id)) throw new DomainError("an RCA does not complete with complete_task: complete it with complete_rca");
   // ADR 0278 決定6: agent の完了は判断を運ぶ —— work の全欄の要求は finishTask が持つ
-  if (task.type !== "work" && task.assignee !== HUMAN_WORKER_ID && whyBlank(handoff?.outcome ?? "")) {
+  if (task.type !== "work" && task.assignee !== HUMAN_ACTOR_ID && whyBlank(handoff?.outcome ?? "")) {
     throw new DomainError(`a ${task.type} task cannot complete without a handoff outcome`);
   }
-  return finishTask(db, task, handoff, workerId, now, origin);
+  return finishTask(db, task, handoff, actorId, now, origin);
 }
 
 /** 完了の処理の本体: completeTask と種別ごとの完了の verb(採点完了・統合レビュー・memory meta-review)が通る。 */
@@ -1417,14 +1415,14 @@ export function finishTask(
   db: Db,
   task: Task,
   handoff: Partial<HandoffDoc> | undefined,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
   db.transaction(() => {
     task = getTask(db, task.id)!;
     assertUnsettled(task, "completed");
-    if (task.type === "work" && task.assignee !== HUMAN_WORKER_ID) {
+    if (task.type === "work" && task.assignee !== HUMAN_ACTOR_ID) {
       const missing = HANDOFF_FIELDS.filter((f) => handoff?.[f] === undefined || whyBlank(handoff[f]));
       if (missing.length > 0) {
         throw new DomainError(
@@ -1447,7 +1445,7 @@ export function finishTask(
     );
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin,
       payload: {
         kind: "task_completed",
@@ -1473,7 +1471,7 @@ export function finishTask(
           },
           now,
           // 盤面の規則が立てる(ADR 0194 決定3)—— 完了させた agent の名義ではない
-          BOARD_WORKER_ID,
+          BOARD_ACTOR_ID,
           "board",
         );
       }
@@ -1491,7 +1489,7 @@ export function moveTask(
   task: Task,
   after: Task | null,
   now: Date,
-  workerId: string,
+  actorId: string,
   origin: EventOrigin,
 ): Task {
   const sortKey = fractionalKeyAfter(db, task, after);
@@ -1499,7 +1497,7 @@ export function moveTask(
     db.prepare("UPDATE tasks SET sort_key = ? WHERE id = ?").run(sortKey, task.id);
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "task_moved", after: after?.id ?? null },
       at: now,
@@ -1528,7 +1526,7 @@ export function returnToQueueHead(
 ): void {
   db.transaction(() => {
     returnToQueue(db, task, payload, now);
-    moveTask(db, task, null, now, BOARD_WORKER_ID, "board");
+    moveTask(db, task, null, now, BOARD_ACTOR_ID, "board");
   })();
 }
 
@@ -1536,7 +1534,7 @@ export function returnToQueueHead(
  *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
 export function returnToQueue(db: Db, task: Task, payload: QueueReturnPayload, now: Date): void {
   db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
-  appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
 }
 
 function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
@@ -1576,7 +1574,7 @@ export function escalateTask(
   db: Db,
   parent: Task,
   input: EscalateInput,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -1596,13 +1594,13 @@ export function escalateTask(
         question_kind: input.question_kind,
       },
       now,
-      workerId,
+      actorId,
       origin,
     );
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
     appendEvent(db, {
       taskId: parent.id,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "task_escalated", question_id: question.id },
       at: now,
@@ -1628,7 +1626,7 @@ export function escalateTask(
 function cancelUnsettledSubtree(
   db: Db,
   rootTaskIds: string[],
-  workerId: string,
+  actorId: string,
   now: Date,
   payload: TaskScopedPayload,
   origin: EventOrigin,
@@ -1640,7 +1638,7 @@ function cancelUnsettledSubtree(
   for (const { id } of scope) {
     // a cancelled declarer holds nothing — the cancel is the record that ends its breach
     db.prepare("UPDATE tasks SET status = 'cancelled', premise_breach_decision = NULL WHERE id = ?").run(id);
-    appendEvent(db, { taskId: id, workerId, origin, payload, at: now });
+    appendEvent(db, { taskId: id, actorId, origin, payload, at: now });
   }
 }
 
@@ -1661,11 +1659,11 @@ function cancelTask(
   db: Db,
   taskIds: string[],
   originQuestionId: string,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): void {
-  cancelUnsettledSubtree(db, taskIds, workerId, now, {
+  cancelUnsettledSubtree(db, taskIds, actorId, now, {
     kind: "task_cancelled",
     origin_question_id: originQuestionId,
   }, origin);
@@ -1789,7 +1787,7 @@ export function cancelTaskDirectly(
   assertDirectlyCancellableScope(db, task, defaults.closedRootOf);
   assertNoGatingQuestion(db, task.id, defaults);
   const cancel = () => withTargetQuestionSweep(db, now, () => {
-    cancelUnsettledSubtree(db, [task.id], HUMAN_WORKER_ID, now, {
+    cancelUnsettledSubtree(db, [task.id], HUMAN_ACTOR_ID, now, {
       kind: "task_cancelled_directly",
       reason,
     }, origin, stopApproval?.taskId);
@@ -1859,10 +1857,10 @@ function cancelDiscards(db: Db, rootIds: string[]): Discard[] {
     .prepare(
       `SELECT t.id, t.title, t.github_issue_number FROM tasks t
        WHERE t.id IN (SELECT value FROM json_each(@felled))
-         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.worker_id = @human)
+         AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind = 'task_completed' AND e.actor_id = @humanActorId)
        ORDER BY t.sort_key`,
     )
-    .all({ felled: JSON.stringify(done.map((task) => task.id)), human: HUMAN_WORKER_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
+    .all({ felled: JSON.stringify(done.map((task) => task.id)), humanActorId: HUMAN_ACTOR_ID }) as Array<{ id: string; title: string | null; github_issue_number: number | null }>;
   return rows.map((row) => ({ id: row.id, title: row.title ?? issueRefPlaceholder(row.github_issue_number!) }));
 }
 
@@ -2098,7 +2096,7 @@ export function answerQuestion(
     // answer event so per-agent acceptance rates need no join
     appendEvent(db, {
       taskId: question.id,
-      workerId: HUMAN_WORKER_ID,
+      actorId: HUMAN_ACTOR_ID,
       origin,
       payload: {
         kind: "question_answered",
@@ -2128,7 +2126,7 @@ export function answerQuestion(
         }
         appendEvent(db, {
           taskId: question.id,
-          workerId: HUMAN_WORKER_ID,
+          actorId: HUMAN_ACTOR_ID,
           origin,
           payload: { kind: "quarantine_released", quarantine: kind.quarantine, value: kind.value },
           at: now,
@@ -2141,7 +2139,7 @@ export function answerQuestion(
           break;
         }
         const failed = getTask(db, question.parent_id!)!;
-        cancelTask(db, abandonScopeIds(db, failed.id), question.id, HUMAN_WORKER_ID, now, origin);
+        cancelTask(db, abandonScopeIds(db, failed.id), question.id, HUMAN_ACTOR_ID, now, origin);
         if (failed.parent_id !== null) {
           unblockTarget = getTask(db, failed.parent_id);
           break;
@@ -2149,7 +2147,7 @@ export function answerQuestion(
         // 受験者の abandon が倒すのは受験者だけ。採点できる答案も未決着の答案も残らない Interview は、この答えで終える(ADR 0247 決定1 / ADR 0267 決定3)
         if (failed.interview_target_id !== null) {
           const rootId = interviewRootIdOf(db, failed)!;
-          if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_WORKER_ID, now, origin);
+          if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_ACTOR_ID, now, origin);
         }
         break;
       }
@@ -2166,7 +2164,7 @@ export function answerQuestion(
             db,
             { type: "work", ...pending, parent_id: question.parent_id! },
             now,
-            HUMAN_WORKER_ID,
+            HUMAN_ACTOR_ID,
             origin,
           );
           // "beyond its parent" is evaluated against the parent's current risk
@@ -2177,7 +2175,7 @@ export function answerQuestion(
             db.prepare("UPDATE tasks SET risk_flag = 1 WHERE id = ?").run(question.parent_id);
             appendEvent(db, {
               taskId: question.parent_id!,
-              workerId: HUMAN_WORKER_ID,
+              actorId: HUMAN_ACTOR_ID,
               origin,
               payload: { kind: "risk_flag_raised", origin_question_id: question.id },
               at: now,
@@ -2194,7 +2192,7 @@ export function answerQuestion(
         }
         // abandon も retry も Interview を終える(ADR 0251 決定2 / ADR 0248 決定2・3)。root の cancel は対象経由で受験者に及び、root は起こさない
         const root = getTask(db, question.parent_id!)!;
-        cancelTask(db, [root.id], question.id, HUMAN_WORKER_ID, now, origin);
+        cancelTask(db, [root.id], question.id, HUMAN_ACTOR_ID, now, origin);
         if (answer === "retry") {
           retryInterview(db, root, { reason: kind.reason, comment }, now, origin, runnable, ' — fix the default agent\'s entry and answer "retry" again, or answer "abandon" and register the Interview again');
         }
@@ -2219,7 +2217,7 @@ export function answerQuestion(
       !hasUnfinishedChildren(db, unblockTarget.id)
     ) {
       if (stageUnblock) stageUnblock(unblockTarget.id);
-      else moveTask(db, unblockTarget, null, now, HUMAN_WORKER_ID, origin);
+      else moveTask(db, unblockTarget, null, now, HUMAN_ACTOR_ID, origin);
     }
   });
   return getTask(db, question.id)!;
@@ -2252,14 +2250,14 @@ function retryInterview(
       interview_targets: retriedTargets(db, previousRoot.id),
     },
     now,
-    HUMAN_WORKER_ID,
+    HUMAN_ACTOR_ID,
     origin,
   );
   if (runnable) assertTargetsRunnable(db, root.id, runnable.candidates, runnable.agentName, remedy);
   const room = interviewRoomPath(db, previousRoot.id);
   appendEvent(db, {
     taskId: root.id,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: {
       kind: "interview_retried",
@@ -2287,9 +2285,9 @@ function dropInterviewTarget(db: Db, question: Task, now: Date, origin: EventOri
          AND @value = ${refusedTargetValueSql("@kind")}`,
     )
     .all({ kind: question.question_quarantine_kind, value: question.question_quarantine_value }) as Array<{ id: string; rootId: string }>;
-  cancelTask(db, children.map(({ id }) => id), question.id, HUMAN_WORKER_ID, now, origin);
+  cancelTask(db, children.map(({ id }) => id), question.id, HUMAN_ACTOR_ID, now, origin);
   for (const rootId of new Set(children.map((child) => child.rootId))) {
-    if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_WORKER_ID, now, origin);
+    if (interviewLeftEmpty(db, rootId)) cancelTask(db, [rootId], question.id, HUMAN_ACTOR_ID, now, origin);
   }
 }
 
@@ -2392,7 +2390,7 @@ export function declarePremiseBreach(
   db: Db,
   task: Task,
   reason: string,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task | undefined {
@@ -2412,14 +2410,14 @@ export function declarePremiseBreach(
       .get(decision) as { prior: number };
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "premise_breached", line: reason, based_on_decision: decision },
       at: now,
     });
     db.prepare("UPDATE tasks SET status = 'todo', premise_breach_decision = ? WHERE id = ?").run(decision, task.id);
     // 書き手が人間、または同じ判断への2度目以降 —— 人間が判断する
-    if (getEvent(db, decision)?.worker_id !== HUMAN_WORKER_ID && prior === 0) return;
+    if (getEvent(db, decision)?.actor_id !== HUMAN_ACTOR_ID && prior === 0) return;
     question = escalateTask(
       db,
       task,
@@ -2428,11 +2426,11 @@ export function declarePremiseBreach(
         questions: [{ title: `premise breach: ${task.title}`, options: ["continue", "abandon"], recommendation: "continue" }],
         question_kind: { kind: "premise_breach", cancel_option: "abandon", breached_decision: decision },
       },
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       now,
       "board",
     );
-    resolvePremiseBreach(db, task.id, "question", BOARD_WORKER_ID, now, "board");
+    resolvePremiseBreach(db, task.id, "question", BOARD_ACTOR_ID, now, "board");
   })();
   return question;
 }
@@ -2457,14 +2455,14 @@ export function continueDecomposition(
   db: Db,
   parent: Task,
   line: string,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): void {
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   db.transaction(() => {
-    logDecision(db, parent, line, workerId, now, origin);
-    resolvePremiseBreach(db, declarerId, "continue", workerId, now, origin);
+    logDecision(db, parent, line, actorId, now, origin);
+    resolvePremiseBreach(db, declarerId, "continue", actorId, now, origin);
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(parent.id);
   })();
 }
@@ -2474,7 +2472,7 @@ export function redecompose(
   db: Db,
   parent: Task,
   input: DecomposeInput,
-  workerId: string,
+  actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
   isProtectedWorkspace: ((name: string) => boolean) | undefined,
@@ -2486,9 +2484,9 @@ export function redecompose(
   }
   const declarerId = requireOpenPremiseBreachChildId(db, parent.id);
   return withTargetQuestionSweep(db, now, () => {
-    cancelUnsettledSubtree(db, abandonScopeIds(db, declarerId), workerId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
-    resolvePremiseBreach(db, declarerId, "redecompose", workerId, now, origin);
-    return decomposeTask(db, parent, input, workerId, now, authority, isProtectedWorkspace, origin);
+    cancelUnsettledSubtree(db, abandonScopeIds(db, declarerId), actorId, now, { kind: "task_cancelled", origin_breach_task_id: declarerId }, origin);
+    resolvePremiseBreach(db, declarerId, "redecompose", actorId, now, origin);
+    return decomposeTask(db, parent, input, actorId, now, authority, isProtectedWorkspace, origin);
   });
 }
 
@@ -2496,14 +2494,14 @@ function resolvePremiseBreach(
   db: Db,
   declarerId: string,
   outcome: Extract<EventPayload, { kind: "premise_breach_resolved" }>["outcome"],
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): void {
   db.prepare("UPDATE tasks SET premise_breach_decision = NULL WHERE id = ?").run(declarerId);
   appendEvent(db, {
     taskId: declarerId,
-    workerId,
+    actorId,
     origin,
     payload: { kind: "premise_breach_resolved", outcome },
     at: now,
@@ -2549,7 +2547,7 @@ export function logDecision(
   db: Db,
   task: Task,
   line: string,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): number {
@@ -2557,7 +2555,7 @@ export function logDecision(
   line = normalizeText(line);
   return appendEvent(db, {
     taskId: task.id,
-    workerId,
+    actorId,
     origin,
     payload: { kind: "decision_logged", line },
     at: now,
@@ -2579,7 +2577,7 @@ export function completeIntegrationReview(
   db: Db,
   review: Task,
   { findings, no_findings }: { findings: string; no_findings?: true },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -2596,12 +2594,12 @@ export function completeIntegrationReview(
   return db.transaction(() => {
     appendEvent(db, {
       taskId: review.id,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "decision_logged", line, judgment: { kind: "integration_review", deliverable, value, findings, repairs } },
       at: now,
     });
-    return finishTask(db, review, { outcome: findings }, workerId, now, origin);
+    return finishTask(db, review, { outcome: findings }, actorId, now, origin);
   })();
 }
 
@@ -2612,7 +2610,7 @@ const POSED_INTERVIEW_EXITS = "score every done answer with complete_interview, 
  *  `head` と一緒に型つきの欄を持つ判断ログの1件にする。同じ transaction で、その出題を監査する review を root の付帯子として盤面名義で
  *  登録し(assignee は空 = Auditor、workspace は root の実環境)、root を blocked(監査待ち)にする。受験者を立てるのは監査の受理
  *  (`completeAudit`)。受験者が1人も立っていないあいだは出題し直せる。 */
-export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: string, now: Date, origin: EventOrigin, head: string): Task {
+export function poseProbe(db: Db, root: Task, input: InterviewProbe, actorId: string, now: Date, origin: EventOrigin, head: string): Task {
   assertPosable(db, root);
   const probe = { ...input };
   for (const field of ["title", "probe", "completion_criteria", "rubric"] as const) {
@@ -2622,7 +2620,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
   return db.transaction(() => {
     const posed = appendEvent(db, {
       taskId: root.id,
-      workerId,
+      actorId,
       origin,
       payload: {
         kind: "decision_logged",
@@ -2647,7 +2645,7 @@ export function poseProbe(db: Db, root: Task, input: InterviewProbe, workerId: s
       },
       now,
       // 盤面の規則が立てる(ADR 0194 決定3)—— 出題した agent の名義ではない
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       "board",
     );
     db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(root.id);
@@ -2677,7 +2675,7 @@ export interface PosedProbe {
   root_id: string;
   probe: InterviewProbe;
   head: string;
-  worker_id: string;
+  actor_id: string;
   origin: EventOrigin;
 }
 
@@ -2685,7 +2683,7 @@ export interface PosedProbe {
 export function posedProbe(db: Db, eventId: number): PosedProbe {
   const event = getEvent(db, eventId);
   if (event?.payload.kind !== "decision_logged" || !event.payload.interview_probe) throw new Error(`event ${eventId} is not a posed probe`);
-  return { root_id: event.task_id!, probe: event.payload.interview_probe, head: event.payload.head, worker_id: event.worker_id, origin: event.origin };
+  return { root_id: event.task_id!, probe: event.payload.interview_probe, head: event.payload.head, actor_id: event.actor_id, origin: event.origin };
 }
 
 /** 段を Interview の root から読む task の root(ADR 0273 決定6): root 自身と、その監査。他の task は undefined。 */
@@ -2703,7 +2701,7 @@ export function completeAudit(
   db: Db,
   audit: Task,
   { verdict, findings }: AuditVerdict,
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -2712,8 +2710,8 @@ export function completeAudit(
   if (whyBlank(findings)) throw new DomainError("complete_audit requires findings");
   findings = normalizeText(findings);
   return db.transaction(() => {
-    appendEvent(db, { taskId: audit.id, workerId, origin, payload: { kind: "interview_audited", verdict, findings }, at: now });
-    const done = finishTask(db, audit, { outcome: findings }, workerId, now, origin);
+    appendEvent(db, { taskId: audit.id, actorId, origin, payload: { kind: "interview_audited", verdict, findings }, at: now });
+    const done = finishTask(db, audit, { outcome: findings }, actorId, now, origin);
     if (verdict === "accepted") {
       const posed = posedProbe(db, posedId);
       const { probe } = posed;
@@ -2731,7 +2729,7 @@ export function completeAudit(
             interview_target_id: id,
           },
           now,
-          posed.worker_id,
+          posed.actor_id,
           posed.origin,
         );
       }
@@ -2760,7 +2758,7 @@ export function completeInterview(
   db: Db,
   root: Task,
   { scores, handoff }: { scores: Array<{ child_id: string; outcome: InterviewOutcome }>; handoff: Partial<HandoffDoc> | undefined },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -2781,9 +2779,9 @@ export function completeInterview(
   // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
   return db.transaction(() => {
     for (const { child_id, outcome } of scores) {
-      appendEvent(db, { taskId: child_id, workerId, origin, payload: { kind: "interview_scored", outcome }, at: now });
+      appendEvent(db, { taskId: child_id, actorId, origin, payload: { kind: "interview_scored", outcome }, at: now });
     }
-    return finishTask(db, root, handoff, workerId, now, origin);
+    return finishTask(db, root, handoff, actorId, now, origin);
   })();
 }
 
@@ -2793,7 +2791,7 @@ export function reportBrokenProbe(
   db: Db,
   root: Task,
   { reason, recommendation }: { reason: string; recommendation: "abandon" | "retry" },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -2818,7 +2816,7 @@ export function reportBrokenProbe(
       questions: [{ title: `broken probe: ${root.title}`, options: ["continue", "abandon", "retry"], recommendation }],
       question_kind: { kind: "broken_probe", reason },
     },
-    workerId,
+    actorId,
     now,
     origin,
   );
@@ -2913,7 +2911,7 @@ export function registerMergeQuestion(
       workspace: task.workspace ?? undefined,
     },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }
@@ -2951,7 +2949,7 @@ export function settleQuestionAsObserved(
     if (changes === 0 || recordOn === null) return false;
     appendEvent(db, {
       taskId: recordOn,
-      workerId: BOARD_WORKER_ID,
+      actorId: BOARD_ACTOR_ID,
       origin: "board",
       payload,
       at: now,
@@ -2998,7 +2996,7 @@ export function recordPrOpened(
   task: Task,
   prNumber: number,
   sha: string,
-  workerId: string,
+  actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
   isProtected: boolean | undefined,
@@ -3008,7 +3006,7 @@ export function recordPrOpened(
     recordPrNumber(db, task.id, prNumber);
     appendEvent(db, {
       taskId: task.id,
-      workerId,
+      actorId,
       origin,
       payload: { kind: "pr_opened", pr_number: prNumber, sha },
       at: now,
@@ -3107,7 +3105,7 @@ function outsideAuthority(value: string | undefined, allowlist: string[] | undef
 export function reviewedTaskExecutor(db: Db, task: Task, spawnedEventId?: number): string | undefined {
   if (task.type !== "review" || !task.parent_id) return undefined;
   const cutoff = spawnedEventId ?? latestEventOfTask(db, task.id, "worker_spawned")?.id;
-  return executionEvent(db, task.parent_id, cutoff)?.worker_id;
+  return executionEvent(db, task.parent_id, cutoff)?.actor_id;
 }
 
 /** 実行の事実(ADR 0054): `before` より前の最新の task_completed、無ければ最新の task_picked_up。 */
@@ -3150,7 +3148,7 @@ export function decomposeTask(
   db: Db,
   parent: Task,
   input: DecomposeInput,
-  workerId: string,
+  actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
   /** Whether an explicitly named workspace is protected (CONTEXT.md's
@@ -3208,7 +3206,7 @@ export function decomposeTask(
   }
   const children: Task[] = [];
   db.transaction(() => {
-    const decisionId = logDecision(db, parent, input.reason, workerId, now, origin);
+    const decisionId = logDecision(db, parent, input.reason, actorId, now, origin);
     for (const child of input.children) {
       const reasons: string[] = [];
       if (raisesParentRisk(child, parent)) {
@@ -3219,16 +3217,16 @@ export function decomposeTask(
       // 0013) — assigneeNeedsApproval carries that exemption, shared with
       // mcp.ts's list_agents so the two can never diverge (issue #43).
       if (assigneeNeedsApproval(db, parent, child.assignee, authority)) {
-        reasons.push(`assigns to "${child.assignee}", outside ${workerId}'s assignable_to`);
+        reasons.push(`assigns to "${child.assignee}", outside ${actorId}'s assignable_to`);
       }
       for (const reviewer of child.review_by ?? []) {
         if (outsideAuthority(reviewer, authority?.assignable_to)) {
-          reasons.push(`assigns review to "${reviewer}", outside ${workerId}'s assignable_to`);
+          reasons.push(`assigns review to "${reviewer}", outside ${actorId}'s assignable_to`);
         }
       }
       if (outsideAuthority(child.workspace, authority?.allowed_workspaces)) {
         reasons.push(
-          `targets workspace "${child.workspace}", outside ${workerId}'s allowed_workspaces`,
+          `targets workspace "${child.workspace}", outside ${actorId}'s allowed_workspaces`,
         );
       }
       if (child.workspace !== undefined && isProtectedWorkspace?.(child.workspace)) {
@@ -3246,7 +3244,7 @@ export function decomposeTask(
             type: "question",
             title: questionTitle,
             purpose:
-              `"${child.title}" ${reasons.join("; ")} — outside ${workerId}'s authority to ` +
+              `"${child.title}" ${reasons.join("; ")} — outside ${actorId}'s authority to ` +
               `register unapproved. ${child.purpose}`,
             completion_criteria: "a human approves or rejects the child registration",
             parent_id: parent.id,
@@ -3270,7 +3268,7 @@ export function decomposeTask(
             based_on_decision: decisionId,
           },
           now,
-          workerId,
+          actorId,
           origin,
         );
         continue;
@@ -3280,7 +3278,7 @@ export function decomposeTask(
           db,
           { type: "work", ...child, workspace, parent_id: parent.id, based_on_decision: decisionId },
           now,
-          workerId,
+          actorId,
           origin,
         ),
       );
@@ -3301,15 +3299,15 @@ export function decomposeTask(
  *  premise-breach question, RCA review) is the board's rule, not an agent's
  *  decompose judgment, so it does not count (ADR 0194 決定5). */
 function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
-  const placeholders = [...NON_AGENT_WORKER_IDS].map(() => "?").join(", ");
+  const placeholders = [...NON_AGENT_ACTOR_IDS].map(() => "?").join(", ");
   const row = db
     .prepare(
       `SELECT 1 FROM tasks t
        JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
-       WHERE t.parent_id = ? AND e.worker_id NOT IN (${placeholders})
+       WHERE t.parent_id = ? AND e.actor_id NOT IN (${placeholders})
        LIMIT 1`,
     )
-    .get(parentId, ...NON_AGENT_WORKER_IDS);
+    .get(parentId, ...NON_AGENT_ACTOR_IDS);
   return row !== undefined;
 }
 
@@ -3319,7 +3317,7 @@ function hasAgentRegisteredChild(db: Db, parentId: string): boolean {
  *  comments in its purpose. */
 export function carriesHumanWords(db: Db, taskId: string): boolean {
   const registered = latestEventOfTask(db, taskId, "task_registered")!;
-  return getTextAuthor(db, taskId) === HUMAN_WORKER_ID || !!registered.payload.opened_on_event_ids?.length;
+  return getTextAuthor(db, taskId) === HUMAN_ACTOR_ID || !!registered.payload.opened_on_event_ids?.length;
 }
 
 /** Settled tasks cannot act again, shared by the human gates and the completion floor (ADR 0304). */
@@ -3369,7 +3367,7 @@ function assertHumanDecomposable(db: Db, parent: Task): void {
  *  board-registered task's text is the board's own instruction, ADR 0198
  *  決定4), unsettled, and not in_progress. */
 function assertHumanEditableScope(db: Db, task: Task): void {
-  if (getTextAuthor(db, task.id) !== HUMAN_WORKER_ID) {
+  if (getTextAuthor(db, task.id) !== HUMAN_ACTOR_ID) {
     throw new DomainError(
       "only a human-authored task can be edited — agent-authored and board-authored tasks are out of scope",
     );
@@ -3390,7 +3388,7 @@ function assertHumanEditableScope(db: Db, task: Task): void {
 function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: ClosedRootOf | undefined): void {
   // 受験者は親を持たないが root ではない —— root の agent が登録した答案で、外すのは failure の abandon か対象外し(ADR 0267 決定1)
   const root = task.parent_id === null && task.interview_target_id === null && task.type !== "question";
-  const inScope = getTextAuthor(db, task.id) === HUMAN_WORKER_ID || root || !!closedRootOf?.(task);
+  const inScope = getTextAuthor(db, task.id) === HUMAN_ACTOR_ID || root || !!closedRootOf?.(task);
   if (!inScope) {
     throw new DomainError(
       "only a human-authored task, a board-registered root other than a question, or a task stranded under a root whose PR " +
@@ -3425,7 +3423,7 @@ export function humanDecomposeTask(
     db,
     parent,
     input,
-    HUMAN_WORKER_ID,
+    HUMAN_ACTOR_ID,
     now,
     undefined,
     isProtectedWorkspace,
@@ -3594,7 +3592,7 @@ export function editTask(
       db.prepare(`UPDATE tasks SET ${c.field} = ? WHERE id = ?`).run(c.value, task.id);
       appendEvent(db, {
         taskId: task.id,
-        workerId: HUMAN_WORKER_ID,
+        actorId: HUMAN_ACTOR_ID,
         origin,
         payload: { kind: "task_edited", field: c.field, from: c.from, to: c.to },
         at: now,
@@ -3998,14 +3996,14 @@ export type BoardTask = Omit<Task, "status" | "question_proposal" | typeof store
 /** Who registered `taskId` — its own `task_registered` event's worker id.
  *  registerTask always writes exactly one, so an existing task always has one. */
 export function getRegistrant(db: Db, taskId: string): string {
-  return latestEventOfTask(db, taskId, "task_registered")!.worker_id;
+  return latestEventOfTask(db, taskId, "task_registered")!.actor_id;
 }
 
 /** 文面の書き手(CONTEXT.md の Registrant / ADR 0197): 分解判断に乗る task ならその分解判断の書き手、
  *  無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
 export function getTextAuthor(db: Db, taskId: string): string {
   const decision = getTask(db, taskId)!.based_on_decision;
-  return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.worker_id;
+  return decision === null ? getRegistrant(db, taskId) : getEvent(db, decision)!.actor_id;
 }
 
 /** Whether materializing `child` under `parent` raises the parent's risk
@@ -4090,7 +4088,7 @@ const INTEGRATION_REVIEW_MARK = `(
           WHERE completed.id = registered.id - 1
             AND completed.task_id = review.parent_id
             AND completed.kind = 'task_completed'
-            AND completed.worker_id = registered.worker_id
+            AND completed.actor_id = registered.actor_id
             AND completed.origin = registered.origin
             AND completed.created_at = registered.created_at
         )
@@ -4134,12 +4132,12 @@ function boardRows(
   return db
     .prepare(
       `WITH RECURSIVE ${HELD_IDS_CTE}, ${SETTLED_TREE_CTE}
-       SELECT tasks.*, ${taskTierNamesSql("tasks")}, ${derivedWorkspaceSql("tasks")} AS workspace, tasks.assignee AS raw_assignee, registered.worker_id AS registrant,
+       SELECT tasks.*, ${taskTierNamesSql("tasks")}, ${derivedWorkspaceSql("tasks")} AS workspace, tasks.assignee AS raw_assignee, registered.actor_id AS registrant,
          ${acceptedSql("tasks.id")} AS accepted,
          (SELECT task_id FROM interview_targets WHERE id = tasks.interview_target_id) AS interview_root_id,
          CASE WHEN status = 'todo' AND ${unsettledAuditSql("tasks.id")} THEN 'audit'
               WHEN status = 'todo' AND ${unsettledExamineeSql("tasks.id")} THEN 'examinees' END AS interview_waiting,
-         CASE WHEN tasks.type = 'question' THEN '${HUMAN_WORKER_ID}'
+         CASE WHEN tasks.type = 'question' THEN '${HUMAN_ACTOR_ID}'
               ELSE COALESCE(tasks.assignee, ${fallback}) END AS assignee,
          CASE WHEN status = 'todo' AND ${unfinishedChildSql("tasks.id")} THEN 'blocked'
               WHEN status = 'todo' AND ${heldSql("tasks.id")} THEN 'held'
@@ -4233,7 +4231,7 @@ export function listQueue(
     ],
   );
   return rows
-    .filter((row) => row.assignee !== HUMAN_WORKER_ID)
+    .filter((row) => row.assignee !== HUMAN_ACTOR_ID)
     .map((row) => toBoardTask(db, row))
     .map((task) => {
       if (task.status !== "todo") return task;
@@ -4262,7 +4260,7 @@ export function listYourTasks(db: Db): YourTask[] {
     "",
     // 保存値が human の行だけなので既定 agent へは落ちない —— SQL が参照する名前を埋めるだけ
     [{ defaultAgentName: null, auditorName: null, interviewerName: null }],
-    `tasks.assignee = '${HUMAN_WORKER_ID}' AND ${unsettledSql("tasks.status")}`,
+    `tasks.assignee = '${HUMAN_ACTOR_ID}' AND ${unsettledSql("tasks.status")}`,
     `, ${blockingSql("tasks")} AS blocking`,
   ) as Array<BoardRow & { blocking: string | null }>;
   return rows.map((row) => ({ ...toBoardTask(db, row), blocking: row.blocking }));
@@ -4615,7 +4613,7 @@ export function nextSlotTask(
       defaultAgentName: defaultAgentName ?? null,
       auditorName: auditorName ?? null,
       interviewerName: interviewerName ?? null,
-      humanWorkerId: HUMAN_WORKER_ID,
+      humanWorkerId: HUMAN_ACTOR_ID,
       stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
       stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       excludedTaskIds: excluded.length ? JSON.stringify(excluded) : null,

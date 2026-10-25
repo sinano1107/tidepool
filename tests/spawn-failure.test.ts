@@ -65,7 +65,7 @@ it("start が同期で投げた瞬間に failure question が立ち、後始末�
   expect(question.purpose).toContain("registry went bad after boot");
   expect(question.purpose).not.toMatch(/time limit|reclaim|bug|environment/i);
   const questionEvents = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(questionEvents.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(questionEvents.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   expect(events.find((e: any) => e.kind === "spawn_failed").payload).toEqual({

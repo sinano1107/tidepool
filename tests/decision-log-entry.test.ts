@@ -4,7 +4,7 @@ import { type EventPayload, type EventRow, isDecisionLogEntry } from "../src/eve
 const row = (payload: EventPayload): EventRow => ({
   id: 1,
   task_id: "t",
-  worker_id: "tako",
+  actor_id: "tako",
   origin: "worker",
   kind: payload.kind,
   payload,

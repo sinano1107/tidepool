@@ -1,5 +1,7 @@
 # 親の文脈は1本の年表として届く
 
+**Status 追記: `EventRow.worker_id` は `actor_id` に改名済み**(2026-10-26、issue #2581)。生の形を worker の面へ出さない決定は変わらない。
+
 issue #179 で決定。ADR 0045 の実装スコープ(issue #171、未実装)が子へ渡すはずだった文脈は
 **2つの別々の束**だった — 親の decision log(`EventRow[]`。id と created_at を持つ)と、親の
 settled 子(`SettledChildContext[]`。title / status / handoff doc だけで、時刻も、どの分解判断

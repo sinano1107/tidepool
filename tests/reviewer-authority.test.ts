@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import type { Db } from "../src/db.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -6,7 +7,6 @@ import { appendEvent, listEvents, type TaskScopedPayload } from "../src/events.j
 import type { AuthorityProfile } from "../src/registry.js";
 import { assigneeNeedsApproval, editTask, getTask, humanDecomposeTask, listChildren, pickupTask, type RegisterTaskInput, registerTask, returnToQueue, reviewedTaskExecutor } from "../src/tasks.js";
 import { commitTriage, raiseObjection } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 let t: Tidepool;
@@ -193,7 +193,7 @@ it("task_completed も pickup も無い被レビュー task では Executor が�
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   // 人間名義の review 子は実行前の親に付けられない(ADR 0292 決定2)—— 盤面名義(異議由来の auditor RCA の形)で置く
-  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, BOARD_WORKER_ID, "board");
+  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, BOARD_ACTOR_ID, "board");
 
   expect(reviewedTaskExecutor(db, review)).toBeUndefined();
   expect(assigneeNeedsApproval(db, review, "fake-worker", { assignable_to: [] })).toBe(true);
@@ -261,8 +261,8 @@ it("assignee の無い被レビュータスクの Executor は、最後の picku
   const db = openDb(":memory:");
   const at = new Date("2026-01-01T00:00:00Z");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const write = (workerId: string, payload: TaskScopedPayload) =>
-    appendEvent(db, { taskId: work.id, workerId, origin: "board", at, payload });
+  const write = (actorId: string, payload: TaskScopedPayload) =>
+    appendEvent(db, { taskId: work.id, actorId, origin: "board", at, payload });
   write("worker-a", { kind: "task_picked_up" });
   write("worker-b", { kind: "task_completed", handoff_present: true, result: null });
   write("worker-c", { kind: "task_picked_up" });
@@ -280,7 +280,7 @@ function auditorRcaUnderUnexecutedParent(db: Db, at: Date) {
   raiseObjection(db, listEvents(db, parent.id).find((event) => event.kind === "decision_logged")!.id, "redo it", at);
   commitTriage(db, at, [], new Map(), { agentRegistered: () => false, resolvesToBuiltIn: () => true });
   const rca = listChildren(db, parent.id).find((child) => child.title.startsWith("rca (auditor)"))!;
-  const spawned = appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(db, { taskId: rca.id, actorId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
   return { parent: getTask(db, parent.id)!, rca, spawned };
 }
 
@@ -295,7 +295,7 @@ it("実行前の親の下の RCA の Executor は、spawn の後に親が埋め�
   expect(reviewedTaskExecutor(db, rca, spawned)).toBeUndefined();
   expect(reviewedTaskExecutor(db, rca)).toBeUndefined();
   expect(assigneeNeedsApproval(db, rca, "tako", { assignable_to: [] })).toBe(true);
-  appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  appendEvent(db, { taskId: rca.id, actorId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
   expect(reviewedTaskExecutor(db, rca)).toBe("tako");
 });
 
@@ -316,8 +316,8 @@ it("review type の親が RCA の spawn の後に別の worker で再 pickup さ
   const at = new Date("2026-10-21T00:00:00Z");
   const reviewed = registerTask(db, { type: "review", title: "rv", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const picked = pickupTask(db, reviewed, "worker-a", at)!;
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, BOARD_WORKER_ID, "board");
-  const spawned = appendEvent(db, { taskId: rca.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, BOARD_ACTOR_ID, "board");
+  const spawned = appendEvent(db, { taskId: rca.id, actorId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
 
   returnToQueue(db, picked, { kind: "cap_interrupted" }, at);
   pickupTask(db, getTask(db, reviewed.id)!, "worker-b", at);
@@ -330,8 +330,8 @@ it("assignee を明示しただけで一度も pickup されていない親の�
   const db = openDb(":memory:");
   const at = new Date("2026-10-21T00:00:00Z");
   const parent = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", assignee: "tako" }, at, ...HUMAN_WEBUI);
-  const review = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_WORKER_ID, "board");
-  const spawned = appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
+  const review = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, BOARD_ACTOR_ID, "board");
+  const spawned = appendEvent(db, { taskId: review.id, actorId: "fugu", origin: "board", at, payload: WORKER_SPAWNED });
 
   expect(reviewedTaskExecutor(db, review, spawned)).toBeUndefined();
   expect(assigneeNeedsApproval(db, review, "tako", { assignable_to: [] })).toBe(true);

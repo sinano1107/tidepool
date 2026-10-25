@@ -1,3 +1,4 @@
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { boardHalts } from "./board-halt.js";
 import { type CliAuthCheck, quarantineCliAuthForProvider, recordProbeBoardCall } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
@@ -85,7 +86,6 @@ import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
 import type { PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   freshenPlaceAtPickup,
@@ -583,7 +583,7 @@ export function startScheduler(deps: {
       console.error(`[scheduler] worker failed to start ${picked.id}:`, err);
       appendEvent(db, {
         taskId: picked.id,
-        workerId: agent,
+        actorId: agent,
         origin: "board",
         payload: { kind: "spawn_failed", ...failure },
         at: clock.now(),
@@ -658,7 +658,7 @@ export function startScheduler(deps: {
               ],
               question_kind: { kind: "failure", cancel_option: "abandon" },
             },
-            BOARD_WORKER_ID,
+            BOARD_ACTOR_ID,
             clock.now(),
             "board",
           );
@@ -734,7 +734,7 @@ export function startScheduler(deps: {
         if (!unlisted) continue;
         const refusal = { ...target, worker_spawned_event_id: null, cause: unlisted.unit === "model" ? "model_not_listed" : "effort_not_advertised" } as const;
         questionRefusedTarget(db, task, refusal, `was not picked up: ${unlisted.reason}`, now);
-        appendEvent(db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "row_refused", ...refusal }, at: now });
+        appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "row_refused", ...refusal }, at: now });
       }
       return evaluateAndReportProviderUsage(
         db,

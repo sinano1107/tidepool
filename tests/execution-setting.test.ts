@@ -1208,7 +1208,7 @@ it("tier の提案の approve の registry への commit の await の間に観�
   const review = routingReviewOf(db, now);
   const evidence = appendEvent(db, {
     taskId: registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI).id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at: now,
     payload: { ...WORKER_SPAWNED, provider: "openai", model: "gpt-6-astra", tier_id: tierIdOf(db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },

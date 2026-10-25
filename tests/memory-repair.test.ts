@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { latestEventOfTask, listEvents } from "../src/events.js";
@@ -24,7 +25,6 @@ import {
 import { MEMORY_META_REVIEW_VERBS } from "../src/meta-review.js";
 import { listChildren, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, listLog, raiseObjection } from "../src/triage.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI, judgedMemoryReview, markPickedUp } from "./harness.js";
 
 /** 修理子から同じ操作の verb を呼ぶ —— meta-review と1つの関数で、射程は門が対象で切り替える(ADR 0281 決定1)。 */
@@ -499,7 +499,7 @@ it("判断の行の修理子の define_memory の supersedes は別 workspace �
     });
     raiseObjection(db, row({ branch: "tides", scope: null }), "define it", at);
     commitTriage(db, at);
-    invalidateMemoryEntry(db, { entry_id: wide, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+    invalidateMemoryEntry(db, { entry_id: wide, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
     const docks = docksDefinition(db);
     expect(() => define(db, repairChild(review.id).id, [docks])).toThrow(
       `a memory repair keeps entries in their scope: replacing memory entry ${docks} in scope docks with a successor in the whole board`,

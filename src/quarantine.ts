@@ -7,6 +7,7 @@
  *  module であり、逆は張らない。 */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
@@ -14,7 +15,6 @@ import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { canonicalHarness, type Harness } from "./registry.js";
 import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
@@ -536,7 +536,7 @@ export function registerQuarantine(
   if (existing) {
     appendEvent(db, {
       taskId: existing.id,
-      workerId: BOARD_WORKER_ID,
+      actorId: BOARD_ACTOR_ID,
       origin: "board",
       payload: { kind: "quarantine_refired", cause: reason },
       at: now,
@@ -556,7 +556,7 @@ export function registerQuarantine(
       question_kind: { kind: "quarantine", quarantine: kind, value },
     },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }

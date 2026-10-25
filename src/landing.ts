@@ -1,3 +1,4 @@
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
@@ -36,7 +37,6 @@ import {
 } from "./tasks.js";
 import { activeTriageSession } from "./triage.js";
 import type { LandingState, RootSettledByObservation, SettledByObservation } from "./wire-contract.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   boardRefWriter,
   branchMergeEffect,
@@ -424,7 +424,7 @@ function landingCandidateIds(db: Db): string[] {
   return db
     .prepare(
       `SELECT t.id FROM tasks t
-        WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_WORKER_ID}'
+        WHERE t.type = 'work' AND t.status = 'done' AND t.assignee IS NOT '${HUMAN_ACTOR_ID}'
           AND t.interview_target_id IS NULL
           AND NOT EXISTS (SELECT 1 FROM events e WHERE e.task_id = t.id AND e.kind IN ${LANDING_ENDED_KINDS})
           AND NOT ${localLandingOpenOrExecutedSql("t.id")}
@@ -613,7 +613,7 @@ function registerPrPromotionQuestion(
       workspace: task.workspace ?? undefined,
     },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }
@@ -637,7 +637,7 @@ export function recordPrPromotionAbandoned(
 ): void {
   appendEvent(db, {
     taskId,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "pr_promotion_abandoned", head: taskBranchHeadOrNull(resolve, taskWorkspace, taskId) },
     at: now,
@@ -720,7 +720,7 @@ export function registerLocalMergeQuestion(
       workspace: task.workspace ?? undefined,
     },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }
@@ -790,7 +790,7 @@ function retireAutoMerge(
   // 外すことと記録を1つにする —— 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
   db.transaction(() => {
     clearPendingAutoMerge(db, taskId);
-    appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
   })();
 }
 
@@ -824,7 +824,7 @@ export function observePrHead(db: Db, taskId: string, prNumber: number, head: st
   if (headKnownAt(db, taskId, head) !== null) return;
   appendEvent(db, {
     taskId,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "pr_head_observed", pr_number: prNumber, sha: head },
     at: now,
@@ -851,7 +851,7 @@ function recordLandingDeferred(
   if (latestEventOfTask(db, taskId, "landing_deferred")) return;
   appendEvent(db, {
     taskId,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "landing_deferred", reason: block.kind, count: block.count },
     at: now,
@@ -904,7 +904,7 @@ export function createLanding(deps: LandingDeps): Landing {
       if (landing.surface === "outside_board") {
         appendEvent(deps.db, {
           taskId: task.id,
-          workerId: BOARD_WORKER_ID,
+          actorId: BOARD_ACTOR_ID,
           origin: "board",
           payload: {
             kind: "auto_merge_withdrawn",
@@ -968,7 +968,7 @@ export function createLanding(deps: LandingDeps): Landing {
       `PR #${prNumber} was closed outside the board, so ${stranded.length} task(s) under it will not run: ` +
         `${stranded.map(({ id }) => id).join(", ")}. To go on, reopen the PR on GitHub and merge it — once its content ` +
         "reaches the protected branch, they run and land as roots of their own. To stop, cancel them.",
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       now,
       "board",
     );
@@ -989,7 +989,7 @@ export function createLanding(deps: LandingDeps): Landing {
     if (root !== null && kind === OBSERVED.CLOSED) announceClosed(root, prNumber, now);
   };
   const recordBoardFact = (taskId: string, payload: TaskScopedPayload) =>
-    appendEvent(deps.db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: deps.clock.now() });
+    appendEvent(deps.db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: deps.clock.now() });
   /** PR の根の着地は終わった —— 事実を根拠つきで1回刻み、以後この根は候補に入らない(ADR 0241 決定1 / ADR 0265 決定3)。 */
   const finishLanding = (
     task: Task,

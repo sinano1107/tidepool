@@ -39,7 +39,7 @@ function session(
 function spawnOn(db: Db, taskId: string, { row = OPUS_ROW, tier = "standard", agent = "deckhand", source = "task" }: { row?: RowKey; tier?: string; agent?: string; source?: "task" | "agent" } = {}): number {
   return appendEvent(db, {
     taskId,
-    workerId: agent,
+    actorId: agent,
     origin: "board",
     at,
     payload: { ...WORKER_SPAWNED, ...row, advisor: null, tier_id: tierIdOf(db, tier), source: { tier: source, provider: "rank" } },
@@ -49,7 +49,7 @@ function spawnOn(db: Db, taskId: string, { row = OPUS_ROW, tier = "standard", ag
 /** setup のみ: session に配分評価を1件付ける。 */
 function allocate(db: Db, spawned: number, allocation: "overpowered" | "underpowered", cause: "uncertain" | "capability") {
   const payload = { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation, cause, evidence: "e" };
-  appendEvent(db, { taskId: taskOf(db, spawned), workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
+  appendEvent(db, { taskId: taskOf(db, spawned), actorId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
 }
 
 /** setup のみ: 行を別の段へ移す(人間の表の編集)。 */

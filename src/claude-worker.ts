@@ -1977,7 +1977,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   ): void {
     appendEvent(this.options.db, {
       taskId: task.id,
-      workerId: agent.name,
+      actorId: agent.name,
       origin: "board",
       payload: { kind: "spawn_failed", ...failure },
       at: this.options.clock.now(),
@@ -2072,7 +2072,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // attributed to whichever agent actually got spawned (ADR 0012 / issue
         // #36) — not this worker's configured default, which a pre-set
         // delegation may override
-        workerId: agent.name,
+        actorId: agent.name,
         origin: "board",
         // issue #127: this records the *attempt* to spawn, not a successful
         // session — it is written before the transcript open and spawn()
@@ -2382,7 +2382,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       const usage = lastResult ? toUsage(lastResult, streamObserved) : null;
       appendEvent(this.options.db, {
         taskId: task.id,
-        workerId: agent.name,
+        actorId: agent.name,
         origin: "board",
         payload: {
           kind: "worker_exited",

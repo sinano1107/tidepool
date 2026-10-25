@@ -1,5 +1,7 @@
 # 組み込み agent は review 専用であり、work は組み込みへ落ちない
 
+**Status 追記: event の識別子 `worker_id` は `actor_id` に改名済み**(2026-10-26、issue #2581)。名前は type によらず1つの定義に解決する規則は変わらない。
+
 **Status 追記: 「組み込みは review 専用」は ADR 0273 決定2 で「review と interview」に広がった** —— どちらも work を実行する授権を持たず、interview が書けるのは面接室だけ(2026-10-18 の grilling、issue #2184 / ADR 0273)。
 
 **Status 追記2: 「review と interview」は ADR 0275 決定1 で「reviewer 定数の授権で走れる type(review / interview / memory_repair)」になった** —— memory_repair は記憶の店にだけ書き、PR も着地のダイヤルも持たない。決定3・4 の扉と quarantine 解除の依存は `work` だけを数える(2026-10-18 の grilling、issue #2209 / ADR 0275)。

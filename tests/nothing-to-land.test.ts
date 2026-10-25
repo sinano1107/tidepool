@@ -43,7 +43,7 @@ it("purely-local の root work が差分ゼロで完了すると、merge questio
   );
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       kind: "nothing_to_land",
       payload: { kind: "nothing_to_land", base: "main" },
@@ -72,7 +72,7 @@ it("remote-backed の root work が差分ゼロで完了すると、PR を開か
   );
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       kind: "nothing_to_land",
       payload: { kind: "nothing_to_land", base: "refs/remotes/origin/main" },
@@ -103,7 +103,7 @@ it("同じ内容が squash で保護ブランチへ着地済みなら、履歴�
   );
   expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json).toContainEqual(
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       kind: "nothing_to_land",
       payload: {

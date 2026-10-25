@@ -1,5 +1,7 @@
 # pickup 済みの task の assignee / workspace は Edit で動かず、Executor の引けない親に review 子は付かない
 
+**Status 追記: `HUMAN_WORKER_ID` は `src/actor-id.ts` の `HUMAN_ACTOR_ID` に改名済み**(2026-10-26、issue #2581)。登録の門は変わらない。
+
 2026-10-21 の grilling(issue #2369、兄弟 #2366 / #2362)で決定。ADR 0054 は Executor を event log の事実と定めつつ「`assignee` 列に
 値があれば両者は一致する」として列を先に読み、ADR 0233 決定2 は列を「走った先」として読み手に読ませる。だが Edit(issue #130)は
 実行済みの task が `todo` に戻った窓(escalate・decompose・queue 復帰)で列を書き換えられ、review の spawn が描いた Roster と、

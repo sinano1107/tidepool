@@ -248,7 +248,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
       task_id: spawned.task_id!,
       worker_spawned_event_id: spawned.id,
       worker_exited_event_id: exited?.id ?? null,
-      agent: spawned.worker_id,
+      agent: spawned.actor_id,
       source: spawned.payload.source,
       cell: {
         provider: spawned.payload.provider,

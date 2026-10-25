@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
@@ -30,7 +31,6 @@ import {
   type Task,
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
@@ -735,7 +735,7 @@ it("merge 回答は question の workspace で live CI を確認してから実 
       ?.created_at,
     questionMerged: listEvents(db, question.id).filter((event) => event.kind === "pr_merged"),
     mergedEvent: listEvents(db, work.id).find((event) => event.kind === "pr_merged")?.payload,
-    mergedBy: listEvents(db, work.id).find((event) => event.kind === "pr_merged")?.worker_id,
+    mergedBy: listEvents(db, work.id).find((event) => event.kind === "pr_merged")?.actor_id,
   }).toEqual({
     ciChecks: [{ path: PRODUCT.path, number: 42 }],
     merged: [{ path: PRODUCT.path, number: 42 }],
@@ -838,13 +838,13 @@ it("盤面の外の head が check 未報告なら、merge 回答は拒否の前
   const observed = () =>
     listEvents(db, work.id)
       .filter((e) => e.kind === "pr_head_observed")
-      .map(({ worker_id, origin, payload }) => ({ worker_id, origin, payload }));
+      .map(({ actor_id, origin, payload }) => ({ actor_id, origin, payload }));
 
   // PR を開いてから6分 —— PR を開いた head の猶予は過ぎているが、この head は初めて読まれる
   await expect(answerAt(6)).rejects.toThrow("have not reported yet");
   await expect(answerAt(10)).rejects.toThrow("have not reported yet");
   expect(observed()).toEqual([
-    { worker_id: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 42, sha: "outside-head" } },
+    { actor_id: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_head_observed", pr_number: 42, sha: "outside-head" } },
   ]);
   expect(github.merged).toEqual([]);
 
@@ -1332,7 +1332,7 @@ it("agent quarantine の解除検査は、盤面の外で merge 済みのキュ�
     awaiting: [],
     observed: [
       expect.objectContaining({
-        worker_id: BOARD_WORKER_ID,
+        actor_id: BOARD_ACTOR_ID,
         origin: "board",
         payload: { kind: "pr_merge_observed", pr_number: 7 },
       }),
@@ -1510,7 +1510,7 @@ function registerHumanTask(db: Db): Task {
       title: "sign the contract",
       purpose: "only a human can sign",
       completion_criteria: "the contract is signed",
-      assignee: HUMAN_WORKER_ID,
+      assignee: HUMAN_ACTOR_ID,
     },
     NOW,
     ...HUMAN_WEBUI,

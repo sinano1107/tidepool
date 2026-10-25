@@ -55,7 +55,7 @@ it("record_knowledge と define_memory_branch の tool 結果の event_id は書
 
     expect(await writeRecords(task.id)).toEqual([branch.event_id, knowledge.event_id]);
     // 行の文と中身はドメイン層が言う —— ここは tool 結果の event_id が決定ログの行になる写像だけ
-    const row = { id: knowledge.event_id, task_id: task.id, worker_id: t.worker.id, payload: expect.objectContaining({ kind: "memory_written" }) };
+    const row = { id: knowledge.event_id, task_id: task.id, actor_id: t.worker.id, payload: expect.objectContaining({ kind: "memory_written" }) };
     expect((await api(t.baseUrl, "GET", "/api/log")).json.entries).toContainEqual(expect.objectContaining({ ...row, unread: true }));
     const read = body(await management.callTool({ name: "read_decision_log", arguments: {} }));
     expect(read.entries).toContainEqual(expect.objectContaining(row));

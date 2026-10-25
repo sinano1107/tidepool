@@ -73,7 +73,7 @@ it("decompose stamps each child with the registering worker and the decision it 
     const events = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}/events`)).json;
     const registered = events.filter((e: any) => e.kind === "task_registered");
     expect(registered).toHaveLength(1);
-    expect(registered[0].worker_id).toBe("fake-worker");
+    expect(registered[0].actor_id).toBe("fake-worker");
     expect(registered[0].payload.based_on_decision).toBe(decisions[0].id);
   }
 });
@@ -189,7 +189,7 @@ it("a completion flows through the log as its own kind, carrying the one-line ou
   expect(log.entries.map((e: any) => e.kind)).toEqual(["decision_logged", "task_completed"]);
   const completion = log.entries[1];
   expect(completion.task_id).toBe(task.id); // the link back to the handoff doc
-  expect(completion.worker_id).toBe("fake-worker");
+  expect(completion.actor_id).toBe("fake-worker");
   expect(completion.payload.result).toBe("criteria met");
 });
 
@@ -276,7 +276,7 @@ it("log_decision records a one-line decision that appears in the log view", asyn
   const decisions = log.entries.filter((e: any) => e.kind === "decision_logged");
   expect(decisions).toHaveLength(1);
   expect(decisions[0].task_id).toBe(task.id);
-  expect(decisions[0].worker_id).toBe("fake-worker");
+  expect(decisions[0].actor_id).toBe("fake-worker");
   expect(decisions[0].payload.line).toBe(
     "chose recursive descent over a parser generator: no new build dep",
   );
