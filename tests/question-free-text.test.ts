@@ -18,6 +18,8 @@ const QUESTIONS = {
   "cancel option": { options: ["retry", "abandon"], question_kind: { kind: "failure", cancel_option: "abandon" } },
   escalate: { options: ["a", "b"] },
   quarantine: { options: ["repaired by hand"], question_kind: { kind: "quarantine", quarantine: "agent", value: "navigator" } },
+  // 停止の理由 question は肢も推奨も持たない(ADR 0310 決定7)
+  "stop reason": { options: [], question_kind: { kind: "stop_reason", task_id: "t-1" } },
 } satisfies Record<string, Partial<RegisterTaskInput> & { options: string[] }>;
 
 function freeTextOf(kind: keyof typeof QUESTIONS) {
@@ -34,7 +36,7 @@ function freeTextOf(kind: keyof typeof QUESTIONS) {
       purpose: "p",
       completion_criteria: "a human answer is recorded",
       parent_id: parent.id,
-      question: [{ title: "t", options, recommendation: options[0]! }],
+      question: [{ title: "t", options, ...(options[0] !== undefined && { recommendation: options[0] }) }],
       ...fields,
     },
     at,
@@ -51,6 +53,6 @@ it.each(["merge", "local merge", "PR promotion", "pending child", "proposal", "c
   },
 );
 
-it.each(["escalate", "quarantine"] as const)("%s question は自由記述を受ける(free_text: true)", (kind) => {
+it.each(["escalate", "quarantine", "stop reason"] as const)("%s question は自由記述を受ける(free_text: true)", (kind) => {
   expect(freeTextOf(kind)).toBe(true);
 });

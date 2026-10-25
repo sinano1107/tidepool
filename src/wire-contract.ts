@@ -93,7 +93,7 @@ export interface BoardTask extends QueueTask {
   github_issue_number: number | null;
   registrant?: string;
   purpose: string;
-  question_items: Array<{ title: string; detail?: string; options: string[]; recommendation: string }> | null;
+  question_items: Array<{ title: string; detail?: string; options: string[]; recommendation?: string }> | null;
   /** 提案 question の種別(ADR 0120 決定4 / ADR 0150 決定2 / ADR 0152 決定2)。routing の行の提案(op row)と段の追加(op add_tier)、registry の tier の提案、
    *  段の説明の提案(op tier_description)、Interview の提案(op interview、仮説・測る仕事・対象の effort・実環境)、memory の approve / consolidate のうち `candidate_id` を持つもの(その文言、Exemplar なら注釈 list ——
    *  種別は画面が candidate から引く)は approve に修正値を添えられる。registry の tier の提案の `pin.tier` は下げ先の選択肢の上端(ADR 0200 決定4)。 */

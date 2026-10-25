@@ -382,6 +382,7 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState("");
+  const [answerText, setAnswerText] = React.useState("");
   return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-md)", fontWeight: "var(--weight-semibold)", color: "var(--text-heading)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, item.title), translated && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "var(--tide-5)", marginBottom: item.detail ? 3 : 8, whiteSpace: "pre-wrap" } }, translated.title), item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--text-secondary)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.detail), translated && item.detail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--tide-5)", marginBottom: 8, whiteSpace: "pre-wrap" } }, translated.detail), item.movedNote && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-xs)", color: "var(--sun-4)", marginBottom: 8, whiteSpace: "pre-wrap" } }, item.movedNote), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", gap: 8 } }, item.options.map((o) => {
     const picked = value === o.label;
     const off = disabled.includes(o.label);
@@ -413,7 +414,19 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
       /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, o.label),
       o.recommended && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: picked ? "var(--tide-2)" : "var(--tide-4)" } }, "recommended")
     ), o.discards && /* @__PURE__ */ React.createElement(TpDiscards, { discards: o.discards }));
-  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
+  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : item.options.length === 0 ? /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      multiline: true,
+      rows: 2,
+      placeholder: "answer \u2014 free text",
+      value: answerText,
+      onChange: (e) => {
+        setAnswerText(e.target.value);
+        onChange(TidepoolRules.whyBlank(e.target.value) ? null : TidepoolRules.normalizeText(e.target.value));
+      }
+    }
+  ) : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
     onChange(TidepoolRules.normalizeText(overrideText));
     setOverride(false);
     setOverrideText("");

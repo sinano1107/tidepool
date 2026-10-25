@@ -178,9 +178,9 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
     const reasonQuestion = reason === undefined ? registerTask(db, {
       type: "question",
       title: `why did you stop "${task.title}"?`,
-      purpose: `Record why you stopped "${task.title}". Choose a suggestion or write the actual reason in free text.`,
+      purpose: `Record why you stopped "${task.title}": write what you saw in free text.`,
       completion_criteria: "The human has recorded the stop reason",
-      question: [{ title: `why did you stop "${task.title}"?`, options: ["suspicious behavior", "work no longer needed"], recommendation: "suspicious behavior" }],
+      question: [{ title: `why did you stop "${task.title}"?`, options: [] }],
       question_kind: { kind: "stop_reason", task_id: taskId },
     }, now, BOARD_WORKER_ID, "board") : undefined;
     appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reasonQuestion ? { reason_question_id: reasonQuestion.id } : { reason }) }, at: now });

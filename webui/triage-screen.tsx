@@ -151,6 +151,7 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
   const { Input, Button } = window.TidepoolDesignSystem_8a0ead;
   const [override, setOverride] = React.useState(false);
   const [overrideText, setOverrideText] = React.useState('');
+  const [answerText, setAnswerText] = React.useState('');
   return (
     <div>
       <div style={{ fontSize: 'var(--text-md)', fontWeight: 'var(--weight-semibold)', color: 'var(--text-heading)', marginBottom: item.detail ? 3 : 8, whiteSpace: 'pre-wrap' }}>{item.title}</div>
@@ -187,7 +188,11 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
         {locked && value && !item.options.some((o) => o.label === value) && (
           <div style={{ fontSize: 'var(--text-sm)', color: '#fff', background: 'var(--tide-4)', borderRadius: 'var(--radius-full)', padding: '11px 18px', boxShadow: 'var(--shadow-primary)' }}>{value}</div>
         )}
-        {locked || !freeText ? null : override
+        {locked || !freeText ? null : item.options.length === 0
+          // 肢の無い項目(理由 question、ADR 0310 決定7)は自由記述欄だけ —— 打った文がそのまま回答の下書きになる
+          ? <Input multiline rows={2} placeholder="answer — free text" value={answerText}
+              onChange={(e) => { setAnswerText(e.target.value); onChange(TidepoolRules.whyBlank(e.target.value) ? null : TidepoolRules.normalizeText(e.target.value)); }} />
+          : override
           ? <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
               <Input multiline rows={2} placeholder="override answer — free text" value={overrideText} onChange={(e) => setOverrideText(e.target.value)} style={{ flex: 1 }} />
               <Button variant="secondary" size="sm" disabled={!!TidepoolRules.whyBlank(overrideText)} onClick={() => { onChange(TidepoolRules.normalizeText(overrideText)); setOverride(false); setOverrideText(''); }}>Set</Button>
