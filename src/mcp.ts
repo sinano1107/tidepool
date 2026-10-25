@@ -54,7 +54,7 @@ import {
 } from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
-import { completeRca, proposeFromObjection } from "./retrospective.js";
+import { completeRca, materialStop, proposeFromObjection, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
@@ -558,6 +558,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
   // complete_task の代わりに complete_integration_review を、memory meta-review は
   // complete_memory_review を、routing meta-review は complete_routing_review を、RCA は complete_rca を登録する(ADR 0278 決定1)
   const { withheld, added } = attributedTaskId === null ? { withheld: [], added: [] } : taskVerbSwap(deps.db, attributedTaskId);
+  // ADR 0310 決定4: 材料が停止の RCA の verb の文は材料の停止を指す
+  const stopRca = attributedTaskId !== null && materialStop(deps.db, attributedTaskId) !== undefined;
   /** `done` へ決着させる種別ごとの完了の verb の handler(門は resolveOnly): 完了した task の id と status を返す。 */
   const completing =
     <I>(complete: (db: Db, task: Task, input: I, workerId: string, now: Date, origin: "worker") => Task) =>
@@ -601,6 +603,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),
             ...auditedProbeEnvelope(deps, task),
+            // ADR 0310 決定4: 材料が停止の RCA には止められた session の行動列(無条件に読むので注入、ADR 0180)
+            ...stopMaterialActions(deps.db, task.id),
             // ADR 0272 決定3 / ADR 0279 決定4: 修理子の verb を伏せた理由(spawn の文面と同じ1行)。帰り先の無い task には何も足さない(ADR 0301 決定5)
             ...(isRepairType(task.type) && { [task.type]: REPAIR_NOTICES[task.type] }),
             parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
@@ -890,9 +894,16 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       "complete_rca",
       {
         description:
-          "Complete this RCA, in one call. findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
-          "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
-          "repeated or non-material entry is refused, named by id, and nothing is recorded. The board records one decision line per finding " +
+          "Complete this RCA, in one call. " +
+          (stopRca
+            ? "Your review was opened on a human stop (its material, quoted in your purpose as \"stop <id>: <reason>\"; get_current_task's actions is " +
+              "that session's action sequence — calls are its tool calls in order with a failed mark, decisions place each logged decision among " +
+              "them, and null means the session left no readable sequence): findings is one finding {entries: [the stop id], root_cause: one line}. A missing, repeated or " +
+              "other id is refused, named by id, and nothing is recorded. "
+            : "findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
+              "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
+              "repeated or non-material entry is refused, named by id, and nothing is recorded. ") +
+          "The board records one decision line per finding " +
           "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries" +
           // decompose を伏せた RCA には分解の修理を言わない(ADR 0301 決定5)
           (withheld.includes("decompose")
@@ -1099,7 +1110,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     "propose_from_objection",
     {
       description:
-        "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, " +
+        (stopRca
+          ? "Review only: turn your finding about the human stop your review was opened on into memory — pass that stop's id (its material) as entry_id. The board derives the entry kind and addressee from the cause attributed to that stop, "
+          : "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, ") +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
