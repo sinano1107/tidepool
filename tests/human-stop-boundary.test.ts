@@ -52,6 +52,16 @@ it("management stop mirrors HTTP refusal and validation, and the worker has no s
   }
 });
 
+it("the reason question is served with no options as free text, and a free-text answer settles it", async () => {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "write parser");
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, {});
+  const reason = (await questions(t)).find((q) => q.question_stop_reason_task_id === task.id);
+  expect(reason).toMatchObject({ question_items: [{ title: 'why did you stop "write parser"?', options: [] }], free_text: true });
+  expect(reason.question_items[0]).not.toHaveProperty("recommendation");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${reason.id}/answer`, { answers: ["parser was deleting files"] })).status).toBe(200);
+});
+
 it.each([
   { supplied: "wrong direction", answer: undefined, expected: "wrong direction" },
   { supplied: undefined, answer: undefined, expected: "not yet answered" },

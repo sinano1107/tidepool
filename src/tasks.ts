@@ -406,7 +406,8 @@ export interface QuestionItem {
   title: string;
   detail?: string;
   options: string[];
-  recommendation: string;
+  /** 肢 0 個の `stop_reason` の項目だけが持たない(ADR 0310 決定7)。 */
+  recommendation?: string;
 }
 
 /** RegisterTaskInput's content is the one place TaskContent's three fields
@@ -756,9 +757,9 @@ export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskEx
  *  recommendation among them, whichever door it enters by (escalate, or a
  *  tidepool-internal registerTask call — watchdog/quarantine/merge/decompose;
  *  the JSON API refuses `type: "question"` outright, issue #38) — the answer
- *  view offers the options first, free text only as an override. The degraded
- *  free-text-only question is reserved for the watchdog's auto-escalation
- *  safety valve (#17).
+ *  view offers the options first, free text only as an override. The one
+ *  free-text-only item is the stop reason question's (ADR 0310 決定7): no
+ *  options, no recommendation.
  *
  *  An item's option floor relaxes to 1 only for an actual quarantine
  *  Confirmation question (issue #21, CONTEXT.md) — a `quarantine` kind, which
@@ -789,11 +790,18 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   for (const item of items) {
     if (whyBlank(item.title)) throw new DomainError("a question item carries a title");
     if (item.detail !== undefined && whyBlank(item.detail)) throw new DomainError("a supplied question detail cannot be blank");
+    // 理由 question は自由記述だけ(ADR 0310 決定7)—— quarantine の「項目 0 個」(ADR 0218 決定6)とは別の例外
+    if (kind?.kind === "stop_reason") {
+      if (item.options.length > 0 || item.recommendation !== undefined) {
+        throw new DomainError("a stop reason question item carries no options and no recommendation");
+      }
+      continue;
+    }
     if (item.options.length < minOptions || item.options.length > 4) {
       throw new DomainError(`a question item carries ${minOptions} to 4 options`);
     }
     if (item.options.some(whyBlank)) throw new DomainError("question options cannot be blank");
-    if (whyBlank(item.recommendation) || !item.options.includes(item.recommendation)) {
+    if (item.recommendation === undefined || whyBlank(item.recommendation) || !item.options.includes(item.recommendation)) {
       throw new DomainError(
         "a question item carries the registrant's recommendation, one of its options",
       );
@@ -1122,7 +1130,7 @@ export function registerTask(
       title: normalizeText(item.title),
       ...(item.detail !== undefined && { detail: normalizeText(item.detail) }),
       options: item.options.map(normalizeText),
-      recommendation: normalizeText(item.recommendation),
+      ...(item.recommendation !== undefined && { recommendation: normalizeText(item.recommendation) }),
     }));
   }
   const kind = input.question_kind;

@@ -413,7 +413,19 @@ function TpQuestionItemPicker({ item, value, locked, freeText, onChange, transla
       /* @__PURE__ */ React.createElement("span", { style: { flex: 1 } }, o.label),
       o.recommended && /* @__PURE__ */ React.createElement("span", { style: { fontFamily: "var(--font-mono)", fontSize: "var(--text-2xs)", color: picked ? "var(--tide-2)" : "var(--tide-4)" } }, "recommended")
     ), o.discards && /* @__PURE__ */ React.createElement(TpDiscards, { discards: o.discards }));
-  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
+  }), locked && value && !item.options.some((o) => o.label === value) && /* @__PURE__ */ React.createElement("div", { style: { fontSize: "var(--text-sm)", color: "#fff", background: "var(--tide-4)", borderRadius: "var(--radius-full)", padding: "11px 18px", boxShadow: "var(--shadow-primary)" } }, value), locked || !freeText ? null : item.options.length === 0 ? /* @__PURE__ */ React.createElement(
+    Input,
+    {
+      multiline: true,
+      rows: 2,
+      placeholder: "answer \u2014 free text",
+      value: overrideText,
+      onChange: (e) => {
+        setOverrideText(e.target.value);
+        onChange(TidepoolRules.whyBlank(e.target.value) ? null : TidepoolRules.normalizeText(e.target.value));
+      }
+    }
+  ) : override ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement(Input, { multiline: true, rows: 2, placeholder: "override answer \u2014 free text", value: overrideText, onChange: (e) => setOverrideText(e.target.value), style: { flex: 1 } }), /* @__PURE__ */ React.createElement(Button, { variant: "secondary", size: "sm", disabled: !!TidepoolRules.whyBlank(overrideText), onClick: () => {
     onChange(TidepoolRules.normalizeText(overrideText));
     setOverride(false);
     setOverrideText("");

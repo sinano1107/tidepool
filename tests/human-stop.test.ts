@@ -91,6 +91,14 @@ it("a reasonless stop asks the human in a separate board root linked to the stop
   expect(listEvents(db, task.id).find((e) => e.kind === "session_stopped_by_human")!.payload).toEqual({ kind: "session_stopped_by_human", reason_question_id: reason.id });
 });
 
+it("a reasonless stop's reason question takes free text only: its item has no options and no recommendation", () => {
+  const { db, task } = fixture();
+  pickupTask(db, task, "deckhand", now);
+  recordHumanStop(db, task.id, undefined, now, "webui");
+  const reason = listBoard(db).find((q) => q.question_stop_reason_task_id === task.id)!;
+  expect(reason.question_items).toEqual([{ title: 'why did you stop "write parser"?', options: [] }]);
+});
+
 it.each(["retry", "abandon"])("the root reason question survives %s and does not block retry", (answer) => {
   const { db, task } = fixture();
   pickupTask(db, task, "deckhand", now);

@@ -1,5 +1,9 @@
-import { expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
+import { openDb } from "../src/db.js";
 import { type QuestionKind, questionColumns, questionKindOf } from "../src/question-kind.js";
+import { registerTask } from "../src/tasks.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
+import { HUMAN_WEBUI } from "./harness.js";
 
 // question の種類の写し(ADR 0246 決定2・3)を domain 層で述べる。書き手・分岐の振る舞いは既存のテストが見る。
 
@@ -35,4 +39,27 @@ it("どの種類にも当てはまらない列の組み合わせは、埋まっ�
     questionKindOf({ ...none, question_pending_merge_pr: 12, question_proposal: { kind: "memory", op: "approve", candidate_id: 1, replaces: [] } }),
   ).toThrow("question_proposal + question_pending_merge_pr");
   expect(() => questionKindOf({ ...none, question_quarantine_value: "navigator" })).toThrow("question_quarantine_value");
+});
+
+// 肢 0 個は stop_reason だけの例外(ADR 0310 決定7)—— 他の種別は従来どおり拒み、stop_reason も肢を持てば拒む
+function registerQuestion(kind: QuestionKind | undefined, options: string[]) {
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const parent = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, new Date(0), ...HUMAN_WEBUI);
+  return () => registerTask(db, {
+    type: "question", title: "q", purpose: "p", completion_criteria: "c", parent_id: parent.id,
+    question: [{ title: "q", options, ...(options.length > 0 && { recommendation: options[0] }) }],
+    ...(kind && { question_kind: kind }),
+  }, new Date(0), BOARD_WORKER_ID, "board");
+}
+
+it.each([
+  ["escalation", undefined],
+  ["failure", { kind: "failure", cancel_option: "abandon" }],
+] as const)("%s の項目は肢 0 個では登録できない", (_, kind) => {
+  expect(registerQuestion(kind, [])).toThrow("a question item carries 2 to 4 options");
+});
+
+it("stop_reason の項目は肢を持つと登録できない", () => {
+  expect(registerQuestion({ kind: "stop_reason", task_id: "t" }, ["a", "b"])).toThrow("a stop reason question item carries no options and no recommendation");
 });
