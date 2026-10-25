@@ -14,10 +14,13 @@ import {
   type DecisionLogEntry,
   type EventOrigin,
   type EventPayload,
+  type EventRow,
+  type EventRowOf,
   getEvent,
   isDecisionLogEntry,
   latestEventOfTask,
   listEvents,
+  listEventsOfKinds,
   objectionBundles,
   sessionSpawnOf,
   sessionWindow,
@@ -25,11 +28,11 @@ import {
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { createBehaviorCandidate, listMemoryEntries, memoryIndex, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
-import { readPulls } from "./precedent.js";
+import { listEpisodes, readPulls } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
-import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, type Task } from "./tasks.js";
+import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, resolvedStopReason, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
@@ -55,6 +58,20 @@ export interface AttributionInput {
   rca_findings?: string[];
 }
 
+/** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
+ *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` は
+ *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。 */
+export interface StopAttributionInput {
+  human_stop: { reason: string };
+  decision_log: string[];
+  memory_read: AttributionInput["memory_read"];
+  agent_definition: AgentDefinitionThen | null;
+  actions: {
+    calls: Array<{ index: number; tool: string; args: string | null; failed: boolean }>;
+    decisions: Array<{ position: number | null; line: string | null }>;
+  } | null;
+}
+
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
  *  evidence は散文。client の出力は門(`gate`)を通してから event に載る。 */
 export interface AttributionJudgment {
@@ -76,6 +93,8 @@ export interface AttributionClient {
     input: AttributionInput,
     setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AttributionJudgment>>;
+  /** 停止の帰責(ADR 0310)。持たない client では停止の帰責は撃てなかった扱い。 */
+  judgeStop?(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>>;
 }
 
 /** Behavior candidate 起草の Board call に渡す入力(ADR 0120 決定1(b)(c)): 帰責と同じ材料に、
@@ -121,7 +140,7 @@ const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", ev
 /** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は entries を
  *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定2)。
  *  通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
-function gate({ entries, ...judgment }: AttributionJudgment, input: AttributionInput): GatedJudgment {
+function gate({ entries, ...judgment }: AttributionJudgment, input: Pick<AttributionInput, "memory_read" | "agent_definition">): GatedJudgment {
   if (judgment.cause === "agent_definition" && input.agent_definition === null) {
     return uncertain("agent_definition attribution rejected: no definition version was resolved for the session");
   }
@@ -175,14 +194,17 @@ async function singleFlight(db: Db, key: string, fire: () => Promise<void>): Pro
   }
 }
 
-/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は異議群(ADR 0170 決定4)、配分評価は review の完了)。 */
+/** 撃ち直しの種別ごとの失敗 event の kind と、撃ち直しの対象を指す欄(起草は帰責、第2回は異議群(ADR 0170 決定4)、配分評価は review の完了、
+ *  停止の帰責は停止(ADR 0310 決定3))。 */
 const REFIRE = {
   draft: { failed: "memory_draft_failed", target: "attribution_event_id" },
   second_round: { failed: "objection_attribution_failed", target: "objection_event_id" },
   allocation: { failed: "allocation_review_failed", target: "review_completed_event_id" },
+  stop_attribution: { failed: "stop_attribution_failed", target: "stop_event_id" },
 } as const;
-/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は異議群の最初の異議 event の id、配分評価は review の task_completed event の id)。 */
-export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round", "allocation"]), target: z.number().int().positive() });
+/** 打ち切りの行を指す鍵: 種別と対象(起草は帰責 event の id、第2回は異議群の最初の異議 event の id、配分評価は review の task_completed event の id、
+ *  停止の帰責は停止 event の id)。 */
+export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round", "allocation", "stop_attribution"]), target: z.number().int().positive() });
 export type RefireKey = z.infer<typeof refireKeySchema>;
 
 /** 対象の失敗の数え(ADR 0164 決定5): 直近の Retry より後の失敗 event の数・最後の失敗、Dismiss の有無。
@@ -365,6 +387,70 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
   });
 }
 
+/** 停止の帰責を1停止ぶん撃つ(ADR 0310 決定1〜3): 判断(`uncertain` も判断として)を門に通して `stop_attributed` として止められた
+ *  task に追記する。撃てなかったら何も書かず、撃って失敗したら `stop_attribution_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。 */
+async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, stop, spawned }: StopTarget, now: Date): Promise<void> {
+  await singleFlight(db, `stop:${stop.id}`, async () => {
+    if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
+    const call = boardCallSetting(db, deps.attributionClient?.judgeStop?.bind(deps.attributionClient), deps.containers);
+    if ("unavailable" in call) return;
+    const input = stopInput(db, deps.registryDir, stop, spawned);
+    const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
+      appendEvent(db, { taskId: task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    let judgment: GatedJudgment;
+    try {
+      judgment = gate(await recordedAnswer(db, "attribution", now, call.client(input, call.setting)), input);
+    } catch (err) {
+      if (quarantineBoardCallRefusal(db, err, "attribution", task_id, now)) return;
+      record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason: `Board call failed: ${message(err)}` });
+      return;
+    }
+    record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment });
+  });
+}
+
+/** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。 */
+function stopInput(db: Db, registryDir: string | undefined, stop: StopTarget["stop"], spawned: EventRow): StopAttributionInput {
+  const { inSession } = sessionWindow(listEvents(db, spawned.task_id!), spawned);
+  return {
+    human_stop: { reason: humanStopReason(db, stop.payload) },
+    decision_log: taskDecisionLog(db, spawned.task_id!).filter(inSession).map(objectedEntryText),
+    ...sessionReads(db, registryDir, stop),
+    actions: sessionActions(db, spawned.id),
+  };
+}
+
+/** session の行動列: Episode の行動の index・tool 名・引数・失敗の印と、判断の行の位置の印。Episode が無い・読めない session は null。 */
+function sessionActions(db: Db, spawnedId: number): StopAttributionInput["actions"] {
+  const [episode] = listEpisodes(db, { spawned: spawnedId });
+  if (!episode || episode.unrecognizedFormat) return null;
+  return {
+    calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
+    decisions: episode.markers.flatMap(({ kind, position, line }) => (kind === "decision" ? [{ position, line }] : [])),
+  };
+}
+
+type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; spawned: EventRow };
+
+/** 停止の帰責の対象(ADR 0310 決定1・3・6): 判定の無い人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
+ *  worker_exited 観測済み)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
+ *  受験者の task でないもの。 */
+// ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の不在を SQL で先に絞る
+function stopTargets(db: Db): StopTarget[] {
+  const eventsOf = new Map<string, EventRow[]>();
+  return listEventsOfKinds(db, ["session_stopped_by_human"]).flatMap((stop): StopTarget[] => {
+    const task_id = stop.task_id!;
+    if (getTask(db, task_id)?.interview_target_id != null || resolvedStopReason(db, stop.payload) === undefined) return [];
+    const events = eventsOf.get(task_id) ?? listEvents(db, task_id);
+    eventsOf.set(task_id, events);
+    const spawned = sessionSpawnOf(events, stop);
+    if (!spawned || !sessionWindow(events, spawned).exited) return [];
+    const skip = events.some(({ id, payload: p }) =>
+      (p.kind === "task_cancelled_directly" && spawned.id < id && id < stop.id) || (p.kind === "stop_attributed" && p.stop_event_id === stop.id));
+    return skip ? [] : [{ task_id, stop, spawned }];
+  });
+}
+
 /** sweep の対象(ADR 0164 決定1): 異議群ごとの帰責の状態のうち、あるべき結果が無いもの —— 第2回を待つ異議群
  *  (初回の `uncertain` と未帰責、ADR 0168 決定3)で、その異議群を覆う RCA 子(ADR 0171 決定2)がすべて決着したものは第2回、確定した異議群は
  *  その帰責を出所とする candidate が無いもの の起草(後の異議群があっても外さない、ADR 0170 決定1)—— と、
@@ -373,6 +459,7 @@ type RefireTarget = { task_id: string } & (
   | { refire: "second_round"; source: SecondRoundSource }
   | { refire: "draft"; attribution: Attribution }
   | { refire: "allocation"; allocation: AllocationTarget }
+  | ({ refire: "stop_attribution" } & StopTarget)
 );
 function refireTargets(db: Db): RefireTarget[] {
   const drafted = new Set(
@@ -384,7 +471,9 @@ function refireTargets(db: Db): RefireTarget[] {
       return rca.length > 0 && settledAll(rca) ? [{ task_id: state.task_id, refire: "second_round", source: state.awaiting }] : [];
     }
     return drafted.has(state.confirmed.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.confirmed }];
-  }).concat(allocationTargets(db).map((a) => ({ task_id: a.reviewed_task_id, refire: "allocation", allocation: a })));
+  })
+    .concat(allocationTargets(db).map((a) => ({ task_id: a.reviewed_task_id, refire: "allocation", allocation: a })))
+    .concat(stopTargets(db).map((t) => ({ refire: "stop_attribution", ...t })));
 }
 
 /** sweep(ADR 0164 決定1・4): 第2回の帰責・起草・配分評価を撃つ唯一の契機(ADR 0169 決定1 / ADR 0172 決定1)。pickup の poll が同期で呼び、
@@ -397,6 +486,8 @@ export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, no
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
     } else if (target.refire === "draft") {
       fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), `entry ${target.attribution.entry_id}`);
+    } else if (target.refire === "stop_attribution") {
+      fireAndForget(attributeStop(db, deps, target, now), `stop ${target.stop.id}`);
     } else {
       fireAndForget(reviewAllocation(db, deps, target.allocation, now), `allocation review ${target.allocation.review_task_id}`);
     }
@@ -404,9 +495,10 @@ export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, no
 }
 
 type Titled = { id: string; title: string };
-/** 打ち切りの行: 配分評価は review と被レビュー task、起草と第2回は異議された entry とその帰責。 */
+/** 打ち切りの行: 配分評価は review と被レビュー task、起草と第2回は異議された entry とその帰責、停止の帰責は停止の理由(entry を持たない)。 */
 type HaltedRefire = { target: number; task: Titled; last_failure: { reason: string; at: string } } & (
   | { refire: "allocation"; review: Titled }
+  | { refire: "stop_attribution"; stop: { reason: string } }
   | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
 );
 
@@ -416,13 +508,15 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
   const current = currentAttributions(db);
   const titled = (id: string) => ({ id, title: getTask(db, id)!.title });
   return refireTargets(db).flatMap((t): HaltedRefire[] => {
-    const target = t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? bundleName(t.source) : t.allocation.completed_event_id;
+    const target =
+      t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? bundleName(t.source) : t.refire === "stop_attribution" ? t.stop.id : t.allocation.completed_event_id;
     const { n, last_id, dismissed } = refireFailures(db, { refire: t.refire, target });
     if (dismissed || n < MAX_FIRED_FAILURES) return [];
     const failure = getEvent(db, last_id!)!;
     const payload = failure.payload as Extract<EventPayload, { kind: (typeof REFIRE)[keyof typeof REFIRE]["failed"] }>;
     const last_failure = { reason: payload.reason, at: failure.created_at };
     if (t.refire === "allocation") return [{ refire: t.refire, target, review: titled(t.allocation.review_task_id), task: titled(t.task_id), last_failure }];
+    if (t.refire === "stop_attribution") return [{ refire: t.refire, target, stop: { reason: humanStopReason(db, t.stop.payload) }, task: titled(t.task_id), last_failure }];
     const { entry_id, round } = payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" }>;
     const entry = getEvent(db, entry_id) as DecisionLogEntry;
     return [
@@ -474,8 +568,8 @@ function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInpu
 /** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、その entry より前の
  *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
  *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
-function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition"> {
-  const events = listEvents(db, entry.task_id);
+function sessionReads(db: Db, registryDir: string | undefined, entry: EventRow): Pick<AttributionInput, "memory_read" | "agent_definition"> {
+  const events = listEvents(db, entry.task_id!);
   const spawned = sessionSpawnOf(events, entry);
   if (!spawned) return { memory_read: [], agent_definition: null };
   const { inSession } = sessionWindow(events, spawned);

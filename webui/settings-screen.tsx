@@ -1422,6 +1422,11 @@ function HaltedRefiresCard({ rows, say, onChanged }: {
             <div key={`${row.refire}:${row.target}`} style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: '1px solid var(--border-default)', paddingTop: 10 }}>
               {row.refire === 'allocation' ? (
                 <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>allocation review · {row.review.title} · {row.task.title}</p>
+              ) : row.refire === 'stop_attribution' ? (
+                <React.Fragment>
+                  <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>stop attribution · stop #{row.target} · {row.task.title}</p>
+                  <p style={{ margin: 0, fontSize: 'var(--text-sm)' }}>{row.stop.reason}</p>
+                </React.Fragment>
               ) : (
                 <React.Fragment>
                   <p style={{ ...muted, fontFamily: 'var(--font-mono)' }}>

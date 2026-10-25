@@ -723,7 +723,8 @@ export interface StoredEpisode extends Omit<Episode, "markers"> {
  *  `position` で `actions` を切る読み出し時のスライスである(ADR 0083 追記)。 */
 export function listEpisodes(
   db: Db,
-  filter: { workspace?: string; agent?: string },
+  /** `spawned` は1 session(worker_spawned の event id)の Episode だけ(停止の帰責の行動列、ADR 0310 決定2)。 */
+  filter: { workspace?: string; agent?: string; spawned?: number },
 ): StoredEpisode[] {
   // 版で絞るのは、同じ session を新しい投影器で読み直したときに古い Episode が
   // 二重に返らないため。読む版は常に今の投影器の版(古い版の行は残ってよい)。
@@ -736,6 +737,10 @@ export function listEpisodes(
   if (filter.agent !== undefined) {
     where.push("agent = ?");
     params.push(filter.agent);
+  }
+  if (filter.spawned !== undefined) {
+    where.push("worker_spawned_event_id = ?");
+    params.push(filter.spawned);
   }
   // 時系列 = session を開いた worker_spawned の event id 順(events は append-only)
   const rows = db

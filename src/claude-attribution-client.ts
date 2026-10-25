@@ -3,7 +3,7 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import type { AttributionClient, AttributionInput, AttributionJudgment } from "./retrospective.js";
+import type { AttributionClient, AttributionInput, AttributionJudgment, StopAttributionInput } from "./retrospective.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the objected task as a judgment
@@ -24,7 +24,39 @@ function buildPrompt(input: AttributionInput): string {
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
-    "as it stood at the time. Respond with ONLY a single JSON object (no markdown fences, no " +
+    `as it stood at the time. ${RESPONSE_FIELDS} When the input carries ` +
+    "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +
+    "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
+    "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
+    "have since settled: those are their decision logs and completion reports, read them as " +
+    "evidence. When present, human_stop is the human's account of why they stopped the session; " +
+    '\"work no longer needed\" is not a cause of the objection, and leave an unanswered reason unanswered.\n\n' +
+    `Input:\n${JSON.stringify(input, null, 2)}`
+  );
+}
+
+/** The question the board asks of a human stop (ADR 0310): the stop is the
+ *  human's observation of a whole session, so the judge names no entry and
+ *  weighs the reason as testimony against what the worker actually did. */
+function buildStopPrompt(input: StopAttributionInput): string {
+  return (
+    "You are the attribution judge of a work-tracking board. A human stopped a running worker session; human_stop.reason " +
+    "is the human's testimony of why. It is an observation, not a verdict: weigh it against what the worker actually did. " +
+    "Judge whose shortfall the stop points at from that testimony, the session's whole decision log (decision_log), the " +
+    "memory entries the worker read before the stop (memory_read), its agent definition as it stood then (agent_definition), " +
+    "and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
+    "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line at its " +
+    "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
+    "sequence could not be read: judge from the rest. A behaviour present in actions but absent from decision_log is evidence " +
+    "— a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
+    `changed, is requirement_change. ${RESPONSE_FIELDS}\n\n` +
+    `Input:\n${JSON.stringify(input, null, 2)}`
+  );
+}
+
+/** The judgment fields both questions share: the cause vocabulary, evidence and entries. */
+const RESPONSE_FIELDS =
+  "Respond with ONLY a single JSON object (no markdown fences, no " +
     'prose) with these fields: "cause" (one of ' +
     `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
     "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
@@ -43,16 +75,7 @@ function buildPrompt(input: AttributionInput): string {
     "it — name it only when the decision log cites that document; use uncertain when the evidence does " +
     'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "entries" ' +
     "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
-    "read before the decision; never answer memory when memory_read is empty). When the input carries " +
-    "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +
-    "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
-    "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
-    "have since settled: those are their decision logs and completion reports, read them as " +
-    "evidence. When present, human_stop is the human's account of why they stopped the session; " +
-    '\"work no longer needed\" is not a cause of the objection, and leave an unanswered reason unanswered.\n\n' +
-    `Input:\n${JSON.stringify(input, null, 2)}`
-  );
-}
+    "read before the decision; never answer memory when memory_read is empty).";
 
 /** The real AttributionClient (issue #574): a headless one-shot `claude -p`
  *  call through the same runner as the draft and allocation clients; the
@@ -71,6 +94,13 @@ export class ClaudeAttributionClient implements AttributionClient {
   ): Promise<BoardCallAnswer<AttributionJudgment>> {
     return runClaudeBoardCallJson(
       { exec: this.exec, label: "attribution", prompt: buildPrompt(input), setting, reasoning: true },
+      judgmentSchema,
+    );
+  }
+
+  async judgeStop(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>> {
+    return runClaudeBoardCallJson(
+      { exec: this.exec, label: "stop attribution", prompt: buildStopPrompt(input), setting, reasoning: true },
       judgmentSchema,
     );
   }

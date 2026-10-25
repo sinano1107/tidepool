@@ -966,12 +966,14 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "List the retrospective Board calls the board stopped refiring after 3 failed calls since the last retry: allocation reviews " +
-        "(refire allocation, target = the review's task_completed event id), Behavior drafts (refire draft, target = the attribution event id) " +
-        "and second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
-        "triage session raised against the entry). An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
-        "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round. Every row shows the last failure's " +
+        "(refire allocation, target = the review's task_completed event id), Behavior drafts (refire draft, target = the attribution event id), " +
+        "second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
+        "triage session raised against the entry) and stop attributions (refire stop_attribution, target = the human stop event id). " +
+        "An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
+        "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round; a stop attribution row shows " +
+        "the stopped task and the stop reason. Every row shows the last failure's " +
         "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
-        `then allocation reviews in the order the reviews completed. ${nextDescription("list_halted_refires", "rows")}`,
+        `then allocation reviews in the order the reviews completed, then stop attributions in the order of the stops. ${nextDescription("list_halted_refires", "rows")}`,
       inputSchema: { next: z.string().optional() },
     },
     // 行は id を持たない —— 続きの境目は refire と target の鍵(Retry / Dismiss が行を指すのと同じ)
@@ -984,7 +986,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     "retry_halted_refire",
     {
       description:
-        "Retry a halted refire (allocation review, Behavior draft or second-round attribution): the board fires it again at the next " +
+        "Retry a halted refire (allocation review, Behavior draft, second-round attribution or stop attribution): the board fires it again at the next " +
         "pickup poll, up to 3 more failed calls. " +
         "Key it as list_halted_refires does (second_round: target = the bundle's first objection event id). Refused for anything not currently in list_halted_refires.",
       inputSchema: refireKeySchema.shape,
