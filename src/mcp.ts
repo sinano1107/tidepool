@@ -1116,7 +1116,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
-        "The board records the write on your review with the entry it came from, and complete_rca lists it on the finding that holds that entry. " +
+        "The board records the write on your review with the material it came from, and complete_rca lists it on the finding that holds that material. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
         material_id: z.number().int(),

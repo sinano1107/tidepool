@@ -85,8 +85,8 @@ it("学習に向かない cause・異議済みで未帰責のエントリ・宛�
     [self, { material_id: unobjected }, `entry ${unobjected} carries no objection`],
     [self, { material_id: otherEntry }, `entry ${otherEntry} is not a decision-log entry of your parent task`],
     [self, { material_id: 999_999 }, "entry 999999 is not a decision-log entry of your parent task"],
-    [task(db, "work", "repair: mixed", HUMAN_WORKER_ID, mixed.id).id, { material_id: capability }, "propose_from_material is only for a review of an objected task"],
-    [task(db, "review", "loose review").id, { material_id: capability }, "propose_from_material is only for a review of an objected task"],
+    [task(db, "work", "repair: mixed", HUMAN_WORKER_ID, mixed.id).id, { material_id: capability }, "propose_from_material is only for a review of an objected or stopped task"],
+    [task(db, "review", "loose review").id, { material_id: capability }, "propose_from_material is only for a review of an objected or stopped task"],
     [self, { material_id: byHuman }, `entry ${byHuman} was written by a human`],
     [rca(db, "rca (auditor): delegated", delegated).id, { material_id: delegatedEntry, as: "behavior", based_on_decision: decision }, decisionRule],
     // 盤面(tidepool)の登録は agent の登録ではない

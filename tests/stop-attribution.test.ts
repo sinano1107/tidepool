@@ -361,7 +361,7 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const draft = { path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace." };
   const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 
-  expect(() => propose(b.entry)).toThrow(`entry ${b.entry} is not in this review's material`);
+  expect(() => propose(b.entry)).toThrow(`id ${b.entry} is not the stop this review was opened on`);
   const { entry_id } = propose(stop);
 
   expect(listMemoryEntries(b.db, {})).toEqual([

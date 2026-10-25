@@ -753,7 +753,7 @@ export function proposeFromMaterial(
   const { material_id, as, based_on_decision, ...fields } = input;
   const task = getTask(db, reviewId);
   if (task?.type !== "review" || task.parent_id === null) {
-    throw new DomainError("propose_from_material is only for a review of an objected task");
+    throw new DomainError("propose_from_material is only for a review of an objected or stopped task");
   }
   const { worker, attribution } = learnedFrom(db, task, material_id);
   // 覆う異議群が未帰責なら uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
@@ -784,7 +784,7 @@ export function proposeFromMaterial(
 function learnedFrom(db: Db, review: Task, material_id: number): { worker: string; attribution: { id: number; cause: Cause } | undefined } {
   const stop = materialStop(db, review.id);
   if (stop) {
-    if (material_id !== stop.id) throw new DomainError(`entry ${material_id} is not in this review's material`);
+    if (material_id !== stop.id) throw new DomainError(`id ${material_id} is not the stop this review was opened on`);
     const { events, spawned } = stoppedSession(db, stop);
     const worker = spawned.worker_id;
     if (worker === HUMAN_WORKER_ID) throw new DomainError(`stop ${material_id} stopped a session a human ran`);
