@@ -864,6 +864,10 @@ export interface ObjectionBundle {
 /** 異議群の名前(最初の異議 event の id、ADR 0170 決定4)—— 帰責の `objection_event_ids` の先頭も同じ異議群を名指す。 */
 export const bundleName = (b: { objection_event_ids: number[] }) => b.objection_event_ids[0]!;
 
+/** 停止ごとの有効な停止の帰責(同じ停止では後の判定が有効、ADR 0310 決定4): 停止 event の id → 判定の event。 */
+export const stopJudgments = (events: readonly EventRow[]) =>
+  new Map(events.filter((e): e is EventRowOf<"stop_attributed"> => e.payload.kind === "stop_attributed").map((e) => [e.payload.stop_event_id, e]));
+
 /** entry ごとの異議群を古い順に(`entryIds` を省けば全 entry)。帰責は束ねた異議群にしか書かれず、`objection_event_ids` の
  *  先頭で自分の異議群を名指す。 */
 export function objectionBundles(db: Db, entryIds?: number[]): Map<number, ObjectionBundle[]> {

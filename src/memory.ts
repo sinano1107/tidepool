@@ -2265,10 +2265,10 @@ const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as 
 
 /** case 描画(ADR 0153 決定3): 出所の decision なら本文・steering(event 順。帰責が出所ならその帰責の異議だけ、
  *  decision を直接指すなら entry への全異議)・
- *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
+ *  Episode の handoff と result、出所の session なら decision 列・handoff・result(停止の帰責が出所なら止められた session のそれに停止の行)。transcript は含まない。 */
 type MemoryCase =
   | { decision: string; steering: string[]; handoff: string | null; result: string | null; human_stop?: { reason: string } }
-  | { decisions: string[]; handoff: string | null; result: string | null };
+  | { decisions: string[]; handoff: string | null; result: string | null; human_stop?: { reason: string } };
 
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
  *  event など)は null。decision 種別の出所は書き手(meta-review)自身の推論で事例ではないので null —— RCA / Board call の
@@ -2282,11 +2282,17 @@ function renderCase(db: Db, source: MemorySource): MemoryCase | null {
 function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: MemoryCase; lineIds: number[] } | null {
   if (source.kind !== "event") return null;
   const event = getEvent(db, source.ref);
-  if (event?.payload.kind === "worker_spawned") {
-    const session = caseSession(db, event);
+  // 停止の帰責が出所なら、止められた session の decision 列 + 停止の行(行動列は描かない、ADR 0310 決定5)
+  const stopped = event?.payload.kind === "stop_attributed" ? getEvent(db, event.payload.stop_event_id) : undefined;
+  const sessionAnchor = event?.payload.kind === "worker_spawned" ? event : stopped;
+  if (sessionAnchor) {
+    const session = caseSession(db, sessionAnchor);
     const decisions = session.events.filter(isDecisionLogEntry).filter((e) => e.kind === "decision_logged");
     return {
-      rendered: { decisions: decisions.map(objectedEntryText), handoff: session.handoff, result: session.result },
+      rendered: {
+        decisions: decisions.map(objectedEntryText), handoff: session.handoff, result: session.result,
+        ...humanStopLine(db, stopped?.payload),
+      },
       lineIds: decisions.map((e) => e.id),
     };
   }
@@ -2303,11 +2309,15 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
   return {
     rendered: {
       decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result,
-      ...(stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {}),
+      ...humanStopLine(db, stop),
     },
     lineIds: steering.map((s) => s.id),
   };
 }
+
+/** case の停止の行(ADR 0308 決定3): 停止 event なら理由つきで、それ以外は欄が無い。 */
+const humanStopLine = (db: Db, stop: EventPayload | undefined) =>
+  stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
 
 /** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
  *  `worker_spawned` ならその session、そうでなければ anchor より前で最後に開いた同じ task の session ——
