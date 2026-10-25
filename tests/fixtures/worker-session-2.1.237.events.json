@@ -2,7 +2,7 @@
   {
     "id": 1,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "human",
+    "actor_id": "human",
     "origin": "webui",
     "kind": "task_registered",
     "payload": {
@@ -15,7 +15,7 @@
   {
     "id": 2,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "human",
+    "actor_id": "human",
     "origin": "webui",
     "kind": "task_moved",
     "payload": {
@@ -27,7 +27,7 @@
   {
     "id": 3,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "human",
+    "actor_id": "human",
     "origin": "webui",
     "kind": "task_moved",
     "payload": {
@@ -39,7 +39,7 @@
   {
     "id": 4,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "board",
     "kind": "task_picked_up",
     "payload": {
@@ -50,7 +50,7 @@
   {
     "id": 5,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "board",
     "kind": "worker_spawned",
     "payload": {
@@ -64,7 +64,7 @@
   {
     "id": 6,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "worker",
     "kind": "decision_logged",
     "payload": {
@@ -76,7 +76,7 @@
   {
     "id": 7,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "worker",
     "kind": "decision_logged",
     "payload": {
@@ -88,7 +88,7 @@
   {
     "id": 8,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "worker",
     "kind": "decision_logged",
     "payload": {
@@ -100,7 +100,7 @@
   {
     "id": 9,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "worker",
     "kind": "task_completed",
     "payload": {
@@ -113,7 +113,7 @@
   {
     "id": 10,
     "task_id": "609d9475-0191-4a7f-b5bf-5b939695315a",
-    "worker_id": "tidepool",
+    "actor_id": "tidepool",
     "origin": "board",
     "kind": "task_registered",
     "payload": {
@@ -126,7 +126,7 @@
   {
     "id": 11,
     "task_id": "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e",
-    "worker_id": "tako",
+    "actor_id": "tako",
     "origin": "board",
     "kind": "worker_exited",
     "payload": {

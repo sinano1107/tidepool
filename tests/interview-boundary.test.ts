@@ -254,7 +254,7 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.parent_id === evidence.id);
   expect(review.type).toBe("review");
   const allocation = { kind: "allocation_reviewed", review_task_id: other.id, worker_spawned_event_id: 1, judge: { provider: "anthropic", model: "claude-opus-4-6", effort: "high" }, allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } as const;
-  appendEvent(t.db, { taskId: evidence.id, workerId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
+  appendEvent(t.db, { taskId: evidence.id, actorId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
   await runNow(t, root.id);
 
@@ -777,7 +777,7 @@ it("ログ API の root の行は Interview のグループを運び、受験者
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [childId] = await pose(root.id);
-  const answer = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "worker", at: t.clock.now(), payload: { kind: "decision_logged", line: "use a hand-written lexer" } });
+  const answer = appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "worker", at: t.clock.now(), payload: { kind: "decision_logged", line: "use a hand-written lexer" } });
 
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   expect(log.entries.find((e: any) => e.task_id === root.id).interview).toEqual({ root_id: root.id, title: POSE.title, workspace: "reef" });
@@ -832,7 +832,7 @@ it("採点した対象の段に行を足すと、その行の本番の pickup �
   await completeMetaReviews(t);
   // 実 adapter が spawn に刻む記録(scripted worker は刻まない —— 刻むことは adapter の seam が言う)
   const { advisor, ...setting } = t.worker.startedSettings.at(-1)!;
-  appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
+  appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });
@@ -860,8 +860,8 @@ it("Interview の種は、置かれた窓の list_routing_cells に行のある�
   await completeMetaReviews(t);
   // 受験者の session の記録(scripted worker は刻まない)
   const { advisor, ...setting } = t.worker.startedSettings.at(-1)!;
-  const spawned = appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
-  appendEvent(t.db, { taskId: childId, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  const spawned = appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
+  appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, outcome: "accepted" }], handoff: FINDINGS });

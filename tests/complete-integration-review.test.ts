@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import {
@@ -11,7 +12,6 @@ import {
   type Task,
   taskVerbSwap,
 } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { bootTidepool, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, mcpClient, NO_FINDINGS, type Tidepool } from "./harness.js";
 
 /** 統合レビューは complete_integration_review で終わる(ADR 0278 決定1〜5 の統合レビュー、issue #2281)。 */
@@ -47,12 +47,12 @@ it("統合レビューの verb の差し替えは complete_task を伏せ comple
 
 it.each([
   ["worker", "fugu", "worker"],
-  ["人間", HUMAN_WORKER_ID, "webui"],
-] as const)("統合レビューへの complete_task は %s の扉でも拒まれ、拒否文は complete_integration_review を指し、何も書かない", (_, workerId, origin) => {
+  ["人間", HUMAN_ACTOR_ID, "webui"],
+] as const)("統合レビューへの complete_task は %s の扉でも拒まれ、拒否文は complete_integration_review を指し、何も書かない", (_, actorId, origin) => {
   const { db, review } = reviewed();
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeTask(db, review, FULL_HANDOFF, workerId, NOW, origin)).toThrow("complete_integration_review");
+  expect(() => completeTask(db, review, FULL_HANDOFF, actorId, NOW, origin)).toThrow("complete_integration_review");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
 });

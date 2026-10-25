@@ -16,7 +16,7 @@ it("周期は未設定なら 7 日で、変更は読み口に効き、人間名�
   const eventId = changeMetaReviewSettings(db, { period_days: 3 }, "mcp", at);
 
   expect(readMetaReviewSettings(db)).toEqual({ period_days: 3 });
-  expect(getEvent(db, eventId)).toMatchObject({ task_id: null, worker_id: "human", origin: "mcp" });
+  expect(getEvent(db, eventId)).toMatchObject({ task_id: null, actor_id: "human", origin: "mcp" });
   expect(getEvent(db, eventId)?.payload).toEqual({ kind: "meta_review_settings_changed", period_days: 3 });
 });
 

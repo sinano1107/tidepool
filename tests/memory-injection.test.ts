@@ -401,7 +401,7 @@ it("注入の記録は task 帰属・agent 名義の memory_injected で、worke
 
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: task.id,
-    worker_id: "deckhand",
+    actor_id: "deckhand",
     origin: "board",
     payload: {
       kind: "memory_injected",
@@ -427,7 +427,7 @@ it("注入上限は未設定なら 2,000 トークンで、変更は読み口に
   const eventId = changeMemorySettings(db, { injection_token_cap: 500 }, "webui", at);
 
   expect(readMemorySettings(db)).toEqual({ injection_token_cap: 500 });
-  expect(getEvent(db, eventId)).toMatchObject({ task_id: null, worker_id: "human", origin: "webui" });
+  expect(getEvent(db, eventId)).toMatchObject({ task_id: null, actor_id: "human", origin: "webui" });
   expect(getEvent(db, eventId)?.payload).toEqual({ kind: "memory_settings_changed", injection_token_cap: 500 });
 });
 

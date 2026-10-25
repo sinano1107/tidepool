@@ -67,7 +67,7 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
   const { db, task, decision, reader, behavior } = board();
   const attributed = appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -98,7 +98,7 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
   expect(current.entries).toHaveLength(1);
   expect(getEvent(db, current.event_id)).toMatchObject({
     task_id: task.id,
-    worker_id: "auditor",
+    actor_id: "auditor",
     payload: { kind: "memory_pulled", verb: "list_memory_candidates", input: {}, returned_ids: [open] },
   });
 
@@ -132,7 +132,7 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
   const { db, task, decision, reader, behavior } = board();
   const attributed = appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -484,7 +484,7 @@ it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指
   // setup のみ: 帰責の event
   const objected = (i: number, cause: "memory" | "capability", entries: number[] | null) => {
     const { decision, objection } = objectedDecision(b, i);
-    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" }, at });
+    appendEvent(db, { taskId: task.id, actorId: "tidepool", origin: "board", payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" }, at });
     return decision;
   };
   const followed = objected(1, "memory", [41, 42]);
@@ -545,7 +545,7 @@ const approve = (db: ReturnType<typeof openDb>, candidate_id: number) =>
 const attribution = ({ db, task, decision }: Pick<ReturnType<typeof board>, "db" | "task" | "decision">, comment?: string) =>
   appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at, comment)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -612,7 +612,7 @@ it("read_memory_entries は path_moved の id に鎖の末尾の行を requested
     { id: tail, scope: null, text: "tools.", requested_id: twice },
   ]);
   const pulled = getEvent(db, read.event_id)!;
-  expect(pulled).toMatchObject({ task_id: reader.taskId, worker_id: "auditor", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: { ids: [once, twice] }, returned_ids: [copy, tail] } });
+  expect(pulled).toMatchObject({ task_id: reader.taskId, actor_id: "auditor", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: { ids: [once, twice] }, returned_ids: [copy, tail] } });
   expect(pulled.payload).not.toHaveProperty("dropped");
 });
 
@@ -679,7 +679,7 @@ it("read_memory_entries の行は、人間が原文つきで書いたエント�
 
 it("session の中で read_memory_entries が返した id は、その session の Precedent の entries_seen に入り entries_read に入らない(ADR 0122 追記 #1225)", () => {
   const { db, task, reader, knowledge } = board();
-  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const spawned = appendEvent(db, { taskId: task.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const id = knowledge("tidepool", "notes");
   const read = readMemoryEntries(db, reader, { ids: [id] }, at);
   const decision = logDecision(db, task, "retired the stale note", "auditor", at, "worker");
@@ -698,7 +698,7 @@ it("session の中で read_memory_entries が返した id は、その session �
 
 it("session の中で list_memory_entries と search_memory_entries が返した id は、その後の decision の entries_seen に入り entries_read に入らない(ADR 0083 追記6)", () => {
   const { db, task, reader, knowledge } = board();
-  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const spawned = appendEvent(db, { taskId: task.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const listed = knowledge("tidepool", "notes");
   const searched = knowledge("charts", "tide");
   const list = pullMemoryList(db, reader, "list_memory_entries", { scope: "tidepool" }, at);
@@ -719,7 +719,7 @@ it("session の中で list_memory_entries と search_memory_entries が返した
 
 it("read_memory_entries と一覧の pull が同じ session にあっても、memory マーカーはすべて位置を持ち欠測にならない", () => {
   const { db, task, reader, knowledge, behavior } = board();
-  const spawned = appendEvent(db, { taskId: task.id, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const spawned = appendEvent(db, { taskId: task.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const id = knowledge("tidepool", "notes");
   behavior({ title: "Keep notes short" });
   const pulls = [
@@ -846,7 +846,7 @@ it("search_memory_entries は応答予算で切って next と remaining を言�
   expect([...first.results, ...second.results].map((r) => r.id).sort((a, b) => a - b)).toEqual(ids);
   expect(getEvent(db, second.event_id)).toMatchObject({
     task_id: reader.taskId,
-    worker_id: "auditor",
+    actor_id: "auditor",
     payload: { kind: "memory_pulled", verb: "search_memory_entries", input: { query: "tide" }, returned_ids: second.results.map((r) => r.id) },
   });
 });

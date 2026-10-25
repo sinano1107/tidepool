@@ -47,12 +47,12 @@ it("every state change is appended as a typed event, readable via the events API
 
   const [registered, pickedUp, completed] = events;
   // registration through the bare JSON API is attributed to the human worker
-  expect(registered.worker_id).toBe("human");
+  expect(registered.actor_id).toBe("human");
   expect(registered.origin).toBe("webui");
   expect(registered.payload.type).toBe("work");
-  expect(pickedUp.worker_id).toBe(t.worker.id);
+  expect(pickedUp.actor_id).toBe(t.worker.id);
   expect(pickedUp.origin).toBe("board");
-  expect(completed.worker_id).toBe(t.worker.id);
+  expect(completed.actor_id).toBe(t.worker.id);
   expect(completed.origin).toBe("worker");
   expect(completed.payload.handoff_present).toBe(true);
   // append-only trail: every event carries its task and a timestamp
@@ -86,7 +86,7 @@ it("タスク単位の最新1件の読み口は、同じタスク・同じ kind 
   const db = seedFixtureBoard();
   const later = appendEvent(db, {
     taskId: FIXTURE_OTHER_TASK,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "worker",
     payload: { kind: "decision_logged", line: "other task" },
     at: new Date("2026-09-28T00:00:00.000Z"),
@@ -104,7 +104,7 @@ it("今の判定の読み口は、同じ異議群に initial と after_rca の�
   const attribute = (cause: "uncertain" | "preference", round: "initial" | "after_rca") =>
     appendEvent(db, {
       taskId: FIXTURE_TASK,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "board",
       payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: null, round },
       at,

@@ -617,7 +617,7 @@ it("準備が task ブランチへ checkout した後で spawn が落ちた pick
   expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${f.task.id}`);
   const failure = { error_code: "ENOENT", message: "spawn claude ENOENT" };
   // 観測点が event を書いてから盤面の一撃を呼ぶ(scheduler / adapter と同じ順)
-  appendEvent(f.db, { taskId: f.task.id, workerId: "deckhand", origin: "board", payload: { kind: "spawn_failed", ...failure }, at: f.clock.now() });
+  appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: { kind: "spawn_failed", ...failure }, at: f.clock.now() });
 
   spawnFailureHandler({ db: f.db, clock: f.clock, slot: f.slot, resolve: f.resolve, pollNow: () => f.triggered.push("pollNow") }, f.containers)(f.task.id, failure);
   await settle();

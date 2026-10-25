@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type AllocationTarget, allocationInput, allocationTargets, buildAllocationReviewInput } from "../src/allocation-review.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
@@ -9,7 +10,6 @@ import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import { completeIntegrationReview, completeTask, getTask, listChildren, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { tierIdOf } from "../src/tier.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { BOARD_CALL_USAGE, FakeAllocationClient, noRetrospectiveCalls } from "./fakes.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, nextPoll, QUIET_EXIT, questions, WORKER_SPAWNED as spawned, type Tidepool } from "./harness.js";
 
@@ -91,8 +91,8 @@ function recordedAllocation(t: Tidepool, session: typeof spawned, requestedTier?
   const work = registerTask(t.db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c", tier: requestedTier }, at, ...HUMAN_WEBUI);
   markPickedUp(t.db, work.id, at, "reef-crab");
   const review = registerTask(t.db, { type: "review", title: "review", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
-  const spawnedId = appendEvent(t.db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: session });
-  const completedId = appendEvent(t.db, { taskId: review.id, workerId: HUMAN_WORKER_ID, origin: "webui", at, payload: { kind: "task_completed", handoff_present: false, result: "accepted" } });
+  const spawnedId = appendEvent(t.db, { taskId: work.id, actorId: "reef-crab", origin: "board", at, payload: session });
+  const completedId = appendEvent(t.db, { taskId: review.id, actorId: HUMAN_ACTOR_ID, origin: "webui", at, payload: { kind: "task_completed", handoff_present: false, result: "accepted" } });
   return { reviewed_task_id: work.id, review_task_id: review.id, spawned_event_id: spawnedId, completed_event_id: completedId };
 }
 
@@ -104,7 +104,7 @@ it.each([
   t = await bootTidepool();
   const target = recordedAllocation(t, { ...spawned, tier_id: tierIdOf(t.db, tier), source: { ...spawned.source, tier: source } }, requestedTier);
   // A later spawn must not change the session this target evaluates.
-  appendEvent(t.db, { taskId: target.reviewed_task_id, workerId: "reef-crab", origin: "board", at: t.clock.now(), payload: { ...spawned, tier_id: tierIdOf(t.db, "economy") } });
+  appendEvent(t.db, { taskId: target.reviewed_task_id, actorId: "reef-crab", origin: "board", at: t.clock.now(), payload: { ...spawned, tier_id: tierIdOf(t.db, "economy") } });
 
   const input = allocationInput(t.db, target);
 
@@ -127,11 +127,11 @@ it("verdict と findings は統合レビューの判断の行から読み、後�
   const db = openDb(":memory:");
   const at = new Date("2026-10-19T00:00:00.000Z");
   const work = registerTask(db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  appendEvent(db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: spawned });
+  appendEvent(db, { taskId: work.id, actorId: "reef-crab", origin: "board", at, payload: spawned });
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
   completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
-  appendEvent(db, { taskId: review.id, workerId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "a later plain decision" } });
+  appendEvent(db, { taskId: review.id, actorId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "a later plain decision" } });
 
   const [target] = allocationTargets(db);
 
@@ -143,7 +143,7 @@ async function reviewAllocationOnBoard(allocationClient: FakeAllocationClient) {
   const db = openDb(":memory:");
   const at = new Date("2026-10-19T00:00:00.000Z");
   const work = registerTask(db, { type: "work", title: "subject", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  appendEvent(db, { taskId: work.id, workerId: "reef-crab", origin: "board", at, payload: spawned });
+  appendEvent(db, { taskId: work.id, actorId: "reef-crab", origin: "board", at, payload: spawned });
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
   completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
@@ -189,7 +189,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
   const spawnedId = options.session
     ? appendEvent(t.db, {
         taskId: task.id,
-        workerId: "reef-crab",
+        actorId: "reef-crab",
         origin: "board",
         at: t.clock.now(),
         payload: { ...spawned, model: "subject-model", tier_id: tierIdOf(t.db, "standard") },
@@ -201,7 +201,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
   if (spawnedId !== null) {
     appendEvent(t.db, {
       taskId: task.id,
-      workerId: "reef-crab",
+      actorId: "reef-crab",
       origin: "board",
       at: t.clock.now(),
       payload: {
@@ -230,10 +230,10 @@ async function completeReview(t: Tidepool, reviewId: string) {
   await client.close();
 }
 
-/** 人間が書き手の完了(worker_id human の task_completed)を置く —— poll は促さない。統合点レビューは盤面が agent 名義で
+/** 人間が書き手の完了(actor_id human の task_completed)を置く —— poll は促さない。統合点レビューは盤面が agent 名義で
  *  登録し review_by も human を拒むので、人間の扉で完了できる公開の経路が今は無く、完了の verb を直に呼ぶ。 */
 function completeReviewByHand(t: Tidepool, reviewId: string) {
-  completeIntegrationReview(t.db, getTask(t.db, reviewId)!, { findings: "accepted by hand", no_findings: true }, HUMAN_WORKER_ID, t.clock.now(), "webui");
+  completeIntegrationReview(t.db, getTask(t.db, reviewId)!, { findings: "accepted by hand", no_findings: true }, HUMAN_ACTOR_ID, t.clock.now(), "webui");
 }
 
 const events = async (t: Tidepool, taskId: string, kind: string) =>
@@ -313,7 +313,7 @@ it("撃って失敗すると review の完了 event を鍵にした失敗 event 
   const [completed] = await events(t, review.id, "task_completed");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${review.id}`)).json.status).toBe("done");
   expect(await annotations(t, task.id)).toEqual([]);
-  expect((await failures(t, task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await failures(t, task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     [
       "tidepool",
       "board",
@@ -429,7 +429,7 @@ it("review の完了の後に被レビュー task が再 spawn されても、�
   t = await bootTidepool({ allocationClient });
   const { task, review, spawnedId } = await reviewedWork(t);
   completeReviewByHand(t, review.id);
-  appendEvent(t.db, { taskId: task.id, workerId: "reef-crab", origin: "board", at: t.clock.now(), payload: { ...spawned, model: "respawned-model" } });
+  appendEvent(t.db, { taskId: task.id, actorId: "reef-crab", origin: "board", at: t.clock.now(), payload: { ...spawned, model: "respawned-model" } });
 
   await nextPoll(t);
 

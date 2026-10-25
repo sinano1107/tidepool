@@ -72,7 +72,7 @@ it("issue 本文の取得中に assignee を別の agent へ付け替えた task
   expect(t.worker.started.map((x) => x.id)).toEqual([head.id]);
   expect(t.worker.startedSettings[0]!.provider).toBe("openai");
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${head.id}/events`)).json;
-  expect(events.filter((e: any) => e.kind === "task_picked_up").map((e: any) => e.worker_id)).toEqual(["codex-agent"]);
+  expect(events.filter((e: any) => e.kind === "task_picked_up").map((e: any) => e.actor_id)).toEqual(["codex-agent"]);
 });
 
 // IssueGone の failure question は、行がまだ選んだ head のときだけ立つ(issue #973)。窓の間の人間の扉の決定は上書きしない

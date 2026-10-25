@@ -1,7 +1,7 @@
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { DomainError } from "./domain-error.js";
 import type { TaskType } from "./tasks.js";
 import { whyAssigneeCannotTake } from "./webui-rules.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 
 export interface AssigneeDeps {
   agentRegistered?: (name: string) => boolean;
@@ -15,7 +15,7 @@ export function assertAssigneeCanTake(
   assignee: string | undefined,
   type: TaskType,
 ): void {
-  if (assignee === undefined || assignee === HUMAN_WORKER_ID) return;
+  if (assignee === undefined || assignee === HUMAN_ACTOR_ID) return;
   if (deps.agentRegistered && !deps.agentRegistered(assignee)) {
     throw new DomainError(`unknown agent: ${assignee}`);
   }

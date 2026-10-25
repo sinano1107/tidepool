@@ -118,12 +118,12 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
   expect(question.title).toBe("execution-setting row anthropic / claude-sonnet-5-5 cannot run on this board");
   expect(question.question_items[0].options).toEqual(["the row can run again"]);
   const [registered] = await events(question.id);
-  expect({ worker: registered.worker_id, origin: registered.origin }).toEqual({ worker: "tidepool", origin: "board" });
+  expect({ worker: registered.actor_id, origin: registered.origin }).toEqual({ worker: "tidepool", origin: "board" });
 
   const timeline = await events(refused.id);
   const spawned = timeline.filter((e) => e.kind === "worker_spawned");
   expect(timeline.find((e) => e.kind === "row_refused")).toMatchObject({
-    worker_id: "tidepool",
+    actor_id: "tidepool",
     origin: "board",
     payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" },
   });
@@ -850,7 +850,7 @@ it("probe の破綻の報告の retry は、「この対象は測らない」で
 
 /** question の quarantine_released を [worker, origin, payload] で並べる(盤面名義かは worker と origin で言う)。 */
 const releases = async (questionId: string) =>
-  (await events(questionId)).filter((e) => e.kind === "quarantine_released").map((e) => [e.worker_id, e.origin, e.payload]);
+  (await events(questionId)).filter((e) => e.kind === "quarantine_released").map((e) => [e.actor_id, e.origin, e.payload]);
 
 it("対象の question が開いている間に Interview の root を直接 cancel すると、question は回答なしで決着し、root の cancel を観測とする quarantine_released が1件だけ残る", async () => {
   const board = await refuseUnrowedTarget([SONNET_MEDIUM]);

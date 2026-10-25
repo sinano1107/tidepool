@@ -99,7 +99,7 @@ it("第2回の帰責が撃って3回失敗すると両方の一覧に出て、�
   await t.clock.advance(HOUR);
 
   expect(s.attributionClient.calls).toHaveLength(4);
-  expect((await taskEvents(t, s.task.id, "refire_dismissed")).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await taskEvents(t, s.task.id, "refire_dismissed")).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     ["human", "mcp", { kind: "refire_dismissed", refire: "second_round", target: s.objection }],
   ]);
 });
@@ -132,7 +132,7 @@ it("POST .../retry で打ち切りの起草はすぐ次の poll で撃たれ、�
     expect.objectContaining({ state: "candidate", source: { kind: "event", ref: s.attribution.id } }),
   ]);
   expect(await haltedRefires(t)).toEqual([]);
-  expect((await taskEvents(t, s.task.id, "refire_retried")).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await taskEvents(t, s.task.id, "refire_retried")).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     ["human", "webui", { kind: "refire_retried", refire: "draft", target: s.attribution.id }],
     ["human", "mcp", { kind: "refire_retried", refire: "draft", target: s.attribution.id }],
   ]);
@@ -239,7 +239,7 @@ it("打ち切りの配分評価は POST .../retry で次の poll にまた撃た
   expect(await haltedRefires(t)).toEqual([]);
   expect(allocationClient.calls).toHaveLength(6);
   const human = [...(await taskEvents(t, s.task.id, "refire_retried")), ...(await taskEvents(t, s.task.id, "refire_dismissed"))];
-  expect(human.map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect(human.map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     ["human", "webui", { kind: "refire_retried", ...key }],
     ["human", "mcp", { kind: "refire_dismissed", ...key }],
   ]);

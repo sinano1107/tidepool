@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
 import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
@@ -14,7 +15,6 @@ import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires
 import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, pickupTask, REPAIR_NOTICES, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
 import {
   api,
@@ -92,7 +92,7 @@ it("好みの異議(preference)だけの commit では修理だけが立ち、�
   const kids = await children(t, task.id);
   expect(kids.map((x: any) => x.title)).toEqual(["repair: naming"]);
   expect(kids[0].purpose).toContain("call it --dry-run, that's what I'm used to");
-  expect((await attributions(t, task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await attributions(t, task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     [
       "tidepool",
       "board",
@@ -167,7 +167,7 @@ it("初回の Board call の失敗は帰責を書かず round initial の失敗 
   expect((await attributions(t, task.id)).map((e: any) => [e.payload.entry_id, e.payload.cause])).toEqual([
     [entries[0].id, "preference"],
   ]);
-  expect((await attributionsFailed(t, task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await attributionsFailed(t, task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: entries[1].id, objection_event_id: expect.any(Number), round: "initial", reason: "Board call failed: claude CLI timed out" }],
   ]);
   const kids = await children(t, task.id);
@@ -694,7 +694,7 @@ it("commit が促す poll の起草の Board call が失敗すると memory_draf
   const { res } = await commit(t, s.task.id, "flaky draft");
 
   expect(res.json.outcome).toBe("closed_now");
-  expect((await attributions(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await attributions(t, s.task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     [
       "tidepool",
       "board",
@@ -709,7 +709,7 @@ it("commit が促す poll の起草の Board call が失敗すると memory_draf
       },
     ],
   ]);
-  expect((await draftsFailed(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await draftsFailed(t, s.task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     [
       "tidepool",
       "board",
@@ -752,7 +752,7 @@ it("人間が登録した task の task_ambiguity は宛先の agent がいな�
 
 it.each([
   ["承認で実体化した子(Registrant は human)は文面の書き手 = 分解した agent 宛てに起草する", "planner", 1],
-  ["人間の分解の子は文面の書き手が人間なので起草しない", HUMAN_WORKER_ID, 0],
+  ["人間の分解の子は文面の書き手が人間なので起草しない", HUMAN_ACTOR_ID, 0],
 ] as const)("第2回で task_ambiguity に確定したとき、%s(ADR 0197)", async (_, decomposedBy, drafts) => {
   const s = await objectedForDraft("decomposed", { decomposedBy });
   t = s.t;
@@ -823,7 +823,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
   await nextPoll(t);
 
   expect((await attributions(t, s.task.id)).map((e: any) => e.payload.round)).toEqual(["initial"]);
-  expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.worker_id, e.origin, e.payload])).toEqual([
+  expect((await attributionsFailed(t, s.task.id)).map((e: any) => [e.actor_id, e.origin, e.payload])).toEqual([
     ["tidepool", "board", { kind: "objection_attribution_failed", entry_id: s.entry.id, objection_event_id: s.objection, round: "after_rca", reason: "Board call failed: claude CLI timed out" }],
   ]);
   s.attributionClient.scriptJudgment(s.entry.id, { cause: "capability", evidence: "the RCA decided it" });
@@ -1387,7 +1387,7 @@ function memoryBoard() {
   const spawn = () =>
     appendEvent(db, {
       taskId: task.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       at,
       payload: WORKER_SPAWNED,
@@ -1431,13 +1431,13 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
   const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
   const material = b.knowledge("Material note");
   const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
-  const spawned = appendEvent(b.db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(b.db, { taskId: review.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordMemoryInjection(b.db, review.id, "deckhand", spawned, buildMemoryInjection(b.db, review, null, "deckhand"), at);
   // setup のみ: 材料の節に material が載った記録(エントリを運ぶのは主題 memory の材料だけ)
   const common = { kind: "meta_review_material_injected" as const, worker_spawned_event_id: spawned, previous_watermark: 0, material_watermark: spawned, tokens: 1, tokenizer: "t", tokenizer_version: "1" };
   appendEvent(b.db, {
     taskId: review.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload:
@@ -1462,7 +1462,7 @@ it.each([
   const guidance = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "review", title: "Fold duplicates first", text: "Fold duplicates first.", addressee: "deckhand" }), "webui", at).entry_id;
   const review = registerTask(b.db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", meta_review_subject: subject }, at, ...HUMAN_WEBUI);
   const repair = registerTask(b.db, { type, title: `${subject} repair`, purpose: "undo it", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
-  const spawned = appendEvent(b.db, { taskId: repair.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(b.db, { taskId: repair.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordMemoryInjection(b.db, repair.id, "deckhand", spawned, buildMemoryInjection(b.db, repair, "charts", "deckhand"), at);
   readMemoryEntries(b.db, { taskId: repair.id, agent: "deckhand" }, { ids: [guidance] }, at);
   const decision = logDecision(b.db, repair, "kept the note", "deckhand", at, "worker");
@@ -1924,7 +1924,7 @@ async function definitionBoard({
   const commit = git("rev-parse", "main");
   const b = memoryBoard();
   const task = sessionTask?.(b.db) ?? b.task;
-  appendEvent(b.db, { taskId: task.id, workerId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: version } });
+  appendEvent(b.db, { taskId: task.id, actorId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: version } });
   const decision = logDecision(b.db, task, "kept the v1 endpoint", worker, at, "worker");
   const deps = { ...noRetrospectiveCalls, registryDir };
   return { ...b, task, registryDir, git, commit, decision, deps, sessionId: b.objectTo(decision) };
@@ -1946,7 +1946,7 @@ const DECKHAND_THEN = (commit: string) => ({
 const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: number[]) =>
   appendEvent(b.db, {
     taskId: b.task.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: spawned, entries: ids.map((id) => ({ id, version: 1 })), tokens: 1, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" },
@@ -2037,11 +2037,11 @@ it("実行前の親の下の review の session の当時版の Roster は、spa
   const b = await definitionBoard({
     sessionTask: (db) => {
       parentId = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-      return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: parentId }, at, BOARD_WORKER_ID, "board");
+      return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: parentId }, at, BOARD_ACTOR_ID, "board");
     },
   });
   pickupTask(b.db, getTask(b.db, parentId)!, "deckhand", at, { assignee: "deckhand" });
-  appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: b.commit } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: b.commit } });
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);

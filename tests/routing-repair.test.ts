@@ -35,7 +35,7 @@ it("routing meta-review の型つきの判断の行への異議は routing_repai
   expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ opened_on_event_ids: objections });
 
   // 自由文の log_decision の行(judgment を持たない)も対象を名指さない
-  const freeText = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "the table looks fine overall" } });
+  const freeText = appendEvent(db, { taskId: review.id, actorId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "the table looks fine overall" } });
   raiseObjection(db, completed, "you should have proposed something", at);
   raiseObjection(db, freeText, "it does not", at);
   commitTriage(db, at);

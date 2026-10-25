@@ -312,7 +312,7 @@ function mapData(
   const openSessionId = triage.session?.id ?? null;
   const logEntries: TpLogEntry[] = [...log.entries].reverse().map((e) => ({
     ...toLogEntryShape(e, openSessionId),
-    id: e.id, time: fmtTime(e.created_at), agentIcon: icons[e.worker_id],
+    id: e.id, time: fmtTime(e.created_at), agentIcon: icons[e.actor_id],
     unread: e.unread,
     handoffPresent: e.payload.kind === 'task_completed' && !!e.payload.handoff_present,
     translatable: e.payload.kind !== 'task_completed' || e.payload.result !== null,

@@ -24,7 +24,7 @@ function board() {
   const spawn = (taskId: string, agent: string, run: ExecutionSetting, tier: "agent" | "task" = "agent") =>
     appendEvent(db, {
       taskId,
-      workerId: agent,
+      actorId: agent,
       origin: "board",
       at,
       payload: {
@@ -42,7 +42,7 @@ function board() {
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: cost };
     return appendEvent(db, {
       taskId,
-      workerId: "board",
+      actorId: "board",
       origin: "board",
       at,
       payload: {
@@ -58,7 +58,7 @@ function board() {
   const allocate = (taskId: string, spawned: number, outcome: object) =>
     appendEvent(db, {
       taskId,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "board",
       at,
       payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, ...outcome } as Extract<EventPayload, { kind: "allocation_reviewed" }>,

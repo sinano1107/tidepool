@@ -10,13 +10,13 @@ import { answerQuestionViaWebui } from "./harness.js";
 // urgency to a question — it blocks its parent the same way. A human task the
 // human's own operation created (WebUI direct registration, or an approve
 // answer materializing a pending child) is the echo of that click and stays
-// silent. The discriminator is the task_registered event's worker_id: 'human'
+// silent. The discriminator is the task_registered event's actor_id: 'human'
 // for both human-triggered paths, the agent's own id otherwise.
 
 function registerHumanTask(
   db: ReturnType<typeof openDb>,
   title: string,
-  workerId: string,
+  actorId: string,
   at = new Date(0),
 ) {
   return registerTask(
@@ -29,7 +29,7 @@ function registerHumanTask(
       assignee: "human",
     },
     at,
-    workerId,
+    actorId,
     "webui",
   );
 }
@@ -60,7 +60,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     expect(push.sent).toHaveLength(1);
   });
 
-  it("WebUI 直接登録(worker_id = 'human')の human タスクは通知しない", async () => {
+  it("WebUI 直接登録(actor_id = 'human')の human タスクは通知しない", async () => {
     const db = openDb(":memory:");
     savePushSubscription(db, { endpoint: "https://push.example/abc", p256dh: "k", auth: "a" });
     registerHumanTask(db, "自分でメモした用事", "human");
@@ -85,7 +85,7 @@ describe("pollNotifications(issue #116): agent 登録の human タスクを ques
     );
     // an out-of-authority `assignee: "human"` child converts to this approval
     // question at decompose time — answerQuestion materializes it under
-    // HUMAN_WORKER_ID on "approve" (tasks.ts), the same silent attribution as
+    // HUMAN_ACTOR_ID on "approve" (tasks.ts), the same silent attribution as
     // a WebUI registration
     const question = registerTask(
       db,

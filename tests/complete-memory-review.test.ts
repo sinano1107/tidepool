@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
@@ -18,7 +19,6 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { completeTask, escalateTask, getTask, listChildren, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { decomposeTaskViaWorker, FULL_HANDOFF, humanDecomposeTaskViaWebui, injectMemoryMaterial, judgmentRows, objectedJudgment } from "./harness.js";
 
 /** memory meta-review は complete_memory_review で終わる(ADR 0278 決定1〜5 の memory、issue #2283)。 */
@@ -61,7 +61,7 @@ it("memory meta-review の verb の差し替えは complete_task と分解の ve
 
 it("memory meta-review も、その判断の行への異議から立った RCA も分解できない —— verb を伏せ、worker の decompose も人間の decompose も直接の work の登録も系譜のルートを名指して拒み、何も登録しない(#2505 測定 G / ADR 0301 決定3)", () => {
   const { db, review } = cycle();
-  const entry = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "keep entry 3" } });
+  const entry = appendEvent(db, { taskId: review.id, actorId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "keep entry 3" } });
   startTriage(db, at);
   raiseObjection(db, entry, "drop entry 3", at);
   commitTriage(db, at, [], new Map());
@@ -73,7 +73,7 @@ it("memory meta-review も、その判断の行への異議から立った RCA �
     expect(() => decomposeTaskViaWorker(db, parent, split, "auditor", at)).toThrow(/root is a memory meta-review/);
     expect(() => humanDecomposeTaskViaWebui(db, parent, split, at)).toThrow(/root is a memory meta-review/);
     // 直接の登録も同じ床に当たる
-    expect(() => registerTask(db, { type: "work", ...split.children[0]!, parent_id: parent.id }, at, BOARD_WORKER_ID, "board")).toThrow(/^no work task grows here: this lineage's root is a memory meta-review/);
+    expect(() => registerTask(db, { type: "work", ...split.children[0]!, parent_id: parent.id }, at, BOARD_ACTOR_ID, "board")).toThrow(/^no work task grows here: this lineage's root is a memory meta-review/);
   }
   expect(listChildren(db, rca.id)).toEqual([]);
   expect(listChildren(db, review.id).map((child) => child.title)).toEqual([`rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
@@ -81,12 +81,12 @@ it("memory meta-review も、その判断の行への異議から立った RCA �
 
 it.each([
   ["worker", "auditor", "worker"],
-  ["人間", HUMAN_WORKER_ID, "webui"],
-] as const)("memory meta-review への complete_task は %s の扉でも拒まれ、拒否文は complete_memory_review を指し、何も書かない", (_, workerId, origin) => {
+  ["人間", HUMAN_ACTOR_ID, "webui"],
+] as const)("memory meta-review への complete_task は %s の扉でも拒まれ、拒否文は complete_memory_review を指し、何も書かない", (_, actorId, origin) => {
   const { db, review } = cycle();
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeTask(db, review, FULL_HANDOFF, workerId, at, origin)).toThrow("complete_memory_review");
+  expect(() => completeTask(db, review, FULL_HANDOFF, actorId, at, origin)).toThrow("complete_memory_review");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
@@ -145,7 +145,7 @@ it("注入の後に人間が引退させた candidate への left_as_is は受�
   register(db, "memory", true);
   const retired = candidate(db, "Retired");
   const { review, injected } = injectedReview(db);
-  invalidateMemoryEntry(db, { entry_id: retired, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "rejected" }, HUMAN_ACTOR_ID, "webui", at);
 
   const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
 
@@ -155,7 +155,7 @@ it("注入の後に人間が引退させた candidate への left_as_is は受�
 });
 
 it.each([
-  ["人間が無効化した", (db: Db, entry: number) => invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at)],
+  ["人間が無効化した", (db: Db, entry: number) => invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at)],
   ["他の worker が畳んだ", (db: Db, entry: number) => foldMemoryEntries(db, { replaces: [entry], successor_id: knowledge(db, "notes"), author: deckhand }, "worker", at)],
 ] as const)("注入の後に%s店の変更のエントリは行為済みで、注入した一覧どおりの完了は done になり、その行は書かれない", (_, act) => {
   const { db, written, review, injected } = cycle();
@@ -171,7 +171,7 @@ it("注入の前(窓の中)に無効化された店の変更のエントリは�
   const db = openDb(":memory:");
   register(db, "memory", true);
   const written = knowledge(db, "notes");
-  invalidateMemoryEntry(db, { entry_id: written, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: written, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const { review, injected } = injectedReview(db);
 
   expect(injected).toEqual([]);
@@ -186,7 +186,7 @@ it("材料を組んでから記録するまでの間に人間が引退させた�
   const review = register(db, "memory");
   const material = buildMetaReviewMaterial(db, review.id);
   if (material?.subject !== "memory") throw new Error("no memory material");
-  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   recordMetaReviewMaterial(db, review.id, "auditor", 42, material, at);
 
   const done = completeMemoryReview(db, review, { judgments: material.parts.items }, "auditor", at, "worker");
@@ -337,7 +337,7 @@ function candidateOnlyCycle() {
   const retired = knowledge(db, "tides", "charts");
   const previous = register(db, "memory", true);
   objectedJudgment(db, previous.id, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
-  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const drafted = createBehaviorCandidate(
     db,
     { scope: "charts", path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },

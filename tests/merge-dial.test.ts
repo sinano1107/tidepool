@@ -377,7 +377,7 @@ it("a low-risk task under auto_if_ci_green queues for auto-merge instead of aski
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   expect(events.filter((e: any) => e.kind === "pr_merged")).toEqual([
     expect.objectContaining({
-      worker_id: "tidepool",
+      actor_id: "tidepool",
       origin: "board",
       payload: { kind: "pr_merged", pr_number: 1 },
     }),

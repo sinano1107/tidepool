@@ -94,7 +94,7 @@ it("a move is appended to the task's event log, attributed to the human worker",
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${b.id}/events`)).json;
   const moved = events.filter((e: any) => e.kind === "task_moved");
   expect(moved).toHaveLength(1);
-  expect(moved[0].worker_id).toBe("human");
+  expect(moved[0].actor_id).toBe("human");
   expect(moved[0].payload).toEqual({ kind: "task_moved", after: null });
 });
 

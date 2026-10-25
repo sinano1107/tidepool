@@ -22,5 +22,5 @@ it("review タスクの未設定 assignee での MCP 呼び出しは、既定 ag
 
   const log = (await api(t.baseUrl, "GET", "/api/log")).json;
   const decision = log.entries.find((e: any) => e.kind === "decision_logged");
-  expect(decision.worker_id).toBe("keeper");
+  expect(decision.actor_id).toBe("keeper");
 });

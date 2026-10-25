@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import {
   cancelTaskDirectly,
@@ -12,7 +13,6 @@ import {
   registerTask,
   type Task,
 } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, interviewExaminee } from "./harness.js";
 
 /** cancel の面が見せる「捨てられる done の work」の読み(ADR 0271 決定4)。範囲は cascade / abandon と同じ述語。 */
@@ -31,10 +31,10 @@ const done = (task: Task, worker = "deckhand") => completeTask(db, getTask(db, t
 it("直接 cancel の範囲の done の work のうち agent が実行したものを、盤面の順で id と題で返す —— 人間が実行したものは入らない", () => {
   db = openDb(":memory:");
   const root = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c" }, NOW, ...HUMAN_WEBUI);
-  const [agentDone, humanDone, open] = split(root, [{ title: "a" }, { title: "b", assignee: HUMAN_WORKER_ID }, { title: "c" }]);
+  const [agentDone, humanDone, open] = split(root, [{ title: "a" }, { title: "b", assignee: HUMAN_ACTOR_ID }, { title: "c" }]);
   const [deep] = split(open!, [{ title: "c1" }]);
   done(agentDone!);
-  done(humanDone!, HUMAN_WORKER_ID);
+  done(humanDone!, HUMAN_ACTOR_ID);
   done(deep!);
   moveTask(db, getTask(db, deep!.id)!, null, NOW, ...HUMAN_WEBUI);
 

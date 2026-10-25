@@ -1,10 +1,10 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { setDisplayLanguage } from "../src/display-language.js";
 import { appendEvent } from "../src/events.js";
 import { injectionQueryText } from "../src/memory.js";
 import { logDecision, registerTask } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { FakeTranslationClient, healthyOpenai } from "./fakes.js";
 import { api, bootTidepool, executionSetting, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
 
@@ -35,12 +35,12 @@ it("表示言語 Japanese の盤面で、異議の材料を持つ盤面名義の
   // 異議された task は人間の担当にして slot に入れない —— slot に入るのは RCA review だけ
   const objected = registerTask(t.db, { type: "work", title: "潮汐グラフ", purpose: "p", completion_criteria: "c", assignee: "human" }, now, "deckhand", "worker");
   const entry = logDecision(t.db, objected, "補正を二重にかけた", "deckhand", now, "worker");
-  const objection = appendEvent(t.db, { taskId: objected.id, workerId: HUMAN_WORKER_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: entry, comment: "補正は一度だけ", session_id: 1 }, at: now });
+  const objection = appendEvent(t.db, { taskId: objected.id, actorId: HUMAN_ACTOR_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: entry, comment: "補正は一度だけ", session_id: 1 }, at: now });
   const review = registerTask(
     t.db,
     { type: "review", title: "rca (auditor): 潮汐グラフ", purpose: "異議: 補正は一度だけ", completion_criteria: "c", parent_id: objected.id, opened_on_event_ids: [objection] },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 
@@ -53,7 +53,7 @@ it("表示言語 Japanese の盤面で、異議の材料を持つ盤面名義の
 
 it.each([
   ["decompose の子(agent が登録した task)", (t: Tidepool) => registerTask(t.db, { type: "work", title: "子", purpose: "p", completion_criteria: "c" }, t.clock.now(), "deckhand", "worker")],
-  ["盤面が登録した task", (t: Tidepool) => registerTask(t.db, { type: "work", title: "盤面", purpose: "p", completion_criteria: "c" }, t.clock.now(), BOARD_WORKER_ID, "board")],
+  ["盤面が登録した task", (t: Tidepool) => registerTask(t.db, { type: "work", title: "盤面", purpose: "p", completion_criteria: "c" }, t.clock.now(), BOARD_ACTOR_ID, "board")],
   [
     "表示言語 English の盤面で人間が登録した task",
     (t: Tidepool) => {

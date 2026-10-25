@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, getTask, registerTask } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, HOUR, HUMAN_WEBUI, markPickedUp, mcpClient, type Tidepool } from "./harness.js";
 
 const NOW = new Date("2026-10-19T00:00:00.000Z");
@@ -58,6 +58,6 @@ for (const type of ["review", "memory_repair", "routing_repair"] as const) {
 
 it("a human-assignee review completes without a handoff outcome", () => {
   const db = openDb(":memory:");
-  const review = registerTask(db, { type: "review", title: "eyeball it", purpose: "p", completion_criteria: "c", assignee: HUMAN_WORKER_ID }, NOW, ...HUMAN_WEBUI);
-  expect(completeTask(db, review, undefined, HUMAN_WORKER_ID, NOW, "webui").status).toBe("done");
+  const review = registerTask(db, { type: "review", title: "eyeball it", purpose: "p", completion_criteria: "c", assignee: HUMAN_ACTOR_ID }, NOW, ...HUMAN_WEBUI);
+  expect(completeTask(db, review, undefined, HUMAN_ACTOR_ID, NOW, "webui").status).toBe("done");
 });

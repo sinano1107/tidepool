@@ -1,6 +1,7 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import {
@@ -26,7 +27,6 @@ import { listEpisodes, projectAndPersist } from "../src/precedent.js";
 import { attributeObjections, proposeFromMaterial } from "../src/retrospective.js";
 import { getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
 import { bundledObjection, HUMAN_WEBUI, markPickedUp, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -63,7 +63,7 @@ it("worker の record_knowledge は書き手の task に書き込みの記録を
     expect.objectContaining({
       id: written.event_id,
       task_id: writer.id,
-      worker_id: "deckhand",
+      actor_id: "deckhand",
       payload: { kind: "memory_written", line: `wrote knowledge #${written.entry_id} "Tests need Node 22" at build/tests (charts)`, created: [written.entry_id], invalidated: [] },
     }),
   ]);
@@ -87,7 +87,7 @@ it("worker の define_memory_branch・RCA の Knowledge・meta-review の define
   const objection = bundledObjection(db, objected.id, entry, at);
   appendEvent(db, {
     taskId: objected.id,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: entry, objection_event_ids: [objection], cause: "missing_information", evidence: "e", wrong_memory_entries: null, round: "initial" },
     at,
@@ -144,7 +144,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
   const writer = task("index the tide charts");
   const reviewed = task("memory meta-review", { type: "review", meta_review_subject: "memory" });
   const [read, dropped] = [knowledge("Squash before merge"), knowledge("Rebase before merge")];
-  appendEvent(db, { taskId: writer.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  appendEvent(db, { taskId: writer.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   readMemory(db, { taskId: writer.id, scope: "charts", agent: "deckhand" }, { ids: [read] }, at);
   const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, writer.id);
   const drop = invalidateMemoryByMetaReview(db, { entry_id: dropped, reason: "capability" }, "auditor", "worker", at, reviewed.id);
@@ -181,7 +181,7 @@ it("書き込みの記録は tool 結果の event id で Episode の memory_writ
   const { db, task, knowledge } = board();
   const writer = task("index the tide charts");
   const read = knowledge("Squash before merge");
-  const spawned = appendEvent(db, { taskId: writer.id, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(db, { taskId: writer.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   const pull = readMemory(db, { taskId: writer.id, scope: "charts", agent: "deckhand" }, { ids: [read] }, at).event_id;
   const wrote = recordKnowledge(db, { scope: "charts", path: "build", title: "Squash", text: "Always squash.", source: { commit: "0a46a46" }, author: worker }, "worker", at, writer.id);
   const transcriptPath = join(await tempDir("tidepool-write-record-"), `${writer.id}.${spawned}.stream.jsonl`);
@@ -211,7 +211,7 @@ it("meta-review の畳みへの異議は、次の meta-review の材料の異議
   registerMetaReview(db, "memory", at);
   const first = getTask(db, listBoard(db).find((t) => t.meta_review_subject === "memory")!.id)!;
   const [a, b] = [knowledge("Tests need Node 22"), knowledge("Node 24 breaks the tests")];
-  const spawned = appendEvent(db, { taskId: first.id, workerId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
+  const spawned = appendEvent(db, { taskId: first.id, actorId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
   const decision = logDecision(db, first, "the two notes say the same", "auditor", at, "worker");
   const fold = foldMemory(db, first.id, { scope: "charts", path: "build", title: "Node 22 only", text: "Node 22 only.", replaces: [a, b], based_on_decision: decision, author: metaReview }, "worker", at);
   const transcriptPath = join(await tempDir("tidepool-write-record-"), `${first.id}.${spawned}.stream.jsonl`);

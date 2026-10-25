@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { escalateTask, getTask, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, api, bootTidepool, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, mcpClient, queueWork, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -140,7 +140,7 @@ const failureQuestion = (db: Db, parent: Task) =>
     db,
     parent,
     { context: "the worker died", questions: [{ title: "failed", options: ["retry", "abandon"], recommendation: "retry" }], question_kind: { kind: "failure", cancel_option: "abandon" } },
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     at,
     "board",
   );

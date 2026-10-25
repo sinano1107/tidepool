@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { warnCliAuthExpiry } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -29,7 +30,6 @@ import {
   whyNoReturnDestination,
 } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   answerQuestionViaWebui,
   auditorRcaOn,
@@ -586,8 +586,8 @@ it("cancelled の work の祖先を挟む task を親にした work の登録は
   const split = { reason: "repair", children: [{ title: "fix", purpose: "p", completion_criteria: "c" }] };
 
   for (const parent of [child, rca]) {
-    for (const [workerId, origin] of [HUMAN_WEBUI, ["auditor", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
-      expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, workerId, origin)).toThrow(discarded);
+    for (const [actorId, origin] of [HUMAN_WEBUI, ["auditor", "worker"], [BOARD_ACTOR_ID, "board"]] as const) {
+      expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: parent.id }, NOW, actorId, origin)).toThrow(discarded);
     }
   }
   expect(() => decomposeTaskViaWorker(db, rca, split, "auditor", NOW)).toThrow(discarded);
@@ -631,7 +631,7 @@ it("cancelled の work でない親(人間が直接 cancel した review 子)の
   expect(getTask(db, parent.id)!.status).not.toBe("cancelled");
   const cancelledParent = `its parent "second look" (${review.id}) is cancelled, so no repair can land`;
 
-  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: review.id }, NOW, BOARD_WORKER_ID, "board")).toThrow(`no work task grows here: ${cancelledParent}`);
+  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: review.id }, NOW, BOARD_ACTOR_ID, "board")).toThrow(`no work task grows here: ${cancelledParent}`);
   expect(() => registerTask(db, { ...APPROVAL_QUESTION, parent_id: review.id }, NOW, "deckhand", "worker")).toThrow(`no question task grows here: ${cancelledParent}`);
   expect(listChildren(db, review.id)).toEqual([]);
 });
@@ -650,8 +650,8 @@ it.each(REPAIR_TYPES)("cancelled の work の祖先を挟む task を親にし�
 
 it.each(REPAIR_TYPES)("親の無い %s の登録は扉を問わず DomainError で、何も登録しない —— 修理子は異議された task の子(ADR 0272 追記2 / ADR 0046 / ADR 0279 決定4)", (type) => {
   db = openDb(":memory:");
-  for (const [workerId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_WORKER_ID, "board"]] as const) {
-    expect(() => registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c" }, NOW, workerId, origin)).toThrow(DomainError);
+  for (const [actorId, origin] of [HUMAN_WEBUI, ["tako", "worker"], [BOARD_ACTOR_ID, "board"]] as const) {
+    expect(() => registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c" }, NOW, actorId, origin)).toThrow(DomainError);
   }
   expect(listBoard(db)).toEqual([]);
 });
@@ -680,7 +680,7 @@ it("cancelled の work の祖先が系譜に複数あるとき、拒否文は最
   cancelTaskDirectly(db, mid, null, NOW, {}, "webui");
   cancelTaskDirectly(db, getTask(db, root.id)!, null, NOW, {}, "webui");
 
-  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: leaf.id }, NOW, BOARD_WORKER_ID, "board")).toThrow(
+  expect(() => registerTask(db, { type: "work", title: "fix", purpose: "p", completion_criteria: "c", parent_id: leaf.id }, NOW, BOARD_ACTOR_ID, "board")).toThrow(
     new RegExp(`cancel of ancestor "R" \\(${root.id}\\) discarded`),
   );
 });

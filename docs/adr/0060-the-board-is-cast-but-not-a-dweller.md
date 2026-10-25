@@ -1,5 +1,7 @@
 # 盤面は登場人物だが住人ではない — 記号の語彙が種別を言う
 
+**Status 追記: `BOARD_WORKER_ID` は `BOARD_ACTOR_ID`、`src/worker-id.ts` は `src/actor-id.ts` に改名済み**(2026-10-26、issue #2581)。盤面は登場人物であり assignee にならないという線は変わらない。
+
 issue #222 で決定。盤面自身が登録した question(PR 昇格失敗、issue #220)が、UI で発行元の
 アイコンも名前も出さず「-」と表示された。盤面の名前は `tidepool` に決まっており
 (`BOARD_WORKER_ID`、`src/tasks.ts:38`)、イベントには正しく記録されているのに、**盤面には

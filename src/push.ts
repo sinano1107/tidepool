@@ -1,9 +1,9 @@
 import webpush from "web-push";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { HUMAN_FACING_KINDS, SKIM_TASK_SQL } from "./events.js";
 import { isQuietHours } from "./quiet-hours.js";
 import { isLandingQuestion, rowToTask, type Task, type TaskRow, taskTierNamesSql } from "./tasks.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** A browser's Web Push registration (the standard PushSubscription shape,
  *  flattened) — endpoint is the push service URL, p256dh/auth the keys
@@ -94,11 +94,11 @@ export function markQuestionNotified(db: Db, taskId: string, now: Date): void {
 /** Human-assignee tasks the human hasn't been pushed about yet — the twin of
  *  listUnnotifiedQuestions above (issue #116). Only a task registered *without*
  *  a human operation counts: an agent's decompose registering it directly. The
- *  registrant is read off the task's own `task_registered` event's worker_id —
+ *  registrant is read off the task's own `task_registered` event's actor_id —
  *  tasks carry no registrant column of their own — and the two human-triggered
  *  paths both stamp it `human` there (a WebUI registration and an approve
  *  answer materializing a pending child, both via registerTask's
- *  HUMAN_WORKER_ID default / explicit arg), so excluding worker_id = 'human'
+ *  HUMAN_ACTOR_ID default / explicit arg), so excluding actor_id = 'human'
  *  keeps a human's own operation from pushing back at them (CONTEXT.md's Quiet
  *  hours: "自分の操作のエコー"). Filtered on `status = 'todo'` like the question
  *  query, so a task the human already settled before the next poll neither
@@ -110,11 +110,11 @@ export function listUnnotifiedHumanTasks(db: Db): Task[] {
       `SELECT t.*, ${taskTierNamesSql("t")} FROM tasks t
        JOIN events e ON e.task_id = t.id AND e.kind = 'task_registered'
        LEFT JOIN human_task_notifications n ON n.task_id = t.id
-       WHERE t.assignee = @humanWorkerId AND t.status = 'todo'
-         AND e.worker_id <> @humanWorkerId AND n.task_id IS NULL
+       WHERE t.assignee = @humanActorId AND t.status = 'todo'
+         AND e.actor_id <> @humanActorId AND n.task_id IS NULL
        ORDER BY t.created_at`,
     )
-    .all({ humanWorkerId: HUMAN_WORKER_ID }) as TaskRow[];
+    .all({ humanActorId: HUMAN_ACTOR_ID }) as TaskRow[];
   return rows.map(rowToTask);
 }
 

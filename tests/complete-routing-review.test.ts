@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, latestEventOfTask, listEvents, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
@@ -7,7 +8,6 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, proposeRoutingChange } from "../src/routing-review.js";
 import { completeTask, escalateTask, getTask, registerTask, type Task, taskVerbSwap } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { DECKHAND_AGENT, divergedSession, FULL_HANDOFF, HUMAN_WEBUI, injectRoutingMaterial, judgmentRows, OPUS_ROW, objectedJudgment, QUIET_EXIT, routedOpusSessions, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review は complete_routing_review で終わる(ADR 0278 決定1〜5・追記4・追記5 の routing、issue #2284)。 */
@@ -44,12 +44,12 @@ it("routing meta-review の verb の差し替えは complete_task と分解の v
 
 it.each([
   ["worker", "auditor", "worker"],
-  ["人間", HUMAN_WORKER_ID, "webui"],
-] as const)("routing meta-review への complete_task は %s の扉でも拒まれ、拒否文は complete_routing_review を指し、何も書かない", (_, workerId, origin) => {
+  ["人間", HUMAN_ACTOR_ID, "webui"],
+] as const)("routing meta-review への complete_task は %s の扉でも拒まれ、拒否文は complete_routing_review を指し、何も書かない", (_, actorId, origin) => {
   const { db, review } = cycle();
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeTask(db, review, FULL_HANDOFF, workerId, at, origin)).toThrow("complete_routing_review");
+  expect(() => completeTask(db, review, FULL_HANDOFF, actorId, at, origin)).toThrow("complete_routing_review");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
@@ -147,7 +147,7 @@ it.each([
   [
     "registry に agent の段が書かれた",
     (db: Db) =>
-      appendEvent(db, { taskId: null, workerId: "human", origin: "webui", at, payload: { kind: "agent_tier_changed", agent: "deckhand", from: "standard", to: "economy", question_id: "q", registry_commit: "c0ffee" } }),
+      appendEvent(db, { taskId: null, actorId: "human", origin: "webui", at, payload: { kind: "agent_tier_changed", agent: "deckhand", from: "standard", to: "economy", question_id: "q", registry_commit: "c0ffee" } }),
   ],
   ["人間が段の説明を書き換えた", (db: Db) => applyExecutionSettingsChange(db, { setting: "edit_tier", name: "standard", description: "Rewritten." }, "webui", at)],
   [
@@ -195,9 +195,9 @@ it("再 spawn で注入の記録が2つあれば最新の記録の項目を読�
   const db = openDb(":memory:");
   register(db, true);
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  const spawned = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null } });
+  const spawned = appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null } });
   const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5, advisor: null, model_swaps: [], refusals: [], models: {} };
-  appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
+  appendEvent(db, { taskId: work, actorId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
   applyExecutionSettingsChange(db, { setting: "delete_row", ...OPUS_ROW }, "webui", at);
   const review = register(db);
   const first = injectRoutingMaterial(db, review.id, "auditor", at);

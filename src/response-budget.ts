@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventPayload, listEventsOfKinds } from "./events.js";
 import type { Unstored } from "./tasks.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** 盤面が返す MCP 応答1回の大きさの上限(ADR 0195 決定2)。text content の本文ではなく、盤面が返す CallToolResult を丸ごと
  *  シリアライズした UTF-8 バイト数(`responseBytes`)で測る(ADR 0195 追記1)。 */
@@ -340,7 +340,7 @@ export function floorResponse<R extends ToolResponse>(
     `${verb} returned ${size} bytes. The text above is incomplete.]`;
   appendEvent(db, {
     taskId: null,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     at,
     payload: { kind: "response_truncated", surface, verb, bytes: size, budget: RESPONSE_BUDGET_BYTES, ...(taskId ? { task_id: taskId } : {}) },

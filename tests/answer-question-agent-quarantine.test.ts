@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { agentNeedsHuman } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
@@ -6,7 +7,6 @@ import { submitAnswer } from "../src/human-verbs.js";
 import { createLanding } from "../src/landing.js";
 import { type AuthorityProfile, UnknownAgentError } from "../src/registry.js";
 import { completeTask, getTask, listBoard, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { quarantineWorkspace, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
 import {
@@ -43,7 +43,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
         question_kind: { kind: "quarantine", quarantine: "agent", value: "navigator" },
       },
       new Date(0),
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       "webui",
     );
     expect(quarantineQuestion(db, "agent", "navigator")).toBeDefined();
@@ -86,7 +86,7 @@ describe("agent の quarantine(ADR 0012 / issue #36: workspace 版の agent 名�
         question_kind: { kind: "quarantine", quarantine: "agent", value: "navigator" },
       },
       new Date(0),
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       "webui",
     );
 

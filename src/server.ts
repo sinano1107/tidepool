@@ -516,7 +516,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
   // McpDeps by hand) still carry their own `?? DEFAULT_AUDITOR_NAME` fallback
-  // (mcp.ts's attributedWorkerId, claude-worker.ts's start()) — defense in
+  // (mcp.ts's attributedActorId, claude-worker.ts's start()) — defense in
   // depth.
   const auditorName = options.auditorName ?? DEFAULT_AUDITOR_NAME;
   const interviewerName = options.interviewerName ?? DEFAULT_INTERVIEWER_NAME;

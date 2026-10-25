@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID, isNonAgentActorId } from "./actor-id.js";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import { type BoardCallAnswer, type BoardCallSetting, recordedAnswer } from "./board-call-usage.js";
 import { type AgentDefinitionThen, agentDefinitionThen } from "./board-prose.js";
@@ -35,7 +36,6 @@ import { isSettled } from "./task-status.js";
 import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, resolvedStopReason, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, RCA_CAUSES, registerRcaReview, requireLogEntry } from "./triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
@@ -270,7 +270,7 @@ export async function attributeObjections(
           round: "initial" as const,
           reason: `Board call failed: ${message(err)}`,
         };
-        appendEvent(db, { taskId: o.entry.task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+        appendEvent(db, { taskId: o.entry.task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
       }
     }),
   );
@@ -334,7 +334,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
         round: "after_rca" as const,
         reason: `Board call failed: ${message(err)}`,
       };
-      appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+      appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
       return;
     }
     const payload = {
@@ -344,7 +344,7 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
       ...judgment,
       round: "after_rca" as const,
     };
-    const id = appendEvent(db, { taskId: objectedId, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    const id = appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     await draftBehaviorCandidate(db, deps, { id, ...payload }, now);
   });
 }
@@ -373,7 +373,7 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     if ("unavailable" in call) return;
     const input = allocationInput(db, target);
     const { review_task_id, reviewed_task_id } = target;
-    const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+    const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     let judgment: AllocationJudgment;
     try {
       judgment = await recordedAnswer(db, "allocation_review", now, call.client.judge(input, call.setting));
@@ -396,7 +396,7 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
     if ("unavailable" in call) return;
     const input = stopInput(db, deps.registryDir, stop, session);
     const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
-      appendEvent(db, { taskId: task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
+      appendEvent(db, { taskId: task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     let judgment: GatedJudgment;
     try {
       judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judgeStop(input, call.setting)), input);
@@ -407,7 +407,7 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
     }
     db.transaction(() => {
       record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment });
-      if (RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.worker_id, input.human_stop.reason, now);
+      if (RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, now);
     })();
   });
 }
@@ -417,7 +417,7 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
 function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string, reason: string, now: Date): void {
   const { title } = getTask(db, taskId)!;
   const purpose = `the human stopped the session ${worker} ran on "${title}":\n\n> stop ${stopId}: ${reason}`;
-  if (worker !== HUMAN_WORKER_ID) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, opened_on_event_ids: [stopId], assignee: worker }, now);
+  if (worker !== HUMAN_ACTOR_ID) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, opened_on_event_ids: [stopId], assignee: worker }, now);
   registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, opened_on_event_ids: [stopId] }, now);
 }
 
@@ -552,7 +552,7 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
 export function markHaltedRefire(db: Db, kind: "refire_retried" | "refire_dismissed", key: RefireKey, origin: "webui" | "mcp", now: Date): number {
   const row = listHaltedRefires(db).find((r) => r.refire === key.refire && r.target === key.target);
   if (!row) throw new DomainError(`no halted ${key.refire} refire for target ${key.target}`);
-  return appendEvent(db, { taskId: row.task.id, workerId: HUMAN_WORKER_ID, origin, payload: { kind, ...key }, at: now });
+  return appendEvent(db, { taskId: row.task.id, actorId: HUMAN_ACTOR_ID, origin, payload: { kind, ...key }, at: now });
 }
 
 /** 帰責の入力を異議群から組む: 異議エントリ本文・steering 列・`before`(event id)より前の decision log。 */
@@ -632,14 +632,14 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   let derived: ReturnType<typeof learningTarget> | null = null;
   if (cause !== "preference") {
     try {
-      derived = learningTarget(cause, entry.worker_id, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
+      derived = learningTarget(cause, entry.actor_id, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
     } catch {
       return;
     }
   }
   // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 文面の書き手が人間のときと同じく起草しない(ADR 0173 決定4)。
   // preference の宛先は Board call が選ぶが、学ぶのは entry の worker
-  const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
+  const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.actor_id;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
   let scope: string | null;
@@ -656,7 +656,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     if ("unavailable" in call) return;
     // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
     const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
-    const index = memoryIndex(db, task, scope, entry.worker_id, query).section;
+    const index = memoryIndex(db, task, scope, entry.actor_id, query).section;
     try {
       const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, call.client.draft({ ...input, index }, call.setting));
       createBehaviorCandidate(
@@ -664,9 +664,9 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
         {
           ...fields,
           scope,
-          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
+          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.actor_id,
           source: { event_id: attribution.id },
-          author: { activity: "board", name: BOARD_WORKER_ID },
+          author: { activity: "board", name: BOARD_ACTOR_ID },
         },
         "board",
         now,
@@ -675,7 +675,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
       if (quarantineBoardCallRefusal(db, err, "behavior_draft", taskId, now)) return;
       appendEvent(db, {
         taskId,
-        workerId: BOARD_WORKER_ID,
+        actorId: BOARD_ACTOR_ID,
         origin: "board",
         payload: { kind: "memory_draft_failed", entry_id, round, attribution_event_id: attribution.id, reason: message(err) },
         at: now,
@@ -701,7 +701,7 @@ function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINI
 }
 
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
-const isHumanEntry = (entry: { worker_id: string }) => entry.worker_id === HUMAN_WORKER_ID;
+const isHumanEntry = (entry: { actor_id: string }) => entry.actor_id === HUMAN_ACTOR_ID;
 
 const LEARNING_CAUSES: readonly Cause[] = ["capability", "preference", "task_ambiguity", "missing_information"];
 
@@ -718,8 +718,8 @@ function learningTarget(
     throw new DomainError('as ("behavior" or "knowledge") is required for a missing_information entry and only for it');
   }
   const toTextAuthor = () => {
-    // 盤面(BOARD_WORKER_ID)も agent ではない —— 宛先にしても注入はどこにも一致しない
-    if (isNonAgentWorkerId(textAuthor)) {
+    // 盤面(BOARD_ACTOR_ID)も agent ではない —— 宛先にしても注入はどこにも一致しない
+    if (isNonAgentActorId(textAuthor)) {
       throw new DomainError("the task's text was not written by an agent: there is no agent to address a behavior to");
     }
     return { kind: "behavior" as const, addressee: textAuthor };
@@ -774,7 +774,7 @@ export function proposeFromMaterial(
         : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
     // 記憶の id は店の作成 event の id(Knowledge の event_id は書き込みの行の id)
     const payload = { kind: "proposed_from_material" as const, material_id, memory_event_id: written.entry_id };
-    appendEvent(db, { taskId: reviewId, workerId: author, origin: "worker", payload, at: now });
+    appendEvent(db, { taskId: reviewId, actorId: author, origin: "worker", payload, at: now });
     return written;
   })();
 }
@@ -786,8 +786,8 @@ function learnedFrom(db: Db, review: Task, material_id: number): { worker: strin
   if (stop) {
     if (material_id !== stop.id) throw new DomainError(`id ${material_id} is not the stop this review was opened on`);
     const { events, spawned } = stoppedSession(db, stop);
-    const worker = spawned.worker_id;
-    if (worker === HUMAN_WORKER_ID) throw new DomainError(`stop ${material_id} stopped a session a human ran`);
+    const worker = spawned.actor_id;
+    if (worker === HUMAN_ACTOR_ID) throw new DomainError(`stop ${material_id} stopped a session a human ran`);
     const judged = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).at(-1);
     return { worker, attribution: judged };
   }
@@ -800,7 +800,7 @@ function learnedFrom(db: Db, review: Task, material_id: number): { worker: strin
   const opened = latestEventOfTask(db, review.id, "task_registered")!.payload.opened_on_event_ids ?? [];
   const bundle = objectionBundles(db, [material_id]).get(material_id)?.find((b) => opened.includes(bundleName(b)));
   if (!bundle) throw new DomainError(`entry ${material_id} is not in this review's material`);
-  return { worker: entry.worker_id, attribution: bundle.attribution };
+  return { worker: entry.actor_id, attribution: bundle.attribution };
 }
 
 /** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の opened_on_event_ids が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
@@ -842,7 +842,7 @@ export function completeRca(
   db: Db,
   review: Task,
   { findings, handoff }: { findings: Array<{ material: number[]; root_cause: string; no_proposal?: true }>; handoff?: Partial<HandoffDoc> },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -883,9 +883,9 @@ export function completeRca(
   if (refusals.length > 0) throw new DomainError(refusals.join("; "));
   return db.transaction(() => {
     for (const { judgment, line } of judged) {
-      appendEvent(db, { taskId: review.id, workerId, origin, payload: { kind: "decision_logged", line, judgment }, at: now });
+      appendEvent(db, { taskId: review.id, actorId, origin, payload: { kind: "decision_logged", line, judgment }, at: now });
     }
-    return finishTask(db, review, handoff, workerId, now, origin);
+    return finishTask(db, review, handoff, actorId, now, origin);
   })();
 }
 

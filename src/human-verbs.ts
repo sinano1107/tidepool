@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
 import { type AgentAdmin, AgentTierMismatchError, agentViewProviders } from "./agent-create.js";
 import { assertAssigneeCanTake } from "./assignee.js";
@@ -104,7 +105,6 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import {
   buildWorkspaceResolver,
   conventionCheckoutPath,
@@ -267,7 +267,7 @@ export function assertReviewersKnown(
   reviewers: string[] | undefined,
 ): void {
   for (const reviewer of reviewers ?? []) {
-    if (reviewer === HUMAN_WORKER_ID || (agentRegistered && !agentRegistered(reviewer))) {
+    if (reviewer === HUMAN_ACTOR_ID || (agentRegistered && !agentRegistered(reviewer))) {
       throw new DomainError(`unknown agent: ${reviewer}`);
     }
   }
@@ -347,7 +347,7 @@ function registerAsHuman(
   origin: EventOrigin,
 ): Task {
   return deps.db.transaction(() => {
-    const registered = registerTask(deps.db, input, now, HUMAN_WORKER_ID, origin);
+    const registered = registerTask(deps.db, input, now, HUMAN_ACTOR_ID, origin);
     if (deps.taskExecutionCandidates) assertTargetsRunnable(deps.db, registered.id, deps.taskExecutionCandidates, deps.defaultAgentName);
     return registered;
   })();
@@ -895,13 +895,13 @@ export async function completeThroughHumanDoor(
   const task = getTask(deps.db, taskId);
   if (!task) return { ok: false, failure: { kind: "not_found", error: "task not found" } };
   try {
-    if (task.assignee !== HUMAN_WORKER_ID) {
+    if (task.assignee !== HUMAN_ACTOR_ID) {
       throw new DomainError(
         "only a human-assignee task can be completed here — agents complete via MCP's complete_task",
       );
     }
     assertUnsettledNotInProgress(task, "completed");
-    const done = completeTask(deps.db, task, handoff, HUMAN_WORKER_ID, now(), origin);
+    const done = completeTask(deps.db, task, handoff, HUMAN_ACTOR_ID, now(), origin);
     deps.pollNow();
     return { ok: true, value: presentTask(deps.db, done, deps.defaultAgentName, deps.auditorName, deps.interviewerName) };
   } catch (err) {
@@ -1272,7 +1272,7 @@ export async function submitAnswer(
           // registry が変わった事実は回答が残るかに依らず真 —— 回答の transaction の外で、commit の直後に刻む(ADR 0288 決定3)
           appendEvent(deps.db, {
             taskId: null,
-            workerId: HUMAN_WORKER_ID,
+            actorId: HUMAN_ACTOR_ID,
             origin,
             payload: { kind: "agent_tier_changed", agent: proposal.agent, from: proposal.pin.tier, to, question_id: task.id, registry_commit: registryCommit },
             at: now(),
@@ -1312,7 +1312,7 @@ export async function submitAnswer(
       if (rootRecord) {
         appendEvent(deps.db, {
           taskId: rootRecord.root,
-          ...(rootRecord.byBoard ? { workerId: BOARD_WORKER_ID, origin: "board" as const } : { workerId: HUMAN_WORKER_ID, origin }),
+          ...(rootRecord.byBoard ? { actorId: BOARD_ACTOR_ID, origin: "board" as const } : { actorId: HUMAN_ACTOR_ID, origin }),
           payload: rootRecord.payload,
           at: now(),
         });
@@ -1348,7 +1348,7 @@ export async function submitAnswer(
         deps.db,
         question,
         `PR promotion abandoned for task ${kind.task_id} — this content stays on its task branch; a later change to the branch asks again`,
-        HUMAN_WORKER_ID,
+        HUMAN_ACTOR_ID,
         now(),
         origin,
       );

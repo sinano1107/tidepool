@@ -102,7 +102,7 @@ it("回収済み観測のあと、tree rule が走り、tidepool 名義で再実
   expect(question.purpose).toMatch(/queue head/i);
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 
   // 後始末の完走が slot を空けた時点で、次の todo は毎時のティックを待たずに拾われている(ADR 0119 決定3)
   expect(t.worker.started.map((x) => x.id)).toEqual([task.id, second.id]);
@@ -240,7 +240,7 @@ it("回収済み観測のあと tree rule 自体が失敗すると、failure que
   const quarantineQuestion = list.find((x: any) => x.type === "question" && x.title.includes("sandbox"));
   expect(quarantineQuestion).toBeDefined();
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantineQuestion.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
   expect(events.find((e: any) => e.kind === "task_registered").origin).toBe("board");
 
   // needs-human の workspace はpickupを止める

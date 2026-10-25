@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -272,7 +272,7 @@ it("a work child of a done parent receives the parent's handoff document", async
       parent_id: parent.id,
     },
     t.clock.now(),
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "webui",
   );
 

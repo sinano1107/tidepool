@@ -28,13 +28,13 @@ describe("pickupTask は呼び手が解決した名前を空の列にだけ書�
     });
   });
 
-  it("pickup イベントの worker_id には呼び出し側が渡した(解決済みの)id が記録される", () => {
+  it("pickup イベントの actor_id には呼び出し側が渡した(解決済みの)id が記録される", () => {
     const db = openDb(":memory:");
     const task = unspecified(db);
 
     pickupTask(db, task, "deckhand", new Date(1));
 
-    expect(listEvents(db, task.id).find((e) => e.kind === "task_picked_up")?.worker_id).toBe("deckhand");
+    expect(listEvents(db, task.id).find((e) => e.kind === "task_picked_up")?.actor_id).toBe("deckhand");
   });
 
   it("指定済みの assignee(委譲先)と workspace は書き換えず、event にも載らない", () => {

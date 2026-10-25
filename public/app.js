@@ -148,8 +148,8 @@ var TidepoolRules = (() => {
   // src/task-status.ts
   var isSettled = (status) => status === "done" || status === "cancelled";
 
-  // src/worker-id.ts
-  var HUMAN_WORKER_ID = "human";
+  // src/actor-id.ts
+  var HUMAN_ACTOR_ID = "human";
 
   // src/webui-rules.ts
   function copiedOriginalLanguage(typed, copied, current) {
@@ -161,7 +161,7 @@ var TidepoolRules = (() => {
   function whyNoCompletionReview(t) {
     if (t.type !== "work") return "completion review fires for work tasks only";
     if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
-    if (t.assignee === HUMAN_WORKER_ID) return "completion review does not fire for a task assigned to human";
+    if (t.assignee === HUMAN_ACTOR_ID) return "completion review does not fire for a task assigned to human";
     if (t.parent_id && !t.review_flag && !t.risk_flag) {
       return "a child task's completion raises a review only with review_flag or risk_flag";
     }
@@ -804,8 +804,8 @@ function groupLogEntries(entries) {
 const objectionBadge = (comments) => comments?.length > 1 ? comments.map((c) => `- ${c}`).join("\n") : comments?.[0];
 const toLogEntryShape = (e, openSessionId) => ({
   taskId: e.task_id,
-  agent: e.worker_id,
-  human: e.worker_id === "human",
+  agent: e.actor_id,
+  human: e.actor_id === "human",
   kind: e.payload.kind === "task_completed" ? "completion" : "decision",
   text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
   cause: e.cause ?? void 0,
@@ -4159,7 +4159,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     ...toLogEntryShape(e, openSessionId),
     id: e.id,
     time: fmtTime(e.created_at),
-    agentIcon: icons[e.worker_id],
+    agentIcon: icons[e.actor_id],
     unread: e.unread,
     handoffPresent: e.payload.kind === "task_completed" && !!e.payload.handoff_present,
     translatable: e.payload.kind !== "task_completed" || e.payload.result !== null,

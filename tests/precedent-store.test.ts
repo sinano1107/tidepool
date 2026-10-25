@@ -1,11 +1,11 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js";
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -105,7 +105,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   for (const entryId of [6, 7, 8]) {
     appendEvent(db, {
       taskId: FIXTURE_TASK,
-      workerId: "human",
+      actorId: "human",
       origin: "webui",
       payload: { kind: "log_entry_displayed", entry_id: entryId, session_id: 1 },
       at,
@@ -114,7 +114,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   const objectionId = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   appendEvent(db, {
     taskId: FIXTURE_TASK,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: {
       kind: "objection_attributed",
@@ -129,7 +129,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   });
   appendEvent(db, {
     taskId: FIXTURE_TASK,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: {
       kind: "objection_attributed",
@@ -144,7 +144,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
   });
   appendEvent(db, {
     taskId: FIXTURE_TASK,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "pr_merged", pr_number: 42 },
     at,
@@ -172,7 +172,7 @@ it("読み口は同じ (workspace, agent) の Episode を時系列(session を�
   const dir = await logDir();
   // 同じタスクの2本目の session。1本目は id 5 で始まり 11 で閉じている
   db.prepare(
-    "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO events (id, task_id, actor_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     12, FIXTURE_TASK, "tako", "board", "worker_spawned",
     JSON.stringify({ kind: "worker_spawned", registry_commit: "abc", definition_version: "0.1.1", advisor: null }),
@@ -196,7 +196,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   });
   const at = new Date("2026-09-15T00:00:00.000Z");
   const event = (payload: TaskScopedPayload) =>
-    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
+    appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload, at });
   event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
   bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
   registerMetaReview(db, "memory", at); // 前回の meta-review
@@ -252,7 +252,7 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
   });
   const at = new Date("2026-09-28T00:00:00.000Z");
   const event = (payload: TaskScopedPayload) =>
-    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
+    appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload, at });
   const first = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   const second = bundledObjection(db, FIXTURE_TASK, 7, at, "箇条書きは5つに");
   event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [second], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "initial" });
@@ -283,7 +283,7 @@ async function seedRootWithPr() {
      VALUES ('other-root', 'work', 'done', 'other', 'ship', 'ship', 'ship', 0, 0, 2, '2026-08-20T05:50:48.374Z', 7)`,
   ).run();
   const record = (kind: "pr_merged" | "pr_merge_observed" | "pr_close_observed", taskId = FIXTURE_TASK) =>
-    appendEvent(db, { taskId, workerId: "human", origin: "webui", payload: { kind, pr_number: 7 }, at: new Date() });
+    appendEvent(db, { taskId, actorId: "human", origin: "webui", payload: { kind, pr_number: 7 }, at: new Date() });
   const prMerged = () => listEpisodes(db, { workspace: "sandbox", agent: "tako" })[0]!.prMerged;
   return { db, record, prMerged };
 }
@@ -313,7 +313,7 @@ it("内容で終わった根(landing_finished の根拠が content)の prMerged 
   const { db, prMerged } = await seedRootWithPr();
   appendEvent(db, {
     taskId: FIXTURE_TASK,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     payload: { kind: "landing_finished", pr_number: 7, basis: "content" },
     at: new Date(),

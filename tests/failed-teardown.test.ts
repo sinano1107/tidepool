@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardHalts } from "../src/board-halt.js";
 import { type Db, openDb } from "../src/db.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
@@ -20,7 +21,6 @@ import {
   type TeardownDeps,
   teardownStep,
 } from "../src/teardown.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { prepareWorkspaceAtPickup, type WorkspaceConfig } from "../src/workspace.js";
 import { FakeClock, unusedLanding } from "./fakes.js";
 import { commitWork, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
@@ -89,7 +89,7 @@ async function session(route: "complete" | "cap" | "watchdog" = "complete"): Pro
         questions: [{ title: "watchdog killed task: one", options: ["retry", "abandon"], recommendation: "retry" }],
         question_kind: { kind: "failure", cancel_option: "abandon" },
       },
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       clock.now(),
       "board",
     );

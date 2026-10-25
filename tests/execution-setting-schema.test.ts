@@ -93,7 +93,7 @@ it("execution_defaults の priority 列は quality / cost 以外を拒む(ADR 01
 it("events.task_id は盤面スコープの操作イベントのために NULL を許す(issue #545)", async () => {
   const db = openDb(await boardPath("events-task-less"));
   db.prepare(
-    "INSERT INTO events (task_id, worker_id, origin, kind, payload, created_at) VALUES (NULL, 'human', 'mcp', 'execution_settings_changed', '{}', '2026-09-14T00:00:00.000Z')",
+    "INSERT INTO events (task_id, actor_id, origin, kind, payload, created_at) VALUES (NULL, 'human', 'mcp', 'execution_settings_changed', '{}', '2026-09-14T00:00:00.000Z')",
   ).run();
   expect(db.prepare("SELECT task_id, origin FROM events").all()).toEqual([{ task_id: null, origin: "mcp" }]);
   db.close();

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents, taskDecisionLog } from "../src/events.js";
 import { setPaused } from "../src/pause.js";
@@ -7,7 +8,6 @@ import { HOURLY, startScheduler } from "../src/scheduler.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, getTask, listBoard, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { FakeClock, fakeContainers, noRetrospectiveCalls, ScriptedWorker } from "./fakes.js";
 import { HUMAN_WEBUI, quarantineQuestion, unhandledRejectionsDuring } from "./harness.js";
 
@@ -146,7 +146,7 @@ describe("続く poll の失敗の question(ADR 0294 決定2)", () => {
     await trigger(scheduler);
     const question = quarantineQuestion(db, "pollFailure", null)!;
     expect(question.title).toBe(POLL_FAILURE_QUESTION_TITLE);
-    expect(listEvents(db, question.id).find((e) => e.kind === "task_registered")).toMatchObject({ worker_id: BOARD_WORKER_ID, origin: "board" });
+    expect(listEvents(db, question.id).find((e) => e.kind === "task_registered")).toMatchObject({ actor_id: BOARD_ACTOR_ID, origin: "board" });
 
     await trigger(scheduler);
 
