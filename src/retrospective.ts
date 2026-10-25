@@ -437,12 +437,10 @@ type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human"
  *  受験者の task でないもの。 */
 // ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の不在を SQL で先に絞る
 function stopTargets(db: Db): StopTarget[] {
-  const eventsOf = new Map<string, EventRow[]>();
   return listEventsOfKinds(db, ["session_stopped_by_human"]).flatMap((stop): StopTarget[] => {
     const task_id = stop.task_id!;
     if (getTask(db, task_id)?.interview_target_id != null || resolvedStopReason(db, stop.payload) === undefined) return [];
-    const events = eventsOf.get(task_id) ?? listEvents(db, task_id);
-    eventsOf.set(task_id, events);
+    const events = listEvents(db, task_id);
     const spawned = sessionSpawnOf(events, stop);
     if (!spawned || !sessionWindow(events, spawned).exited) return [];
     const skip = events.some(({ id, payload: p }) =>
