@@ -38,7 +38,7 @@ import { getTask, HUMAN_ROSTER_AGENT, interviewRoomPath, listBoard, nextSlotTask
 import { sessionInTeardown } from "../src/teardown.js";
 import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { capInterruptionHandler, RECLAIM_TIMEOUT, spawnFailureHandler } from "../src/watchdog.js";
+import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -54,6 +54,7 @@ import {
   passthroughContainers,
   recordingPty,
   recordingSpawn,
+  ScriptedWorker,
 } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, markPickedUp, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
@@ -293,6 +294,8 @@ async function makeWorker(
   onTestFinished(() => recorder.emitExit(0, null));
   // 資源の停止で spawn まで届かなかった pickup の盤面側の一撃(ADR 0274)の呼び出し
   const stops: Array<[string, unknown]> = [];
+  const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), resolveWorkspace, pollNow: () => {}, config: { timeLimits: {}, grace: 0 } });
+  onTestFinished(watchdog.stop);
   const worker = new ClaudeCodeWorker({
     db,
     clock,
@@ -303,7 +306,7 @@ async function makeWorker(
     logDir,
     transcripts: new TranscriptStore(logDir),
     ...containerHarness(containers, clock),
-    onCapInterrupted: capInterruptionHandler({ db, clock, slot, resolve: resolveWorkspace, pollNow: () => {} }),
+    onWorkerExited: (taskId, exit, cap) => { if (cap) watchdog.onWorkerExited(taskId, exit, cap); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
     ...extraOptions,
   });
@@ -4756,18 +4759,17 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);
   });
 
-  it("上限到達の一撃は exit の一撃より先に呼ばれる(ADR 0145)", async () => {
-    const order: string[] = [];
+  it("429 の exit 通知は解決済みの中断分類を運ぶ(ADR 0309)", async () => {
+    const order: unknown[] = [];
     const { start, processes, emitExit } = await makeWorker({}, {
-      onCapInterrupted: () => order.push("cap"),
-      onWorkerExited: () => order.push("exited"),
+      onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
     });
     start("task-capped-order");
     processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
 
-    expect(order).toEqual(["cap", "exited"]);
+    expect(order).toEqual([true]);
   });
 
   it("行の拒否(result 行の 404)の一撃は exit の一撃より先に、spawn 時の provider / model と worker_spawned の id を運んで呼ばれる(ADR 0184 決定4)", async () => {
@@ -4994,17 +4996,16 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     expect(exitedOf(f.db, "task-late-stderr")).toMatchObject({ stderr_tail: "early\nLAST-STDERR" });
   });
 
-  it("exit のあと読み切りの前に届いた 429 の result 行で、上限到達の一撃が exit の一撃より先に撃たれる", async () => {
-    const order: string[] = [];
+  it("読み切りまでに届いた 429 も exit 通知の解決済みの中断分類に載る", async () => {
+    const order: unknown[] = [];
     const f = await makeWorker({}, {
-      onCapInterrupted: () => order.push("cap"),
-      onWorkerExited: () => order.push("exited"),
+      onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
     });
     f.start("task-late-429");
 
     await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 429 }) }, 1);
 
-    expect(order).toEqual(["cap", "exited"]);
+    expect(order).toEqual([true]);
   });
 
   it("exit のあと読み切りの前に届いた 404 の result 行で、行の拒否の一撃が撃たれる", async () => {

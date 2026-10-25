@@ -115,7 +115,7 @@ it("worker options は宣言された registryMode を運ぶ(ADR 0052 / ADR 0043
 
   const options = buildWorkerOptions(
     { ...composition(), registryDir, registryMode: "remote-backed", workspaceName: "tidepool" },
-    { db: openDb(":memory:"), clock, reclaimTimeout: 1, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
+    { db: openDb(":memory:"), clock, reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") },
   );
 
   expect(options.registry.mode).toBe("remote-backed");
@@ -303,18 +303,18 @@ it("main.ts は buildServerOptions が組み立てたオプションで盤面を
  *  ADR 0041 は `ClaudeWorkerOptions` を「#172 の類ではない」と除外していたが、
  *  その根拠は当時の任意フィールドが `spawn` / `pty` / `enumerateSkills` ——
  *  **不在 = 実物を使う**というテスト用の注入 seam —— だけだったことにある。
- *  `onCapInterrupted` などは機能そのもので、渡し忘れれば静かに壊れる:
+ *  `onWorkerExited` などは機能そのもので、渡し忘れれば静かに壊れる:
  *  全部が健康に見えたまま、上限で落ちた task が watchdog 待ちになる。
  *  除外一覧をテスト側に置くのは ADR 0041 §3 と同じ理由 —— 除外を1つ増やすことは
  *  「その口は本番で永久に立たない」という宣言だからである。 */
 it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam を除いて全て組み立てられる(ADR 0043)", async () => {
   const optional = optionalFields("claude-worker.ts", "ClaudeWorkerOptions");
   // 走査が壊れていないことの control(server 側の網羅テストと同じ形)
-  expect(optional).toEqual(expect.arrayContaining(["onCapInterrupted", "pty", "boardState"]));
+  expect(optional).toEqual(expect.arrayContaining(["onWorkerExited", "pty", "boardState"]));
 
   const registryDir = await makeRegistry();
   const emitted = new Set(
-    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
+    Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
   );
   // 不在が正当なのは注入 seam の2つだけ —— そこでの不在は「機能が静かに切れる」
   // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。#463 で
@@ -328,15 +328,15 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
 it("CodexWorkerOptions の任意フィールドは全て組み立てられ、使用量の読み口は盤面の openaiUsage と同じ probe である(ADR 0043 / ADR 0261)", async () => {
   const optional = optionalFields("codex-worker.ts", "CodexWorkerOptions");
   // 走査が壊れていないことの control
-  expect(optional).toEqual(expect.arrayContaining(["usageProbe", "onCapInterrupted", "onWorkerExited"]));
+  expect(optional).toEqual(expect.arrayContaining(["usageProbe", "onWorkerExited"]));
 
   const registryDir = await makeRegistry();
   const harness = containerHarness(fakeContainers());
-  const onCapInterrupted = () => {};
+  const onWorkerExited = () => {};
   const openaiUsage: CodexAppServerProbe = async () => ({ status: "unobservable", provider: "openai", cliVersion: null, reason: "fake" });
-  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, onCapInterrupted, openaiUsage, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  const options = buildCodexWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...harness, openaiUsage, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
   expect(optional.filter((key) => !Object.keys(options).includes(key))).toEqual([]);
-  expect(options.onCapInterrupted).toBe(onCapInterrupted);
+  expect(options.onWorkerExited).toBe(onWorkerExited);
   expect(options.usageProbe).toBe(openaiUsage);
 });
 
@@ -372,7 +372,7 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
     logDir,
     boardState: [{ label: "worker logs (TIDEPOOL_WORKER_LOGS)", path: logDir }],
   };
-  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onCapInterrupted: () => {}, onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
+  const options = buildWorkerOptions(board, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") });
 
   expect(options.logDir).toBe(logDir);
   expect(options.boardState?.map((p) => p.path)).toContain(options.logDir);

@@ -62,7 +62,6 @@ import type { RecordContainerError, TranscriptStore } from "./transcript-store.j
 import type { TranslationClient } from "./translate.js";
 import { closeStaleTriage } from "./triage.js";
 import {
-  capInterruptionHandler,
   type PendingReclaim,
   queueReturnHandler,
   RECLAIM_TIMEOUT,
@@ -75,7 +74,7 @@ import {
   type Watchdog,
   type WatchdogConfig,
 } from "./watchdog.js";
-import type { WorkerAdapter, WorkerExit } from "./worker.js";
+import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
 import {
   buildWorkspaceResolver,
   restoreWorkspaceProjectSettingsAtBoot,
@@ -96,9 +95,6 @@ export type WorkerFactory = (deps: {
   /** Board call の口(ADR 0136)。skill 列挙はここを通る —— 容器と Clock は
    *  `startServer` にしか無いので、口もここで組んで adapter へ配る。 */
   boardCall: BoardCall;
-  /** ADR 0104: 上限到達による中断を受ける盤面側の一撃(`capInterruptionHandler` 製)。
-   *  adapter はこれを呼ぶだけで、slot も tree rule も先頭復帰も持たない。 */
-  onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
   /** ADR 0261 決定1: Codex adapter が `turn.failed` の exit の直後に使用量を読み直す口 —— pickup の観測と同じ probe。
    *  任意の口にしない: 渡し忘れは型で落ちる(合成側に probe が無い盤面だけが undefined を渡す)。 */
   openaiUsage: CodexAppServerProbe | undefined;
@@ -111,7 +107,7 @@ export type WorkerFactory = (deps: {
   /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
   onPickupStopped: (taskId: string, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
-  onWorkerExited: (taskId: string, exit: WorkerExit) => void;
+  onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
   transcripts: TranscriptStore;
 }) => WorkerAdapter;
@@ -145,7 +141,7 @@ export interface ServerOptions {
   resolveWorkspace?: (taskWorkspace: string | null) => WorkspaceConfig;
   /** ADR 0018 の規約の基点。盤面が面接室を作る場所(ADR 0273 決定1)。Absent の解決は scheduler が持つ。 */
   workspacesDir?: string;
-  /** Per-task-type absolute time limits (#9). Absent → no watchdog runs. */
+  /** Per-task-type absolute time limits (#9). Absent → no timed watchdog ticks; exit classification and teardown still run. */
   watchdog?: WatchdogConfig;
   /** The GitHub-facing seam (issue #19): a work task's completion is promoted
    *  to a PR through here. Absent → no PR is ever opened. */
@@ -445,10 +441,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   app.use(auth.require);
   // credential の**後**に置く: 無認証リクエストは 415 ではなく 401 で落ちる
   app.use(auth.requireJsonContentType);
-  // ADR 0104: 上限到達による中断の盤面側の一撃。**worker より先に**組む ——
-  // adapter が観測するのは 429 と回収済み観測だけで、slot も tree rule もこちら側に
-  // ある(ADR 0099 決定1)。watchdog とは独立(slot と resolver しか要らない)なので、
-  // 時限を持たない盤面でも中断は回収される。
+  // exit の観測・分類は時限の設定によらず watchdog が受ける(ADR 0309)。
   let watchdog: Watchdog | undefined;
   // ADR 0119 決定3・4: pickup の契機は scheduler より先に組まれる deps(中断の一撃・起動時の
   // 復旧)にも要るので、scheduler を後から解決する。解決するのは起動完了の時点(この関数の
@@ -465,7 +458,6 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     heldForContainment: (taskId) => watchdog?.heldForContainment(taskId) ?? false,
     pollNow,
   };
-  const onCapInterrupted = capInterruptionHandler(sessionTeardown);
   // ADR 0184 決定4: 行の拒否の一撃。中断と同じく worker より先に組む
   const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
@@ -482,14 +474,13 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     reclaimTimeout,
     containers,
     boardCall: boardCalls.call,
-    onCapInterrupted,
     openaiUsage: options.openaiUsage,
     onRowRefused,
     onSpawnFailed,
     onRecordContainerFailed,
     onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
-    onWorkerExited: (taskId, exit) => watchdog?.onWorkerExited(taskId, exit),
+    onWorkerExited: (taskId, exit, cap) => watchdog?.onWorkerExited(taskId, exit, cap),
     transcripts: options.transcripts,
   });
   const providerCliAuth: Partial<Record<Provider, CliAuthCheck>> = {
@@ -627,20 +618,20 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
     })) pollNow();
   }, 60 * 1000);
-  watchdog = options.watchdog
-    ? startWatchdog({
-        db,
-        clock: options.clock,
-        slot,
-        worker,
-        containers,
-        workspace: options.workspace,
-        resolveWorkspace: options.resolveWorkspace,
-        githubAuth: options.githubAuth,
-        pollNow,
-        config: options.watchdog,
-      })
-    : undefined;
+  watchdog = startWatchdog({
+    db,
+    clock: options.clock,
+    slot,
+    worker,
+    containers,
+    workspace: options.workspace,
+    resolveWorkspace: options.resolveWorkspace,
+    githubAuth: options.githubAuth,
+    pollNow,
+    config: options.watchdog,
+  });
+  // Human stop needs the timed ladder; the exit receiver also serves boards without it.
+  const stopSession = options.watchdog ? watchdog.stopSession : undefined;
   // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
   // 2つ(worker session と Board call)なので、回答受理側が読む口もその2つの合成
   // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
@@ -739,7 +730,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       // ADR 0099 決定3: 受理された確認回答が tree rule を走らせて slot を解放する
       reclaim,
-      stopSession: watchdog?.stopSession,
+      stopSession,
       quarantineChecks: checks,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
@@ -776,7 +767,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
       reclaim,
-      stopSession: watchdog?.stopSession,
+      stopSession,
       quarantineChecks: checks,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,

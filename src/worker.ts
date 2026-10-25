@@ -17,6 +17,9 @@ export type WorkerExit = Pick<Extract<EventPayload, { kind: "worker_exited" }>, 
   model_swaps?: ModelSwap[];
 };
 
+/** 上限到達による中断か。非同期の分類も必ず値で解決し、reject しない(ADR 0309)。 */
+export type WorkerExitClassification = boolean | Promise<boolean>;
+
 /** Boundary between the board and whatever executes tasks (design principle 7:
  *  the board speaks tasks; adapters speak vendors). The real adapter spawns a
  *  Claude Code child process; tests substitute a scripted fake here.

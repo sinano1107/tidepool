@@ -15,7 +15,7 @@ import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineV
 import { Slot } from "../src/slot.js";
 import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
-import { capInterruptionHandler, queueReturnHandler, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
+import { queueReturnHandler, recordHumanStop, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -108,10 +108,10 @@ async function sessionInTeardown(
     config: CONFIG,
   });
   if (route === "cap") {
-    capInterruptionHandler({ db, clock, slot, resolve: () => ws, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
+    watchdog.onWorkerExited(task.id, QUIET_EXIT, true);
     containers.forceReclaim(task.id);
   }
-  if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 });
+  if (route === "exit") watchdog.onWorkerExited(task.id, { ...QUIET_EXIT, exit_code: 1 }, false);
   return { db, clock, slot, task, ws, runtime, containers, worker, watchdog, triggered };
 }
 
@@ -132,6 +132,136 @@ async function reclaimTimesOut(f: Fixture): Promise<void> {
 
 const questions = (db: Db) => listBoard(db).filter((t) => t.type === "question");
 
+it("exit の分類待ちは slot を握り、解決後に逐語付きの failure question を1枚立てる(ADR 0309)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  let classify!: (cap: boolean) => void;
+  const classification = new Promise<boolean>((resolve) => { classify = resolve; });
+  f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, last_message: "LAST", reported_error: "ERROR", stderr_tail: "STDERR" }, classification);
+  await settle();
+  expect(questions(f.db)).toEqual([]);
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(markedSession(f.db)).toBeUndefined();
+
+  classify(false);
+  await settle();
+  const [question, ...more] = questions(f.db);
+  expect(more).toEqual([]);
+  expect(question?.title).toBe("worker exited without reporting: one");
+  expect(question?.purpose).toContain("last message from the worker:\nLAST\n\nerror reported by the CLI:\nERROR\n\nstderr tail:\nSTDERR");
+});
+
+it("満杯の分類は in_progress のまま後始末へ入り、空の観測で queue head へ戻る(ADR 0309)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  classify(true);
+  await settle();
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(markedSession(f.db)?.taskId).toBe(f.task.id);
+  expect(f.slot.inTeardown).toBe(true);
+  expect(questions(f.db)).toEqual([]);
+  f.runtime.fireEmpty(f.task.id);
+  await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
+  expect(nextSlotTask(f.db)?.id).toBe(f.task.id);
+  expect(listEvents(f.db, f.task.id).some((event) => event.kind === "cap_interrupted")).toBe(true);
+});
+
+it.each([false, true])("人間の停止後の分類 %s は何も書かない(ADR 0309)", async (cap) => {
+  const f = await sessionInTeardown("watchdog");
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
+  const events = listEvents(f.db, f.task.id);
+  const before = questions(f.db);
+  classify(cap);
+  await settle();
+  expect(listEvents(f.db, f.task.id)).toEqual(events);
+  expect(questions(f.db)).toEqual(before);
+  expect(before).toHaveLength(1);
+  expect(before[0]?.title).toBe("stopped by human: one");
+});
+
+it.each(["before-timeout", "timeout", "empty-before-stop"] as const)("%s: 人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async (order) => {
+  const f = await sessionInTeardown("watchdog");
+  await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  if (order !== "before-timeout") await f.clock.advance(CONFIG.reclaimTimeout - 1);
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  if (order === "empty-before-stop") {
+    f.runtime.fireEmpty(f.task.id);
+    await settle();
+  }
+  if (order === "timeout") await f.clock.advance(1);
+  f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
+  if (order === "empty-before-stop") {
+    await settle();
+    expect(f.slot.currentTaskId).toBeNull();
+    expect(openQuarantineQuestion(f.db, "containment", null)).toBeUndefined();
+  } else f.runtime.fireEmpty(f.task.id);
+  await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
+  const failure = questions(f.db).find((question) => question.parent_id === f.task.id)!;
+  answerQuestionViaWebui(f.db, getTask(f.db, failure.id)!, ["retry"], f.clock.now());
+  await f.clock.advance(1);
+  const retried = pickupTask(f.db, getTask(f.db, f.task.id)!, "deckhand", f.clock.now())!;
+  expect(retried.status).toBe("in_progress");
+  f.slot.occupy(retried.id);
+  f.containers.open(retried.id);
+  f.runtime.hold(retried.id);
+  const events = listEvents(f.db, f.task.id);
+
+  classify(true);
+  await settle();
+
+  expect(listEvents(f.db, f.task.id)).toEqual(events);
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(f.slot.inTeardown).toBe(false);
+  expect(markedSession(f.db)).toBeUndefined();
+});
+
+it.each([false, true])("時間制限の停止後の分類 %s は満杯なら cap、そうでなければ梯子だけが受ける(ADR 0309)", async (cap) => {
+  const f = await sessionInTeardown("watchdog");
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  await f.clock.advance(CONFIG.timeLimits.work);
+  expect(f.worker.gracefulStops).toEqual([f.task.id]);
+  classify(cap);
+  await settle();
+  expect(questions(f.db)).toEqual([]);
+  expect(f.slot.inTeardown).toBe(cap);
+  f.runtime.fireEmpty(f.task.id);
+  if (!cap) await f.clock.advance(CONFIG.grace);
+  await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
+  if (cap) {
+    expect(questions(f.db)).toEqual([]);
+    expect(nextSlotTask(f.db)?.id).toBe(f.task.id);
+    expect(listEvents(f.db, f.task.id).some((event) => event.kind === "cap_interrupted")).toBe(true);
+  } else {
+    expect(questions(f.db)).toHaveLength(1);
+    expect(questions(f.db)[0]?.title).toBe("watchdog killed task: one");
+  }
+});
+
+it.each(["slot", "status", "teardown"] as const)("分類解決時に %s を再観測し、既に決着した session を動かさない(ADR 0309)", async (gate) => {
+  const f = await sessionInTeardown("watchdog");
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  if (gate === "slot") {
+    f.slot.release();
+    f.slot.occupy("another-task");
+  } else if (gate === "status") {
+    completeTask(f.db, f.task, FULL_HANDOFF, "deckhand", f.clock.now(), "worker");
+  } else {
+    markTeardown(f.db, f.task.id, f.clock.now());
+  }
+  const before = listEvents(f.db, f.task.id);
+  classify(true);
+  await settle();
+  expect(listEvents(f.db, f.task.id)).toEqual(before);
+  expect(questions(f.db)).toEqual([]);
+});
+
 it("cap settlement supersedes an already pending watchdog reclaim callback", async () => {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -145,7 +275,7 @@ it("cap settlement supersedes an already pending watchdog reclaim callback", asy
   const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), pollNow: () => {}, config: { timeLimits: { work: MIN }, grace: MIN, reclaimTimeout: 5 * MIN } });
   await clock.advance(2 * MIN);
   expect(runtime.forceReclaims).toEqual([task.id]);
-  capInterruptionHandler({ db, clock, slot, resolve: undefined, heldForContainment: watchdog.heldForContainment, pollNow: () => {} })(task.id, containers.reclaimed(task.id));
+  watchdog.onWorkerExited(task.id, QUIET_EXIT, true);
   runtime.fireEmpty(task.id);
   await settle();
   expect(questions(db)).toEqual([]);
@@ -537,17 +667,16 @@ it("回収済み観測が中断の一撃より先に届いていても(Codex の
   const f = await sessionInTeardown("watchdog");
   registerTask(f.db, { type: "work", title: "next", purpose: "why", completion_criteria: "done" }, f.clock.now(), ...HUMAN_WEBUI);
 
-  // Codex の順: root の exit で強制回収 → 使用量を読み直す間に容器が空になる → 中断の一撃 → exit の一撃
+  // 分類が揃った時点で既に空でも、cap の後始末が先頭へ戻す。
   f.containers.forceReclaim(f.task.id);
   f.runtime.fireEmpty(f.task.id);
   await settle();
-  capInterruptionHandler({ db: f.db, clock: f.clock, slot: f.slot, resolve: () => f.ws, heldForContainment: f.watchdog.heldForContainment, pollNow: () => {} })(f.task.id, f.containers.reclaimed(f.task.id));
   f.watchdog.onWorkerExited(f.task.id, {
     ...QUIET_EXIT,
     exit_code: 1,
     reported_error: "You've hit your usage limit.",
     usage_recheck: { result: "full", windows: [{ name: "primary", used_percent: 100, resets_at: "2026-10-15T12:00:00.000Z" }] },
-  });
+  }, true);
   await settle();
 
   expect(questions(f.db)).toEqual([]);
@@ -564,7 +693,7 @@ it("使用量を読み直せなかった報告なき exit の failure question �
     ...QUIET_EXIT,
     exit_code: 1,
     usage_recheck: { result: "unreadable", reason: "App Server probe failed: timeout" },
-  });
+  }, false);
 
   const [question, ...more] = questions(f.db);
   expect(more).toEqual([]);
@@ -813,7 +942,7 @@ it("報告なき exit で後始末の印の書き込みが落ちると、failure
   const f = await sessionInTeardown("watchdog");
   failTeardownMark(f.db);
 
-  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 })).toThrow("teardown mark failed");
+  expect(() => f.watchdog.onWorkerExited(f.task.id, { ...QUIET_EXIT, exit_code: 1 }, false)).toThrow("teardown mark failed");
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
   expect(questions(f.db)).toEqual([]);

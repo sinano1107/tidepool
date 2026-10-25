@@ -55,7 +55,7 @@ import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupSt
 import { tierNames } from "./tier.js";
 import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit } from "./worker.js";
+import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
   quarantineWorkspace,
   resolveExecutionWorkspace,
@@ -379,12 +379,10 @@ export interface CodexWorkerOptions {
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が先頭へ戻す。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
-  onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
+  onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
    *  分類にだけ使い、Throttle の状態には書かない。 */
   usageProbe?: CodexAppServerProbe;
-  /** ADR 0261 決定3: 上限到達による中断の盤面側の一撃(`capInterruptionHandler` 製)。Claude と同じく exit より先に撃つ。 */
-  onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
 }
 
 /** Codex に登録された hook のうち、盤面が宣言と突き合わせる項目 —— ADR 0130 決定3 の4つ
@@ -1495,8 +1493,18 @@ export class CodexWorker implements WorkerAdapter {
           last_message: lastMessage,
         };
         const probe = this.options.usageProbe;
-        if (!turnFailed || !probe) return record(exit, outputClosed);
-        void recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => record({ ...exit, usage_recheck }, outputClosed));
+        if (!turnFailed || !probe) {
+          record(exit, outputClosed);
+          this.options.onWorkerExited?.(task.id, exit, false);
+          return;
+        }
+        // ADR 0309: exit の逐語は即時に渡し、分類は worker_exited を書いてから解決する。
+        const classification = recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => {
+          exit.usage_recheck = usage_recheck;
+          record(exit, outputClosed);
+          return usage_recheck.result === "full";
+        });
+        this.options.onWorkerExited?.(task.id, exit, classification);
       };
       const record = (exit: WorkerExit, outputClosed: boolean) => {
         const normalized: Extract<EventPayload, { kind: "worker_exited" }>["usage"] = usage
@@ -1521,10 +1529,6 @@ export class CodexWorker implements WorkerAdapter {
           at: this.options.clock.now(),
         });
         removeTaskTemp();
-        // ADR 0261 決定3: Claude と同じ順 —— 中断を先に撃てば、続く exit は後始末中として盤面に読まれる。
-        // 回収済み観測が読み直しの間に届いていても `reclaimed()` は解決する
-        if (exit.usage_recheck?.result === "full") this.options.onCapInterrupted?.(task.id, this.containers.reclaimed(task.id));
-        this.options.onWorkerExited?.(task.id, exit);
         // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
         projectWhenTranscriptCloses(this.options.db, transcript.stream, {
           workerSpawnedEventId: spawned,

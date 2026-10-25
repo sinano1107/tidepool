@@ -62,7 +62,7 @@ import { tierNames } from "./tier.js";
 import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
-import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit } from "./worker.js";
+import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
   excludeWorkspaceProjectSettings,
   guardRegistryDefaultBranch,
@@ -1165,35 +1165,27 @@ export interface ClaudeWorkerOptions {
   /** issue #56 / ADR 0025: the skill-enumeration boundary the complement-deny
    *  ping runs at. Injected so the deny plumbing is tested without a real CLI. */
   enumerateSkills?: EnumerateSkillsFn;
-  /** 上限到達による中断(ADR 0104)の盤面側の一撃 —— `capInterruptionHandler` 製。
-   *  adapter が持つのは「429 で断られた」と「容器が空になった」の観測だけで、
-   *  slot も tree rule も先頭復帰も向こう側にある(ADR 0099 決定1)。不在のときの壊れ方が
-   *  静かな fail で、`spawn`/`pty`/`enumerateSkills`(不在 = 実物を使う注入 seam)の類ではない
-   *  機能フィールドなので、`buildWorkerOptions` が literal を所有し
-   *  網羅テストが見張る(ADR 0043)。不在 → 中断を観測しても盤面は動かない(workspaceless な
-   *  unit 盤面のための姿)。 */
-  onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
   /** 行の拒否(ADR 0184 決定4)の盤面側の一撃 —— `rowRefusalHandler` 製。
-   *  `onCapInterrupted` と同じ機能フィールドで、渡すのは spawn 時の行と回収済み観測だけ。 */
+   *  `onWorkerExited` と同じ機能フィールドで、渡すのは spawn 時の行と回収済み観測だけ。 */
   onRowRefused?: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
   /** worker が1度も走らなかった pickup(ADR 0118)の盤面側の一撃 —— `spawnFailureHandler` 製。
-   *  `onCapInterrupted` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
+   *  `onWorkerExited` と同じ機能フィールド。不在 → spawn 失敗を観測しても盤面は動かない。 */
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** transcript の open が記録の器に書けなかった pickup(ADR 0266 決定4)の盤面側の一撃 —— `recordContainerHaltHandler` 製。
    *  観測するのは scheduler の catch の外(skill 列挙の continuation)だけで、同期の経路は scheduler が受ける。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
-   *  `onCapInterrupted` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
+   *  `onWorkerExited` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
-   *  `onCapInterrupted` と同じ機能フィールド。報告なき exit かどうかの判定は盤面側が持つ。 */
-  onWorkerExited?: (taskId: string, exit: WorkerExit) => void;
+   *  分類も同じ通知で渡す(ADR 0309)。報告なき exit かどうかの判定は盤面側が持つ。 */
+  onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。`containers` と同じく**省略できない**。 */
   transcripts: TranscriptStore;
   /** ADR 0097 決定4 / issue #445: where the Moonshot Platform key lives —
    *  a mode-600 state file, never the board's env (plaintext on process.env
    *  rides every worker spawn). Read fresh at each spawn, only for
-   *  `provider: moonshot` agents. Same class as `onCapInterrupted` above: a
+   *  `provider: moonshot` agents. Same class as `onWorkerExited` above: a
    *  functional field, not a test seam, so `buildWorkerOptions` owns the
    *  literal. Absent → `resolveMoonshotApiKeyFile`'s default
    *  (`~/.tidepool/moonshot-api-key`). */
@@ -2402,16 +2394,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         at: this.options.clock.now(),
       });
       removeTaskTemp();
-      // ADR 0104 決定1: 上限到達による中断は失敗ではない —— failure question を
-      // 立てず、タスクを `todo` の先頭へ戻して slot を解放する。**解放は容器が
-      // 空になった観測のあと**(ADR 0099 決定3): exit は root process の話で
-      // あって容器が空になった証拠ではない。観測が届かないまま止まった session は
-      // exit の時点で後始末に入り、watchdog の回収 timeout → Containment quarantine が
-      // 受ける(ADR 0113)。帰属は 401 と同じく spawn 時の provider —— Claude CLI を喋る他
-      // Provider も envelope が同じなのでこの1本を通る(決定5)。
-      if (capInterrupted) {
-        this.options.onCapInterrupted?.(task.id, this.containers.reclaimed(task.id));
-      }
       // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
       // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
       if (refusalCause) {
@@ -2421,9 +2403,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           this.containers.reclaimed(task.id),
         );
       }
-      // ADR 0145: 盤面に exit を渡す。上限到達の一撃が**先**に後始末へ入れているので、
-      // 盤面側の判定はその session を報告なき exit として拾わない。
-      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit);
+      // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
+      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit, capInterrupted);
       // issue #356: この session の Precedent を投影する —— worker_exited を書いたあと。
       projectWhenTranscriptCloses(this.options.db, transcript.stream, {
         workerSpawnedEventId: spawnedEventId,

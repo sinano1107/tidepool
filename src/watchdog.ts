@@ -18,7 +18,7 @@ import {
   teardownStep,
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
-import type { WorkerAdapter, WorkerExit } from "./worker.js";
+import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
@@ -70,9 +70,8 @@ export interface Watchdog extends PendingReclaim {
    *  遅れて届いた回収済み観測はこの述語で弾かれる。`pendingReclaim` では代われない:
    *  あちらは容器の側も読むので、空が観測された瞬間に false になる。 */
   heldForContainment: (taskId: string) => boolean;
-  /** root process の exit の観測(ADR 0145)。まだ後始末に入っておらず、梯子にも入って
-   *  いない session なら、報告なき exit として failure question を立てて後始末へ入れる。 */
-  onWorkerExited: (taskId: string, exit: WorkerExit) => void;
+  /** exit は即時に保持し、上限到達の分類が揃ってから盤面が決める(ADR 0309)。 */
+  onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
 }
 
 /** watchdog が持つ、今 slot にいるタスクの今の pickup の記録。taskId か pickup が替われば
@@ -92,6 +91,8 @@ interface WatchRecord {
   settled: boolean;
   /** 観測した root の exit。読むのは梯子の底の question だけで、どの判定にも使わない(ADR 0191) */
   exit?: WorkerExit;
+  /** worker_exited の記録より前に梯子の底が決着しないための門(ADR 0309 決定3)。 */
+  classification?: Promise<void>;
 }
 
 /** The task's most recent pickup, not its first: a retried task is picked up
@@ -185,28 +186,6 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
     appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reasonQuestion ? { reason_question_id: reasonQuestion.id } : { reason }) }, at: now });
     markTeardown(db, taskId, now);
   })();
-}
-
-/** 上限到達による中断(CONTEXT.md / ADR 0104)の盤面側の一撃。adapter は
- *  「Provider が 429 で断った」ことと「容器が空になった」ことだけを観測し、
- *  ここへ task id を渡す —— slot も tree rule も盤面の側にある(ADR 0099 決定1)。
- *
- *  通る型は通常完了・watchdog の強制回収と同じ後始末(`runTeardown`)であり、違いは
- *  failure question を立てないことだけである: リトライ判断が存在しない以上、問いに
- *  判断価値が無い(ADR 0007 の理路)。同じ理由で `registerFailureQuestion` を通さず、失敗統計も汚さない。
- *
- *  slot と status の門は後始末モジュールが持つ: 回収済み観測は非同期に届くので、その間に
- *  session が自己申告して次のタスクが slot に入っていることがありうる —— 他人の slot を
- *  解放しないために、そこで観測しなおす(ADR 0104 の実装時にこの経路だけが取った自衛が、
- *  ADR 0109 で3経路の共有物になった)。 */
-export function capInterruptionHandler(deps: TeardownDeps): (taskId: string, reclaimed: Promise<void>) => void {
-  return (taskId, reclaimed) => {
-    if (deps.slot.currentTaskId !== taskId || deps.slot.inTeardown) return;
-    if (getTask(deps.db, taskId)?.status !== "in_progress") return;
-    markTeardown(deps.db, taskId, deps.clock.now());
-    deps.slot.enterTeardown();
-    void reclaimed.then(() => runTeardown(deps, taskId, teardownStep(deps.db, taskId)));
-  };
 }
 
 /** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
@@ -385,9 +364,11 @@ export function startWatchdog(deps: {
    *  帰り先を決める fetch がここの token を要る。 */
   githubAuth?: GitHubAuth;
   pollNow: () => void;
-  config: WatchdogConfig;
+  /** Absent → receive exits and classify them, without time-based watchdog ticks. */
+  config?: WatchdogConfig;
 }): Watchdog {
-  const { db, clock, slot, worker, containers, workspace, resolveWorkspace, config } = deps;
+  const { db, clock, slot, worker, containers, workspace, resolveWorkspace } = deps;
+  const config: WatchdogConfig = deps.config ?? { timeLimits: {}, grace: 0 };
   const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
   const reclaimTimeout = config.reclaimTimeout ?? RECLAIM_TIMEOUT;
   let pending: string | null = null;
@@ -416,8 +397,15 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
+    if (rec.settled) return;
     if (rec.humanStop) {
       void runTeardown(teardown, taskId, teardownStep(db, taskId));
+      return;
+    }
+    if (rec.classification) {
+      void rec.classification.then(() => {
+        if (!rec.humanStop) onReclaimed(taskId, rec, limit);
+      });
       return;
     }
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。回収 timeout で
@@ -452,6 +440,13 @@ export function startWatchdog(deps: {
    *  退避しても、退避そのものが競合する)。tree rule は確認 question の受理まで待つ
    *  (ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)。後始末の印が待ちを再起動の先へ運ぶ。 */
   function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
+    if (rec.humanStop) return;
+    if (rec.classification) {
+      void rec.classification.then(() => onReclaimTimeout(task, rec, limit));
+      return;
+    }
+    if (slot.currentTaskId !== task.id || slot.inTeardown || sessionInTeardown(db)?.taskId === task.id) return;
+    if (getTask(db, task.id)?.status !== "in_progress") return;
     pending = task.id;
     rec.settled = true;
     const now = clock.now();
@@ -562,34 +557,47 @@ export function startWatchdog(deps: {
     slot.enterTeardown();
     rec.humanStop = true;
     beginStop(taskId, rec);
-    // A cap may already have sent force reclaim; its existing observation now finishes this stop.
+    // 分類待ちに留めた空の観測も、人間の停止は分類を待たずに受け取る(ADR 0309)。
+    if (rec.forceSentAt !== undefined && rec.classification) {
+      void containers.reclaimed(taskId).then(() => onReclaimed(taskId, rec, 0));
+    }
     return undefined;
   };
 
-  /** 報告なき exit(ADR 0145)。最終 verb・上限到達による中断は exit より先に後始末へ
-   *  入るので、ここの門で自然に外れる。梯子に入った session は梯子の底の question が受ける
-   *  (決定4)—— 梯子の強制回収も決着も畳み込み停止の後ろにしか無いので、停止の送達記録
-   *  1つで見分けられる。強制回収は adapter が送達済みなので重ねない。 */
-  function onWorkerExited(taskId: string, exit: WorkerExit): void {
+  /** exit の事実と分類を分けて受け、分類が揃った時点で slot・後始末・status を読み直す(ADR 0309)。 */
+  function onWorkerExited(taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification): void {
     if (slot.currentTaskId !== taskId || slot.inTeardown) return;
     const rec = syncPickup(taskId);
     rec.exit = exit;
-    if (rec.stopSentAt !== undefined) return;
-    const task = getTask(db, taskId);
-    if (task?.status !== "in_progress") return;
-    const now = clock.now();
-    const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
-    registerFailureAndMarkTeardown(
-      db,
-      task,
-      `worker exited without reporting: ${task.title}`,
-      `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
-        "it did not complete, decompose, or escalate. No self-report is possible." +
-        exitSections(exit),
-      now,
-    );
-    slot.enterTeardown();
-    void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
+    const decide = (cap: boolean) => {
+      if (rec.humanStop) return;
+      if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return;
+      const task = getTask(db, taskId);
+      if (task?.status !== "in_progress") return;
+      if (cap) {
+        markTeardown(db, taskId, clock.now());
+      } else {
+        // 畳み込み停止の結果は梯子が受ける。満杯だけは時間制限の停止より優先する。
+        if (rec.stopSentAt !== undefined) return;
+        const how = exit.signal ? `signal ${exit.signal}` : `exit code ${exit.exit_code}`;
+        registerFailureAndMarkTeardown(
+          db,
+          task,
+          `worker exited without reporting: ${task.title}`,
+          `the worker for task "${task.title}" (${task.id}) exited (${how}) without a final report — ` +
+            "it did not complete, decompose, or escalate. No self-report is possible." +
+            exitSections(exit),
+          clock.now(),
+        );
+      }
+      slot.enterTeardown();
+      void containers.reclaimed(taskId).then(() => runTeardown(teardown, taskId, teardownStep(db, taskId)));
+    };
+    if (typeof capInterrupted === "boolean") decide(capInterrupted);
+    else rec.classification = capInterrupted.then((cap) => {
+      delete rec.classification;
+      decide(cap);
+    });
   }
 
   function tick(): void {
@@ -626,7 +634,7 @@ export function startWatchdog(deps: {
     advanceStop(task, rec, limit);
   }
 
-  const cancel = clock.setInterval(tick, WATCHDOG_TICK);
+  const cancel = deps.config ? clock.setInterval(tick, WATCHDOG_TICK) : () => {};
   return {
     stop: cancel,
     stopSession,
