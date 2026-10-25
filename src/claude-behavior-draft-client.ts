@@ -46,13 +46,13 @@ function buildStopPrompt(input: StopBehaviorDraftInput): string {
   );
 }
 
-/** The fields both questions share; `worker` names whose rule addressee "worker" means. */
-const responseFields = (worker: string) =>
+/** The fields both questions share; `workerPhrase` says whose rule addressee "worker" means. */
+const responseFields = (workerPhrase: string) =>
   "Respond with ONLY a single JSON object (no markdown fences, no prose) " +
   'with these fields: "path" (string — a "/"-separated hierarchy in English, such as build/tests; place it ' +
   "under an existing branch of the index when one fits), " +
   '"title" (string — a short name for the rule, in English), "text" (string — the rule itself, in English, ' +
-  `stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for ${worker}, ` +
+  `stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for ${workerPhrase}, ` +
   '"all" when every agent should follow it). ' +
   `${TIER_DEFINITION_RULE} The index is the ` +
   "workspace's memory branches with their definitions (null when the store is empty).";

@@ -969,9 +969,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         "(refire allocation, target = the review's task_completed event id), Behavior drafts (refire draft, target = the attribution event id — an objection's or a stop's), " +
         "second-round attributions (refire second_round, target = the id of the first objection event of the bundle — the objections one " +
         "triage session raised against the entry) and stop attributions (refire stop_attribution, target = the human stop event id). " +
-        "An allocation row shows the review and the reviewed task; a draft or second-round row shows " +
+        "An allocation row shows the review and the reviewed task; a second-round row and a draft from an objection show " +
         "the objected entry, its task, cause (the latest bundle's judgment; null = unattributed) and round; a stop attribution row shows " +
-        "the stopped task and the stop reason, and a draft from a stop also the stop judgment's cause and round. Every row shows the last failure's " +
+        "the stopped task and the stop reason, and a draft from a stop shows the stop reason, its task and the stop attribution's cause and round. Every row shows the last failure's " +
         "reason and time. Rows come as `halted`: draft and second-round rows first, in the order of the objections they answer, " +
         `then allocation reviews in the order the reviews completed, then stop attributions and drafts from them in the order of the stops. ${nextDescription("list_halted_refires", "rows")}`,
       inputSchema: { next: z.string().optional() },

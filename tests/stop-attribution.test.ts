@@ -39,8 +39,9 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
   };
   const stopEvent = () => listEvents(db, picked.id).find((e) => e.kind === "session_stopped_by_human")!;
   const stopInputs = () => client.stopCalls.map((c) => c.input);
-  const judged = () => listEvents(db, picked.id).filter((e) => e.kind === "stop_attributed").map((e) => e.payload);
-  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, stopInputs, judged };
+  const judgments = () => listEvents(db, picked.id).filter((e): e is EventRowOf<"stop_attributed"> => e.payload.kind === "stop_attributed");
+  const judged = () => judgments().map((e) => e.payload);
+  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, stopInputs, judgments, judged };
 }
 
 it("a stop with a reason is judged once by the sweep after its session closes, from the session window, its reads and no actions", async () => {
@@ -65,7 +66,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       actions: null,
     },
   ]);
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", wrong_memory_entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", wrong_memory_entries: null, round: "initial" }]);
   expect(b.client.calls).toEqual([]);
 });
 
@@ -201,7 +202,7 @@ it.each([
 
   await b.sweep();
 
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, wrong_memory_entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, wrong_memory_entries: null, round: "initial" }]);
 });
 
 it("a failing Board call leaves failure events, halts after 3 as a stop row without an entry, and Retry / Dismiss act on it", async () => {
@@ -359,7 +360,7 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const latest = appendEvent(b.db, { taskId: b.task.id, workerId: BOARD_WORKER_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null } });
+  const latest = appendEvent(b.db, { taskId: b.task.id, workerId: BOARD_WORKER_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null, round: "initial" } });
   const draft = { path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace." };
   const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 
@@ -393,8 +394,6 @@ function withDrafter(b: ReturnType<typeof fixture>, extra: Partial<Retrospective
   return { drafter, deps: { ...b.deps, behaviorDraftClient: drafter, workspace: { name: "charts" }, ...extra } };
 }
 
-const judgments = (b: ReturnType<typeof fixture>) => listEvents(b.db, b.task.id).filter((e): e is EventRowOf<"stop_attributed"> => e.payload.kind === "stop_attributed");
-
 it.each([
   { addressee: "worker" as const, expected: "deckhand" },
   { addressee: "all" as const, expected: null },
@@ -415,7 +414,7 @@ it.each([
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({
       kind: "behavior", state: "candidate", path: "build", title: "Keep fixtures", text: "Keep the fixtures.",
-      scope: "charts", addressee: expected, source: { kind: "event", ref: judgments(b)[0]!.id }, cause: "preference",
+      scope: "charts", addressee: expected, source: { kind: "event", ref: b.judgments()[0]!.id }, cause: "preference",
     }),
   ]);
 });
@@ -471,12 +470,12 @@ it.each([
   ];
   expect(b.stopInputs()).toEqual([initialInput, { ...initialInput, rca_findings: findings }]);
   expect(b.judged()).toEqual([
-    { kind: "stop_attributed", stop_event_id: stop, cause: "uncertain", evidence: "cannot tell from the log", wrong_memory_entries: null },
+    { kind: "stop_attributed", stop_event_id: stop, cause: "uncertain", evidence: "cannot tell from the log", wrong_memory_entries: null, round: "initial" },
     { kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the RCAs found the worker removed ../other", wrong_memory_entries: null, round: "after_rca" },
   ]);
   expect(drafter.stopCalls.map((c) => c.input)).toEqual(Array(candidates).fill({ ...initialInput, rca_findings: findings, index: null }));
   expect(listMemoryEntries(b.db, {}).map((m) => ({ source: m.source, addressee: m.addressee, cause: m.cause }))).toEqual(
-    Array(candidates).fill({ source: { kind: "event", ref: judgments(b)[1]!.id }, addressee: "deckhand", cause }),
+    Array(candidates).fill({ source: { kind: "event", ref: b.judgments()[1]!.id }, addressee: "deckhand", cause }),
   );
 });
 
@@ -489,7 +488,7 @@ it("a second-round uncertain stop judgment is final and is never fired again", a
   for (const hour of [0, 1, 2]) await b.sweep(new Date(at.getTime() + hour * HOUR));
 
   expect(b.client.stopCalls).toHaveLength(2);
-  expect(judgments(b).map((j) => [j.payload.cause, j.payload.round])).toEqual([["uncertain", undefined], ["uncertain", "after_rca"]]);
+  expect(b.judged().map((j) => [j.cause, j.round])).toEqual([["uncertain", "initial"], ["uncertain", "after_rca"]]);
 });
 
 it("a failing second round counts only the failures after the initial judgment, then halts as the stop's row", async () => {
@@ -527,7 +526,7 @@ it("a failing draft from a stop judgment leaves failure events naming the stop, 
   b.exit();
   const sweepAt = (hour: number) => b.sweep(new Date(at.getTime() + hour * HOUR), deps);
   for (const hour of [0, 1, 2, 3]) await sweepAt(hour);
-  const judgment = judgments(b)[0]!.id;
+  const judgment = b.judgments()[0]!.id;
 
   expect(drafter.stopCalls).toHaveLength(3);
   expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual(
@@ -568,7 +567,7 @@ it("after the second round the stop is read by its second judgment: the history'
 
   await b.sweep(at, deps);
 
-  const [initial, second] = judgments(b);
+  const [initial, second] = b.judgments();
   expect(drafter.stopCalls).toHaveLength(1);
   expect(taskHistoryRows(b.db, b.task.id).find((r) => "stopped_by_human" in r.entry)?.entry).toEqual({
     stopped_by_human: { reason: "deleting unrelated files", cause: "capability", evidence: "the RCAs found the worker removed ../other" },
@@ -580,5 +579,5 @@ it("after the second round the stop is read by its second judgment: the history'
   expect(readMemory(b.db, { taskId: b.task.id, scope: "charts", agent: "deckhand" }, { ids: [candidate!.id] }, at).entries[0]?.case).toEqual({
     decisions: ["deleted the fixtures"], handoff: null, result: null, human_stop: { reason: "deleting unrelated files" },
   });
-  expect(judgments(b).map((j) => j.payload.cause)).toEqual(["uncertain", "capability"]);
+  expect(b.judged().map((j) => j.cause)).toEqual(["uncertain", "capability"]);
 });
