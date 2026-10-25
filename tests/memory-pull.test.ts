@@ -832,6 +832,24 @@ it("worker_spawned を出所に持つ Behavior の case は、その session の
   });
 });
 
+it("停止の帰責を出所に持つ Behavior の case は、止められた session の decision 列と停止の行(理由)で、行動列は無い(ADR 0310 決定5)", () => {
+  const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
+  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
+  const spawned = append(WORKER_SPAWNED);
+  append({ kind: "decision_logged", line: "cleaned the parent directory" });
+  const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" });
+  append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawned, output_closed: true, usage: null });
+  const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", entries: null });
+  const id = approvedBehavior(db, "Stay in the workspace", { event_id: attributed });
+
+  expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [id] }, at).entries[0]?.case).toEqual({
+    decisions: ["cleaned the parent directory"],
+    handoff: null,
+    result: null,
+    human_stop: { reason: "deleting files outside the workspace" },
+  });
+});
+
 it("人間が書いた Behavior(出所 = 自身の作成 event)と Knowledge の case は null", async () => {
   const { db, reader } = await projectedBoard();
   const human = approvedBehavior(db, "Human");

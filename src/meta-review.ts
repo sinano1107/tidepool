@@ -106,7 +106,7 @@ export const META_REVIEW_SUBJECTS = {
       completion_criteria:
         "every item to judge in this cycle's material is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or listed as left as is in complete_memory_review",
     },
-    material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed"],
+    material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed", "stop_attributed"],
     verbs: MEMORY_META_REVIEW_VERBS,
   },
   routing: {

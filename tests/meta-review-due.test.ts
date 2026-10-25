@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, composeRoutingRow } from "../src/execution-setting.js";
 import {
   approveMemoryProposal,
@@ -110,6 +110,17 @@ it("人間の memory の直接の無効化は材料で、周期が過ぎれば�
   previousReview(db, "memory");
 
   invalidateMemoryEntry(db, { entry_id: entry, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  registerDueMetaReviews(db, afterPeriod);
+
+  expect(openMetaReviews(db, "memory")).toBe(1);
+});
+
+it("停止の帰責は材料で、周期が過ぎれば次の memory meta-review を登録する(ADR 0310 決定5)", () => {
+  const db = openDb(":memory:");
+  const work = writerTask(db);
+  previousReview(db, "memory");
+
+  appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: 1, cause: "preference", evidence: "e", entries: null } });
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(1);

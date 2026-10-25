@@ -3,7 +3,7 @@ import type { Cause } from "../src/cause.js";
 import type { CodexAppServerProbe, CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { type Db, openDb } from "../src/db.js";
 import { DEFAULT_AUDITOR_NAME } from "../src/defaults.js";
-import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { episodeOutcome, type LearnerEpisode, loadEpisodes, loadSeeds, observedInTier, recommend, type Seed, selectorBranch } from "../src/learner.js";
 import { listRoutingShadow } from "../src/routing-review.js";
@@ -674,6 +674,27 @@ it.each(REPAIR_TYPES)("spawn を持つ %s は episode になり、完了して�
 
   attribute(b, repair.id, logDecision(b.db, getTask(b.db, repair.id)!, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
   expect(outcome()).toBe("rejected");
+});
+
+it("人間が止めた session は停止の帰責が capability なら rejected、preference なら数えない —— 帰責は停止 event で窓に入る(ADR 0310 決定5、loadEpisodes)", () => {
+  const b = bareBoard();
+  const stoppedSession = (title: string, cause: Cause) => {
+    const { task, spawnedId } = spawnedWork(b, title);
+    const at = b.clock.now();
+    const append = (payload: TaskScopedPayload, workerId = WORKER) => appendEvent(b.db, { taskId: task.id, workerId, origin: "board", at, payload });
+    const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" }, "human");
+    append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
+    // 判定は session が閉じた後に書かれる —— 窓に入るのは停止 event
+    append({ kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the worker removed ../other", entries: null }, "board");
+    accept(b, task.id);
+    return spawnedId;
+  };
+  const capability = stoppedSession("a", "capability");
+  const preference = stoppedSession("b", "preference");
+
+  const episodes = loadEpisodes(b.db);
+  const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect({ capability: outcomeOf(capability), preference: outcomeOf(preference) }).toEqual({ capability: "rejected", preference: "accepted" });
 });
 
 it("spawn を持つ review task は episode にならない —— 判定者は学習器の外(ADR 0111 決定3 / ADR 0272 決定4 の追記、loadEpisodes)", () => {

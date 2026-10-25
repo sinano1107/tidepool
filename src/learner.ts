@@ -41,7 +41,7 @@ export interface LearnerEpisode {
 
 /** 1 session の outcome(純関数)。受理は統合点レビューの完了からの派生(ADR 0111
  *  決定1、`acceptedSql`)で、0 は「保留」も含むので失敗とは読まない。負の信号は
- *  worker の落ち度と帰責された異議(`capability`)と、配分評価の underpowered ×
+ *  worker の落ち度と帰責された異議・人間の停止(`capability`、ADR 0310 決定5)と、配分評価の underpowered ×
  *  capability だけ —— `preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)の異議は
  *  数えず、環境要因を除く配分評価と同じ機構に乗る(ADR 0115 決定5)。負の信号は
  *  受理より強い: 受理された task に capability の異議が残っていれば負である。
@@ -227,12 +227,14 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
   // 異議群ごとの有効な判定(同じ異議群では後の event が有効)をすべて —— 前の異議群の capability を後の異議群の
   // preference で消さない(ADR 0170 決定3)
   const attributions = [...objectionBundles(db).values()].flat().flatMap((b) => (b.attribution ? [{ ...b.attribution, task_id: b.task_id }] : []));
+  // 停止の帰責は停止ごとに後の判定が有効(ADR 0310 決定4)。窓には停止 event で入る —— 判定は session が閉じた後に書かれる
+  const stopCauses = new Map(listEventsOfKinds(db, ["stop_attributed"]).map((e) => [e.payload.stop_event_id, { id: e.payload.stop_event_id, task_id: e.task_id, cause: e.payload.cause }]));
   const spawns = events.filter((e): e is Spawned => e.payload.kind === "worker_spawned");
   return spawns.map((spawned) => {
     const task = tasks.find((t) => t.id === spawned.task_id)!;
     const { exited, hasNextSpawn, inSession } = sessionWindow(events, spawned);
     // 異議群のタスク(= entry のタスク)で窓に入れる
-    const causes = attributions.filter((a) => inSession({ id: a.entry_id, task_id: a.task_id })).map((a) => a.cause);
+    const causes = [...attributions.map((a) => ({ id: a.entry_id, task_id: a.task_id, cause: a.cause })), ...stopCauses.values()].filter(inSession).map((a) => a.cause);
     const allocations: { allocation: Allocation; cause: Cause }[] = [];
     for (const e of events) {
       if (e.task_id !== spawned.task_id) continue;
