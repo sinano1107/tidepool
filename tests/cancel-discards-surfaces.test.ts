@@ -86,7 +86,7 @@ it("祖先の cancel の下の RCA の worker MCP は tools/list に分解の ve
 
   expect((await tools()).map((tool) => tool.name)).toEqual(live.filter((name) => name !== "decompose" && name !== "redecompose"));
   const withheld = await completeRcaDescription();
-  expect(withheld).toContain("lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries. Only a finding");
+  expect(withheld).toContain("lists its acts from the record: the memory you wrote with propose_from_material from that finding's material. Only a finding");
   expect(withheld).not.toMatch(/repair task|decompose/);
   expect(t.worker.started.at(-1)!.id).toBe(rca.id);
   expect(JSON.parse((await callAsTask(t, rca.id, "get_current_task", {})).content[0].text)).not.toHaveProperty("artifact_discarded");

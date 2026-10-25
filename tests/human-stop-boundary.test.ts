@@ -110,7 +110,7 @@ it("GET /tasks/:id human_stops carries the stop attribution's cause and evidence
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "deleting unrelated files" });
   const stop = listEvents(t.db, task.id).find((e) => e.kind === "session_stopped_by_human")!.id;
   // setup のみ: sweep の判定を直に置く(撃つ経路は tests/stop-attribution.test.ts)
-  const payload = { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "removed ../other", entries: null } as const;
+  const payload = { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "removed ../other", wrong_memory_entries: null } as const;
   appendEvent(t.db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", at: t.clock.now(), payload });
 
   const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
@@ -135,8 +135,8 @@ async function runningRca(material: "stop" | "objection", transcript?: string[])
     writeFileSync(transcriptPath, transcript.join("\n"));
     projectAndPersist(t.db, { workerSpawnedEventId: spawned, transcriptPath });
   }
-  const objection_event_ids = material === "stop" ? [stop] : [bundledObjection(t.db, task.id, entry, t.clock.now())];
-  const rca = registerTask(t.db, { type: "review", title: "rca (auditor): write parser", purpose: "p", completion_criteria: "c", parent_id: task.id, objection_event_ids }, t.clock.now(), BOARD_WORKER_ID, "board");
+  const opened_on_event_ids = material === "stop" ? [stop] : [bundledObjection(t.db, task.id, entry, t.clock.now())];
+  const rca = registerTask(t.db, { type: "review", title: "rca (auditor): write parser", purpose: "p", completion_criteria: "c", parent_id: task.id, opened_on_event_ids }, t.clock.now(), BOARD_WORKER_ID, "board");
   await nextPoll(t);
   const client = await mcpClient(t.mcpBaseUrl, rca.id);
   try {

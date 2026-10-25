@@ -38,7 +38,7 @@ it("表示言語 Japanese の盤面で、異議の材料を持つ盤面名義の
   const objection = appendEvent(t.db, { taskId: objected.id, workerId: HUMAN_WORKER_ID, origin: "webui", payload: { kind: "objection_raised", entry_id: entry, comment: "補正は一度だけ", session_id: 1 }, at: now });
   const review = registerTask(
     t.db,
-    { type: "review", title: "rca (auditor): 潮汐グラフ", purpose: "異議: 補正は一度だけ", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] },
+    { type: "review", title: "rca (auditor): 潮汐グラフ", purpose: "異議: 補正は一度だけ", completion_criteria: "c", parent_id: objected.id, opened_on_event_ids: [objection] },
     now,
     BOARD_WORKER_ID,
     "board",

@@ -1,5 +1,7 @@
 # 人間の停止は session を単位に帰責され、判事と RCA は判断ログと行動列に照らし、RCA の材料は停止そのものである —— 帰責の単位は観測の単位
 
+**Status 追記: 決定4 の「材料 id 欄」「材料にした event の id」は登録の欄 `opened_on_event_ids` を指す(issue #2577 で `objection_event_ids` から改名)** —— 起草 verb は `propose_from_material`(引数 `material_id`)、帰責の `entries` は `wrong_memory_entries`。
+
 2026-10-25 の triage → grilling(issue #2553、#2549 / ADR 0308 決定4 の前提から分離)で決定。ADR 0308 は人間の停止の理由を「学習の材料であり
 扉でもある」と置いたが、学習の鎖(帰責 → RCA → candidate → meta-review → 承認)は入口から出口まで**判断ログの行**を鍵にしており
 (異議群 = entry × triage session、ADR 0170; RCA の材料と所見は行、ADR 0171 / 0278)、停止は行を指さない。issue の案 (a)「判事が

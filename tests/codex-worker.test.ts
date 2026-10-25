@@ -636,11 +636,11 @@ describe("CodexWorker (ADR 0098)", () => {
     await f.start(metaReviewTask(f.db));
 
     const base = ["get_current_task", "list_agents", "complete_task", "log_decision", "decompose", "escalate", "declare_premise_breach", "continue_decomposition", "redecompose"];
-    expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_objection"]);
+    expect(enabledTools(f.process.calls[0]!.args)).toEqual([...base, "record_knowledge", "define_memory_branch", "browse_memory", "search_memory", "read_memory", "propose_from_material"]);
     expect(enabledTools(f.process.calls[1]!.args)).toEqual([
       // meta-review は帰り先の無い系譜で、分解の verb も伏せる(ADR 0301 決定3)
       ...base.filter((verb) => !["complete_task", "decompose", "redecompose"].includes(verb)),
-      "propose_from_objection",
+      "propose_from_material",
       "list_memory_candidates",
       "list_precedents",
       "list_memory_entries",

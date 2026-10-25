@@ -54,7 +54,7 @@ import {
 } from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
-import { completeRca, materialStop, proposeFromObjection, stopMaterialActions } from "./retrospective.js";
+import { completeRca, materialStop, proposeFromMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
@@ -898,13 +898,13 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           (stopRca
             ? "Your review was opened on a human stop (its material, quoted in your purpose as \"stop <id>: <reason>\"; get_current_task's actions is " +
               "that session's action sequence — calls are its tool calls in order with a failed mark, decisions place each logged decision among " +
-              "them, and null means the session left no readable sequence): findings is one finding {entries: [the stop id], root_cause: one line}. A missing, repeated or " +
+              "them, and null means the session left no readable sequence): findings is one finding {material: [the stop id], root_cause: one line}. A missing, repeated or " +
               "other id is refused, named by id, and nothing is recorded. "
             : "findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
-              "each finding is {entries: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
+              "each finding is {material: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
               "repeated or non-material entry is refused, named by id, and nothing is recorded. ") +
           "The board records one decision line per finding " +
-          "and lists its acts from the record: the memory you wrote with propose_from_objection from that finding's entries" +
+          "and lists its acts from the record: the memory you wrote with propose_from_material from that finding's material" +
           // decompose を伏せた RCA には分解の修理を言わない(ADR 0301 決定5)
           (withheld.includes("decompose")
             ? ". "
@@ -914,7 +914,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           `nothing. The handoff takes the same fields as complete_task (${describeHandoffFields()}); none is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
-          findings: z.array(z.strictObject({ entries: z.array(z.number().int()), root_cause: requiredTextSchema, no_proposal: z.literal(true).optional() })),
+          findings: z.array(z.strictObject({ material: z.array(z.number().int()), root_cause: requiredTextSchema, no_proposal: z.literal(true).optional() })),
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
@@ -1106,20 +1106,20 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
     );
   }
 
-  if (!withheld.includes("propose_from_objection")) server.registerTool(
-    "propose_from_objection",
+  if (!withheld.includes("propose_from_material")) server.registerTool(
+    "propose_from_material",
     {
       description:
         (stopRca
-          ? "Review only: turn your finding about the human stop your review was opened on into memory — pass that stop's id (its material) as entry_id. The board derives the entry kind and addressee from the cause attributed to that stop, "
-          : "Review only: turn your finding about an objected entry into memory — only the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, ") +
+          ? "Review only: turn your finding about the human stop your review was opened on into memory — pass that stop's id (its material) as material_id. The board derives the entry kind and addressee from the cause attributed to that stop, "
+          : "Review only: turn your finding about an objected entry into memory — pass as material_id one of the objected entries your review was opened on (its material). The board derives the entry kind and addressee from the cause attributed to those objections, ") +
         "except for a missing_information cause, where you pass as (behavior or knowledge) and must not otherwise. " +
         "With as knowledge, pass based_on_decision (the event id log_decision returned for your reasoning), and not otherwise; it becomes the knowledge entry's source, an inference. " +
         `A behavior is a candidate a human approves later. ${TIER_DEFINITION_RULE} path is a "/"-separated hierarchy (e.g. build/tests). ` +
         "The board records the write on your review with the entry it came from, and complete_rca lists it on the finding that holds that entry. " +
         BOARD_WRITE_LANGUAGE_RULE,
       inputSchema: {
-        entry_id: z.number().int(),
+        material_id: z.number().int(),
         path: requiredTextSchema,
         title: requiredTextSchema,
         text: requiredTextSchema,
@@ -1128,7 +1128,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       },
     },
     async (input) =>
-      runVerb(deps, attributedTaskId, (task) => proposeFromObjection(deps.db, task.id, input, deps, attributedWorkerId(deps, task), deps.clock.now())),
+      runVerb(deps, attributedTaskId, (task) => proposeFromMaterial(deps.db, task.id, input, deps, attributedWorkerId(deps, task), deps.clock.now())),
   );
 
   // ADR 0273 決定2・9: interview の root は routing の読み口と、根拠があれば根拠の history の読み口を持つ

@@ -639,7 +639,7 @@ it("読み手が pin の子のとき、出所が帰責(objection_attributed)の�
   const root = examineeRootId(db, examinee.taskId);
   const attributed = (entryTask: { id: string }, eventTask: { id: string }) => {
     const entry_id = logDecision(db, getTask(db, entryTask.id)!, "chose the tide table", "deckhand", at, "worker");
-    const payload = { kind: "objection_attributed" as const, entry_id, objection_event_ids: [], cause: "capability" as const, evidence: "e", entries: null, round: "initial" as const };
+    const payload = { kind: "objection_attributed" as const, entry_id, objection_event_ids: [], cause: "capability" as const, evidence: "e", wrong_memory_entries: null, round: "initial" as const };
     const event_id = appendEvent(db, { taskId: eventTask.id, workerId: "board", origin: "board", payload, at });
     const candidate = createBehaviorCandidate(
       db,
@@ -755,7 +755,7 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
     taskId: FIXTURE_TASK,
     workerId: "board",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", entries: null, round: "initial" },
+    payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", wrong_memory_entries: null, round: "initial" },
     at,
   });
   const id = approvedBehavior(db, "Cover the topic", { event_id: attributed });
@@ -839,7 +839,7 @@ it("停止の帰責を出所に持つ Behavior の case は、止められた se
   append({ kind: "decision_logged", line: "cleaned the parent directory" });
   const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" });
   append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawned, output_closed: true, usage: null });
-  const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", entries: null });
+  const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", wrong_memory_entries: null });
   const id = approvedBehavior(db, "Stay in the workspace", { event_id: attributed });
 
   expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [id] }, at).entries[0]?.case).toEqual({

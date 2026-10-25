@@ -879,7 +879,7 @@ it("出題は監査 review を root の付帯子として盤面名義で立て(a
   expect(presentTask(db, getTask(db, root.id)!)).toMatchObject({ status: "blocked", interview_waiting: "audit" });
   expect(nextSlotTask(db)?.id).toBe(audit.id);
   expect(taskVerbSwap(db, audit.id)).toEqual({
-    withheld: ["complete_task", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "propose_from_objection", "list_agents"],
+    withheld: ["complete_task", "decompose", "redecompose", "continue_decomposition", "declare_premise_breach", "record_knowledge", "define_memory_branch", "propose_from_material", "list_agents"],
     added: ["complete_audit"],
   });
   audited(db, audit, "accepted");
@@ -936,7 +936,7 @@ it("監査の判断行への異議を commit すると監査の下に RCA(self /
   startTriage(db, new Date(2));
   raiseObjection(db, entry, "the tier below solves it", new Date(2));
 
-  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   expect(listChildren(db, audit.id).map((child) => [child.type, child.title])).toEqual([
     ["review", `rca (self): audit: ${POSE.title}`],
@@ -1093,7 +1093,7 @@ it.each(["root の下の RCA", "監査の下の RCA", "retry で cancelled に�
   startTriage(db, new Date(2));
   raiseObjection(db, entry, "the cause is the tier", new Date(2));
 
-  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   expect(listChildren(db, rca.id).map((child) => [child.type, child.title])).toEqual([
     ["review", `rca (self): ${rca.title}`],
@@ -1170,7 +1170,7 @@ it.each(["出題", "採点"] as const)("root の%sの行への異議を commit �
   startTriage(db, new Date(2));
   raiseObjection(db, entry, "the rubric is too loose", new Date(2));
 
-  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, new Date(2), [], new Map([[entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   expect(listChildren(db, root.id).map((child) => [child.type, child.title])).toEqual([
     ["review", `audit: ${POSE.title}`],

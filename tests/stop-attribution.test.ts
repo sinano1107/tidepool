@@ -6,7 +6,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, latestEventOfTask, listEvents } from "../src/events.js";
 import { humanEntryInput, listMemoryEntries, recordBehavior } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
-import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromObjection, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
+import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromMaterial, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
@@ -63,7 +63,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       actions: null,
     },
   ]);
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", wrong_memory_entries: null }]);
   expect(b.client.calls).toEqual([]);
 });
 
@@ -189,8 +189,8 @@ async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: strin
 }
 
 it.each([
-  { judgment: { cause: "memory" as const, evidence: "followed a note", entries: [999] }, rejected: "memory attribution rejected: entry 999 was not read before the decision" },
-  { judgment: { cause: "capability" as const, evidence: "e", entries: [1] }, rejected: "capability attribution rejected: entries are only for cause memory" },
+  { judgment: { cause: "memory" as const, evidence: "followed a note", wrong_memory_entries: [999] }, rejected: "memory attribution rejected: entry 999 was not read before the decision" },
+  { judgment: { cause: "capability" as const, evidence: "e", wrong_memory_entries: [1] }, rejected: "capability attribution rejected: entries are only for cause memory" },
 ])("a $judgment.cause judgment the gate refuses falls to uncertain", async ({ judgment, rejected }) => {
   const b = fixture();
   b.client.scriptStopJudgment(judgment);
@@ -199,7 +199,7 @@ it.each([
 
   await b.sweep();
 
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, wrong_memory_entries: null }]);
 });
 
 it("a failing Board call leaves failure events, halts after 3 as a stop row without an entry, and Retry / Dismiss act on it", async () => {
@@ -251,7 +251,7 @@ it("the history's stop row carries the judgment's cause and evidence", async () 
 const rcas = (b: ReturnType<typeof fixture>) =>
   listChildren(b.db, b.task.id)
     .filter((c) => c.type === "review")
-    .map((r) => ({ task: r, material: latestEventOfTask(b.db, r.id, "task_registered")!.payload.objection_event_ids }));
+    .map((r) => ({ task: r, material: latestEventOfTask(b.db, r.id, "task_registered")!.payload.opened_on_event_ids }));
 
 /** setup: 理由つきで止め、session を閉じ、sweep で判定させる。 */
 async function stoppedAndJudged(b: ReturnType<typeof fixture>) {
@@ -282,7 +282,7 @@ it.each([
   const b = fixture();
   const memory = recordBehavior(b.db, humanEntryInput(b.db, { workspace: null, path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee: "deckhand" }), "webui", at).entry_id;
   appendEvent(b.db, { taskId: b.task.id, workerId: "deckhand", origin: "worker", at, payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [memory], watermark: 0 } });
-  b.client.scriptStopJudgment({ cause, evidence: "e", ...(cause === "memory" && { entries: [memory] }) });
+  b.client.scriptStopJudgment({ cause, evidence: "e", ...(cause === "memory" && { wrong_memory_entries: [memory] }) });
 
   await stoppedAndJudged(b);
 
@@ -296,7 +296,7 @@ it("a session the human ran gets only the auditor RCA", async () => {
   const stop = await stoppedAndJudged(b);
 
   expect(rcas(b).map(({ task }) => task.title)).toEqual(["rca (auditor): parser"]);
-  expect(() => proposeFromObjection(b.db, rcas(b)[0]!.task.id, { path: "p", title: "t", text: "x", entry_id: stop }, { workspace: { name: "charts" } }, "auditor", at)).toThrow(
+  expect(() => proposeFromMaterial(b.db, rcas(b)[0]!.task.id, { path: "p", title: "t", text: "x", material_id: stop }, { workspace: { name: "charts" } }, "auditor", at)).toThrow(
     `stop ${stop} stopped a session a human ran`,
   );
 });
@@ -321,7 +321,7 @@ it("a stop on a session whose entry already has an objection-bundle RCA register
   const b = fixture();
   startTriage(b.db, at);
   const objection = raiseObjection(b.db, b.entry, "redo it", at);
-  commitTriage(b.db, at, [], new Map([[b.entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(b.db, at, [], new Map([[b.entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   const stop = await stoppedAndJudged(b);
 
@@ -337,18 +337,18 @@ it("a stop RCA completes with one finding covering the stop, and refuses another
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const complete = (findings: Array<{ entries: number[]; root_cause: string; no_proposal?: true }>) => completeRca(b.db, self, { findings }, "deckhand", at, "worker");
+  const complete = (findings: Array<{ material: number[]; root_cause: string; no_proposal?: true }>) => completeRca(b.db, self, { findings }, "deckhand", at, "worker");
 
-  expect(() => complete([{ entries: [b.entry], root_cause: "r", no_proposal: true }])).toThrow(`not in this RCA's material: entries ${b.entry}; in no finding: entries ${stop}`);
-  expect(() => complete([{ entries: [], root_cause: "r", no_proposal: true }])).toThrow("a finding names no entries");
-  expect(() => complete([{ entries: [stop], root_cause: "r", no_proposal: true }, { entries: [stop], root_cause: "r", no_proposal: true }])).toThrow(`named more than once: entries ${stop}`);
+  expect(() => complete([{ material: [b.entry], root_cause: "r", no_proposal: true }])).toThrow(`not in this RCA's material: stop ${b.entry}; in no finding: stop ${stop}`);
+  expect(() => complete([{ material: [], root_cause: "r", no_proposal: true }])).toThrow("a finding names no stop");
+  expect(() => complete([{ material: [stop], root_cause: "r", no_proposal: true }, { material: [stop], root_cause: "r", no_proposal: true }])).toThrow(`named more than once: stop ${stop}`);
 
-  expect(complete([{ entries: [stop], root_cause: "deleted outside the workspace", no_proposal: true }]).status).toBe("done");
+  expect(complete([{ material: [stop], root_cause: "deleted outside the workspace", no_proposal: true }]).status).toBe("done");
   expect(judgmentRows(b.db, self.id)).toEqual([
     {
       kind: "decision_logged",
-      line: `no_proposal: entries ${stop} — deleted outside the workspace`,
-      judgment: { kind: "rca", entries: [stop], root_cause: "deleted outside the workspace", memories: [], repairs: [], no_proposal: true },
+      line: `no_proposal: stop ${stop} — deleted outside the workspace`,
+      judgment: { kind: "rca", material: [stop], root_cause: "deleted outside the workspace", memories: [], repairs: [], no_proposal: true },
     },
   ]);
 });
@@ -357,9 +357,9 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const latest = appendEvent(b.db, { taskId: b.task.id, workerId: BOARD_WORKER_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", entries: null } });
+  const latest = appendEvent(b.db, { taskId: b.task.id, workerId: BOARD_WORKER_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null } });
   const draft = { path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace." };
-  const propose = (entry_id: number) => proposeFromObjection(b.db, self.id, { ...draft, entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
+  const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 
   expect(() => propose(b.entry)).toThrow(`entry ${b.entry} is not in this review's material`);
   const { entry_id } = propose(stop);
@@ -367,19 +367,19 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({ ...draft, id: entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest } }),
   ]);
-  completeRca(b.db, self, { findings: [{ entries: [stop], root_cause: "r" }] }, "deckhand", at, "worker");
-  expect(judgmentRows(b.db, self.id).map((r) => r.line)).toEqual([`entries ${stop} → behavior candidate #${entry_id} — r`]);
+  completeRca(b.db, self, { findings: [{ material: [stop], root_cause: "r" }] }, "deckhand", at, "worker");
+  expect(judgmentRows(b.db, self.id).map((r) => r.line)).toEqual([`stop ${stop} → behavior candidate #${entry_id} — r`]);
 });
 
 it("an RCA opened on objections refuses a stop's id", async () => {
   const b = fixture();
   startTriage(b.db, at);
   raiseObjection(b.db, b.entry, "redo it", at);
-  commitTriage(b.db, at, [], new Map([[b.entry, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(b.db, at, [], new Map([[b.entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
   const stop = await stoppedAndJudged(b);
   const objectionSelf = rcas(b)[0]!.task;
 
-  expect(() => proposeFromObjection(b.db, objectionSelf.id, { path: "p", title: "t", text: "x", entry_id: stop }, { workspace: { name: "charts" } }, "deckhand", at)).toThrow(
+  expect(() => proposeFromMaterial(b.db, objectionSelf.id, { path: "p", title: "t", text: "x", material_id: stop }, { workspace: { name: "charts" } }, "deckhand", at)).toThrow(
     `entry ${stop} is not a decision-log entry of your parent task`,
   );
 });

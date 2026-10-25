@@ -1461,7 +1461,7 @@ describe("ClaudeCodeWorker", () => {
         : registerTask(
             db,
             // 異議の id を運ぶ RCA —— 帰り先の無い系譜にも立つ(ADR 0301 決定2)
-            { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id, objection_event_ids: [objectionOn(db, audit.id)] },
+            { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id, opened_on_event_ids: [objectionOn(db, audit.id)] },
             new Date(0),
             BOARD_WORKER_ID,
             "board",

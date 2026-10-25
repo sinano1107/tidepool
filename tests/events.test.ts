@@ -106,7 +106,7 @@ it("今の判定の読み口は、同じ異議群に initial と after_rca の�
       taskId: FIXTURE_TASK,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause, evidence: "e", entries: null, round },
+      payload: { kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: null, round },
       at,
     });
   attribute("uncertain", "initial");

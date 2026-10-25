@@ -432,7 +432,7 @@ function drafts() {
       taskId: task.id,
       workerId: "tidepool",
       origin: "board",
-      payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+      payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
       at,
     });
   };

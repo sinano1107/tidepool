@@ -809,7 +809,7 @@ const toLogEntryShape = (e, openSessionId) => ({
   kind: e.payload.kind === "task_completed" ? "completion" : "decision",
   text: e.payload.kind === "task_completed" ? e.payload.result ?? "(no outcome recorded)" : e.payload.line,
   cause: e.cause ?? void 0,
-  causeEntries: e.entries ?? void 0,
+  causeEntries: e.wrong_memory_entries ?? void 0,
   causeEvidence: e.evidence ?? void 0,
   // 記憶の書き込みの行は触ったエントリへのリンクを持つ(ADR 0252 決定3)
   memoryEntries: e.payload.kind === "memory_written" ? [...e.payload.created, ...e.payload.invalidated] : void 0,

@@ -114,7 +114,7 @@ it("記憶の修理 verb は memory_repair の修理 task にだけ登録され�
   // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)
   const writeWorkRepair = registerTask(
     t.db,
-    { type: "work", title: "repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [write.objection] },
+    { type: "work", title: "repair", purpose: "undo it", completion_criteria: "c", parent_id: objected.id, opened_on_event_ids: [write.objection] },
     t.clock.now(),
     ...HUMAN_WEBUI,
   );

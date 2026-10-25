@@ -2251,7 +2251,7 @@ function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRe
       displayed: m.displayed,
       objections: m.objections,
       cause: m.cause,
-      entries: m.entries,
+      wrong_memory_entries: m.wrong_memory_entries,
       completed: episode.completed,
       pr_merged: episode.prMerged,
       entries_read: entriesReadBefore(episode, events, m.eventId!),
@@ -2762,7 +2762,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).flatMap(liveTail)),
-    ...parts.precedents.flatMap(({ cause, entries }) => (cause === "memory" ? (entries ?? []).flatMap(liveTail) : [])),
+    ...parts.precedents.flatMap(({ cause, wrong_memory_entries }) => (cause === "memory" ? (wrong_memory_entries ?? []).flatMap(liveTail) : [])),
     ...parts.store_changes.flatMap(({ id }) => liveTail(id)),
     ...objected.flatMap((j) => ("entry" in j ? liveTail(j.entry) : [])),
   ]);

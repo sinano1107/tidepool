@@ -949,7 +949,7 @@ export async function memoryAttributedObjection(t: Tidepool, taskId: string, ent
     workerId: BOARD_WORKER_ID,
     origin: "board",
     at: t.clock.now(),
-    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence, entries, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence, wrong_memory_entries: entries, round: "after_rca" },
   });
 }
 
@@ -1199,7 +1199,7 @@ export function auditorRcaOn(db: Db, task: Task, at: Date, worker = "auditor"): 
   startTriage(db, at);
   const row = logDecision(db, task, `${worker}'s call`, worker, at, "worker");
   raiseObjection(db, row, "redo it", at);
-  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
   return listChildren(db, task.id).find((child) => child.title.startsWith("rca (auditor)"))!;
 }
 
@@ -1315,9 +1315,9 @@ export const RCA_ROOT_CAUSE = "the objection came from the call itself";
 /** RCA の材料の全エントリを1つの所見に入れた complete_rca の引数(ADR 0278 決定5 / ADR 0280)。no_proposal は行為が無い所見に要り、
  *  行為があれば無害。handoff の outcome は complete_task の RCA と同じ完了の result を残す。 */
 export function rcaFindings(db: Db, reviewId: string, root_cause = RCA_ROOT_CAUSE) {
-  const objections = latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? [];
+  const objections = latestEventOfTask(db, reviewId, "task_registered")!.payload.opened_on_event_ids ?? [];
   const entries = [...new Set(objections.map((id) => (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id))];
-  return { findings: [{ entries, root_cause, no_proposal: true as const }], handoff: { outcome: FULL_HANDOFF.outcome } };
+  return { findings: [{ material: entries, root_cause, no_proposal: true as const }], handoff: { outcome: FULL_HANDOFF.outcome } };
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
@@ -1582,9 +1582,9 @@ export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
   if (res.isError) throw new Error(`RCA completion failed: ${JSON.stringify(res)}`);
 }
 
-/** `taskId` の task として RCA の起草 verb `propose_from_objection` を呼ぶ(起草の中身は固定)。 */
+/** `taskId` の task として RCA の起草 verb `propose_from_material` を呼ぶ(起草の中身は固定)。 */
 export async function propose(t: Tidepool, taskId: string, args: Record<string, unknown>) {
-  return callAsTask(t, taskId, "propose_from_objection", { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args });
+  return callAsTask(t, taskId, "propose_from_material", { path: "testing/fixtures", title: "Keep fixtures", text: "Never skip the fixtures.", ...args });
 }
 
 /** settings の撃ち直しを打ち切った件の一覧。 */

@@ -179,9 +179,9 @@ export type ResolvedFromDefault = { assignee?: string; workspace?: string };
 export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
   // child rests on — stamped at registration so provenance never needs a join.
-  // objection_event_ids: the events a repair / RCA child was opened on — its material objections (ADR 0171 決定1), or an RCA's one human stop (ADR 0310 決定4)
+  // opened_on_event_ids: the events a repair / RCA child was opened on — its material objections (ADR 0171 決定1), or an RCA's one human stop (ADR 0310 決定4)
   // audited_probe: Interview の監査 review(ADR 0273 決定3・4)が監査する出題の event —— 監査の印はこれだけ
-  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string }; audited_probe?: number }
+  | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; opened_on_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string }; audited_probe?: number }
   // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
   // head は面接室の写しの commit —— 受験者は全部ここから分岐する(ADR 0263 決定6 / ADR 0273 決定3)。head の無い出題は無い(追記5)
   // judgment: 完了の verb が運ぶ判断(ADR 0278 決定4)。line は盤面が組む文で、読み手は今までどおり line を読む
@@ -599,7 +599,7 @@ export type EventPayload =
       cause: Cause;
       evidence: string;
       /** cause `memory` のとき名指された誤った entry の id(読んだ集合の内側、ADR 0166 決定3)。他の cause は null。 */
-      entries: number[] | null;
+      wrong_memory_entries: number[] | null;
       round: "initial" | "after_rca";
       /** 初回だけ: 判定が読んだ decision log の最後の entry の id(#1572)。判定の入力を組んだ後、commit までに異議された
        *  task へ entry が書かれたときだけ持つ —— 無ければこの event の id より前が当時の decision log(#1572 より前の記録も同じ)。 */
@@ -674,9 +674,9 @@ export type EventPayload =
   // line は盤面が同じ transaction の店の event から組む。created / invalidated はその呼び出しが作った・無効化したエントリの id
   // (作成の event id = エントリの id)。event id は tool 結果に載り、Precedent の memory_write マーカーになる。
   | { kind: "memory_written"; line: string; created: number[]; invalidated: number[] }
-  // ADR 0280 決定1: RCA の propose_from_objection 1回(呼んだ RCA の task 帰属)。entry_id は材料の異議されたエントリ(材料が停止なら停止 event、ADR 0310 決定4)、memory_event_id は
+  // ADR 0280 決定1: RCA の propose_from_material 1回(呼んだ RCA の task 帰属)。material_id は材料の異議されたエントリ(材料が停止なら停止 event、ADR 0310 決定4)、memory_event_id は
   // 書いた記憶の店の event(= 記憶の id)。判断ログの行ではない(memory_pulled と同じ側)—— complete_rca が所見の行為をここから読む
-  | { kind: "proposed_from_objection"; entry_id: number; memory_event_id: number }
+  | { kind: "proposed_from_material"; material_id: number; memory_event_id: number }
   // spec #586 G: エントリ表と FTS を events から作り直した。
   // 刻んだ索引の版を持つ。
   | { kind: "memory_index_rebuilt"; tokenizer: string; preprocess_version: string }
@@ -725,8 +725,8 @@ export type EventPayload =
   // 初回(`initial`)は撃ち直さない。
   | { kind: "objection_attribution_failed"; entry_id: number; objection_event_id: number; round: "initial" | "after_rca"; reason: string }
   // ADR 0310 決定1・3: 停止の帰責 —— 理由が解けて session が閉じた人間の停止1つに、盤面が Board call に問うた「この停止は誰の落ち度か」。
-  // 止められた task に帰属し、`stop_event_id` が鍵(同じ task の別の停止は別の帰責)。行は名指さない。`entries` は objection_attributed と同じ。
-  | { kind: "stop_attributed"; stop_event_id: number; cause: Cause; evidence: string; entries: number[] | null }
+  // 止められた task に帰属し、`stop_event_id` が鍵(同じ task の別の停止は別の帰責)。行は名指さない。`wrong_memory_entries` は objection_attributed と同じ。
+  | { kind: "stop_attributed"; stop_event_id: number; cause: Cause; evidence: string; wrong_memory_entries: number[] | null }
   // ADR 0310 決定3: 停止の帰責の Board call が撃って失敗した(撃てなかった回は書かない、ADR 0164 決定3)。撃ち直しは停止 event の id で数える。
   | { kind: "stop_attribution_failed"; stop_event_id: number; reason: string }
   // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = 異議群の最初の異議 event の id)/
@@ -746,7 +746,7 @@ export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
 /** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
  *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝((path, scope)、ADR 0282 決定2)、値は left_as_is で、reason は任意。routing meta-review の
  *  対象は行((provider, model, effort))・agent(名前)・段(id)・学習器で、値は no_change、reason は任意(ADR 0278 追記5)。RCA の対象は
- *  所見(entries)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_proposal を持つ(ADR 0280 決定3)。 */
+ *  所見(material)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_proposal を持つ(ADR 0280 決定3)。 */
 export type Judgment =
   | {
       kind: "integration_review";
@@ -759,7 +759,7 @@ export type Judgment =
   | ({ kind: "routing"; value: "no_change"; reason?: string } & RoutingObject)
   | {
       kind: "rca";
-      entries: number[];
+      material: number[];
       root_cause: string;
       memories: Array<{ id: number; kind: MemoryEntryFields["kind"] }>;
       repairs: Array<{ id: string; status: TaskStatus }>;

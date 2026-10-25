@@ -272,11 +272,11 @@ export const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "mi
  *  is a diff, prose reflection is forbidden). `purpose` quotes the material — the
  *  entry/comment pairs, or the human stop and its reason (ADR 0310 決定4) — the RCA's
  *  only supplied context beyond what get_current_task (issue #29) already carries;
- *  `material` is the ids of the events it was opened on (ADR 0171 決定1). */
+ *  `opened_on_event_ids` is the ids of the events it was opened on (ADR 0171 決定1). */
 export function registerRcaReview(
   db: Db,
   taskId: string,
-  spec: { title: string; purpose: string; material: number[]; assignee?: string },
+  spec: { title: string; purpose: string; opened_on_event_ids: number[]; assignee?: string },
   now: Date,
 ): void {
   registerTask(
@@ -289,7 +289,7 @@ export function registerRcaReview(
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
       assignee: spec.assignee,
-      objection_event_ids: spec.material,
+      opened_on_event_ids: spec.opened_on_event_ids,
     },
     now,
     // 盤面の規則が立てる(ADR 0194 決定3)—— どの閉じ方でも盤面名義
@@ -414,7 +414,7 @@ function bundleObjections(
           assignee,
           assignee_not_copied: assigneeNotCopied,
           workspace: objected.workspace ?? undefined,
-          objection_event_ids: group.flatMap((p) => p.objection_event_ids),
+          opened_on_event_ids: group.flatMap((p) => p.objection_event_ids),
         },
         now,
         HUMAN_WORKER_ID,
@@ -450,7 +450,7 @@ function bundleObjections(
         {
           title: `rca (self): ${objected.title}`,
           purpose: renderObjectionPairs(`objections raised against decisions ${workerId} made on "${objected.title}"`, workerPairs, { entryIds: true }),
-          material: workerPairs.flatMap((p) => p.objection_event_ids),
+          opened_on_event_ids: workerPairs.flatMap((p) => p.objection_event_ids),
           assignee: workerId,
         },
         now,
@@ -462,7 +462,7 @@ function bundleObjections(
       {
         title: `rca (auditor): ${objected.title}`,
         purpose: renderObjectionPairs(`objections raised against decisions of "${objected.title}"`, rcaPairs, { entryIds: true }),
-        material: rcaPairs.flatMap((p) => p.objection_event_ids),
+        opened_on_event_ids: rcaPairs.flatMap((p) => p.objection_event_ids),
       },
       now,
     );
@@ -706,7 +706,7 @@ export function commitTriage(
  *  objections both ride along. `session_id` is the sole fact the read model
  *  hands the caller for telling the two apart (against the current open
  *  session, if any); `at` and who raised it are deliberately left out
- *  (issue #371). The entry's current attribution `cause` (and its `entries`, ADR 0166) — the last
+ *  (issue #371). The entry's current attribution `cause` (and its `wrong_memory_entries`, ADR 0166) — the last
  *  objection bundle's judgment (ADR 0170) — is joined at read time from append-only
  *  `objection_attributed` events (ADR 0115). */
 export interface LogEntry extends DecisionLogEntry {
@@ -714,7 +714,7 @@ export interface LogEntry extends DecisionLogEntry {
   objections: { comment: string; session_id: number }[];
   cause: Cause | null;
   /** 今の判定(`currentAttributions`)が `memory` のとき名指された entry の id 列(ADR 0166 決定6)。他の cause・未帰責のエントリは null。 */
-  entries: number[] | null;
+  wrong_memory_entries: number[] | null;
   /** 今の判定の evidence —— 人間の面の異議注釈に出す(ADR 0213 決定4)。未帰責のエントリは null。 */
   evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
@@ -779,7 +779,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
       no_work_repair: isDecisionRow(entry) && noDestination(entry.task_id),
       objections: objectionsByEntry.get(entry.id) ?? [],
       cause: attribution?.cause ?? null,
-      entries: attribution?.entries ?? null,
+      wrong_memory_entries: attribution?.wrong_memory_entries ?? null,
       evidence: attribution?.evidence ?? null,
       session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };

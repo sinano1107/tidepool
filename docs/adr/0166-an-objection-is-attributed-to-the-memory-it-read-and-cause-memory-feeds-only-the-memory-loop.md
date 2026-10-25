@@ -1,5 +1,7 @@
 # 異議は読んだ記憶にも帰責され、cause `memory` は worker ではなく記憶側の閉路に流れる
 
+**Status 追記: 決定3 の判定の欄 `entries` は `wrong_memory_entries` に改名(issue #2577)** —— 帰責 event(`objection_attributed` / `stop_attributed`)、帰責 Board call の出力、`read_decision_log` / `GET /api/log` の行、`list_precedents` の Precedent も同じ名前。
+
 2026-09-28 の triage(issue #1045、#1038 後の記憶機構の見直し)で決定。approved の Behavior が誤っていても、それへ戻る負の信号が
 無かった。帰責 Board call の入力はエントリ本文・steering・決定ログだけで、worker がその decision の前に読んだ記憶は渡らず、cause の
 語彙(ADR 0115 決定1)に「従った指針が誤っていた」に当たる値が無い。誤った Behavior に従って異議されると `capability` が付き、worker

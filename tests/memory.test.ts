@@ -892,12 +892,12 @@ it("決定ログの各エントリは最新の帰責の entries を持つ ——
   const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
   // setup のみ: 束ね済みの異議群を1つ足して帰責する(呼ぶたびに後の異議群 —— 最後の異議群の判定が有効、ADR 0170)
   const attribute = (entry_id: number, cause: "memory" | "capability", entries: number[] | null) =>
-    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", entries, round: "initial" } });
+    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" } });
   attribute(followed!, "memory", [41, 42]);
   attribute(overturned!, "memory", [41]);
   attribute(overturned!, "capability", null);
 
-  expect(listLog(db).map((e) => [e.id, e.cause, e.entries])).toEqual([
+  expect(listLog(db).map((e) => [e.id, e.cause, e.wrong_memory_entries])).toEqual([
     [followed, "memory", [41, 42]],
     [overturned, "capability", null],
     [plain, null, null],
@@ -908,7 +908,7 @@ it("決定ログの各エントリは今の判定の evidence を持ち、帰責
   const { db, task } = board();
   const [judged, plain] = ["retried the fetch", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
   // setup のみ: 束ね済みの異議群を1つ足して帰責する
-  appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id: judged!, objection_event_ids: [bundledObjection(db, task.id, judged!, at)], cause: "environment", evidence: "the registry was down", entries: null, round: "initial" } });
+  appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id: judged!, objection_event_ids: [bundledObjection(db, task.id, judged!, at)], cause: "environment", evidence: "the registry was down", wrong_memory_entries: null, round: "initial" } });
 
   expect(listLog(db).map((e) => [e.id, e.evidence])).toEqual([
     [judged, "the registry was down"],
@@ -1232,7 +1232,7 @@ it("RCA が起草した candidate(出所は帰責 event)を修正値つきで ap
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;
@@ -1264,7 +1264,7 @@ function exemplarProposal() {
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
   const replaces = ["Split migrations", "Two commits"].map(
@@ -1894,7 +1894,7 @@ it("人間の Exemplar は source_event_id を省くと supersedes の揃った�
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
   const drafted = createBehaviorCandidate(db, { ...knowledge, addressee: null, source: { event_id: attributed }, author: { activity: "rca", name: "auditor" } }, "board", at).entry_id;

@@ -1,5 +1,7 @@
 # RCA 子と修理子は材料の異議を記録に持ち、第2回はその異議群を覆う RCA だけを待って証拠にする
 
+**Status 追記: 決定1 の欄(登録 event の `objection_event_ids`)は `opened_on_event_ids` に、決定3 の起草 verb は `propose_from_material`(引数 `material_id`)に改名(issue #2577)** —— 帰責と異議群の `objection_event_ids` は異議 event を持つので据え置き。
+
 **Status 追記: 決定1 の欄は「材料にした event の id」と読み、停止の RCA は停止 event を置く(ADR 0310 決定4)** —— 決定2・3 は停止を材料にした RCA に同形で掛かる。
 
 2026-09-28 の grilling(issue #1124、ADR 0170 の派生)で決定。帰責の単位は異議群(entry × 束ねた session)になったが(ADR 0170)、

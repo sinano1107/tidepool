@@ -102,7 +102,7 @@ it("好みの異議(preference)だけの commit では修理だけが立ち、�
         objection_event_ids: [objectionId],
         cause: "preference",
         evidence: "the steering asks for a different spelling of the same flag",
-        entries: null,
+        wrong_memory_entries: null,
         round: "initial",
       },
     ],
@@ -459,7 +459,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
       objection_event_ids: [expect.any(Number)],
       cause: "capability",
       evidence: "the self RCA found the criteria named the fixtures",
-      entries: null,
+      wrong_memory_entries: null,
       round: "after_rca",
     },
   ]);
@@ -704,7 +704,7 @@ it("commit が促す poll の起草の Board call が失敗すると memory_draf
         objection_event_ids: [expect.any(Number)],
         cause: "preference",
         evidence: "taste",
-        entries: null,
+        wrong_memory_entries: null,
         round: "initial",
       },
     ],
@@ -1147,7 +1147,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     objection_event_ids: [s.objection],
     cause: "capability",
     evidence: "the RCA decided it",
-    entries: null,
+    wrong_memory_entries: null,
     round: "after_rca",
   });
   expect(s.attributionClient.calls[1]?.input).toEqual({
@@ -1299,7 +1299,7 @@ it("前の異議群で capability と判定された entry を後の session が
   expect(await logCause(t, s.entry.id)).toBeNull();
   const self = (await children(t, s.task.id)).find((x: any) => x.title === "rca (self): reobjected capability" && x.id !== firstSelf.id);
   await runNow(t, self.id);
-  expect(await propose(t, self.id, { entry_id: s.entry.id })).toMatchObject({
+  expect(await propose(t, self.id, { material_id: s.entry.id })).toMatchObject({
     isError: true,
     content: [{ text: expect.stringContaining("the entry's cause is uncertain: nothing to learn from it") }],
   });
@@ -1574,12 +1574,12 @@ it("起草の答えが schema に合わなくても behavior_draft の行は残�
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
 
-it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entries?: number[] }, string]>([
-  ["読んでいない entry を名指す memory", ({ read, unread }) => ({ cause: "memory", entries: [read, unread] }), "was not read before the decision"],
-  ["entries が空の memory", () => ({ cause: "memory", entries: [] }), "names no entry"],
-  ["entries の無い memory", () => ({ cause: "memory" }), "names no entry"],
-  ["entries つきの capability", ({ read }) => ({ cause: "capability", entries: [read] }), "only for cause memory"],
-])("初回: %s は門で uncertain に倒れ、evidence が理由を言い、entries は null", async (_, judgment, reason) => {
+it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; wrong_memory_entries?: number[] }, string]>([
+  ["読んでいない entry を名指す memory", ({ read, unread }) => ({ cause: "memory", wrong_memory_entries: [read, unread] }), "was not read before the decision"],
+  ["wrong_memory_entries が空の memory", () => ({ cause: "memory", wrong_memory_entries: [] }), "names no entry"],
+  ["wrong_memory_entries の無い memory", () => ({ cause: "memory" }), "names no entry"],
+  ["wrong_memory_entries つきの capability", ({ read }) => ({ cause: "capability", wrong_memory_entries: [read] }), "only for cause memory"],
+])("初回: %s は門で uncertain に倒れ、evidence が理由を言い、wrong_memory_entries は null", async (_, judgment, reason) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { ...judgment(b), evidence: "followed the note" });
@@ -1587,31 +1587,31 @@ it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; entr
   commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
-    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), entries: null }),
+    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining(reason), wrong_memory_entries: null }),
   ]);
 });
 
 it("初回: 読んだ集合の中の entry を名指す memory は entries ごと帰責に載り、memory だけの commit は修理だけが立つ(RCA も candidate も立たない)", async () => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
-  client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", entries: [b.read] });
+  client.scriptJudgment(b.decision, { cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [b.read] });
 
   commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
 
   expect(attributed(b.db, b.task.id)).toEqual([
-    { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", entries: [b.read], round: "initial" },
+    { kind: "objection_attributed", entry_id: b.decision, objection_event_ids: [expect.any(Number)], cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [b.read], round: "initial" },
   ]);
   expect(listChildren(b.db, b.task.id).map((c) => c.title)).toEqual(["repair: t"]);
 });
 
 it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<GatedJudgment>]>([
-  ["読んだ集合の中の entry を名指す memory は entries ごと載り、candidate は起草されない", ({ read }) => [read], { cause: "memory", evidence: "the RCA traced it to the note" }],
-  ["読んでいない entry を名指す memory は uncertain に倒れる", ({ unread }) => [unread], { cause: "uncertain", evidence: expect.stringContaining("was not read before the decision"), entries: null }],
+  ["読んだ集合の中の entry を名指す memory は wrong_memory_entries ごと載り、candidate は起草されない", ({ read }) => [read], { cause: "memory", evidence: "the RCA traced it to the note" }],
+  ["読んでいない entry を名指す memory は uncertain に倒れる", ({ unread }) => [unread], { cause: "uncertain", evidence: expect.stringContaining("was not read before the decision"), wrong_memory_entries: null }],
 ])("第2回: %s", async (_, entries, expected) => {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
   commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
-  client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", entries: entries(b) });
+  client.scriptJudgment(b.decision, { cause: "memory", evidence: "the RCA traced it to the note", wrong_memory_entries: entries(b) });
   const drafter = new FakeBehaviorDraftClient();
   const rca = listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("));
   for (const r of rca) settleReview(b.db, r, "auditor", at);
@@ -1621,7 +1621,7 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
-  expect(attributed(b.db, b.task.id)[1]).toMatchObject({ entries: entries(b), ...expected });
+  expect(attributed(b.db, b.task.id)[1]).toMatchObject({ wrong_memory_entries: entries(b), ...expected });
   expect(drafter.calls).toEqual([]);
 });
 
@@ -1693,7 +1693,7 @@ it.each([
     commitTriage(db, at, [], initial ? await attributeObjections(db, deps, session.id, at) : new Map());
     logDecision(db, task, "decided after the commit", "deckhand", at, "worker");
     completeTask(db, task, { ...FULL_HANDOFF, outcome: "done as specified" }, "deckhand", at, "worker");
-    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review" && listEvents(db, c.id).some((e) => e.payload.kind === "task_registered" && e.payload.objection_event_ids?.includes(objection)))) {
+    for (const rca of listChildren(db, task.id).filter((c) => c.type === "review" && listEvents(db, c.id).some((e) => e.payload.kind === "task_registered" && e.payload.opened_on_event_ids?.includes(objection)))) {
       completeRca(db, rca, rcaFindings(db, rca.id, `finding from ${rca.title}`), "auditor", at, "worker");
     }
     client.scriptJudgment(entry, { cause: "capability", evidence: "the RCA explained it" });
@@ -1848,7 +1848,7 @@ function twoBundles(same: boolean) {
   const rcasOf = (objection: number) =>
     listChildren(db, task.id).filter((c) => {
       const registered = listEvents(db, c.id).find((e) => e.kind === "task_registered")!.payload;
-      return c.type === "review" && "objection_event_ids" in registered && registered.objection_event_ids!.includes(objection);
+      return c.type === "review" && "opened_on_event_ids" in registered && registered.opened_on_event_ids!.includes(objection);
     });
   const a = objectAndCommit(x, "A's direction");
   const b = objectAndCommit(y, "B's direction");
@@ -2077,11 +2077,11 @@ it("初回: memory で注入された Definition を名指すと門を通って 
   injectMemory(b, b.spawn(), [definition]);
   const decision = b.decide("built from the notes");
   const client = new FakeAttributionClient();
-  client.scriptJudgment(decision, { cause: "memory", evidence: "followed the build notes", entries: [definition] });
+  client.scriptJudgment(decision, { cause: "memory", evidence: "followed the build notes", wrong_memory_entries: [definition] });
 
   commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.objectTo(decision), at));
 
-  expect(attributed(b.db, b.task.id)).toEqual([expect.objectContaining({ cause: "memory", entries: [definition] })]);
+  expect(attributed(b.db, b.task.id)).toEqual([expect.objectContaining({ cause: "memory", wrong_memory_entries: [definition] })]);
 });
 
 it("初回: agent_definition は当時版の欄が null なら uncertain に倒れ、欄があれば agent_definition のまま載る", async () => {
@@ -2093,9 +2093,9 @@ it("初回: agent_definition は当時版の欄が null なら uncertain に倒�
   commitTriage(resolved.db, at, [], await attributeObjections(resolved.db, { ...resolved.deps, attributionClient: client }, resolved.sessionId, at));
   commitTriage(unresolved.db, at, [], await attributeObjections(unresolved.db, { ...noRetrospectiveCalls, attributionClient: client }, unresolved.sessionId, at));
 
-  expect(attributed(resolved.db, resolved.task.id)).toEqual([expect.objectContaining({ cause: "agent_definition", evidence: "the body said to keep v1", entries: null })]);
+  expect(attributed(resolved.db, resolved.task.id)).toEqual([expect.objectContaining({ cause: "agent_definition", evidence: "the body said to keep v1", wrong_memory_entries: null })]);
   expect(attributed(unresolved.db, unresolved.task.id)).toEqual([
-    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining("agent_definition attribution rejected"), entries: null }),
+    expect.objectContaining({ cause: "uncertain", evidence: expect.stringContaining("agent_definition attribution rejected"), wrong_memory_entries: null }),
   ]);
 });
 
