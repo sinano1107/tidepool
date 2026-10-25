@@ -145,7 +145,7 @@ function gate({ wrong_memory_entries, ...judgment }: AttributionJudgment, input:
     return uncertain("agent_definition attribution rejected: no definition version was resolved for the session");
   }
   if (judgment.cause !== "memory") {
-    return wrong_memory_entries === undefined ? { ...judgment, wrong_memory_entries: null } : uncertain(`${judgment.cause} attribution rejected: entries are only for cause memory`);
+    return wrong_memory_entries === undefined ? { ...judgment, wrong_memory_entries: null } : uncertain(`${judgment.cause} attribution rejected: wrong_memory_entries are only for cause memory`);
   }
   if (!wrong_memory_entries?.length) return uncertain("memory attribution rejected: it names no entry");
   const unread = wrong_memory_entries.filter((id) => !input.memory_read.some((r) => r.id === id));
@@ -803,7 +803,7 @@ function learnedFrom(db: Db, review: Task, material_id: number): { worker: strin
   return { worker: entry.worker_id, attribution: bundle.attribution };
 }
 
-/** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の材料 id が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
+/** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の opened_on_event_ids が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
 export function materialStop(db: Db, reviewId: string): EventRowOf<"session_stopped_by_human"> | undefined {
   const [id] = latestEventOfTask(db, reviewId, "task_registered")?.payload.opened_on_event_ids ?? [];
   const event = id === undefined ? undefined : getEvent(db, id);
@@ -851,12 +851,12 @@ export function completeRca(
   const noun = stop ? "stop" : "entries";
   if (findings.some((f) => f.material.length === 0)) throw new DomainError(`a finding names no ${noun}`);
   if (findings.some((f) => whyBlank(f.root_cause))) throw new DomainError("every finding requires a root_cause");
-  const material = rcaMaterial(db, review.id, stop);
+  const reviewMaterial = rcaMaterial(db, review.id, stop);
   const given = findings.flatMap((f) => f.material);
   const ids = (list: number[]) => [...new Set(list)].join(", ");
-  const unknown = given.filter((id) => !material.has(id));
+  const unknown = given.filter((id) => !reviewMaterial.has(id));
   const repeated = given.filter((id, i) => given.indexOf(id) !== i);
-  const missing = [...material].filter((id) => !given.includes(id));
+  const missing = [...reviewMaterial].filter((id) => !given.includes(id));
   const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_material" ? [payload] : []));
   const repairs = repairChildren(db, review.id);
   const judged = findings.map(({ material, root_cause, no_proposal }) => {

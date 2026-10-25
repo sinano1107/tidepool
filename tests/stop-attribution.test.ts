@@ -190,7 +190,7 @@ async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: strin
 
 it.each([
   { judgment: { cause: "memory" as const, evidence: "followed a note", wrong_memory_entries: [999] }, rejected: "memory attribution rejected: entry 999 was not read before the decision" },
-  { judgment: { cause: "capability" as const, evidence: "e", wrong_memory_entries: [1] }, rejected: "capability attribution rejected: entries are only for cause memory" },
+  { judgment: { cause: "capability" as const, evidence: "e", wrong_memory_entries: [1] }, rejected: "capability attribution rejected: wrong_memory_entries are only for cause memory" },
 ])("a $judgment.cause judgment the gate refuses falls to uncertain", async ({ judgment, rejected }) => {
   const b = fixture();
   b.client.scriptStopJudgment(judgment);
