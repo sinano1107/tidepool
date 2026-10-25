@@ -60,7 +60,8 @@ export interface AttributionInput {
 
 /** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
  *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` は
- *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。 */
+ *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。
+ *  `rca_findings` は第2回だけが足す: その停止を材料にした RCA 子(self / auditor)の decision log と完了 result(ADR 0310 決定4)。 */
 export interface StopAttributionInput {
   human_stop: { reason: string };
   decision_log: string[];
@@ -70,6 +71,7 @@ export interface StopAttributionInput {
     calls: Array<{ index: number; tool: string; args: string | null; failed: boolean }>;
     decisions: Array<{ position: number | null; line: string | null }>;
   } | null;
+  rca_findings?: string[];
 }
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
@@ -103,6 +105,11 @@ export interface BehaviorDraftInput extends AttributionInput {
   index: string | null;
 }
 
+/** 停止の帰責からの起草に渡す入力(ADR 0310 決定4): 停止の判事と同じ欄(第2回なら rca_findings つき)に INDEX を足す。 */
+export interface StopBehaviorDraftInput extends StopAttributionInput {
+  index: string | null;
+}
+
 /** 起草の構造化出力。宛先 `worker` / `all` は `preference` のときだけ読まれる。 */
 export interface BehaviorDraft {
   path: string;
@@ -114,6 +121,8 @@ export interface BehaviorDraft {
 /** Behavior candidate 起草の Board call の seam(issue #617)。AttributionClient と同型。 */
 export interface BehaviorDraftClient {
   draft(input: BehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>>;
+  /** 停止の帰責からの起草(ADR 0310 決定4)。 */
+  draftFromStop(input: StopBehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>>;
 }
 
 /** 振り返り Board call(帰責・起草・配分評価)が受け取るもの。合成 root が一度だけ組み、scheduler(poll の sweep)と triage close に
@@ -208,7 +217,8 @@ export const refireKeySchema = z.object({ refire: z.enum(["draft", "second_round
 export type RefireKey = z.infer<typeof refireKeySchema>;
 
 /** 対象の失敗の数え(ADR 0164 決定5): 直近の Retry より後の失敗 event の数・最後の失敗、Dismiss の有無。
- *  Retry との前後は id で見る。帰責の初回の失敗は数えない —— 撃ち直すのは第2回だけ(ADR 0168 決定1)。 */
+ *  Retry との前後は id で見る。帰責の初回の失敗は数えない —— 撃ち直すのは第2回だけ(ADR 0168 決定1)。停止の帰責は初回も撃ち直すので、
+ *  その停止の判定より前の失敗(初回の失敗)を第2回に数えない(ADR 0310 決定4)。 */
 function refireFailures(db: Db, { refire, target }: RefireKey): { n: number; last: string | null; last_id: number | null; dismissed: number } {
   const marks = "json_extract(payload, '$.refire') = @refire AND json_extract(payload, '$.target') = @target";
   return db
@@ -217,6 +227,7 @@ function refireFailures(db: Db, { refire, target }: RefireKey): { n: number; las
               EXISTS (SELECT 1 FROM events WHERE kind = 'refire_dismissed' AND ${marks}) AS dismissed
          FROM events WHERE kind = @failed AND json_extract(payload, @path) = @target
           AND NOT (kind = 'objection_attribution_failed' AND json_extract(payload, '$.round') = 'initial')
+          AND NOT (kind = 'stop_attribution_failed' AND id < COALESCE((SELECT MAX(id) FROM events WHERE kind = 'stop_attributed' AND json_extract(payload, '$.stop_event_id') = @target), 0))
           AND id > COALESCE((SELECT MAX(id) FROM events WHERE kind = 'refire_retried' AND ${marks}), 0)`,
     )
     .get({ refire, target, failed: REFIRE[refire].failed, path: `$.${REFIRE[refire].target}` }) as ReturnType<typeof refireFailures>;
@@ -387,14 +398,17 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
   });
 }
 
-/** 停止の帰責を1停止ぶん撃つ(ADR 0310 決定1〜3): 判断(`uncertain` も判断として)を門に通して `stop_attributed` として止められた
- *  task に追記する。撃てなかったら何も書かず、撃って失敗したら `stop_attribution_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。 */
-async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, stop, session }: StopTarget, now: Date): Promise<void> {
+/** 停止の帰責を1停止ぶん撃つ(ADR 0310 決定1〜4): 判断(`uncertain` も判断として)を門に通して `stop_attributed` として止められた
+ *  task に追記し、起草へ進む。判定が既にある停止(初回の uncertain)には第2回として RCA の所見つきで撃ち、`round: "after_rca"` で書く(RCA は立てない)。
+ *  撃てなかったら何も書かず、撃って失敗したら `stop_attribution_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。 */
+async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, now: Date): Promise<void> {
+  const { task_id, stop, session } = target;
+  const second = target.judgments.length > 0;
   await singleFlight(db, `stop:${stop.id}`, async () => {
     if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = stopInput(db, deps.registryDir, stop, session);
+    const input = stopInput(db, deps.registryDir, target, second);
     const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
       appendEvent(db, { taskId: task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
     let judgment: GatedJudgment;
@@ -405,10 +419,12 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
       record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason: `Board call failed: ${message(err)}` });
       return;
     }
-    db.transaction(() => {
-      record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment });
-      if (RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.worker_id, input.human_stop.reason, now);
+    const judged = db.transaction(() => {
+      const id = record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, ...(second && { round: "after_rca" as const }) });
+      if (!second && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.worker_id, input.human_stop.reason, now);
+      return getEvent(db, id) as EventRowOf<"stop_attributed">;
     })();
+    await draftStopBehaviorCandidate(db, deps, target, judged, now);
   });
 }
 
@@ -421,13 +437,15 @@ function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string
   registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, opened_on_event_ids: [stopId] }, now);
 }
 
-/** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。 */
-function stopInput(db: Db, registryDir: string | undefined, stop: StopTarget["stop"], session: Session): StopAttributionInput {
+/** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。第2回は停止を材料にした RCA 子の
+ *  decision log と完了 result を足す(ADR 0310 決定4)。起草も同じ入力を組む。 */
+function stopInput(db: Db, registryDir: string | undefined, { task_id, stop, session }: StopTarget, afterRca: boolean): StopAttributionInput {
   return {
     human_stop: { reason: humanStopReason(db, stop.payload) },
     decision_log: session.events.filter(isDecisionLogEntry).filter(session.inSession).map(objectedEntryText),
     ...readsIn(db, registryDir, stop, session),
     actions: sessionActions(db, session.spawned.id),
+    ...(afterRca && { rca_findings: rcaChildren(db, task_id, stop.id).flatMap((r) => decisionLogText(db, r.id)) }),
   };
 }
 
@@ -444,12 +462,13 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
 /** 1つの worker session: その task の event・開いた spawn・窓の判定。 */
 type Session = { events: EventRow[]; spawned: EventRow; inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean };
 
-type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session };
+/** 帰責の扉が開いた停止と、その判定(古い順、無ければ空)。 */
+type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session; judgments: EventRowOf<"stop_attributed">[] };
 
-/** 停止の帰責の対象(ADR 0310 決定1・3・6): 判定の無い人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
+/** 停止の帰責の扉が開いた停止(ADR 0310 決定1・3・6): 人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
  *  worker_exited 観測済み)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
  *  受験者の task でないもの。 */
-// ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の不在を SQL で先に絞る
+// ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の確定を SQL で先に絞る
 function stopTargets(db: Db): StopTarget[] {
   return listEventsOfKinds(db, ["session_stopped_by_human"]).flatMap((stop): StopTarget[] => {
     const task_id = stop.task_id!;
@@ -459,9 +478,9 @@ function stopTargets(db: Db): StopTarget[] {
     if (!spawned) return [];
     const { exited, inSession } = sessionWindow(events, spawned);
     if (!exited) return [];
-    const skip = events.some(({ id, payload: p }) =>
-      (p.kind === "task_cancelled_directly" && spawned.id < id && id < stop.id) || (p.kind === "stop_attributed" && p.stop_event_id === stop.id));
-    return skip ? [] : [{ task_id, stop, session: { events, spawned, inSession } }];
+    if (events.some(({ id, kind }) => kind === "task_cancelled_directly" && spawned.id < id && id < stop.id)) return [];
+    const judgments = events.filter((e): e is EventRowOf<"stop_attributed"> => e.payload.kind === "stop_attributed" && e.payload.stop_event_id === stop.id);
+    return [{ task_id, stop, session: { events, spawned, inSession }, judgments }];
   });
 }
 
@@ -472,6 +491,7 @@ function stopTargets(db: Db): StopTarget[] {
 type RefireTarget = { task_id: string } & (
   | { refire: "second_round"; source: SecondRoundSource }
   | { refire: "draft"; attribution: Attribution }
+  | ({ refire: "draft"; judgment: EventRowOf<"stop_attributed"> } & StopTarget)
   | { refire: "allocation"; allocation: AllocationTarget }
   | ({ refire: "stop_attribution" } & StopTarget)
 );
@@ -487,7 +507,18 @@ function refireTargets(db: Db): RefireTarget[] {
     return drafted.has(state.confirmed.id) ? [] : [{ task_id: state.task_id, refire: "draft", attribution: state.confirmed }];
   })
     .concat(allocationTargets(db).map((a) => ({ task_id: a.reviewed_task_id, refire: "allocation", allocation: a })))
-    .concat(stopTargets(db).map((t) => ({ refire: "stop_attribution", ...t })));
+    .concat(
+      stopTargets(db).flatMap((t): RefireTarget[] => {
+        const judgment = t.judgments.at(-1);
+        if (!judgment) return [{ refire: "stop_attribution", ...t }];
+        // 初回の uncertain は停止を材料にした RCA 子が全部決着したら第2回(第2回の uncertain は最終値、ADR 0164)
+        if (judgment.payload.round === undefined && judgment.payload.cause === "uncertain") {
+          const rca = rcaChildren(db, t.task_id, t.stop.id);
+          return rca.length > 0 && settledAll(rca) ? [{ refire: "stop_attribution", ...t }] : [];
+        }
+        return drafted.has(judgment.id) ? [] : [{ refire: "draft", judgment, ...t }];
+      }),
+    );
 }
 
 /** sweep(ADR 0164 決定1・4): 第2回の帰責・起草・配分評価を撃つ唯一の契機(ADR 0169 決定1 / ADR 0172 決定1)。pickup の poll が同期で呼び、
@@ -498,8 +529,10 @@ export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, no
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
-    } else if (target.refire === "draft") {
+    } else if (target.refire === "draft" && "attribution" in target) {
       fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), `entry ${target.attribution.entry_id}`);
+    } else if (target.refire === "draft") {
+      fireAndForget(draftStopBehaviorCandidate(db, deps, target, target.judgment, now), `stop ${target.stop.id}`);
     } else if (target.refire === "stop_attribution") {
       fireAndForget(attributeStop(db, deps, target, now), `stop ${target.stop.id}`);
     } else {
@@ -509,10 +542,12 @@ export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, no
 }
 
 type Titled = { id: string; title: string };
-/** 打ち切りの行: 配分評価は review と被レビュー task、起草と第2回は異議された entry とその帰責、停止の帰責は停止の理由(entry を持たない)。 */
+/** 打ち切りの行: 配分評価は review と被レビュー task、起草と第2回は異議された entry とその帰責、停止の帰責と停止からの起草は停止の理由
+ *  (entry を持たない。起草はその判定の cause と round も)。 */
 type HaltedRefire = { target: number; task: Titled; last_failure: { reason: string; at: string } } & (
   | { refire: "allocation"; review: Titled }
   | { refire: "stop_attribution"; stop: { reason: string } }
+  | { refire: "draft"; stop: { reason: string }; cause: Cause; round: "initial" | "after_rca" }
   | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
 );
 
@@ -523,15 +558,21 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
   const titled = (id: string) => ({ id, title: getTask(db, id)!.title });
   return refireTargets(db).flatMap((t): HaltedRefire[] => {
     const target =
-      t.refire === "draft" ? t.attribution.id : t.refire === "second_round" ? bundleName(t.source) : t.refire === "stop_attribution" ? t.stop.id : t.allocation.completed_event_id;
+      t.refire === "draft"
+        ? "attribution" in t ? t.attribution.id : t.judgment.id
+        : t.refire === "second_round" ? bundleName(t.source) : t.refire === "stop_attribution" ? t.stop.id : t.allocation.completed_event_id;
     const { n, last_id, dismissed } = refireFailures(db, { refire: t.refire, target });
     if (dismissed || n < MAX_FIRED_FAILURES) return [];
     const failure = getEvent(db, last_id!)!;
     const payload = failure.payload as Extract<EventPayload, { kind: (typeof REFIRE)[keyof typeof REFIRE]["failed"] }>;
     const last_failure = { reason: payload.reason, at: failure.created_at };
     if (t.refire === "allocation") return [{ refire: t.refire, target, review: titled(t.allocation.review_task_id), task: titled(t.task_id), last_failure }];
-    if (t.refire === "stop_attribution") return [{ refire: t.refire, target, stop: { reason: humanStopReason(db, t.stop.payload) }, task: titled(t.task_id), last_failure }];
-    const { entry_id, round } = payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" }>;
+    if ("stop" in t) {
+      const stop = { reason: humanStopReason(db, t.stop.payload) };
+      if (t.refire === "stop_attribution") return [{ refire: t.refire, target, stop, task: titled(t.task_id), last_failure }];
+      return [{ refire: t.refire, target, stop, cause: t.judgment.payload.cause, round: t.judgment.payload.round ?? "initial", task: titled(t.task_id), last_failure }];
+    }
+    const { entry_id, round } = payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" } & { entry_id: number }>;
     const entry = getEvent(db, entry_id) as DecisionLogEntry;
     return [
       {
@@ -623,23 +664,60 @@ function memoryBodies(db: Db, ids: number[]): AttributionInput["memory_read"] {
  *  撃って失敗したら —— 書き込みが一木の門(ADR 0178)に当たったときも —— `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
  *  (第2回は帰責の追記の直後、ADR 0169)ので poll を止めない。 */
 async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attribution: Attribution, now: Date): Promise<void> {
-  const { cause, round, entry_id } = attribution;
+  const entry = requireLogEntry(db, attribution.entry_id);
+  await draftCandidate(db, deps, {
+    attribution,
+    taskId: entry.task_id,
+    worker: entry.worker_id,
+    material: { entry_id: entry.id },
+    prepare: () => {
+      const input = attribution.round === "initial" ? objectionInput(db, deps.registryDir, attribution, readCut(attribution)) : secondRoundInput(db, deps.registryDir, entry.task_id, attribution);
+      return (client, index, setting) => client.draft({ ...input, index }, setting);
+    },
+  }, now);
+}
+
+/** 停止の帰責から Behavior candidate を起草する(ADR 0310 決定4): 異議と同じ規則で、学ぶのは止められた session の worker、入力は停止の判事と同じ欄
+ *  (第2回の判定なら RCA の所見つき)。失敗 event は停止を `stop_event_id` で指す。 */
+async function draftStopBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, target: StopTarget, judgment: EventRowOf<"stop_attributed">, now: Date): Promise<void> {
+  const { cause, round = "initial" } = judgment.payload;
+  await draftCandidate(db, deps, {
+    attribution: { id: judgment.id, cause, round },
+    taskId: target.task_id,
+    worker: target.session.spawned.worker_id,
+    material: { stop_event_id: target.stop.id },
+    prepare: () => {
+      const input = stopInput(db, deps.registryDir, target, round === "after_rca");
+      return (client, index, setting) => client.draftFromStop({ ...input, index }, setting);
+    },
+  }, now);
+}
+
+/** 起草の出所: 帰責 event、学ぶ worker とその task、失敗 event が指す材料、入力を組んで(組めなければ投げる)起草 client を撃つ口。 */
+type DraftSource = {
+  attribution: { id: number; cause: Cause; round: "initial" | "after_rca" };
+  taskId: string;
+  worker: string;
+  material: { entry_id: number } | { stop_event_id: number };
+  prepare: () => (client: BehaviorDraftClient, index: string | null, setting: BoardCallSetting) => Promise<BoardCallAnswer<BehaviorDraft>>;
+};
+
+async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution, taskId, worker, material, prepare }: DraftSource, now: Date): Promise<void> {
+  const { cause, round } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
-  const entry = requireLogEntry(db, entry_id);
-  if (!deps.behaviorDraftClient || !drafts || isHumanEntry(entry)) return;
-  const taskId = entry.task_id;
+  if (!deps.behaviorDraftClient || !drafts || isHumanEntry({ worker_id: worker })) return;
   // preference の宛先は Board call が選ぶ。他の cause は導出し、文面の書き手が agent でなければ起草しない
   let derived: ReturnType<typeof learningTarget> | null = null;
   if (cause !== "preference") {
     try {
-      derived = learningTarget(cause, entry.worker_id, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
+      derived = learningTarget(cause, worker, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
     } catch {
       return;
     }
   }
   // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 文面の書き手が人間のときと同じく起草しない(ADR 0173 決定4)。
-  // preference の宛先は Board call が選ぶが、学ぶのは entry の worker
-  const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : entry.worker_id;
+  // preference の宛先は Board call が選ぶが、学ぶのは行の(停止なら session の)worker
+  const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : worker;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
   let scope: string | null;
@@ -651,20 +729,20 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
     // 入力が組めない帰責(出所の異議が壊れている)は撃って失敗したのではないので、失敗 event に畳まず投げる
-    const input = round === "initial" ? objectionInput(db, deps.registryDir, attribution, readCut(attribution)) : secondRoundInput(db, deps.registryDir, taskId, attribution);
+    const fire = prepare();
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
     // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
     const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
-    const index = memoryIndex(db, task, scope, entry.worker_id, query).section;
+    const index = memoryIndex(db, task, scope, worker, query).section;
     try {
-      const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, call.client.draft({ ...input, index }, call.setting));
+      const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, fire(call.client, index, call.setting));
       createBehaviorCandidate(
         db,
         {
           ...fields,
           scope,
-          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : entry.worker_id,
+          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : worker,
           source: { event_id: attribution.id },
           author: { activity: "board", name: BOARD_WORKER_ID },
         },
@@ -677,7 +755,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
         taskId,
         workerId: BOARD_WORKER_ID,
         origin: "board",
-        payload: { kind: "memory_draft_failed", entry_id, round, attribution_event_id: attribution.id, reason: message(err) },
+        payload: { kind: "memory_draft_failed", ...material, round, attribution_event_id: attribution.id, reason: message(err) },
         at: now,
       });
     }

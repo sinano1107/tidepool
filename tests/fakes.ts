@@ -67,6 +67,7 @@ import type {
   BehaviorDraftInput,
   RetrospectiveCallDeps,
   StopAttributionInput,
+  StopBehaviorDraftInput,
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
@@ -971,6 +972,20 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
 
   scriptDraft(entryId: number, draft: BehaviorDraft | Error | Promise<BehaviorDraft>): void {
     this.scripted.set(entryId, draft);
+  }
+
+  /** 停止からの起草(ADR 0310 決定4): 入力を記録し、台本の起草(Error なら投げる)を返す。台本が無ければ投げる。 */
+  readonly stopCalls: Array<{ input: StopBehaviorDraftInput; setting: Pick<ExecutionSettingRow, "model" | "effort"> }> = [];
+  private stopDraft: BehaviorDraft | Error = new Error("no draft scripted");
+
+  async draftFromStop(input: StopBehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>> {
+    this.stopCalls.push({ input, setting });
+    if (this.stopDraft instanceof Error) throw this.stopDraft;
+    return { output: this.stopDraft, usage: BOARD_CALL_USAGE, setting };
+  }
+
+  scriptStopDraft(draft: BehaviorDraft | Error): void {
+    this.stopDraft = draft;
   }
 }
 
