@@ -2103,7 +2103,7 @@ export function answerQuestion(
         kind: "question_answered",
         answers: answers.map((a, i) => ({
           answer: a,
-          recommendation_accepted: a === items[i]!.recommendation && amendment === undefined,
+          recommendation_accepted: items[i]!.recommendation === undefined ? null : a === items[i]!.recommendation && amendment === undefined,
         })),
         recommended_by: getRegistrant(db, question.id),
         ...(comment !== undefined && { comment }),

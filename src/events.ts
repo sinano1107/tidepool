@@ -314,9 +314,10 @@ export type EventPayload =
   // never need a join back through task_registered. One entry per question
   // item, in item order (issue #30) — acceptance is counted per item, not per
   // submission, so "N of M answered per recommendation" stays expressible.
+  // null = the item carried no recommendation (停止の理由 question、ADR 0310 決定7) —— 受理率の分母に入れない
   | {
       kind: "question_answered";
-      answers: Array<{ answer: string; recommendation_accepted: boolean }>;
+      answers: Array<{ answer: string; recommendation_accepted: boolean | null }>;
       recommended_by: string;
       // the reject-reason steering channel (issue #40) — one per submission,
       // not per item; absent entirely (not null) when the answer carried none

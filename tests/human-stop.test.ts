@@ -99,6 +99,15 @@ it("a reasonless stop's reason question takes free text only: its item has no op
   expect(reason.question_items).toEqual([{ title: 'why did you stop "write parser"?', options: [] }]);
 });
 
+it("an answer to the reason question is not counted for or against a recommendation it never carried", () => {
+  const { db, task } = fixture();
+  pickupTask(db, task, "deckhand", now);
+  recordHumanStop(db, task.id, undefined, now, "webui");
+  const reason = getTask(db, listBoard(db).find((q) => q.question_stop_reason_task_id === task.id)!.id)!;
+  answerQuestion(db, reason, ["parser was deleting unrelated files"], now, undefined, undefined, undefined, "webui");
+  expect(listEvents(db, reason.id).find((e) => e.kind === "question_answered")!.payload).toMatchObject({ answers: [{ answer: "parser was deleting unrelated files", recommendation_accepted: null }] });
+});
+
 it.each(["retry", "abandon"])("the root reason question survives %s and does not block retry", (answer) => {
   const { db, task } = fixture();
   pickupTask(db, task, "deckhand", now);

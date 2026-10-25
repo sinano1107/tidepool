@@ -5,7 +5,8 @@ import { registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
-// question の種類の写し(ADR 0246 決定2・3)を domain 層で述べる。書き手・分岐の振る舞いは既存のテストが見る。
+// question の種類の写し(ADR 0246 決定2・3)と、種類で分かれる登録の門の肢の数(ADR 0310 決定7)を domain 層で述べる。
+// それ以外の書き手・分岐の振る舞いは既存のテストが見る。
 
 // 種類で鍵を張るので、union に種類を足すとここが tsc のエラーになり、往復のテストが読む側の腕の書き漏れを捕まえる
 const examples: { [K in QuestionKind["kind"]]: Extract<QuestionKind, { kind: K }>[] } = {
