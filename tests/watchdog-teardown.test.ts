@@ -182,15 +182,25 @@ it.each([false, true])("人間の停止後の分類 %s は何も書かない(ADR
   expect(before[0]?.title).toBe("stopped by human: one");
 });
 
-it.each([false, true])("回収 timeout の予約 %s: 人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async (timeout) => {
+it.each(["before-timeout", "timeout", "empty-before-stop"] as const)("%s: 人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async (order) => {
   const f = await sessionInTeardown("watchdog");
   await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
-  if (timeout) await f.clock.advance(CONFIG.reclaimTimeout - 1);
+  if (order !== "before-timeout") await f.clock.advance(CONFIG.reclaimTimeout - 1);
   let classify!: (cap: boolean) => void;
   f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
-  if (timeout) await f.clock.advance(1);
+  if (order === "empty-before-stop") {
+    f.runtime.fireEmpty(f.task.id);
+    await settle();
+  }
+  if (order === "timeout") await f.clock.advance(1);
   f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
-  f.runtime.fireEmpty(f.task.id);
+  if (order === "empty-before-stop") {
+    await f.clock.advance(1);
+    expect(f.watchdog.heldForContainment(f.task.id)).toBe(true);
+    const containment = getTask(f.db, openQuarantineQuestion(f.db, "containment", null)!.id)!;
+    answerQuestionViaWebui(f.db, containment, [containment.question_items![0]!.options[0]!], f.clock.now());
+    f.watchdog.acceptReclaimed();
+  } else f.runtime.fireEmpty(f.task.id);
   await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
   const failure = questions(f.db).find((question) => question.parent_id === f.task.id)!;
   answerQuestionViaWebui(f.db, getTask(f.db, failure.id)!, ["retry"], f.clock.now());

@@ -397,6 +397,7 @@ export function startWatchdog(deps: {
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
+    if (rec.settled) return;
     if (rec.humanStop) {
       void runTeardown(teardown, taskId, teardownStep(db, taskId));
       return;
