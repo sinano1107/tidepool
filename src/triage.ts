@@ -283,13 +283,10 @@ export function registerRcaReview(
     db,
     {
       type: "review",
-      title: spec.title,
-      purpose: spec.purpose,
+      ...spec,
       completion_criteria:
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
-      assignee: spec.assignee,
-      opened_on_event_ids: spec.opened_on_event_ids,
     },
     now,
     // 盤面の規則が立てる(ADR 0194 決定3)—— どの閉じ方でも盤面名義
