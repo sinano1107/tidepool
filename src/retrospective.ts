@@ -788,7 +788,7 @@ function learnedFrom(db: Db, review: Task, entry_id: number): { worker: string; 
     const events = listEvents(db, stop.task_id!);
     const worker = sessionSpawnOf(events, stop)!.worker_id;
     if (isHumanEntry({ worker_id: worker })) throw new DomainError(`entry ${entry_id} was written by a human`);
-    const [judged] = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).slice(-1);
+    const judged = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).at(-1);
     return { worker, attribution: judged };
   }
   const entry = getEvent(db, entry_id);
