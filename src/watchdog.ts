@@ -403,7 +403,9 @@ export function startWatchdog(deps: {
       return;
     }
     if (rec.classification) {
-      void rec.classification.then(() => onReclaimed(taskId, rec, limit));
+      void rec.classification.then(() => {
+        if (!rec.humanStop) onReclaimed(taskId, rec, limit);
+      });
       return;
     }
     // 強制回収の待ちの間に cap / 最終 verb が決着したなら、その後始末が観測を受ける。回収 timeout で
@@ -555,7 +557,10 @@ export function startWatchdog(deps: {
     slot.enterTeardown();
     rec.humanStop = true;
     beginStop(taskId, rec);
-    // A cap may already have sent force reclaim; its existing observation now finishes this stop.
+    // 分類待ちに留めた空の観測も、人間の停止は分類を待たずに受け取る(ADR 0309)。
+    if (rec.forceSentAt !== undefined && rec.classification) {
+      void containers.reclaimed(taskId).then(() => onReclaimed(taskId, rec, 0));
+    }
     return undefined;
   };
 

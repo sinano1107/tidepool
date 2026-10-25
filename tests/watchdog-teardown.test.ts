@@ -195,11 +195,9 @@ it.each(["before-timeout", "timeout", "empty-before-stop"] as const)("%s: 人間
   if (order === "timeout") await f.clock.advance(1);
   f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
   if (order === "empty-before-stop") {
-    await f.clock.advance(1);
-    expect(f.watchdog.heldForContainment(f.task.id)).toBe(true);
-    const containment = getTask(f.db, openQuarantineQuestion(f.db, "containment", null)!.id)!;
-    answerQuestionViaWebui(f.db, containment, [containment.question_items![0]!.options[0]!], f.clock.now());
-    f.watchdog.acceptReclaimed();
+    await settle();
+    expect(f.slot.currentTaskId).toBeNull();
+    expect(openQuarantineQuestion(f.db, "containment", null)).toBeUndefined();
   } else f.runtime.fireEmpty(f.task.id);
   await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
   const failure = questions(f.db).find((question) => question.parent_id === f.task.id)!;
