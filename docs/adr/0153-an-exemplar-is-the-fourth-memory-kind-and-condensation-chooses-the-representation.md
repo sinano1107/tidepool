@@ -1,5 +1,7 @@
 # 事例(Exemplar)は記憶の第4種であり、表現の選択は condensation の仕事で、Behavior の読み出しは依拠した事例を返す
 
+**Status 追記: 決定3 の case 描画に、出所の帰責が入力に読んだ人間の停止の行(理由つき)が加わる(ADR 0308 決定3)** —— 「帰責が入力に使った steering だけ」(#958)と同じ規則。
+
 2026-09-25 の grilling(issue #587 を錨に、context-vault `projects/tidepool/memory-and-growth.md` の設計懸念を審査)で決定。
 懸念は「異議 → RCA → Behavior の経路が、経験を自然言語の常設指示へ過圧縮する」— 具体の成功 / 失敗が持つ高次元の質は規則文に
 畳むと失われる。vault の4分法を盤面の語彙に写すと、hard boundary は registry の authority / profile(Memory は決裁権を広げない、
