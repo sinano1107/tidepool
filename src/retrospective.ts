@@ -93,8 +93,8 @@ export interface AttributionClient {
     input: AttributionInput,
     setting: BoardCallSetting,
   ): Promise<BoardCallAnswer<AttributionJudgment>>;
-  /** 停止の帰責(ADR 0310)。持たない client では停止の帰責は撃てなかった扱い。 */
-  judgeStop?(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>>;
+  /** 停止の帰責(ADR 0310)。 */
+  judgeStop(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>>;
 }
 
 /** Behavior candidate 起草の Board call に渡す入力(ADR 0120 決定1(b)(c)): 帰責と同じ材料に、
@@ -392,14 +392,14 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
 async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, stop, session }: StopTarget, now: Date): Promise<void> {
   await singleFlight(db, `stop:${stop.id}`, async () => {
     if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
-    const call = boardCallSetting(db, deps.attributionClient?.judgeStop?.bind(deps.attributionClient), deps.containers);
+    const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
     const input = stopInput(db, deps.registryDir, stop, session);
     const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
       appendEvent(db, { taskId: task_id, workerId: BOARD_WORKER_ID, origin: "board", payload, at: now });
     let judgment: GatedJudgment;
     try {
-      judgment = gate(await recordedAnswer(db, "attribution", now, call.client(input, call.setting)), input);
+      judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judgeStop(input, call.setting)), input);
     } catch (err) {
       if (quarantineBoardCallRefusal(db, err, "attribution", task_id, now)) return;
       record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason: `Board call failed: ${message(err)}` });

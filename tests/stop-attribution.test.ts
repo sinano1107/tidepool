@@ -1,30 +1,17 @@
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished } from "vitest";
-import type { BoardCallSetting } from "../src/board-call-usage.js";
 import { CliAuthError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { humanEntryInput, recordBehavior } from "../src/memory.js";
 import { projectAndPersist } from "../src/precedent.js";
-import { type AttributionJudgment, listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireRetrospectiveCalls, type StopAttributionInput } from "../src/retrospective.js";
+import { listHaltedRefires, markHaltedRefire, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { BOARD_CALL_USAGE, FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
+import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
 import { HUMAN_WEBUI, interviewExaminee, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
-
-/** 停止の帰責だけを台本で返す fake(fakes.ts の異議の fake は変えない)。 */
-class FakeStopAttributionClient extends FakeAttributionClient {
-  readonly stopCalls: StopAttributionInput[] = [];
-  answer: AttributionJudgment | Error = { cause: "capability", evidence: "deleted files outside the workspace" };
-
-  async judgeStop(input: StopAttributionInput, setting: BoardCallSetting) {
-    this.stopCalls.push(input);
-    if (this.answer instanceof Error) throw this.answer;
-    return { output: this.answer, usage: BOARD_CALL_USAGE, setting };
-  }
-}
 
 const at = new Date("2026-10-25T00:00:00Z");
 const HOUR = 60 * 60 * 1000;
@@ -37,7 +24,8 @@ function fixture({ task = work, spawn = {} }: { task?: (db: Db) => Task; spawn?:
   const picked = pickupTask(db, task(db), "deckhand", at)!;
   const spawned = appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...spawn } });
   const entry = logDecision(db, picked, "deleted the fixtures", "deckhand", at, "worker");
-  const client = new FakeStopAttributionClient();
+  const client = new FakeAttributionClient();
+  client.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
   const deps: RetrospectiveCallDeps = { ...noRetrospectiveCalls, attributionClient: client };
   const exit = (session = spawned) =>
     appendEvent(db, { taskId: picked.id, workerId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
@@ -46,8 +34,9 @@ function fixture({ task = work, spawn = {} }: { task?: (db: Db) => Task; spawn?:
     await new Promise((resolve) => setImmediate(resolve));
   };
   const stopEvent = () => listEvents(db, picked.id).find((e) => e.kind === "session_stopped_by_human")!;
+  const stopInputs = () => client.stopCalls.map((c) => c.input);
   const judged = () => listEvents(db, picked.id).filter((e) => e.kind === "stop_attributed").map((e) => e.payload);
-  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, judged };
+  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, stopInputs, judged };
 }
 
 it("a stop with a reason is judged once by the sweep after its session closes, from the session window, its reads and no actions", async () => {
@@ -63,7 +52,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
   await b.sweep();
   await b.sweep();
 
-  expect(b.client.stopCalls).toEqual([
+  expect(b.stopInputs()).toEqual([
     {
       human_stop: { reason: "deleting unrelated files" },
       decision_log: ["deleted the fixtures"],
@@ -86,7 +75,7 @@ it("the judge reads only the stopped session's decisions, not an earlier session
 
   await b.sweep();
 
-  expect(b.client.stopCalls.map((i) => i.decision_log)).toEqual([["removed ../other"]]);
+  expect(b.stopInputs().map((i) => i.decision_log)).toEqual([["removed ../other"]]);
 });
 
 it("an unanswered stop is not judged until its reason question is answered, then with the answer", async () => {
@@ -101,7 +90,7 @@ it("an unanswered stop is not judged until its reason question is answered, then
   answerQuestion(b.db, getTask(b.db, reason.id)!, ["parser was deleting unrelated files"], at, undefined, undefined, undefined, "webui");
   await b.sweep();
 
-  expect(b.client.stopCalls.map((i) => i.human_stop)).toEqual([{ reason: "parser was deleting unrelated files" }]);
+  expect(b.stopInputs().map((i) => i.human_stop)).toEqual([{ reason: "parser was deleting unrelated files" }]);
 });
 
 it("a stop-approved cancel's stop is not judged", async () => {
@@ -127,23 +116,20 @@ it("an examinee's stop is not judged", async () => {
   expect(b.client.stopCalls).toEqual([]);
 });
 
-it.each([
-  { client: "none", attributionClient: undefined },
-  { client: "one without judgeStop", attributionClient: new FakeAttributionClient() },
-])("a stop the board could not fire for ($client) leaves nothing", async ({ attributionClient }) => {
+it("a stop the board could not fire for (no client) leaves nothing", async () => {
   const b = fixture();
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit();
   const before = listEvents(b.db, b.task.id).length;
 
-  await b.sweep(at, { ...b.deps, attributionClient });
+  await b.sweep(at, { ...b.deps, attributionClient: undefined });
 
   expect(listEvents(b.db, b.task.id).length).toBe(before);
 });
 
 it("a 401 from the stop attribution Board call quarantines the Provider's authentication and leaves no failure event", async () => {
   const b = fixture();
-  b.client.answer = new CliAuthError("Invalid API key");
+  b.client.scriptStopJudgment(new CliAuthError("Invalid API key"));
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit();
 
@@ -173,7 +159,7 @@ it.each([
 
   await b.sweep();
 
-  expect(b.client.stopCalls[0]!.actions).toEqual({
+  expect(b.stopInputs()[0]!.actions).toEqual({
     calls: [
       { index: 0, tool, args: "rm -rf ../other", failed: true },
       { index: 1, tool: "mcp__tidepool__log_decision", args: null, failed: false },
@@ -188,7 +174,7 @@ it("a session whose transcript the projector could not read is judged with actio
 
   await b.sweep();
 
-  expect(b.client.stopCalls.map((i) => i.actions)).toEqual([null]);
+  expect(b.stopInputs().map((i) => i.actions)).toEqual([null]);
 });
 
 /** setup: 理由つきで止め、session を閉じ、その transcript を投影する。 */
@@ -205,7 +191,7 @@ it.each([
   { judgment: { cause: "capability" as const, evidence: "e", entries: [1] }, rejected: "capability attribution rejected: entries are only for cause memory" },
 ])("a $judgment.cause judgment the gate refuses falls to uncertain", async ({ judgment, rejected }) => {
   const b = fixture();
-  b.client.answer = judgment;
+  b.client.scriptStopJudgment(judgment);
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit();
 
@@ -216,7 +202,7 @@ it.each([
 
 it("a failing Board call leaves failure events, halts after 3 as a stop row without an entry, and Retry / Dismiss act on it", async () => {
   const b = fixture();
-  b.client.answer = new Error("CLI exited 1");
+  b.client.scriptStopJudgment(new Error("CLI exited 1"));
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit();
   const stop = b.stopEvent().id;
