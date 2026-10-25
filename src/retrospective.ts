@@ -529,10 +529,9 @@ export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, no
   for (const target of refireTargets(db)) {
     if (target.refire === "second_round") {
       fireAndForget(attributeSecondRound(db, deps, target.task_id, target.source, now), `entry ${target.source.entry_id}`);
-    } else if (target.refire === "draft" && "attribution" in target) {
-      fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), `entry ${target.attribution.entry_id}`);
     } else if (target.refire === "draft") {
-      fireAndForget(draftStopBehaviorCandidate(db, deps, target, target.judgment, now), `stop ${target.stop.id}`);
+      if ("attribution" in target) fireAndForget(draftBehaviorCandidate(db, deps, target.attribution, now), `entry ${target.attribution.entry_id}`);
+      else fireAndForget(draftStopBehaviorCandidate(db, deps, target, target.judgment, now), `stop ${target.stop.id}`);
     } else if (target.refire === "stop_attribution") {
       fireAndForget(attributeStop(db, deps, target, now), `stop ${target.stop.id}`);
     } else {
@@ -705,7 +704,7 @@ type DraftSource = {
 async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution, taskId, worker, material, prepare }: DraftSource, now: Date): Promise<void> {
   const { cause, round } = attribution;
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
-  if (!deps.behaviorDraftClient || !drafts || isHumanEntry({ worker_id: worker })) return;
+  if (!deps.behaviorDraftClient || !drafts || worker === HUMAN_WORKER_ID) return;
   // preference の宛先は Board call が選ぶ。他の cause は導出し、文面の書き手が agent でなければ起草しない
   let derived: ReturnType<typeof learningTarget> | null = null;
   if (cause !== "preference") {
