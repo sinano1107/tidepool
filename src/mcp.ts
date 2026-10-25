@@ -1142,8 +1142,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       "read_evidence_history",
       {
         description:
-          "Read the history of one of this Interview's evidence tasks (get_current_task's interview.evidence_task_ids): its decisions with " +
-          "their children, its completion with the handoff_doc, and the allocation reviews of its sessions, in the order they happened. " +
+          "Read the history of one of this Interview's evidence tasks (get_current_task's interview.evidence_task_ids): its own decisions, " +
+          "its completion with the handoff_doc, and the allocation reviews of its sessions, in the order they happened. " +
           "A task that is not an evidence task of this Interview is refused. " +
           nextDescription("read_evidence_history", "history rows"),
         inputSchema: { task_id: requiredTextSchema.optional(), next },
