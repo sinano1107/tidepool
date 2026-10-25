@@ -103,7 +103,7 @@ export function teardownStep(db: Db, taskId: string): TeardownStep {
  *
  *  **門は `slot.currentTaskId` の再観測である。** 回収済み観測は非同期に届く
  *  ので、その間に次の session が枠に入っていることがありうる —— 他人の slot を
- *  解放しないために、ここで観測しなおす(`capInterruptionHandler` が ADR 0104 の
+ *  解放しないために、ここで観測しなおす(上限到達による中断の経路が ADR 0104 の
  *  実装時に局所的に取った自衛と同じ形で、それが1つの session につきちょうど1回を
  *  保証する)。梯子の底で保留されている session(`heldForContainment`)も同じ点で
  *  弾く —— そこでの解放の門は確認 question ただ1つである(ADR 0099 決定3)。

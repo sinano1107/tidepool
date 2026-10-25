@@ -13,14 +13,15 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
-import type { ContainerSpawn } from "../src/process-container.js";
+import { type ContainerSpawn, ProcessContainers } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
-import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
+import { Slot } from "../src/slot.js";
+import { cancelTaskDirectly, completeTask, examineeCheckoutPath, getTask, interviewRoomPath, listBoard, listChildren, logDecision, pickupTask, poseProbe, registerTask, retryInterviewRoot, type Task } from "../src/tasks.js";
 import { getProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
-import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
+import { RECLAIM_TIMEOUT, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
@@ -28,6 +29,7 @@ import {
   codexSkillsListAt,
   driveCodexPreflight,
   FakeClock,
+  FakeContainerRuntime,
   fakeAppServerCall,
   passthroughContainers,
   recordingSpawn,
@@ -195,14 +197,14 @@ const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_server
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
-  onWorkerExited?: (taskId: string, exit: WorkerExit) => void,
+  onWorkerExited?: CodexWorkerOptions["onWorkerExited"],
   spawn?: ContainerSpawn,
   {
     registryFiles = {},
     linkWorkspace = false,
     appServer = honestSkillsList,
     usageProbe,
-    onCapInterrupted,
+    containers,
     auditorName,
     onPickupStopped,
     boardState,
@@ -212,7 +214,7 @@ async function fixture(
     linkWorkspace?: boolean;
     appServer?: Parameters<typeof fakeAppServerCall>[0];
     usageProbe?: CodexAppServerProbe;
-    onCapInterrupted?: (taskId: string, reclaimed: Promise<void>) => void;
+    containers?: ProcessContainers;
     onPickupStopped?: CodexWorkerOptions["onPickupStopped"];
     boardState?: (workspace: string) => CodexWorkerOptions["boardState"];
   } = {},
@@ -258,12 +260,11 @@ You are the Codex worker.`,
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    containers: passthroughContainers(spawn ?? process.spawn),
+    containers: containers ?? passthroughContainers(spawn ?? process.spawn),
     boardCall: appServerCall.call,
     onSpawnFailed,
     onWorkerExited,
     usageProbe,
-    onCapInterrupted,
     auditorName,
     onPickupStopped,
     boardState: boardState?.(workspace),
@@ -1443,54 +1444,89 @@ describe("上限到達による中断は exit の直後に読み直した使用�
 
   /** 最後の行を流して exit させ、盤面側の一撃の順と worker_exited の payload を返す。 */
   async function exitAfter(id: string, usageProbe: CodexAppServerProbe, last: object = turnFailed, code = 1) {
-    const calls: string[] = [];
-    const f = await fixture(undefined, undefined, (taskId) => calls.push(`exited ${taskId}`), undefined, {
-      usageProbe,
-      onCapInterrupted: (taskId) => calls.push(`cap ${taskId}`),
-    });
+    const calls: Array<boolean | Promise<boolean>> = [];
+    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification), undefined, { usageProbe });
     const value = task(f.db, id);
     await f.start(value);
     f.process.processes[0]!.stdout.write(`${JSON.stringify(last)}\n`);
     f.process.emitExit(code, null);
-    await vi.waitFor(() => expect(calls.at(-1)).toBe(`exited ${value.id}`));
+    expect(calls).toHaveLength(1);
+    const cap = await calls[0];
     const exited = listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")!.payload as Record<string, unknown>;
-    return { f, value, calls, exited };
+    return { f, calls, cap, exited };
   }
 
-  it("turn.failed で終わり、読み直した窓のどれかが 100% なら、onCapInterrupted を onWorkerExited より先に撃ち、worker_exited に満杯の窓だけを残す", async () => {
-    const { value, calls, exited } = await exitAfter("codex-capped", observed(windowAt("primary", 100), windowAt("secondary", 40)));
+  it("probe 保留中に exit を即時通知し、分類の解決時には worker_exited が読める(ADR 0309)", async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const calls: Array<boolean | Promise<boolean>> = [];
+    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification), undefined, {
+      usageProbe: async (now) => { await pending; return observed(windowAt("primary", 100))(now); },
+    });
+    const value = task(f.db, "codex-pending-classification");
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
+    f.process.emitExit(1, null);
 
-    expect(calls).toEqual([`cap ${value.id}`, `exited ${value.id}`]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toBeInstanceOf(Promise);
+    let resolved = false;
+    const classification = Promise.resolve(calls[0]).then((cap) => {
+      resolved = true;
+      expect(listEvents(f.db, value.id).find((event) => event.kind === "worker_exited")?.payload).toMatchObject({ usage_recheck: { result: "full" } });
+      return cap;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(resolved).toBe(false);
+    release();
+    expect(await classification).toBe(true);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("probe 未配線の turn.failed は即時に中断でない分類を渡す", async () => {
+    const calls: unknown[] = [];
+    const f = await fixture(undefined, undefined, (_taskId, _exit, classification) => calls.push(classification));
+    const value = task(f.db, "codex-no-probe");
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(turnFailed)}\n`);
+    f.process.emitExit(1, null);
+    expect(calls).toEqual([false]);
+  });
+
+  it("turn.failed で終わり、読み直した窓のどれかが 100% なら、exit と分類を同じ通知で渡し、worker_exited に満杯の窓だけを残す", async () => {
+    const { cap, exited } = await exitAfter("codex-capped", observed(windowAt("primary", 100), windowAt("secondary", 40)));
+
+    expect(cap).toBe(true);
     expect(exited.usage_recheck).toEqual({
       result: "full",
       windows: [{ name: "primary", used_percent: 100, resets_at: RESETS_AT }],
     });
   });
 
-  it("turn.failed で終わっても、どの窓も 100% 未満なら onCapInterrupted は撃たず、usage_recheck は not_full", async () => {
-    const { value, calls, exited } = await exitAfter("codex-not-full", observed(windowAt("primary", 99), windowAt("secondary", 40)));
+  it("turn.failed で終わっても、どの窓も 100% 未満なら中断ではなく、usage_recheck は not_full", async () => {
+    const { cap, exited } = await exitAfter("codex-not-full", observed(windowAt("primary", 99), windowAt("secondary", 40)));
 
-    expect(calls).toEqual([`exited ${value.id}`]);
+    expect(cap).toBe(false);
     expect(exited.usage_recheck).toEqual({ result: "not_full" });
   });
 
-  it("turn.failed で終わって使用量が読めなければ(unobservable / unauthorized / probe が投げる)、onCapInterrupted は撃たず、usage_recheck は unreadable で理由を持つ", async () => {
+  it("turn.failed で終わって使用量が読めなければ(unobservable / unauthorized / probe が投げる)、中断ではなく、usage_recheck は unreadable で理由を持つ", async () => {
     const cases: Array<[string, CodexAppServerProbe, string]> = [
       ["unobservable", async () => ({ status: "unobservable", provider: "openai", cliVersion: CLI_VERSION, reason: "App Server probe failed: timeout" }), "App Server probe failed: timeout"],
       ["unauthorized", async () => ({ status: "unauthorized", provider: "openai", cliVersion: CLI_VERSION, reason: "Codex rejected the rate-limit read with HTTP 401" }), "Codex rejected the rate-limit read with HTTP 401"],
       ["thrown", async () => { throw new Error("probe blew up"); }, "Error: probe blew up"],
     ];
     for (const [id, probe, reason] of cases) {
-      const { value, calls, exited } = await exitAfter(`codex-unreadable-${id}`, probe);
+      const { cap, exited } = await exitAfter(`codex-unreadable-${id}`, probe);
 
-      expect(calls).toEqual([`exited ${value.id}`]);
+      expect(cap).toBe(false);
       expect(exited.usage_recheck).toEqual({ result: "unreadable", reason });
     }
   });
 
   it("turn.completed で exit 0 した session は、窓が 100% でも使用量を読み直さず、usage_recheck の欄を持たない", async () => {
     const probe = vi.fn(observed(windowAt("primary", 100)));
-    const { value, calls, exited } = await exitAfter(
+    const { cap, calls, exited } = await exitAfter(
       "codex-completed",
       probe,
       { type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1 } },
@@ -1498,7 +1534,8 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     );
 
     expect(probe).not.toHaveBeenCalled();
-    expect(calls).toEqual([`exited ${value.id}`]);
+    expect(calls).toEqual([false]);
+    expect(cap).toBe(false);
     expect(exited).not.toHaveProperty("usage_recheck");
   });
 
@@ -1506,6 +1543,53 @@ describe("上限到達による中断は exit の直後に読み直した使用�
     const { f } = await exitAfter("codex-capped-no-throttle", observed(windowAt("primary", 100)));
 
     expect(getProviderUsage(f.db)).toEqual([]);
+  });
+});
+
+describe("Codex の分類待ちを停止の梯子が追い越さない(ADR 0309)", () => {
+  it.each(["reclaimed", "timeout"] as const)("%s の question は probe 解決後に逐語を持ち、worker_exited より後に記録される", async (bottom) => {
+    const process = recordingSpawn();
+    const runtime = new FakeContainerRuntime(process.spawn);
+    const containers = new ProcessContainers(runtime);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    let notify!: NonNullable<CodexWorkerOptions["onWorkerExited"]>;
+    const f = await fixture(undefined, undefined, (...args) => notify(...args), process.spawn, {
+      containers,
+      usageProbe: async () => {
+        await pending;
+        return { status: "observed", provider: "openai", cliVersion: CLI_VERSION, plan: "plus", models: new Map(), windows: [] };
+      },
+    });
+    const value = task(f.db, `codex-ladder-${bottom}`);
+    pickupTask(f.db, value, "codex-agent", f.clock.now());
+    const slot = new Slot();
+    slot.occupy(value.id);
+    containers.open(value.id);
+    runtime.hold(value.id);
+    const watchdog = startWatchdog({ db: f.db, clock: f.clock, slot, worker: f.worker, containers, pollNow: () => {}, config: { timeLimits: { work: 60_000 }, grace: 60_000, reclaimTimeout: 60_000 } });
+    onTestFinished(watchdog.stop);
+    notify = watchdog.onWorkerExited;
+    await f.start(getTask(f.db, value.id)!);
+    await f.clock.advance(60_000); // 畳み込み停止
+    process.processes[0]!.stdout.write(`${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "LAST" } })}\n${JSON.stringify({ type: "turn.failed", error: { message: "ERROR" } })}\n`);
+    process.processes[0]!.stderr.write("STDERR\n");
+    process.emitExit(1, null);
+    await f.clock.advance(60_000); // 梯子が回収の観測を待つ
+    if (bottom === "reclaimed") runtime.fireEmpty(value.id);
+    else await f.clock.advance(120_000); // timeout 後も分類が揃うまで決めない
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(listBoard(f.db).filter((task) => task.type === "question")).toEqual([]);
+    expect(slot.currentTaskId).toBe(value.id);
+    expect(listEvents(f.db, value.id).some((event) => event.kind === "worker_exited")).toBe(false);
+
+    release();
+    await vi.waitFor(() => expect(listBoard(f.db).filter((task) => task.parent_id === value.id)).toHaveLength(1));
+    const question = listBoard(f.db).find((task) => task.parent_id === value.id)!;
+    expect(question.title).toBe(`watchdog killed task: ${value.title}`);
+    expect(question.purpose).toContain("last message from the worker:\nLAST\n\nerror reported by the CLI:\nERROR\n\nstderr tail:\nSTDERR");
+    const events = listEvents(f.db, value.id);
+    expect(events.find((event) => event.kind === "task_escalated")!.id).toBeGreaterThan(events.find((event) => event.kind === "worker_exited")!.id);
   });
 });
 

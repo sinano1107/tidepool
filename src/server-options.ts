@@ -93,7 +93,7 @@ import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import type { WatchdogConfig } from "./watchdog.js";
-import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit } from "./worker.js";
+import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
   boardRefWriter,
   listRegisteredWorkspaces,
@@ -249,7 +249,7 @@ export class LoggingWorker implements WorkerAdapter {
  *
  *  ADR 0041 はこの層を「#172 の類ではない」と除外していた。その根拠は当時の任意
  *  フィールドが `spawn` / `pty` / `enumerateSkills` —— **不在 = 実物を使う**という
- *  テスト用の注入 seam —— だけだったことにある。`onCapInterrupted` などはその類では
+ *  テスト用の注入 seam —— だけだったことにある。`onWorkerExited` などはその類では
  *  ない: 機能そのものであり、渡し忘れたときの壊れ方は静かな fail(盤面のどこも
  *  赤くならない)。したがって網羅の観測をこの層まで
  *  伸ばす —— 一覧をここへ出さなければ、テストが見るのはテスト自身が書いた複製に
@@ -265,12 +265,11 @@ export function buildWorkerOptions(
     reclaimTimeout: number;
     containers: ProcessContainers;
     boardCall: BoardCall;
-    onCapInterrupted: (taskId: string, reclaimed: Promise<void>) => void;
     onRowRefused: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, payload: PickupStopped) => void;
-    onWorkerExited: (taskId: string, exit: WorkerExit) => void;
+    onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
     transcripts: TranscriptStore;
   },
 ): ClaudeWorkerOptions {
@@ -302,9 +301,6 @@ export function buildWorkerOptions(
     boardState: board.boardState,
     // ADR 0097 決定4: Moonshot キーの置き場。アダプタが spawn 時にだけ読む
     moonshotApiKeyFile: board.moonshotApiKeyFile,
-    // ADR 0104: 429 で断られた session の後始末。渡し忘れは「上限で落ちたタスクが
-    // in_progress のまま watchdog 待ちになる」形で静かに fail するので、上の網羅テストが見張る面に載せる
-    onCapInterrupted: session.onCapInterrupted,
     // ADR 0184 決定4: 渡し忘れは「404 で断られた session が報告なき exit の failure question になる」形で静かに fail する
     onRowRefused: session.onRowRefused,
     // ADR 0118: 渡し忘れは「spawn に失敗した pickup が in_progress のまま枠を握る」形で静かに fail する
@@ -351,7 +347,6 @@ export function buildCodexWorkerOptions(
     // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
     // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない
     usageProbe: session.openaiUsage,
-    onCapInterrupted: session.onCapInterrupted,
   };
 }
 
