@@ -1,5 +1,7 @@
 # 人間の停止と理由は振り返りの Board call に自分の欄で届き、判断ログには混ぜない —— 理由の回答は学習の材料であり扉でもある
 
+**Status 追記: 決定4 の扉の機構は ADR 0310 で決まった** —— 停止の帰責は session 単位、判事と RCA は行動列も読む。決定5 の読み手の列に停止の帰責の判事と RCA が加わる。
+
 2026-10-25 の triage → grilling(issue #2549、#2537 の spec レビューから派生)で決定。ADR 0305 決定2 は「X の history を読むものすべて
 (次の session の briefing・`get_current_task`・meta-review・記憶・WebUI)」が停止の行の隣に理由を読むと書いたが、前3者 + WebUI は
 history の読み口(#2537 で実装)を通る一方、meta-review と記憶は task の history を読む経路を持たず、記憶の側は帰責・起草の Board call の

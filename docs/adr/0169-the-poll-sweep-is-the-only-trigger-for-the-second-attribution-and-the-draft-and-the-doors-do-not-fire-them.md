@@ -1,5 +1,7 @@
 # 第2回の帰責と起草を撃つのは poll の sweep だけで、扉は撃たず、束の欄は必須にする
 
+**Status 追記: 決定1 の sweep は停止の帰責も撃つ(ADR 0310 決定3)** —— 門は「理由が解けていて、session が閉じていて、判定が無い停止」。
+
 2026-09-28 の grilling(issue #1097、ADR 0164 の派生)で決定。ADR 0115 / 0120 は第2回の帰責と Behavior candidate の起草を扉(RCA 子の
 決着・triage close)からの fire-and-forget で撃ち、ADR 0164 が後から「結果の不在で拾って撃ち直す」sweep を poll に足した。二つの機構が
 同じ結果を作るので、扉の配線を外してもテストは sweep が拾って緑のまま、扉の deps の束 `AttributionCallDeps` は4欄すべて optional で

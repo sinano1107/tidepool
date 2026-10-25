@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の読み手の列は ADR 0308 決定5 で読み直した** —— history の読み手(briefing・`get_current_task`・WebUI)+ 振り返りの Board call(自分の欄、ADR 0308 決定1)+ 記憶 case。meta-review は外す。理由は学習の材料であり扉でもある(ADR 0308 決定4、機構は #2553)。
 
+**Status 追記: 扉の機構は ADR 0310** —— 理由 question は出口を問わず立つが、停止の帰責が付くのは人間の停止の出口(failure question)だけ。停止承認付き cancel の reason は材料にとどまる。理由 question は自由記述だけになる(ADR 0310 決定7)。
+
 2026-10-23 の grilling(issue #2527 から派生)で決定。盤面には走行中の worker session を人間が止める手段が無く、止まるのは watchdog の cap
 (work は 90 分)か worker 自身の最終 verb だけだった。不審な挙動の session、もう要らないのに token と時間を食っている session を止めるのは
 当たり前の要望で、ADR 0304 の不変条件(走っている task は盤面が session を終わらせない限り cancelled にならない)の上では、祖先の cancel を

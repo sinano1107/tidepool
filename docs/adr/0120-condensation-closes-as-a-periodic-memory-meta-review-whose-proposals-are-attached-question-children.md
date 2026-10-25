@@ -1,5 +1,7 @@
 # Condensation は周期の memory meta-review で閉じ、提案は付帯子の question として人間へ届く
 
+**Status 追記: 決定1 の起草は停止の帰責からも走る(ADR 0310 決定4)** —— RCA は材料の停止を指して書き、`preference` は理由の文言から。
+
 **Status 追記: 決定2 の周期は2回目から数え、主題の初回は人間が起こす(ADR 0300)** —— 前回の無い初回を本 ADR は書いておらず、材料1件の次の poll で登録されていた。足る材料かの判断は人間に置く(2026-10-22 の grilling、issue #2437)。
 
 2026-09-15 の grilling(issue #358)で決定。ADR 0083 決定9 は Condensation を3段(異議ごとの RCA が candidate を書く /
