@@ -2,6 +2,8 @@
 
 **Status 追記: 決定5 の「Codex の上限到達による exit は除外しない」は ADR 0261 で置き換え** —— 読み直した使用量で上限到達と認めた exit は、報告なき exit ではなく上限到達による中断になる。
 
+**Status 追記: 決定1 の「exit を観測した時点で」は ADR 0309 で「exit の事実と上限到達の分類が揃った時点」に** —— Codex の使用量の読み直し中は exit を記録して待ち、決めない(issue #2547)。
+
 2026-09-22 の grilling(issue #805)で決定。worker の root process が最終 verb を着地させずに exit すると、adapter は `worker_exited` を書いて強制回収を撃つだけで、task は `in_progress` のまま slot を握り、種別の時間制限いっぱい待った末に watchdog の梯子の底で「時間制限に達し容器を回収した」という偽の failure question が立っていた。実測は issue #724(1ターンを完走して exit 0、verb は全部 cancel)。現状調査と `file:line` は issue #805 のコメントに置く。
 
 ## 決定

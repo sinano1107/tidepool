@@ -1,5 +1,7 @@
 # Codex の上限到達による中断は exit の直後に読み直した使用量で認め、読み直しの結果は exit の記録に残す
 
+**Status 追記: 決定3 の後段「満杯なら `onCapInterrupted` を先に撃ってから exit を渡す」は ADR 0309 で置き換え** —— adapter は exit を即時に渡し、読み直しの結果は同じ通知の別の引数(Promise)で届く。盤面が分類を読んでから決める(issue #2547)。
+
 2026-10-15 の triage / grilling(issue #1979)で決定。ADR 0104 決定5 と ADR 0145 決定5 の「Codex の上限到達の形は未観測
 なので建てない」を置き換える。pin した codex-cli 0.147.0 のソースを読むと、上限の拒否は CLI の内側では構造化された種別
 (`UsageLimitExceeded`)を持つが、`exec --json` が JSONL に写すときに捨てられ、`turn.failed` には文言しか残らない。
