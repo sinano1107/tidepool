@@ -4334,8 +4334,8 @@ type TaskHistoryEntry =
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
 
-/** Resolve a stop's reason once for history readers (ADR 0305). */
-function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
+/** Resolve a stop's reason for history, retrospective calls and memory cases (ADR 0305 / 0308). */
+export function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
   return stop.reason ?? (stop.reason_question_id ? getTask(db, stop.reason_question_id)?.question_answer?.[0] : undefined) ?? "not yet answered";
 }
 

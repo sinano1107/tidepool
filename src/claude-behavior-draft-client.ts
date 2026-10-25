@@ -29,7 +29,9 @@ function buildPrompt(input: BehaviorDraftInput): string {
     'stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for the ' +
     'worker who wrote the entry, "all" when every agent should follow it). ' +
     `${TIER_DEFINITION_RULE} The index is the ` +
-    "workspace's memory branches with their definitions (null when the store is empty).\n\n" +
+    "workspace's memory branches with their definitions (null when the store is empty). " +
+    "When present, human_stop is the human's account of why they stopped the session; " +
+    '\"work no longer needed\" is not a cause of the objection, and leave an unanswered reason unanswered.\n\n' +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

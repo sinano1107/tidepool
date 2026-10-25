@@ -29,7 +29,7 @@ import { readPulls } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
-import { finishTask, getTask, getTextAuthor, type HandoffDoc, isRca, lineageSubjectOf, listChildren, repairChildren, type Task } from "./tasks.js";
+import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
@@ -40,6 +40,7 @@ import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-i
  *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
  *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
  *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
+ *  `human_stop` は同じ session の人間の停止と生で解いた理由。decision log の切れ目では切らない(ADR 0308)。
  *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。
  *  `agent_definition` は異議された entry の session の agent 定義の当時版の束で、引けなければ null(ADR 0291 決定2)。 */
 export interface AttributionInput {
@@ -49,6 +50,7 @@ export interface AttributionInput {
   decision_log: string[];
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
   agent_definition: AgentDefinitionThen | null;
+  human_stop?: { reason: string };
   written?: AttributionInput["memory_read"];
   rca_findings?: string[];
 }
@@ -231,6 +233,7 @@ export async function attributeObjections(
         decision_log: decisionLogText(db, o.entry.task_id),
         ...sessionReads(db, deps.registryDir, o.entry),
         ...writtenBodies(db, o.entry),
+        ...sessionHumanStop(db, o.entry),
       };
       const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
@@ -454,7 +457,18 @@ function objectionInput(db: Db, registryDir: string | undefined, attribution: Se
     decision_log: decisionLogText(db, entry.task_id, before),
     ...sessionReads(db, registryDir, entry),
     ...writtenBodies(db, entry),
+    ...sessionHumanStop(db, entry),
   };
+}
+
+/** 人間の証言は decision log の切れ目で切らず、異議された entry と同じ session から生で読む(ADR 0308)。 */
+function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInput, "human_stop"> {
+  const events = listEvents(db, entry.task_id);
+  const spawned = sessionSpawnOf(events, entry);
+  if (!spawned) return {};
+  const { inSession } = sessionWindow(events, spawned);
+  const stop = events.find((e) => e.kind === "session_stopped_by_human" && inSession(e))?.payload;
+  return stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
 }
 
 /** 異議された entry を含む worker session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、その entry より前の

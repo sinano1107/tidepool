@@ -29,7 +29,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryAgent, routingMaterial } from "./routing-review.js";
-import { approvalAnnotation, getTask, type HandoffDoc, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
+import { approvalAnnotation, getTask, type HandoffDoc, humanStopReason, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
 import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
@@ -2267,7 +2267,7 @@ const SOURCE_KIND = { commit: "fact", event: "fact", decision: "inference" } as 
  *  decision を直接指すなら entry への全異議)・
  *  Episode の handoff と result、出所の session なら decision 列・handoff・result。transcript は含まない。 */
 type MemoryCase =
-  | { decision: string; steering: string[]; handoff: string | null; result: string | null }
+  | { decision: string; steering: string[]; handoff: string | null; result: string | null; human_stop?: { reason: string } }
   | { decisions: string[]; handoff: string | null; result: string | null };
 
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
@@ -2298,8 +2298,15 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
     event?.payload.kind === "objection_attributed"
       ? objectionsById(db, entryId, event.payload.objection_event_ids)
       : entryObjections(db, [entryId]);
-  const { handoff, result } = caseSession(db, entry);
-  return { rendered: { decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result }, lineIds: steering.map((s) => s.id) };
+  const { events, handoff, result } = caseSession(db, entry);
+  const stop = event?.payload.kind === "objection_attributed" ? events.find((e) => e.kind === "session_stopped_by_human")?.payload : undefined;
+  return {
+    rendered: {
+      decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result,
+      ...(stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {}),
+    },
+    lineIds: steering.map((s) => s.id),
+  };
 }
 
 /** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
