@@ -79,7 +79,7 @@ const BOARD_VERBS = [
   "browse_memory",
   "search_memory",
   "read_memory",
-  "propose_from_objection",
+  "propose_from_material",
 ] as const;
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 /** 盤面 verb を選ぶ matcher。spawn の設定と preflight の期待値は同じここから来る。 */

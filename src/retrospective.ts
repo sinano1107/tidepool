@@ -77,11 +77,11 @@ export interface StopAttributionInput {
 export interface AttributionJudgment {
   cause: Cause;
   evidence: string;
-  entries?: number[];
+  wrong_memory_entries?: number[];
 }
 
 /** 門を通った判定 —— `objection_attributed` に載る形。 */
-export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attributed" }>, "cause" | "evidence" | "entries">;
+export type GatedJudgment = Pick<Extract<EventPayload, { kind: "objection_attributed" }>, "cause" | "evidence" | "wrong_memory_entries">;
 
 /** 初回の判定と、その入力が読んだ decision log の最後の entry の id(#1572)。commit の transaction が欄に載せるかを決める。 */
 export type InitialJudgment = GatedJudgment & { decision_log_through?: number };
@@ -135,22 +135,22 @@ export interface RetrospectiveCallDeps {
   registryDir: string | undefined;
 }
 
-const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, entries: null });
+const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, wrong_memory_entries: null });
 
-/** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は entries を
+/** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は wrong_memory_entries を
  *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定2)。
  *  通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
-function gate({ entries, ...judgment }: AttributionJudgment, input: Pick<AttributionInput, "memory_read" | "agent_definition">): GatedJudgment {
+function gate({ wrong_memory_entries, ...judgment }: AttributionJudgment, input: Pick<AttributionInput, "memory_read" | "agent_definition">): GatedJudgment {
   if (judgment.cause === "agent_definition" && input.agent_definition === null) {
     return uncertain("agent_definition attribution rejected: no definition version was resolved for the session");
   }
   if (judgment.cause !== "memory") {
-    return entries === undefined ? { ...judgment, entries: null } : uncertain(`${judgment.cause} attribution rejected: entries are only for cause memory`);
+    return wrong_memory_entries === undefined ? { ...judgment, wrong_memory_entries: null } : uncertain(`${judgment.cause} attribution rejected: wrong_memory_entries are only for cause memory`);
   }
-  if (!entries?.length) return uncertain("memory attribution rejected: it names no entry");
-  const unread = entries.filter((id) => !input.memory_read.some((r) => r.id === id));
+  if (!wrong_memory_entries?.length) return uncertain("memory attribution rejected: it names no entry");
+  const unread = wrong_memory_entries.filter((id) => !input.memory_read.some((r) => r.id === id));
   if (unread.length > 0) return uncertain(`memory attribution rejected: entry ${unread.join(", ")} was not read before the decision`);
-  return { ...judgment, entries };
+  return { ...judgment, wrong_memory_entries };
 }
 
 /** Board call を撃てるか。Provider は盤面設定の固定値(ADR 0111 決定4 と同じ枠)、ティアは
@@ -278,10 +278,10 @@ export async function attributeObjections(
 }
 
 /** 異議された task の子の登録 event のうち、その子が異議群を覆うもの(ADR 0171 決定1): `task_registered` の
- *  `objection_event_ids` が異議群の名前(最初の異議 id)を含む。 */
+ *  `opened_on_event_ids` が異議群の名前(最初の異議 id)を含む。 */
 const COVERING_CHILD = `FROM events e JOIN tasks t ON t.id = e.task_id
   WHERE e.kind = 'task_registered' AND t.parent_id = @objectedId
-    AND EXISTS (SELECT 1 FROM json_each(e.payload, '$.objection_event_ids') WHERE value = @bundle)`;
+    AND EXISTS (SELECT 1 FROM json_each(e.payload, '$.opened_on_event_ids') WHERE value = @bundle)`;
 
 /** 異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)。 */
 const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
@@ -417,8 +417,8 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
 function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string, reason: string, now: Date): void {
   const { title } = getTask(db, taskId)!;
   const purpose = `the human stopped the session ${worker} ran on "${title}":\n\n> stop ${stopId}: ${reason}`;
-  if (worker !== HUMAN_WORKER_ID) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, material: [stopId], assignee: worker }, now);
-  registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, material: [stopId] }, now);
+  if (worker !== HUMAN_WORKER_ID) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, opened_on_event_ids: [stopId], assignee: worker }, now);
+  registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, opened_on_event_ids: [stopId] }, now);
 }
 
 /** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。 */
@@ -684,7 +684,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
   });
 }
 
-/** 行から学んだ記憶の置き場(起草と propose_from_objection が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
+/** 行から学んだ記憶の置き場(起草と propose_from_material が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
  *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事で、子はそれを継ぐ(ADR 0279 決定1 / ADR 0283 決定1)。 */
 const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Task): string | null =>
   lineageSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
@@ -737,25 +737,25 @@ function learningTarget(
   }
 }
 
-/** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
+/** RCA の起草 verb `propose_from_material`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
  *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先はその review が材料にした異議群の判定(ADR 0171 決定3)の
  *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。材料が停止の RCA は
- *  その停止の id を entry_id に指し、停止の帰責から導く(ADR 0310 決定4、`learnedFrom`)。
+ *  その停止の id を material_id に指し、停止の帰責から導く(ADR 0310 決定4、`learnedFrom`)。
  *  書いた記憶とエントリを結ぶ記録を呼んだ RCA に、店の書き込みと同じ transaction で残す(ADR 0280 決定1)。 */
-export function proposeFromObjection(
+export function proposeFromMaterial(
   db: Db,
   reviewId: string,
-  input: { entry_id: number; path: string; title: string; text: string; as?: "behavior" | "knowledge"; based_on_decision?: number },
+  input: { material_id: number; path: string; title: string; text: string; as?: "behavior" | "knowledge"; based_on_decision?: number },
   board: { workspace?: { name: string } },
   author: string,
   now: Date,
 ): { entry_id: number; event_id: number } {
-  const { entry_id, as, based_on_decision, ...fields } = input;
+  const { material_id, as, based_on_decision, ...fields } = input;
   const task = getTask(db, reviewId);
   if (task?.type !== "review" || task.parent_id === null) {
-    throw new DomainError("propose_from_objection is only for a review of an objected task");
+    throw new DomainError("propose_from_material is only for a review of an objected or stopped task");
   }
-  const { worker, attribution } = learnedFrom(db, task, entry_id);
+  const { worker, attribution } = learnedFrom(db, task, material_id);
   // 覆う異議群が未帰責なら uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
   const target = learningTarget(attribution?.cause ?? "uncertain", worker, getTextAuthor(db, task.parent_id), as);
   if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
@@ -773,39 +773,39 @@ export function proposeFromObjection(
         ? recordKnowledge(db, entryInput, "worker", now, reviewId)
         : createBehaviorCandidate(db, { ...entryInput, addressee: target.addressee }, "worker", now);
     // 記憶の id は店の作成 event の id(Knowledge の event_id は書き込みの行の id)
-    const payload = { kind: "proposed_from_objection" as const, entry_id, memory_event_id: written.entry_id };
+    const payload = { kind: "proposed_from_material" as const, material_id, memory_event_id: written.entry_id };
     appendEvent(db, { taskId: reviewId, workerId: author, origin: "worker", payload, at: now });
     return written;
   })();
 }
 
-/** 起草の出所(propose_from_objection): 材料の停止ならその session の worker と、その停止の最新の帰責(ADR 0310 決定4 —— 後の判定が有効)。
+/** 起草の出所(propose_from_material): 材料の停止ならその session の worker と、その停止の最新の帰責(ADR 0310 決定4 —— 後の判定が有効)。
  *  他は異議されたエントリの書き手と、review の材料の異議群の帰責(ADR 0171 決定3)。材料に無い id・人間の書いたものは拒む。 */
-function learnedFrom(db: Db, review: Task, entry_id: number): { worker: string; attribution: { id: number; cause: Cause } | undefined } {
+function learnedFrom(db: Db, review: Task, material_id: number): { worker: string; attribution: { id: number; cause: Cause } | undefined } {
   const stop = materialStop(db, review.id);
   if (stop) {
-    if (entry_id !== stop.id) throw new DomainError(`entry ${entry_id} is not in this review's material`);
+    if (material_id !== stop.id) throw new DomainError(`id ${material_id} is not the stop this review was opened on`);
     const { events, spawned } = stoppedSession(db, stop);
     const worker = spawned.worker_id;
-    if (worker === HUMAN_WORKER_ID) throw new DomainError(`stop ${entry_id} stopped a session a human ran`);
+    if (worker === HUMAN_WORKER_ID) throw new DomainError(`stop ${material_id} stopped a session a human ran`);
     const judged = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).at(-1);
     return { worker, attribution: judged };
   }
-  const entry = getEvent(db, entry_id);
+  const entry = getEvent(db, material_id);
   if (!isDecisionLogEntry(entry) || entry.task_id !== review.parent_id) {
-    throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
+    throw new DomainError(`entry ${material_id} is not a decision-log entry of your parent task`);
   }
-  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no objection`);
-  if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-  const material = latestEventOfTask(db, review.id, "task_registered")!.payload.objection_event_ids ?? [];
-  const bundle = objectionBundles(db, [entry_id]).get(entry_id)?.find((b) => material.includes(bundleName(b)));
-  if (!bundle) throw new DomainError(`entry ${entry_id} is not in this review's material`);
+  if (entryObjections(db, [material_id]).length === 0) throw new DomainError(`entry ${material_id} carries no objection`);
+  if (isHumanEntry(entry)) throw new DomainError(`entry ${material_id} was written by a human`);
+  const opened = latestEventOfTask(db, review.id, "task_registered")!.payload.opened_on_event_ids ?? [];
+  const bundle = objectionBundles(db, [material_id]).get(material_id)?.find((b) => opened.includes(bundleName(b)));
+  if (!bundle) throw new DomainError(`entry ${material_id} is not in this review's material`);
   return { worker: entry.worker_id, attribution: bundle.attribution };
 }
 
-/** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の材料 id が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
+/** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の opened_on_event_ids が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
 export function materialStop(db: Db, reviewId: string): EventRowOf<"session_stopped_by_human"> | undefined {
-  const [id] = latestEventOfTask(db, reviewId, "task_registered")?.payload.objection_event_ids ?? [];
+  const [id] = latestEventOfTask(db, reviewId, "task_registered")?.payload.opened_on_event_ids ?? [];
   const event = id === undefined ? undefined : getEvent(db, id);
   return event?.payload.kind === "session_stopped_by_human" ? (event as EventRowOf<"session_stopped_by_human">) : undefined;
 }
@@ -823,11 +823,10 @@ function stoppedSession(db: Db, stop: EventRowOf<"session_stopped_by_human">): {
 }
 
 /** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
-function rcaMaterial(db: Db, reviewId: string): Set<number> {
-  const stop = materialStop(db, reviewId);
+function rcaMaterial(db: Db, reviewId: string, stop: EventRowOf<"session_stopped_by_human"> | undefined): Set<number> {
   if (stop) return new Set([stop.id]);
   return new Set(
-    (latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? []).flatMap((id) => {
+    (latestEventOfTask(db, reviewId, "task_registered")!.payload.opened_on_event_ids ?? []).flatMap((id) => {
       const objection = getEvent(db, id)?.payload;
       return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
     }),
@@ -835,48 +834,51 @@ function rcaMaterial(db: Db, reviewId: string): Set<number> {
 }
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
- *  名指して拒み何も記録しない。所見ごとの行為は記録から列挙する —— この RCA の起草の記録のうち所見の entries と交わるものの記憶と、
+ *  名指して拒み何も記録しない。所見ごとの行為は記録から列挙する —— この RCA の起草の記録のうち所見の material と交わるものの記憶と、
  *  この RCA の修理子(子は全所見に載る RCA 単位の近似、#2279)。行為の無い所見だけが no_proposal を要し、行為のある所見への
- *  no_proposal は受け取って何もしない。所見1つが型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。 */
+ *  no_proposal は受け取って何もしない。所見1つが型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。
+ *  行と拒否文は id を材料の種類で名指す(異議の RCA は entries、停止の RCA は stop)。 */
 export function completeRca(
   db: Db,
   review: Task,
-  { findings, handoff }: { findings: Array<{ entries: number[]; root_cause: string; no_proposal?: true }>; handoff?: Partial<HandoffDoc> },
+  { findings, handoff }: { findings: Array<{ material: number[]; root_cause: string; no_proposal?: true }>; handoff?: Partial<HandoffDoc> },
   workerId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
   if (!isRca(db, review.id)) throw new DomainError("only an RCA completes with complete_rca");
-  if (findings.some((f) => f.entries.length === 0)) throw new DomainError("a finding names no entries");
+  const stop = materialStop(db, review.id);
+  const noun = stop ? "stop" : "entries";
+  if (findings.some((f) => f.material.length === 0)) throw new DomainError(`a finding names no ${noun}`);
   if (findings.some((f) => whyBlank(f.root_cause))) throw new DomainError("every finding requires a root_cause");
-  const material = rcaMaterial(db, review.id);
-  const given = findings.flatMap((f) => f.entries);
+  const reviewMaterial = rcaMaterial(db, review.id, stop);
+  const given = findings.flatMap((f) => f.material);
   const ids = (list: number[]) => [...new Set(list)].join(", ");
-  const unknown = given.filter((id) => !material.has(id));
+  const unknown = given.filter((id) => !reviewMaterial.has(id));
   const repeated = given.filter((id, i) => given.indexOf(id) !== i);
-  const missing = [...material].filter((id) => !given.includes(id));
-  const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_objection" ? [payload] : []));
+  const missing = [...reviewMaterial].filter((id) => !given.includes(id));
+  const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_material" ? [payload] : []));
   const repairs = repairChildren(db, review.id);
-  const judged = findings.map(({ entries, root_cause, no_proposal }) => {
+  const judged = findings.map(({ material, root_cause, no_proposal }) => {
     const memories = drafted
-      .filter((d) => entries.includes(d.entry_id))
+      .filter((d) => material.includes(d.material_id))
       .flatMap(({ memory_event_id: id }) => {
         const created = getEvent(db, id)?.payload;
         return created?.kind === "memory_entry_created" ? [{ id, kind: created.entry.kind }] : [];
       });
     const acts = [...memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`), ...repairs.map(({ id }) => `repair ${id}`)];
     // 行為のある所見への no_proposal は受け取って載せない(ADR 0278 決定3)
-    const judgment = { kind: "rca" as const, entries, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
-    const named = `entries ${entries.join(", ")}`;
+    const judgment = { kind: "rca" as const, material, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
+    const named = `${noun} ${material.join(", ")}`;
     const line = acts.length ? `${named} → ${acts.join(", ")} — ${judgment.root_cause}` : `no_proposal: ${named} — ${judgment.root_cause}`;
     return { judgment, line, unjustified: !acts.length && !no_proposal };
   });
-  const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.entries : []));
+  const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.material : []));
   const refusals = [
-    unknown.length > 0 && `not in this RCA's material: entries ${ids(unknown)}`,
-    repeated.length > 0 && `named more than once: entries ${ids(repeated)}`,
-    missing.length > 0 && `in no finding: entries ${ids(missing)}`,
-    unjustified.length > 0 && `no act and no no_proposal: entries ${ids(unjustified)} — draft from them, file a repair, or pass no_proposal: true`,
+    unknown.length > 0 && `not in this RCA's material: ${noun} ${ids(unknown)}`,
+    repeated.length > 0 && `named more than once: ${noun} ${ids(repeated)}`,
+    missing.length > 0 && `in no finding: ${noun} ${ids(missing)}`,
+    unjustified.length > 0 && `no act and no no_proposal: ${noun} ${ids(unjustified)} — draft from them, file a repair, or pass no_proposal: true`,
   ].filter(Boolean);
   if (refusals.length > 0) throw new DomainError(refusals.join("; "));
   return db.transaction(() => {

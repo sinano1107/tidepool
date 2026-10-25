@@ -862,13 +862,13 @@ it("commit が立てる子の登録は材料の異議 id 列を持つ —— 修
   const preferred = logDecision(db, task, "deckhand's naming", "deckhand", at, "worker");
   startTriage(db, at);
   const [d, h, p] = [deckhand, helmsman, preferred].map((entry) => raiseObjection(db, entry, "redo it", at));
-  const judged = (cause: Cause): GatedJudgment => ({ cause, evidence: "e", entries: null });
+  const judged = (cause: Cause): GatedJudgment => ({ cause, evidence: "e", wrong_memory_entries: null });
 
   commitTriage(db, at, [], new Map([[deckhand, judged("capability")], [preferred, judged("preference")]]));
 
   const registered = listChildren(db, task.id).map((c) => {
     const payload = listEvents(db, c.id).find((e) => e.kind === "task_registered")!.payload;
-    return [c.title, c.assignee, "objection_event_ids" in payload ? payload.objection_event_ids : undefined];
+    return [c.title, c.assignee, "opened_on_event_ids" in payload ? payload.opened_on_event_ids : undefined];
   });
   expect(registered).toEqual([
     ["repair: t", null, [d, h, p]],
@@ -1059,9 +1059,9 @@ it("修理の purpose は判定のある対の steering の後に board judged �
     at,
     [],
     new Map<number, GatedJudgment>([
-      [outage, { cause: "environment", evidence: "the registry was down", entries: null }],
-      [guessed, { cause: "capability", evidence: "guessed past the missing schema", entries: null }],
-      [unsure, { cause: "uncertain", evidence: "the log does not say", entries: null }],
+      [outage, { cause: "environment", evidence: "the registry was down", wrong_memory_entries: null }],
+      [guessed, { cause: "capability", evidence: "guessed past the missing schema", wrong_memory_entries: null }],
+      [unsure, { cause: "uncertain", evidence: "the log does not say", wrong_memory_entries: null }],
     ]),
   );
 
@@ -1158,7 +1158,7 @@ it.each([
   };
   const entries = [...(rows === "記憶" ? [] : [decision]), ...(rows === "判断" ? [] : [memory])];
 
-  commitTriage(db, at, [], new Map(entries.map((entry) => [entry, { cause: "capability", evidence: "e", entries: null }])));
+  commitTriage(db, at, [], new Map(entries.map((entry) => [entry, { cause: "capability", evidence: "e", wrong_memory_entries: null }])));
 
   // done の work には完了時レビューも付くので、異議の束ねが立てた子だけを見る
   const bundled = listChildren(db, registered.id).filter((child) => child.type !== "review" || child.title.startsWith("rca"));
@@ -1169,11 +1169,11 @@ it.each([
   };
   for (const child of bundled) {
     if (child.type === "review") {
-      expect(registration(db, child).payload).toMatchObject({ objection_event_ids: [...objections.decision, ...objections.memory] });
+      expect(registration(db, child).payload).toMatchObject({ opened_on_event_ids: [...objections.decision, ...objections.memory] });
       continue;
     }
     const group = groups[child.type as keyof typeof groups];
-    expect(registration(db, child).payload).toMatchObject({ objection_event_ids: group.ids });
+    expect(registration(db, child).payload).toMatchObject({ opened_on_event_ids: group.ids });
     expect(child.purpose).toContain(group.intro);
     expect(child.purpose).toContain(group.own);
     expect(child.purpose).not.toContain(group.other);
@@ -1220,7 +1220,7 @@ it.each([
   }
   raiseObjection(db, row, "redo it", at);
 
-  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   const repair = rowKind === "型つきの判断の行" ? [`memory repair: ${review.title}`] : [];
   expect(listChildren(db, review.id).map((child) => child.title)).toEqual([...repair, `rca (self): ${review.title}`, `rca (auditor): ${review.title}`]);
@@ -1281,7 +1281,7 @@ it.each([
   startTriage(db, at);
   raiseObjection(db, row, "redo it", at);
 
-  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+  commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
 
   expect(listChildren(db, objected.id).map((child) => child.title)).toEqual([`rca (self): ${objected.title}`, `rca (auditor): ${objected.title}`]);
   expect(listEvents(db, objected.id).filter((event) => event.kind === "objection_attributed")).toHaveLength(1);
@@ -1298,7 +1298,7 @@ it("meta-review の下の memory_repair の記憶の書き込みの行への異�
   const rows = [workerRepair, workerRca].map((task) => logDecision(db, task, "auditor's call", "auditor", at, "worker"));
   for (const row of rows) raiseObjection(db, row, "redo it", at);
 
-  commitTriage(db, at, [], new Map(rows.map((row) => [row, { cause: "capability", evidence: "e", entries: null }])));
+  commitTriage(db, at, [], new Map(rows.map((row) => [row, { cause: "capability", evidence: "e", wrong_memory_entries: null }])));
 
   expect(listChildren(db, subjectRepair.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["memory_repair"]);
   for (const task of [workerRepair, workerRca]) expect(listChildren(db, task.id).map((child) => child.type).filter((type) => type !== "review")).toEqual(["work"]);
@@ -1332,7 +1332,7 @@ it("人間が直接 cancel した review 子と、cancelled の work の祖先�
     const row = logDecision(db, objected, `${worker}'s call`, worker, at, "worker");
     startTriage(db, at);
     raiseObjection(db, row, "redo it", at);
-    commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", entries: null }]]));
+    commitTriage(db, at, [], new Map([[row, { cause: "capability", evidence: "e", wrong_memory_entries: null }]]));
   };
   // review 子だけを cancel する —— 祖先の work は生きている(今の捨てた成果の判定には当たらない)
   cancelTaskDirectly(db, reviewChild, null, at, {}, "webui");

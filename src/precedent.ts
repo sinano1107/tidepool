@@ -499,7 +499,7 @@ const PULL_TOOL = new RegExp(`__(${Object.keys(PULL_VERBS).join("|")})$`);
 /** memory_write マーカーに結ぶ tool = 記憶の verb のうち pull でないもの(worker・RCA・meta-review・修理 task の直接適用、ADR 0252)。
  *  書き込みの記録を返さない verb(提案)は event_id を写さないので結ばれない。 */
 const WRITE_TOOL = new RegExp(
-  `__(${[...WORKER_MEMORY_VERBS, ...MEMORY_META_REVIEW_VERBS, ...MEMORY_REPAIR_VERBS, "propose_from_objection"].filter((verb) => !(verb in PULL_VERBS)).join("|")})$`,
+  `__(${[...WORKER_MEMORY_VERBS, ...MEMORY_META_REVIEW_VERBS, ...MEMORY_REPAIR_VERBS, "propose_from_material"].filter((verb) => !(verb in PULL_VERBS)).join("|")})$`,
 );
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
@@ -697,7 +697,7 @@ export function entriesSeenBefore(
 /** 読み出し時に結ぶ outcome を持つマーカー。表示済み・異議は投影のあとに届く
  *  ので派生表には焼かない(ADR 0083 決定7: 正の信号は「表示済み・異議なし」から
  *  機械導出する — 分母は Displayed)。 */
-type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections" | "cause" | "entries">;
+type DecisionOutcome = Pick<StoredMarker, "line" | "displayed" | "objections" | "cause" | "wrong_memory_entries">;
 
 export interface StoredMarker extends EpisodeMarker {
   /** decision の文言。transcript と events が正本なので、読み出し時に引く。 */
@@ -706,7 +706,7 @@ export interface StoredMarker extends EpisodeMarker {
   objections: string[];
   cause: Cause | null;
   /** 今の判定(最後の異議群の判定、ADR 0170)が `memory` のとき名指された entry の id 列(ADR 0166 決定5)。他は null。 */
-  entries: number[] | null;
+  wrong_memory_entries: number[] | null;
 }
 
 export interface StoredEpisode extends Omit<Episode, "markers"> {
@@ -827,7 +827,7 @@ export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): Marker
 
 /** decision 以外のマーカー、および events から何も見つからなかった decision の
  *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
-const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null, entries: null });
+const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null, wrong_memory_entries: null });
 
 /** decision マーカーの outcome — 表示済み(異議の分母)と異議の本文。`listLog` と
  *  同じ形で `entry_id` で引く: エントリを指す id であって task_id ではないので、
@@ -854,7 +854,7 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
     out.get(row.entry_id)!.displayed = true;
   }
   // cause は entry の今の判定 —— 最後の異議群の判定(ADR 0170 決定2)
-  for (const [entryId, { cause, entries }] of currentAttributions(db, ids)) Object.assign(out.get(entryId)!, { cause, entries });
+  for (const [entryId, { cause, wrong_memory_entries }] of currentAttributions(db, ids)) Object.assign(out.get(entryId)!, { cause, wrong_memory_entries });
   return out;
 }
 

@@ -32,7 +32,7 @@ it("routing meta-review の型つきの判断の行への異議は routing_repai
 
   const repairs = listChildren(db, review.id).filter((child) => child.type === "routing_repair" || child.type === "work" || child.type === "memory_repair");
   expect(repairs.map((child) => child.type)).toEqual(["routing_repair"]);
-  expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ objection_event_ids: objections });
+  expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ opened_on_event_ids: objections });
 
   // 自由文の log_decision の行(judgment を持たない)も対象を名指さない
   const freeText = appendEvent(db, { taskId: review.id, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: "the table looks fine overall" } });
@@ -47,7 +47,7 @@ it("routing_repair の purpose と get_current_task の親の history は親の�
   const { db, review, row } = board();
   const learner = row({ learner: true });
   raiseObjection(db, learner, "promote the learner", at);
-  commitTriage(db, at, [], new Map([[learner, { cause: "capability", evidence: "the track records favour the learner", entries: null }]]));
+  commitTriage(db, at, [], new Map([[learner, { cause: "capability", evidence: "the track records favour the learner", wrong_memory_entries: null }]]));
   const repair = listChildren(db, review.id).find((child) => child.type === "routing_repair")!;
 
   expect(repair.purpose).toContain("> no_change: the learner\n- promote the learner\nboard judged: capability — the track records favour the learner");
@@ -135,7 +135,7 @@ it("修理子の下の提案 question は open な間は次の routing meta-revi
   const objected = row({ row: OPUS_ROW });
   raiseObjection(db, objected, "move it to frontier", at);
   // RCA の要らない cause —— 開いた RCA の子が登録を止めない
-  commitTriage(db, at, [], new Map([[objected, { cause: "preference", evidence: "the human wants frontier", entries: null }]]));
+  commitTriage(db, at, [], new Map([[objected, { cause: "preference", evidence: "the human wants frontier", wrong_memory_entries: null }]]));
   const repair = listChildren(db, review.id).find((child) => child.type === "routing_repair")!;
   const { question_id } = proposeRoutingChange(db, repair.id, { op: "row", row: OPUS_ROW, change: { tier: "frontier" }, evidence: [evidence[0]!], rationale: "r" }, "auditor", at);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(repair.id);

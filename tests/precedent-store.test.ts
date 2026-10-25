@@ -122,7 +122,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       objection_event_ids: [objectionId],
       cause: "uncertain",
       evidence: "RCA is needed",
-      entries: null,
+      wrong_memory_entries: null,
       round: "initial",
     },
     at,
@@ -137,7 +137,7 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
       objection_event_ids: [objectionId],
       cause: "preference",
       evidence: "RCA found a naming preference",
-      entries: null,
+      wrong_memory_entries: null,
       round: "after_rca",
     },
     at,
@@ -202,7 +202,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   registerMetaReview(db, "memory", at); // 前回の meta-review
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run(); // setup のみ: 完了した登録だけが窓の起点(ADR 0193)
   const objection = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
-  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", entries: null, round: "after_rca" });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [objection], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at); // 今回の meta-review(読み手)
   // setup のみ: 登録した task の id を引く
   const [, current] = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory' ORDER BY rowid").all() as Array<{ id: string }>;
@@ -221,7 +221,7 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
         displayed: false,
         objections: ["2回目は要らない"],
         cause: "preference",
-        entries: null,
+        wrong_memory_entries: null,
         completed: {
           result:
             "Created notes.md with 3 bullets on tide pools; logged 3 decisions (2 identical); used 1 subagent and 1 advisor consult.",
@@ -255,8 +255,8 @@ it("前の異議群の after_rca が後の異議群の initial より後の id �
     appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload, at });
   const first = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
   const second = bundledObjection(db, FIXTURE_TASK, 7, at, "箇条書きは5つに");
-  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [second], cause: "preference", evidence: "e", entries: null, round: "initial" });
-  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [first], cause: "capability", evidence: "e", entries: null, round: "after_rca" });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [second], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "initial" });
+  event({ kind: "objection_attributed", entry_id: 7, objection_event_ids: [first], cause: "capability", evidence: "e", wrong_memory_entries: null, round: "after_rca" });
   registerMetaReview(db, "memory", at);
   // setup のみ: 登録した task の id を引く
   const { id } = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string };

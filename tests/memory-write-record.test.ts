@@ -23,7 +23,7 @@ import {
 } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { attributeObjections, proposeFromObjection } from "../src/retrospective.js";
+import { attributeObjections, proposeFromMaterial } from "../src/retrospective.js";
 import { getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
@@ -89,13 +89,13 @@ it("worker の define_memory_branch・RCA の Knowledge・meta-review の define
     taskId: objected.id,
     workerId: BOARD_WORKER_ID,
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: entry, objection_event_ids: [objection], cause: "missing_information", evidence: "e", entries: null, round: "initial" },
+    payload: { kind: "objection_attributed", entry_id: entry, objection_event_ids: [objection], cause: "missing_information", evidence: "e", wrong_memory_entries: null, round: "initial" },
     at,
   });
   markPickedUp(db, objected.id, at);
-  const rca = task("rca (auditor): objected", { type: "review", parent_id: objected.id, objection_event_ids: [objection] });
+  const rca = task("rca (auditor): objected", { type: "review", parent_id: objected.id, opened_on_event_ids: [objection] });
   const reasoning = logDecision(db, rca, "the fixture rule was never written down", "auditor", at, "worker");
-  proposeFromObjection(db, rca.id, { entry_id: entry, path: "testing", title: "Fixtures", text: "Keep the fixtures.", as: "knowledge", based_on_decision: reasoning }, {}, "auditor", at);
+  proposeFromMaterial(db, rca.id, { material_id: entry, path: "testing", title: "Fixtures", text: "Keep the fixtures.", as: "knowledge", based_on_decision: reasoning }, {}, "auditor", at);
 
   expect(rows().map((r) => [r.task_id, r.payload.kind === "memory_written" && r.payload.line.split(" ")[0]])).toEqual([
     [worked.id, "wrote"],

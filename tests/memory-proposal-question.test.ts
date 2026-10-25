@@ -303,7 +303,7 @@ async function proposeExemplar(board: Awaited<ReturnType<typeof boardWithMetaRev
     taskId: board.review.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [bundledObjection(t.db, board.review.id, objected, t.clock.now())], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [bundledObjection(t.db, board.review.id, objected, t.clock.now())], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at: t.clock.now(),
   });
   const replaces = [candidate(t, "Split migrations", null, { event_id: attributed }), candidate(t, "Two commits", null, { event_id: attributed })];

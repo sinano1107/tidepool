@@ -1,5 +1,7 @@
 # 盤面が完了を材料として読む review は種別ごとの完了 verb で終わり、verb が運ぶのは記録が示せない判断だけで、判断1つが対象を名指す判断ログ1行になる
 
+**Status 追記: RCA の所見の欄 `entries` は `material` に改名(issue #2577)** —— `complete_rca` の `findings[].material` と、判断ログの型つきの欄(kind `rca`)。
+
 **Status 追記: 決定3 の材料は行または停止(ADR 0310 決定4)** —— 停止の RCA の所見は材料1つ(停止 event)を覆う1つ。
 
 2026-10-19 の triage / grilling(issue #1919)で決定。worker が task を終える verb は種別によらず汎用の `complete_task` 1つで、

@@ -173,7 +173,7 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
       isError: false,
       body: { entries: [{ id: material, case: null }], missing: [9999], event_id: expect.any(Number) },
     });
-    expect(review.purpose).toContain("A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop");
+    expect(review.purpose).toContain("A Precedent with cause memory names the wrong entries it followed (wrong_memory_entries): read them with read_memory_entries, then drop");
     expect(review.purpose).toContain("Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries.");
     const propose = tools.find((tool) => tool.name === "propose_memory_change")!.inputSchema as any;
     expect(propose.properties.text.properties.annotations.description).toContain("read the case with read_memory_entries");

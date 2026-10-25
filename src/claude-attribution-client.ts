@@ -11,7 +11,7 @@ const judgmentSchema = z.object({
   cause: z.enum(CAUSES),
   evidence: z.string().min(1),
   // prompt の JSON は model が null を書きうる —— 欠落と同じに読み、正しい判定を parse 失敗で落とさない
-  entries: z.array(z.number().int()).nullish().transform((v) => v ?? undefined),
+  wrong_memory_entries: z.array(z.number().int()).nullish().transform((v) => v ?? undefined),
 });
 
 /** The question the board asks when an objection is bundled (ADR 0115 決定2):
@@ -54,7 +54,7 @@ function buildStopPrompt(input: StopAttributionInput): string {
   );
 }
 
-/** The judgment fields both questions share: the cause vocabulary, evidence and entries. `w` names what is judged —
+/** The judgment fields both questions share: the cause vocabulary, evidence and wrong_memory_entries. `w` names what is judged —
  *  the objected entry's decision, or the stopped session's conduct. */
 const responseFields = (w: { reading: string; before: string; sound: string; cites: string }) =>
   "Respond with ONLY a single JSON object (no markdown fences, no " +
@@ -74,7 +74,7 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
   "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +
-  'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "entries" ' +
+  'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "wrong_memory_entries" ' +
   "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
   `read before ${w.before}; never answer memory when memory_read is empty).`;
 const OBJECTION_FIELDS = responseFields({ reading: "the objected reading", before: "the decision", sound: "the decision", cites: "the decision log cites" });

@@ -120,7 +120,7 @@ it("停止の帰責は材料で、周期が過ぎれば次の memory meta-review
   const work = writerTask(db);
   previousReview(db, "memory");
 
-  appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: 1, cause: "preference", evidence: "e", entries: null } });
+  appendEvent(db, { taskId: work, workerId: "board", origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: 1, cause: "preference", evidence: "e", wrong_memory_entries: null } });
   registerDueMetaReviews(db, afterPeriod);
 
   expect(openMetaReviews(db, "memory")).toBe(1);

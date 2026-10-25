@@ -318,7 +318,7 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
   // 修理子は異議の束ねが立てる子(登録の記録が異議を運ぶ)のうち RCA でないもの —— 題では見分けない(ADR 0171)
   const repairs: Record<string, number> = {};
   for (const task of tree) {
-    if (latestEventOfTask(db, task.id, "task_registered")?.payload.objection_event_ids?.length && !isRca(db, task.id)) repairs[task.type] = (repairs[task.type] ?? 0) + 1;
+    if (latestEventOfTask(db, task.id, "task_registered")?.payload.opened_on_event_ids?.length && !isRca(db, task.id)) repairs[task.type] = (repairs[task.type] ?? 0) + 1;
   }
   // 記録から学ぶ task(RCA review と記憶・routing の修理子)は走行の節に置き、課題の行の費用から外す
   const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task));

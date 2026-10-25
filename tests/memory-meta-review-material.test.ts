@@ -260,7 +260,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
     taskId: work,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", entries: [followed], round: "initial" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", wrong_memory_entries: [followed], round: "initial" },
     at,
   });
   const review = register(db, "memory");
@@ -636,7 +636,7 @@ it("窓で reject された candidate と、cause memory の異議つき判断�
     taskId: work,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", entries: [followed], round: "initial" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", wrong_memory_entries: [followed], round: "initial" },
     at,
   });
   invalidateMemoryEntry(db, { entry_id: followed, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);

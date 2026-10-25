@@ -113,7 +113,7 @@ it.each(REPAIR_NOTICES)("profile が reviewer 定数でも、%s の Authority �
 function rcaOf(db: Db, objected: Task, at: Date, worker = "deckhand", assignee?: string) {
   const entryId = logDecision(db, objected, "kept the old index", worker, at, "worker");
   const objection = appendEvent(db, { taskId: objected.id, workerId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
-  return registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee, objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+  return registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee, opened_on_event_ids: [objection] }, at, ...HUMAN_WEBUI);
 }
 
 /** `objected`(deckhand が pickup 済み)の deckhand の判断の行への異議の self RCA の文面 —— 当時版は registry の main の commit。

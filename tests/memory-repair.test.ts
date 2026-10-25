@@ -93,13 +93,13 @@ it("修理 verb は異議された書き込みが触ったエントリ(path_move
   commitTriage(db, at);
   const repair = repairChild(objected.id);
   // 同じ書き込みの行への異議を材料にした work の修理子(束ねは立てないので手で)—— 対象は memory_repair の修理子にだけ立つ(ADR 0272 決定3)
-  const workWriteRepair = registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+  const workWriteRepair = registerTask(db, { type: "work", title: "repair", purpose: "p", completion_criteria: "c", parent_id: objected.id, opened_on_event_ids: [objection] }, at, ...HUMAN_WEBUI);
   const later = moveMemoryByMetaReview(db, { entry_id: wrote.entry_id, scope: "charts", path: "build/squash", mover: metaReview }, "worker", at, reviewed.id).entry_id;
   raiseObjection(db, logDecision(db, objected, "squashed", "deckhand", at, "worker"), "undo it", at);
   commitTriage(db, at);
   const decisionRepair = repairChild(objected.id, "work");
   markPickedUp(db, objected.id, at);
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, objection_event_ids: [] }, at, ...HUMAN_WEBUI);
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, opened_on_event_ids: [] }, at, ...HUMAN_WEBUI);
 
   // invalidate_memory / move_memory は meta-review と1つの関数で、修理子でない書き手には meta-review の規則が掛かる —— その門は MCP の登録(ADR 0281 決定1)
   expect(() => invalidateAsRepairer(db, { taskId: repair.id, agent: "deckhand" }, { entry_id: untouched, reason: "capability" }, at)).toThrow(DomainError);
@@ -195,7 +195,7 @@ it("枝ごとの移し戻し(restore_memory_branch): 異議された move_memory
   expect([entry(definition), entry(leaf), entry(later)]).toMatchObject([{ invalidation_reason: "path_moved" }, { invalidation_reason: "path_moved" }, { invalidation_reason: null }]);
 });
 
-it("memory meta-review の型つきの判断の行への異議は memory_repair を立て、同じ task の書き込みの行への異議と合わせて1本で objection_event_ids は和(ADR 0279 決定3)", () => {
+it("memory meta-review の型つきの判断の行への異議は memory_repair を立て、同じ task の書き込みの行への異議と合わせて1本で opened_on_event_ids は和(ADR 0279 決定3)", () => {
   const { db, knowledge, repairChild, judged } = board();
   let note = 0;
   let moved: { entry_id: number; event_id: number } | undefined;
@@ -209,7 +209,7 @@ it("memory meta-review の型つきの判断の行への異議は memory_repair 
 
   const repairs = listChildren(db, review.id).filter((child) => child.type === "memory_repair");
   expect(repairs).toHaveLength(1);
-  expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ objection_event_ids: objections });
+  expect(latestEventOfTask(db, repairs[0]!.id, "task_registered")?.payload).toMatchObject({ opened_on_event_ids: objections });
   expect(repairChild(review.id).purpose).toContain("fold it into the build note");
 });
 
@@ -385,7 +385,7 @@ it("判断の行の修理子の get_current_task は親の判断の行・異議�
   const [first, second] = named.map((id) => row(id));
   raiseObjection(db, first!, "fold the two squash notes", at);
   raiseObjection(db, second!, "fold the two squash notes", at);
-  commitTriage(db, at, [], new Map([[first!, { cause: "capability", evidence: "the two notes say the same", entries: null }]]));
+  commitTriage(db, at, [], new Map([[first!, { cause: "capability", evidence: "the two notes say the same", wrong_memory_entries: null }]]));
   const repair = repairChild(review.id);
 
   expect(repair.purpose).toContain(`> left_as_is: entry #${named[0]}\n- fold the two squash notes\nboard judged: capability — the two notes say the same`);

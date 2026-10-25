@@ -69,7 +69,7 @@ it("list_memory_candidates は candidate を cause・author・出所つきで返
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
   const open = behavior({ title: "Short notes", source: attributed });
@@ -134,7 +134,7 @@ it("list_memory_candidates は kind で絞れる —— exemplar なら Exemplar
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
   const drafted = behavior({ title: "Short notes", source: attributed });
@@ -484,13 +484,13 @@ it("Precedent は最新の帰責の entries を運ぶ —— memory なら名指
   // setup のみ: 帰責の event
   const objected = (i: number, cause: "memory" | "capability", entries: number[] | null) => {
     const { decision, objection } = objectedDecision(b, i);
-    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [objection], cause, evidence: "e", entries, round: "initial" }, at });
+    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [objection], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" }, at });
     return decision;
   };
   const followed = objected(1, "memory", [41, 42]);
   const own = objected(2, "capability", null);
 
-  expect(listPrecedents(db, reader, {}, at).precedents.map((p) => [p.decision_event_id, p.cause, p.entries])).toEqual([
+  expect(listPrecedents(db, reader, {}, at).precedents.map((p) => [p.decision_event_id, p.cause, p.wrong_memory_entries])).toEqual([
     [followed, "memory", [41, 42]],
     [own, "capability", null],
   ]);
@@ -547,7 +547,7 @@ const attribution = ({ db, task, decision }: Pick<ReturnType<typeof board>, "db"
     taskId: task.id,
     workerId: "tidepool",
     origin: "board",
-    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at, comment)], cause: "preference", evidence: "e", entries: null, round: "after_rca" },
+    payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at, comment)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
   });
 

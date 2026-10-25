@@ -67,9 +67,9 @@ it("語彙の外の cause や JSON でない応答は reject する(未検証の
   await expect(prose.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 });
 
-it("prompt は cause の memory と、entries を読んだ記憶から名指すことを言い、判定は entries を運ぶ(ADR 0166 決定3)", async () => {
+it("prompt は cause の memory と、wrong_memory_entries を読んだ記憶から名指すことを言い、判定は wrong_memory_entries を運ぶ(ADR 0166 決定3)", async () => {
   const prompts: string[] = [];
-  const memory = { cause: "memory", evidence: "followed the squash note", entries: [3] };
+  const memory = { cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [3] };
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
@@ -82,7 +82,7 @@ it("prompt は cause の memory と、entries を読んだ記憶から名指す�
   ).resolves.toHaveProperty("output", memory);
 
   expect(prompts[0]).toContain("memory is when a memory entry the worker read before the decision, and followed, was itself wrong");
-  expect(prompts[0]).toContain('"entries"');
+  expect(prompts[0]).toContain('"wrong_memory_entries"');
   expect(prompts[0]).toContain("Squash before merge.");
 });
 

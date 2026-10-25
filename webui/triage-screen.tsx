@@ -738,7 +738,7 @@ const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], ope
   kind: e.payload.kind === 'task_completed' ? 'completion' as const : 'decision' as const,
   text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
   cause: e.cause ?? undefined,
-  causeEntries: e.entries ?? undefined,
+  causeEntries: e.wrong_memory_entries ?? undefined,
   causeEvidence: e.evidence ?? undefined,
   // 記憶の書き込みの行は触ったエントリへのリンクを持つ(ADR 0252 決定3)
   memoryEntries: e.payload.kind === 'memory_written' ? [...e.payload.created, ...e.payload.invalidated] : undefined,

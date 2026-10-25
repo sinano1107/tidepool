@@ -52,7 +52,7 @@ export const PROMOTION_RULE =
   "retire it with invalidate_memory reason rejected when it will become neither; leave it unpromoted while more material could still " +
   "change the judgment — there is no threshold or deadline.";
 
-/** 段の定義の置き場(ADR 0200 決定7): Behavior の起草側(RCA の propose_from_objection・Board call)と memory meta-review が同じ文を載せる。 */
+/** 段の定義の置き場(ADR 0200 決定7): Behavior の起草側(RCA の propose_from_material・Board call)と memory meta-review が同じ文を載せる。 */
 export const TIER_DEFINITION_RULE =
   "A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers specific to one workspace or writer may be a Behavior.";
 
@@ -93,7 +93,7 @@ export const META_REVIEW_SUBJECTS = {
         "you judge one of those right, leave the entry in place and say so — in its reason in complete_memory_review when the entry " +
         "is an item to judge, otherwise in one log_decision line naming the entry id, or the branch path and scope, and the scope you judged right (complete_memory_review " +
         "refuses an entry not on the injected list). " +
-        "A Precedent with cause memory names the wrong entries it followed (entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
+        "A Precedent with cause memory names the wrong entries it followed (wrong_memory_entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
         "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
         "with include_invalidated), so you do not repeat a retirement of your own. A rejected proposal always carries the human's reason: " +
@@ -210,12 +210,12 @@ export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedent
     return payload?.kind === "decision_logged" && payload.judgment?.kind === kind ? [payload.judgment as Extract<Judgment, { kind: K }>] : [];
   });
 
-/** 修理子(memory_repair / routing_repair)の束が異議した行の id(task_registered の objection_event_ids → 異議の entry_id)。修理子でなければ
+/** 修理子(memory_repair / routing_repair)の束が異議した行の id(task_registered の opened_on_event_ids → 異議の entry_id)。修理子でなければ
  *  空(ADR 0272 決定3)—— work の修理子と RCA の review 子も同じ欄を持つ。 */
 export function objectedRowIds(db: Db, taskId: string): number[] {
   const task = getTask(db, taskId);
   if (!task || !isRepairType(task.type)) return [];
-  return (latestEventOfTask(db, taskId, "task_registered")?.payload.objection_event_ids ?? []).flatMap((id) => {
+  return (latestEventOfTask(db, taskId, "task_registered")?.payload.opened_on_event_ids ?? []).flatMap((id) => {
     const objection = getEvent(db, id)?.payload;
     return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
   });
