@@ -464,12 +464,14 @@ export interface WireContract {
   /** 撃ち直しを打ち切った振り返り Board call(src/retrospective.ts の listHaltedRefires、ADR 0164 決定5 / ADR 0172 決定3)。
    *  配分評価の行は review と被レビュー task(target は review の task_completed event の id)、起草と第2回の行は entry と
    *  その帰責(target は起草なら帰責 event の id、第2回なら異議群の最初の異議 event の id(ADR 0170 決定4)、cause は entry の
-   *  今の判定で、最後の異議群が未帰責なら null)。停止の帰責の行は entry を持たず停止の理由(target は停止 event の id、ADR 0310 決定3)。 */
+   *  今の判定で、最後の異議群が未帰責なら null)。停止の帰責の行は entry を持たず停止の理由(target は停止 event の id、ADR 0310 決定3)。
+   *  停止の帰責からの起草の行も entry を持たず停止の理由と、その判定の cause と round(target は判定 event の id、ADR 0310 決定4)。 */
   "GET /api/settings/execution/halted-refires": {
     halted: Array<
       { target: number; task: { id: string; title: string }; last_failure: { reason: string; at: string } } & (
         | { refire: "allocation"; review: { id: string; title: string } }
         | { refire: "stop_attribution"; stop: { reason: string } }
+        | { refire: "draft"; stop: { reason: string }; cause: Cause; round: "initial" | "after_rca" }
         | { refire: "draft" | "second_round"; entry: { id: number; text: string }; cause: Cause | null; round: "initial" | "after_rca" }
       )
     >;

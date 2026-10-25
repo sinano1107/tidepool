@@ -685,7 +685,7 @@ it("人間が止めた session は停止の帰責が capability なら rejected�
     const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" }, "human");
     append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
     // 判定は session が閉じた後に書かれる —— 窓に入るのは停止 event
-    append({ kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the worker removed ../other", wrong_memory_entries: null }, "board");
+    append({ kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the worker removed ../other", wrong_memory_entries: null, round: "initial" }, "board");
     accept(b, task.id);
     return spawnedId;
   };

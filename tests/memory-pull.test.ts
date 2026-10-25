@@ -839,7 +839,7 @@ it("停止の帰責を出所に持つ Behavior の case は、止められた se
   append({ kind: "decision_logged", line: "cleaned the parent directory" });
   const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" });
   append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawned, output_closed: true, usage: null });
-  const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", wrong_memory_entries: null });
+  const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", wrong_memory_entries: null, round: "initial" });
   const id = approvedBehavior(db, "Stay in the workspace", { event_id: attributed });
 
   expect(readMemory(db, { taskId: FIXTURE_TASK, scope: "sandbox", agent: "tako" }, { ids: [id] }, at).entries[0]?.case).toEqual({

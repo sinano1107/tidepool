@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
-import type { BehaviorDraftInput } from "../src/retrospective.js";
+import type { BehaviorDraftInput, StopBehaviorDraftInput } from "../src/retrospective.js";
 import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
@@ -97,4 +97,33 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
   expect(prompts[0]).toContain('"work no longer needed" is not a cause');
   expect(prompts[0]).toContain("leave an unanswered reason unanswered");
   expect(prompts[0]).toContain('"human_stop": {\n    "reason": "not yet answered"\n  }');
+});
+
+it("停止からの起草の prompt は理由を人間の証言として描き、判断ログ・行動列・RCA の所見から1つの規則を書かせ、停止用の入力を描く(ADR 0310 決定4)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+  const stop: StopBehaviorDraftInput = {
+    human_stop: { reason: "deleting files outside the workspace" },
+    decision_log: ["chose plan B"],
+    memory_read: [],
+    agent_definition: null,
+    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
+    rca_findings: ["stop 9 → no guard on rm"],
+    index: "- workspace/ — where agents may write",
+  };
+
+  await expect(client.draftFromStop(stop, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);
+
+  expect(prompts[0]).toContain("A human stopped a running worker session; human_stop.reason is the human's testimony of why");
+  expect(prompts[0]).toContain("its action sequence (actions)");
+  expect(prompts[0]).toContain("When the input carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found");
+  expect(prompts[0]).toContain('"addressee" ("worker" when the rule is for the worker who ran the session');
+  expect(prompts[0]).not.toContain("objected");
+  expect(prompts[0]).toContain('"args": "rm -rf ../other"');
+  expect(prompts[0]).toContain("where agents may write");
 });

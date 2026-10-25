@@ -110,7 +110,7 @@ it("GET /tasks/:id human_stops carries the stop attribution's cause and evidence
   await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "deleting unrelated files" });
   const stop = listEvents(t.db, task.id).find((e) => e.kind === "session_stopped_by_human")!.id;
   // setup のみ: sweep の判定を直に置く(撃つ経路は tests/stop-attribution.test.ts)
-  const payload = { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "removed ../other", wrong_memory_entries: null } as const;
+  const payload = { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "removed ../other", wrong_memory_entries: null, round: "initial" } as const;
   appendEvent(t.db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", at: t.clock.now(), payload });
 
   const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;

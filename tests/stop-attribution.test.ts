@@ -4,14 +4,16 @@ import { expect, it, onTestFinished } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { CliAuthError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, latestEventOfTask, listEvents } from "../src/events.js";
-import { humanEntryInput, listMemoryEntries, recordBehavior } from "../src/memory.js";
+import { appendEvent, type EventPayload, type EventRowOf, latestEventOfTask, listEvents } from "../src/events.js";
+import { loadEpisodes } from "../src/learner.js";
+import { approveMemoryProposal, humanEntryInput, listMemoryEntries, readMemory, recordBehavior } from "../src/memory.js";
+import { META_REVIEW_SUBJECTS, materialEvents } from "../src/meta-review.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromMaterial, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
+import { FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls } from "./fakes.js";
 import { HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -37,8 +39,9 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
   };
   const stopEvent = () => listEvents(db, picked.id).find((e) => e.kind === "session_stopped_by_human")!;
   const stopInputs = () => client.stopCalls.map((c) => c.input);
-  const judged = () => listEvents(db, picked.id).filter((e) => e.kind === "stop_attributed").map((e) => e.payload);
-  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, stopInputs, judged };
+  const judgments = () => listEvents(db, picked.id).filter((e): e is EventRowOf<"stop_attributed"> => e.payload.kind === "stop_attributed");
+  const judged = () => judgments().map((e) => e.payload);
+  return { db, task: picked, spawned, entry, client, deps, exit, sweep, stopEvent, stopInputs, judgments, judged };
 }
 
 it("a stop with a reason is judged once by the sweep after its session closes, from the session window, its reads and no actions", async () => {
@@ -63,7 +66,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       actions: null,
     },
   ]);
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", wrong_memory_entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "capability", evidence: "deleted files outside the workspace", wrong_memory_entries: null, round: "initial" }]);
   expect(b.client.calls).toEqual([]);
 });
 
@@ -199,7 +202,7 @@ it.each([
 
   await b.sweep();
 
-  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, wrong_memory_entries: null }]);
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: b.stopEvent().id, cause: "uncertain", evidence: rejected, wrong_memory_entries: null, round: "initial" }]);
 });
 
 it("a failing Board call leaves failure events, halts after 3 as a stop row without an entry, and Retry / Dismiss act on it", async () => {
@@ -357,7 +360,7 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const latest = appendEvent(b.db, { taskId: b.task.id, actorId: BOARD_ACTOR_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null } });
+  const latest = appendEvent(b.db, { taskId: b.task.id, actorId: BOARD_ACTOR_ID, origin: "board", at, payload: { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "later", wrong_memory_entries: null, round: "initial" } });
   const draft = { path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace." };
   const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 
@@ -382,4 +385,199 @@ it("an RCA opened on objections refuses a stop's id", async () => {
   expect(() => proposeFromMaterial(b.db, objectionSelf.id, { path: "p", title: "t", text: "x", material_id: stop }, { workspace: { name: "charts" } }, "deckhand", at)).toThrow(
     `entry ${stop} is not a decision-log entry of your parent task`,
   );
+});
+
+/** setup: 起草 client と盤面の workspace を足した deps(ADR 0310 決定4 の起草)。 */
+function withDrafter(b: ReturnType<typeof fixture>, extra: Partial<RetrospectiveCallDeps> = {}) {
+  const drafter = new FakeBehaviorDraftClient();
+  drafter.scriptStopDraft({ path: "workspace/scope", title: "Stay inside the workspace", text: "Never delete outside the workspace.", addressee: "worker" });
+  return { drafter, deps: { ...b.deps, behaviorDraftClient: drafter, workspace: { name: "charts" }, ...extra } };
+}
+
+it.each([
+  { addressee: "worker" as const, expected: "deckhand" },
+  { addressee: "all" as const, expected: null },
+])("a preference stop judgment drafts a Behavior candidate from the stop input with the INDEX, sourced from the judgment, scoped as the stopped task, addressed to $expected; a later sweep does not draft again", async ({ addressee, expected }) => {
+  const b = fixture();
+  b.client.scriptStopJudgment({ cause: "preference", evidence: "the human wanted the fixtures kept" });
+  const { drafter, deps } = withDrafter(b);
+  drafter.scriptStopDraft({ path: "build", title: "Keep fixtures", text: "Keep the fixtures.", addressee });
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+
+  await b.sweep(at, deps);
+  await b.sweep(at, deps);
+
+  expect(drafter.stopCalls.map((c) => c.input)).toEqual([
+    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, actions: null, index: null },
+  ]);
+  expect(listMemoryEntries(b.db, {})).toEqual([
+    expect.objectContaining({
+      kind: "behavior", state: "candidate", path: "build", title: "Keep fixtures", text: "Keep the fixtures.",
+      scope: "charts", addressee: expected, source: { kind: "event", ref: b.judgments()[0]!.id }, cause: "preference",
+    }),
+  ]);
+});
+
+it.each([
+  { board: "without the session's worker in its registry", extra: { agentRegistered: () => false } },
+  { board: "without a workspace for the stopped task", extra: { workspace: undefined } },
+])("a preference stop judgment drafts nothing on a board $board", async ({ extra }) => {
+  const b = fixture();
+  b.client.scriptStopJudgment({ cause: "preference", evidence: "e" });
+  const { drafter, deps } = withDrafter(b, extra);
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+
+  await b.sweep(at, deps);
+
+  expect(drafter.stopCalls).toEqual([]);
+  expect(listEvents(b.db, b.task.id).some((e) => e.kind === "memory_draft_failed")).toBe(false);
+});
+
+/** setup: 初回を `uncertain` で判定させ、立った self / auditor RCA と、RCA を停止1つを覆う所見で完了させる口を返す。 */
+async function judgedUncertain(b: ReturnType<typeof fixture>) {
+  b.client.scriptStopJudgment({ cause: "uncertain", evidence: "cannot tell from the log" });
+  const stop = await stoppedAndJudged(b);
+  const [self, auditor] = rcas(b).map((r) => r.task);
+  const settle = (rca: Task, root_cause: string) => completeRca(b.db, rca, { findings: [{ material: [stop], root_cause, no_proposal: true }] }, "deckhand", at, "worker");
+  return { stop, self: self!, auditor: auditor!, settle };
+}
+
+it.each([
+  { cause: "capability" as const, candidates: 1, drafts: "a Behavior candidate from the findings" },
+  { cause: "requirement_change" as const, candidates: 0, drafts: "nothing" },
+])("an uncertain stop judgment gets its second round with rca_findings once every RCA on the stop settles, beside the initial; a $cause second round drafts $drafts", async ({ cause, candidates }) => {
+  const b = fixture();
+  const { stop, self, auditor, settle } = await judgedUncertain(b);
+  const { drafter, deps } = withDrafter(b);
+  b.client.scriptStopJudgment({ cause, evidence: "the RCAs found the worker removed ../other" });
+
+  settle(self, "ignored the workspace boundary");
+  await b.sweep(at, deps);
+  expect(b.client.stopCalls).toHaveLength(1);
+
+  settle(auditor, "no guard on rm");
+  await b.sweep(at, deps);
+  await b.sweep(at, deps);
+
+  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, actions: null };
+  const findings = [
+    `no_proposal: stop ${stop} — ignored the workspace boundary`,
+    "completion report: (no outcome recorded)",
+    `no_proposal: stop ${stop} — no guard on rm`,
+    "completion report: (no outcome recorded)",
+  ];
+  expect(b.stopInputs()).toEqual([initialInput, { ...initialInput, rca_findings: findings }]);
+  expect(b.judged()).toEqual([
+    { kind: "stop_attributed", stop_event_id: stop, cause: "uncertain", evidence: "cannot tell from the log", wrong_memory_entries: null, round: "initial" },
+    { kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the RCAs found the worker removed ../other", wrong_memory_entries: null, round: "after_rca" },
+  ]);
+  expect(drafter.stopCalls.map((c) => c.input)).toEqual(Array(candidates).fill({ ...initialInput, rca_findings: findings, index: null }));
+  expect(listMemoryEntries(b.db, {}).map((m) => ({ source: m.source, addressee: m.addressee, cause: m.cause }))).toEqual(
+    Array(candidates).fill({ source: { kind: "event", ref: b.judgments()[1]!.id }, addressee: "deckhand", cause }),
+  );
+});
+
+it("a second-round uncertain stop judgment is final and is never fired again", async () => {
+  const b = fixture();
+  const { self, auditor, settle } = await judgedUncertain(b);
+  settle(self, "r");
+  settle(auditor, "r");
+
+  for (const hour of [0, 1, 2]) await b.sweep(new Date(at.getTime() + hour * HOUR));
+
+  expect(b.client.stopCalls).toHaveLength(2);
+  expect(b.judged().map((j) => [j.cause, j.round])).toEqual([["uncertain", "initial"], ["uncertain", "after_rca"]]);
+});
+
+it("a failing second round counts only the failures after the initial judgment, then halts as the stop's row", async () => {
+  const b = fixture();
+  const sweepAt = (hour: number) => b.sweep(new Date(at.getTime() + hour * HOUR));
+  b.client.scriptStopJudgment(new Error("CLI exited 1"));
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  for (const hour of [0, 1]) await sweepAt(hour);
+  b.client.scriptStopJudgment({ cause: "uncertain", evidence: "cannot tell" });
+  await sweepAt(2);
+  for (const rca of rcas(b)) completeRca(b.db, rca.task, { findings: [{ material: [b.stopEvent().id], root_cause: "r", no_proposal: true }] }, "deckhand", at, "worker");
+  b.client.scriptStopJudgment(new Error("CLI exited 2"));
+
+  for (const hour of [3, 4, 5, 6]) await sweepAt(hour);
+
+  expect(b.client.stopCalls).toHaveLength(6);
+  expect(listHaltedRefires(b.db)).toEqual([
+    {
+      refire: "stop_attribution",
+      target: b.stopEvent().id,
+      stop: { reason: "deleting unrelated files" },
+      task: { id: b.task.id, title: "parser" },
+      last_failure: { reason: "Board call failed: CLI exited 2", at: new Date(at.getTime() + 5 * HOUR).toISOString() },
+    },
+  ]);
+});
+
+it("a failing draft from a stop judgment leaves failure events naming the stop, not an entry, halts after 3 as a stop row, and Retry / Dismiss act on it", async () => {
+  const b = fixture();
+  b.client.scriptStopJudgment({ cause: "preference", evidence: "e" });
+  const { drafter, deps } = withDrafter(b);
+  drafter.scriptStopDraft(new Error("CLI exited 1"));
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  const sweepAt = (hour: number) => b.sweep(new Date(at.getTime() + hour * HOUR), deps);
+  for (const hour of [0, 1, 2, 3]) await sweepAt(hour);
+  const judgment = b.judgments()[0]!.id;
+
+  expect(drafter.stopCalls).toHaveLength(3);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual(
+    Array(3).fill({ kind: "memory_draft_failed", stop_event_id: b.stopEvent().id, round: "initial", attribution_event_id: judgment, reason: "CLI exited 1" }),
+  );
+  expect(listHaltedRefires(b.db)).toEqual([
+    {
+      refire: "draft",
+      target: judgment,
+      stop: { reason: "deleting unrelated files" },
+      cause: "preference",
+      round: "initial",
+      task: { id: b.task.id, title: "parser" },
+      last_failure: { reason: "CLI exited 1", at: new Date(at.getTime() + 2 * HOUR).toISOString() },
+    },
+  ]);
+
+  markHaltedRefire(b.db, "refire_retried", { refire: "draft", target: judgment }, "webui", at);
+  await sweepAt(4);
+  expect(drafter.stopCalls).toHaveLength(4);
+
+  for (const hour of [5, 6]) await sweepAt(hour);
+  markHaltedRefire(b.db, "refire_dismissed", { refire: "draft", target: judgment }, "webui", at);
+  await sweepAt(7);
+  expect(drafter.stopCalls).toHaveLength(6);
+  expect(listHaltedRefires(b.db)).toEqual([]);
+});
+
+it("after the second round the stop is read by its second judgment: the history's stop row, the learner's negative signal, the memory meta-review material and the case of a candidate drafted from it; the initial judgment stays", async () => {
+  const b = fixture();
+  const { self, auditor, settle } = await judgedUncertain(b);
+  const outcome = () => loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === b.spawned)?.outcome;
+  const outcomeBefore = outcome();
+  const { drafter, deps } = withDrafter(b);
+  b.client.scriptStopJudgment({ cause: "capability", evidence: "the RCAs found the worker removed ../other" });
+  settle(self, "r");
+  settle(auditor, "r");
+
+  await b.sweep(at, deps);
+
+  const [initial, second] = b.judgments();
+  expect(drafter.stopCalls).toHaveLength(1);
+  expect(taskHistoryRows(b.db, b.task.id).find((r) => "stopped_by_human" in r.entry)?.entry).toEqual({
+    stopped_by_human: { reason: "deleting unrelated files", cause: "capability", evidence: "the RCAs found the worker removed ../other" },
+  });
+  expect({ before: outcomeBefore, after: outcome() }).toEqual({ before: "excluded", after: "rejected" });
+  expect(materialEvents(b.db, META_REVIEW_SUBJECTS.memory.material, { after: initial!.id }).map((e) => e.id)).toContain(second!.id);
+  const [candidate] = listMemoryEntries(b.db, {});
+  approveMemoryProposal(b.db, { kind: "memory", op: "approve", candidate_id: candidate!.id, replaces: [] }, "approval", "webui", at);
+  expect(readMemory(b.db, { taskId: b.task.id, scope: "charts", agent: "deckhand" }, { ids: [candidate!.id] }, at).entries[0]?.case).toEqual({
+    decisions: ["deleted the fixtures"], handoff: null, result: null, human_stop: { reason: "deleting unrelated files" },
+  });
+  expect(b.judged().map((j) => j.cause)).toEqual(["uncertain", "capability"]);
 });

@@ -718,7 +718,8 @@ export type EventPayload =
   // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃って失敗した(異議されたタスクに帰属)。
   // 撃てなかった回は書かない(ADR 0164 決定3)。`attribution_event_id` は起草の出所になるはずだった帰責 ——
   // 撃ち直しの回数と間隔はこれで数える。店の event ではなく rebuild は再生しない。
-  | { kind: "memory_draft_failed"; entry_id: number; round: "initial" | "after_rca"; attribution_event_id: number; reason: string }
+  // 停止の帰責が出所の起草(ADR 0310 決定4)は異議された行を持たないので、`entry_id` の代わりに止められた停止 event の id(`stop_event_id`)を持つ。
+  | ({ kind: "memory_draft_failed"; round: AttributionRound; attribution_event_id: number; reason: string } & ({ entry_id: number } | { stop_event_id: number }))
   // ADR 0164 決定3 / ADR 0168 決定2: 帰責の Board call が撃って失敗した(異議されたタスクに帰属)。
   // 判断ではないので `objection_attributed` には書かない。`objection_event_id` は異議群の名前(最初の異議 event の id、
   // ADR 0170 決定4)。撃ち直すのは第2回だけで、その回数と間隔は異議群ごとに `round = after_rca` のこれで数える ——
@@ -726,7 +727,9 @@ export type EventPayload =
   | { kind: "objection_attribution_failed"; entry_id: number; objection_event_id: number; round: "initial" | "after_rca"; reason: string }
   // ADR 0310 決定1・3: 停止の帰責 —— 理由が解けて session が閉じた人間の停止1つに、盤面が Board call に問うた「この停止は誰の落ち度か」。
   // 止められた task に帰属し、`stop_event_id` が鍵(同じ task の別の停止は別の帰責)。行は名指さない。`wrong_memory_entries` は objection_attributed と同じ。
-  | { kind: "stop_attributed"; stop_event_id: number; cause: Cause; evidence: string; wrong_memory_entries: number[] | null }
+  // `round` は objection_attributed と同じ: 初回(`initial`)が `uncertain` なら、停止を材料にした RCA の決着後に第2回(`after_rca`)を同じ停止に書き、
+  // 同じ停止では後の判定が有効(ADR 0310 決定4)。
+  | { kind: "stop_attributed"; stop_event_id: number; cause: Cause; evidence: string; wrong_memory_entries: number[] | null; round: AttributionRound }
   // ADR 0310 決定3: 停止の帰責の Board call が撃って失敗した(撃てなかった回は書かない、ADR 0164 決定3)。撃ち直しは停止 event の id で数える。
   | { kind: "stop_attribution_failed"; stop_event_id: number; reason: string }
   // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = 異議群の最初の異議 event の id)/
@@ -846,6 +849,9 @@ export type DecisionLogEntry = Omit<EventRow, "payload" | "task_id"> & {
  *  `task_id: string` への絞り込みは、human-facing kind が BOARD_SCOPED_KINDS に入らないという上の satisfies に依る。 */
 export const isDecisionLogEntry = (e: EventRow | undefined): e is DecisionLogEntry =>
   HUMAN_FACING_KINDS.some((k) => k === e?.kind);
+
+/** 帰責の回(異議群の帰責・停止の帰責に共通): 初回か、RCA の決着後の第2回か。 */
+export type AttributionRound = "initial" | "after_rca";
 
 /** 帰責 event を id つきで。 */
 export type Attribution = { id: number } & Extract<EventPayload, { kind: "objection_attributed" }>;

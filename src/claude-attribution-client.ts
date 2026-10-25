@@ -49,7 +49,9 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
     "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
     "evidence — a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
-    `changed, is requirement_change. ${STOP_FIELDS}\n\n` +
+    "changed, is requirement_change. When the input carries rca_findings, an earlier judgment of this stop was uncertain and the " +
+    "root-cause reviews of the stop have since settled: those are their decision logs and completion reports, read them as evidence. " +
+    `${STOP_FIELDS}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
