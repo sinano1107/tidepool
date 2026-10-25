@@ -126,9 +126,9 @@ export function openDb(path: string): Db {
       -- JSON API.
       question_quarantine_kind TEXT,
       question_quarantine_value TEXT,
-      -- system-internal only (ADR 0075): the configured expiry epoch for
+      -- system-internal only (ADR 0075): the configured expiry epoch in ms for
       -- which this advance warning was created. It never halts pickup.
-      question_cli_auth_expiry_warning INTEGER,
+      question_cli_auth_expiry INTEGER,
       -- ADR 0305: independent root asking why this task was stopped.
       question_stop_reason_task_id TEXT,
       -- issue-backed task reference (issue #49, ADR 0016): the GitHub issue
@@ -182,7 +182,7 @@ export function openDb(path: string): Db {
     CREATE TABLE IF NOT EXISTS events (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       task_id    TEXT REFERENCES tasks(id),
-      worker_id  TEXT NOT NULL,
+      actor_id   TEXT NOT NULL, -- 登場人物の id(agent 名・human・tidepool)
       origin     TEXT NOT NULL DEFAULT 'webui' CHECK (origin IN ('webui', 'mcp', 'worker', 'board')),
       kind       TEXT NOT NULL,
       payload    TEXT NOT NULL,
@@ -467,7 +467,7 @@ export function openDb(path: string): Db {
       extractor_version       TEXT NOT NULL,
       task_id                 TEXT NOT NULL REFERENCES tasks(id),
       -- 引き口 (workspace, agent) の2列。workspace は tasks 行、agent は
-      -- worker_spawned の worker_id(実際に起こされた agent — ADR 0012)。
+      -- worker_spawned の actor_id(実際に起こされた agent — ADR 0012)。
       workspace               TEXT,
       agent                   TEXT NOT NULL,
       registry_commit         TEXT,

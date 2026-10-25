@@ -89,7 +89,7 @@ it("回収 timeout では failure question は立つが slot は解放されず�
   expect(quarantine.question_items[0].options).toEqual(["repaired by hand"]);
   expect(quarantine.purpose).toContain(task.id);
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantine.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 
   // slot は解放されない。tree rule も走っていない — まだ生きているかもしれない
   // process が書いている作業ツリーを退避すること自体が競合である

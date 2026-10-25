@@ -1,11 +1,10 @@
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
-
 import { appendEvent, type ResourceStop } from "./events.js";
 import { git, gitWithEnv, gitWithInput } from "./git.js";
-
 import {
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
@@ -36,7 +35,6 @@ import {
   readableInterviewRooms,
   type Task,
 } from "./tasks.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
 
 /** The board's workspace: registry name + path of a real git checkout. The
  *  branch discipline and the slot-release tree rule (issue #8) act on it —
@@ -238,7 +236,7 @@ function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "e
   const at = conventionCheckoutPath(taskId, workspacesBaseDir);
   mkdirSync(at, { recursive: true });
   const path = realpathSync(at);
-  appendEvent(db, { taskId, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind, path }, at: now });
+  appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind, path }, at: now });
   return path;
 }
 

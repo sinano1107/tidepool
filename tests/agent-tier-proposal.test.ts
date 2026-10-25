@@ -59,11 +59,11 @@ async function boardWithRoutingReview(registry = fakeRegistry()) {
 }
 
 /** 根拠の episode(setup): agent が表の行 (provider, model) で、registry の宣言の段 frontier で走った worker_spawned。 */
-function spawned(tp: Tidepool, workerId: string, provider: "openai" | "moonshot", model: string): number {
+function spawned(tp: Tidepool, actorId: string, provider: "openai" | "moonshot", model: string): number {
   const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c" }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
     taskId: id,
-    workerId,
+    actorId,
     origin: "board",
     at: tp.clock.now(),
     payload: { ...WORKER_SPAWNED, provider, model, tier_id: tierIdOf(tp.db, "frontier"), source: { tier: "agent", provider: "only" }, harness: "codex" },

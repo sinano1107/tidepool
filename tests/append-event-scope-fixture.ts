@@ -8,8 +8,8 @@ declare const at: Date;
 {
   // 盤面スコープでない kind は taskId: null で書けない
   // @ts-expect-error
-  appendEvent(db, { taskId: null, workerId: "w", origin: "board", payload: { kind: "task_picked_up" }, at });
+  appendEvent(db, { taskId: null, actorId: "w", origin: "board", payload: { kind: "task_picked_up" }, at });
   // 盤面スコープの kind は task に帰属させて書けない
   // @ts-expect-error
-  appendEvent(db, { taskId: "t", workerId: "w", origin: "mcp", payload: { kind: "memory_settings_changed", injection_token_cap: 1 }, at });
+  appendEvent(db, { taskId: "t", actorId: "w", origin: "mcp", payload: { kind: "memory_settings_changed", injection_token_cap: 1 }, at });
 }

@@ -212,7 +212,7 @@ it("拒否の後も、review の spawn の当時版の Roster は spawn が描�
   const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: task.id }, at, ...HUMAN_WEBUI);
   const registryDir = await makeRegistry();
   const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
-  appendEvent(db, { taskId: review.id, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
+  appendEvent(db, { taskId: review.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
   const spawned = listEvents(db, review.id).find((e) => e.kind === "worker_spawned")!;
 
   expect(() => editTask(db, task, { assignee: "navigator" }, at, "webui")).toThrow(DomainError);

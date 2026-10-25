@@ -1,3 +1,7 @@
+import {
+  BOARD_ACTOR_ID,
+  HUMAN_ACTOR_ID,
+} from "./actor-id.js";
 import { type AssigneeDeps, assertAssigneeCanTake } from "./assignee.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
@@ -33,10 +37,6 @@ import {
   registerTask,
   whyNoReturnDestination,
 } from "./tasks.js";
-import {
-  BOARD_WORKER_ID,
-  HUMAN_WORKER_ID,
-} from "./worker-id.js";
 
 export class TriageError extends Error {}
 
@@ -144,7 +144,7 @@ export function raiseObjection(
   const open = triageActivity(db, now, true)!;
   return appendEvent(db, {
     taskId: entry.task_id,
-    workerId: HUMAN_WORKER_ID,
+    actorId: HUMAN_ACTOR_ID,
     origin: "webui",
     payload: { kind: "objection_raised", entry_id: entryId, comment: normalizeText(comment), session_id: open.id },
     at: now,
@@ -290,7 +290,7 @@ export function registerRcaReview(
     },
     now,
     // 盤面の規則が立てる(ADR 0194 決定3)—— どの閉じ方でも盤面名義
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }
@@ -371,7 +371,7 @@ function bundleObjections(
       const grown = decision_log_through !== undefined && taskDecisionLog(db, taskId).at(-1)!.id !== decision_log_through;
       appendEvent(db, {
         taskId,
-        workerId: BOARD_WORKER_ID,
+        actorId: BOARD_ACTOR_ID,
         origin: "board",
         payload: {
           kind: "objection_attributed",
@@ -387,7 +387,7 @@ function bundleObjections(
     const registerRepair = (type: "work" | RepairType, titlePrefix: string, rows: string, group: ObjectionPair[]): void => {
       // 列が名前なら列、空の参照(review / interview)なら走らせた agent(ADR 0275 決定2)。question の空は参照でなく人間 ——
       // listBoard の SQL が question の assignee を human と読むのと同じ値にする(#2377)
-      let assignee = objected.type === "question" ? HUMAN_WORKER_ID : (objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.worker_id);
+      let assignee = objected.type === "question" ? HUMAN_ACTOR_ID : (objected.assignee ?? latestEventOfTask(db, taskId, "worker_spawned")?.actor_id);
       let assigneeNotCopied: RegisterTaskInput["assignee_not_copied"];
       try {
         assertAssigneeCanTake(assigneeDeps, assignee, type);
@@ -414,7 +414,7 @@ function bundleObjections(
           opened_on_event_ids: group.flatMap((p) => p.objection_event_ids),
         },
         now,
-        HUMAN_WORKER_ID,
+        HUMAN_ACTOR_ID,
         origin,
       );
     };
@@ -435,20 +435,20 @@ function bundleObjections(
     }
     if (routingRows.length > 0) registerRepair("routing_repair", "routing repair", "routing judgments", routingRows);
     if (rcaPairs.length === 0) continue;
-    const byWorker = new Map<string, ObjectionPair[]>();
+    const byActor = new Map<string, ObjectionPair[]>();
     for (const pair of rcaPairs) {
-      if (pair.entry.worker_id === HUMAN_WORKER_ID) continue;
-      byWorker.set(pair.entry.worker_id, [...(byWorker.get(pair.entry.worker_id) ?? []), pair]);
+      if (pair.entry.actor_id === HUMAN_ACTOR_ID) continue;
+      byActor.set(pair.entry.actor_id, [...(byActor.get(pair.entry.actor_id) ?? []), pair]);
     }
-    for (const [workerId, workerPairs] of byWorker) {
+    for (const [actorId, actorPairs] of byActor) {
       registerRcaReview(
         db,
         taskId,
         {
           title: `rca (self): ${objected.title}`,
-          purpose: renderObjectionPairs(`objections raised against decisions ${workerId} made on "${objected.title}"`, workerPairs, { entryIds: true }),
-          opened_on_event_ids: workerPairs.flatMap((p) => p.objection_event_ids),
-          assignee: workerId,
+          purpose: renderObjectionPairs(`objections raised against decisions ${actorId} made on "${objected.title}"`, actorPairs, { entryIds: true }),
+          opened_on_event_ids: actorPairs.flatMap((p) => p.objection_event_ids),
+          assignee: actorId,
         },
         now,
       );
@@ -518,7 +518,7 @@ function applyScratchpad(
       db,
       { type: "work", title: line.line, purpose: "raised on the triage scratchpad", completion_criteria: "the line above is resolved" },
       now,
-      HUMAN_WORKER_ID,
+      HUMAN_ACTOR_ID,
       "webui",
     );
   }
@@ -564,7 +564,7 @@ export function recordDisplayedEntries(db: Db, entryIds: number[], now: Date): v
       const entry = requireLogEntry(db, entryId);
       appendEvent(db, {
         taskId: entry.task_id,
-        workerId: HUMAN_WORKER_ID,
+        actorId: HUMAN_ACTOR_ID,
         origin: "webui",
         payload: {
           kind: "log_entry_displayed",
@@ -629,7 +629,7 @@ function closeTriageSession(
   // apply in reverse staging order so the first-staged task ends up on top
   for (const taskId of stagedFrontInserts(db, open.id).reverse()) {
     const task = getTask(db, taskId);
-    if (task && task.status === "todo") moveTask(db, task, null, now, HUMAN_WORKER_ID, origin);
+    if (task && task.status === "todo") moveTask(db, task, null, now, HUMAN_ACTOR_ID, origin);
   }
   db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = ? WHERE id = ?").run(
     now.toISOString(),

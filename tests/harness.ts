@@ -7,6 +7,10 @@ import { isDeepStrictEqual } from "node:util";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { afterAll, expect, onTestFinished, vi } from "vitest";
+import {
+  BOARD_ACTOR_ID,
+  HUMAN_ACTOR_ID,
+} from "../src/actor-id.js";
 import type { AgentAdmin, AgentView } from "../src/agent-create.js";
 import type { AllocationClient } from "../src/allocation-review.js";
 import {
@@ -75,10 +79,6 @@ import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
-import {
-  BOARD_WORKER_ID,
-  HUMAN_WORKER_ID,
-} from "../src/worker-id.js";
 import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
@@ -128,7 +128,7 @@ export const TEST_TOKEN = generateToken();
 export const TEST_CREDENTIAL = { tokenHash: () => hashToken(TEST_TOKEN) };
 
 /** 既定値を外した登録者・経路(#1361)を、今までの既定どおり human / webui で渡す。 */
-export const HUMAN_WEBUI = [HUMAN_WORKER_ID, "webui"] as const;
+export const HUMAN_WEBUI = [HUMAN_ACTOR_ID, "webui"] as const;
 
 /** domain 層の出題が記録する root の分岐元の仮の sha。checkout で引く受験者の pickup が要るテストは実の sha を渡す。 */
 export const POSED_HEAD = "0000000000000000000000000000000000000000";
@@ -153,11 +153,11 @@ export function decomposeTaskViaWorker(
   db: Db,
   parent: Task,
   input: Parameters<typeof decomposeTask>[2],
-  workerId: string,
+  actorId: string,
   now: Date,
   { authority }: { authority?: Parameters<typeof decomposeTask>[5] } = {},
 ): Task[] {
-  return decomposeTask(db, parent, input, workerId, now, authority, undefined, "worker");
+  return decomposeTask(db, parent, input, actorId, now, authority, undefined, "worker");
 }
 
 /** 人間が webui から分解する。保護 workspace は無い。 */
@@ -635,10 +635,10 @@ export function seedFixtureBoard(handoffDoc: string | null = null): Db {
   insertTask.run(FIXTURE_TASK, "tako", "sandbox", handoffDoc);
   insertTask.run(FIXTURE_OTHER_TASK, "tidepool", "sandbox", null);
   const insertEvent = db.prepare(
-    "INSERT INTO events (id, task_id, worker_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO events (id, task_id, actor_id, origin, kind, payload, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   );
   for (const e of JSON.parse(sessionFixture("events.json")) as EventRow[]) {
-    insertEvent.run(e.id, e.task_id, e.worker_id, e.origin, e.kind, JSON.stringify(e.payload), e.created_at);
+    insertEvent.run(e.id, e.task_id, e.actor_id, e.origin, e.kind, JSON.stringify(e.payload), e.created_at);
   }
   return db;
 }
@@ -794,7 +794,7 @@ export async function closedRootTree(
   raiseObjection(db, entry, "redo it", now);
   commitTriage(db, now);
   if (closed) {
-    appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
+    appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "pr_close_observed", pr_number: 1 }, at: now });
   }
   const repairs = listChildren(db, objected.id).filter((child) => child.status === "todo");
   expect(repairs.map((child) => child.type).sort()).toEqual(["review", "review", "work"]);
@@ -883,7 +883,7 @@ export function openTestExamineeCheckout(db: Db, examinee: Task): string {
   onTestFinished(() => rm(path, { recursive: true, force: true }));
   git(path, "init", "--quiet", "--initial-branch=main");
   git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
-  appendEvent(db, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
+  appendEvent(db, { taskId: examinee.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path }, at: new Date(0) });
   return path;
 }
 
@@ -916,8 +916,8 @@ export async function unhandledRejectionsDuring(body: () => Promise<unknown>): P
 }
 
 /** setup のみ: task を一度 pickup された形にする(列も status も動かさない)—— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
-export function markPickedUp(db: Db, taskId: string, at: Date, workerId = "deckhand"): void {
-  appendEvent(db, { taskId, workerId, origin: "board", at, payload: { kind: "task_picked_up" } });
+export function markPickedUp(db: Db, taskId: string, at: Date, actorId = "deckhand"): void {
+  appendEvent(db, { taskId, actorId, origin: "board", at, payload: { kind: "task_picked_up" } });
 }
 
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */
@@ -946,7 +946,7 @@ export async function memoryAttributedObjection(t: Tidepool, taskId: string, ent
   await api(t.baseUrl, "POST", "/api/triage/close");
   appendEvent(t.db, {
     taskId,
-    workerId: BOARD_WORKER_ID,
+    actorId: BOARD_ACTOR_ID,
     origin: "board",
     at: t.clock.now(),
     payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "memory", evidence, wrong_memory_entries: entries, round: "after_rca" },
@@ -963,7 +963,7 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
     .run(iso, iso, iso);
   return appendEvent(db, {
     taskId,
-    workerId: "human",
+    actorId: "human",
     origin: "webui",
     payload: { kind: "objection_raised", entry_id: entryId, comment, session_id: Number(session.lastInsertRowid) },
     at,
@@ -980,7 +980,7 @@ export function episodeOfDecision(db: Db, taskId: string, decision: number, agen
 /** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置いて episode に載せ、その行に異議を立てる。
  *  返り値は判断の行の event id。 */
 export function objectedJudgment(db: Db, taskId: string, judgment: Judgment, at: Date): number {
-  const decision = appendEvent(db, { taskId, workerId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: judgment.kind, judgment } });
+  const decision = appendEvent(db, { taskId, actorId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: judgment.kind, judgment } });
   episodeOfDecision(db, taskId, decision, "auditor");
   bundledObjection(db, taskId, decision, at);
   return decision;
@@ -1050,7 +1050,7 @@ export function holdChildren(t: Tidepool, parentId: string): Task {
  *  `type: "question"` outright (issue #38), so tests that need a question
  *  fixture go through this seam instead. */
 export function registerQuestion(t: Tidepool, input: Omit<RegisterTaskInput, "type">): Task {
-  return registerTask(t.db, { ...input, type: "question" }, t.clock.now(), BOARD_WORKER_ID, "board");
+  return registerTask(t.db, { ...input, type: "question" }, t.clock.now(), BOARD_ACTOR_ID, "board");
 }
 
 /** 盤面の DB へ直に付帯子(親を持ち、based_on_decision を持たず、question でない子)を
@@ -1128,24 +1128,24 @@ export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: str
 
 /** meta-review の spawn の注入を記録し、材料を返す(setup、ADR 0278 追記4): 記録を書くのは実 adapter の spawn だけで ScriptedWorker は
  *  刻まないので、WORKER_SPAWNED の写しを刻み、その event id で材料の節を記録する。 */
-function injectMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
+function injectMaterial(db: Db, reviewId: string, actorId: string, at: Date, agents?: readonly RegistryAgent[]) {
   const material = buildMetaReviewMaterial(db, reviewId, agents);
   if (!material) throw new Error(`${reviewId} is not a meta-review`);
-  const spawned = appendEvent(db, { taskId: reviewId, workerId, origin: "board", at, payload: WORKER_SPAWNED });
-  recordMetaReviewMaterial(db, reviewId, workerId, spawned, material, at);
+  const spawned = appendEvent(db, { taskId: reviewId, actorId, origin: "board", at, payload: WORKER_SPAWNED });
+  recordMetaReviewMaterial(db, reviewId, actorId, spawned, material, at);
   return material;
 }
 
 /** memory meta-review の注入を記録し、注入した「Items to judge」の項目を返す(setup)。 */
-export function injectMemoryMaterial(db: Db, reviewId: string, workerId: string, at: Date) {
-  const material = injectMaterial(db, reviewId, workerId, at);
+export function injectMemoryMaterial(db: Db, reviewId: string, actorId: string, at: Date) {
+  const material = injectMaterial(db, reviewId, actorId, at);
   if (material.subject !== "memory") throw new Error(`${reviewId} is not a memory meta-review`);
   return material.parts.items;
 }
 
 /** routing meta-review の注入を記録し、節の「Items to judge」が並べる判断の鍵(agent が写す形)を返す(setup)。 */
-export function injectRoutingMaterial(db: Db, reviewId: string, workerId: string, at: Date, agents?: readonly RegistryAgent[]) {
-  const material = injectMaterial(db, reviewId, workerId, at, agents);
+export function injectRoutingMaterial(db: Db, reviewId: string, actorId: string, at: Date, agents?: readonly RegistryAgent[]) {
+  const material = injectMaterial(db, reviewId, actorId, at, agents);
   if (material.subject !== "routing") throw new Error(`${reviewId} is not a routing meta-review`);
   return material.parts.items.map(judgmentKey);
 }
@@ -1217,11 +1217,11 @@ export function routedOpusSessions(db: Db, at: Date): number[] {
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
   recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
   const spawn = (tier: "agent" | "task") =>
-    appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
+    appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
   const evidence = [spawn("agent"), spawn("task")];
   for (const spawned of evidence) {
     const payload = { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "overpowered", cause: "uncertain", evidence: "e" };
-    appendEvent(db, { taskId: work, workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
+    appendEvent(db, { taskId: work, actorId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
   }
   return evidence;
 }
@@ -1244,7 +1244,7 @@ export function divergedSession(
   recordShadow(db, work, { recommended, actual, basis: "data", recommended_record, actual_record, candidates: 2 }, at);
   return appendEvent(db, {
     taskId: work,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: { ...WORKER_SPAWNED, provider: "anthropic", model: actual.model, effort: actual.effort, advisor: null, tier_id, source: actual.source },
@@ -1258,7 +1258,7 @@ export function rowSession(db: Db, row: { provider: string; model: string; effor
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier, workspace: "reef" }, at, ...HUMAN_WEBUI).id;
   return appendEvent(db, {
     taskId: work,
-    workerId: agent,
+    actorId: agent,
     origin: "board",
     at,
     payload: { ...WORKER_SPAWNED, ...row, provider: row.provider as Provider, advisor: null, tier_id: tierIdOf(db, tier), source: { tier: "task", provider: "rank" } },
@@ -1387,12 +1387,12 @@ export function settleReviews(db: Db, now: Date): void {
 /** review をドメインで完了させる(setup): 統合レビューは complete_integration_review の「指摘なし」、memory / routing meta-review は
  *  材料の注入を記録して complete_memory_review で項目をすべて据え置き / complete_routing_review で対象をすべて no_change に、RCA は
  *  complete_rca で材料を1つの所見に、他は complete_task。 */
-export function settleReview(db: Db, review: Task, workerId: string, now: Date): Task {
-  if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, workerId, now, "worker");
-  if (review.meta_review_subject === "memory") return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, workerId, now) }, workerId, now, "worker");
-  if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, workerId, now) }, workerId, now, "worker", routingPrecedents(db, review.id));
-  if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), workerId, now, "worker");
-  return completeTask(db, review, FULL_HANDOFF, workerId, now, "worker");
+export function settleReview(db: Db, review: Task, actorId: string, now: Date): Task {
+  if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, actorId, now, "worker");
+  if (review.meta_review_subject === "memory") return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, actorId, now) }, actorId, now, "worker");
+  if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, actorId, now) }, actorId, now, "worker", routingPrecedents(db, review.id));
+  if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), actorId, now, "worker");
+  return completeTask(db, review, FULL_HANDOFF, actorId, now, "worker");
 }
 
 /** agent `assignee` が完了させた work(domain 層)。着地の記録はまだ何も無い。 */
@@ -1504,7 +1504,7 @@ export async function objectedForDraft(
     entry = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.find((e: any) => e.kind === "task_completed");
   } else {
     await t.clock.advance(HOURLY);
-    if (opts.allocationClient) appendEvent(t.db, { taskId: task.id, workerId: t.worker.id, origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+    if (opts.allocationClient) appendEvent(t.db, { taskId: task.id, actorId: t.worker.id, origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
     entry = await loggedEntry(t, task.id, "skipped the fixtures");
     await completeViaMcp(t, task.id);
   }
@@ -1519,7 +1519,7 @@ export async function objectedForDraft(
  *  承認 question に変え、人間が approve して実体化させる —— 子の登録者は human、文面の書き手は分解した agent(ADR 0197)。
  *  人間の分解は子を直接登録する。 */
 export function decomposedChild(db: Db, parent: Task, title: string, decomposer: string, now: Date, tier?: string): Task {
-  const viaApproval = decomposer !== HUMAN_WORKER_ID;
+  const viaApproval = decomposer !== HUMAN_ACTOR_ID;
   const child = { title, purpose: "p", completion_criteria: "c", workspace: parent.workspace ?? undefined, tier };
   const authority = viaApproval ? { allowed_workspaces: [] } : undefined;
   decomposeTask(db, parent, { reason: "split it", children: [child] }, decomposer, now, authority, undefined, viaApproval ? "worker" : "webui");

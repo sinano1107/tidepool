@@ -1,3 +1,4 @@
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { quarantineRefusedRow, ROW_REFUSAL_EVIDENCE } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { quarantineContainment } from "./containment.js";
@@ -19,7 +20,6 @@ import {
 } from "./teardown.js";
 import type { RecordContainerError, TranscriptFailure } from "./transcript-store.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, type WorkspaceConfig } from "./workspace.js";
 
 export const WATCHDOG_TICK = 60 * 1000;
@@ -145,7 +145,7 @@ export function registerFailureQuestion(
       questions: [{ title, options: ["retry", "abandon"], recommendation: "retry" }],
       question_kind: { kind: "failure", cancel_option: "abandon" },
     },
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     now,
     "board",
   );
@@ -182,8 +182,8 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
       completion_criteria: "The human has recorded the stop reason",
       question: [{ title: `why did you stop "${task.title}"?`, options: [] }],
       question_kind: { kind: "stop_reason", task_id: taskId },
-    }, now, BOARD_WORKER_ID, "board") : undefined;
-    appendEvent(db, { taskId, workerId: HUMAN_WORKER_ID, origin, payload: { kind: "session_stopped_by_human", ...(reasonQuestion ? { reason_question_id: reasonQuestion.id } : { reason }) }, at: now });
+    }, now, BOARD_ACTOR_ID, "board") : undefined;
+    appendEvent(db, { taskId, actorId: HUMAN_ACTOR_ID, origin, payload: { kind: "session_stopped_by_human", ...(reasonQuestion ? { reason_question_id: reasonQuestion.id } : { reason }) }, at: now });
     markTeardown(db, taskId, now);
   })();
 }
@@ -294,7 +294,7 @@ export function transcriptFailureHandler(
     appendEvent(deps.db, {
       taskId,
       // worker_spawned は open より先に書かれている(ADR 0149 決定2)
-      workerId: getEvent(deps.db, workerSpawnedEventId)!.worker_id,
+      actorId: getEvent(deps.db, workerSpawnedEventId)!.actor_id,
       origin: "board",
       payload: { kind: "transcript_failed", error_code, message, file, worker_spawned_event_id: workerSpawnedEventId },
       at: deps.clock.now(),

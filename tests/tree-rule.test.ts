@@ -223,7 +223,7 @@ it("tree rule の失敗で workspace が needs-human になり、pickup が止�
 
   // question は盤面自身の名義で登録される — 自分の失敗をエージェントに帰属させない
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 });
 
 it("sandbox shadow の削除失敗は workspace を quarantine し、後続 pickup を止める", async () => {

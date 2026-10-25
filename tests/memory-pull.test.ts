@@ -640,7 +640,7 @@ it("読み手が pin の子のとき、出所が帰責(objection_attributed)の�
   const attributed = (entryTask: { id: string }, eventTask: { id: string }) => {
     const entry_id = logDecision(db, getTask(db, entryTask.id)!, "chose the tide table", "deckhand", at, "worker");
     const payload = { kind: "objection_attributed" as const, entry_id, objection_event_ids: [], cause: "capability" as const, evidence: "e", wrong_memory_entries: null, round: "initial" as const };
-    const event_id = appendEvent(db, { taskId: eventTask.id, workerId: "board", origin: "board", payload, at });
+    const event_id = appendEvent(db, { taskId: eventTask.id, actorId: "board", origin: "board", payload, at });
     const candidate = createBehaviorCandidate(
       db,
       { scope: "tidepool", path: "tide", title: "tide call", text: "tide call", addressee: null, source: { event_id }, author: { activity: "rca", name: "auditor" } },
@@ -747,13 +747,13 @@ const FIXTURE_RESULT = "Created notes.md with 3 bullets on tide pools; logged 3 
 it("RCA が起草した Behavior の read は、帰責 event から辿った異議の decision 本文・その entry への異議の steering(event 順)・その session の handoff と result を case に持つ", async () => {
   const { db, reader } = await projectedBoard();
   const objection = (entry_id: number, comment: string) =>
-    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id: 1 }, at });
+    appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id: 1 }, at });
   const first = objection(6, "three bullets is too few");
   objection(8, "not about this entry");
   const second = objection(6, "cover the tide cycle too");
   const attributed = appendEvent(db, {
     taskId: FIXTURE_TASK,
-    workerId: "board",
+    actorId: "board",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: 6, objection_event_ids: [first, second], cause: "capability", evidence: "e", wrong_memory_entries: null, round: "initial" },
     at,
@@ -777,7 +777,7 @@ it("RCA が起草した Behavior の read は、帰責 event から辿った異�
 async function objectedInTwoSessions() {
   const { db, reader } = await projectedBoard();
   const objection = (comment: string, session_id: number) =>
-    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
+    appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: 6, comment, session_id }, at });
   objection("three bullets is too few", 1);
   objection("cover the tide cycle too", 2);
   return { db, reader };
@@ -834,7 +834,7 @@ it("worker_spawned を出所に持つ Behavior の case は、その session の
 
 it("停止の帰責を出所に持つ Behavior の case は、止められた session の decision 列と停止の行(理由)で、行動列は無い(ADR 0310 決定5)", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
-  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
+  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, actorId: "tako", origin: "worker", payload, at });
   const spawned = append(WORKER_SPAWNED);
   append({ kind: "decision_logged", line: "cleaned the parent directory" });
   const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" });
@@ -876,7 +876,7 @@ it("episode 行の無い session の decision / 完了 entry の case も、even
 
 it("episode 行の無い同じ task の複数 session は、それぞれの窓の decision(event id 順)と完了だけを case に持ち、前後の session と混ざらない", () => {
   const db = seedFixtureBoard("## Outcome\nCreated notes.md.");
-  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, workerId: "tako", origin: "worker", payload, at });
+  const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, actorId: "tako", origin: "worker", payload, at });
   // 2つ目の session: decision を書かずに exit
   const silent = append(WORKER_SPAWNED);
   append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: silent, output_closed: true, usage: null });
@@ -947,7 +947,7 @@ it("pull は1回ごとに task 帰属の memory_pulled を残す —— verb・�
 
   expect(getEvent(db, browse.event_id)).toMatchObject({
     task_id: task.id,
-    worker_id: "deckhand",
+    actor_id: "deckhand",
     origin: "worker",
     payload: { kind: "memory_pulled", verb: "browse_memory", input: { prefix: "build" }, returned_ids: [first], watermark: second },
   });
@@ -1236,7 +1236,7 @@ it("店に刻まれた tokenizer id が今の版と違えば、open 後の照合
   db.prepare("DELETE FROM memory_fts").run();
   const eventId = ensureMemoryIndex(db, at);
 
-  expect(getEvent(db, eventId!)).toMatchObject({ task_id: null, worker_id: "tidepool", origin: "board", payload: { kind: "memory_index_rebuilt" } });
+  expect(getEvent(db, eventId!)).toMatchObject({ task_id: null, actor_id: "tidepool", origin: "board", payload: { kind: "memory_index_rebuilt" } });
   expect(searchMemory(db, reader, { query: "派生" }, at).results.map((r) => r.title)).toEqual(["tsc"]);
   expect(ensureMemoryIndex(db, at)).toBeNull();
 });

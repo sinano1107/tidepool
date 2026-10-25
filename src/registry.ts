@@ -5,6 +5,7 @@ import { basename } from "node:path";
 import { parse as parseTwemoji } from "@twemoji/parser";
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { isNonAgentActorId } from "./actor-id.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { git } from "./git.js";
 import {
@@ -17,7 +18,6 @@ import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { whyInvalidRegistryName } from "./registry-name.js";
 import { findSkillAllowlistError, whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 import type { Tier } from "./tier.js";
-import { isNonAgentWorkerId } from "./worker-id.js";
 
 /** An agent definition file: `agents/<name>.md` in the registry clone.
  *  Frontmatter carries the machine-stamped version and the authority profile
@@ -1155,7 +1155,7 @@ export function assertValidAgentName(registry: Registry, name: string): void {
  *  shared charset plus the board's own worker ids. */
 function assertAgentNameRule(name: string): void {
   assertNameRule(name, InvalidAgentNameError);
-  if (isNonAgentWorkerId(name)) {
+  if (isNonAgentActorId(name)) {
     throw new InvalidAgentNameError(name, "this is a worker id reserved by the board");
   }
 }

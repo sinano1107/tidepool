@@ -192,9 +192,9 @@ function placeTranscript(logs: string, fixture: string, taskId: string, spawnedI
 /** 盤面が刻む worker session 1本(worker_spawned と worker_exited)。費用は盤面が result 行の total_cost_usd を写した値で、Codex は null。 */
 function session(db: Db, taskId: string, agent: string, harness: "claude-code" | "codex", cost: number | null): number {
   const at = new Date("2026-10-09T00:00:00.000Z");
-  const spawned = appendEvent(db, { taskId, workerId: agent, origin: "board", at, payload: { ...WORKER_SPAWNED, harness } });
+  const spawned = appendEvent(db, { taskId, actorId: agent, origin: "board", at, payload: { ...WORKER_SPAWNED, harness } });
   const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: cost, advisor: null, model_swaps: [], refusals: [], models: {} };
-  appendEvent(db, { taskId, workerId: agent, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
+  appendEvent(db, { taskId, actorId: agent, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
   return spawned;
 }
 
@@ -272,8 +272,8 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   settleReviews(db, AT);
   // 子の review の no_findings より後の判断を root の側に置く —— 木を辿る順(root が先)では古い方が最後に来るので、最後は event id で決まる
   const repaired = { kind: "integration_review" as const, deliverable: work.id, value: "repaired" as const, findings: "f", repairs: [] };
-  appendEvent(db, { taskId: work.id, workerId: "fugu", origin: "worker", at: AT, payload: { kind: "decision_logged", line: "repaired", judgment: repaired } });
-  appendEvent(db, { taskId: work.id, workerId: "human", origin: "webui", at: AT, payload: { kind: "local_merge_executed", sha: "c0ffee" } });
+  appendEvent(db, { taskId: work.id, actorId: "fugu", origin: "worker", at: AT, payload: { kind: "decision_logged", line: "repaired", judgment: repaired } });
+  appendEvent(db, { taskId: work.id, actorId: "human", origin: "webui", at: AT, payload: { kind: "local_merge_executed", sha: "c0ffee" } });
   failureQuestion(db, work.id, AT);
   // memory meta-review: 店の1件を引退させ、1件の候補を提案し、残りを据え置く
   let kept = 0;
@@ -401,7 +401,7 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   const minute = (n: number) => new Date(AT.getTime() + n * 60_000);
   const work = registerTask(db, { type: "work", title: "ship", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, minute(0), ...HUMAN_WEBUI);
   // 0〜5 分は pickup 待ち
-  appendEvent(db, { taskId: work.id, workerId: "deckhand", origin: "board", at: minute(5), payload: WORKER_SPAWNED });
+  appendEvent(db, { taskId: work.id, actorId: "deckhand", origin: "board", at: minute(5), payload: WORKER_SPAWNED });
   const ask = (at: Date) =>
     registerTask(
       db,
@@ -423,7 +423,7 @@ it("所要時間は登録から木の最後の event までで、pickup 待ち�
   const land = listBoard(db).find((t) => t.type === "question" && questionKindOf(t).kind === "local_merge")!;
   answerQuestionViaWebui(db, getTask(db, land.id)!, ["hold"], minute(90));
   // 120 分に人間が判断ログを見た —— 仕事の時間ではない
-  appendEvent(db, { taskId: work.id, workerId: "human", origin: "webui", at: minute(120), payload: { kind: "log_entry_displayed", entry_id: 1 } });
+  appendEvent(db, { taskId: work.id, actorId: "human", origin: "webui", at: minute(120), payload: { kind: "log_entry_displayed", entry_id: 1 } });
 
   const { record, markdown } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work.id, test_exit: 0 }], CONFIG, []);
 

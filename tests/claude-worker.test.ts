@@ -4,6 +4,7 @@ import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { agentNeedsHuman } from "../src/agent.js";
 import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import { boardHalts } from "../src/board-halt.js";
@@ -40,7 +41,6 @@ import { getProviderUsage, reportProviderUsage } from "../src/throttle.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT, spawnFailureHandler, startWatchdog } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   excludeWorkspaceProjectSettings,
   prepareWorkspaceAtPickup,
@@ -102,7 +102,7 @@ function makeTask(
     question_pending_pr_promotion_task_id: null,
     question_quarantine_kind: null,
     question_quarantine_value: null,
-    question_cli_auth_expiry_warning: null,
+    question_cli_auth_expiry: null,
     question_stop_reason_task_id: null,
     github_issue_number: null,
     meta_review_subject: null,
@@ -165,34 +165,34 @@ function builtInVersion(registryDir: string, name: string): string {
 /** A second registry agent for the 当時版 Roster tests (issue #1741). */
 const LOOKOUT_MD = `---\nversion: "1"\nauthority: standard\ndescription: Looks out for the board.\nprovider: anthropic\nskills: []\n---\nYou are Lookout.\n`;
 
-/** The objected task's record a self RCA anchors on (ADR 0020 part 4): `workerId`
+/** The objected task's record a self RCA anchors on (ADR 0020 part 4): `actorId`
  *  spawned from `commit` (recording `definitionVersion`), logged one decision, and a
  *  human objected to it. */
 function objectDecisionAt(
   db: Db,
   taskId: string,
-  workerId: string,
+  actorId: string,
   commit: string,
   definitionVersion = WORKER_SPAWNED.definition_version,
 ): number {
   const at = new FakeClock().now();
   appendEvent(db, {
     taskId,
-    workerId,
+    actorId,
     origin: "board",
     payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: definitionVersion },
     at,
   });
   const entryId = appendEvent(db, {
     taskId,
-    workerId,
+    actorId,
     origin: "worker",
     payload: { kind: "decision_logged", line: "chose approach X" },
     at,
   });
   appendEvent(db, {
     taskId,
-    workerId: "human",
+    actorId: "human",
     origin: "webui",
     payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider X", session_id: 1 },
     at,
@@ -203,8 +203,8 @@ function objectDecisionAt(
 /** `taskId` の判断の行1つと、それへの異議を置き、異議の event id を返す(setup)。 */
 function objectionOn(db: Db, taskId: string): number {
   const at = new FakeClock().now();
-  const entryId = appendEvent(db, { taskId, workerId: "deckhand", origin: "worker", payload: { kind: "decision_logged", line: "accepted" }, at });
-  return appendEvent(db, { taskId, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: entryId, comment: "too loose", session_id: 1 }, at });
+  const entryId = appendEvent(db, { taskId, actorId: "deckhand", origin: "worker", payload: { kind: "decision_logged", line: "accepted" }, at });
+  return appendEvent(db, { taskId, actorId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id: entryId, comment: "too loose", session_id: 1 }, at });
 }
 
 /** A git runner pinned to the registry fixture clone, identity flags inlined
@@ -667,7 +667,7 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, reviewed);
     appendEvent(db, {
       taskId: reviewed.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "task_completed", handoff_present: true, result: "done" },
       at: new FakeClock().now(),
@@ -700,7 +700,7 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, reviewed);
     appendEvent(db, {
       taskId: reviewed.id,
-      workerId: "ghost",
+      actorId: "ghost",
       origin: "worker",
       payload: { kind: "task_completed", handoff_present: true, result: "done" },
       at: new FakeClock().now(),
@@ -813,11 +813,11 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
-  it("worker_spawned イベントの worker_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {
+  it("worker_spawned イベントの actor_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {
     const { start, db } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-attributed", null, "navigator");
     const spawned = listEvents(db, "task-attributed").find((e) => e.kind === "worker_spawned");
-    expect(spawned?.worker_id).toBe("navigator");
+    expect(spawned?.actor_id).toBe("navigator");
   });
 
   it("一時 MCP 設定でボードを ?task= 付きで指す(呼び出しのタスク帰属)", async () => {
@@ -1319,7 +1319,7 @@ describe("ClaudeCodeWorker", () => {
     ]);
     expect(failure.message).not.toMatch(/time limit|reclaim/i);
     const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
-    expect(failed.map((e) => [e.worker_id, e.origin, e.payload])).toEqual([
+    expect(failed.map((e) => [e.actor_id, e.origin, e.payload])).toEqual([
       ["deckhand", "board", { kind: "spawn_failed", ...failure }],
     ]);
     // 列挙は試みたが、その失敗で子プロセスは起動しない
@@ -1463,7 +1463,7 @@ describe("ClaudeCodeWorker", () => {
             // 異議の id を運ぶ RCA —— 帰り先の無い系譜にも立つ(ADR 0301 決定2)
             { type: "review", assignee: "deckhand", title: "rca (self): audit", purpose: "p", completion_criteria: "c", parent_id: audit.id, opened_on_event_ids: [objectionOn(db, audit.id)] },
             new Date(0),
-            BOARD_WORKER_ID,
+            BOARD_ACTOR_ID,
             "board",
           );
     slot.occupy(task.id);
@@ -3042,7 +3042,7 @@ describe("ClaudeCodeWorker", () => {
     });
     emitError(err);
     const failed = listEvents(db, task.id).find((e) => e.kind === "spawn_failed");
-    expect(failed?.worker_id).toBe("deckhand");
+    expect(failed?.actor_id).toBe("deckhand");
     expect(failed?.payload).toEqual({
       kind: "spawn_failed",
       error_code: "ENOENT",
@@ -3080,7 +3080,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-9");
     const spawned = listEvents(db, "task-9").find((e) => e.kind === "worker_spawned");
     expect(spawned).toBeDefined();
-    expect(spawned!.worker_id).toBe("deckhand");
+    expect(spawned!.actor_id).toBe("deckhand");
     expect(spawned!.payload).toMatchObject({
       kind: "worker_spawned",
       registry_commit: main,
@@ -3166,21 +3166,21 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, objected);
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "human",
+      actorId: "human",
       origin: "webui",
       payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
       at: new FakeClock().now(),
@@ -3210,21 +3210,21 @@ describe("ClaudeCodeWorker", () => {
     // spawn 1 (v1) → objected decision → objection, all in that first session
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
       at: new FakeClock().now(),
     });
     const decisionId = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
     });
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "human",
+      actorId: "human",
       origin: "webui",
       payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
       at: new FakeClock().now(),
@@ -3240,7 +3240,7 @@ describe("ClaudeCodeWorker", () => {
     const v2Hash = git("rev-parse", "main");
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
       at: new FakeClock().now(),
@@ -3267,14 +3267,14 @@ describe("ClaudeCodeWorker", () => {
     const v1Hash = git("rev-parse", "main");
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
@@ -3289,14 +3289,14 @@ describe("ClaudeCodeWorker", () => {
     const v2Hash = git("rev-parse", "main");
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach Y" },
       at: new FakeClock().now(),
@@ -3305,7 +3305,7 @@ describe("ClaudeCodeWorker", () => {
     for (const entryId of [decision1, decision2]) {
       appendEvent(db, {
         taskId: objected.id,
-        workerId: "human",
+        actorId: "human",
         origin: "webui",
         payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
         at: new FakeClock().now(),
@@ -3355,14 +3355,14 @@ describe("ClaudeCodeWorker", () => {
     // session 1's spawn hash points at a commit the registry no longer has
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: "0000000000000000000000000000000000000000" },
       at: new FakeClock().now(),
     });
     const decision1 = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach X" },
       at: new FakeClock().now(),
@@ -3370,14 +3370,14 @@ describe("ClaudeCodeWorker", () => {
     // session 2 under the reachable main commit
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: main },
       at: new FakeClock().now(),
     });
     const decision2 = appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "worker",
       payload: { kind: "decision_logged", line: "chose approach Y" },
       at: new FakeClock().now(),
@@ -3385,7 +3385,7 @@ describe("ClaudeCodeWorker", () => {
     for (const entryId of [decision1, decision2]) {
       appendEvent(db, {
         taskId: objected.id,
-        workerId: "human",
+        actorId: "human",
         origin: "webui",
         payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
         at: new FakeClock().now(),
@@ -3422,7 +3422,7 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, objected);
     appendEvent(db, {
       taskId: objected.id,
-      workerId: "deckhand",
+      actorId: "deckhand",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
       at: new FakeClock().now(),
@@ -4807,7 +4807,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     expect(exited.payload).toMatchObject({ kind: "worker_exited", exit_code: 1, usage: null });
     const interrupted = events.find((e) => e.kind === "cap_interrupted")!;
     expect(interrupted.origin).toBe("board");
-    expect(interrupted.worker_id).toBe("tidepool");
+    expect(interrupted.actor_id).toBe("tidepool");
     // 刻むのは1件だけ
     expect(events.filter((e) => e.kind === "cap_interrupted")).toHaveLength(1);
   });

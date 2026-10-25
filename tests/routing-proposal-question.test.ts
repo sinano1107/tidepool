@@ -204,7 +204,7 @@ it("reject で表は変わらず、コメントが回答に残る", async () => 
   }
 });
 
-const staleEvents = async (id: string) => (await events(id)).filter((e) => e.kind !== "task_registered").map((e) => [e.kind, e.worker_id, e.payload]);
+const staleEvents = async (id: string) => (await events(id)).filter((e) => e.kind !== "task_registered").map((e) => [e.kind, e.actor_id, e.payload]);
 
 it("pin の行を settings タブで編集する・管理MCP で消すと open な提案は観測で決着し routing_proposal_stale が残る", async () => {
   const { client, propose } = await boardWithRoutingReview();
@@ -414,7 +414,7 @@ function declaredSession(tp: Tidepool, tier: string): number {
   const { id } = registerTask(tp.db, { type: "work", title: "evidence", purpose: "p", completion_criteria: "c", tier }, tp.clock.now(), ...HUMAN_WEBUI);
   return appendEvent(tp.db, {
     taskId: id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at: tp.clock.now(),
     payload: { ...WORKER_SPAWNED, tier_id: tierIdOf(tp.db, tier), source: { tier: "task", provider: "rank" } },

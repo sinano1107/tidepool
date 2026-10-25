@@ -1,3 +1,4 @@
+import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { type BoardCallSetting, type BoardCallUsage, type QuarantinableBoardCallUse, recordBoardCall } from "./board-call-usage.js";
 import type { Db } from "./db.js";
 import type { RowRefusal, RowRefusalCause } from "./events.js";
@@ -5,7 +6,6 @@ import { loadExecutionSettingTable } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { registerQuarantine, tableRowValue } from "./quarantine.js";
 import { registerTask } from "./tasks.js";
-import { BOARD_WORKER_ID } from "./worker-id.js";
 
 export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expires soon";
 
@@ -176,7 +176,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
     expiry === undefined ||
     expiry - now.getTime() > CLI_AUTH_EXPIRY_WARNING_MS ||
     db
-      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry_warning = ? LIMIT 1")
+      .prepare("SELECT 1 FROM tasks WHERE question_cli_auth_expiry = ? LIMIT 1")
       .get(expiry) !== undefined
   ) {
     return;
@@ -206,7 +206,7 @@ export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date
       question_kind: { kind: "cli_auth_expiry_warning", expiry },
     },
     now,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
 }

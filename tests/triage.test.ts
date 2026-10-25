@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
@@ -7,7 +8,6 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { completeRca, type GatedJudgment } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, finishTask, getTask, humanDecomposeTask, listBoard, listChildren, logDecision, nextSlotTask, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { closeStaleTriage, closeTriageSessionOnly, commitTriage, entryObjections, listLog, objectionsById, raiseObjection, recordDisplayedEntries, stageFrontInsert, startTriage, TRIAGE_TIMEOUT, TriageError } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { resolveTaskBranchLineage } from "../src/workspace.js";
 import {
   answerQuestionViaWebui,
@@ -174,7 +174,7 @@ it("Decision log は human のエントリを保持するが未読には数え�
 
   expect(agentEntry).toBeDefined();
   expect(log.entries.find((entry: any) => entry.id === agentEntry.id)?.unread).toBe(true);
-  expect(humanEntry).toMatchObject({ worker_id: "human", unread: false });
+  expect(humanEntry).toMatchObject({ actor_id: "human", unread: false });
 });
 
 it("an objection needs a direction comment and lands durably on the log entry", async () => {
@@ -198,7 +198,7 @@ it("an objection needs a direction comment and lands durably on the log entry", 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json;
   const objections = events.filter((e: any) => e.kind === "objection_raised");
   expect(objections).toHaveLength(1);
-  expect(objections[0].worker_id).toBe("human");
+  expect(objections[0].actor_id).toBe("human");
   expect(objections[0].payload.entry_id).toBe(entry.id);
   expect(objections[0].payload.comment).toBe("plan B breaks the fixtures — go back to plan A");
 });
@@ -462,7 +462,7 @@ it("showing a log entry to the human is itself a recorded event", async () => {
   expect(displayed).toHaveLength(1);
   expect(displayed[0].payload.entry_id).toBe(entry.id);
   expect(displayed[0].payload).not.toHaveProperty("session_id");
-  expect(displayed[0].worker_id).toBe("human");
+  expect(displayed[0].actor_id).toBe("human");
 });
 
 it("displaying a new log entry keeps an open triage session alive", async () => {
@@ -723,7 +723,7 @@ it("an objection against a human-completed task's log entry generates no self RC
   const humanEntry = log.entries.find(
     (e: any) => e.kind === "task_completed" && e.task_id === humanTask.id,
   );
-  expect(humanEntry.worker_id).toBe("human");
+  expect(humanEntry.actor_id).toBe("human");
 
   await api(t.baseUrl, "POST", "/api/triage/start");
   await api(t.baseUrl, "POST", "/api/triage/objection", {
@@ -798,7 +798,7 @@ function objectedFixture() {
   const db = seedFixtureBoard();
   const at = new Date("2026-09-14T00:00:00.000Z");
   const object = (entry_id: number, comment: string, session_id: number) =>
-    appendEvent(db, { taskId: FIXTURE_TASK, workerId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id }, at });
+    appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload: { kind: "objection_raised", entry_id, comment, session_id }, at });
   const a = object(6, "first session", 1);
   const b = object(8, "other entry", 1);
   const c = object(6, "second session", 2);
@@ -885,7 +885,7 @@ it.each([
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type: "work", assignee: "deckhand", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, task, "human's call", HUMAN_ACTOR_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
   commitTriage(db, at, [], new Map(), assigneeDeps);
@@ -902,7 +902,7 @@ it.each([
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type: "work", assignee: name, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, task, "human's call", HUMAN_ACTOR_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
   const result = commitTriage(db, at, [], new Map(), { agentRegistered: () => registered, resolvesToBuiltIn: () => builtIn });
@@ -923,7 +923,7 @@ it.each([
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type, assignee, title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, task, "human's call", HUMAN_ACTOR_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
   commitTriage(db, at, [], new Map(), { agentRegistered: () => true, resolvesToBuiltIn: () => false });
@@ -965,11 +965,11 @@ it.each([
       question: [{ title: "retry?", options: ["retry", "abandon promotion"], recommendation: "retry" }],
     },
     at,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
   answerQuestionViaWebui(db, question, ["abandon promotion"], at);
-  const entry = logDecision(db, getTask(db, question.id)!, "abandon promotion", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, getTask(db, question.id)!, "abandon promotion", HUMAN_ACTOR_ID, at, "webui");
   startTriage(db, at);
   raiseObjection(db, entry, "retry it", at);
 
@@ -977,7 +977,7 @@ it.each([
 
   const children = listChildren(db, question.id);
   const repair = children.find((child) => child.type === "work")!;
-  expect(repair.assignee).toBe(HUMAN_WORKER_ID);
+  expect(repair.assignee).toBe(HUMAN_ACTOR_ID);
   expect(listEvents(db, repair.id).find((event) => event.kind === "task_registered")!.payload).not.toHaveProperty("assignee_not_copied");
   const rca = children.find((child) => child.type === "review")!;
   expect(rca.title).toBe("rca (auditor): retry?");
@@ -992,25 +992,25 @@ it("ルートの question の人間の判断の行は帰り先がある —— �
     db,
     { type: "question", title: "merge?", purpose: "p", completion_criteria: "c", question: [{ title: "merge?", options: ["merge", "hold"], recommendation: "merge" }] },
     at,
-    BOARD_WORKER_ID,
+    BOARD_ACTOR_ID,
     "board",
   );
   answerQuestionViaWebui(db, question, ["hold"], at);
-  const entry = logDecision(db, getTask(db, question.id)!, "hold", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, getTask(db, question.id)!, "hold", HUMAN_ACTOR_ID, at, "webui");
 
   expect(listLog(db).find((e) => e.id === entry)!.no_work_repair).toBe(false);
   startTriage(db, at);
   raiseObjection(db, entry, "merge it", at);
   commitTriage(db, at);
 
-  expect(listChildren(db, question.id).filter((child) => child.type === "work").map((repair) => [repair.title, repair.assignee])).toEqual([["repair: merge?", HUMAN_WORKER_ID]]);
+  expect(listChildren(db, question.id).filter((child) => child.type === "work").map((repair) => [repair.title, repair.assignee])).toEqual([["repair: merge?", HUMAN_ACTOR_ID]]);
 });
 
 it("timeout も修理子の assignee を門に通す(ADR 0237)", () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-10T00:00:00.000Z");
   const task = registerTask(db, { type: "work", assignee: "fugu", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(db, task, "human's call", HUMAN_ACTOR_ID, at, "webui");
   raiseObjection(db, entry, "redo it", at);
 
   expect(closeStaleTriage(db, new Date(at.getTime() + TRIAGE_TIMEOUT), { agentRegistered: () => true, resolvesToBuiltIn: () => true })).toBe(true);
@@ -1028,7 +1028,7 @@ it.each(["commit", "close-only", "watchdog"] as const)("%s の入口は registry
   t = await bootTidepool({ agentRegistered, resolvesToBuiltIn });
   const at = t.clock.now();
   const task = registerTask(t.db, { type: "work", assignee: "repair-worker", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
-  const entry = logDecision(t.db, task, "human's call", HUMAN_WORKER_ID, at, "webui");
+  const entry = logDecision(t.db, task, "human's call", HUMAN_ACTOR_ID, at, "webui");
   await api(t.baseUrl, "POST", "/api/triage/objection", { entry_id: entry, comment: "redo it" });
   agentRegistered.mockClear();
   resolvesToBuiltIn.mockClear();
@@ -1100,14 +1100,14 @@ it.each([
 
   const registered = listChildren(db, task.id).map((c) => {
     const event = listEvents(db, c.id).find((e) => e.kind === "task_registered")!;
-    return [c.title, event.worker_id, event.origin];
+    return [c.title, event.actor_id, event.origin];
   });
   expect(registered).toEqual([
-    ["repair: t", HUMAN_WORKER_ID, origin],
-    ["rca (self): t", BOARD_WORKER_ID, "board"],
-    ["rca (auditor): t", BOARD_WORKER_ID, "board"],
+    ["repair: t", HUMAN_ACTOR_ID, origin],
+    ["rca (self): t", BOARD_ACTOR_ID, "board"],
+    ["rca (auditor): t", BOARD_ACTOR_ID, "board"],
   ]);
-  expect(listEvents(db, staged.id).find((e) => e.kind === "task_moved")).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin });
+  expect(listEvents(db, staged.id).find((e) => e.kind === "task_moved")).toMatchObject({ actor_id: HUMAN_ACTOR_ID, origin });
 });
 
 /** 記憶の書き込みの行(Knowledge の note)を `writerTaskId` の task の書き込みとして残す。 */
@@ -1181,7 +1181,7 @@ it.each([
   const memoryRepair = bundled.find((child) => child.type === "memory_repair");
   if (memoryRepair) {
     expect(memoryRepair).toMatchObject({ workspace: getTask(db, registered.id)!.workspace, assignee: registered.assignee });
-    expect(registration(db, memoryRepair)).toMatchObject({ worker_id: HUMAN_WORKER_ID, origin: "webui" });
+    expect(registration(db, memoryRepair)).toMatchObject({ actor_id: HUMAN_ACTOR_ID, origin: "webui" });
   }
   expect(listEvents(db, registered.id).filter((event) => event.kind === "objection_attributed").map((event) => event.payload)).toEqual(
     entries.map((entry) => expect.objectContaining({ entry_id: entry, cause: "capability", round: "initial" })),
@@ -1359,7 +1359,7 @@ it("流し読みのエントリの no_work_repair は、帰り先の無い task 
   const rootRcaRow = logDecision(db, rootRca, "the cause is X", "auditor", at, "worker");
   const metaReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
   const metaRow = logDecision(db, metaReview, "keep entry 3", "fugu", at, "worker");
-  const typedRow = appendEvent(db, { taskId: metaReview.id, workerId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "left_as_is", judgment: { kind: "memory", entry: 1, value: "left_as_is" } } });
+  const typedRow = appendEvent(db, { taskId: metaReview.id, actorId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "left_as_is", judgment: { kind: "memory", entry: 1, value: "left_as_is" } } });
   const cancelled = registerTask(db, { type: "work", title: "dropped", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const cancelledRow = logDecision(db, cancelled, "split it", "deckhand", at, "worker");
   cancelTaskDirectly(db, cancelled, null, at, {}, "webui");
@@ -1383,7 +1383,7 @@ const interviewRoot = (db: Db, at: Date, assignee?: string) =>
     at,
     ...HUMAN_WEBUI,
   );
-const spawnedAs = (db: Db, task: Task, name: string, at: Date) => appendEvent(db, { taskId: task.id, workerId: name, origin: "board", payload: WORKER_SPAWNED, at });
+const spawnedAs = (db: Db, task: Task, name: string, at: Date) => appendEvent(db, { taskId: task.id, actorId: name, origin: "board", payload: WORKER_SPAWNED, at });
 
 it.each([
   ["Interview の root(列は空の参照)", (db: Db, at: Date) => {

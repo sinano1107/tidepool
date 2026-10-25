@@ -58,7 +58,7 @@ it("Board call の容器が回収 timeout まで空にならなければ、盤�
   expect(quarantine.purpose).toContain("skill enumeration");
   // Tidepool 名義(盤面自身の判断であってエージェントの失敗ではない)
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${quarantine.id}/events`)).json;
-  expect(events.find((e: any) => e.kind === "task_registered").worker_id).toBe("tidepool");
+  expect(events.find((e: any) => e.kind === "task_registered").actor_id).toBe("tidepool");
 
   // 停止範囲は盤面全体 —— cwd では線を引かない
   queueWork(t, "long haul");

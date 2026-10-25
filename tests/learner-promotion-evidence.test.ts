@@ -42,10 +42,10 @@ it("根拠は乖離した shadow 行の session の worker_spawned に限る —
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const registered = latestEventOfTask(db, work, "task_registered")!.id;
   // review の session: pickup に shadow 行を書かない
-  const reviewSession = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
+  const reviewSession = appendEvent(db, { taskId: review, actorId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
   const run = executionSetting("anthropic", "claude-opus-5-5");
   recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
-  const matched = appendEvent(db, { taskId: work, workerId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const matched = appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 
   expect(() => propose("promote", [registered])).toThrow(`evidence ${registered} is not a worker_spawned event`);
   expect(() => propose("promote", [reviewSession])).toThrow(`evidence ${reviewSession} is not the session of any shadow row`);
@@ -145,7 +145,7 @@ it("昇格後の降格の提案は、走った学習器のセルと推薦に回�
   const excluded = divergedSession(db, at, { learner: true, learnerRecord: record([3, 0], [1, 0]), tableRecord: record([90, 2], [9, 1]) });
   const rejected = divergedSession(db, at, { learner: true, learnerRecord: record([3, 1], [1, 1]), tableRecord: record([90, 2], [9, 1]) });
   const payload = { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: rejected, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "underpowered", cause: "capability", evidence: "e" };
-  appendEvent(db, { taskId: taskOf(db, rejected), workerId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
+  appendEvent(db, { taskId: taskOf(db, rejected), actorId: "tidepool", origin: "board", at, payload: payload as Extract<EventPayload, { kind: "allocation_reviewed" }> });
 
   const { question_id } = propose("demote", [excluded, rejected]);
 

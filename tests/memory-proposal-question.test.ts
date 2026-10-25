@@ -217,7 +217,7 @@ it("pin の entry が人間・meta-review・superseded のどの経路で無効�
 
     for (const [i, entryId] of [byHuman, byMetaReview, superseded].entries()) {
       expect(await task(questions[i]!)).toMatchObject({ status: "done", question_answer: null, settled_by_observation: "memory_proposal_stale" });
-      expect((await events(questions[i]!)).map((e) => [e.kind, e.worker_id, e.payload])).toEqual([
+      expect((await events(questions[i]!)).map((e) => [e.kind, e.actor_id, e.payload])).toEqual([
         ["task_registered", expect.any(String), expect.anything()],
         ["memory_proposal_stale", "tidepool", { kind: "memory_proposal_stale", question_id: questions[i], entry_id: entryId, observed_event_id: observed[i] }],
       ]);
@@ -301,7 +301,7 @@ async function proposeExemplar(board: Awaited<ReturnType<typeof boardWithMetaRev
   // setup のみ: RCA の帰責 event(起草の出所)
   const attributed = appendEvent(t.db, {
     taskId: board.review.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: objected, objection_event_ids: [bundledObjection(t.db, board.review.id, objected, t.clock.now())], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at: t.clock.now(),

@@ -646,7 +646,7 @@ it("register_task は人間名義かつ mcp origin で work task を登録する
     expect(readToolPayload(events)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "task_registered", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "task_registered", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );
@@ -676,7 +676,7 @@ it("answer_question は人間名義かつ mcp origin で question を回答す�
     expect(readToolPayload(events)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "question_answered", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "question_answered", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );
@@ -746,7 +746,7 @@ it("cancel_task は人間名義かつ mcp origin で human task を cancel す�
     expect(readToolPayload(events)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "task_cancelled_directly", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "task_cancelled_directly", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );
@@ -795,7 +795,7 @@ it("edit_task は人間名義かつ mcp origin で未消費フィールドを更
     expect(readToolPayload(events)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "task_edited", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "task_edited", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );
@@ -837,7 +837,7 @@ it("decompose_task は人間名義かつ mcp origin で子を一括登録する(
     expect(readToolPayload(child)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "task_registered", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "task_registered", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );
@@ -937,7 +937,7 @@ it("complete_task は human assignee の task だけを mcp origin で完了す�
     expect(readToolPayload(events)).toEqual(
       expect.objectContaining({
         events: expect.arrayContaining([
-          expect.objectContaining({ kind: "task_completed", worker_id: "human", origin: "mcp" }),
+          expect.objectContaining({ kind: "task_completed", actor_id: "human", origin: "mcp" }),
         ]),
       }),
     );

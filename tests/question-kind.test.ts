@@ -1,8 +1,8 @@
 import { expect, it, onTestFinished } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { type QuestionKind, questionColumns, questionKindOf } from "../src/question-kind.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI } from "./harness.js";
 
 // question の種類の写し(ADR 0246 決定2・3)と、種類で分かれる登録の門の肢の数(ADR 0310 決定7)を domain 層で述べる。
@@ -51,7 +51,7 @@ function registerQuestion(kind: QuestionKind | undefined, options: string[]) {
     type: "question", title: "q", purpose: "p", completion_criteria: "c", parent_id: parent.id,
     question: [{ title: "q", options, ...(options.length > 0 && { recommendation: options[0] }) }],
     ...(kind && { question_kind: kind }),
-  }, new Date(0), BOARD_WORKER_ID, "board");
+  }, new Date(0), BOARD_ACTOR_ID, "board");
 }
 
 it.each([

@@ -180,12 +180,12 @@ it("同じタスクの別 worker session の decision は、この Episode の�
     ...fixtureEvents(),
     // 2本目の session — retry / 統合復帰 / quarantine 復帰のいずれでも同じ形
     {
-      id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
+      id: 12, task_id: task, actor_id: "tako", origin: "board", kind: "worker_spawned",
       payload: WORKER_SPAWNED,
       created_at: at,
     },
     {
-      id: 13, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged",
+      id: 13, task_id: task, actor_id: "tako", origin: "worker", kind: "decision_logged",
       payload: { kind: "decision_logged", line: "2本目の session の判断" }, created_at: at,
     },
   ];
@@ -288,12 +288,12 @@ it("worker_exited が無いまま終わった session の窓は、次の worker_
   const events: EventRow[] = [
     ...fixtureEvents().filter((e) => e.kind !== "worker_exited"),
     {
-      id: 12, task_id: task, worker_id: "tako", origin: "board", kind: "worker_spawned",
+      id: 12, task_id: task, actor_id: "tako", origin: "board", kind: "worker_spawned",
       payload: WORKER_SPAWNED,
       created_at: at,
     },
     {
-      id: 13, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged",
+      id: 13, task_id: task, actor_id: "tako", origin: "worker", kind: "decision_logged",
       payload: { kind: "decision_logged", line: "2本目の session の判断" }, created_at: at,
     },
   ];
@@ -308,13 +308,13 @@ it("memory verb の tool 結果に写った memory_pulled の event id は、dec
   const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
   const at = "2026-08-20T06:30:00.000Z";
   const pulled = (id: number, verb: "search_memory" | "read_memory", returned_ids: number[]): EventRow => ({
-    id, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled",
+    id, task_id: task, actor_id: "tako", origin: "worker", kind: "memory_pulled",
     payload: { kind: "memory_pulled", verb, input: {}, returned_ids, watermark: 3 }, created_at: at,
   });
   const events: EventRow[] = [
     ...fixtureEvents().filter((e) => e.id === 5),
     pulled(6, "search_memory", [1, 2]),
-    { id: 7, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+    { id: 7, task_id: task, actor_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
     pulled(8, "read_memory", [2, 3]),
     // tool 結果に写っていない pull —— 位置を持たず、D の前の読み口は拾わない
     pulled(9, "read_memory", [4]),
@@ -347,7 +347,7 @@ it("「D の前に読んだ記憶」(read)は read_memory が返した id だけ
   const task = "6b4c0b23-289e-4f9f-ade1-995fb27f3c0e";
   const at = "2026-08-20T06:30:00.000Z";
   const injected = (id: number, spawned: number, entryIds: number[]): EventRow => ({
-    id, task_id: task, worker_id: "tako", origin: "board", kind: "memory_injected",
+    id, task_id: task, actor_id: "tako", origin: "board", kind: "memory_injected",
     payload: { kind: "memory_injected", worker_spawned_event_id: spawned, watermark: 3, entries: entryIds.map((e) => ({ id: e, version: e })), tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
     created_at: at,
   });
@@ -355,8 +355,8 @@ it("「D の前に読んだ記憶」(read)は read_memory が返した id だけ
     ...fixtureEvents().filter((e) => e.id === 5),
     injected(6, 5, [3, 1]),
     injected(7, 99, [8]),
-    { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [2, 3], watermark: 3 }, created_at: at },
-    { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+    { id: 8, task_id: task, actor_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [2, 3], watermark: 3 }, created_at: at },
+    { id: 9, task_id: task, actor_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
   ];
   const episode = project({
     events,
@@ -373,17 +373,17 @@ it("read_memory_entries が返した id は、その session の memory_injected
   const events: EventRow[] = [
     ...fixtureEvents().filter((e) => e.id === 5),
     {
-      id: 6, task_id: task, worker_id: "tako", origin: "board", kind: "memory_injected",
+      id: 6, task_id: task, actor_id: "tako", origin: "board", kind: "memory_injected",
       payload: { kind: "memory_injected", worker_spawned_event_id: 5, watermark: 3, entries: [{ id: 4, version: 4 }], tokens: 10, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0" },
       created_at: at,
     },
     {
-      id: 7, task_id: task, worker_id: "tako", origin: "board", kind: "meta_review_material_injected",
+      id: 7, task_id: task, actor_id: "tako", origin: "board", kind: "meta_review_material_injected",
       payload: { kind: "meta_review_material_injected", subject: "memory", worker_spawned_event_id: 5, previous_watermark: 0, material_watermark: 3, tokens: 10, tokenizer: "gpt-tokenizer/o200k_base", tokenizer_version: "4.0.0", store_changes: [2], candidates: [], precedents: [], precedent_entries: [], proposals: [], proposal_entries: [], branches: [], items: [] },
       created_at: at,
     },
-    { id: 8, task_id: task, worker_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: {}, returned_ids: [2, 4], watermark: 3 }, created_at: at },
-    { id: 9, task_id: task, worker_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
+    { id: 8, task_id: task, actor_id: "tako", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory_entries", input: {}, returned_ids: [2, 4], watermark: 3 }, created_at: at },
+    { id: 9, task_id: task, actor_id: "tako", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "x" }, created_at: at },
   ];
   const episode = project({
     events,
@@ -401,10 +401,10 @@ const codexEvents = (): EventRow[] => {
   const task = "t1231";
   const at = "2026-10-09T00:00:00.000Z";
   return [
-    { id: 400, task_id: task, worker_id: "codex-agent", origin: "board", kind: "worker_spawned", payload: { ...WORKER_SPAWNED, harness: "codex", cli_version: "codex-cli 0.147.0" }, created_at: at },
-    { id: 500, task_id: task, worker_id: "codex-agent", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [7], watermark: 3 }, created_at: at },
-    { id: 501, task_id: task, worker_id: "codex-agent", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "chose path A" }, created_at: at },
-    { id: 502, task_id: task, worker_id: "codex-agent", origin: "board", kind: "worker_exited", payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: 400, output_closed: true, usage: null }, created_at: at },
+    { id: 400, task_id: task, actor_id: "codex-agent", origin: "board", kind: "worker_spawned", payload: { ...WORKER_SPAWNED, harness: "codex", cli_version: "codex-cli 0.147.0" }, created_at: at },
+    { id: 500, task_id: task, actor_id: "codex-agent", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [7], watermark: 3 }, created_at: at },
+    { id: 501, task_id: task, actor_id: "codex-agent", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "chose path A" }, created_at: at },
+    { id: 502, task_id: task, actor_id: "codex-agent", origin: "board", kind: "worker_exited", payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: 400, output_closed: true, usage: null }, created_at: at },
   ];
 };
 const projectCodex = (transcriptLines = codexTranscriptLines()) =>

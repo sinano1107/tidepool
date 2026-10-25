@@ -1,4 +1,5 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { appendEvent } from "../src/events.js";
 import { loadExecutionSettingTable } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
@@ -6,7 +7,6 @@ import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { WORKER_MEMORY_VERBS } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -57,11 +57,11 @@ it("前回登録が無ければ routing の材料があっても poll は登録�
     review_tier: "frontier",
     workspace: null,
     raw_assignee: null,
-    registrant: BOARD_WORKER_ID,
+    registrant: BOARD_ACTOR_ID,
   });
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
   expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([
-    { worker_id: HUMAN_WORKER_ID, origin: "webui", payload: { subject: "routing", material_watermark: expect.any(Number) } },
+    { actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { subject: "routing", material_watermark: expect.any(Number) } },
   ]);
 });
 
@@ -71,7 +71,7 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
   t.db.prepare("UPDATE tasks SET status = 'cancelled' WHERE id = ?").run(id);
   appendEvent(t.db, {
     taskId: id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at: t.clock.now(),
     payload: WORKER_SPAWNED,
@@ -192,12 +192,12 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
     const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
     const run = executionSetting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
     recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
-    const spawned = appendEvent(t.db, { taskId: id, workerId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
+    const spawned = appendEvent(t.db, { taskId: id, actorId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0 };
-    appendEvent(t.db, { taskId: id, workerId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: {} } } });
+    appendEvent(t.db, { taskId: id, actorId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: {} } } });
     appendEvent(t.db, {
       taskId: id,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "board",
       at: now,
       payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge: { provider: "anthropic", model: "fable", effort: "high" }, allocation: "appropriate", cause: "uncertain", evidence: "e" },

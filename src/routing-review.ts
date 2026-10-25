@@ -352,7 +352,7 @@ export function completeRoutingReview(
   db: Db,
   review: Task,
   input: { judgments: Array<RoutingJudgmentKey & { reason?: string }>; handoff?: Partial<HandoffDoc> },
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
   precedents: { decision_event_id: number }[],
@@ -378,7 +378,7 @@ export function completeRoutingReview(
       value: "no_change",
       object: (item): RoutingObject => ("row" in item ? { row: item.row } : "tier_id" in item ? { tier_id: item.tier_id } : item),
     },
-    workerId,
+    actorId,
     now,
     origin,
   );
@@ -858,7 +858,7 @@ export function proposeRoutingChange(
     workspace?: string;
     rationale: string;
   },
-  workerId: string,
+  actorId: string,
   now: Date,
   agents?: () => readonly AgentView[],
   assertWorkspaceKnown?: (name: string) => void,
@@ -1005,7 +1005,7 @@ export function proposeRoutingChange(
       question_kind: { kind: "proposal", proposal },
     },
     now,
-    workerId,
+    actorId,
     "worker",
   );
   return { question_id: question.id };

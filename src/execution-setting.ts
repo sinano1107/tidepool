@@ -1,5 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { z } from "zod";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import { ADVISOR_CEILINGS, type AdvisorCeiling, type AdvisorSource, claudeAdvisorFor, isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
@@ -23,7 +24,6 @@ import {
   type Task,
   type TierNeighbour,
 } from "./tasks.js";
-
 import {
   assertKnownTier,
   liveTierId,
@@ -36,7 +36,6 @@ import {
   tierIdOf,
   tierNames,
 } from "./tier.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 要求2列を受け取る入口(管理MCP の `register_task` / `decompose_task`、worker MCP の `decompose`)が
  *  エージェントへ見せる説明。**綴りは1つ** —— 入口ごとに書くと、片方だけが古い段や古い意味を喋り続ける。
@@ -850,7 +849,7 @@ export function applyExecutionSettingsChange(
     }
     const eventId = appendEvent(db, {
       taskId: null,
-      workerId: HUMAN_WORKER_ID,
+      actorId: HUMAN_ACTOR_ID,
       origin,
       payload: {
         kind: "execution_settings_changed",

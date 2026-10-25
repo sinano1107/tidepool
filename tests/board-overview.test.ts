@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  BOARD_ACTOR_ID,
+  HUMAN_ACTOR_ID,
+} from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import {
   cancelTaskDirectly,
@@ -9,10 +13,6 @@ import {
   presentTask,
   registerTask,
 } from "../src/tasks.js";
-import {
-  BOARD_WORKER_ID,
-  HUMAN_WORKER_ID,
-} from "../src/worker-id.js";
 import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
 describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)", () => {
@@ -103,7 +103,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
     expect(board.some((t) => t.status === "skipped")).toBe(false);
   });
 
-  it("行は登録者(task_registered イベントの worker_id)を持つ(issue #261)", () => {
+  it("行は登録者(task_registered イベントの actor_id)を持つ(issue #261)", () => {
     const db = openDb(":memory:");
 
     const byAgent = registerTask(
@@ -154,7 +154,7 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
       db,
       { type: "work", title: "log the low tide", purpose: "p", completion_criteria: "c" },
       new Date(1),
-      HUMAN_WORKER_ID,
+      HUMAN_ACTOR_ID,
       "webui",
     );
     const byBoard = registerTask(
@@ -167,14 +167,14 @@ describe("listBoard は進捗俯瞰に必要な形を一望できる(issue #16)"
         question: [{ title: "retry?", options: ["retry", "abandon"], recommendation: "retry" }],
       },
       new Date(2),
-      BOARD_WORKER_ID,
+      BOARD_ACTOR_ID,
       "webui",
     );
     const running = pickupTask(db, byAgent, "reef-crab", new Date(3))!;
 
     expect(presentTask(db, byAgent).registrant).toBe("reef-crab");
-    expect(presentTask(db, byHuman).registrant).toBe(HUMAN_WORKER_ID);
-    expect(presentTask(db, byBoard).registrant).toBe(BOARD_WORKER_ID);
+    expect(presentTask(db, byHuman).registrant).toBe(HUMAN_ACTOR_ID);
+    expect(presentTask(db, byBoard).registrant).toBe(BOARD_ACTOR_ID);
     expect(presentTask(db, running).registrant).toBe("reef-crab");
   });
 });

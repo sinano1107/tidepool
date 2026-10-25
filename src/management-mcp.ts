@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Router } from "express";
 import { z } from "zod";
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 import {
   type AgentAdmin,
   BuiltInAgentNotEditableError,
@@ -128,7 +129,6 @@ import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 import { buildWorkspaceResolver, GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
@@ -905,7 +905,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       // strict な object ごと渡す —— .shape だと迷い込んだ successor_id が黙って捨てられる
       inputSchema: invalidationSchema.extend({ entry_id: z.number().int().positive() }),
     },
-    async (input) => domainResult(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_WORKER_ID, "mcp", deps.clock.now()) })),
+    async (input) => domainResult(() => ({ event_id: invalidateMemoryEntry(deps.db, input, HUMAN_ACTOR_ID, "mcp", deps.clock.now()) })),
   );
   const moveEffect =
     "The board copies the body — title, text, originals, addressee, annotations, source, author, state and approval — to the new place " +
@@ -1007,7 +1007,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
   server.registerTool(
     "rebuild_memory_index",
     { description: "Rebuild the memory entry table and its search index by replaying the board's memory events." },
-    async () => toolResult({ event_id: rebuildMemoryIndex(deps.db, HUMAN_WORKER_ID, "mcp", deps.clock.now()) }),
+    async () => toolResult({ event_id: rebuildMemoryIndex(deps.db, HUMAN_ACTOR_ID, "mcp", deps.clock.now()) }),
   );
   server.registerTool(
     "cancel_task",

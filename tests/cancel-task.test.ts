@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { pickupTask, registerTask } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import {
   api,
   bootTidepool,
@@ -86,8 +86,8 @@ it("cancelled のツリーは即時にボードから退く", async () => {
 it("理由は任意 — 付ければ cancelled イベントに残る", async () => {
   t = await bootTidepool();
   // 人間担当にして、1本目の cancel が撃つ poll(ADR 0119 決定1)に2本目を pickup させない
-  const withReason = queueWork(t, "with reason", undefined, HUMAN_WORKER_ID);
-  const without = queueWork(t, "without reason", undefined, HUMAN_WORKER_ID);
+  const withReason = queueWork(t, "with reason", undefined, HUMAN_ACTOR_ID);
+  const without = queueWork(t, "without reason", undefined, HUMAN_ACTOR_ID);
 
   await api(t.baseUrl, "POST", `/api/tasks/${withReason.id}/cancel`, { reason: "changed my mind" });
   await api(t.baseUrl, "POST", `/api/tasks/${without.id}/cancel`, {});

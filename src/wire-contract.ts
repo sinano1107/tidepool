@@ -258,7 +258,7 @@ export interface WireContract {
       id: number;
       created_at: string;
       task_id: string;
-      worker_id: string;
+      actor_id: string;
       /** 値集合の正本は src/events.ts の HUMAN_FACING_KINDS(移送は issue #352)。 */
       payload:
         | { kind: "task_completed"; result: string | null; handoff_present: boolean }

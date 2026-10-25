@@ -61,7 +61,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const q2 = registerQuestion(db, "深夜の質問2", MIDNIGHT);
     appendEvent(db, {
       taskId: q1.id,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "webui",
       payload: { kind: "decision_logged", line: "a" },
       at: MIDNIGHT,
@@ -159,7 +159,7 @@ describe("createNotificationTick(issue #14): quiet hours 明けの1通まとめ�
     const push = new FakePushClient();
     const tick = createNotificationTick(db, push, MIDNIGHT);
 
-    // agent の decompose 直接登録(worker_id != 'human')— question と同格の通知対象
+    // agent の decompose 直接登録(actor_id != 'human')— question と同格の通知対象
     registerTask(
       db,
       {

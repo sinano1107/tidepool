@@ -41,7 +41,7 @@ const COLUMNS = [
   "question_pending_pr_promotion_task_id",
   "question_quarantine_kind",
   "question_quarantine_value",
-  "question_cli_auth_expiry_warning",
+  "question_cli_auth_expiry",
 ] as const;
 
 export type QuestionColumns<T extends TierRef = TierId> = Pick<Task, Exclude<(typeof COLUMNS)[number], "question_proposal">> & {
@@ -75,7 +75,7 @@ export function questionColumns<T extends TierRef>(kind: QuestionKind<T>): Quest
     case "quarantine":
       return { ...none, question_quarantine_kind: kind.quarantine, question_quarantine_value: kind.value };
     case "cli_auth_expiry_warning":
-      return { ...none, question_cli_auth_expiry_warning: kind.expiry };
+      return { ...none, question_cli_auth_expiry: kind.expiry };
   }
 }
 
@@ -107,8 +107,8 @@ export function questionKindOf<T extends TierRef>(q: QuestionColumns<T>): Questi
     case "question_quarantine_kind":
     case "question_quarantine_kind + question_quarantine_value":
       return { kind: "quarantine", quarantine: q.question_quarantine_kind!, value: q.question_quarantine_value };
-    case "question_cli_auth_expiry_warning":
-      return { kind: "cli_auth_expiry_warning", expiry: q.question_cli_auth_expiry_warning! };
+    case "question_cli_auth_expiry":
+      return { kind: "cli_auth_expiry_warning", expiry: q.question_cli_auth_expiry! };
   }
   throw new Error(`question columns fit no question kind: ${filled}`);
 }

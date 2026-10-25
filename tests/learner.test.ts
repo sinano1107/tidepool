@@ -323,7 +323,7 @@ const queueWork = (b: Board, title: string, tier?: Tier) =>
 
 /** ScriptedWorker は spawn しないので、その session の開始を setup として置く。 */
 const recordSpawn = (b: Board, taskId: string, run: Partial<typeof WORKER_SPAWNED> = {}) =>
-  appendEvent(b.db, { taskId, workerId: WORKER, origin: "board", at: b.clock.now(), payload: { ...WORKER_SPAWNED, ...run } });
+  appendEvent(b.db, { taskId, actorId: WORKER, origin: "board", at: b.clock.now(), payload: { ...WORKER_SPAWNED, ...run } });
 
 /** scheduler 無しで work を pickup し、その session を開く。spawn の event id を返す。 */
 function spawnedWork(b: Board, title: string) {
@@ -408,7 +408,7 @@ function attribute(b: Board, taskId: string, entryId: number, cause: Cause, comm
     wrong_memory_entries: null,
     round: "initial",
   };
-  appendEvent(b.db, { taskId, workerId: "board", origin: "board", at: b.clock.now(), payload: attributed });
+  appendEvent(b.db, { taskId, actorId: "board", origin: "board", at: b.clock.now(), payload: attributed });
 }
 
 it("観測が効くと shadow 行は selector と乖離しうるが、選択は変わらない —— capability と帰責された session の行が下がり、basis は data", async () => {
@@ -493,7 +493,7 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
   const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
   appendEvent(b.db, {
     taskId: earlier.id,
-    workerId: WORKER,
+    actorId: WORKER,
     origin: "board",
     at: b.clock.now(),
     payload: {
@@ -654,8 +654,8 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   const b = bareBoard();
   const { task, spawnedId: refusedId } = spawnedWork(b, "a");
   const at = b.clock.now();
-  appendEvent(b.db, { taskId: task.id, workerId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
-  appendEvent(b.db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
+  appendEvent(b.db, { taskId: task.id, actorId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
   const rerunId = recordSpawn(b, task.id);
   accept(b, task.id);
 
@@ -681,7 +681,7 @@ it("人間が止めた session は停止の帰責が capability なら rejected�
   const stoppedSession = (title: string, cause: Cause) => {
     const { task, spawnedId } = spawnedWork(b, title);
     const at = b.clock.now();
-    const append = (payload: TaskScopedPayload, workerId = WORKER) => appendEvent(b.db, { taskId: task.id, workerId, origin: "board", at, payload });
+    const append = (payload: TaskScopedPayload, actorId = WORKER) => appendEvent(b.db, { taskId: task.id, actorId, origin: "board", at, payload });
     const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" }, "human");
     append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
     // 判定は session が閉じた後に書かれる —— 窓に入るのは停止 event
@@ -727,7 +727,7 @@ it.each([
   const swap = { from: "claude-fable-5-1", to: "claude-opus-4-8", scope, category: "cyber" };
   appendEvent(b.db, {
     taskId: task.id,
-    workerId: WORKER,
+    actorId: WORKER,
     origin: "board",
     at: b.clock.now(),
     payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [swap], refusals: ["cyber"] } },
@@ -767,7 +767,7 @@ it("done の root の受理の採点が (セル, 段) の種になり、同じ�
   // event で釘付けする。採点は root の完了で確定する(ADR 0251 決定4)
   for (const cancel of [true, false]) {
     const { root, examinee } = posedInterview(b);
-    appendEvent(b.db, { taskId: examinee.id, workerId: "auditor", origin: "worker", at: b.clock.now(), payload: { kind: "interview_scored", outcome: "accepted" } });
+    appendEvent(b.db, { taskId: examinee.id, actorId: "auditor", origin: "worker", at: b.clock.now(), payload: { kind: "interview_scored", outcome: "accepted" } });
     if (cancel) cancelTaskDirectly(b.db, getTask(b.db, root.id)!, null, b.clock.now(), {}, "webui");
   }
   const frontier = scoredInterview(b, "accepted", "frontier");

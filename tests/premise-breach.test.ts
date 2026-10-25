@@ -1,9 +1,11 @@
 import { expect, it } from "vitest";
+import {
+  BOARD_ACTOR_ID,
+  HUMAN_ACTOR_ID,
+} from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
-
 import { DomainError } from "../src/domain-error.js";
 import { taskDecisionLog } from "../src/events.js";
-
 import {
   cancelTaskDirectly,
   completeTask,
@@ -20,12 +22,7 @@ import {
   type Task,
   taskHistoryRows,
 } from "../src/tasks.js";
-
 import { listLog } from "../src/triage.js";
-import {
-  BOARD_WORKER_ID,
-  HUMAN_WORKER_ID,
-} from "../src/worker-id.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, HUMAN_WEBUI, humanDecomposeTaskViaWebui } from "./harness.js";
 
 const at = new Date("2026-09-15T00:00:00.000Z");
@@ -45,13 +42,13 @@ function agentDecompose(db: Db, parent: Task, ...titles: string[]): Task[] {
 }
 
 /** 分解の author(worker)が撮り直す。authority も保護 workspace も無い。 */
-function redecomposeViaWorker(db: Db, parent: Task, input: Parameters<typeof redecompose>[2], workerId: string, now: Date): Task[] {
-  return redecompose(db, parent, input, workerId, now, undefined, undefined, "worker");
+function redecomposeViaWorker(db: Db, parent: Task, input: Parameters<typeof redecompose>[2], actorId: string, now: Date): Task[] {
+  return redecompose(db, parent, input, actorId, now, undefined, undefined, "worker");
 }
 
 /** 同じ親に乗る別の分解判断の子(人間 decompose が blocked な親に足す形)。 */
 function otherDecisionChild(db: Db, parent: Task, title: string): Task {
-  const decision = logDecision(db, parent, `human adds ${title}`, HUMAN_WORKER_ID, at, "worker");
+  const decision = logDecision(db, parent, `human adds ${title}`, HUMAN_ACTOR_ID, at, "worker");
   return registerTask(db, { type: "work", ...spec(title), parent_id: parent.id, based_on_decision: decision }, at, ...HUMAN_WEBUI);
 }
 
@@ -93,7 +90,7 @@ it("書き手が人間の分解判断への宣言は Tidepool 名義の question
   const question = declarePremiseBreach(db, getTask(db, a!.id)!, "module M is broken", "tako", at, "worker")!;
 
   expect(question.parent_id).toBe(a!.id);
-  expect(getRegistrant(db, question.id)).toBe(BOARD_WORKER_ID);
+  expect(getRegistrant(db, question.id)).toBe(BOARD_ACTOR_ID);
   expect(question.question_items).toEqual([
     expect.objectContaining({ options: ["continue", "abandon"], recommendation: "continue" }),
   ]);
@@ -162,7 +159,7 @@ it("親の continue は判断ログ1行で held を解いて親を blocked に�
 
   const question = declarePremiseBreach(db, getTask(db, b!.id)!, "M is still broken", "tako", at, "worker")!;
   expect(question.parent_id).toBe(b!.id);
-  expect(getRegistrant(db, question.id)).toBe(BOARD_WORKER_ID);
+  expect(getRegistrant(db, question.id)).toBe(BOARD_ACTOR_ID);
   expect(nextSlotTask(db)).toBeUndefined();
   db.close();
 });

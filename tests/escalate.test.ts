@@ -175,7 +175,7 @@ it("a picked option matching the recommendation is recorded as acceptance in the
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   const answered = events.filter((e: any) => e.kind === "question_answered");
   expect(answered).toHaveLength(1);
-  expect(answered[0].worker_id).toBe("human");
+  expect(answered[0].actor_id).toBe("human");
   // recommended_by makes per-agent acceptance rates a one-event statistic
   expect(answered[0].payload).toEqual({
     kind: "question_answered",

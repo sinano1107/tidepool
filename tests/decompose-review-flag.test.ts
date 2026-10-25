@@ -180,7 +180,7 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
   await t.clock.advance(HOUR);
   const spawned = appendEvent(t.db, {
     taskId: task.id,
-    workerId: "reef-crab",
+    actorId: "reef-crab",
     origin: "board",
     at: t.clock.now(),
     payload: { ...WORKER_SPAWNED, model: "subject-model-secret" },
@@ -188,7 +188,7 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
   await completeVia(t, task.id);
   appendEvent(t.db, {
     taskId: task.id,
-    workerId: "reef-crab",
+    actorId: "reef-crab",
     origin: "board",
     at: t.clock.now(),
     payload: {
@@ -346,7 +346,7 @@ it("更新前に生成済みの完了時 review も、完了後は受理に数�
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(subject.id);
   appendEvent(db, {
     taskId: subject.id,
-    workerId: "reef-crab",
+    actorId: "reef-crab",
     origin: "worker",
     payload: { kind: "task_completed", handoff_present: true, result: "done" },
     at: completedAt,

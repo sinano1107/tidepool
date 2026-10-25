@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, getEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
@@ -28,7 +29,6 @@ import {
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, failureQuestion, HUMAN_WEBUI, objectedJudgment, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
@@ -84,7 +84,7 @@ it("材料の節は主題 memory の meta-review に memory の部分で組ま�
 
 const deckhand = { activity: "worker_verb" as const, name: "deckhand" };
 const metaReview = { activity: "meta_review" as const, name: "auditor" };
-const human = { activity: "human" as const, name: HUMAN_WORKER_ID };
+const human = { activity: "human" as const, name: HUMAN_ACTOR_ID };
 const knowledge = (db: Db, path: string, author: { activity: "worker_verb" | "human"; name: string } = deckhand) =>
   recordKnowledge(db, { scope: "tidepool", path, title: path, text: `${path}.`, ...(author === deckhand ? { source: { commit: "0a46a46" } } : {}), author }, "worker", at).entry_id;
 const knowledgeIn = (db: Db, scope: string, path: string) =>
@@ -104,7 +104,7 @@ it("店の変更: 前回の登録より後に worker が書いた Knowledge と�
   const previous = register(db, "memory", true);
 
   const written = knowledge(db, "written");
-  invalidateMemoryEntry(db, { entry_id: toDrop, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: toDrop, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const decision = logDecision(db, getTask(db, previous)!, "these say the same", "auditor", at, "worker");
   defineMemoryByMetaReview(db, { scope: null, path: "build", text: "How it builds.", author: metaReview }, "worker", at, writerTask(db));
   foldMemory(db, previous, { scope: "tidepool", path: "folded", title: "Folded", text: "Folded.", replaces: [toFold], based_on_decision: decision, author: metaReview }, "worker", at);
@@ -258,7 +258,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   appendEvent(db, {
     taskId: work,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", wrong_memory_entries: [followed], round: "initial" },
     at,
@@ -281,7 +281,7 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
   const db = openDb(":memory:");
   defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
   const [kept, dropped, outside] = ["notes", "notes", "notes"].map((path) => knowledge(db, path));
-  invalidateMemoryEntry(db, { entry_id: dropped!, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: dropped!, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { entry } : { branch: entry, scope: "tidepool" }) });
   const older = register(db, "memory", true);
   objectedJudgment(db, older, judged(outside!), at);
@@ -340,7 +340,7 @@ function candidateOnlyBranch() {
   const retired = knowledgeIn(db, "charts", "tides").entry_id;
   const previous = register(db, "memory", true);
   objectedJudgment(db, previous, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
-  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: retired, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const drafted = createBehaviorCandidate(
     db,
     { scope: "charts", path: "tides/high", title: "High", text: "High.", addressee: null, source: { commit: "0a46a46" }, author: { activity: "rca", name: "auditor" } },
@@ -364,7 +364,7 @@ it("candidate だけが残る異議された枝が枝ごと移されていれば
   const moved = candidateOnlyBranch();
   moveMemoryBranch(moved.db, { scope: "charts", path: "tides", to_scope: "charts", to_path: "memo", mover: human }, "webui", at);
   const rejected = candidateOnlyBranch();
-  invalidateMemoryEntry(rejected.db, { entry_id: rejected.drafted, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(rejected.db, { entry_id: rejected.drafted, reason: "rejected" }, HUMAN_ACTOR_ID, "webui", at);
 
   const afterMove = memoryMaterialOf(moved.db, register(moved.db, "memory")).parts;
   const afterReject = memoryMaterialOf(rejected.db, register(rejected.db, "memory")).parts;
@@ -378,7 +378,7 @@ it("枝ごと移された candidate の複製も無効化されていれば、�
   const { db } = candidateOnlyBranch();
   moveMemoryBranch(db, { scope: "charts", path: "tides", to_scope: "charts", to_path: "memo", mover: human }, "webui", at);
   const copy = memoryMaterialOf(db, register(db, "memory")).parts.candidates[0]!.id;
-  invalidateMemoryEntry(db, { entry_id: copy, reason: "rejected" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: copy, reason: "rejected" }, HUMAN_ACTOR_ID, "webui", at);
 
   const { parts } = memoryMaterialOf(db, register(db, "memory"));
 
@@ -466,7 +466,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
 
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: review,
-    worker_id: "auditor",
+    actor_id: "auditor",
     origin: "board",
     payload: {
       kind: "meta_review_material_injected",
@@ -515,7 +515,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
   const followed = knowledge(db, "followed");
   appendEvent(db, {
     taskId: work,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     payload: { kind: "memory_injected", worker_spawned_event_id: workSession, watermark: 0, entries: [{ id: followed, version: 1 }], tokens: 0, index_depth: 0, index_max_depth: 0, omitted: 0, tokenizer: "t", tokenizer_version: "0" },
     at,
@@ -530,11 +530,11 @@ it("主題 memory の材料の節に載ったエントリは、その session �
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   const review = register(db, "memory");
   const routingShown = knowledge(db, "routing-shown");
-  const spawned = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const spawned = appendEvent(db, { taskId: review, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   recordMetaReviewMaterial(db, review, "auditor", spawned, memoryMaterialOf(db, review), at);
   appendEvent(db, {
     taskId: review,
-    workerId: "auditor",
+    actorId: "auditor",
     origin: "board",
     payload: {
       kind: "meta_review_material_injected",
@@ -574,7 +574,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
 
 /** setup のみ: review の session を spawn して材料の節を記録し、decision を1本書いて、材料の項目とその decision の seen / read を返す。 */
 function seenOfMaterial(db: Db, review: string) {
-  const spawned = appendEvent(db, { taskId: review, workerId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
+  const spawned = appendEvent(db, { taskId: review, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const material = memoryMaterialOf(db, review);
   recordMetaReviewMaterial(db, review, "auditor", spawned, material, at);
   const decision = logDecision(db, getTask(db, review)!, "judged the items", "auditor", at, "worker");
@@ -634,12 +634,12 @@ it("窓で reject された candidate と、cause memory の異議つき判断�
   rejectMemoryProposal(db, getTask(db, question)!.question_proposal as MemoryProposal, question, "webui", at);
   appendEvent(db, {
     taskId: work,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, work, decision, at)], cause: "memory", evidence: "e", wrong_memory_entries: [followed], round: "initial" },
     at,
   });
-  invalidateMemoryEntry(db, { entry_id: followed, reason: "environment" }, HUMAN_WORKER_ID, "webui", at);
+  invalidateMemoryEntry(db, { entry_id: followed, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
   const review = register(db, "memory");
   const material = memoryMaterialOf(db, review);
   recordMetaReviewMaterial(db, review, "auditor", 42, material, at);

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { listEvents } from "../src/events.js";
 import { cancelTaskDirectly, completeTask, editTask, logDecision, pickupTask, presentTask, type RegisterTaskInput, registerTask, returnToQueue, type Task } from "../src/tasks.js";
 import { listLog } from "../src/triage.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
 
 // ADR 0290: 付帯子の review は自分の workspace を持たず、列が非 NULL の最も近い祖先に従う(無ければ既定)
@@ -12,7 +12,7 @@ const at = new Date(0);
 const register = (db: Db, input: Partial<RegisterTaskInput> & Pick<RegisterTaskInput, "type">): Task =>
   registerTask(db, { title: "t", purpose: "p", completion_criteria: "c", ...input }, at, ...HUMAN_WEBUI);
 const boardReview = (db: Db, input: Partial<RegisterTaskInput>): Task =>
-  registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, BOARD_WORKER_ID, "board");
+  registerTask(db, { type: "review", title: "t", purpose: "p", completion_criteria: "c", ...input }, at, BOARD_ACTOR_ID, "board");
 /** 一度 pickup された形の親 —— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
 const ran = (db: Db, task: Task): Task => {
   markPickedUp(db, task.id, at);
@@ -73,8 +73,8 @@ describe("Executor の引けない親への review 子の登録(ADR 0292 決定2
     const running = pickupTask(db, register(db, { type: "work", assignee: "deckhand" }), "deckhand", at)!;
     const returned = pickupTask(db, register(db, { type: "work", assignee: "deckhand" }), "deckhand", at)!;
     returnToQueue(db, returned, { kind: "cap_interrupted" }, at);
-    const human = register(db, { type: "work", assignee: HUMAN_WORKER_ID });
-    completeTask(db, human, undefined, HUMAN_WORKER_ID, at, "webui");
+    const human = register(db, { type: "work", assignee: HUMAN_ACTOR_ID });
+    completeTask(db, human, undefined, HUMAN_ACTOR_ID, at, "webui");
 
     for (const parent of [running, returned, human]) {
       expect(register(db, { type: "review", parent_id: parent.id }).parent_id).toBe(parent.id);

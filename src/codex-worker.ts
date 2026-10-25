@@ -1367,7 +1367,7 @@ export class CodexWorker implements WorkerAdapter {
       removeTaskTemp();
       appendEvent(this.options.db, {
         taskId: task.id,
-        workerId: agent.name,
+        actorId: agent.name,
         origin: "board",
         payload: { kind: "spawn_failed", ...failure },
         at: this.options.clock.now(),
@@ -1405,7 +1405,7 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0149 決定2: `worker_spawned` → transcript の同期 open → spawn(Claude adapter と同じ順)
       const spawned = appendEvent(this.options.db, {
         taskId: task.id,
-        workerId: agent.name,
+        actorId: agent.name,
         origin: "board",
         payload: {
           kind: "worker_spawned",
@@ -1517,7 +1517,7 @@ export class CodexWorker implements WorkerAdapter {
           : null;
         appendEvent(this.options.db, {
           taskId: task.id,
-          workerId: agent.name,
+          actorId: agent.name,
           origin: "board",
           payload: {
             kind: "worker_exited",

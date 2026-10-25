@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import { appendEvent, type EventKind, type EventOrigin, type EventPayload, type EventRowOf, getEvent, type Judgment, latestEventOfTask, parseEventRow } from "./events.js";
@@ -7,7 +8,6 @@ import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
 import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
  *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
@@ -244,7 +244,7 @@ export function completeMetaReview<I, J = I>(
   { judgments, handoff }: { judgments: ReadonlyArray<J & { reason?: string }>; handoff?: Partial<HandoffDoc> },
   items: { injected: readonly I[]; open: readonly I[] },
   judging: { key: (item: I | J) => string; label: (item: I) => string; object: (item: I) => object } & ({ kind: "memory"; value: "left_as_is" } | { kind: "routing"; value: "no_change" }),
-  workerId: string,
+  actorId: string,
   now: Date,
   origin: EventOrigin,
 ): Task {
@@ -263,13 +263,13 @@ export function completeMetaReview<I, J = I>(
       const judgment = { kind: judging.kind, ...judging.object(item), value: judging.value, ...(said && { reason: said }) } as Judgment;
       appendEvent(db, {
         taskId: review.id,
-        workerId,
+        actorId,
         origin,
         payload: { kind: "decision_logged", line: `${judging.value}: ${judging.label(item)}${said ? ` — ${said}` : ""}`, judgment },
         at: now,
       });
     }
-    return finishTask(db, review, handoff, workerId, now, origin);
+    return finishTask(db, review, handoff, actorId, now, origin);
   })();
 }
 
@@ -303,11 +303,11 @@ export function registerMetaReview(db: Db, subject: MetaReviewSubject, now: Date
   return db.transaction(() => {
     // 盤面自身の判断の段で走る —— 振り返り Board call と1つの設定を共有する(ADR 0200 決定4)
     const review_tier = readExecutionSettings(db).judgementTier;
-    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, review_tier, meta_review_subject: subject }, now, BOARD_WORKER_ID, "board");
+    const task = registerTask(db, { type: "review", ...META_REVIEW_SUBJECTS[subject].task, review_tier, meta_review_subject: subject }, now, BOARD_ACTOR_ID, "board");
     const { watermark } = db.prepare("SELECT MAX(id) AS watermark FROM events").get() as { watermark: number };
     appendEvent(db, {
       taskId: task.id,
-      workerId: origin === "board" ? BOARD_WORKER_ID : HUMAN_WORKER_ID,
+      actorId: origin === "board" ? BOARD_ACTOR_ID : HUMAN_ACTOR_ID,
       origin,
       payload: { kind: "meta_review_registered", subject, material_watermark: watermark },
       at: now,
@@ -393,7 +393,7 @@ export function changeMetaReviewSettings(db: Db, change: z.infer<typeof metaRevi
     ).run(change);
     return appendEvent(db, {
       taskId: null,
-      workerId: HUMAN_WORKER_ID,
+      actorId: HUMAN_ACTOR_ID,
       origin,
       payload: { kind: "meta_review_settings_changed", ...readMetaReviewSettings(db) },
       at,

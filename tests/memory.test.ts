@@ -83,7 +83,7 @@ it("Knowledge は書いた瞬間に approved で載り、エントリ全欄を�
   const { id: _id, version: _version, ...fields } = expected;
   expect(getEvent(db, event_id)).toMatchObject({
     task_id: null,
-    worker_id: "deckhand",
+    actor_id: "deckhand",
     kind: "memory_entry_created",
     // 同一性(id)と版は event 自身の id なので payload には写さない
     payload: { kind: "memory_entry_created", entry: fields },
@@ -140,7 +140,7 @@ it("無効化は memory_entry_invalidated を残し、そのエントリを appr
   expect(approvedMemoryEntries(db).map((e) => e.title)).toEqual(["new wording"]);
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: null,
-    worker_id: "human",
+    actor_id: "human",
     origin: "webui",
     payload: { kind: "memory_entry_invalidated", entry_id: old, reason: "superseded", successor_id: successor },
   });
@@ -565,7 +565,7 @@ it("人間が書く Behavior は任意で decision_logged か worker_spawned の
   // setup のみ: worker session の開始 event
   const spawned = appendEvent(db, {
     taskId: task.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: WORKER_SPAWNED,
@@ -609,7 +609,7 @@ it("人間の Behavior は supersedes で approved の Behavior を書き直し�
     { id: revised, state: "approved", title: "new rule", addressee: "deckhand", author: human },
   ]);
   // 作成 event の直後が旧の無効化 event
-  expect(getEvent(db, revised + 1)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_invalidated", entry_id: old, activity: "human" } });
+  expect(getEvent(db, revised + 1)).toMatchObject({ actor_id: "human", payload: { kind: "memory_entry_invalidated", entry_id: old, activity: "human" } });
 });
 
 it("人間の Behavior の出所は、渡せばそれ、渡さなければ supersedes の出所が1つに揃うとき(1件の編集も、RCA 起草の帰責 event も)それを継ぎ、揃わない・自身の作成 event なら後継自身の作成 event(ADR 0162 決定3)", () => {
@@ -802,7 +802,7 @@ it("worker_spawned を出所に持つ Exemplar の decision の quote はその 
   // setup のみ: worker session の開始 event
   const spawned = appendEvent(db, {
     taskId: task.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: WORKER_SPAWNED,
@@ -865,7 +865,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
   // setup のみ: worker session の開始と終了の event
   const spawned = appendEvent(db, {
     taskId: task.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: WORKER_SPAWNED,
@@ -873,7 +873,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
   const inside = logDecision(db, task, "inside the session", "deckhand", at, "worker");
   appendEvent(db, {
     taskId: task.id,
-    workerId: "deckhand",
+    actorId: "deckhand",
     origin: "board",
     at,
     payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null },
@@ -892,7 +892,7 @@ it("決定ログの各エントリは最新の帰責の entries を持つ ——
   const [followed, overturned, plain] = ["followed the note", "followed then overturned", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
   // setup のみ: 束ね済みの異議群を1つ足して帰責する(呼ぶたびに後の異議群 —— 最後の異議群の判定が有効、ADR 0170)
   const attribute = (entry_id: number, cause: "memory" | "capability", entries: number[] | null) =>
-    appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" } });
+    appendEvent(db, { taskId: task.id, actorId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id, objection_event_ids: [bundledObjection(db, task.id, entry_id, at)], cause, evidence: "e", wrong_memory_entries: entries, round: "initial" } });
   attribute(followed!, "memory", [41, 42]);
   attribute(overturned!, "memory", [41]);
   attribute(overturned!, "capability", null);
@@ -908,7 +908,7 @@ it("決定ログの各エントリは今の判定の evidence を持ち、帰責
   const { db, task } = board();
   const [judged, plain] = ["retried the fetch", "no objection"].map((line) => logDecision(db, task, line, "deckhand", at, "worker"));
   // setup のみ: 束ね済みの異議群を1つ足して帰責する
-  appendEvent(db, { taskId: task.id, workerId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id: judged!, objection_event_ids: [bundledObjection(db, task.id, judged!, at)], cause: "environment", evidence: "the registry was down", wrong_memory_entries: null, round: "initial" } });
+  appendEvent(db, { taskId: task.id, actorId: "tidepool", origin: "board", at, payload: { kind: "objection_attributed", entry_id: judged!, objection_event_ids: [bundledObjection(db, task.id, judged!, at)], cause: "environment", evidence: "the registry was down", wrong_memory_entries: null, round: "initial" } });
 
   expect(listLog(db).map((e) => [e.id, e.evidence])).toEqual([
     [judged, "the registry was down"],
@@ -967,7 +967,7 @@ it("rebuild は一覧を無効化の理由コード・後継 id ごと同じに�
   const eventId = rebuildMemoryIndex(db, "human", "mcp", at);
 
   expect(listMemoryEntries(db, {})).toEqual(before);
-  expect(getEvent(db, eventId)).toMatchObject({ kind: "memory_index_rebuilt", worker_id: "human", origin: "mcp" });
+  expect(getEvent(db, eventId)).toMatchObject({ kind: "memory_index_rebuilt", actor_id: "human", origin: "mcp" });
 });
 
 /** 承認の export(issue #620 / spec #615 A)。pin の一致 / 不一致は回答の挙動としてサーバ境界が言う。 */
@@ -990,7 +990,7 @@ it("承認は memory_entry_approved を task 非依存で残し、candidate を 
 
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: null,
-    worker_id: "human",
+    actor_id: "human",
     origin: "webui",
     payload: { kind: "memory_entry_approved", entry_id: id, question_id: "question-1", replaced: [] },
   });
@@ -1230,7 +1230,7 @@ it("RCA が起草した candidate(出所は帰責 event)を修正値つきで ap
   const decision = logDecision(db, task, "split the migration", "deckhand", at, "worker");
   const attributed = appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -1262,7 +1262,7 @@ function exemplarProposal() {
   // setup のみ: RCA の帰責 event(起草の出所)
   const attributed = appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -1436,7 +1436,7 @@ it("移動は4種別の未無効化の approved / candidate を写し、複製�
     const copy = copies[i]!;
     expect(after.get(copy)).toEqual({ ...old, id: copy, scope: null, path: place(old), source: old.source.ref === old.id ? { kind: "event", ref: copy } : old.source });
     expect(after.get(old.id)).toMatchObject({ invalidation_reason: "path_moved", successor_id: copy, invalidated_by: { activity: "human" } });
-    expect(getEvent(db, copy)).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_created", activity: "human", entry: { author: old.author } } });
+    expect(getEvent(db, copy)).toMatchObject({ actor_id: "human", payload: { kind: "memory_entry_created", activity: "human", entry: { author: old.author } } });
   });
 });
 
@@ -1688,7 +1688,7 @@ it("復元は無効化済みのエントリの本文の側(書き手・状態・
   expect(after.get(entry_id)).toEqual({ ...old, id: entry_id, invalidation_reason: null, successor_id: null, invalidated_by: null, cause: null });
   expect(old).toMatchObject({ state: "candidate", scope: "tidepool", addressee: "deckhand", author: { activity: "rca" }, source: { kind: "commit", ref: "0a46a46" } });
   const created = getEvent(db, entry_id);
-  expect(created).toMatchObject({ worker_id: "human", payload: { kind: "memory_entry_created", restored_from: drafted, activity: "human" } });
+  expect(created).toMatchObject({ actor_id: "human", payload: { kind: "memory_entry_created", restored_from: drafted, activity: "human" } });
   expect(created?.payload).not.toHaveProperty("version");
 });
 
@@ -1892,7 +1892,7 @@ it("人間の Exemplar は source_event_id を省くと supersedes の揃った�
   // setup のみ: RCA の帰責 event(起草の出所)
   const attributed = appendEvent(db, {
     taskId: task.id,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "board",
     payload: { kind: "objection_attributed", entry_id: decision, objection_event_ids: [bundledObjection(db, task.id, decision, at)], cause: "preference", evidence: "e", wrong_memory_entries: null, round: "after_rca" },
     at,
@@ -2321,7 +2321,7 @@ it("watermark 再生と rebuild は記録済みの event を写すだけで門�
   const { db } = board();
   // setup のみ: どの export でも作れない並びを event で直に置く
   const created = (entry: Parameters<typeof recordKnowledge>[1] & { kind: "knowledge" | "definition" }) =>
-    appendEvent(db, { taskId: null, workerId: "deckhand", origin: "worker", payload: { kind: "memory_entry_created", entry: { ...entry, state: "approved", original: null, addressee: null, source: null } }, at });
+    appendEvent(db, { taskId: null, actorId: "deckhand", origin: "worker", payload: { kind: "memory_entry_created", entry: { ...entry, state: "approved", original: null, addressee: null, source: null } }, at });
   const leaf = created({ ...knowledge, scope: null, path: "build/x", kind: "knowledge" });
   const defined = created({ ...definition, title: definition.text, kind: "definition" });
 

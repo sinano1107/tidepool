@@ -2,11 +2,11 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { workspaceSettingsDisposition } from "../src/sandbox.js";
 import { getTask, interviewRootIdOf, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import {
   excludeWorkspaceProjectSettings,
   materializeWorkspaceProjectSettings,
@@ -317,7 +317,7 @@ const BOOT = new Date("2026-10-21T00:00:00.000Z");
 async function examineeCheckout(board: Db, name: string) {
   const checkout = await monorepo(name);
   const examinee = interviewExaminee(board, BOOT);
-  appendEvent(board, { taskId: examinee.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path: checkout.path }, at: BOOT });
+  appendEvent(board, { taskId: examinee.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "examinee_checkout_opened", path: checkout.path }, at: BOOT });
   return { examinee, place: taskRunPlace(board, examinee, checkout) };
 }
 
@@ -343,7 +343,7 @@ it("起動時の復元は registry 外の面接室も写しどおり戻し、roo
   const registered = await monorepo("sparse-boot-registered");
   const room = await monorepo("sparse-boot-room");
   const root = getTask(db, interviewRootIdOf(db, interviewExaminee(db, BOOT))!)!;
-  appendEvent(db, { taskId: root.id, workerId: BOARD_WORKER_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
+  appendEvent(db, { taskId: root.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "interview_room_opened", path: room.path }, at: BOOT });
   const place = taskRunPlace(db, root, registered);
   excludeWorkspaceProjectSettings(db, place);
 

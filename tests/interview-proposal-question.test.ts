@@ -59,7 +59,7 @@ function session(workspace: string, cell = OPUS) {
   const task = registerTask(t.db, { type: "work", ...CHILD, workspace }, t.clock.now(), ...HUMAN_WEBUI);
   const eventId = appendEvent(t.db, {
     taskId: task.id,
-    workerId: "fake-worker",
+    actorId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
     payload: { ...WORKER_SPAWNED, ...cell, advisor: null, tier_id: tierIdOf(t.db, "standard") },
@@ -203,7 +203,7 @@ it("shadow 行は session の task の workspace を運び、approve で登録�
   const work = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD, workspace: "lagoon" })).json;
   await runNow(t, work.id);
   // 実 adapter が spawn に刻む記録(scripted worker は刻まない)
-  const eventId = appendEvent(t.db, { taskId: work.id, workerId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null, tier_id: tierIdOf(t.db, "standard") } });
+  const eventId = appendEvent(t.db, { taskId: work.id, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null, tier_id: tierIdOf(t.db, "standard") } });
   await callAsTask(t, work.id, "log_decision", { line: "split the migration in two" });
   // 読み手は work の pickup の後の routing meta-review(前のものは runNow が完了させた)
   registerMetaReview(t.db, "routing", t.clock.now());
@@ -245,7 +245,7 @@ it("受験者の session は根拠にならず、verb は本番の session だ�
   const examinee = interviewExaminee(t.db, t.clock.now());
   const eventId = appendEvent(t.db, {
     taskId: examinee.id,
-    workerId: "fake-worker",
+    actorId: "fake-worker",
     origin: "board",
     at: t.clock.now(),
     payload: { ...WORKER_SPAWNED, ...OPUS, advisor: null, tier_id: tierIdOf(t.db, "standard") },

@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { createBehaviorCandidate, recordKnowledge } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID, HUMAN_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, completeMemoryReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -45,12 +45,12 @@ it("前回登録が無ければ材料があっても poll は登録せず、扉�
     workspace: null,
     raw_assignee: null,
     status: "in_progress",
-    registrant: BOARD_WORKER_ID,
+    registrant: BOARD_ACTOR_ID,
   });
   expect(t.worker.started.map((task) => task.id)).toEqual([id]);
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
   expect(events.filter((e) => e.kind === "meta_review_registered")).toMatchObject([
-    { worker_id: HUMAN_WORKER_ID, origin: "webui", payload: { subject: "memory", material_watermark: expect.any(Number) } },
+    { actor_id: HUMAN_ACTOR_ID, origin: "webui", payload: { subject: "memory", material_watermark: expect.any(Number) } },
   ]);
 });
 

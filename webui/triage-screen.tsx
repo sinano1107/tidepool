@@ -734,7 +734,7 @@ const objectionBadge = (comments?: string[] | null) =>
 // into commit-pending vs. already-bundled. No open session → all bundled.
 // biome-ignore lint/correctness/noUnusedVariables: used by webui/app.tsx and webui/settings-screen.tsx — one concatenated bundle
 const toLogEntryShape = (e: WireContract['GET /api/log']['entries'][number], openSessionId: number | null) => ({
-  taskId: e.task_id, agent: e.worker_id, human: e.worker_id === 'human',
+  taskId: e.task_id, agent: e.actor_id, human: e.actor_id === 'human',
   kind: e.payload.kind === 'task_completed' ? 'completion' as const : 'decision' as const,
   text: e.payload.kind === 'task_completed' ? (e.payload.result ?? '(no outcome recorded)') : e.payload.line,
   cause: e.cause ?? undefined,

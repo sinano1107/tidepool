@@ -1,8 +1,8 @@
 import { afterEach, expect, it } from "vitest";
+import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { completeTask, HANDOFF_FIELDS, listChildren, registerTask } from "../src/tasks.js";
-import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -104,5 +104,5 @@ it("完了時レビューは完了させた agent ではなく盤面の名義・
   completeTask(db, root, FULL_HANDOFF, "deckhand", at, "worker");
 
   const [review] = listChildren(db, root.id);
-  expect(listEvents(db, review!.id).find((e) => e.kind === "task_registered")).toMatchObject({ worker_id: BOARD_WORKER_ID, origin: "board" });
+  expect(listEvents(db, review!.id).find((e) => e.kind === "task_registered")).toMatchObject({ actor_id: BOARD_ACTOR_ID, origin: "board" });
 });

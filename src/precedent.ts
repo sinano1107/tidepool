@@ -564,7 +564,7 @@ export function projectAndPersist(
         EXTRACTOR_VERSION,
         episode.taskId,
         workspace ?? null,
-        spawned.worker_id,
+        spawned.actor_id,
         episode.registryCommit,
         episode.definitionVersion,
         episode.cliVersion,

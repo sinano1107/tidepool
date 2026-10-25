@@ -9,11 +9,11 @@ export { normalizeText, whyBlank } from "./required-text.js";
 export { whyInvalidSkillAllowlist } from "./skill-allowlist.js";
 export { isSettled } from "./task-status.js";
 
+import { HUMAN_ACTOR_ID } from "./actor-id.js";
 // 完了時レビューが立つかの規則の正本(ADR 0111 追記8)。サーバーの拒否・完了時の起票・WebUI の欄の出し分けが
 // 同じ関数を呼ぶ。WebUI へは scripts/build-webui-bundle.mjs が bundle して `TidepoolRules` として届ける(ADR 0209)ので、
 // ここから届くファイルは DB や fs に触れてはならない。
 import { normalizeText } from "./required-text.js";
-import { HUMAN_WORKER_ID } from "./worker-id.js";
 
 /** 写した原文の言語の正本(ADR 0223 決定2、申告の無い書き込み —— ADR 0230 決定2): 原文が写した相手の原文と一致すれば、
  *  その言語が1つに揃うときだけそれを継ぎ、一致が無いか割れたら `current`(人間の面では今の表示言語)。Knowledge / Behavior /
@@ -46,7 +46,7 @@ export interface ReviewSubject {
 export function whyNoCompletionReview(t: ReviewSubject): string | undefined {
   if (t.type !== "work") return "completion review fires for work tasks only";
   if (t.examinee) return "an Interview examinee's answer is evaluated only by its Interview's scoring";
-  if (t.assignee === HUMAN_WORKER_ID) return "completion review does not fire for a task assigned to human";
+  if (t.assignee === HUMAN_ACTOR_ID) return "completion review does not fire for a task assigned to human";
   if (t.parent_id && !t.review_flag && !t.risk_flag) {
     return "a child task's completion raises a review only with review_flag or risk_flag";
   }

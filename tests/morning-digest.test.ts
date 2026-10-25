@@ -20,18 +20,18 @@ function registerQuestion(db: ReturnType<typeof openDb>, title: string) {
   );
 }
 
-// issue #116: an agent-registered human task (worker_id != 'human') is a
+// issue #116: an agent-registered human task (actor_id != 'human') is a
 // digest count of its own, alongside questions.
 function registerHumanTask(
   db: ReturnType<typeof openDb>,
   title: string,
-  workerId: string,
+  actorId: string,
 ) {
   return registerTask(
     db,
     { type: "work", title, purpose: `purpose of ${title}`, completion_criteria: "n/a", assignee: "human" },
     new Date(0),
-    workerId,
+    actorId,
     "webui",
   );
 }
@@ -39,7 +39,7 @@ function registerHumanTask(
 function logDecision(db: ReturnType<typeof openDb>, taskId: string, line: string) {
   appendEvent(db, {
     taskId,
-    workerId: "tidepool",
+    actorId: "tidepool",
     origin: "webui",
     payload: { kind: "decision_logged", line },
     at: new Date(0),
@@ -64,7 +64,7 @@ describe("buildMorningDigest(issue #14 / #116): quiet hours 中に溜まった�
     });
   });
 
-  it("human 自身の操作で登録された human タスク(worker_id = 'human')は件数に数えない", () => {
+  it("human 自身の操作で登録された human タスク(actor_id = 'human')は件数に数えない", () => {
     const db = openDb(":memory:");
     registerHumanTask(db, "agent が委譲", "planner");
     registerHumanTask(db, "自分でメモ", "human");

@@ -82,7 +82,7 @@ function board() {
   const spawn = (taskId: string, agent: string, run: ExecutionSetting) =>
     appendEvent(db, {
       taskId,
-      workerId: agent,
+      actorId: agent,
       origin: "board",
       at,
       payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id, source: run.source, harness: run.provider === "openai" ? "codex" : "claude-code" },
@@ -91,7 +91,7 @@ function board() {
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5 };
     return appendEvent(db, {
       taskId,
-      workerId: "board",
+      actorId: "board",
       origin: "board",
       at,
       payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: {} } },
@@ -100,7 +100,7 @@ function board() {
   const allocate = (taskId: string, spawned: number, allocation: "overpowered" | "appropriate") =>
     appendEvent(db, {
       taskId,
-      workerId: "tidepool",
+      actorId: "tidepool",
       origin: "board",
       at,
       payload: { kind: "allocation_reviewed", review_task_id: "r", worker_spawned_event_id: spawned, judge, allocation, cause: "uncertain", evidence: "e" } as Extract<EventPayload, { kind: "allocation_reviewed" }>,
@@ -276,7 +276,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
 
   expect(getEvent(db, eventId)).toMatchObject({
     task_id: review,
-    worker_id: "auditor",
+    actor_id: "auditor",
     origin: "board",
     payload: {
       kind: "meta_review_material_injected",
