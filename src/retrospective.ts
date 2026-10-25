@@ -34,7 +34,7 @@ import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
 import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, resolvedStopReason, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
-import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, requireLogEntry } from "./triage.js";
+import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, RCA_CAUSES, registerRcaReview, requireLogEntry } from "./triage.js";
 import { BOARD_WORKER_ID, HUMAN_WORKER_ID, isNonAgentWorkerId } from "./worker-id.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
@@ -405,8 +405,20 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, { task_id, sto
       record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason: `Board call failed: ${message(err)}` });
       return;
     }
-    record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment });
+    db.transaction(() => {
+      record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment });
+      if (RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.worker_id, input.human_stop.reason, now);
+    })();
   });
+}
+
+/** 停止を材料にした RCA(ADR 0310 決定4): self(session の worker、human なら立てない)と auditor を止められた task の付帯子に。
+ *  材料 id は停止 event 1つ、purpose は停止の事実と理由だけ(行動列は get_current_task が注入する)。修理子は立てない。 */
+function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string, reason: string, now: Date): void {
+  const { title } = getTask(db, taskId)!;
+  const purpose = `the human stopped the session ${worker} ran on "${title}":\n\n> stop ${stopId}: ${reason}`;
+  if (!isHumanEntry({ worker_id: worker })) registerRcaReview(db, taskId, { title: `rca (self): ${title}`, purpose, material: [stopId], assignee: worker }, now);
+  registerRcaReview(db, taskId, { title: `rca (auditor): ${title}`, purpose, material: [stopId] }, now);
 }
 
 /** 停止の帰責の入力: 止められた session の窓の判断ログ全体・読んだもの・行動列(ADR 0310 決定2)。 */
@@ -727,7 +739,8 @@ function learningTarget(
 
 /** RCA の起草 verb `propose_from_objection`(spec #615 B / issue #1077): 異議エントリへの所見を記憶にする。
  *  門は列を足さず構造で引き(ADR 0120 決定1(a))、kind と宛先はその review が材料にした異議群の判定(ADR 0171 決定3)の
- *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。
+ *  cause から導く(ADR 0115 決定4)。材料に無い entry(同じ task で別 session に異議されたもの)は拒む。材料が停止の RCA は
+ *  その停止の id を entry_id に指し、停止の帰責から導く(ADR 0310 決定4、`learnedFrom`)。
  *  書いた記憶とエントリを結ぶ記録を呼んだ RCA に、店の書き込みと同じ transaction で残す(ADR 0280 決定1)。 */
 export function proposeFromObjection(
   db: Db,
@@ -742,18 +755,9 @@ export function proposeFromObjection(
   if (task?.type !== "review" || task.parent_id === null) {
     throw new DomainError("propose_from_objection is only for a review of an objected task");
   }
-  const entry = getEvent(db, entry_id);
-  if (!isDecisionLogEntry(entry) || entry.task_id !== task.parent_id) {
-    throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
-  }
-  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no objection`);
-  if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
-  const material = latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? [];
-  const bundle = objectionBundles(db, [entry_id]).get(entry_id)?.find((b) => material.includes(bundleName(b)));
-  if (!bundle) throw new DomainError(`entry ${entry_id} is not in this review's material`);
-  const { attribution } = bundle;
+  const { worker, attribution } = learnedFrom(db, task, entry_id);
   // 覆う異議群が未帰責なら uncertain と同じに読む(ADR 0168 決定3)—— learningTarget が拒否する
-  const target = learningTarget(attribution?.cause ?? "uncertain", entry.worker_id, getTextAuthor(db, entry.task_id), as);
+  const target = learningTarget(attribution?.cause ?? "uncertain", worker, getTextAuthor(db, task.parent_id), as);
   if ((target.kind === "knowledge") !== (based_on_decision !== undefined)) {
     throw new DomainError("based_on_decision is required for a knowledge entry and only for it");
   }
@@ -775,14 +779,54 @@ export function proposeFromObjection(
   })();
 }
 
-/** RCA の材料のエントリ: 登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
-const rcaMaterial = (db: Db, reviewId: string) =>
-  new Set(
+/** 起草の出所(propose_from_objection): 材料の停止ならその session の worker と、その停止の最新の帰責(ADR 0310 決定4 —— 後の判定が有効)。
+ *  他は異議されたエントリの書き手と、review の材料の異議群の帰責(ADR 0171 決定3)。材料に無い id・人間の書いたものは拒む。 */
+function learnedFrom(db: Db, review: Task, entry_id: number): { worker: string; attribution: { id: number; cause: Cause } | undefined } {
+  const stop = materialStop(db, review.id);
+  if (stop) {
+    if (entry_id !== stop.id) throw new DomainError(`entry ${entry_id} is not in this review's material`);
+    const events = listEvents(db, stop.task_id!);
+    const worker = sessionSpawnOf(events, stop)!.worker_id;
+    if (isHumanEntry({ worker_id: worker })) throw new DomainError(`entry ${entry_id} was written by a human`);
+    const [judged] = events.flatMap(({ id, payload: p }) => (p.kind === "stop_attributed" && p.stop_event_id === stop.id ? [{ id, cause: p.cause }] : [])).slice(-1);
+    return { worker, attribution: judged };
+  }
+  const entry = getEvent(db, entry_id);
+  if (!isDecisionLogEntry(entry) || entry.task_id !== review.parent_id) {
+    throw new DomainError(`entry ${entry_id} is not a decision-log entry of your parent task`);
+  }
+  if (entryObjections(db, [entry_id]).length === 0) throw new DomainError(`entry ${entry_id} carries no objection`);
+  if (isHumanEntry(entry)) throw new DomainError(`entry ${entry_id} was written by a human`);
+  const material = latestEventOfTask(db, review.id, "task_registered")!.payload.objection_event_ids ?? [];
+  const bundle = objectionBundles(db, [entry_id]).get(entry_id)?.find((b) => material.includes(bundleName(b)));
+  if (!bundle) throw new DomainError(`entry ${entry_id} is not in this review's material`);
+  return { worker: entry.worker_id, attribution: bundle.attribution };
+}
+
+/** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の材料 id が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
+export function materialStop(db: Db, reviewId: string): EventRowOf<"session_stopped_by_human"> | undefined {
+  const [id] = latestEventOfTask(db, reviewId, "task_registered")?.payload.objection_event_ids ?? [];
+  const event = id === undefined ? undefined : getEvent(db, id);
+  return event?.payload.kind === "session_stopped_by_human" ? (event as EventRowOf<"session_stopped_by_human">) : undefined;
+}
+
+/** 材料が停止の RCA の get_current_task に注入する、止められた session の行動列(ADR 0310 決定2・4、判事と同じ形)。他の task には欄ごと無い。 */
+export function stopMaterialActions(db: Db, reviewId: string): { actions: StopAttributionInput["actions"] } | undefined {
+  const stop = materialStop(db, reviewId);
+  return stop && { actions: sessionActions(db, sessionSpawnOf(listEvents(db, stop.task_id!), stop)!.id) };
+}
+
+/** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
+function rcaMaterial(db: Db, reviewId: string): Set<number> {
+  const stop = materialStop(db, reviewId);
+  if (stop) return new Set([stop.id]);
+  return new Set(
     (latestEventOfTask(db, reviewId, "task_registered")!.payload.objection_event_ids ?? []).flatMap((id) => {
       const objection = getEvent(db, id)?.payload;
       return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
     }),
   );
+}
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
  *  名指して拒み何も記録しない。所見ごとの行為は記録から列挙する —— この RCA の起草の記録のうち所見の entries と交わるものの記憶と、

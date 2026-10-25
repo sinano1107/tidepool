@@ -1,7 +1,12 @@
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { appendEvent, listEvents } from "../src/events.js";
+import { projectAndPersist } from "../src/precedent.js";
+import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { BOARD_WORKER_ID } from "../src/worker-id.js";
-import { api, bootTidepool, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, questions, registerWork, type Tidepool } from "./harness.js";
+import { api, bootTidepool, bundledObjection, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, nextPoll, questions, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -111,4 +116,52 @@ it("GET /tasks/:id human_stops carries the stop attribution's cause and evidence
   const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
 
   expect(detail.human_stops).toEqual([{ id: stop, reason: "deleting unrelated files", cause: "capability", evidence: "removed ../other" }]);
+});
+
+/** setup: worker が判断を1行書いた session を理由つきで止めて abandon し、slot が空いてから、その task の付帯子に RCA を直に登録して
+ *  拾わせる(停止の帰責からの登録の経路は tests/stop-attribution.test.ts)。材料は停止 event か、判断の行への異議。 */
+async function runningRca(material: "stop" | "objection", transcript?: string[]) {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "write parser");
+  const spawned = appendEvent(t.db, { taskId: task.id, workerId: "deckhand", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+  const entry = logDecision(t.db, getTask(t.db, task.id)!, "deleted the fixtures", "deckhand", t.clock.now(), "worker");
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "deleting unrelated files" });
+  const failure = (await questions(t)).find((q) => q.parent_id === task.id)!;
+  await api(t.baseUrl, "POST", `/api/tasks/${failure.id}/answer`, { answers: ["abandon"] });
+  await t.clock.advance(MIN);
+  const stop = listEvents(t.db, task.id).find((e) => e.kind === "session_stopped_by_human")!.id;
+  if (transcript) {
+    const transcriptPath = join(await tempDir("tidepool-stop-rca-"), "session.jsonl");
+    writeFileSync(transcriptPath, transcript.join("\n"));
+    projectAndPersist(t.db, { workerSpawnedEventId: spawned, transcriptPath });
+  }
+  const objection_event_ids = material === "stop" ? [stop] : [bundledObjection(t.db, task.id, entry, t.clock.now())];
+  const rca = registerTask(t.db, { type: "review", title: "rca (auditor): write parser", purpose: "p", completion_criteria: "c", parent_id: task.id, objection_event_ids }, t.clock.now(), BOARD_WORKER_ID, "board");
+  await nextPoll(t);
+  const client = await mcpClient(t.mcpBaseUrl, rca.id);
+  try {
+    const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.id).toBe(rca.id);
+    return payload;
+  } finally {
+    await client.close();
+  }
+}
+
+it("get_current_task of an RCA opened on a stop carries the stopped session's actions", async () => {
+  const payload = await runningRca("stop", [
+    '{"type":"assistant","uuid":"u1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf ../other"}}]}}',
+    '{"type":"user","uuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}',
+  ]);
+
+  expect(payload.actions).toEqual({ calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: null, line: "deleted the fixtures" }] });
+});
+
+it("get_current_task of an RCA opened on a stop whose session has no Episode says actions null", async () => {
+  expect(await runningRca("stop")).toHaveProperty("actions", null);
+});
+
+it("get_current_task of an RCA opened on objections carries no actions", async () => {
+  expect(await runningRca("objection")).not.toHaveProperty("actions");
 });

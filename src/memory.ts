@@ -1678,12 +1678,12 @@ export function listMemoryEntries(
     ),
   );
   const restored = restoredAs(db);
-  // cause = 出所 event が帰責(objection_attributed)のときのその cause(spec #615 G)
+  // cause = 出所 event が帰責(異議の objection_attributed か停止の stop_attributed、ADR 0310 決定4)のときのその cause(spec #615 G)
   const rows = (
     db
       .prepare(
         `SELECT m.*, json_extract(e.payload, '$.cause') AS cause FROM memory_entries m
-         LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind = 'objection_attributed'
+         LEFT JOIN events e ON m.source_kind = 'event' AND e.id = CAST(m.source_ref AS INTEGER) AND e.kind IN ('objection_attributed', 'stop_attributed')
         ORDER BY m.id`,
       )
       .all() as Array<EntryRow & { cause: Cause | null }>

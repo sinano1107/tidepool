@@ -179,7 +179,7 @@ export type ResolvedFromDefault = { assignee?: string; workspace?: string };
 export type EventPayload =
   // based_on_decision points at the decision-log entry (event id) a decomposed
   // child rests on — stamped at registration so provenance never needs a join.
-  // objection_event_ids: a repair / RCA child's material objections (ADR 0171 決定1)
+  // objection_event_ids: the events a repair / RCA child was opened on — its material objections (ADR 0171 決定1), or an RCA's one human stop (ADR 0310 決定4)
   // audited_probe: Interview の監査 review(ADR 0273 決定3・4)が監査する出題の event —— 監査の印はこれだけ
   | { kind: "task_registered"; type: TaskType; title: string; based_on_decision?: number; integration_review?: boolean; objection_event_ids?: number[]; assignee_not_copied?: { name: string; reason: string }; audited_probe?: number }
   // interview_probe: Interview の root の出題(ADR 0253 決定1)。line は盤面が4つ全部から組む文で、読み手は今までどおり line を読む。
@@ -674,7 +674,7 @@ export type EventPayload =
   // line は盤面が同じ transaction の店の event から組む。created / invalidated はその呼び出しが作った・無効化したエントリの id
   // (作成の event id = エントリの id)。event id は tool 結果に載り、Precedent の memory_write マーカーになる。
   | { kind: "memory_written"; line: string; created: number[]; invalidated: number[] }
-  // ADR 0280 決定1: RCA の propose_from_objection 1回(呼んだ RCA の task 帰属)。entry_id は材料の異議されたエントリ、memory_event_id は
+  // ADR 0280 決定1: RCA の propose_from_objection 1回(呼んだ RCA の task 帰属)。entry_id は材料の異議されたエントリ(材料が停止なら停止 event、ADR 0310 決定4)、memory_event_id は
   // 書いた記憶の店の event(= 記憶の id)。判断ログの行ではない(memory_pulled と同じ側)—— complete_rca が所見の行為をここから読む
   | { kind: "proposed_from_objection"; entry_id: number; memory_event_id: number }
   // spec #586 G: エントリ表と FTS を events から作り直した。

@@ -264,18 +264,19 @@ export function listObjectedEntries(db: Db, sessionId: number): ObjectionPair[] 
  *  判定できていない側。`preference` / `requirement_change` / `environment` / `memory`(ADR 0166 決定4)では
  *  self RCA の問い「なぜ自分はそう判断したか」が空である。判断の無い entry も
  *  `uncertain` と同じくこちら側(ADR 0168 決定3)。 */
-const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
+export const RCA_CAUSES: readonly Cause[] = ["capability", "task_ambiguity", "missing_information", "uncertain"];
 
-/** One RCA review, always a child of the objected task `taskId`, following its nearest fixed
+/** One RCA review, always a child of the objected or stopped task `taskId`, following its nearest fixed
  *  ancestor's workspace (ADR 0290), with the shared RCA discipline
  *  baked into `completion_criteria` (issue #15 layer 2 grilling notes: output
- *  is a diff, prose reflection is forbidden). The entry/comment pairs land
- *  verbatim in `purpose` — the RCA's only supplied context beyond what
- *  get_current_task (issue #29) already carries. */
-function registerRcaReview(
+ *  is a diff, prose reflection is forbidden). `purpose` quotes the material — the
+ *  entry/comment pairs, or the human stop and its reason (ADR 0310 決定4) — the RCA's
+ *  only supplied context beyond what get_current_task (issue #29) already carries;
+ *  `material` is the ids of the events it was opened on (ADR 0171 決定1). */
+export function registerRcaReview(
   db: Db,
   taskId: string,
-  spec: { title: string; purposeIntro: string; pairs: ObjectionPair[]; assignee?: string },
+  spec: { title: string; purpose: string; material: number[]; assignee?: string },
   now: Date,
 ): void {
   registerTask(
@@ -283,12 +284,12 @@ function registerRcaReview(
     {
       type: "review",
       title: spec.title,
-      purpose: renderObjectionPairs(spec.purposeIntro, spec.pairs, { entryIds: true }),
+      purpose: spec.purpose,
       completion_criteria:
         "root cause lands as a concrete diff (instruction/authority/template change) — no prose reflection",
       parent_id: taskId,
       assignee: spec.assignee,
-      objection_event_ids: spec.pairs.flatMap((p) => p.objection_event_ids),
+      objection_event_ids: spec.material,
     },
     now,
     // 盤面の規則が立てる(ADR 0194 決定3)—— どの閉じ方でも盤面名義
@@ -448,8 +449,8 @@ function bundleObjections(
         taskId,
         {
           title: `rca (self): ${objected.title}`,
-          purposeIntro: `objections raised against decisions ${workerId} made on "${objected.title}"`,
-          pairs: workerPairs,
+          purpose: renderObjectionPairs(`objections raised against decisions ${workerId} made on "${objected.title}"`, workerPairs, { entryIds: true }),
+          material: workerPairs.flatMap((p) => p.objection_event_ids),
           assignee: workerId,
         },
         now,
@@ -460,8 +461,8 @@ function bundleObjections(
       taskId,
       {
         title: `rca (auditor): ${objected.title}`,
-        purposeIntro: `objections raised against decisions of "${objected.title}"`,
-        pairs: rcaPairs,
+        purpose: renderObjectionPairs(`objections raised against decisions of "${objected.title}"`, rcaPairs, { entryIds: true }),
+        material: rcaPairs.flatMap((p) => p.objection_event_ids),
       },
       now,
     );
