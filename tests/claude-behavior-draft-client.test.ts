@@ -81,3 +81,20 @@ it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する
     await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
   }
 });
+
+it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+
+  await client.draft({ ...input, human_stop: { reason: "not yet answered" } }, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain("the human's account of why they stopped the session");
+  expect(prompts[0]).toContain('"work no longer needed" is not a cause');
+  expect(prompts[0]).toContain("leave an unanswered reason unanswered");
+  expect(prompts[0]).toContain('"human_stop": {\n    "reason": "not yet answered"\n  }');
+});

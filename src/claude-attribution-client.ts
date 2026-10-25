@@ -48,7 +48,8 @@ function buildPrompt(input: AttributionInput): string {
     "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: those are their decision logs and completion reports, read them as " +
-    "evidence.\n\n" +
+    "evidence. When present, human_stop is the human's account of why they stopped the session; " +
+    '\"work no longer needed\" is not a cause of the objection, and leave an unanswered reason unanswered.\n\n' +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

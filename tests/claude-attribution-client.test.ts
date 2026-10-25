@@ -152,3 +152,20 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
   expect(prompt).toContain("only when the decision log cites that document");
   expect(prompt).toContain("following the board's own protocol text injected into every session, or a skill bundled with the harness, is environment");
 });
+
+it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+
+  await client.judge({ ...input, human_stop: { reason: "not yet answered" } }, { provider: "anthropic", model: "fable", effort: "high" });
+
+  expect(prompts[0]).toContain("the human's account of why they stopped the session");
+  expect(prompts[0]).toContain('"work no longer needed" is not a cause');
+  expect(prompts[0]).toContain("leave an unanswered reason unanswered");
+  expect(prompts[0]).toContain('"human_stop": {\n    "reason": "not yet answered"\n  }');
+});
