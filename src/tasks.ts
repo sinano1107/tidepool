@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { Cause } from "./cause.js";
 import { isClaudeModelAlias } from "./claude-model-alias.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
@@ -4337,14 +4338,20 @@ interface DecisionHistoryEntry {
 type TaskHistoryEntry =
   | DecisionHistoryEntry
   | { completion: string | null }
-  | { stopped_by_human: { reason: string } }
+  /** cause / evidence は停止の帰責があるときだけ(ADR 0310 決定5)。 */
+  | { stopped_by_human: { reason: string; cause?: Cause; evidence?: string } }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext };
 
 /** Resolve a stop's reason for history, retrospective calls and memory cases (ADR 0305 / 0308). */
 export function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
-  return stop.reason ?? (stop.reason_question_id ? getTask(db, stop.reason_question_id)?.question_answer?.[0] : undefined) ?? "not yet answered";
+  return resolvedStopReason(db, stop) ?? "not yet answered";
+}
+
+/** 停止の理由が解けていればその文(停止 event の reason、または理由 question の回答)、未回答なら undefined。 */
+export function resolvedStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string | undefined {
+  return stop.reason ?? (stop.reason_question_id ? getTask(db, stop.reason_question_id)?.question_answer?.[0] : undefined);
 }
 
 /** taskHistoryRows の1行: `id` は行の境目の event、`decision` は行が属する decision の event。 */
@@ -4416,9 +4423,14 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
   }
   const examinee = getTask(db, taskId)?.interview_target_id != null;
-  for (const event of listEvents(db, taskId)) {
+  const events = listEvents(db, taskId);
+  // 同じ停止では後の判定が有効(ADR 0310 決定4)
+  const stopJudgments = new Map(events.flatMap(({ payload: p }) => (p.kind === "stop_attributed" ? [[p.stop_event_id, p] as const] : [])));
+  for (const event of events) {
     if (event.payload.kind === "session_stopped_by_human") {
-      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human: { reason: humanStopReason(db, event.payload) } } });
+      const judged = stopJudgments.get(event.id);
+      const stopped_by_human = { reason: humanStopReason(db, event.payload), ...(judged && { cause: judged.cause, evidence: judged.evidence }) };
+      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human } });
     }
   }
   for (const child of [...listChildren(db, taskId), ...listExaminees(db, taskId)]) {

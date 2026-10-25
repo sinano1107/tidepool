@@ -639,7 +639,7 @@ function TaskActionsDialog({ task, onAddChild, onEdit, onCancel, onStop, onClose
       <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 2px' }}>{task.title}</h1>
       <p style={meta}>{task.id} · {task.type}</p>
       {review && <p style={meta}>{review}</p>}
-      {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}</p>)}
+      {humanStops.map((row) => <p key={row.id} style={meta}>stopped by human · {row.reason}{row.cause && ` · ${row.cause}: ${row.evidence}`}</p>)}
       {interview && <p style={meta} data-testid="interview-room">interview room: {interview.room}<br />posed head: {interview.head}</p>}
       {checkout && <p style={meta} data-testid="examinee-checkout">checkout: {checkout}</p>}
       {task.status === 'in_progress'

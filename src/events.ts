@@ -724,10 +724,15 @@ export type EventPayload =
   // ADR 0170 決定4)。撃ち直すのは第2回だけで、その回数と間隔は異議群ごとに `round = after_rca` のこれで数える ——
   // 初回(`initial`)は撃ち直さない。
   | { kind: "objection_attribution_failed"; entry_id: number; objection_event_id: number; round: "initial" | "after_rca"; reason: string }
+  // ADR 0310 決定1・3: 停止の帰責 —— 理由が解けて session が閉じた人間の停止1つに、盤面が Board call に問うた「この停止は誰の落ち度か」。
+  // 止められた task に帰属し、`stop_event_id` が鍵(同じ task の別の停止は別の帰責)。行は名指さない。`entries` は objection_attributed と同じ。
+  | { kind: "stop_attributed"; stop_event_id: number; cause: Cause; evidence: string; entries: number[] | null }
+  // ADR 0310 決定3: 停止の帰責の Board call が撃って失敗した(撃てなかった回は書かない、ADR 0164 決定3)。撃ち直しは停止 event の id で数える。
+  | { kind: "stop_attribution_failed"; stop_event_id: number; reason: string }
   // ADR 0164 決定5 / issue #1066: 撃ち直しを打ち切った起草(target = 帰責 event の id)/ 第2回の帰責(target = 異議群の最初の異議 event の id)/
-  // 配分評価(target = review の task_completed event の id、ADR 0172 決定3)への人間の Retry(以後の失敗を数え直す)と
+  // 配分評価(target = review の task_completed event の id、ADR 0172 決定3)/ 停止の帰責(target = 停止 event の id、ADR 0310 決定3)への人間の Retry(以後の失敗を数え直す)と
   // Dismiss(二度と撃たない)。失敗 event と同じタスクに帰属。
-  | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round" | "allocation"; target: number }
+  | { kind: "refire_retried" | "refire_dismissed"; refire: "draft" | "second_round" | "allocation" | "stop_attribution"; target: number }
   // ADR 0195 決定5 / issue #1388: 出口の床が応答予算を超えた成功の応答を切った(盤面スコープ)。読み口の欠陥の記録 ——
   // bytes = 切る前の CallToolResult を丸ごとシリアライズしたバイト数(ADR 0195 追記1)。worker の面では session の task id を載せる。
   | { kind: "response_truncated"; surface: "management" | "worker"; verb: string; bytes: number; budget: number; task_id?: string };

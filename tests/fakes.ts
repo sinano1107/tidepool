@@ -66,6 +66,7 @@ import type {
   BehaviorDraftClient,
   BehaviorDraftInput,
   RetrospectiveCallDeps,
+  StopAttributionInput,
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
@@ -934,6 +935,20 @@ export class FakeAttributionClient implements AttributionClient {
 
   scriptJudgment(entryId: number, judgment: AttributionJudgment | Error | Promise<AttributionJudgment>): void {
     this.scripted.set(entryId, judgment);
+  }
+
+  /** 停止の帰責(ADR 0310): 入力を記録し、台本の判定(Error なら投げる)を返す。台本が無ければ `uncertain`。 */
+  readonly stopCalls: Array<{ input: StopAttributionInput; setting: Pick<ExecutionSettingRow, "model" | "effort"> }> = [];
+  private stopAnswer: AttributionJudgment | Error = { cause: "uncertain", evidence: "scripted" };
+
+  async judgeStop(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>> {
+    this.stopCalls.push({ input, setting });
+    if (this.stopAnswer instanceof Error) throw this.stopAnswer;
+    return { output: this.stopAnswer, usage: BOARD_CALL_USAGE, setting };
+  }
+
+  scriptStopJudgment(judgment: AttributionJudgment | Error): void {
+    this.stopAnswer = judgment;
   }
 }
 

@@ -1,4 +1,6 @@
 import { afterEach, expect, it } from "vitest";
+import { appendEvent, listEvents } from "../src/events.js";
+import { BOARD_WORKER_ID } from "../src/worker-id.js";
 import { api, bootTidepool, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, questions, registerWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
@@ -95,4 +97,18 @@ it.each([
   } finally {
     await client.close();
   }
+});
+
+it("GET /tasks/:id human_stops carries the stop attribution's cause and evidence", async () => {
+  t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
+  const task = await registerWork(t, "write parser");
+  await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "deleting unrelated files" });
+  const stop = listEvents(t.db, task.id).find((e) => e.kind === "session_stopped_by_human")!.id;
+  // setup のみ: sweep の判定を直に置く(撃つ経路は tests/stop-attribution.test.ts)
+  const payload = { kind: "stop_attributed", stop_event_id: stop, cause: "capability", evidence: "removed ../other", entries: null } as const;
+  appendEvent(t.db, { taskId: task.id, workerId: BOARD_WORKER_ID, origin: "board", at: t.clock.now(), payload });
+
+  const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
+
+  expect(detail.human_stops).toEqual([{ id: stop, reason: "deleting unrelated files", cause: "capability", evidence: "removed ../other" }]);
 });

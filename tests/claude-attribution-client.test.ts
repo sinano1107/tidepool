@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
-import type { AttributionInput } from "../src/retrospective.js";
+import type { AttributionInput, StopAttributionInput } from "../src/retrospective.js";
 import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AttributionInput = {
@@ -168,4 +168,32 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
   expect(prompts[0]).toContain('"work no longer needed" is not a cause');
   expect(prompts[0]).toContain("leave an unanswered reason unanswered");
   expect(prompts[0]).toContain('"human_stop": {\n    "reason": "not yet answered"\n  }');
+});
+
+it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要らなくなった理由は requirement_change、行動列だけにある挙動は証拠と言い、停止用の入力を描く(ADR 0310 決定2)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+  const stop: StopAttributionInput = {
+    human_stop: { reason: "deleting files outside the workspace" },
+    decision_log: ["chose plan B"],
+    memory_read: [],
+    agent_definition: null,
+    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
+  };
+
+  await expect(client.judgeStop(stop, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
+
+  expect(prompts[0]).toContain("human_stop.reason is the human's testimony");
+  expect(prompts[0]).toContain("A reason saying the work is no longer needed, or that what was wanted changed, is requirement_change");
+  expect(prompts[0]).toContain("What the worker did that appears in actions but not in decision_log is evidence");
+  expect(prompts[0]).toContain("memory is when a memory entry the worker read before the stop, and followed, was itself wrong");
+  expect(prompts[0]).not.toContain("objected");
+  expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
+  expect(prompts[0]).toContain("deleting files outside the workspace");
+  expect(prompts[0]).toContain('"args": "rm -rf ../other"');
 });
