@@ -182,6 +182,34 @@ it.each([false, true])("人間の停止後の分類 %s は何も書かない(ADR
   expect(before[0]?.title).toBe("stopped by human: one");
 });
 
+it("人間の停止の後始末と同じ task の再 pickup 後も、旧 session の満杯の分類を捨てる(ADR 0309)", async () => {
+  const f = await sessionInTeardown("watchdog");
+  await f.clock.advance(CONFIG.timeLimits.work + CONFIG.grace);
+  let classify!: (cap: boolean) => void;
+  f.watchdog.onWorkerExited(f.task.id, QUIET_EXIT, new Promise<boolean>((resolve) => { classify = resolve; }));
+  f.watchdog.stopSession(f.task.id, () => recordHumanStop(f.db, f.task.id, "stop now", f.clock.now(), "webui"));
+  f.runtime.fireEmpty(f.task.id);
+  await vi.waitFor(() => expect(f.slot.currentTaskId).toBeNull());
+  const failure = questions(f.db).find((question) => question.parent_id === f.task.id)!;
+  answerQuestionViaWebui(f.db, getTask(f.db, failure.id)!, ["retry"], f.clock.now());
+  await f.clock.advance(1);
+  const retried = pickupTask(f.db, getTask(f.db, f.task.id)!, "deckhand", f.clock.now())!;
+  expect(retried.status).toBe("in_progress");
+  f.slot.occupy(retried.id);
+  f.containers.open(retried.id);
+  f.runtime.hold(retried.id);
+  const events = listEvents(f.db, f.task.id);
+
+  classify(true);
+  await settle();
+
+  expect(listEvents(f.db, f.task.id)).toEqual(events);
+  expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
+  expect(f.slot.currentTaskId).toBe(f.task.id);
+  expect(f.slot.inTeardown).toBe(false);
+  expect(markedSession(f.db)).toBeUndefined();
+});
+
 it.each([false, true])("時間制限の停止後の分類 %s は満杯なら cap、そうでなければ梯子だけが受ける(ADR 0309)", async (cap) => {
   const f = await sessionInTeardown("watchdog");
   let classify!: (cap: boolean) => void;

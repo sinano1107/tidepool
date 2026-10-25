@@ -5,6 +5,26 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 const MIN = 60 * 1000;
 
+it("HTTP stop remains unavailable when watchdog timing is not configured", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "running");
+  const response = await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "stop" });
+  expect(response).toMatchObject({ status: 409, json: { error: "session stopping is unavailable" } });
+});
+
+it("management stop remains unavailable when watchdog timing is not configured", async () => {
+  t = await bootTidepool();
+  const task = await registerWork(t, "running");
+  const management = await managementMcpClient(t.baseUrl);
+  try {
+    const result = await management.callTool({ name: "stop_task", arguments: { task_id: task.id, reason: "stop" } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).toContain("session stopping is unavailable");
+  } finally {
+    await management.close();
+  }
+});
+
 it("HTTP stop exposes the failure immediately, rejects late worker completion, and retries only after reclaim", async () => {
   t = await bootTidepool({ watchdog: { timeLimits: {}, grace: MIN } });
   const task = await registerWork(t, "running");

@@ -630,6 +630,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     pollNow,
     config: options.watchdog,
   });
+  // Human stop needs the timed ladder; the exit receiver also serves boards without it.
+  const stopSession = options.watchdog ? watchdog.stopSession : undefined;
   // ADR 0099 決定3 / ADR 0136: 回収済み観測を待って止まっている容器の門。単位は
   // 2つ(worker session と Board call)なので、回答受理側が読む口もその2つの合成
   // である —— 片方だけを読むと、もう片方の未回収を抱えたまま quarantine が解ける。
@@ -728,7 +730,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       // ADR 0099 決定3: 受理された確認回答が tree rule を走らせて slot を解放する
       reclaim,
-      stopSession: watchdog?.stopSession,
+      stopSession,
       quarantineChecks: checks,
       vapidPublicKey: options.vapidPublicKey,
       auditorName,
@@ -765,7 +767,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       resolvesToBuiltIn: options.resolvesToBuiltIn,
       isProtectedWorkspace: options.isProtectedWorkspace,
       reclaim,
-      stopSession: watchdog?.stopSession,
+      stopSession,
       quarantineChecks: checks,
       quarantineResolvers: options.quarantineResolvers,
       taskExecutionCandidates: options.taskExecutionCandidates,

@@ -563,6 +563,7 @@ export function startWatchdog(deps: {
     const rec = syncPickup(taskId);
     rec.exit = exit;
     const decide = (cap: boolean) => {
+      if (rec.humanStop) return;
       if (slot.currentTaskId !== taskId || slot.inTeardown || sessionInTeardown(db)?.taskId === taskId) return;
       const task = getTask(db, taskId);
       if (task?.status !== "in_progress") return;
