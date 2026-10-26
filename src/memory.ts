@@ -31,7 +31,7 @@ import {
   rowSubjectSql,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
-import { displayedEntries, entriesReadBefore, entriesSeenBefore, listEpisodes, mergedPr } from "./precedent.js";
+import { displayedEntries, entriesReadBefore, entriesSeenBefore, episodesOfMarkers, mergedPr } from "./precedent.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
@@ -2208,7 +2208,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
 
 /** meta-review の Precedent の読み口(issue #619): 異議つきの log entry の行(precedentRows)を cause・outcome と、その行より前に
  *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は読み手と同主題の前回の meta-review 登録の
- *  watermark で、異議の帰責の event がそれより後の decision だけを返す —— 古い decision への新しい帰責も材料である。 */
+ *  watermark で、異議の帰責の event がそれより後の行だけを返す —— 古い行への新しい帰責も材料である。 */
 export function listPrecedents(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
@@ -2226,7 +2226,7 @@ export function listPrecedents(
   })();
 }
 
-/** list_precedents の行の decision より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
+/** list_precedents の行より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
 const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.memory_entries_read ?? []), ...(p.memory_entries_seen ?? [])]))];
 
 /** list_precedents の行: 異議の帰責(`objection_attributed`)が窓 `(after, upTo]` にある log entry —— 帰責の無い異議は cause も
@@ -2242,9 +2242,7 @@ function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaRevi
   const objected = [...new Set(materialEvents(db, { objection_attributed }, window).map((e) => e.payload.entry_id))].sort((a, b) => a - b);
   const judged = currentAttributions(db, objected, window.upTo);
   const displayed = displayedEntries(db, objected);
-  const episodes = new Map(
-    listEpisodes(db, {}).flatMap((episode) => episode.markers.flatMap((m) => ((m.kind === "decision" || m.kind === "memory_write") && m.eventId !== null ? [[m.eventId, episode] as const] : []))),
-  );
+  const episodes = episodesOfMarkers(db, objected);
   return objected.flatMap((id) => {
     const entry = getEvent(db, id);
     if (!isDecisionLogEntry(entry)) return [];

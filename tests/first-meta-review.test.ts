@@ -85,7 +85,7 @@ it("材料の件数は材料の event の読みと同じ集合を数える —�
   expect(materialEvents(db, kinds.routing, { after: 0 })).toHaveLength(1);
 });
 
-it("面の読みは主題ごとに、初回が未実施なら盤面の始まりからの材料の件数と最初の時刻を、登録済みなら前回の登録の時刻・次に立てられる最早の時刻・次の回が読む材料の件数を返す", () => {
+it("面の読みは主題ごとに、初回が未実施なら盤面の始まりからの回を開く event の数と最初の時刻を、登録済みなら前回の登録の時刻・次に立てられる最早の時刻・次の回を開く event の数を返す", () => {
   const db = openDb(":memory:");
   expect(readMetaReviewStatus(db)).toEqual({
     memory: { first_review: "not_started", material: 0, first_material_at: null },
@@ -104,7 +104,7 @@ it("面の読みは主題ごとに、初回が未実施なら盤面の始まり�
   expect(readMetaReviewStatus(db).memory).toEqual(registered);
 });
 
-it("取り消された初回の窓は次の回が読むので、面の次の回が読む材料の件数は盤面の始まりから数える(ADR 0193 決定3)", () => {
+it("取り消された初回の窓は次の回が読むので、面の次の回を開く event の数は盤面の始まりから数える(ADR 0193 決定3)", () => {
   const db = openDb(":memory:");
   material(db, "memory", days(1));
   const first = startFirstMetaReview(db, "memory", "webui", days(3));

@@ -840,6 +840,22 @@ export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): Marker
   ).map((m) => m.kind);
 }
 
+/** 判断・記憶の書き込みのマーカーの event id ごとの Episode(今の投影器の版) —— `ids` のマーカーを持つ session だけを読む。 */
+export function episodesOfMarkers(db: Db, ids: readonly number[]): Map<number, StoredEpisode> {
+  if (ids.length === 0) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT m.event_id, e.worker_spawned_event_id FROM episode_markers m JOIN episodes e ON e.id = m.episode_id
+        WHERE e.extractor_version = ? AND m.kind IN ('decision', 'memory_write') AND m.event_id IN (${ids.map(() => "?").join(", ")})`,
+    )
+    .all(EXTRACTOR_VERSION, ...ids) as Array<{ event_id: number; worker_spawned_event_id: number }>;
+  const episodes = new Map<number, StoredEpisode>();
+  for (const spawn of new Set(rows.map((r) => r.worker_spawned_event_id))) {
+    for (const episode of listEpisodes(db, { workerSpawnedEventId: spawn })) episodes.set(spawn, episode);
+  }
+  return new Map(rows.flatMap((r) => (episodes.has(r.worker_spawned_event_id) ? [[r.event_id, episodes.get(r.worker_spawned_event_id)!] as const] : [])));
+}
+
 /** merge 済みの PR —— 盤面の merge と merge の観測の両方(ADR 0079 決定4)。根の PR の決着の1本の読みで読む(ADR 0265 決定2)。 */
 export function mergedPr(db: Db, taskId: string): number | null {
   const outcome = rootPrOutcome(db, taskId);
