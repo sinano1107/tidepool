@@ -154,7 +154,7 @@ it starts.
   is the relative path of its session file.
 - `sessions/<task id>.<worker_spawned event id>.md` is one file per session the record counts (exercise trees,
   learning, unclassified): the prompt the worker received (the user prompt, then each system part under its own
-  heading, the definition with its builtin flag and version) and every board verb call in transcript order with
+  heading, the definition with its builtin flag and version, the authority with its source and profile name) and every board verb call in transcript order with
   its arguments and response in full as JSON. A response is the text the worker saw, so a response cut to the
   response budget ends with the board's `[tidepool: response cut to …]` marker. An error result is marked
   `(error)`. Other tools (Bash, Read, …) are not shown. A session whose prompt or transcript was not recorded says
