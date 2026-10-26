@@ -20,14 +20,17 @@ import {
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import {
+  attributionParts,
   completeMetaReview,
   injectedMaterial,
   inWindow,
+  type MaterialPart,
+  type MaterialPartRows,
   type MetaReviewWindow,
   materialSection,
   metaReviewWindow,
-  OBJECTED_DECISIONS_NOTE,
   objectedJudgments,
+  partEntries,
   previousMetaReviewWatermark,
   ROUTING_META_REVIEW_VERBS,
   repairJudgments,
@@ -366,7 +369,8 @@ export function completeRoutingReview(
   const key = (item: RoutingObject | RoutingJudgmentItem | RoutingJudgmentKey) =>
     itemName("tier_id" in item ? { tier: injectedTiers.get(item.tier_id) ?? tierNameOf(db, item.tier_id) } : item);
   const judged = new Set([...proposedObjects(db, review.id), ...actedSince(db, record.id, injectedTiers.keys())].map(key));
-  const open = routingMaterial(db, metaReviewWindow(db, review.id), precedents, agents).parts.items.filter((item) => !judged.has(key(item)));
+  // 項目は停止の行を読まない(ADR 0312 決定4)
+  const open = routingMaterial(db, metaReviewWindow(db, review.id), precedents, [], agents).parts.items.filter((item) => !judged.has(key(item)));
   return completeMetaReview<RoutingJudgmentItem, RoutingJudgmentKey>(
     db,
     review,
@@ -418,10 +422,17 @@ function judgmentItems(
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map(({ id, name }) => ({ tier_id: id, tier: name })), { learner: true }];
 }
 
-/** routing の材料の節の7つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
- *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、窓の中で
- *  決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断の行は memory.ts の list_precedents の行を呼び手が渡す(import の循環を避ける)。 */
-export function routingMaterial<P extends { decision_event_id: number }>(db: Db, window: Required<MetaReviewWindow>, precedents: P[], agents?: readonly RegistryAgent[]) {
+/** routing の材料の節の8つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
+ *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、停止の帰責
+ *  (ADR 0312 決定7)、窓の中で決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断と停止の帰責の行は memory.ts の行を
+ *  呼び手が渡す(import の循環を避ける)。 */
+export function routingMaterial<P extends { decision_event_id: number }, S extends { attribution_event_id: number; row: object }>(
+  db: Db,
+  window: Required<MetaReviewWindow>,
+  precedents: P[],
+  stops: S[],
+  agents?: readonly RegistryAgent[],
+) {
   const shadow = shadowRows(db, window);
   const allocations = allocationRows(db, window);
   const { cells, rows } = cellRows(db, window);
@@ -434,9 +445,27 @@ export function routingMaterial<P extends { decision_event_id: number }>(db: Db,
     cells,
     rows,
     precedents,
+    stops,
     proposals: listRoutingProposals(db, window),
   };
   const parts = { ...read, items: judgmentItems(db, read, agents) };
+  // 材料の kind が描く部分(ADR 0312 決定1): kind を足して部分を書かなければ、ここで compile が落ちる。節の順はこの写像の順
+  const material = {
+    "Diverged shadow rows": [
+      `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
+        `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
+        "and a row with one candidate always matches. Track records count production sessions only. A record's seed, when not null, is an accepted score of a done Interview or a row a human added as observed: it makes the cell observed in that tier and weighs one accepted session in place of the table's prior. Read the matched rows, and rows before this window, with list_routing_shadow.",
+      parts.shadow.map(({ id: _, ...row }) => row),
+      "no diverged shadow rows",
+    ],
+    "Allocation reviews": ["Rows of list_allocations counting the annotations written in this window.", allocations.groups, "no allocation reviews"],
+    "New cells and changed rows": [
+      "The cells and rows of list_routing_cells: cells first observed or seeded in this window, and execution-setting rows humans wrote in this window.",
+      [...cells, ...rows],
+      "no new cells or changed rows",
+    ],
+    ...attributionParts(parts.precedents, parts.stops),
+  } satisfies Record<MaterialPart<"routing">, MaterialPartRows>;
   const section = materialSection("routing", window, [
     [
       "Table and settings",
@@ -444,22 +473,7 @@ export function routingMaterial<P extends { decision_event_id: number }>(db: Db,
       [parts.settings],
       "no settings",
     ],
-    [
-      "Diverged shadow rows",
-      `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
-        `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
-        "and a row with one candidate always matches. Track records count production sessions only. A record's seed, when not null, is an accepted score of a done Interview or a row a human added as observed: it makes the cell observed in that tier and weighs one accepted session in place of the table's prior. Read the matched rows, and rows before this window, with list_routing_shadow.",
-      parts.shadow.map(({ id: _, ...row }) => row),
-      "no diverged shadow rows",
-    ],
-    ["Allocation reviews", "Rows of list_allocations counting the annotations written in this window.", allocations.groups, "no allocation reviews"],
-    [
-      "New cells and changed rows",
-      "The cells and rows of list_routing_cells: cells first observed or seeded in this window, and execution-setting rows humans wrote in this window.",
-      [...cells, ...rows],
-      "no new cells or changed rows",
-    ],
-    ["Objected decisions", OBJECTED_DECISIONS_NOTE, parts.precedents, "no objected decisions"],
+    ...partEntries(material),
     ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
     [
       "Items to judge",

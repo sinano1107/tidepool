@@ -31,7 +31,7 @@ function routingMaterialOf(db: Db, taskId: string, agents: readonly { name: stri
   return material;
 }
 
-it("材料の節は両端の watermark と7つの部分の見出しを持ち、材料の無い部分は空と書く —— 学習器は毎周期の項目", () => {
+it("材料の節は両端の watermark と8つの部分の見出しを持ち、材料の無い部分は空と書く —— 学習器は毎周期の項目", () => {
   const db = openDb(":memory:");
   register(db, true);
   const review = register(db);
@@ -52,6 +52,8 @@ it("材料の節は両端の watermark と7つの部分の見出しを持ち、�
     "(no new cells or changed rows)",
     "### Objected decisions",
     "(no objected decisions)",
+    "### Stops attributed",
+    "(no stops attributed)",
     "### Settled proposals",
     "(no settled proposals)",
     "### Items to judge",
@@ -290,6 +292,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
       allocation_review_event_ids: [annotation],
       cell_event_ids: [seen],
       row_change_event_ids: [rowEdit],
+      stop_attributed_event_ids: [],
       proposals: [question],
       items: material.parts.items,
       tokens: material.tokens,
@@ -433,7 +436,7 @@ it("窓で異議された前の routing meta-review の判断の行が名指す�
   expect(section).toContain("the rows, agents and tiers named by the judgments of the objected decisions");
 });
 
-it("routing meta-review の purpose は材料の節とその7つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", () => {
+it("routing meta-review の purpose は材料の節とその8つの部分を名指し、各項目を提案か complete_routing_review の no_change で判断すると言い、提案の前に過去の提案を read_routing_settings で読むと言い、一致した shadow 行と前回より前は読み口で読めると言い、読む順の文は無く、昇格の根拠を乖離した行の outcome でなく推薦したセルの実績に置く —— completion_criteria は各項目を判断したこと(ADR 0180 追記 #1239 / ADR 0278)", () => {
   const db = openDb(":memory:");
 
   const review = getTask(db, register(db))!;
@@ -441,7 +444,8 @@ it("routing meta-review の purpose は材料の節とその7つの部分を名�
   expect(review.purpose).toContain(
     "This cycle's material is in your prompt, in the Routing meta-review material section: the current table and settings, the shadow rows " +
       "since the previous routing meta-review where the learner's recommendation diverged from what ran, the allocation reviews since then, " +
-      "the cells first seen and the rows humans changed since then, the decisions objected to since then, the routing proposals answered or settled since then, and the items to judge.",
+      "the cells first seen and the rows humans changed since then, the decisions whose objections were attributed since then, " +
+      "the human stops attributed since then, the routing proposals answered or settled since then, and the items to judge.",
   );
   expect(review.purpose).toContain(
     "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, listing each item you leave unchanged as no_change (with a reason when it helps).",

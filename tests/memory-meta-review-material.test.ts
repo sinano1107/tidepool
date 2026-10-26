@@ -556,6 +556,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       row_change_event_ids: [9004],
       precedents: [9005],
       precedent_memory_entry_ids: [routingShown],
+      stop_attributed_event_ids: [],
       proposals: [],
       items: [],
     },

@@ -1443,7 +1443,7 @@ it.each(["memory", "routing"] as const)("主題 %s の meta-review の帰責の�
     payload:
       subject === "memory"
         ? { ...common, subject, changed_memory_entry_ids: [material], candidates: [], precedents: [], precedent_memory_entry_ids: [], stop_attributed_event_ids: [], proposals: [], proposal_memory_entry_ids: [], branch_definition_ids: [], items: [] }
-        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocation_review_event_ids: [], cell_event_ids: [], row_change_event_ids: [], precedents: [], precedent_memory_entry_ids: [], proposals: [], items: [] },
+        : { ...common, subject, shadow: [], shadow_rows: 0, shadow_rows_multi_candidate: 0, allocation_review_event_ids: [], cell_event_ids: [], row_change_event_ids: [], precedents: [], precedent_memory_entry_ids: [], stop_attributed_event_ids: [], proposals: [], items: [] },
   });
   readMemoryEntries(b.db, { taskId: review.id, agent: "deckhand" }, { ids: [guidance, material] }, at);
   const decision = logDecision(b.db, review, "kept candidate 12", "deckhand", at, "worker");
