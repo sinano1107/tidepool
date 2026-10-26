@@ -1935,12 +1935,8 @@ const DECKHAND_THEN = (commit: string) => ({
   builtin: false,
   body: "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
   authority: { guidance: "Prefer reversible actions. Anything irreversible is outside your authority.\n", assignable_to: ["*"] },
-  // 当時版の `*` は上書きの無かった組み込みにも展開される(self RCA の注入と同じ、issue #1741)
-  roster: [
-    { name: "deckhand", description: "General work agent for the tidepool board" },
-    { name: DEFAULT_AUDITOR_NAME, description: "Reviews work independently against its completion criteria." },
-    { name: DEFAULT_INTERVIEWER_NAME, description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers." },
-  ],
+  // 当時版の `*` も組み込みには展開されない —— spawn 時の Roster と同じ集合(ADR 0235 決定1、#2602)
+  roster: [{ name: "deckhand", description: "General work agent for the tidepool board" }],
 });
 
 const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: number[]) =>
