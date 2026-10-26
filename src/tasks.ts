@@ -4511,7 +4511,7 @@ function cancelOrigin(
   const answer = { answer: question.question_answer, comment: question.question_answer_comment };
   if (!REFUSED_TARGET_KINDS.includes(question.question_quarantine_kind ?? "")) return { origin_question: { title: question.title, ...answer } };
   // 断られた対象の question の題は model を名指すので、統合復帰の history には伏せた文と証拠の種類だけを見せる(伏せた handoff、
-  // ADR 0199 / ADR 0253)。spawn 前に止まっていた子には証拠が無い
+  // ADR 0199 / ADR 0253)。別の子の拒否で開いた question に spawn 前から止められた子には自身の証拠が無い
   const cause = latestEventOfTask(db, taskId, "target_refused")?.payload.cause;
   return { origin_question: { title: "the provider refused this child's Interview target", ...answer, ...(cause && { cause }) } };
 }
