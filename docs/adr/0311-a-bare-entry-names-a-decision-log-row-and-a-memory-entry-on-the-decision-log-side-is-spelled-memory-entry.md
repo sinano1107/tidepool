@@ -12,7 +12,8 @@
    `read_decision_log` の `entries`、`objection_raised` などの `entry_id`、kind `log_entry_displayed` が既にそう呼んでいる。
 2. **記憶のエントリは、判断ログ側の面では `memory_entry` と書く。** 判断ログ側の面とは、判断ログの行の中(`decision_logged` の `judgment`、
    `list_precedents` の行)、判断の id の隣、kind が `memory_*` でない event のこと。`memory_*` の event と記憶の verb の中では今どおり `entry`
-   と書く。名前に entry を含まないもの(`candidates`、Definition)は修飾しない。
+   と書く。名前に entry を含まないもの(`candidates`、Definition)は修飾しない。盤面が判断ログ側に書く文(判断の行の文、帰責の
+   evidence、帰責の Board call の prompt)にも同じ規則を当て、記憶の側を `memory entry` / `memory entries` と書く。
 3. **`memory_*` の event に判断ログの行が入るときは `log_entry_id` と書く。** 決定2 により `memory_*` の中の `entry` は記憶を指すので、
    判断ログの行のほうを修飾する。
 4. **材料の記録(`meta_review_material_injected`)の配列の鍵は、持っている id の物を名指す。** 部分の名前がそれを名指していれば、そのまま
@@ -20,8 +21,12 @@
    id と、同じ語の二義)を言い直したもので、routing の結果は変わらない。memory では `store_changes` が新たに改名の側に入る(記憶の
    エントリの id を持つが、名前は変更を指す)。
 5. **当てはめ。**
-   - `judgment.entry`、材料の `items[].entry`、`complete_memory_review` の項目の鍵 → `memory_entry`。memory meta-review の判断の行の文
-     (`left_as_is: entry #<id>`)も `memory entry #<id>` と書く(項目の名前は記憶の修理の拒否文と共有なので、拒否文も同じになる)
+   - `judgment.entry`、材料の `items[].entry`、`complete_memory_review` の項目の鍵 → `memory_entry`。`complete_memory_review` は
+     meta-review の verb だが、同じ形の項目が判断の行(`decision_logged.judgment`)にそのまま記録されるので、判断ログ側として扱う。
+     memory meta-review の判断の行の文(`left_as_is: entry #<id>`)も `memory entry #<id>` と書く(項目の名前は記憶の修理の拒否文と
+     共有なので、拒否文も同じになる)
+   - 帰責の門が書く evidence(`entry <id> was not read before the decision`、`it names no entry`)→ `memory entry`。帰責の Board call の
+     prompt が記憶のエントリを指す `entries`(`written` の説明、`wrong_memory_entries` の説明)→ `memory entries`
    - `propose_from_material` の返り値の `entry_id` → `memory_entry_id`
    - `list_precedents` の `entries_read` / `entries_seen` → `memory_entries_read` / `memory_entries_seen`(#2577 はこの2つを残した。当時の範囲が
      同じ payload に並ぶ帰責の `entries` だけだったため)
