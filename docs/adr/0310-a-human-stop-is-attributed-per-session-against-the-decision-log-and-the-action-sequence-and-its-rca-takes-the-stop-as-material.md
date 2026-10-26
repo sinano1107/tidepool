@@ -2,6 +2,8 @@
 
 **Status 追記: 決定4 の「材料 id 欄」「材料にした event の id」は登録の欄 `opened_on_event_ids` を指す(issue #2577 で `objection_event_ids` から改名)** —— 起草 verb は `propose_from_material`(引数 `material_id`)、帰責の `entries` は `wrong_memory_entries`。
 
+**Status 追記: 決定3 の「session が閉じていて」は、その session の Episode の投影の決着(行を書いた・書かなかった・throw した)を含む(issue #2570)** —— spec #2557 の「sweep を撃つ poll は後始末の完走による slot 解放の後に来るので、判事の時点で Episode は投影済み」は成り立たない。投影は `worker_exited` より後に transcript の書き込みストリームの close で走り、その間に無関係な契機の poll が入りうる。
+
 2026-10-25 の triage → grilling(issue #2553、#2549 / ADR 0308 決定4 の前提から分離)で決定。ADR 0308 は人間の停止の理由を「学習の材料であり
 扉でもある」と置いたが、学習の鎖(帰責 → RCA → candidate → meta-review → 承認)は入口から出口まで**判断ログの行**を鍵にしており
 (異議群 = entry × triage session、ADR 0170; RCA の材料と所見は行、ADR 0171 / 0278)、停止は行を指さない。issue の案 (a)「判事が

@@ -31,7 +31,7 @@ import {
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { createBehaviorCandidate, listMemoryEntries, memoryIndex, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
-import { listEpisodes, readPulls } from "./precedent.js";
+import { listEpisodes, projectionPending, readPulls } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
@@ -474,7 +474,7 @@ type Session = { events: EventRow[]; spawned: EventRow; inSession: (e: Pick<Even
 type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session; judged: EventRowOf<"stop_attributed"> | undefined };
 
 /** 停止の帰責の扉が開いた停止(ADR 0310 決定1・3・6): 人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
- *  worker_exited 観測済み)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
+ *  worker_exited 観測済みで、その Episode の投影が決着済み —— issue #2570)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
  *  受験者の task でないもの。 */
 // ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の確定を SQL で先に絞る
 function stopTargets(db: Db): StopTarget[] {
@@ -485,7 +485,7 @@ function stopTargets(db: Db): StopTarget[] {
     const spawned = sessionSpawnOf(events, stop);
     if (!spawned) return [];
     const { exited, inSession } = sessionWindow(events, spawned);
-    if (!exited) return [];
+    if (!exited || projectionPending(db, spawned.id)) return [];
     if (events.some(({ id, kind }) => kind === "task_cancelled_directly" && spawned.id < id && id < stop.id)) return [];
     return [{ task_id, stop, session: { events, spawned, inSession }, judged: stopJudgments(events).get(stop.id) }];
   });

@@ -42,7 +42,7 @@ import {
   recordMetaReviewMaterial,
 } from "./memory.js";
 import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
-import { projectWhenTranscriptCloses } from "./precedent.js";
+import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
@@ -1442,6 +1442,8 @@ export class CodexWorker implements WorkerAdapter {
         memorySection: memoryPromptSection(memory, material),
       })}\n\n`;
       const transcript = this.options.transcripts.open(task.id, spawned);
+      // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
+      markProjectionPending(this.options.db, spawned);
       const child = this.containers.open(task.id).spawn(
         this.options.executable,
         [
