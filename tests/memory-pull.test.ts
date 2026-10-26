@@ -451,7 +451,7 @@ it("search は Definition を workspace・盤面全体のどちらも当てず�
   const search = searchMemory(db, reader, { query: "tides" }, at);
 
   expect(search.results.map((r) => r.id)).toEqual([leaf]);
-  expect(getEvent(db, search.event_id)?.payload).toMatchObject({ candidates: [{ id: leaf, dropped: null }] });
+  expect(getEvent(db, search.event_id)?.payload).toMatchObject({ hits: [{ id: leaf, dropped: null }] });
 });
 
 it("read は見える Definition の本文を workspace・盤面全体のどちらも返す(ADR 0178 決定6)", () => {
@@ -558,7 +558,7 @@ it("読み手が pin の子のとき、どの Interview の root が書いたエ
   const search = searchMemory(db, examinee, { query: "tide" }, at);
 
   expect(search.results.map((r) => r.id)).toEqual([production]);
-  expect((getEvent(db, search.event_id)!.payload as { candidates: Array<{ id: number }> }).candidates.map((c) => c.id)).toEqual([production]);
+  expect((getEvent(db, search.event_id)!.payload as { hits: Array<{ id: number }> }).hits.map((c) => c.id)).toEqual([production]);
   expect(browseMemory(db, examinee, { prefix: "tide" }, at)).toMatchObject({ children: [], entries: [{ id: production }] });
   expect(readMemory(db, examinee, { ids }, at)).toMatchObject({ entries: [{ id: production }], dropped: [] });
   for (const seer of [reader, { ...reader, taskId: root.id }]) {
@@ -609,7 +609,7 @@ it("読み手の視界に無い後継による無効化はその読み手には�
   expect(readMemory(db, examinee, { ids: [own, ownFact] }, at)).toMatchObject({ entries: [{ id: own, text: "What the production work files." }, { id: ownFact }], dropped: [] });
   const search = searchMemory(db, examinee, { query: "tide" }, at);
   expect(search.results.map((r) => r.id)).toEqual([ownFact]);
-  expect(getEvent(db, search.event_id)!.payload).toMatchObject({ candidates: [{ id: ownFact, dropped: null }] });
+  expect(getEvent(db, search.event_id)!.payload).toMatchObject({ hits: [{ id: ownFact, dropped: null }] });
 });
 
 it("読み手の視界に無い後継がその後に落とされても、その読み手には置き換えられた定義の無効化が起きていないまま —— 生きて INDEX に出て read が本文を返す(ADR 0264 決定4)", () => {
@@ -1121,7 +1121,7 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
     input: { query: "tide" },
     returned_ids: shown,
     watermark: pages[20],
-    candidates: [
+    hits: [
       { id: invalidated, dropped: "invalidated" },
       { id: elsewhere, dropped: "addressee" },
       ...shown.map((id) => ({ id, dropped: null })),
@@ -1132,12 +1132,12 @@ it("search の memory_pulled は FTS の順位どおりの候補と、返さな�
   expect(rest.results.map((r) => r.id)).toEqual(pages.slice(shown.length));
   expect(rest).not.toHaveProperty("next");
   // 続きの呼び出しも1回の pull: input は最初の呼び出しの引数、returned_ids はその応答で返した id
-  // candidates は前の応答で返した候補を持たない —— それらは前の応答の pull に dropped: null で残っている
+  // hits は前の応答で返した候補を持たない —— それらは前の応答の pull に dropped: null で残っている
   expect(getEvent(db, rest.event_id)?.payload).toMatchObject({
     verb: "search_memory",
     input: { query: "tide" },
     returned_ids: pages.slice(shown.length),
-    candidates: [
+    hits: [
       { id: invalidated, dropped: "invalidated" },
       { id: elsewhere, dropped: "addressee" },
       ...pages.slice(shown.length).map((id) => ({ id, dropped: null })),
@@ -1203,7 +1203,7 @@ it("rebuild はエントリ表と FTS を events から作り直し、無効化�
   const eventId = ensureMemoryIndex(db, at);
 
   expect(storeView(db, reader)).toEqual(before);
-  expect(before.candidates).toMatchObject({ candidates: expect.arrayContaining([{ id: old, dropped: "invalidated" }]) });
+  expect(before.candidates).toMatchObject({ hits: expect.arrayContaining([{ id: old, dropped: "invalidated" }]) });
   expect(() => invalidateMemoryEntry(db, { entry_id: old, reason: "environment" }, "human", "webui", at)).toThrow(/already invalidated/);
   expect(getEvent(db, eventId!)).toMatchObject({
     task_id: null,

@@ -106,6 +106,7 @@ it("an answer to the reason question is not counted for or against a recommendat
   const reason = getTask(db, listBoard(db).find((q) => q.question_stop_reason_task_id === task.id)!.id)!;
   answerQuestion(db, reason, ["parser was deleting unrelated files"], now, undefined, undefined, undefined, "webui");
   expect(listEvents(db, reason.id).find((e) => e.kind === "question_answered")!.payload).toMatchObject({ answers: [{ answer: "parser was deleting unrelated files", recommendation_accepted: null }] });
+  expect(listEvents(db, reason.id).find((e) => e.kind === "question_answered")!.payload).not.toHaveProperty("recommended_by");
 });
 
 it.each(["retry", "abandon"])("the root reason question survives %s and does not block retry", (answer) => {

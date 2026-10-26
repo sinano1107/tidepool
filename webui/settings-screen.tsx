@@ -1654,7 +1654,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }: {
           <div style={{ display: 'flex', gap: 8 }}>
             {/* only a decision_logged entry is a citable case by itself (citedEpisode) */}
             {e.payload.kind === 'decision_logged' && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.id)}>This entry</Button>}
-            {e.session_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.session_event_id)}>This session</Button>}
+            {e.worker_spawned_event_id !== null && <Button variant="ghost" size="sm" onClick={() => onChange?.(e.worker_spawned_event_id)}>This session</Button>}
           </div>
         </div>;
       })}

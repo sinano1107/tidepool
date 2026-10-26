@@ -538,7 +538,7 @@ export function registerQuarantine(
       taskId: existing.id,
       actorId: BOARD_ACTOR_ID,
       origin: "board",
-      payload: { kind: "quarantine_refired", cause: reason },
+      payload: { kind: "quarantine_refired", reason },
       at: now,
     });
     return;

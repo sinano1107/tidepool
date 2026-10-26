@@ -1956,11 +1956,11 @@ export function searchMemory(
     const returned = new Set(packed.results.map((r) => r.id));
     // 前の応答で返した候補は外す —— それらは前の応答の pull に dropped: null で残っている
     const earlier = new Set(visible.slice(0, Math.max(0, visible.findIndex((r) => r.id === read.at))).map((r) => r.id));
-    const candidates = hits.filter((row) => !earlier.has(row.id)).map((row) => ({
+    const hitsRecord = hits.filter((row) => !earlier.has(row.id)).map((row) => ({
       id: row.id,
       dropped: sight.dropReason(row) ?? (returned.has(row.id) ? null : ("response_budget" as const)),
     }));
-    return recordPull(db, reader, { verb: "search_memory", input: read.args, returned_ids: [...returned], candidates }, packed, at);
+    return recordPull(db, reader, { verb: "search_memory", input: read.args, returned_ids: [...returned], hits: hitsRecord }, packed, at);
   })();
 }
 
@@ -2886,10 +2886,10 @@ export function recordMetaReviewMaterial(
             shadow: material.parts.shadow.map((row) => row.id),
             shadow_rows: material.parts.shadow_rows,
             shadow_rows_multi_candidate: material.parts.shadow_rows_multi_candidate,
-            allocations: material.parts.allocations.counted,
+            allocation_review_event_ids: material.parts.allocations.counted,
             // 本番の session の無い種のセルは種の event で名指す
-            cells: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
-            rows: material.parts.rows.map((r) => r.event_id),
+            cell_event_ids: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
+            row_change_event_ids: material.parts.rows.map((r) => r.event_id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),
             precedent_entries: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),

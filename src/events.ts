@@ -315,11 +315,12 @@ export type EventPayload =
   // never need a join back through task_registered. One entry per question
   // item, in item order (issue #30) — acceptance is counted per item, not per
   // submission, so "N of M answered per recommendation" stays expressible.
-  // null = the item carried no recommendation (停止の理由 question、ADR 0310 決定7) —— 受理率の分母に入れない
+  // null = the item carried no recommendation (停止の理由 question、ADR 0310 決定7) —— 受理率の分母に入れない。
+  // 推奨を持つ項目が1つも無い回答は recommended_by も欄ごと無い(盤面が登録した推奨なしの question を、盤面が推奨したと読ませない)
   | {
       kind: "question_answered";
       answers: Array<{ answer: string; recommendation_accepted: boolean | null }>;
-      recommended_by: string;
+      recommended_by?: string;
       // the reject-reason steering channel (issue #40) — one per submission,
       // not per item; absent entirely (not null) when the answer carried none
       comment?: string;
@@ -399,7 +400,7 @@ export type EventPayload =
   // ADR 0137: a quarantine key that already has an open Confirmation question
   // fired again — recorded on that same question rather than opening a second
   // one (CONTEXT.md's Quarantine: 1資源につき確認は最大1枚)
-  | { kind: "quarantine_refired"; cause: string }
+  | { kind: "quarantine_refired"; reason: string }
   // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
   // kind's check and was accepted — pickup resumes for what that kind stops.
   // 回答なしで盤面名義に決着したときだけ observed_event_id を持つ: 行の Quarantine は表の編集がその行を消したとき
@@ -647,7 +648,7 @@ export type EventPayload =
   // ADR 0150 決定1 が新設しないとした「registry 変更の event」ではない —— 盤面自身の書き込みの記録で、row の approve の execution_settings_changed と同じ位置。
   | { kind: "agent_tier_changed"; agent: string; from: Tier; to: Tier; question_id: string; registry_commit: string }
   // spec #586 D: worker の pull 1回(task 帰属)。返した id と snapshot watermark、search は
-  // 候補ごとの落ちた理由(null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
+  // ヒットごとの落ちた理由(`hits`、null = 返した)、read は求めた id のうち本文を返さなかった無効化済みの理由と見える後継
   // (ADR 0167 決定4。returned_ids はたどった先の id)。event id は tool 結果に載り、Precedent の
   // memory マーカーになる。続き(next)の呼び出しも1回の pull で、input は最初の呼び出しの引数、returned_ids はその応答で
   // 返した id だけ(ADR 0195)。
@@ -668,7 +669,7 @@ export type EventPayload =
       };
       returned_ids: number[];
       watermark: number;
-      candidates?: Array<{ id: number; dropped: MemoryDropReason | null }>;
+      hits?: Array<{ id: number; dropped: MemoryDropReason | null }>;
       dropped?: Array<{ id: number; reason: InvalidationReason; successor: number | null }>;
     }
   // ADR 0252 決定2・3 / issue #632: AI が直接適用した記憶の書き込み1回(verb の呼び出し1回、書き手の task 帰属)。決定ログの1行で、
@@ -709,10 +710,12 @@ export type EventPayload =
   // list_memory_proposals が返すエントリの id も持つ(precedent_entries / proposal_entries —— Precedent の seen に
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4。エントリの項目の id も seen に数える、issue #2307)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
-  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed、新しいセルの初観測(worker_exited —— 本番の session の無い種のセルは種の event)、人間が変えた行(execution_settings_changed)、
+  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed(allocation_review_event_ids)、新しいセルの初観測(cell_event_ids —— worker_exited、本番の session の無い種のセルは種の event)、人間が変えた行(row_change_event_ids —— execution_settings_changed)、
   // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
+  // 鍵の規則: 鍵は原則として材料の部分の名前のまま。改名するのは (1) 部分の行が別の鍵(セル・集計の軸)で引かれていて、配列は他から借りた
+  // event id を持つもの、(2) 同じ payload の中で同じ語が別のものを指すもの —— だけで、持っている id の名前にする(routing で残る名前は shadow / precedents / proposals)
   | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[]; items: MemoryJudgmentItem[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocations: number[]; cells: number[]; rows: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }

@@ -31,3 +31,7 @@ scope・宛先のフィルタ)、落とした理由は結果にも event にも�
   意味が使われない。
 - **理由を `superseded` / `invalidated` の2値に潰す** —— 誤っていたのか陳腐化したのかで、worker が次に探すものが変わる。
 - **見えない後継も `successor` に載せる** —— 「そこに何かがある」を視界の外に見せる。今の `Ids you cannot see are omitted` の線を破る。
+
+## 追記(2026-10-26 の triage、issue #2579)
+
+決定4 の `search_memory` の `candidates` は `hits` に改名した(中身の `{id, dropped}` は同じ)。candidate は記憶の未承認の状態を指す語で、同じ payload の `verb` の値にも `list_memory_candidates` があるため。

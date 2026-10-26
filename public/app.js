@@ -2460,7 +2460,7 @@ function MemoryCasePicker({ workspace, value, onChange, onQuote }) {
         entry: { ...row, objection: objectionBadge(row.pendingObjections), bundledObjection: objectionBadge(row.bundledObjections) },
         onOpenMemoryEntry: (id) => document.querySelector(`[data-testid="memory-entry-${id}"]`)?.scrollIntoView({ block: "center" })
       }
-    ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.session_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.session_event_id) }, "This session")));
+    ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, e.payload.kind === "decision_logged" && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.id) }, "This entry"), e.worker_spawned_event_id !== null && /* @__PURE__ */ React.createElement(Button, { variant: "ghost", size: "sm", onClick: () => onChange?.(e.worker_spawned_event_id) }, "This session")));
   }));
 }
 const annotationsToSend = (annotations) => annotations.map(({ anchor, polarity, text, original }) => ({ anchor, polarity, text: text.trim(), ...original.trim() ? { original: original.trim() } : {} }));

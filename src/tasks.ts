@@ -2093,7 +2093,8 @@ export function answerQuestion(
     ).run(JSON.stringify(answers), comment ?? null, question.id);
     if (changes === 0) throw new QuestionClosedError();
     // the recommender is whoever registered the question — carried on the
-    // answer event so per-agent acceptance rates need no join
+    // answer event so per-agent acceptance rates need no join. 推奨を持つ項目が
+    // 1つも無い回答(停止の理由 question)は欄ごと無い
     appendEvent(db, {
       taskId: question.id,
       actorId: HUMAN_ACTOR_ID,
@@ -2104,7 +2105,7 @@ export function answerQuestion(
           answer: a,
           recommendation_accepted: items[i]!.recommendation === undefined ? null : a === items[i]!.recommendation && amendment === undefined,
         })),
-        recommended_by: getRegistrant(db, question.id),
+        ...(items.some((i) => i.recommendation !== undefined) && { recommended_by: getRegistrant(db, question.id) }),
         ...(comment !== undefined && { comment }),
         ...(amendment !== undefined && { amendment }),
       },
