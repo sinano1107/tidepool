@@ -199,7 +199,6 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
     appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload, at });
   event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
   attributedObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
-  bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の未帰責の異議"); // 最後の異議群が未帰責なら entry の今の判定は無い(ADR 0170 決定2)
   registerMetaReview(db, "memory", at); // 前回の meta-review
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run(); // setup のみ: 完了した登録だけが窓の起点(ADR 0193)
   const objection = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
@@ -240,8 +239,26 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
     payload: { kind: "memory_pulled", verb: "list_precedents", returned_ids: [42] },
   });
   expect(listPrecedents(db, reader, { since_watermark: 0 }, at).precedents.map((p) => [p.decision_event_id, p.cause])).toEqual([
-    [6, null],
+    [6, "capability"],
     [7, "preference"],
+  ]);
+});
+
+it("帰責のある異議群の後に未帰責の異議群がある decision は、list_precedents に cause・wrong_memory_entries が null の行で載る —— 今の判定は最後の異議群のもの(ADR 0170 決定2)", async () => {
+  const db = seedFixtureBoard();
+  projectAndPersist(db, {
+    workerSpawnedEventId: FIXTURE_SPAWNED_EVENT_ID,
+    transcriptPath: writeFixtureTranscript(await logDir(), `${FIXTURE_TASK}.${FIXTURE_SPAWNED_EVENT_ID}.stream.jsonl`),
+  });
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  attributedObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");
+  bundledObjection(db, FIXTURE_TASK, 7, at, "箇条書きは5つに");
+  registerMetaReview(db, "memory", at);
+  // setup のみ: 登録した task の id を引く
+  const { id } = db.prepare("SELECT id FROM tasks WHERE meta_review_subject = 'memory'").get() as { id: string };
+
+  expect(listPrecedents(db, { taskId: id, agent: "auditor" }, { since_watermark: 0 }, at).precedents.map((p) => [p.decision_event_id, p.cause, p.wrong_memory_entries])).toEqual([
+    [7, null, null],
   ]);
 });
 
