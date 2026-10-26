@@ -1954,13 +1954,13 @@ export function searchMemory(
     const visible = hits.filter((row) => sight.has(row, 3)).map((row) => ({ id: row.id, title: row.title, path: row.path, ...sight.mark(row) }));
     const packed = packItems(read, "results", visible, {}, { every: PENDING_EVENT_ID }) as ReturnType<typeof searchMemory>;
     const returned = new Set(packed.results.map((r) => r.id));
-    // 前の応答で返した候補は外す —— それらは前の応答の pull に dropped: null で残っている
+    // 前の応答で返したヒットは外す —— それらは前の応答の pull に dropped: null で残っている
     const earlier = new Set(visible.slice(0, Math.max(0, visible.findIndex((r) => r.id === read.at))).map((r) => r.id));
-    const hitsRecord = hits.filter((row) => !earlier.has(row.id)).map((row) => ({
+    const recorded = hits.filter((row) => !earlier.has(row.id)).map((row) => ({
       id: row.id,
       dropped: sight.dropReason(row) ?? (returned.has(row.id) ? null : ("response_budget" as const)),
     }));
-    return recordPull(db, reader, { verb: "search_memory", input: read.args, returned_ids: [...returned], hits: hitsRecord }, packed, at);
+    return recordPull(db, reader, { verb: "search_memory", input: read.args, returned_ids: [...returned], hits: recorded }, packed, at);
   })();
 }
 
