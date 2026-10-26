@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { boardDoctrine } from "../src/board-prose.js";
+import { boardDoctrine, fenced } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -27,12 +27,14 @@ import type { WorkerExit } from "../src/worker.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
+  definitionPart,
   driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
   fakeAppServerCall,
   passthroughContainers,
   recordingSpawn,
+  recordPrompt,
 } from "./fakes.js";
 import {
   bootTidepool,
@@ -193,7 +195,6 @@ const developerInstructions = (args: string[]) => configValue<string>(args, "dev
 
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
-
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
@@ -935,13 +936,14 @@ describe("CodexWorker (ADR 0098)", () => {
     const at = new Date("2026-08-24T00:00:00.000Z");
     const objected = task(f.db, "codex-objected");
     markPickedUp(f.db, objected.id, at, "codex-agent");
-    appendEvent(f.db, {
+    const spawned = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "codex-agent",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
+    recordPrompt(f.logDir, objected.id, spawned, [definitionPart("You are the Codex worker.")]);
     const decision = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "codex-agent",
@@ -983,23 +985,28 @@ describe("CodexWorker (ADR 0098)", () => {
     ].map((heading) => developer.indexOf(heading));
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
-    expect(developer).toContain("---\n\nYou are the Codex worker.\n\n");
+    expect(developer).toContain(`---\n\n${fenced("You are the Codex worker.")}\n\n`);
     expect(developer.endsWith(`\n\n${section}\n\n`)).toBe(true);
   });
 
-  it("当事者レビューの当時版には当時の Authority と Roster が入る —— 文面は Claude と共有の boardProse(issue #1741 / ADR 0157)", async () => {
+  it("当事者レビューの当時版には記録した Authority と Roster が入る —— 文面は Claude と共有の boardProse(issue #1741 / ADR 0157 / ADR 0314 決定1)", async () => {
     const f = await fixture();
     const objectedCommit = execFileSync("git", ["rev-parse", "main"], { cwd: f.registry }).toString().trim();
     const at = new Date("2026-08-24T00:00:00.000Z");
     const objected = task(f.db, "codex-objected-1741");
     markPickedUp(f.db, objected.id, at, "codex-agent");
-    appendEvent(f.db, {
+    const spawned = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "codex-agent",
       origin: "board",
       payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
+    recordPrompt(f.logDir, objected.id, spawned, [
+      definitionPart("You are the Codex worker."),
+      { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions.", source: "profile", profile: "standard" },
+      { part: "roster", text: "\n\n## Roster\n\ncodex-agent — Codex agent" },
+    ]);
     const decision = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "codex-agent",
@@ -1023,8 +1030,8 @@ describe("CodexWorker (ADR 0098)", () => {
 
     // 文面そのものは claude-worker.test.ts が釘付けする(ADR 0107 決定3)。ここは developer instructions に届くことだけ
     const developer = developerInstructions(f.process.calls[0]!.args);
-    expect(developer).toContain("### Authority as it stood then (profile standard)");
-    expect(developer).toContain("### Roster as it stood then (profile standard)");
+    expect(developer).toContain("The Authority below came from the registry's authority profile standard.");
+    expect(developer).toContain(fenced("## Roster\n\ncodex-agent — Codex agent"));
   });
 
   it("work / review task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async () => {

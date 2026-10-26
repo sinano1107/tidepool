@@ -1,21 +1,19 @@
-import { execFileSync } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
+import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { BoardCallUsageError, listBoardCalls } from "../src/board-call-usage.js";
+import type { PromptPart } from "../src/board-prose.js";
 import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
-import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
-import { REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
-import { cancelTaskDirectly, completeTask, getTask, listChildren, logDecision, pickupTask, REPAIR_NOTICES, registerTask, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
+import { BOARD_CALL_USAGE, definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, recordPrompt, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -31,7 +29,6 @@ import {
   KEEP_FIXTURES,
   loggedEntry,
   managementMcpClient,
-  markPickedUp,
   mcpClient,
   memoryEntries,
   nextPoll,
@@ -49,7 +46,7 @@ import {
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -317,6 +314,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         decision_log: ["chose plan B", "dropped the cache layer", "completion report: shipped plan B"],
         memory_read: [],
         agent_definition: null,
+        board_text: [],
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
       setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -470,6 +468,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
     agent_definition: null,
+    board_text: [],
     rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
   });
 });
@@ -560,6 +559,7 @@ it.each([
           decision_log: ["skipped the fixtures", "completion report: done as specified"],
           memory_read: [],
           agent_definition: null,
+          board_text: [],
           index: expect.stringContaining("testing/ — how tests are run"),
         },
         setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -1157,6 +1157,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
     agent_definition: null,
+    board_text: [],
     rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
@@ -1907,37 +1908,41 @@ it("打ち切りの一覧も同じ照合で読む —— B の RCA が未決着�
 
 // 従った agent 定義と workspace の文書への帰責(ADR 0291 / #2364)—— ドメイン層
 
-const registryGit = (cwd: string) => (...args: string[]) =>
-  execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@e", ...args], { cwd, stdio: ["ignore", "pipe", "pipe"] }).toString().trim();
+/** deckhand の spawn で記録した prompt の部分(adapter が `TranscriptStore.open` に渡す形、ADR 0313 決定2)。 */
+const DECKHAND_RECORD: PromptPart[] = [
+  definitionPart("You are Deckhand."),
+  { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions.", source: "profile", profile: "standard" },
+  { part: "roster", text: "\n\n## Roster\n\ndeckhand — General work agent" },
+  { part: "doctrine", text: "\n\n## Board doctrine\n\nStay on the board." },
+  { part: "protocol", text: "\n\n## Rules of the road\n\nLog every decision." },
+  { part: "memory", text: "\n\n## Memory\n\nThe tide is high." },
+];
 
-/** 当時版の束を引ける盤面: registry の main の commit から spawn した session で decision を書き、異議を打つ。
- *  `worker` / `version` は spawn の worker と definition_version(組み込みは本文の内容 hash)、`registryFiles` は registry の上書き、
+/** `DECKHAND_RECORD` から judge が受ける当時版(ADR 0314 決定3)。 */
+const DECKHAND_THEN = {
+  registry_commit: "c0ffee",
+  builtin: false,
+  body: "You are Deckhand.",
+  authority: { source: "profile", profile: "standard", text: "\n\n## Authority\n\nPrefer reversible actions." },
+  roster: "\n\n## Roster\n\ndeckhand — General work agent",
+};
+
+/** 当時版を読める盤面: spawn の prompt を記録の器に書いた session で decision を書き、異議を打つ。`system` は記録する部分、
  *  `sessionTask` は session の task を組む(既定は memoryBoard の work task)。 */
-async function definitionBoard({
-  worker = "deckhand",
-  version = "1",
-  registryFiles = {},
-  sessionTask,
-}: { worker?: string; version?: string; registryFiles?: Record<string, string>; sessionTask?: (db: ReturnType<typeof openDb>) => Task } = {}) {
-  const registryDir = await makeRegistry(registryFiles);
-  const git = registryGit(registryDir);
-  const commit = git("rev-parse", "main");
+async function definitionBoard({ system = DECKHAND_RECORD, sessionTask }: { system?: PromptPart[]; sessionTask?: (db: ReturnType<typeof openDb>) => Task } = {}) {
+  const recordDir = await tempDir("tidepool-records-");
   const b = memoryBoard();
   const task = sessionTask?.(b.db) ?? b.task;
-  appendEvent(b.db, { taskId: task.id, actorId: worker, origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: version } });
-  const decision = logDecision(b.db, task, "kept the v1 endpoint", worker, at, "worker");
-  const deps = { ...noRetrospectiveCalls, registryDir };
-  return { ...b, task, registryDir, git, commit, decision, deps, sessionId: b.objectTo(decision) };
+  const spawn = (parts: PromptPart[]) => {
+    const spawned = appendEvent(b.db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+    recordPrompt(recordDir, task.id, spawned, parts);
+    return spawned;
+  };
+  const spawned = spawn(system);
+  const decision = logDecision(b.db, task, "kept the v1 endpoint", "deckhand", at, "worker");
+  const deps = { ...noRetrospectiveCalls, recordDir };
+  return { ...b, task, recordDir, spawned, spawn, decision, deps, sessionId: b.objectTo(decision) };
 }
-
-const DECKHAND_THEN = (commit: string) => ({
-  registry_commit: commit,
-  builtin: false,
-  body: "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.",
-  authority: { guidance: "Prefer reversible actions. Anything irreversible is outside your authority.\n", assignable_to: ["*"] },
-  // 当時版の `*` も組み込みには展開されない —— spawn 時の Roster と同じ集合(ADR 0235 決定1、#2602)
-  roster: [{ name: "deckhand", description: "General work agent for the tidepool board" }],
-});
 
 const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: number[]) =>
   appendEvent(b.db, {
@@ -1951,98 +1956,59 @@ const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: n
 const defineBranch = (b: ReturnType<typeof memoryBoard>, path: string, text: string) =>
   defineMemoryBranch(b.db, { scope: null, path, text, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
 
-it("帰責の入力の当時版は、異議された entry の session の spawn の registry commit 時点の本文・profile の散文・roster の description で、後で定義を変えても当時の値", async () => {
+it("帰責の入力の当時版は異議された entry の session の spawn で記録した部分の text で、盤面の文(doctrine / protocol)は board_text に入り、記憶の節は入らない(ADR 0314 決定3・4)", async () => {
   const b = await definitionBoard();
-  await writeFile(join(b.registryDir, "agents", "deckhand.md"), "---\nname: deckhand\ndescription: Edited later\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills: []\n---\nYou are someone else NOW.\n");
-  b.git("commit", "-qam", "edit deckhand");
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
-  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([DECKHAND_THEN(b.commit)]);
+  expect(client.calls.map((c) => [c.input.agent_definition, c.input.board_text])).toEqual([
+    [DECKHAND_THEN, ["\n\n## Board doctrine\n\nStay on the board.", "\n\n## Rules of the road\n\nLog every decision."]],
+  ]);
 });
 
-/** deckhand が実行した work を被レビュー task に持つ review の task(組み込みの Auditor が走る形)。 */
-const reviewSession = (db: ReturnType<typeof openDb>) => {
-  const reviewed = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI);
-  markPickedUp(db, reviewed.id, at);
-  return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: reviewed.id }, at, ...HUMAN_WEBUI);
-};
+it("記録が読めない session(記録の器を持たない呼び手・記録が後から失われた)では帰責の入力の当時版の欄は null で、盤面の文は空(ADR 0314 決定2)", async () => {
+  const lost = await definitionBoard();
+  rmSync(join(lost.recordDir, `${lost.task.id}.${lost.spawned}.prompt.json`));
+  const noRecordDir = await definitionBoard();
+  const client = new FakeAttributionClient();
 
-it.each([
-  ["本文が空の組み込み Auditor", DEFAULT_AUDITOR_NAME, "e3b0c44298fc1c14", ""],
-  ["本文を持つ組み込み Interviewer", DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f", expect.stringMatching(/^You run Interviews/)],
-])("%s の session では当時版の builtin が真で、本文は内容 hash で引いた当時の本文", async (_, worker, version, body) => {
-  const b = await definitionBoard({ worker, version, sessionTask: reviewSession });
+  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, at);
+  await attributeObjections(noRecordDir.db, { ...noRetrospectiveCalls, attributionClient: client }, noRecordDir.sessionId, at);
+
+  expect(client.calls.map((c) => [c.input.agent_definition, c.input.board_text])).toEqual([
+    [null, []],
+    [null, []],
+  ]);
+});
+
+it.each(["reviewer", "repair"] as const)("Authority の部分が盤面の文(%s)の記録なら、帰責の入力の当時版の authority は出所の印を持ち、profile 名を持たない(ADR 0314 決定5)", async (source) => {
+  const authority = { part: "authority" as const, text: "\n\n## Authority\n\nYou are reviewing read-only.", source };
+  const b = await definitionBoard({ system: DECKHAND_RECORD.map((part) => (part.part === "authority" ? authority : part)) });
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
-  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([expect.objectContaining({ registry_commit: b.commit, builtin: true, body })]);
+  expect(client.calls.map((c) => c.input.agent_definition?.authority)).toEqual([{ source, text: authority.text }]);
 });
 
-it("当時版が引けない session(registry の無い盤面・その commit が読めない)では帰責の入力の当時版の欄は null", async () => {
-  const unreachable = await definitionBoard();
-  const noRegistry = objectedAfterReading();
-  const client = new FakeAttributionClient();
-
-  await attributeObjections(unreachable.db, { ...unreachable.deps, registryDir: await makeRegistry({ "agents/deckhand.md": "---\nname: deckhand\n---\nOther history.\n" }), attributionClient: client }, unreachable.sessionId, at);
-  await attributeObjections(noRegistry.db, { ...noRetrospectiveCalls, attributionClient: client }, noRegistry.sessionId, at);
-
-  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([null, null]);
-});
-
-it("agent が名指す authority profile がその commit で読めない session でも、帰責の入力の当時版の欄は丸ごと null", async () => {
-  const b = await definitionBoard({
-    registryFiles: { "agents/deckhand.md": "---\nname: deckhand\ndescription: d\nversion: 1.0.0\nauthority: ghost\nprovider: anthropic\nskills: []\n---\nYou are Deckhand.\n" },
-  });
+it("組み込みの agent の spawn の記録なら、帰責の入力の当時版は builtin を持つ(ADR 0314 決定3)", async () => {
+  const b = await definitionBoard({ system: [definitionPart("", true)] });
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
-  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([null]);
+  expect(client.calls.map((c) => c.input.agent_definition?.builtin)).toEqual([true]);
 });
 
-it.each([
-  [
-    "review の task",
-    reviewSession,
-    { guidance: REVIEWER_AUTHORITY_PROFILE.guidance, assignable_to: ["deckhand"] },
-    [{ name: "deckhand", description: "General work agent for the tidepool board" }],
-  ],
-  [
-    "修理子の type(memory_repair)の task",
-    (db: ReturnType<typeof openDb>) => {
-      const review = registerTask(db, { type: "review", title: "m", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
-      return registerTask(db, { type: "memory_repair", title: "mr", purpose: "p", completion_criteria: "c", parent_id: review.id }, at, ...HUMAN_WEBUI);
-    },
-    { guidance: REPAIR_NOTICES.memory_repair, assignable_to: [] },
-    [],
-  ],
-])("%s の session の当時版の Authority と Roster は spawn が描いたもの —— worker の registry profile ではない", async (_, sessionTask, authority, roster) => {
-  const b = await definitionBoard({ sessionTask });
+it("異議された entry の後で同じ task が再 spawn されても、帰責の入力の当時版は entry の session の spawn の記録(ADR 0295 決定3 / #2374)", async () => {
+  const b = await definitionBoard({ system: DECKHAND_RECORD.filter((part) => part.part !== "roster") });
+  b.spawn(DECKHAND_RECORD);
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
-  expect(client.calls.map((c) => c.input.agent_definition)).toEqual([expect.objectContaining({ builtin: false, authority, roster })]);
-});
-
-it("実行前の親の下の review の session の当時版の Roster は、spawn の後に親が pickup され review が再 spawn されても、異議された entry の spawn が描いた空のまま(ADR 0295 決定3 / #2374)", async () => {
-  let parentId = "";
-  const b = await definitionBoard({
-    sessionTask: (db) => {
-      parentId = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-      return registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: parentId }, at, BOARD_ACTOR_ID, "board");
-    },
-  });
-  pickupTask(b.db, getTask(b.db, parentId)!, "deckhand", at, { assignee: "deckhand" });
-  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: b.commit } });
-  const client = new FakeAttributionClient();
-
-  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
-
-  expect(client.calls.map((c) => c.input.agent_definition?.roster)).toEqual([[]]);
+  expect(client.calls.map((c) => c.input.agent_definition?.roster)).toEqual([null]);
 });
 
 it("帰責の入力の読んだ記憶に、同じ spawn で注入された Definition が入る —— 注入された他の leaf・前の session の注入は入らず、pull と重なれば1つ", async () => {
@@ -2125,8 +2091,8 @@ it("第2回の入力にも当時版の欄が組まれる", async () => {
   await new Promise((resolve) => setImmediate(resolve));
 
   expect(client.calls.map((c) => [c.input.rca_findings !== undefined, c.input.agent_definition])).toEqual([
-    [false, DECKHAND_THEN(b.commit)],
-    [true, DECKHAND_THEN(b.commit)],
+    [false, DECKHAND_THEN],
+    [true, DECKHAND_THEN],
   ]);
 });
 

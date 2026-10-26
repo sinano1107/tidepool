@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { deleteAgent } from "../src/agent-create.js";
 import { openDb } from "../src/db.js";
-import { loadRegistry, registryAtCommit } from "../src/registry.js";
+import { loadRegistry } from "../src/registry.js";
 import { DeletionConfirmationRequiredError } from "../src/registry-write.js";
 import { countUnsettledTasksReferencing, countUnsettledWorkAssignedTo, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI, markPickedUp } from "./harness.js";
@@ -210,22 +210,6 @@ describe("deleteAgent: 確認で買えない拒否(ADR 0087 決定2/3)", () => {
     expect(loadRegistry(registryDir, "purely-local").authority.standard?.assignable_to).toEqual([
       "deckhand",
     ]);
-  });
-});
-
-describe("deleteAgent: 記録は git が保つ(ADR 0087 決定1)", () => {
-  it("削除後も、削除前のコミットを指定した agent 本文の読み出しは通る", async () => {
-    const registryDir = await makeMainRegistry();
-    const before = git(registryDir, "rev-parse", "HEAD");
-
-    await deleteAgent(
-      { name: "deckhand", confirm: true },
-      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, ...NO_REFERENCES },
-    );
-
-    // 過去タスクの自己 RCA が読む経路(ADR 0020 / board-prose.ts)
-    expect(registryAtCommit(registryDir, before)?.agents.deckhand?.body).toContain("You are Deckhand");
-    expect(registryAtCommit(registryDir, "HEAD")?.agents.deckhand).toBeUndefined();
   });
 });
 

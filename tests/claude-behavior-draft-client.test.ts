@@ -10,6 +10,7 @@ const input: BehaviorDraftInput = {
   decision_log: ["named the flag --dry"],
   memory_read: [],
   agent_definition: null,
+  board_text: [],
   index: "- cli/ — how command-line flags are named",
 };
 
@@ -38,6 +39,9 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   expect(args[1]).toContain("always spell it --dry-run");
   expect(args[1]).toContain("how command-line flags are named");
+  // 起草も judge と同じ当時版と盤面の文を読む(ADR 0314 決定4)
+  expect(args[1]).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
+  expect(args[1]).toContain("(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline)");
 });
 
 it("Behavior candidate の起草は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
@@ -112,6 +116,7 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
     decision_log: ["chose plan B"],
     memory_read: [],
     agent_definition: null,
+    board_text: [],
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
     rca_findings: ["stop 9 → no guard on rm"],
     index: "- workspace/ — where agents may write",

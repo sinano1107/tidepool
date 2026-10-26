@@ -163,6 +163,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       decision_log: [`wrote knowledge #${wrote.entry_id} "Squash" at build (charts)`],
       memory_read: [{ id: read, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
       agent_definition: null,
+      board_text: [],
       written: [{ id: wrote.entry_id, kind: "knowledge", title: "Squash", text: "Always squash." }],
     },
     {
@@ -172,6 +173,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       decision_log: [`dropped #${dropped} (capability)`],
       memory_read: [],
       agent_definition: null,
+      board_text: [],
       written: [{ id: dropped, kind: "knowledge", title: "Rebase before merge", text: "Rebase before merge." }],
     },
   ]);

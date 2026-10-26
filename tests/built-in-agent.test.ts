@@ -6,11 +6,9 @@ import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { buildMemoryInjection, humanEntryInput, recordBehavior } from "../src/memory.js";
 import {
   assertValidAgentName,
-  builtInBodyAt,
   InvalidAgentNameError,
   loadRegistry,
   REVIEWER_AUTHORITY_PROFILE,
-  registryAtCommit,
 } from "../src/registry.js";
 import { listQueue, nextSlotTask, registerTask, resolveTaskAgent } from "../src/tasks.js";
 import { seedTierNames } from "./fakes.js";
@@ -33,33 +31,18 @@ it("agents/fugu.md の無い registry を読むと、組み込みの fugu が印
       { name: "anthropic", advisor: false },
       { name: "moonshot", advisor: false },
     ],
-    // 当時版は registry commit に無い —— spawn 記録の definition_version が運ぶのは
-    // 本文の内容 hash(ADR 0270 決定1)。空本文も空文字列の hash
+    // spawn 記録の definition_version が運ぶのは本文の内容 hash(ADR 0270 決定1)。空本文も空文字列の hash
     version: createHash("sha256").update("").digest("hex").slice(0, 16),
   });
 });
 
-// 現在の本文は表の末尾から組むので「本文を変えて表に足し忘れ」は形の上で起きない —— 起きうる誤りは末尾の行の
-// 書き換えで、それを捕まえるのは下の hash の釘である
-it("各組み込みの version は現在の本文の hash で、その hash で本文履歴表から現在の本文が引ける(ADR 0270 決定2)", async () => {
+it("各組み込みの version は現在の本文の hash(ADR 0270 決定1)", async () => {
   const registry = loadRegistry(await makeRegistry(), "purely-local");
 
   for (const name of ["fugu", DEFAULT_INTERVIEWER_NAME]) {
     const agent = registry.agents[name]!;
     expect(agent.version).toBe(createHash("sha256").update(agent.systemPrompt).digest("hex").slice(0, 16));
-    expect(builtInBodyAt(name, agent.version)).toBe(agent.systemPrompt);
   }
-});
-
-it("本文履歴表の既存の版は書き換わらない —— 本文を変えるときは行を足す(ADR 0270 決定2)", () => {
-  // 本文を変えた PR は旧本文を表に残す。ここに並ぶ hash が引けなくなったら、既存の行を書き換えている
-  expect(builtInBodyAt("fugu", "e3b0c44298fc1c14")).toBe("");
-  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "34e46a1b9aa87f3f")).toMatch(/^You run Interviews/);
-  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "1cf9caffd86b5578")).toContain("Composing the environment:");
-  // ADR 0276 決定2: 受験者に渡したいものを ignore しない、の1行は環境を組む節に住む
-  expect(builtInBodyAt(DEFAULT_INTERVIEWER_NAME, "fc043e28dba56c77")).toMatch(
-    /Composing the environment:\n(- .*\n)*- Do not list in \.gitignore anything you want the targets to have: ignored files never reach their environment\.\n\nWriting the probe/,
-  );
 });
 
 it("agents/fugu.md があればそのファイルの定義が fugu であり、組み込みの印は付かない(ADR 0117 決定2 の shadowing)", async () => {
@@ -127,15 +110,6 @@ it("shadow している間は、その名前の work は registry のエント�
   expect(resolved.profile.name).toBe("standard");
 });
 
-it("組み込みの名前で、その commit にファイルが無ければ当時版は組み込みに解決されていたと読む —— 本文は無い(ADR 0020 #1741 追記 / ADR 0117 帰結)", async () => {
-  const dir = await makeRegistry();
-
-  expect(registryAtCommit(dir, "HEAD")?.agents.fugu).toEqual({
-    description: "Reviews work independently against its completion criteria.",
-    builtin: true,
-  });
-});
-
 it("組み込みだけが持つ名前は「既に存在する」で弾かれない —— 作成の扉は同名を拒まない(ADR 0117 決定2)", async () => {
   const registry = loadRegistry(await makeRegistry(), "purely-local");
 
@@ -148,10 +122,9 @@ it("組み込みの Interviewer suzumedai も、ファイルが無ければ印�
   const builtIn = loadRegistry(dir, "purely-local");
 
   expect(builtIn.agents.suzumedai).toMatchObject({ name: "suzumedai", builtin: true, skills: ["@workspace"], icon: "🐠" });
-  // ADR 0275 決定3: 規律は盤面が運ぶので本文は空(旧本文は履歴表に残る)
+  // ADR 0275 決定3: 規律は盤面が運ぶので本文は空
   expect(builtIn.agents.suzumedai!.systemPrompt).toBe("");
   expect(resolveExecutionAgent(builtIn, "deckhand", "suzumedai", seedTierNames, "review").profile).toEqual(REVIEWER_AUTHORITY_PROFILE);
-  expect(registryAtCommit(dir, "HEAD")?.agents.suzumedai).toMatchObject({ builtin: true });
 
   const shadowed = loadRegistry(
     await makeRegistry({

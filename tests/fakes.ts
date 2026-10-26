@@ -12,6 +12,7 @@ import type {
 } from "../src/allocation-review.js";
 import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/board-call.js";
 import type { BoardCallAnswer, BoardCallSetting, BoardCallUsage } from "../src/board-call-usage.js";
+import type { PromptPart } from "../src/board-prose.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
@@ -71,6 +72,7 @@ import type {
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
+import { TranscriptStore } from "../src/transcript-store.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
@@ -96,6 +98,16 @@ export const unusedLanding: Landing = {
   async stop() {},
 };
 
+/** 過去の spawn が記録した prompt(ADR 0313 決定1)を記録の器 `dir` に書く —— 当時版の読み手(ADR 0314 決定1)の setup。 */
+export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[]): void {
+  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, { harness: "claude-code", system, user: "" });
+  stream.destroy();
+  stderr.destroy();
+}
+
+/** 記録した `definition` の部分(ADR 0313 決定2)。 */
+export const definitionPart = (text: string, builtin = false): PromptPart => ({ part: "definition", text, builtin, registry_commit: "c0ffee", definition_version: "1" });
+
 /** Board call を持たない盤面の束(帰責も起草も配分評価も撃たない)。 */
 export const noRetrospectiveCalls: RetrospectiveCallDeps = {
   allocationClient: undefined,
@@ -104,7 +116,7 @@ export const noRetrospectiveCalls: RetrospectiveCallDeps = {
   workspace: undefined,
   containers: undefined,
   agentRegistered: undefined,
-  registryDir: undefined,
+  recordDir: undefined,
 };
 
 /** A reading well under the default threshold — the harness default so tests

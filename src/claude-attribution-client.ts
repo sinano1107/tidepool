@@ -43,7 +43,7 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "is the human's testimony of why. It is an observation, not a verdict: weigh it against what the worker actually did. " +
     "Judge whose shortfall the stop points at from that testimony, the session's whole decision log (decision_log), the " +
     "memory entries the worker read before the stop (memory_read), its agent definition as it stood then (agent_definition), " +
-    "and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
+    "the board's own text it was given (board_text), and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
     "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line at its " +
     "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
     "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
@@ -65,13 +65,16 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   `for ${w.reading} or omitting a fact the worker needed; environment is the worker's ` +
   "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
   "worker's judgment was sound given what it had (working around or guessing past such trouble " +
-  "instead of escalating is capability; following the board's own protocol text injected into every session, " +
-  "or a skill bundled with the harness, is environment); preference is the human's taste where the " +
+  "instead of escalating is capability; following the board's own protocol text injected into every session " +
+  "(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline, as the worker was given them at its spawn) as written, " +
+  "or a skill bundled with the harness, is environment, while misreading that text is capability); preference is the human's taste where the " +
   "worker's choice was equally valid; requirement_change is a requirement the human changed " +
   `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +
   "was itself wrong — the shortfall is the memory entry's, not the worker's; agent_definition is when the worker's agent " +
   `definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and ${w.sound} ` +
-  "was sound against it — but when agent_definition.builtin is true the body is board code: that is environment; " +
+  "was sound against it — agent_definition holds the text the worker was given at its spawn; but when " +
+  "agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer " +
+  "or repair that Authority is board code, not a registry profile: that is environment; " +
   "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
   "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +

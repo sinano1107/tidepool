@@ -1430,7 +1430,7 @@ export class CodexWorker implements WorkerAdapter {
       // 文面の一部である(ADR 0124 Consequences)—— 記録が渡した値の逐語であるよう、その空行は列の最後の部分に載せる(ADR 0313 決定2)
       const parts = boardProse({
         db: this.options.db,
-        registryDir: this.options.registry.dir,
+        recordDir: this.options.transcripts.dir,
         registry,
         task,
         spawnedEventId: spawned,
