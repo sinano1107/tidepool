@@ -69,6 +69,11 @@ export const OBJECTION_HUMAN_STOP_RULE =
   "When present, human_stop is the human's account of why they stopped the session; a reason saying the work is no " +
   "longer needed is not a cause of the objection, and leave an unanswered reason unanswered.";
 
+/** 異議の帰責と起草の prompt が `written` に添える文(ADR 0252 決定4): 記憶の書き込みの行だけが持つ欄の読み方。 */
+export const OBJECTION_WRITTEN_RULE =
+  "When the input carries written, the objected entry is a memory write the worker applied directly: written holds the memory " +
+  "entries it wrote, or for an invalidation the memory entries it dropped, and memory_read is what it read before that write.";
+
 /** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
  *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` / `board_text` は
  *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。

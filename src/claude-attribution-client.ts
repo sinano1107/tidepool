@@ -3,7 +3,7 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import { type AttributionClient, type AttributionInput, type AttributionJudgment, OBJECTION_HUMAN_STOP_RULE, type StopAttributionInput } from "./retrospective.js";
+import { type AttributionClient, type AttributionInput, type AttributionJudgment, OBJECTION_HUMAN_STOP_RULE, OBJECTION_WRITTEN_RULE, type StopAttributionInput } from "./retrospective.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the objected task as a judgment
@@ -24,9 +24,7 @@ function buildPrompt(input: AttributionInput): string {
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
-    `as it stood at the time. ${OBJECTION_FIELDS} When the input carries ` +
-    "written, the objected entry is a memory write the worker applied directly: written holds the memory entries it wrote, or for an " +
-    "invalidation the memory entries it dropped, and memory_read is what it read before that write. When the input " +
+    `as it stood at the time. ${OBJECTION_FIELDS} ${OBJECTION_WRITTEN_RULE} When the input ` +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: those are their decision logs and completion reports, read them as " +
     `evidence. ${OBJECTION_HUMAN_STOP_RULE}\n\n` +

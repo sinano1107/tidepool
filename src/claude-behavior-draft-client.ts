@@ -3,7 +3,7 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import { TIER_DEFINITION_RULE } from "./meta-review.js";
-import { type BehaviorDraft, type BehaviorDraftClient, type BehaviorDraftInput, OBJECTION_HUMAN_STOP_RULE, type StopBehaviorDraftInput } from "./retrospective.js";
+import { type BehaviorDraft, type BehaviorDraftClient, type BehaviorDraftInput, OBJECTION_HUMAN_STOP_RULE, OBJECTION_WRITTEN_RULE, type StopBehaviorDraftInput } from "./retrospective.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
 const draftSchema = z.object({
@@ -19,6 +19,9 @@ const SPAWN_TEXT_FIELDS =
   "null when not recorded), the board's own text it was given (board_text: the board's doctrine, protocol and, for an " +
   "Interview root, Interview discipline)";
 
+/** What the worker read before what is learned from (ADR 0166 決定2) —— `before` names the objected decision or the stop. */
+const memoryReadField = (before: string) => `the memory entries the worker read before ${before} (memory_read)`;
+
 /** The question the board asks once an objection's cause says an agent should
  *  learn from it (ADR 0120 決定1(b)(c)): word one standing rule a human can approve. */
 function buildPrompt(input: BehaviorDraftInput): string {
@@ -26,8 +29,9 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "You draft agent memory for a work-tracking board. A human objected to one entry of a worker's " +
     "decision log and left steering comments; the objection's cause says an agent should behave " +
     "differently from now on. Draft ONE behavior rule — a standing instruction a human will approve " +
-    `later — from the objected entry, the steering, ${SPAWN_TEXT_FIELDS}, and the task's decision log as it stood at the ` +
-    "time. When the input carries rca_findings, the task's root-cause reviews have settled: draft " +
+    `later — from the objected entry, the steering, ${memoryReadField("the decision")}, ${SPAWN_TEXT_FIELDS}, and the ` +
+    `task's decision log as it stood at the time. ${OBJECTION_WRITTEN_RULE} When the input carries rca_findings, the ` +
+    "task's root-cause reviews have settled: draft " +
     `from what they found. ${responseFields("the worker who wrote the entry")} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
@@ -40,7 +44,7 @@ function buildStopPrompt(input: StopBehaviorDraftInput): string {
     "You draft agent memory for a work-tracking board. A human stopped a running worker session; human_stop.reason is the " +
     "human's testimony of why, and the stop's attribution says an agent should behave differently from now on. Draft ONE " +
     "behavior rule — a standing instruction a human will approve later — from that testimony weighed against what the worker " +
-    "actually did: the session's whole decision log (decision_log), the memory entries it read before the stop (memory_read), " +
+    `actually did: the session's whole decision log (decision_log), ${memoryReadField("the stop")}, ` +
     `${SPAWN_TEXT_FIELDS}, and its action sequence (actions). actions.calls lists the ` +
     "session's tool calls in order (index, tool, the extracted argument, and whether it failed); actions.decisions places each " +
     "decision-log line at its position in that sequence; actions is null when the sequence could not be read. When the input " +

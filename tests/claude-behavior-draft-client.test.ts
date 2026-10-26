@@ -42,6 +42,9 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   // 起草も judge と同じ当時版と盤面の文を読む(ADR 0314 決定4)
   expect(args[1]).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
   expect(args[1]).toContain("(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline)");
+  // 起草も judge と同じく読んだ記憶と書き込みの本文の欄を説明する(#2621)
+  expect(args[1]).toContain("the memory entries the worker read before the decision (memory_read)");
+  expect(args[1]).toContain("When the input carries written, the objected entry is a memory write the worker applied directly");
 });
 
 it("Behavior candidate の起草は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
@@ -125,6 +128,7 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
   await expect(client.draftFromStop(stop, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);
 
   expect(prompts[0]).toContain("A human stopped a running worker session; human_stop.reason is the human's testimony of why");
+  expect(prompts[0]).toContain("the memory entries the worker read before the stop (memory_read)");
   expect(prompts[0]).toContain("its action sequence (actions)");
   expect(prompts[0]).toContain("When the input carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found");
   expect(prompts[0]).toContain('"addressee" ("worker" when the rule is for the worker who ran the session');
