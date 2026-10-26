@@ -481,7 +481,7 @@ it("AI 下書きの3用途は、表の行で撃った Board call が断られる
   ]);
   expect(await rowQuarantines()).toEqual([[SONNET_ROW, "The task draft Board call ended with API error 404 for this model id"]]);
   const [question] = await questions(t);
-  expect((await events(question.id)).filter((e) => e.kind === "quarantine_refired").map((e) => e.payload.cause)).toEqual([
+  expect((await events(question.id)).filter((e) => e.kind === "quarantine_refired").map((e) => e.payload.reason)).toEqual([
     `The handoff draft Board call for task ${human.id} ended with API error 404 for this model id`,
     "The issue inspection Board call ended with API error 404 for this model id",
   ]);

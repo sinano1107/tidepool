@@ -715,7 +715,7 @@ export interface LogEntry extends DecisionLogEntry {
   /** 今の判定の evidence —— 人間の面の異議注釈に出す(ADR 0213 決定4)。未帰責のエントリは null。 */
   evidence: string | null;
   /** エントリを含む worker session の `worker_spawned` の id(case 描画と同じ窓、`sessionSpawnOf`)。窓の外なら null。 */
-  session_event_id: number | null;
+  worker_spawned_event_id: number | null;
   /** Interview のグループ(ADR 0273 決定10、ADR 0268 決定6 の印の昇格): root と監査 review の行だけが運ぶ —— 鍵は root の id、見出しは
    *  最新の出題の題(出題前は root の題)と実環境の名前。受験者の行は一覧に出ない(ADR 0268 決定1)。 */
   interview: { root_id: string; title: string; workspace: string | null } | null;
@@ -778,7 +778,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
       cause: attribution?.cause ?? null,
       wrong_memory_entries: attribution?.wrong_memory_entries ?? null,
       evidence: attribution?.evidence ?? null,
-      session_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
+      worker_spawned_event_id: sessionSpawnOf(sessionEvents, entry)?.id ?? null,
     };
   });
 }

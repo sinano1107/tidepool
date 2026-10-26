@@ -880,7 +880,7 @@ it("決定ログの各エントリは、それを含む worker session の worke
   });
   const after = logDecision(db, task, "after the session exited", "human", at, "worker");
 
-  expect(listLog(db).map((e) => [e.id, e.session_event_id])).toEqual([
+  expect(listLog(db).map((e) => [e.id, e.worker_spawned_event_id])).toEqual([
     [before, null],
     [inside, spawned],
     [after, null],

@@ -58,7 +58,7 @@ describe.each(QUARANTINES.map((row) => row.kind))("Quarantine の種類 %s", (ki
       listEvents(db, question!.id)
         .map((e) => e.payload)
         .filter((p) => p.kind === "quarantine_refired"),
-    ).toEqual([{ kind: "quarantine_refired", cause: "second cause" }]);
+    ).toEqual([{ kind: "quarantine_refired", reason: "second cause" }]);
   });
 
   it.skipIf(other === undefined)("別の値は別の確認型 question になる", () => {

@@ -73,7 +73,7 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
 // directly against the running board's own sqlite file, same as
 // worker-failure.test.ts drops to the scheduler/tasks seam when the full
 // stack can't reach the scenario. Git itself is still real, never faked.
-it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の cause イベントを追記する", async () => {
+it("同一 workspace への2度目の quarantine は quarantine question を増やさず、既存 question に再発火の reason イベントを追記する", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws });
   await triggerQuarantine(t, ws, "doomed work");
@@ -88,7 +88,7 @@ it("同一 workspace への2度目の quarantine は quarantine question を増�
 
   const events = (await api(t.baseUrl, "GET", `/api/tasks/${question.id}/events`)).json;
   expect(
-    events.some((e: any) => e.payload.cause?.includes("second, unrelated tree-rule failure")),
+    events.some((e: any) => e.payload.reason?.includes("second, unrelated tree-rule failure")),
   ).toBe(true);
 });
 
