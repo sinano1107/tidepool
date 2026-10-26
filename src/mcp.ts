@@ -8,7 +8,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { EFFORT_LEVELS } from "./effort.js";
-import { INTERVIEW_OUTCOMES } from "./events.js";
+import { INTERVIEW_VERDICTS } from "./events.js";
 import { PRIORITY_FIELD_DESCRIPTION, rowKeySchema, tierFieldDescriptions } from "./execution-setting.js";
 import type { GitHubClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
@@ -796,7 +796,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "otherwise, and findings says why. On accepted the board registers one answer task per target; on rejected the " +
           "Interview's root resumes with your findings and poses again. " +
           BOARD_WRITE_LANGUAGE_RULE,
-        inputSchema: { verdict: z.enum(INTERVIEW_OUTCOMES), findings: requiredTextSchema },
+        inputSchema: { verdict: z.enum(INTERVIEW_VERDICTS), findings: requiredTextSchema },
       },
       completing(completeAudit),
     );
@@ -810,10 +810,10 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "Complete this integration review of the parent task's deliverable, in one call. findings is your assessment and " +
           "is always required. If you filed what you found as repair tasks with decompose, the board records the review as " +
           "repaired, naming those repair tasks and their statuses: call this once every repair task has settled (an unsettled " +
-          "one is refused), and no_findings is then not needed — passing it is harmless. If you filed no repair task, pass " +
-          "no_findings: true to say the deliverable has nothing to repair; without it the call is refused and nothing is recorded. " +
+          "one is refused), and nothing_to_repair is then not needed — passing it is harmless. If you filed no repair task, pass " +
+          "nothing_to_repair: true to say the deliverable has nothing to repair; without it the call is refused and nothing is recorded. " +
           BOARD_WRITE_LANGUAGE_RULE,
-        inputSchema: { findings: requiredTextSchema, no_findings: z.literal(true).optional() },
+        inputSchema: { findings: requiredTextSchema, nothing_to_repair: z.literal(true).optional() },
       },
       completing(completeIntegrationReview),
     );
@@ -910,11 +910,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ? ". "
             : ", and the repair tasks you filed with decompose (every repair task is listed on every finding; call this once each has settled). ") +
           "Only a finding " +
-          "without an act needs no_proposal: true, and without it the call is refused; on a finding with an act it is harmless and records " +
+          "without an act needs no_act: true, and without it the call is refused; on a finding with an act it is harmless and records " +
           `nothing. The handoff takes the same fields as complete_task (${describeHandoffFields()}); none is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
-          findings: z.array(z.strictObject({ material: z.array(z.number().int()), root_cause: requiredTextSchema, no_proposal: z.literal(true).optional() })),
+          findings: z.array(z.strictObject({ material: z.array(z.number().int()), root_cause: requiredTextSchema, no_act: z.literal(true).optional() })),
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },
@@ -932,14 +932,14 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           "handoff alone. The board withholds which agent and model ran it; do not guess one. Write your findings in " +
           "handoff.outcome, naming for each answer what decided its score: the deliverable and its evidence, not the " +
           "confidence of the prose. scores lists every done child exactly once: child_id is the id the child carries in " +
-          "get_current_task's history, and outcome is accepted when the deliverable meets the rubric, rejected when it does " +
-          "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing outcome is refused " +
+          "get_current_task's history, and verdict is accepted when the deliverable meets the rubric, rejected when it does " +
+          "not. A child still unsettled, a missing, repeated, unknown or not-done child, or a missing verdict is refused " +
           "and nothing is recorded. Do not bend the rubric after reading the answers: if they show the probe or rubric " +
           "itself was broken, report it with report_broken_probe instead of scoring them. The handoff " +
           `takes the same fields as complete_task (${describeHandoffFields()}); only outcome is required. ` +
           BOARD_WRITE_LANGUAGE_RULE,
         inputSchema: {
-          scores: z.array(z.object({ child_id: requiredTextSchema, outcome: z.enum(INTERVIEW_OUTCOMES) })),
+          scores: z.array(z.object({ child_id: requiredTextSchema, verdict: z.enum(INTERVIEW_VERDICTS) })),
           handoff: z.partialRecord(z.enum(HANDOFF_FIELDS), z.string()).optional(),
         },
       },

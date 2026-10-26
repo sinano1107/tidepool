@@ -1,5 +1,7 @@
 # RCA の学びの書き込みは RCA の task に帰属する記録でエントリと記憶を結び、所見の行は行為を列挙して `no_proposal` だけを値に持つ
 
+**Status 追記: 題と決定3 の値 `no_proposal` は `no_act` に改名(issue #2580)** —— 行為(この RCA が書いた記憶・この RCA の修理子)の無い所見を表す。
+
 **Status 追記: 決定1 の verb は `propose_from_material`(引数 `material_id`)、その記録の event は `proposed_from_material`(欄 `material_id`)に、決定2 の所見の `entries` は `material` に改名(issue #2577)** —— 行と拒否文は id を材料の種類で名指す: 異議の RCA は今の「entries 501, 502 → …」のまま、停止の RCA は「stop 700 → …」。
 
 2026-10-19 の grilling(issue #2285、元 #1919 / ADR 0278)で決定。ADR 0278 決定5 は RCA の所見の帰結 `proposed` を「この RCA が

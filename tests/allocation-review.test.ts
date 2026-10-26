@@ -130,12 +130,12 @@ it("verdict と findings は統合レビューの判断の行から読み、後�
   appendEvent(db, { taskId: work.id, actorId: "reef-crab", origin: "board", at, payload: spawned });
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
-  completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
+  completeIntegrationReview(db, review, { findings: "the deliverable holds up", nothing_to_repair: true }, "fugu", at, "worker");
   appendEvent(db, { taskId: review.id, actorId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "a later plain decision" } });
 
   const [target] = allocationTargets(db);
 
-  expect(allocationInput(db, target!)).toMatchObject({ verdict: "no_findings", findings: "the deliverable holds up" });
+  expect(allocationInput(db, target!)).toMatchObject({ verdict: "nothing_to_repair", findings: "the deliverable holds up" });
 });
 
 /** 統合点レビューが完了した work task を1つ持つ盤面で、配分評価の Board call を sweep から撃つ。 */
@@ -146,7 +146,7 @@ async function reviewAllocationOnBoard(allocationClient: FakeAllocationClient) {
   appendEvent(db, { taskId: work.id, actorId: "reef-crab", origin: "board", at, payload: spawned });
   completeTask(db, getTask(db, work.id)!, FULL_HANDOFF, "reef-crab", at, "worker");
   const review = listChildren(db, work.id).find((child) => child.type === "review")!;
-  completeIntegrationReview(db, review, { findings: "the deliverable holds up", no_findings: true }, "fugu", at, "worker");
+  completeIntegrationReview(db, review, { findings: "the deliverable holds up", nothing_to_repair: true }, "fugu", at, "worker");
   refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, allocationClient }, at);
   await new Promise((resolve) => setImmediate(resolve));
   return { db, work, at };
@@ -225,7 +225,7 @@ async function completeReview(t: Tidepool, reviewId: string) {
   const client = await mcpClient(t.mcpBaseUrl, reviewId);
   await client.callTool({
     name: "complete_integration_review",
-    arguments: { findings: "accepted with one nit", no_findings: true },
+    arguments: { findings: "accepted with one nit", nothing_to_repair: true },
   });
   await client.close();
 }
@@ -233,7 +233,7 @@ async function completeReview(t: Tidepool, reviewId: string) {
 /** 人間が書き手の完了(actor_id human の task_completed)を置く —— poll は促さない。統合点レビューは盤面が agent 名義で
  *  登録し review_by も human を拒むので、人間の扉で完了できる公開の経路が今は無く、完了の verb を直に呼ぶ。 */
 function completeReviewByHand(t: Tidepool, reviewId: string) {
-  completeIntegrationReview(t.db, getTask(t.db, reviewId)!, { findings: "accepted by hand", no_findings: true }, HUMAN_ACTOR_ID, t.clock.now(), "webui");
+  completeIntegrationReview(t.db, getTask(t.db, reviewId)!, { findings: "accepted by hand", nothing_to_repair: true }, HUMAN_ACTOR_ID, t.clock.now(), "webui");
 }
 
 const events = async (t: Tidepool, taskId: string, kind: string) =>

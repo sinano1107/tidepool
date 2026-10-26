@@ -734,7 +734,7 @@ export function startScheduler(deps: {
         if (!unlisted) continue;
         const refusal = { ...target, worker_spawned_event_id: null, cause: unlisted.unit === "model" ? "model_not_listed" : "effort_not_advertised" } as const;
         questionRefusedTarget(db, task, refusal, `was not picked up: ${unlisted.reason}`, now);
-        appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "row_refused", ...refusal }, at: now });
+        appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind: "target_refused", ...refusal }, at: now });
       }
       return evaluateAndReportProviderUsage(
         db,

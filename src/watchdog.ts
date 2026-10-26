@@ -191,7 +191,7 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
 /** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
  *  Quarantine(行が表に残っているときだけ)・`row_refused`・`todo` 先頭への復帰(行でない Interview の対象なら対象の question と
- *  位置を変えない `todo`)を1 transaction で済ませてから後始末に入るので、
+ *  `target_refused` と位置を変えない `todo`)を1 transaction で済ませてから後始末に入るので、
  *  後始末中の status は `todo` で、経路は解放の step に読まれる(ADR 0113 決定3)—— `in_progress` の
  *  まま入れば中断と読まれ `cap_interrupted` が書かれる。slot の解放は回収済み観測の後ろ。 */
 export function rowRefusalHandler(
@@ -207,7 +207,7 @@ export function rowRefusalHandler(
     deps.db.transaction(() => {
       if (target) {
         questionRefusedTarget(deps.db, task, { ...target, cause: refusal.cause }, `ended with ${ROW_REFUSAL_EVIDENCE[refusal.cause]}`, now);
-        returnToQueue(deps.db, task, { kind: "row_refused", ...refusal }, now);
+        returnToQueue(deps.db, task, { kind: "target_refused", ...refusal }, now);
       } else {
         quarantineRefusedRow(deps.db, refusal, `The worker session for task ${taskId}`, now);
         returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);

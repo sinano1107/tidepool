@@ -285,7 +285,7 @@ export function loadSeeds(db: Db): Seed[] {
        JOIN tasks examinee ON examinee.id = e.task_id
        JOIN interview_targets it ON it.id = examinee.interview_target_id
        JOIN tasks root ON root.id = it.task_id
-       WHERE e.kind = 'interview_scored' AND json_extract(e.payload, '$.outcome') = 'accepted' AND root.status = 'done'
+       WHERE e.kind = 'interview_scored' AND json_extract(e.payload, '$.verdict') = 'accepted' AND root.status = 'done'
        UNION ALL
        SELECT id, json_extract(payload, '$.row.provider'), json_extract(payload, '$.row.model'), json_extract(payload, '$.row.effort'),
          json_extract(payload, '$.tier_id'), 'human'

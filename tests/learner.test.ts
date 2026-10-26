@@ -752,9 +752,9 @@ function posedInterview(b: Board, tier: Tier = "standard") {
 }
 
 /** 採点完了で root を done にし、採点の event id を返す。 */
-function scoredInterview(b: Board, outcome: "accepted" | "rejected", tier?: Tier) {
+function scoredInterview(b: Board, verdict: "accepted" | "rejected", tier?: Tier) {
   const { root, examinee } = posedInterview(b, tier);
-  completeInterview(b.db, getTask(b.db, root.id)!, { scores: [{ child_id: examinee.id, outcome }], handoff: { outcome: "findings" } }, "auditor", b.clock.now(), "worker");
+  completeInterview(b.db, getTask(b.db, root.id)!, { scores: [{ child_id: examinee.id, verdict }], handoff: { outcome: "findings" } }, "auditor", b.clock.now(), "worker");
   return listEventsOfKinds(b.db, ["interview_scored"]).find((e) => e.task_id === examinee.id)!.id;
 }
 
@@ -767,7 +767,7 @@ it("done の root の受理の採点が (セル, 段) の種になり、同じ�
   // event で釘付けする。採点は root の完了で確定する(ADR 0251 決定4)
   for (const cancel of [true, false]) {
     const { root, examinee } = posedInterview(b);
-    appendEvent(b.db, { taskId: examinee.id, actorId: "auditor", origin: "worker", at: b.clock.now(), payload: { kind: "interview_scored", outcome: "accepted" } });
+    appendEvent(b.db, { taskId: examinee.id, actorId: "auditor", origin: "worker", at: b.clock.now(), payload: { kind: "interview_scored", verdict: "accepted" } });
     if (cancel) cancelTaskDirectly(b.db, getTask(b.db, root.id)!, null, b.clock.now(), {}, "webui");
   }
   const frontier = scoredInterview(b, "accepted", "frontier");

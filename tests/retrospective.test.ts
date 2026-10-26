@@ -56,8 +56,8 @@ afterEach(() => t?.stop());
 
 /** 定型の outcome で完了した RCA 子が findings に残す1行(RCA review は人間の直接 cancel の範囲外 —— ADR 0194)。 */
 const RCA_OUTCOME = `completion report: ${FULL_HANDOFF.outcome}`;
-/** RCA の所見の行の文(harness の complete_rca は材料を1つの所見に no_proposal で入れる、ADR 0280 決定3)。 */
-const noProposal = (entry: number, rootCause = RCA_ROOT_CAUSE) => `no_proposal: entries ${entry} — ${rootCause}`;
+/** RCA の所見の行の文(harness の complete_rca は材料を1つの所見に no_act で入れる、ADR 0280 決定3)。 */
+const noAct = (entry: number, rootCause = RCA_ROOT_CAUSE) => `no_act: entries ${entry} — ${rootCause}`;
 
 async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   const task = await registerWork(t, title);
@@ -470,7 +470,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
     agent_definition: null,
-    rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
+    rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
   });
 });
 
@@ -651,7 +651,7 @@ it.each([
     expect(s.behaviorDraftClient.calls.map((c) => c.input)).toEqual([
       expect.objectContaining({
         entry_id: s.entry.id,
-        rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
+        rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
       }),
     ]);
   },
@@ -833,7 +833,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
 
   const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
   expect(second.payload).toMatchObject({ cause: "capability", round: "after_rca" });
-  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id), RCA_OUTCOME], [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id), RCA_OUTCOME]]);
+  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id), RCA_OUTCOME], [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id), RCA_OUTCOME]]);
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
@@ -1157,7 +1157,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     decision_log: ["skipped the fixtures", "completion report: done as specified"],
     memory_read: [],
     agent_definition: null,
-    rca_findings: [noProposal(s.entry.id), RCA_OUTCOME, noProposal(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
+    rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
@@ -1706,7 +1706,7 @@ it.each([
     const material = {
       decision_log: ["skipped the fixtures"],
       steering: ["keep the fixtures"],
-      rca_findings: [noProposal(entry, "finding from rca (self): t"), RCA_OUTCOME, noProposal(entry, "finding from rca (auditor): t"), RCA_OUTCOME],
+      rca_findings: [noAct(entry, "finding from rca (self): t"), RCA_OUTCOME, noAct(entry, "finding from rca (auditor): t"), RCA_OUTCOME],
     };
     expect(client.calls.at(-1)!.input).toMatchObject(material);
     expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material)]);
@@ -1877,7 +1877,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
-    [s.x, ["A's direction"], ["A's finding from rca (self): t", noProposal(s.x), RCA_OUTCOME, "A's finding from rca (auditor): t", noProposal(s.x), RCA_OUTCOME]],
+    [s.x, ["A's direction"], ["A's finding from rca (self): t", noAct(s.x), RCA_OUTCOME, "A's finding from rca (auditor): t", noAct(s.x), RCA_OUTCOME]],
   ]);
 });
 
@@ -1891,7 +1891,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
-    [["B's direction"], ["B's finding from rca (self): t", noProposal(s.y), RCA_OUTCOME, "B's finding from rca (auditor): t", noProposal(s.y), RCA_OUTCOME]],
+    [["B's direction"], ["B's finding from rca (self): t", noAct(s.y), RCA_OUTCOME, "B's finding from rca (auditor): t", noAct(s.y), RCA_OUTCOME]],
   ]);
 });
 

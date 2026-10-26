@@ -12,12 +12,12 @@ import {
   type Task,
   taskVerbSwap,
 } from "../src/tasks.js";
-import { bootTidepool, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, mcpClient, NO_FINDINGS, type Tidepool } from "./harness.js";
+import { bootTidepool, FULL_HANDOFF, HUMAN_WEBUI, humanDecomposeTaskViaWebui, judgmentRows, mcpClient, NOTHING_TO_REPAIR, type Tidepool } from "./harness.js";
 
 /** 統合レビューは complete_integration_review で終わる(ADR 0278 決定1〜5 の統合レビュー、issue #2281)。 */
 
 const NOW = new Date("2026-10-19T00:00:00.000Z");
-const FINDINGS = NO_FINDINGS.findings;
+const FINDINGS = NOTHING_TO_REPAIR.findings;
 
 /** root work を完了させ、盤面が立てた統合レビューと、人間が同じ親を名指して立てた review 子を返す。 */
 function reviewed(db = openDb(":memory:")) {
@@ -57,43 +57,43 @@ it.each([
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
 
-it("修理子が無く no_findings も無い完了は拒まれ、何も記録されない", () => {
+it("修理子が無く nothing_to_repair も無い完了は拒まれ、何も記録されない", () => {
   const { db, review } = reviewed();
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeIntegrationReview(db, review, { findings: FINDINGS }, "fugu", NOW, "worker")).toThrow("no_findings");
+  expect(() => completeIntegrationReview(db, review, { findings: FINDINGS }, "fugu", NOW, "worker")).toThrow("nothing_to_repair");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
 
-it("分解でない付帯子の work(異議の修理など)は修理子に数えず、no_findings が無ければ拒まれる", () => {
+it("分解でない付帯子の work(異議の修理など)は修理子に数えず、nothing_to_repair が無ければ拒まれる", () => {
   const { db, review } = reviewed();
   registerTask(db, { type: "work", title: "attached fix", purpose: "p", completion_criteria: "c", parent_id: review.id }, NOW, ...HUMAN_WEBUI);
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeIntegrationReview(db, getTask(db, review.id)!, { findings: FINDINGS }, "fugu", NOW, "worker")).toThrow("no_findings");
+  expect(() => completeIntegrationReview(db, getTask(db, review.id)!, { findings: FINDINGS }, "fugu", NOW, "worker")).toThrow("nothing_to_repair");
   expect(listEvents(db, review.id)).toHaveLength(before);
 });
 
-it("修理子が無く no_findings がある完了は done になり、判断ログに成果物を名指す no_findings の行が1つ、完了の result は findings", () => {
+it("修理子が無く nothing_to_repair がある完了は done になり、判断ログに成果物を名指す nothing_to_repair の行が1つ、完了の result は findings", () => {
   const { db, work, review } = reviewed();
 
-  const done = completeIntegrationReview(db, review, NO_FINDINGS, "fugu", NOW, "worker");
+  const done = completeIntegrationReview(db, review, NOTHING_TO_REPAIR, "fugu", NOW, "worker");
 
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([
     {
       kind: "decision_logged",
-      line: `no_findings: deliverable ${work.id} — ${FINDINGS}`,
-      judgment: { kind: "integration_review", deliverable: work.id, value: "no_findings", findings: FINDINGS, repairs: [] },
+      line: `nothing_to_repair: deliverable ${work.id} — ${FINDINGS}`,
+      judgment: { kind: "integration_review", deliverable: work.id, value: "nothing_to_repair", findings: FINDINGS, repairs: [] },
     },
   ]);
   expect(listEvents(db, review.id).find((e) => e.kind === "task_completed")!.payload).toMatchObject({ result: FINDINGS });
 });
 
 it.each([
-  ["no_findings を渡しても", { no_findings: true as const }],
-  ["no_findings が無くても", {}],
+  ["nothing_to_repair を渡しても", { nothing_to_repair: true as const }],
+  ["nothing_to_repair が無くても", {}],
 ])("決着した修理子があれば %s done になり、行の値は repaired で成果物と修理子の id と status を名指す", (_, mark) => {
   const { db, work, review } = reviewed();
   const [fixed, dropped] = repairs(db, review, 2);
@@ -126,17 +126,17 @@ it("未決着の修理子があれば今どおり拒まれ、何も記録され�
   repairs(db, review, 1);
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeIntegrationReview(db, getTask(db, review.id)!, NO_FINDINGS, "fugu", NOW, "worker")).toThrow("unfinished children");
+  expect(() => completeIntegrationReview(db, getTask(db, review.id)!, NOTHING_TO_REPAIR, "fugu", NOW, "worker")).toThrow("unfinished children");
   expect(listEvents(db, review.id)).toHaveLength(before);
 });
 
 it("統合レビューでない task と空の findings は拒まれる", () => {
   const { db, review, humanReview } = reviewed();
 
-  expect(() => completeIntegrationReview(db, humanReview, NO_FINDINGS, "fugu", NOW, "worker")).toThrow(
+  expect(() => completeIntegrationReview(db, humanReview, NOTHING_TO_REPAIR, "fugu", NOW, "worker")).toThrow(
     "only an integration review completes with complete_integration_review",
   );
-  expect(() => completeIntegrationReview(db, review, { findings: " ", no_findings: true }, "fugu", NOW, "worker")).toThrow("requires findings");
+  expect(() => completeIntegrationReview(db, review, { findings: " ", nothing_to_repair: true }, "fugu", NOW, "worker")).toThrow("requires findings");
 });
 
 let t: Tidepool;
