@@ -3489,7 +3489,7 @@ describe("ClaudeCodeWorker", () => {
     expect(prompt).not.toContain(then.slice(0, 7));
   });
 
-  it("当時の profile の `*` は当時の commit の全 agent と、上書きの無かった組み込み Auditor に展開される(issue #1741)", async () => {
+  it("当時の profile の `*` は当時の commit の全 agent に展開され、組み込みは含まない(issue #1741 / ADR 0235 決定1、#2602)", async () => {
     const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
     const git = registryGit(registryDir);
     insertTask(db, makeTask("objected-7", null, "deckhand", "work"));
@@ -3502,12 +3502,13 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
 
     const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(
+    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    expect(prompt).toContain(
       "### Roster as it stood then (profile standard)\n\n" +
         "deckhand — General work agent for the tidepool board\n" +
-        "lookout — Looks out for the board.\n" +
-        `${DEFAULT_AUDITOR_NAME} — Reviews work independently against its completion criteria.`,
+        "lookout — Looks out for the board.",
     );
+    expect(prompt).not.toContain(`${DEFAULT_AUDITOR_NAME} — Reviews work independently against its completion criteria.`);
   });
 
   it("当時の commit に profile の yaml が無ければ、本文は注入した上で Authority / Roster の欠落を1行申告する(issue #1741)", async () => {
