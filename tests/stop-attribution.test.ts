@@ -175,7 +175,7 @@ it.each([
 });
 
 /** setup: 理由つきで止め、adapter と同じ順で transcript の投影待ちを立てて session を閉じ、投影を閉じていない stream の close に予約する。 */
-async function stoppedPendingProjection(b: ReturnType<typeof fixture>, transcriptPath: string) {
+function stoppedPendingProjection(b: ReturnType<typeof fixture>, transcriptPath: string) {
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   markProjectionPending(b.db, b.spawned);
   b.exit();
@@ -191,7 +191,7 @@ it("a stop is not judged while its session's Episode projection is pending, then
   const b = fixture();
   const transcriptPath = join(await tempDir("tidepool-stop-"), `${b.task.id}.${b.spawned}.stream.jsonl`);
   writeFileSync(transcriptPath, claudeLines(b.entry).join("\n"));
-  const close = await stoppedPendingProjection(b, transcriptPath);
+  const close = stoppedPendingProjection(b, transcriptPath);
 
   await b.sweep();
   expect(b.client.stopCalls).toEqual([]);
@@ -226,7 +226,7 @@ it("a projection pending on another board with the same spawn event id does not 
 it("a stop whose session's projection threw is judged with actions null after the transcript closes", async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   const b = fixture();
-  const close = await stoppedPendingProjection(b, join(await tempDir("tidepool-stop-"), "missing.stream.jsonl"));
+  const close = stoppedPendingProjection(b, join(await tempDir("tidepool-stop-"), "missing.stream.jsonl"));
 
   close();
   await b.sweep();
