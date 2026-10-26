@@ -1166,7 +1166,7 @@ export function judgedMemoryReview(db: Db, at: Date, stock: () => void, act: (re
     listEvents(db, review.id).find(({ payload: p }) => {
       const j = p.kind === "decision_logged" ? p.judgment : undefined;
       if (j?.kind !== "memory") return false;
-      return "entry" in j ? j.entry === object : typeof object === "object" && j.branch === object.branch && j.scope === object.scope;
+      return "memory_entry" in j ? j.memory_entry === object : typeof object === "object" && j.branch === object.branch && j.scope === object.scope;
     })!.id;
   return { review, row };
 }

@@ -825,7 +825,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Complete this memory meta-review, in one call. The Items to judge part of your material section lists what this cycle needs a " +
-          "judgment on. Entries ({entry: id}) are the candidates drafted in this window, the candidates and entries named by the settled " +
+          "judgment on. Entries ({memory_entry: id}) are the candidates drafted in this window, the candidates and entries named by the settled " +
           "proposals and by the objected decisions with cause memory, and the store changes; every entry is listed only while its latest " +
           "copy is still live. Branches ({branch: path, scope: workspace " +
           "name, or null for the whole board}) are those holding entries without a Definition in their scope or whole-board: one item per " +
@@ -843,7 +843,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         inputSchema: {
           judgments: z.array(
             z.union([
-              z.strictObject({ entry: z.number().int(), reason: z.string().optional() }),
+              z.strictObject({ memory_entry: z.number().int(), reason: z.string().optional() }),
               z.strictObject({ branch: z.string(), scope: z.string().nullable(), reason: z.string().optional() }),
             ]),
           ),
@@ -1397,7 +1397,7 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
     {
       description:
         "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
-        "the session outcome, and the memory entry ids read (entries_read) and seen (entries_seen) before the decision. " +
+        "the session outcome, and the memory entry ids read (memory_entries_read) and seen (memory_entries_seen) before the decision. " +
         "When the cause is memory, wrong_memory_entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
         "Rows are limited to your subject: a routing meta-review or routing repair sees the decisions of routing meta-reviews and their children, a memory meta-review " +
         "or memory repair every other decision, and an Interview all of them. " +

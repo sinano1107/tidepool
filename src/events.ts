@@ -707,23 +707,22 @@ export type EventPayload =
   // ADR 0180 決定2・追記 #1239: meta-review の spawn に材料の節を入れた(task 帰属、memory_injected の直後)。主題、窓の両端の
   // watermark、計数したトークン数と計数器、部分ごとに載せた id —— memory は店の変更と candidate がエントリ、異議つき判断が
   // decision の event、提案が question、枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
-  // list_memory_proposals が返すエントリの id も持つ(precedent_entries / proposal_entries —— Precedent の seen に
+  // list_memory_proposals が返すエントリの id も持つ(precedent_memory_entry_ids / proposal_memory_entry_ids —— Precedent の seen に
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4。エントリの項目の id も seen に数える、issue #2307)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
   // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed(allocation_review_event_ids)、新しいセルの初観測(cell_event_ids —— worker_exited、本番の session の無い種のセルは種の event)、人間が変えた行(row_change_event_ids —— execution_settings_changed)、
   // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
-  // 鍵の規則: 鍵は原則として材料の部分の名前のまま。改名するのは (1) 部分の行が別の鍵(セル・集計の軸)で引かれていて、配列は他から借りた
-  // event id を持つもの、(2) 同じ payload の中で同じ語が別のものを指すもの —— だけで、持っている id の名前にする(routing で残る名前は shadow / precedents / proposals)
-  | (MetaReviewMaterialCommon & { subject: "memory"; store_changes: number[]; candidates: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; proposal_entries: number[]; branches: number[]; items: MemoryJudgmentItem[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_entries: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
+  // 鍵の規則(ADR 0311 決定4): 配列の鍵は持っている id の物を名指す。部分の名前がそれを名指していれば、そのまま
+  | (MetaReviewMaterialCommon & { subject: "memory"; changed_memory_entry_ids: number[]; candidates: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; proposals: string[]; proposal_memory_entry_ids: number[]; branch_definition_ids: number[]; items: MemoryJudgmentItem[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }
   // spec #615 A / issue #617: Board call の Behavior candidate 起草が撃って失敗した(異議されたタスクに帰属)。
   // 撃てなかった回は書かない(ADR 0164 決定3)。`attribution_event_id` は起草の出所になるはずだった帰責 ——
   // 撃ち直しの回数と間隔はこれで数える。店の event ではなく rebuild は再生しない。
-  // 停止の帰責が出所の起草(ADR 0310 決定4)は異議された行を持たないので、`entry_id` の代わりに止められた停止 event の id(`stop_event_id`)を持つ。
-  | ({ kind: "memory_draft_failed"; round: AttributionRound; attribution_event_id: number; reason: string } & ({ entry_id: number } | { stop_event_id: number }))
+  // 停止の帰責が出所の起草(ADR 0310 決定4)は異議された行を持たないので、`log_entry_id`(異議された判断ログの行、ADR 0311 決定3)の代わりに止められた停止 event の id(`stop_event_id`)を持つ。
+  | ({ kind: "memory_draft_failed"; round: AttributionRound; attribution_event_id: number; reason: string } & ({ log_entry_id: number } | { stop_event_id: number }))
   // ADR 0164 決定3 / ADR 0168 決定2: 帰責の Board call が撃って失敗した(異議されたタスクに帰属)。
   // 判断ではないので `objection_attributed` には書かない。`objection_event_id` は異議群の名前(最初の異議 event の id、
   // ADR 0170 決定4)。撃ち直すのは第2回だけで、その回数と間隔は異議群ごとに `round = after_rca` のこれで数える ——

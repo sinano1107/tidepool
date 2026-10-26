@@ -339,7 +339,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   // meta-review の判断の行すべて(memory と routing)
   const rows = record.decision_rows;
   expect(rows.filter((r) => r.review_id === memory.review.id).map((r) => r.judgment)).toEqual(
-    expect.arrayContaining([expect.objectContaining({ kind: "memory", entry: kept, value: "left_as_is" })]),
+    expect.arrayContaining([expect.objectContaining({ kind: "memory", memory_entry: kept, value: "left_as_is" })]),
   );
   expect(rows.find((r) => r.event_id === routing.row({ learner: true }))).toMatchObject({ subject: "routing", agent: "auditor" });
   // 提案 question: 提案(op・pin)・根拠(rationale と detail)と人間の回答。陳腐化で閉じたものは未回答と分けて印が付く

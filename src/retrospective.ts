@@ -158,9 +158,9 @@ function gate({ wrong_memory_entries, ...judgment }: AttributionJudgment, input:
   if (judgment.cause !== "memory") {
     return wrong_memory_entries === undefined ? { ...judgment, wrong_memory_entries: null } : uncertain(`${judgment.cause} attribution rejected: wrong_memory_entries are only for cause memory`);
   }
-  if (!wrong_memory_entries?.length) return uncertain("memory attribution rejected: it names no entry");
+  if (!wrong_memory_entries?.length) return uncertain("memory attribution rejected: it names no memory entry");
   const unread = wrong_memory_entries.filter((id) => !input.memory_read.some((r) => r.id === id));
-  if (unread.length > 0) return uncertain(`memory attribution rejected: entry ${unread.join(", ")} was not read before the decision`);
+  if (unread.length > 0) return uncertain(`memory attribution rejected: memory entry ${unread.join(", ")} was not read before the decision`);
   return { ...judgment, wrong_memory_entries };
 }
 
@@ -572,7 +572,9 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
       if (t.refire === "stop_attribution") return [{ refire: t.refire, target, stop, task: titled(t.task_id), last_failure }];
       return [{ refire: t.refire, target, stop, cause: t.judged.payload.cause, round: t.judged.payload.round, task: titled(t.task_id), last_failure }];
     }
-    const { entry_id, round } = payload as Extract<EventPayload, { kind: "memory_draft_failed" | "objection_attribution_failed" } & { entry_id: number }>;
+    const failed = payload as Extract<EventPayload, { kind: "memory_draft_failed" } & { log_entry_id: number }> | Extract<EventPayload, { kind: "objection_attribution_failed" }>;
+    const entry_id = failed.kind === "memory_draft_failed" ? failed.log_entry_id : failed.entry_id;
+    const { round } = failed;
     const entry = getEvent(db, entry_id) as DecisionLogEntry;
     return [
       {
@@ -630,7 +632,7 @@ function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLo
 
 /** `anchor`(異議された entry か人間の停止)の session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、anchor より前の
  *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
- *  event 順で組み、transcript には依らない —— Precedent の entries_read より広くてよい(issue #1045)。 */
+ *  event 順で組み、transcript には依らない —— Precedent の memory_entries_read より広くてよい(issue #1045)。 */
 function readsIn(db: Db, registryDir: string | undefined, anchor: Pick<EventRow, "id">, { events, spawned, inSession }: Session): Pick<AttributionInput, "memory_read" | "agent_definition"> {
   const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < anchor.id && inSession(e) ? [e.payload] : []));
   const pulled = readPulls(events, spawned.id, pulls);
@@ -662,7 +664,7 @@ async function draftBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, attri
     attribution,
     taskId: entry.task_id,
     worker: entry.actor_id,
-    material: { entry_id: entry.id },
+    material: { log_entry_id: entry.id },
     prepare: () => {
       const input = attribution.round === "initial" ? objectionInput(db, deps.registryDir, attribution, readCut(attribution)) : secondRoundInput(db, deps.registryDir, entry.task_id, attribution);
       return (client, index, setting) => client.draft({ ...input, index }, setting);
@@ -690,7 +692,7 @@ type DraftSource = {
   attribution: { id: number; cause: Cause; round: AttributionRound };
   taskId: string;
   worker: string;
-  material: { entry_id: number } | { stop_event_id: number };
+  material: { log_entry_id: number } | { stop_event_id: number };
   prepare: () => (client: BehaviorDraftClient, index: string | null, setting: BoardCallSetting) => Promise<BoardCallAnswer<BehaviorDraft>>;
 };
 
@@ -827,7 +829,7 @@ export function proposeFromMaterial(
   board: { workspace?: { name: string } },
   author: string,
   now: Date,
-): { entry_id: number; event_id: number } {
+): { memory_entry_id: number; event_id: number } {
   const { material_id, as, based_on_decision, ...fields } = input;
   const task = getTask(db, reviewId);
   if (task?.type !== "review" || task.parent_id === null) {
@@ -853,7 +855,7 @@ export function proposeFromMaterial(
     // 記憶の id は店の作成 event の id(Knowledge の event_id は書き込みの行の id)
     const payload = { kind: "proposed_from_material" as const, material_id, memory_event_id: written.entry_id };
     appendEvent(db, { taskId: reviewId, actorId: author, origin: "worker", payload, at: now });
-    return written;
+    return { memory_entry_id: written.entry_id, event_id: written.event_id };
   })();
 }
 

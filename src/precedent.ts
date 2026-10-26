@@ -659,15 +659,15 @@ type MemoryMaterial = Extract<EventPayload, { kind: "meta_review_material_inject
 type MaterialPart = { [K in keyof MemoryMaterial]: MemoryMaterial[K] extends unknown[] ? K : never }[keyof MemoryMaterial];
 /** 材料の節(主題 memory)の部分ごとに、seen に数えるエントリの id。部分を足すと `satisfies` がここでの判断を型で強いる。 */
 const MATERIAL_ENTRY_IDS = {
-  store_changes: (m) => m.store_changes,
+  changed_memory_entry_ids: (m) => m.changed_memory_entry_ids,
   candidates: (m) => m.candidates,
   precedents: () => [],
-  precedent_entries: (m) => m.precedent_entries,
+  precedent_memory_entry_ids: (m) => m.precedent_memory_entry_ids,
   proposals: () => [],
-  proposal_entries: (m) => m.proposal_entries,
-  branches: (m) => m.branches,
+  proposal_memory_entry_ids: (m) => m.proposal_memory_entry_ids,
+  branch_definition_ids: (m) => m.branch_definition_ids,
   // 項目は verb の鍵の列で、id を持つのはエントリの項目だけ(枝の項目は持たない)
-  items: (m) => m.items.flatMap((item) => ("entry" in item ? [item.entry] : [])),
+  items: (m) => m.items.flatMap((item) => ("memory_entry" in item ? [item.memory_entry] : [])),
 } satisfies Record<MaterialPart, (material: MemoryMaterial) => readonly number[]>;
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
@@ -688,7 +688,7 @@ export function entriesSeenBefore(
       : p.kind === "meta_review_material_injected" && p.worker_spawned_event_id === spawned
         ? p.subject === "memory"
           ? Object.values(MATERIAL_ENTRY_IDS).flatMap((ids) => ids(p))
-          : p.precedent_entries
+          : p.precedent_memory_entry_ids
         : [],
   );
   return sortedIds([...injected, ...pulls.flatMap((p) => p.returned_ids)]);

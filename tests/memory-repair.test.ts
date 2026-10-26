@@ -359,15 +359,15 @@ it("片側の verb の射程は広げない —— define_memory / fold_memory /
 
   expect(entry(define("tides").entry_id)).toMatchObject({ kind: "definition", path: "tides", author });
   expect(() => define("misc")).toThrow("branch misc in scope charts is not named by the objected judgment");
-  expect(() => fold([named.k, other])).toThrow(`entry #${other} is not named by the objected judgment`);
+  expect(() => fold([named.k, other])).toThrow(`memory entry #${other} is not named by the objected judgment`);
   fold([named.k, named.k2]);
   expect(approve(named.c)).toMatchObject({ question_id: expect.any(String) });
-  expect(() => approve(otherCandidate)).toThrow(`entry #${otherCandidate} is not named by the objected judgment`);
+  expect(() => approve(otherCandidate)).toThrow(`memory entry #${otherCandidate} is not named by the objected judgment`);
   // invalidate は target、consolidate は replaces が変える対象 —— consolidate の後継(candidate_id)は行き先なので名指されていなくてよい
   const propose = (input: Omit<Parameters<typeof proposeMemoryChange>[2], "rationale">) => proposeMemoryChange(db, repair.id, { ...input, rationale: "it holds" }, "deckhand", at);
-  expect(() => propose({ op: "invalidate", target_id: otherApproved, reason: "capability" })).toThrow(`entry #${otherApproved} is not named by the objected judgment`);
+  expect(() => propose({ op: "invalidate", target_id: otherApproved, reason: "capability" })).toThrow(`memory entry #${otherApproved} is not named by the objected judgment`);
   expect(propose({ op: "invalidate", target_id: named.b, reason: "capability" })).toMatchObject({ question_id: expect.any(String) });
-  expect(() => propose({ op: "consolidate", candidate_id: otherCandidate, replaces: [otherApproved] })).toThrow(`entry #${otherApproved} is not named by the objected judgment`);
+  expect(() => propose({ op: "consolidate", candidate_id: otherCandidate, replaces: [otherApproved] })).toThrow(`memory entry #${otherApproved} is not named by the objected judgment`);
   expect(propose({ op: "consolidate", candidate_id: otherCandidate, replaces: [named.b2] })).toMatchObject({ question_id: expect.any(String) });
   for (const write of [
     () => repairRestore(db, repairer, { entry_id: named.k }, at),
@@ -388,9 +388,9 @@ it("判断の行の修理子の get_current_task は親の判断の行・異議�
   commitTriage(db, at, [], new Map([[first!, { cause: "capability", evidence: "the two notes say the same", wrong_memory_entries: null }]]));
   const repair = repairChild(review.id);
 
-  expect(repair.purpose).toContain(`> left_as_is: entry #${named[0]}\n- fold the two squash notes\nboard judged: capability — the two notes say the same`);
+  expect(repair.purpose).toContain(`> left_as_is: memory entry #${named[0]}\n- fold the two squash notes\nboard judged: capability — the two notes say the same`);
   expect(taskHistoryRows(db, review.id, repair.id).map((r) => r.entry)).toEqual(
-    expect.arrayContaining([expect.objectContaining({ decision: `left_as_is: entry #${named[0]}` }), expect.objectContaining({ decision: `left_as_is: entry #${named[1]}` })]),
+    expect.arrayContaining([expect.objectContaining({ decision: `left_as_is: memory entry #${named[0]}` }), expect.objectContaining({ decision: `left_as_is: memory entry #${named[1]}` })]),
   );
   const before = listEvents(db, review.id).length;
   const decision = logDecision(db, repair, "the two say the same", "deckhand", at, "worker");

@@ -95,10 +95,10 @@ it("項目に値も行為も無ければ unjudged で拒まれ、材料に無い
   const { db, written, review } = cycle();
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${written}, branch notes in scope tidepool`);
+  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: memory entry #${written}, branch notes in scope tidepool`);
   expect(() =>
-    completeMemoryReview(db, review, { judgments: [{ entry: written }, { branch: "notes", scope: "tidepool" }, { entry: 9999 }, { branch: "nowhere", scope: "tidepool" }] }, "auditor", at, "worker"),
-  ).toThrow("not items to judge: entry #9999, branch nowhere in scope tidepool");
+    completeMemoryReview(db, review, { judgments: [{ memory_entry: written }, { branch: "notes", scope: "tidepool" }, { memory_entry: 9999 }, { branch: "nowhere", scope: "tidepool" }] }, "auditor", at, "worker"),
+  ).toThrow("not items to judge: memory entry #9999, branch nowhere in scope tidepool");
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
 });
@@ -118,13 +118,13 @@ it("注入された項目をそのまま left_as_is で渡しても、この ses
   const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
 
   expect(injected).toEqual([
-    ...[retired!, proposed!, kept, moved].map((entry) => ({ entry })),
+    ...[retired!, proposed!, kept, moved].map((memory_entry) => ({ memory_entry })),
     { branch: "drafts", scope: "tidepool" },
     { branch: "drafts/x", scope: "tidepool" },
     { branch: "notes", scope: "tidepool" },
   ]);
   expect(done.status).toBe("done");
-  expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([{ kind: "memory", entry: kept, value: "left_as_is" }]);
+  expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([{ kind: "memory", memory_entry: kept, value: "left_as_is" }]);
 });
 
 it("注入の後に他の worker が定義の無い path に Knowledge を書いても、注入した一覧どおりの完了は done になり、その枝の行は書かれない —— 項目の全体は注入の記録", () => {
@@ -135,7 +135,7 @@ it("注入の後に他の worker が定義の無い path に Knowledge を書い
 
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id).map((row) => row.judgment)).toEqual([
-    { kind: "memory", entry: written, value: "left_as_is" },
+    { kind: "memory", memory_entry: written, value: "left_as_is" },
     { kind: "memory", branch: "notes", scope: "tidepool", value: "left_as_is" },
   ]);
 });
@@ -149,7 +149,7 @@ it("注入の後に人間が引退させた candidate への left_as_is は受�
 
   const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
 
-  expect(injected).toContainEqual({ entry: retired });
+  expect(injected).toContainEqual({ memory_entry: retired });
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([]);
 });
@@ -164,7 +164,7 @@ it.each([
   const done = completeMemoryReview(db, review, { judgments: injected }, "auditor", at, "worker");
 
   expect(done.status).toBe("done");
-  expect(judgmentRows(db, review.id).map((row) => row.judgment)).not.toContainEqual(expect.objectContaining({ entry: written }));
+  expect(judgmentRows(db, review.id).map((row) => row.judgment)).not.toContainEqual(expect.objectContaining({ memory_entry: written }));
 });
 
 it("注入の前(窓の中)に無効化された店の変更のエントリは項目に載らず、値なしで完了し、行は書かれない(ADR 0286 決定1)", () => {
@@ -191,7 +191,7 @@ it("材料を組んでから記録するまでの間に人間が引退させた�
 
   const done = completeMemoryReview(db, review, { judgments: material.parts.items }, "auditor", at, "worker");
 
-  expect(material.parts.items).toContainEqual({ entry: retired });
+  expect(material.parts.items).toContainEqual({ memory_entry: retired });
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([]);
 });
@@ -201,12 +201,12 @@ it("窓で異議された前の判断の行が名指すエントリと枝は項�
   defineMemoryByMetaReview(db, { scope: "tidepool", path: "notes", text: "Notes.", author: metaReview }, "worker", at, register(db, "memory", true).id);
   const kept = knowledge(db, "notes");
   const previous = register(db, "memory", true);
-  objectedJudgment(db, previous.id, { kind: "memory", entry: kept, value: "left_as_is" }, at);
+  objectedJudgment(db, previous.id, { kind: "memory", memory_entry: kept, value: "left_as_is" }, at);
   objectedJudgment(db, previous.id, { kind: "memory", branch: "notes", scope: "tidepool", value: "left_as_is" }, at);
   const { review } = injectedReview(db);
 
-  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: entry #${kept}, branch notes in scope tidepool —`);
-  expect(completeMemoryReview(db, review, { judgments: [{ entry: kept }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker").status).toBe("done");
+  expect(() => completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker")).toThrow(`unjudged: memory entry #${kept}, branch notes in scope tidepool —`);
+  expect(completeMemoryReview(db, review, { judgments: [{ memory_entry: kept }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker").status).toBe("done");
 });
 
 it("この review 自身が注入の後に書いたエントリへの値は注入した一覧に無いので名指して拒まれ、何も記録しない", () => {
@@ -214,8 +214,8 @@ it("この review 自身が注入の後に書いたエントリへの値は注�
   const defined = defineMemoryByMetaReview(db, { scope: "tidepool", path: "notes", text: "Notes.", author: metaReview }, "worker", at, review.id).entry_id;
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: written }, { entry: defined }] }, "auditor", at, "worker")).toThrow(
-    `not items to judge: entry #${defined}`,
+  expect(() => completeMemoryReview(db, review, { judgments: [{ memory_entry: written }, { memory_entry: defined }] }, "auditor", at, "worker")).toThrow(
+    `not items to judge: memory entry #${defined}`,
   );
   expect(listEvents(db, review.id)).toHaveLength(before);
   expect(getTask(db, review.id)!.status).toBe("todo");
@@ -236,7 +236,7 @@ it("材料の注入が記録されていない memory meta-review の完了は�
   const review = register(db, "memory");
   const before = listEvents(db, review.id).length;
 
-  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: written }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker")).toThrow(
+  expect(() => completeMemoryReview(db, review, { judgments: [{ memory_entry: written }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker")).toThrow(
     "material was not injected",
   );
   expect(listEvents(db, review.id)).toHaveLength(before);
@@ -251,13 +251,13 @@ it("祖先の枝の移動は枝の項目を覆わず、その枝は unjudged で
   const { review } = injectedReview(db);
   moveMemoryByMetaReview(db, { entry_id: leaves, scope: "tidepool", path: "misc", mover: metaReview }, "worker", at, review.id);
 
-  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: stays }] }, "auditor", at, "worker")).toThrow("unjudged: branch tools in scope tidepool —");
+  expect(() => completeMemoryReview(db, review, { judgments: [{ memory_entry: stays }] }, "auditor", at, "worker")).toThrow("unjudged: branch tools in scope tidepool —");
 });
 
 it("scope だけを変える移動(workspace → 盤面全体)は移動先の (path, 盤面全体) の項目を覆い、行を求めない(ADR 0282 決定4)", () => {
   const db = openDb(":memory:");
   register(db, "memory", true);
-  const stored = [knowledge(db, "notes", null), knowledge(db, "notes")].map((entry) => ({ entry }));
+  const stored = [knowledge(db, "notes", null), knowledge(db, "notes")].map((memory_entry) => ({ memory_entry }));
   const { review, injected } = injectedReview(db);
   moveMemoryBranchByMetaReview(db, { scope: "tidepool", path: "notes", to_scope: null, to_path: "notes", mover: metaReview }, "worker", at, review.id);
 
@@ -270,7 +270,7 @@ it("scope だけを変える移動(workspace → 盤面全体)は移動先の (p
 function twoScopeCycle() {
   const db = openDb(":memory:");
   register(db, "memory", true);
-  const stored = ["charts", "docks"].map((scope) => ({ entry: knowledge(db, "tides", scope) }));
+  const stored = ["charts", "docks"].map((scope) => ({ memory_entry: knowledge(db, "tides", scope) }));
   return { db, stored, ...injectedReview(db) };
 }
 
@@ -309,7 +309,7 @@ it("盤面全体の枝の改名が連れて行った workspace の行はその w
   moveMemoryBranchByMetaReview(db, { scope: null, path: "tides", to_scope: null, to_path: "sea", mover: metaReview }, "worker", at, review.id);
   knowledge(db, "tides", "charts");
 
-  expect(injected).toEqual([{ entry: carried }, { branch: "tides", scope: "charts" }]);
+  expect(injected).toEqual([{ memory_entry: carried }, { branch: "tides", scope: "charts" }]);
   expect(completeMemoryReview(db, review, { judgments: [] }, "auditor", at, "worker").status).toBe("done");
 });
 
@@ -319,10 +319,10 @@ it("注入した一覧に無い (path, scope) は path と scope を名指して
   const stored = knowledge(db, "tides", null);
   const { review } = injectedReview(db);
 
-  expect(() => completeMemoryReview(db, review, { judgments: [{ entry: stored }, { branch: "tides", scope: "charts" }] }, "auditor", at, "worker")).toThrow(
+  expect(() => completeMemoryReview(db, review, { judgments: [{ memory_entry: stored }, { branch: "tides", scope: "charts" }] }, "auditor", at, "worker")).toThrow(
     "not items to judge: branch tides in scope charts",
   );
-  completeMemoryReview(db, review, { judgments: [{ entry: stored }, { branch: "tides", scope: null, reason: "fine" }] }, "auditor", at, "worker");
+  completeMemoryReview(db, review, { judgments: [{ memory_entry: stored }, { branch: "tides", scope: null, reason: "fine" }] }, "auditor", at, "worker");
   expect(judgmentRows(db, review.id)).toContainEqual({
     kind: "decision_logged",
     line: "left_as_is: branch tides in the whole board — fine",
@@ -344,7 +344,7 @@ function candidateOnlyCycle() {
     "worker",
     at,
   ).entry_id;
-  return { db, stored: [{ entry: drafted }], ...injectedReview(db) };
+  return { db, stored: [{ memory_entry: drafted }], ...injectedReview(db) };
 }
 
 it("candidate だけが残る異議された枝の再掲は、値も行為も無ければ unjudged で拒まれ、left_as_is なら判断の行が書かれ、その scope の定義の後は値なしで完了する(ADR 0284 決定1)", () => {
@@ -370,21 +370,21 @@ it("再掲の (path, workspace) と構造の (path, 盤面全体) が並んで�
   objectedJudgment(db, previous.id, { kind: "memory", branch: "tides", scope: "charts", value: "left_as_is" }, at);
   const deep = knowledge(db, "tides/deep", null);
   const { review, injected } = injectedReview(db);
-  const rest = [{ entry: deep }, { branch: "tides/deep", scope: null }, { branch: "tides/low", scope: "charts" }];
+  const rest = [{ memory_entry: deep }, { branch: "tides/deep", scope: null }, { branch: "tides/low", scope: "charts" }];
   defineMemoryByMetaReview(db, { scope: null, path: "tides", text: "Tides.", author: metaReview }, "worker", at, review.id);
 
-  expect(injected).toEqual([{ entry: deep }, { branch: "tides", scope: null }, { branch: "tides", scope: "charts" }, ...rest.slice(1)]);
+  expect(injected).toEqual([{ memory_entry: deep }, { branch: "tides", scope: null }, { branch: "tides", scope: "charts" }, ...rest.slice(1)]);
   expect(completeMemoryReview(db, review, { judgments: rest }, "auditor", at, "worker").status).toBe("done");
 });
 
 it("据え置いた項目ごとに対象を名指す型つきの decision_logged が1行、文は盤面が組み reason があれば添え、完了する", () => {
   const { db, written, review } = cycle();
 
-  const done = completeMemoryReview(db, review, { judgments: [{ entry: written, reason: "  still accurate " }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker");
+  const done = completeMemoryReview(db, review, { judgments: [{ memory_entry: written, reason: "  still accurate " }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker");
 
   expect(done.status).toBe("done");
   expect(judgmentRows(db, review.id)).toEqual([
-    { kind: "decision_logged", line: `left_as_is: entry #${written} — still accurate`, judgment: { kind: "memory", entry: written, value: "left_as_is", reason: "still accurate" } },
+    { kind: "decision_logged", line: `left_as_is: memory entry #${written} — still accurate`, judgment: { kind: "memory", memory_entry: written, value: "left_as_is", reason: "still accurate" } },
     { kind: "decision_logged", line: "left_as_is: branch notes in scope tidepool", judgment: { kind: "memory", branch: "notes", scope: "tidepool", value: "left_as_is" } },
   ]);
 });
@@ -393,7 +393,7 @@ it("完了が拒まれれば判断の行も書かれない —— 行と完了�
   const { db, written, review } = cycle();
   escalateTask(db, review, { context: "c", questions: [{ title: "which scope?", options: ["a", "b"], recommendation: "a" }] }, "auditor", at, "worker");
 
-  expect(() => completeMemoryReview(db, getTask(db, review.id)!, { judgments: [{ entry: written }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker")).toThrow(
+  expect(() => completeMemoryReview(db, getTask(db, review.id)!, { judgments: [{ memory_entry: written }, { branch: "notes", scope: "tidepool" }] }, "auditor", at, "worker")).toThrow(
     "unfinished children",
   );
   expect(judgmentRows(db, review.id)).toEqual([]);

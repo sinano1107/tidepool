@@ -64,8 +64,8 @@ it("capability の異議エントリに self RCA が propose すると、author 
 
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
   const returned = body(result);
-  expect(returned).toEqual({ entry_id: expect.any(Number), event_id: expect.any(Number) });
-  expect(await memoryEntries(t)).toEqual([expect.objectContaining({ id: returned.entry_id, author: { activity: "rca", name: t.worker.id } })]);
+  expect(returned).toEqual({ memory_entry_id: expect.any(Number), event_id: expect.any(Number) });
+  expect(await memoryEntries(t)).toEqual([expect.objectContaining({ id: returned.memory_entry_id, author: { activity: "rca", name: t.worker.id } })]);
 });
 
 it("propose_from_material の拒否は tool error として返る(何を断るかは domain 層 —— tests/propose-from-material.test.ts が言う)", async () => {
@@ -86,9 +86,9 @@ it("auditor RCA では author = RCA task の agent 名(auditorName の盤面)に
   const result = await propose(t, auditor.id, { material_id: entry.id });
 
   expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
-  const { entry_id } = body(result);
+  const { memory_entry_id } = body(result);
   const listed = await memoryEntries(t);
-  expect(listed).toEqual([expect.objectContaining({ id: entry_id, author: { activity: "rca", name: "shako" }, cause: "task_ambiguity" })]);
+  expect(listed).toEqual([expect.objectContaining({ id: memory_entry_id, author: { activity: "rca", name: "shako" }, cause: "task_ambiguity" })]);
 
   const client = await managementMcpClient(t.baseUrl);
   try {

@@ -200,7 +200,7 @@ it("書き込みの記録は tool 結果の event id で Episode の memory_writ
     decision_event_id: wrote.event_id,
     line: `wrote knowledge #${wrote.entry_id} "Squash" at build (charts)`,
     objections: ["the note is wrong"],
-    entries_read: [read],
+    memory_entries_read: [read],
   };
   expect(listPrecedents(db, { taskId: reviewId, agent: "auditor" }, { since_watermark: 0 }, at).precedents).toEqual([expect.objectContaining(objected)]);
   expect(buildMetaReviewMaterial(db, reviewId)!.parts).toMatchObject({ precedents: [objected] });
