@@ -282,7 +282,7 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
 
   const claude = sessionFiles.get(`sessions/${claudeTask}.${claudeSpawned}.md`)!;
   // 見出し: task・agent・Harness・spawn の event id
-  expectInOrder(claude, [claudeTask, "tako", "claude-code", String(claudeSpawned)]);
+  expectInOrder(claude, [claudeTask, `worker_spawned ${claudeSpawned}`, "tako", "claude-code"]);
   // get_current_task の応答は transcript の本文のまま全文(fixture の tool_result の text)
   const firstResult = fs
     .readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8")
@@ -320,9 +320,9 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
   // 組み込みの定義は本文が空でも節があり、builtin 旗と版が出る。最後の部分は末尾の空行ごと
   expectInOrder(codex, [
     codexTask,
+    `worker_spawned ${codexSpawned}`,
     "codex-agent",
     "codex",
-    String(codexSpawned),
     "Task: exp1231 canary\nPurpose: measure\nCompletion criteria: follow the user prompt",
     "definition",
     "builtin: true",

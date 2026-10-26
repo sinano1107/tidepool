@@ -233,10 +233,7 @@ function readPrompt(path: string): PromptRecord | null {
  *  `tool_use.input` と(後の行の)`tool_result.content`、Codex は `mcp_tool_call` の `arguments` と `result.content`。 */
 function verbCalls(lines: readonly string[], calls: readonly EpisodeAction[]) {
   const bodies = new Map<string, { input?: unknown; result?: unknown }>();
-  const body = (id: unknown) => {
-    if (!bodies.has(String(id))) bodies.set(String(id), {});
-    return bodies.get(String(id))!;
-  };
+  const body = (id: unknown) => bodies.get(String(id)) ?? bodies.set(String(id), {}).get(String(id))!;
   for (const line of lines) {
     const parsed = parseStreamLine(line);
     const item = parsed?.item as Record<string, unknown> | undefined;
@@ -279,7 +276,7 @@ function sessionFile(
   const verbs = calls
     ? calls.flatMap((call, i) => [`### ${i + 1}. ${call.verb}${call.failed ? " (error)" : ""}`, "Arguments:", json(call.input), "Response:", json(call.result)])
     : ["transcript not recorded"];
-  return [`# ${row.task_id} · session ${spawnedId}`, `agent: ${row.agent}, harness: ${row.harness}, worker_spawned: ${spawnedId}`, ...parts, "## Board verbs", ...verbs, ""].join("\n\n");
+  return [`# ${row.task_id} · worker_spawned ${spawnedId}`, `agent: ${row.agent}, harness: ${row.harness}`, ...parts, "## Board verbs", ...verbs, ""].join("\n\n");
 }
 
 /** 費用を Harness(Provider)ごとに足し、費用の無いものは和に入れず数える —— 部分和を全額と読ませない。 */
