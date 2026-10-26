@@ -6,7 +6,7 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
+import { attributedObjection, bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
@@ -198,7 +198,8 @@ it("list_precedents は異議つき decision を cause・outcome・読んだ / �
   const event = (payload: TaskScopedPayload) =>
     appendEvent(db, { taskId: FIXTURE_TASK, actorId: "human", origin: "webui", payload, at });
   event({ kind: "memory_injected", worker_spawned_event_id: FIXTURE_SPAWNED_EVENT_ID, watermark: 0, entries: [{ id: 42, version: 42 }], tokens: 10, index_depth: 1, index_max_depth: 1, omitted: 0, tokenizer: "t", tokenizer_version: "1" });
-  bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
+  attributedObjection(db, FIXTURE_TASK, 6, at, "前の周期の異議");
+  bundledObjection(db, FIXTURE_TASK, 6, at, "前の周期の未帰責の異議"); // 最後の異議群が未帰責なら entry の今の判定は無い(ADR 0170 決定2)
   registerMetaReview(db, "memory", at); // 前回の meta-review
   db.prepare("UPDATE tasks SET status = 'done' WHERE meta_review_subject = 'memory'").run(); // setup のみ: 完了した登録だけが窓の起点(ADR 0193)
   const objection = bundledObjection(db, FIXTURE_TASK, 7, at, "2回目は要らない");

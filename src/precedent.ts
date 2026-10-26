@@ -663,6 +663,8 @@ const MATERIAL_ENTRY_IDS = {
   candidates: (m) => m.candidates,
   precedents: () => [],
   precedent_memory_entry_ids: (m) => m.precedent_memory_entry_ids,
+  // 停止の行はエントリの id を直に持たない —— wrong_memory_entries は Items を経て数える(ADR 0312 決定7)
+  stop_attributed_event_ids: () => [],
   proposals: () => [],
   proposal_memory_entry_ids: (m) => m.proposal_memory_entry_ids,
   branch_definition_ids: (m) => m.branch_definition_ids,
@@ -671,7 +673,7 @@ const MATERIAL_ENTRY_IDS = {
 } satisfies Record<MaterialPart, (material: MemoryMaterial) => readonly number[]>;
 
 /** 「decision D より前に見た記憶」= seen(ADR 0083 追記6、seen ⊇ read): この session の spawn 注入
- *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は5部分と項目のうちエントリの項目、主題 routing は異議つき判断の部分 ——
+ *  (`memory_injected` と `meta_review_material_injected` のエントリ —— 主題 memory は停止の帰責を除く部分と項目のうちエントリの項目、主題 routing は異議つき判断の部分 ——
  *  worker_spawned の event id で結ぶ)の id と、D より前の全 verb の pull が返した id の和集合(昇順)。
  *  D がこの Episode で位置を持たなければ null。 */
 export function entriesSeenBefore(

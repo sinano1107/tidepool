@@ -3690,14 +3690,13 @@ export function metaReviewSubjectOf(db: Db, taskId: string): Task["meta_review_s
  *  親の主題に載る。祖先にも無ければ null。「この行はどの主題に載るか / この task は誰の読み手か」を問う箇所はすべてこれで読む
  *  (起草の置き場・束ねの門・注入の分岐と読み口・未決着の門・Precedent の絞り)。「この task は meta-review か」は自身の列。 */
 export function lineageSubjectOf(db: Db, taskId: string): Task["meta_review_subject"] {
-  return (
-    metaReviewSubjectOf(db, taskId) ??
-    ((db
-      .prepare(`${ancestorsSql("?")} SELECT t.meta_review_subject FROM tasks t JOIN ancestors a ON a.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY a.depth LIMIT 1`)
-      .pluck()
-      .get(taskId) as Task["meta_review_subject"] | undefined) ?? null)
-  );
+  return (db.prepare(`SELECT ${lineageSubjectSql("?")}`).pluck().get(taskId) as Task["meta_review_subject"] | undefined) ?? null;
 }
+
+/** lineageSubjectOf の SQL 式(`taskRef` は task の id の SQL 式、相関でもよい): 行を読み込まずに主題で絞る読み(due の件数、ADR 0312 決定3)が使う。 */
+export const lineageSubjectSql = (taskRef: string) =>
+  `(WITH RECURSIVE lineage(id, depth) AS (SELECT ${taskRef}, 0 UNION SELECT t.parent_id, l.depth + 1 FROM tasks t JOIN lineage l ON t.id = l.id)
+     SELECT t.meta_review_subject FROM tasks t JOIN lineage l ON l.id = t.id WHERE t.meta_review_subject IS NOT NULL ORDER BY l.depth LIMIT 1)`;
 
 /** あるタスクの祖先(自身を除き root を含む、`parent_id` だけをたどる)の CTE。`taskRef` は起点の id を持つ SQL 式。
  *  `depth` は起点からの段数(親が 1)。 */

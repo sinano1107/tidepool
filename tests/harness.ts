@@ -970,6 +970,20 @@ export function bundledObjection(db: Db, taskId: string, entryId: number, at: Da
   });
 }
 
+/** setup のみ: bundledObjection の異議群に cause capability の初回の帰責を直に置き(Board call は撃たない)、異議 event の id を返す ——
+ *  異議つき判断の行(list_precedents・材料の節)は帰責のある判断だけ(ADR 0312 決定5)。 */
+export function attributedObjection(db: Db, taskId: string, entryId: number, at: Date, comment = "redo it"): number {
+  const objection = bundledObjection(db, taskId, entryId, at, comment);
+  appendEvent(db, {
+    taskId,
+    actorId: BOARD_ACTOR_ID,
+    origin: "board",
+    at,
+    payload: { kind: "objection_attributed", entry_id: entryId, objection_event_ids: [objection], cause: "capability", evidence: "e", wrong_memory_entries: null, round: "initial" },
+  });
+  return objection;
+}
+
 /** setup のみ: 判断の行の event を 1 marker = 1 episode の直挿しで episode に載せる(#356 の投影は使わない)。episode の id と
  *  worker_spawned_event_id はその event id —— 呼び手ごとの採番が重ならない。 */
 export function episodeOfDecision(db: Db, taskId: string, decision: number, agent = "deckhand"): void {
@@ -977,12 +991,12 @@ export function episodeOfDecision(db: Db, taskId: string, decision: number, agen
   db.prepare("INSERT INTO episode_markers (episode_id, seq, kind, position, event_id) VALUES (?, 0, 'decision', 0, ?)").run(decision, decision);
 }
 
-/** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置いて episode に載せ、その行に異議を立てる。
+/** setup のみ: meta-review の task に完了の verb が書く型つきの判断の行を置いて episode に載せ、その行に帰責つきの異議を立てる。
  *  返り値は判断の行の event id。 */
 export function objectedJudgment(db: Db, taskId: string, judgment: Judgment, at: Date): number {
   const decision = appendEvent(db, { taskId, actorId: "auditor", origin: "worker", at, payload: { kind: "decision_logged", line: judgment.kind, judgment } });
   episodeOfDecision(db, taskId, decision, "auditor");
-  bundledObjection(db, taskId, decision, at);
+  attributedObjection(db, taskId, decision, at);
   return decision;
 }
 

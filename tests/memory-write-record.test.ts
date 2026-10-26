@@ -28,7 +28,7 @@ import { attributeObjections, proposeFromMaterial } from "../src/retrospective.j
 import { getTask, listBoard, logDecision, registerTask, type Task } from "../src/tasks.js";
 import { listLog, raiseObjection, startTriage } from "../src/triage.js";
 import { FakeAttributionClient, noRetrospectiveCalls } from "./fakes.js";
-import { bundledObjection, HUMAN_WEBUI, markPickedUp, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { attributedObjection, bundledObjection, HUMAN_WEBUI, markPickedUp, settleReview, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 /** AI の直接適用の書き込みの記録(issue #632 / ADR 0252 決定1〜3)のドメイン層。tool 結果と決定ログ API への写像はサーバ境界
@@ -187,7 +187,7 @@ it("書き込みの記録は tool 結果の event id で Episode の memory_writ
   const transcriptPath = join(await tempDir("tidepool-write-record-"), `${writer.id}.${spawned}.stream.jsonl`);
   writeFileSync(transcriptPath, [...toolCall(1, "mcp__tidepool__read_memory", pull), ...toolCall(2, "mcp__tidepool__record_knowledge", wrote.event_id)].join("\n"));
   projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
-  bundledObjection(db, writer.id, wrote.event_id, at, "the note is wrong");
+  attributedObjection(db, writer.id, wrote.event_id, at, "the note is wrong");
   registerMetaReview(db, "memory", at);
   const reviewId = listBoard(db).find((t) => t.meta_review_subject === "memory")!.id;
 
@@ -218,7 +218,7 @@ it("meta-review の畳みへの異議は、次の meta-review の材料の異議
   writeFileSync(transcriptPath, [...toolCall(1, "mcp__tidepool__log_decision", decision), ...toolCall(2, "mcp__tidepool__fold_memory", fold.event_id)].join("\n"));
   projectAndPersist(db, { workerSpawnedEventId: spawned, transcriptPath });
   settleReview(db, first, "auditor", at);
-  bundledObjection(db, first.id, fold.event_id, at, "those two were different");
+  attributedObjection(db, first.id, fold.event_id, at, "those two were different");
   registerMetaReview(db, "memory", at);
   const next = listBoard(db).find((t) => t.meta_review_subject === "memory" && t.id !== first.id)!;
 

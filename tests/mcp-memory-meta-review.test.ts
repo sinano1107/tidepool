@@ -173,7 +173,7 @@ it("read_memory_entries は主題 memory の接続に出て管理MCP には出�
       isError: false,
       body: { entries: [{ id: material, case: null }], missing: [9999], event_id: expect.any(Number) },
     });
-    expect(review.purpose).toContain("A Precedent with cause memory names the wrong entries it followed (wrong_memory_entries): read them with read_memory_entries, then drop");
+    expect(review.purpose).toContain("A Precedent or an attributed stop with cause memory names the wrong entries it followed (wrong_memory_entries), each an item to judge: read them with read_memory_entries, then drop");
     expect(review.purpose).toContain("Read the case of a candidate or an Exemplar — the example it was drafted from — with read_memory_entries.");
     const propose = tools.find((tool) => tool.name === "propose_memory_change")!.inputSchema as any;
     expect(propose.properties.text.properties.annotations.description).toContain("read the case with read_memory_entries");
@@ -230,7 +230,7 @@ it("memory meta-review の purpose は材料の節とその6つの部分を名�
   try {
     expect(review.purpose).toContain(
       "This cycle's material is in your prompt, in the Memory meta-review material section: the store changes since the previous memory " +
-        "meta-review, every live candidate, the decisions objected to since then, the memory proposals answered or settled since then, the branch list, and the items to judge.",
+        "meta-review, every live candidate, the decisions whose objections were attributed since then, the human stops attributed since then, the memory proposals answered or settled since then, the branch list, and the items to judge.",
     );
     expect(review.purpose).toContain("search_memory_entries with like");
     expect(review.purpose).toContain("read why it was dropped (its invalidation_reason, and for a rejected candidate the human's comment in list_memory_proposals)");

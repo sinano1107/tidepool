@@ -7,7 +7,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
+import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, lineageSubjectSql, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
  *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
@@ -56,16 +56,30 @@ export const PROMOTION_RULE =
 export const TIER_DEFINITION_RULE =
   "A tier's definition is not a Behavior: it belongs in the tier's description. A habit of declaring tiers specific to one workspace or writer may be a Behavior.";
 
-/** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数える
- *  材料の event 種別、接続で worker の memory verb を置き換える専用 verb。 */
+/** 材料の述語の1組(ADR 0312 決定1): due が数え節が読む event の where(`events` の行の SQL、行を受け取る読み手の主題もここ)と、
+ *  その行を描く節の部分の見出し。 */
+type MaterialPredicate = { where: string; part: string };
+type MaterialMap = { [K in EventKind]?: MaterialPredicate };
+
+/** 同じ主題の meta-review 自身の産物を除く印(ADR 0151 決定3): 提案 question への回答が刻んだ question_id と、review の直接書き込みの
+ *  activity(無効化は payload の、作成は entry の書き手の)。店の変更(と routing の kind)の組だけが持つ。 */
+const NOT_OWN_PRODUCT_SQL = `json_extract(payload, '$.question_id') IS NULL
+  AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`;
+
+/** event の task の行の主題(lineageSubjectOf、主題の無い行は memory)が `subject` か(ADR 0279 決定6)。null は主題の無い読み手で全件。 */
+export const rowSubjectSql = (subject: "memory" | "routing" | null) =>
+  subject === null ? "1" : `IFNULL(${lineageSubjectSql("events.task_id")}, 'memory') = '${subject}'`;
+
+/** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数え節が描く
+ *  材料の kind → 組の写像(ADR 0312 決定1)、接続で worker の memory verb を置き換える専用 verb。 */
 export const META_REVIEW_SUBJECTS = {
   memory: {
     task: {
       title: "Memory meta-review",
       purpose:
         "Periodic meta-review of the board's memory store. This cycle's material is in your prompt, in the Memory meta-review material section: " +
-        "the store changes since the previous memory meta-review, every live candidate, the decisions objected to since then, the memory proposals " +
-        "answered or settled since then, the branch list, and the items to judge. " +
+        "the store changes since the previous memory meta-review, every live candidate, the decisions whose objections were attributed since then, " +
+        "the human stops attributed since then, the memory proposals answered or settled since then, the branch list, and the items to judge. " +
         "Every item to judge needs a judgment: act on it with the verbs below, or leave it as is. End the session with complete_memory_review, " +
         "listing each item you leave as is (with a reason when it helps). " +
         "Judge repeats among candidates and exemplars, redundant examples included, by reading them, not by counting. " +
@@ -93,7 +107,7 @@ export const META_REVIEW_SUBJECTS = {
         "you judge one of those right, leave the entry in place and say so — in its reason in complete_memory_review when the entry " +
         "is an item to judge, otherwise in one log_decision line naming the entry id, or the branch path and scope, and the scope you judged right (complete_memory_review " +
         "refuses an entry not on the injected list). " +
-        "A Precedent with cause memory names the wrong entries it followed (wrong_memory_entries): read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
+        "A Precedent or an attributed stop with cause memory names the wrong entries it followed (wrong_memory_entries), each an item to judge: read them with read_memory_entries, then drop the wrong entry (reason capability) or replace it — " +
         "a Behavior or Exemplar through propose_memory_change, Knowledge through fold_memory or invalidate_memory. The proposals settled since the previous meta-review are in the material section; read " +
         "earlier ones, with the human's answers and comments, with list_memory_proposals, and the invalidated candidates with invalidated_by (list_memory_candidates " +
         "with include_invalidated), so you do not repeat a retirement of your own. A rejected proposal always carries the human's reason: " +
@@ -106,7 +120,12 @@ export const META_REVIEW_SUBJECTS = {
       completion_criteria:
         "every item to judge in this cycle's material is either proposed, retired, folded, moved, applied (Knowledge / Definitions), or listed as left as is in complete_memory_review",
     },
-    material: ["memory_entry_created", "memory_entry_invalidated", "objection_attributed", "stop_attributed"],
+    material: {
+      memory_entry_created: { where: NOT_OWN_PRODUCT_SQL, part: "Store changes" },
+      memory_entry_invalidated: { where: NOT_OWN_PRODUCT_SQL, part: "Store changes" },
+      objection_attributed: { where: rowSubjectSql("memory"), part: "Objected decisions" },
+      stop_attributed: { where: rowSubjectSql("memory"), part: "Stops attributed" },
+    } as const satisfies MaterialMap,
     verbs: MEMORY_META_REVIEW_VERBS,
   },
   routing: {
@@ -146,11 +165,18 @@ export const META_REVIEW_SUBJECTS = {
       completion_criteria:
         "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
     },
-    material: ["allocation_reviewed", "worker_exited", "execution_settings_changed"],
+    material: {
+      allocation_reviewed: { where: NOT_OWN_PRODUCT_SQL, part: "Allocation reviews" },
+      worker_exited: { where: NOT_OWN_PRODUCT_SQL, part: "Diverged shadow rows" },
+      execution_settings_changed: { where: NOT_OWN_PRODUCT_SQL, part: "New cells and changed rows" },
+    } as const satisfies MaterialMap,
     verbs: ROUTING_META_REVIEW_VERBS,
   },
 } as const;
 export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
+/** 主題の材料の部分(材料の kind が描く見出し)。描き手は部分ごとの行を `satisfies Record<MaterialPart<S>, …>` で置く —— kind を足して
+ *  部分を描かなければ compile が落ちる。 */
+export type MaterialPart<S extends MetaReviewSubject> = { [K in keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]]: (typeof META_REVIEW_SUBJECTS)[S]["material"][K] extends { part: infer P } ? P : never }[keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]];
 
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。
  *  `excludeTaskId` は読み手自身 —— その登録の watermark は「今」なので除く。 */
@@ -202,6 +228,10 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
     ...parts.flatMap(([heading, note, rows, empty]) => ["", `### ${heading}`, "", note, ...(rows.length === 0 ? [`(${empty})`] : rows.map((row) => JSON.stringify(row)))]),
   ].join("\n");
 }
+
+/** 材料の節の "Objected decisions" の注(両主題): 窓の中で帰責の付いた異議の行(ADR 0312 決定5・6)。 */
+export const OBJECTED_DECISIONS_NOTE =
+  "Rows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.";
 
 /** 異議つき判断の行のうち、主題 `kind` の完了の verb が書いた型つきの判断(ADR 0279 決定5): 次周期の Items to judge が名指す対象を読む。 */
 export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedents: readonly { decision_event_id: number }[], kind: K) =>
@@ -273,27 +303,25 @@ export function completeMetaReview<I, J = I>(
   })();
 }
 
-/** 窓の中の主題の材料の event の SQL(ADR 0151): 同じ主題の meta-review 自身の産物 —— 提案 question への回答が刻んだ question_id と、
- *  review の直接書き込みの activity(無効化は payload の、作成は entry の書き手の)—— は数えない。材料の述語の唯一の置き場で、
- *  材料の event の読みと件数の読みが共有する。 */
-function materialSql(select: string, kinds: readonly EventKind[], { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+/** 窓の中の材料の event の SQL(ADR 0312 決定1): kind ごとの組の where の和。材料の述語の唯一の置き場で、材料の event の読みと件数の
+ *  読みが共有する。 */
+function materialSql(select: string, material: MaterialMap, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+  const kinds = Object.entries(material) as Array<[EventKind, MaterialPredicate]>;
   return {
-    sql: `SELECT ${select} FROM events WHERE kind IN (${kinds.map(() => "?").join(", ")}) AND id > ? AND id <= ?
-            AND json_extract(payload, '$.question_id') IS NULL
-            AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`,
-    params: [...kinds, after, upTo],
+    sql: `SELECT ${select} FROM events WHERE id > ? AND id <= ? AND (${kinds.map(([, { where }]) => `(kind = ? AND ${where})`).join(" OR ")})`,
+    params: [after, upTo, ...kinds.map(([kind]) => kind)],
   };
 }
 
-/** 窓の中の主題の材料の event(id 順)。due の判定と memory meta-review の材料の節が共有する。 */
-export function materialEvents<K extends EventKind>(db: Db, kinds: readonly K[], window: MetaReviewWindow): EventRowOf<K>[] {
-  const { sql, params } = materialSql("*", kinds, window);
+/** 窓の中の材料の event(id 順)。`material` は主題の写像か、その一部。due の判定と材料の節が共有する。 */
+export function materialEvents<K extends EventKind>(db: Db, material: { [P in K]?: MaterialPredicate }, window: MetaReviewWindow): EventRowOf<K>[] {
+  const { sql, params } = materialSql("*", material, window);
   return db.prepare(`${sql} ORDER BY id`).all(...params).map((row) => parseEventRow(row) as EventRowOf<K>);
 }
 
-/** 窓の中の主題の材料の件数と最初の時刻(行を読み込まない —— 盤面の履歴に比例する、ADR 0300 帰結)。 */
-function countMaterial(db: Db, kinds: readonly EventKind[], window: MetaReviewWindow): { count: number; first_at: string | null } {
-  const { sql, params } = materialSql("COUNT(*) AS count, MIN(created_at) AS first_at", kinds, window);
+/** 窓の中の材料の件数(組の count の和)と最初の時刻(行を読み込まない —— 盤面の履歴に比例する、ADR 0300 帰結)。 */
+function countMaterial(db: Db, material: MaterialMap, window: MetaReviewWindow): { count: number; first_at: string | null } {
+  const { sql, params } = materialSql("COUNT(*) AS count, MIN(created_at) AS first_at", material, window);
   return db.prepare(sql).get(...params) as { count: number; first_at: string | null };
 }
 
