@@ -60,6 +60,8 @@ export const TIER_DEFINITION_RULE =
  *  その行を描く節の部分の見出し。 */
 type MaterialPredicate = { where: string; part: string };
 type MaterialMap = { [K in EventKind]?: MaterialPredicate };
+/** due と節の読みが使う組の部分: where だけ。 */
+type MaterialWhere = { [K in EventKind]?: Pick<MaterialPredicate, "where"> };
 
 /** 同じ主題の meta-review 自身の産物を除く印(ADR 0151 決定3): 提案 question への回答が刻んだ question_id と、review の直接書き込みの
  *  activity(無効化は payload の、作成は entry の書き手の)。店の変更(と routing の kind)の組だけが持つ。 */
@@ -176,7 +178,9 @@ export const META_REVIEW_SUBJECTS = {
 export type MetaReviewSubject = keyof typeof META_REVIEW_SUBJECTS;
 /** 主題の材料の部分(材料の kind が描く見出し)。描き手は部分ごとの行を `satisfies Record<MaterialPart<S>, …>` で置く —— kind を足して
  *  部分を描かなければ compile が落ちる。 */
-export type MaterialPart<S extends MetaReviewSubject> = { [K in keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]]: (typeof META_REVIEW_SUBJECTS)[S]["material"][K] extends { part: infer P } ? P : never }[keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]];
+type Material<S extends MetaReviewSubject> = (typeof META_REVIEW_SUBJECTS)[S]["material"];
+type PartOf<T> = T extends { part: infer P } ? P : never;
+export type MaterialPart<S extends MetaReviewSubject> = PartOf<Material<S>[keyof Material<S>]>;
 
 /** 同主題で完了(done)した最新の登録の watermark(無ければ 0)。取り消された登録は材料の窓の起点にならない(ADR 0193 決定1)。
  *  `excludeTaskId` は読み手自身 —— その登録の watermark は「今」なので除く。 */
@@ -305,8 +309,8 @@ export function completeMetaReview<I, J = I>(
 
 /** 窓の中の材料の event の SQL(ADR 0312 決定1): kind ごとの組の where の和。材料の述語の唯一の置き場で、材料の event の読みと件数の
  *  読みが共有する。 */
-function materialSql(select: string, material: MaterialMap, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
-  const kinds = Object.entries(material) as Array<[EventKind, MaterialPredicate]>;
+function materialSql(select: string, material: MaterialWhere, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
+  const kinds = Object.entries(material) as Array<[EventKind, Pick<MaterialPredicate, "where">]>;
   return {
     sql: `SELECT ${select} FROM events WHERE id > ? AND id <= ? AND (${kinds.map(([, { where }]) => `(kind = ? AND ${where})`).join(" OR ")})`,
     params: [after, upTo, ...kinds.map(([kind]) => kind)],
@@ -314,13 +318,13 @@ function materialSql(select: string, material: MaterialMap, { after, upTo = Numb
 }
 
 /** 窓の中の材料の event(id 順)。`material` は主題の写像か、その一部。due の判定と材料の節が共有する。 */
-export function materialEvents<K extends EventKind>(db: Db, material: { [P in K]?: MaterialPredicate }, window: MetaReviewWindow): EventRowOf<K>[] {
+export function materialEvents<K extends EventKind>(db: Db, material: { [P in K]?: Pick<MaterialPredicate, "where"> }, window: MetaReviewWindow): EventRowOf<K>[] {
   const { sql, params } = materialSql("*", material, window);
   return db.prepare(`${sql} ORDER BY id`).all(...params).map((row) => parseEventRow(row) as EventRowOf<K>);
 }
 
 /** 窓の中の材料の件数(組の count の和)と最初の時刻(行を読み込まない —— 盤面の履歴に比例する、ADR 0300 帰結)。 */
-function countMaterial(db: Db, material: MaterialMap, window: MetaReviewWindow): { count: number; first_at: string | null } {
+function countMaterial(db: Db, material: MaterialWhere, window: MetaReviewWindow): { count: number; first_at: string | null } {
   const { sql, params } = materialSql("COUNT(*) AS count, MIN(created_at) AS first_at", material, window);
   return db.prepare(sql).get(...params) as { count: number; first_at: string | null };
 }

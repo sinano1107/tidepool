@@ -2233,10 +2233,7 @@ const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Se
  *  同じものだけ —— 主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件
  *  (ADR 0279 決定6)。読み手 memory の述語は材料の組(META_REVIEW_SUBJECTS.memory.material)と同じ rowSubjectSql。 */
 function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
-  const objected = new Set(
-    materialEvents(db, { objection_attributed: { where: rowSubjectSql(readerSubject), part: "Objected decisions" } }, window).map((e) => e.payload.entry_id),
-  );
-  if (objected.size === 0) return [];
+  const objected = new Set(materialEvents(db, { objection_attributed: { where: rowSubjectSql(readerSubject) } }, window).map((e) => e.payload.entry_id));
   const judged = currentAttributions(db, [...objected], window.upTo);
   return listEpisodes(db, {}).flatMap((episode) => {
     // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)

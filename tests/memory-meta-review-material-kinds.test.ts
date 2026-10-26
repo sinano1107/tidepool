@@ -201,27 +201,27 @@ it("節を組んだ記録 meta_review_material_injected(主題 memory)の stop_a
 });
 
 type MemoryRecord = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: "memory" }>;
-/** kind ごとの fixture: before() は窓の前に材料でない下ごしらえを置き、inWindow() は窓にその kind の event をちょうど1つ書いて、
+/** kind ごとの fixture: 呼ぶと窓の前に材料でない下ごしらえを置き、返す関数は窓にその kind の event をちょうど1つ書いて、
  *  節の記録のどの部分にどの id で載るべきかを返す。 */
-const KIND_FIXTURES: Record<keyof (typeof META_REVIEW_SUBJECTS)["memory"]["material"], (db: Db) => { inWindow: () => [keyof MemoryRecord, number] }> = {
-  memory_entry_created: (db) => ({ inWindow: () => ["changed_memory_entry_ids", knowledge(db, "written")] }),
+const KIND_FIXTURES: Record<keyof (typeof META_REVIEW_SUBJECTS)["memory"]["material"], (db: Db) => () => [keyof MemoryRecord, number]> = {
+  memory_entry_created: (db) => () => ["changed_memory_entry_ids", knowledge(db, "written")],
   memory_entry_invalidated: (db) => {
     const dropped = knowledge(db, "dropped");
-    return { inWindow: () => (invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at), ["changed_memory_entry_ids", dropped]) };
+    return () => (invalidateMemoryEntry(db, { entry_id: dropped, reason: "environment" }, "human", "webui", at), ["changed_memory_entry_ids", dropped]);
   },
   objection_attributed: (db) => {
     const objected = objectedDecision(db);
-    return { inWindow: () => (attributeObjection(db, objected, "capability"), ["precedents", objected.decision]) };
+    return () => (attributeObjection(db, objected, "capability"), ["precedents", objected.decision]);
   },
   stop_attributed: (db) => {
     const stopped = stoppedSession(db);
-    return { inWindow: () => ["stop_attributed_event_ids", attributeStop(db, stopped, "capability")] };
+    return () => ["stop_attributed_event_ids", attributeStop(db, stopped, "capability")];
   },
 };
 
 it.each(Object.entries(KIND_FIXTURES))("材料の kind %s の event が窓に1つだけあれば、due が開き(件数 1)、注入した節のその部分の記録に載る(ADR 0312 決定1)", (_, fixture) => {
   const db = openDb(":memory:");
-  const { inWindow } = fixture(db);
+  const inWindow = fixture(db);
   register(db, "memory", true);
   const [part, id] = inWindow();
 
