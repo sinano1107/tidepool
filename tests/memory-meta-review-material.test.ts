@@ -50,7 +50,7 @@ function memoryMaterialOf(db: Db, taskId: string) {
   return material;
 }
 
-it("材料の節は主題 memory の meta-review に memory の部分で組まれ、両端の watermark と6つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task には null、主題 routing の meta-review には routing の部分(ADR 0180 追記 #1239)", () => {
+it("材料の節は主題 memory の meta-review に memory の部分で組まれ、両端の watermark と7つの部分の見出しを持ち、材料の無い部分は空と書く —— 普通の task には null、主題 routing の meta-review には routing の部分(ADR 0180 追記 #1239)", () => {
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const review = register(db, "memory");
@@ -653,7 +653,7 @@ it("窓で reject された candidate と、cause memory の異議つき判断�
   expect(completeMemoryReview(db, getTask(db, review)!, { judgments: [] }, "auditor", at, "worker").status).toBe("done");
 });
 
-it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5部分のどこにも載らなくても項目に載り、その session の decision の memory_entries_seen に入り memory_entries_read に入らない", () => {
+it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、6部分のどこにも載らなくても項目に載り、その session の decision の memory_entries_seen に入り memory_entries_read に入らない", () => {
   const db = openDb(":memory:");
   const outside = knowledge(db, "outside");
   const previous = register(db, "memory", true);

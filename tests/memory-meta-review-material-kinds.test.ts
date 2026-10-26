@@ -6,6 +6,7 @@ import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events
 import { buildMetaReviewMaterial, completeMemoryReview, invalidateMemoryEntry, listPrecedents, recordKnowledge } from "../src/memory.js";
 import { META_REVIEW_SUBJECTS, type MetaReviewSubject, readMetaReviewStatus, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { getTask, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { bundledObjection, episodeOfDecision, HUMAN_WEBUI, injectMemoryMaterial, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
 
@@ -158,6 +159,28 @@ it("異議つき判断の行の判定は窓の上限までの最新: 登録の�
   const branches = items.filter((item) => "branch" in item);
   expect(() => completeMemoryReview(db, getTask(db, review)!, { judgments: branches }, "fugu", at, "worker")).toThrow(`unjudged: memory entry #${followed} —`);
   expect(readMetaReviewStatus(db).memory).toMatchObject({ material_since: 1 });
+});
+
+it("登録の時点で開いていた triage session の異議が上限の後に束ねられ帰責されても、窓の行の判定と注入時・完了時の Items は変わらない(ADR 0312 決定6)", () => {
+  const db = openDb(":memory:");
+  const followed = knowledge(db, "followed");
+  register(db, "memory", true);
+  const objected = objectedDecision(db);
+  attributeObjection(db, objected, "memory", { wrong: [followed] });
+  const session = startTriage(db, at);
+  const late = raiseObjection(db, objected.decision, "again", at);
+  const review = register(db, "memory");
+  const rows = () => memoryMaterialOf(db, review).parts.precedents.map((p) => [p.decision_event_id, p.cause, p.wrong_memory_entries]);
+  const injected = rows();
+
+  injectMemoryMaterial(db, review, "fugu", at);
+  db.prepare("UPDATE triage_sessions SET committed_at = ?, closed_by = 'commit' WHERE id = ?").run(at.toISOString(), session.id); // setup のみ: 束ねだけを起こす
+  attributeObjection(db, { ...objected, objection: late }, "capability");
+
+  expect(injected).toEqual([[objected.decision, "memory", [followed]]]);
+  expect(rows()).toEqual(injected);
+  const branches = memoryMaterialOf(db, review).parts.items.filter((item) => "branch" in item);
+  expect(() => completeMemoryReview(db, getTask(db, review)!, { judgments: branches }, "fugu", at, "worker")).toThrow(`unjudged: memory entry #${followed} —`);
 });
 
 it("同じ停止は窓に1行、窓の上限までの最新の判定で載る: 初回が前の窓・第2回が今の窓でも、両方が今の窓でも1行 —— 前回の登録以前と自身の登録より後の判定だけの停止は載らず、上限の後の第2回は今の行に効かない", () => {

@@ -706,7 +706,8 @@ export type EventPayload =
     }
   // ADR 0180 決定2・追記 #1239: meta-review の spawn に材料の節を入れた(task 帰属、memory_injected の直後)。主題、窓の両端の
   // watermark、計数したトークン数と計数器、部分ごとに載せた id —— memory は店の変更と candidate がエントリ、異議つき判断が
-  // decision の event、提案が question、枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
+  // decision の event、停止の帰責が行の判定の event(stop_attributed_event_ids —— seen に数えない、ADR 0312 決定7)、提案が question、
+  // 枝の一覧が Definition。異議つき判断と提案の部分は、同じ行で list_precedents /
   // list_memory_proposals が返すエントリの id も持つ(precedent_memory_entry_ids / proposal_memory_entry_ids —— Precedent の seen に
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4。エントリの項目の id も seen に数える、issue #2307)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
@@ -912,10 +913,11 @@ export function objectionBundles(db: Db, entryIds?: number[], upTo = Number.MAX_
 
 /** entry の今の判定(ADR 0170 決定2): 最後の異議群の帰責。最後の異議群が未帰責なら entry は未帰責で、Map に載らない。
  *  entry を1つの値で読む読み手(一覧・Precedent・打ち切りの行)はすべてこれを読む —— 起草 verb は review 子が材料にした
- *  異議群の判定を読む(ADR 0171 決定3)。 */
+ *  異議群の判定を読む(ADR 0171 決定3)。`upTo` で切るときは帰責のある最後の異議群 —— 束ねは event を書かない(committed_at)ので、
+ *  未帰責の異議群を上限で切れず、読む時点で注入時と完了時の判定が割れる(ADR 0312 決定6)。 */
 export function currentAttributions(db: Db, entryIds?: number[], upTo?: number): Map<number, Attribution> {
   return new Map([...objectionBundles(db, entryIds, upTo)].flatMap(([entryId, bundles]) => {
-    const attribution = bundles.at(-1)!.attribution;
+    const attribution = upTo === undefined ? bundles.at(-1)!.attribution : [...bundles].reverse().find((b) => b.attribution)?.attribution;
     return attribution ? [[entryId, attribution] as const] : [];
   }));
 }

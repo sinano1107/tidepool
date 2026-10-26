@@ -225,7 +225,7 @@ it("search_memory_entries は主題 memory の接続に出て、主題 routing �
   }
 });
 
-it("memory meta-review の purpose は材料の節とその6つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、判断を要する項目を行為か complete_memory_review の据え置きで閉じ、項目でないエントリの scope の据え置きは log_decision で言うと言い、completion_criteria は項目を名指す(ADR 0180 / ADR 0278 決定3)", async () => {
+it("memory meta-review の purpose は材料の節とその7つの部分を名指し、店の変更の各行を like で重複と照らして落とされたエントリの理由を読むと言い、判断を要する項目を行為か complete_memory_review の据え置きで閉じ、項目でないエントリの scope の据え置きは log_decision で言うと言い、completion_criteria は項目を名指す(ADR 0180 / ADR 0278 決定3)", async () => {
   const { review, client } = await boardWithMetaReview();
   try {
     expect(review.purpose).toContain(
