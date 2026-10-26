@@ -1034,9 +1034,37 @@ export function sessionWindow(
 
 /** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
  *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
- *  `events` は同じ task の、payload を解いた event(spawn と exit があれば足りる)。case 描画と決定ログの一覧が共有する。 */
+ *  `events` は同じ task の、payload を解いた event(spawn と exit があれば足りる)。`sessionOf` と決定ログの一覧が共有する。 */
 export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRow | undefined {
   if (anchor.kind === "worker_spawned") return anchor;
   const spawned = events.filter((e) => e.kind === "worker_spawned" && e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
   return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
+}
+
+/** `anchor` を含む worker session(`sessionSpawnOf` の規則)と、その窓の完了(最初の `task_completed`)と人間の停止(最初の
+ *  `session_stopped_by_human`)。窓の外なら undefined。session の完了と停止はここでだけ読む —— Episode の投影・meta-review の材料・
+ *  case 描画・帰責の入力が同じ値を見る(issue #2615)。db を取らない純関数(issue #356)。 */
+export function sessionOf(
+  events: readonly EventRow[],
+  anchor: EventRow,
+):
+  | {
+      spawned: EventRow;
+      exited: EventRow | undefined;
+      inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean;
+      completed: EventRowOf<"task_completed"> | undefined;
+      stopped: EventRowOf<"session_stopped_by_human"> | undefined;
+    }
+  | undefined {
+  const spawned = sessionSpawnOf(events, anchor);
+  if (!spawned) return undefined;
+  const { exited, inSession } = sessionWindow(events, spawned);
+  const inWindow = events.filter(inSession);
+  return {
+    spawned,
+    exited,
+    inSession,
+    completed: inWindow.find((e): e is EventRowOf<"task_completed"> => e.payload.kind === "task_completed"),
+    stopped: inWindow.find((e): e is EventRowOf<"session_stopped_by_human"> => e.payload.kind === "session_stopped_by_human"),
+  };
 }

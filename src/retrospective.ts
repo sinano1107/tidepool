@@ -24,8 +24,8 @@ import {
   listEvents,
   listEventsOfKinds,
   objectionBundles,
+  sessionOf,
   sessionSpawnOf,
-  sessionWindow,
   stopJudgments,
   taskDecisionLog,
 } from "./events.js";
@@ -468,7 +468,7 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
 }
 
 /** 1つの worker session: その task の event・開いた spawn・窓の判定。 */
-type Session = { events: EventRow[]; spawned: EventRow; inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean };
+type Session = { events: EventRow[] } & NonNullable<ReturnType<typeof sessionOf>>;
 
 /** 帰責の扉が開いた停止と、その有効な(最新の)判定(無ければ undefined)。 */
 type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session; judged: EventRowOf<"stop_attributed"> | undefined };
@@ -482,12 +482,10 @@ function stopTargets(db: Db): StopTarget[] {
     const task_id = stop.task_id!;
     if (getTask(db, task_id)?.interview_target_id != null || resolvedStopReason(db, stop.payload) === undefined) return [];
     const events = listEvents(db, task_id);
-    const spawned = sessionSpawnOf(events, stop);
-    if (!spawned) return [];
-    const { exited, inSession } = sessionWindow(events, spawned);
-    if (!exited || projectionPending(db, spawned.id)) return [];
-    if (events.some(({ id, kind }) => kind === "task_cancelled_directly" && spawned.id < id && id < stop.id)) return [];
-    return [{ task_id, stop, session: { events, spawned, inSession }, judged: stopJudgments(events).get(stop.id) }];
+    const session = sessionOf(events, stop);
+    if (!session?.exited || projectionPending(db, session.spawned.id)) return [];
+    if (events.some(({ id, kind }) => kind === "task_cancelled_directly" && session.spawned.id < id && id < stop.id)) return [];
+    return [{ task_id, stop, session: { events, ...session }, judged: stopJudgments(events).get(stop.id) }];
   });
 }
 
@@ -620,20 +618,16 @@ function objectionInput(db: Db, registryDir: string | undefined, attribution: Se
 
 /** 人間の証言は decision log の切れ目で切らず、異議された entry と同じ session から生で読む(ADR 0308)。 */
 function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInput, "human_stop"> {
-  const events = listEvents(db, entry.task_id);
-  const spawned = sessionSpawnOf(events, entry);
-  if (!spawned) return {};
-  const { inSession } = sessionWindow(events, spawned);
-  const stop = events.find((e) => e.kind === "session_stopped_by_human" && inSession(e))?.payload;
-  return stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
+  const stopped = sessionOf(listEvents(db, entry.task_id), entry)?.stopped;
+  return stopped ? { human_stop: { reason: humanStopReason(db, stopped.payload) } } : {};
 }
 
 /** 異議された entry を含む worker session が読んだもの(`readsIn`)。entry が session の窓の外なら何も読んでいない。 */
 function sessionReads(db: Db, registryDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition"> {
   const events = listEvents(db, entry.task_id);
-  const spawned = sessionSpawnOf(events, entry);
-  if (!spawned) return { memory_read: [], agent_definition: null };
-  return readsIn(db, registryDir, entry, { events, spawned, inSession: sessionWindow(events, spawned).inSession });
+  const session = sessionOf(events, entry);
+  if (!session) return { memory_read: [], agent_definition: null };
+  return readsIn(db, registryDir, entry, { events, ...session });
 }
 
 /** `anchor`(異議された entry か人間の停止)の session が読んだもの —— spawn の当時版(ADR 0291 決定2)と読んだ記憶。読んだ記憶は、anchor より前の
