@@ -6,23 +6,27 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, type EventOrigin, type EventPayload, type EventRow, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow } from "./events.js";
+import { appendEvent, currentAttributions, type EventOrigin, type EventPayload, type EventRow, type EventRowOf, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow, stopJudgments } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
 import {
   completeMetaReview,
   injectedMaterial,
   inWindow,
+  type MaterialPart,
   MEMORY_META_REVIEW_VERBS,
   MEMORY_REPAIR_VERBS,
+  META_REVIEW_SUBJECTS,
   type MetaReviewSubject,
   type MetaReviewWindow,
   materialEvents,
   materialSection,
   metaReviewWindow,
+  OBJECTED_DECISIONS_NOTE,
   objectedJudgments,
   objectedRowIds,
   previousMetaReviewWatermark,
   repairJudgments,
+  rowSubjectSql,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
@@ -2202,7 +2206,7 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
 
 /** meta-review の Precedent の読み口(issue #619): 異議つき decision マーカーを cause・outcome と、その decision より前に
  *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は読み手と同主題の前回の meta-review 登録の
- *  watermark で、異議の event がそれより後の decision だけを返す —— 古い decision への新しい異議も材料である。 */
+ *  watermark で、異議の帰責の event がそれより後の decision だけを返す —— 古い decision への新しい帰責も材料である。 */
 export function listPrecedents(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
@@ -2223,25 +2227,21 @@ export function listPrecedents(
 /** list_precedents の行の decision より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
 const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.memory_entries_read ?? []), ...(p.memory_entries_seen ?? [])]))];
 
-/** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
- *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と同じものだけ ——
- *  主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件(ADR 0279 決定6)。 */
-function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
-  const objectedIn = db.prepare(
-    `SELECT 1 FROM events WHERE kind IN ('objection_raised', 'objection_attributed') AND json_extract(payload, '$.entry_id') = ? AND id > ? AND id <= ?`,
-  );
-  // 祖先にも主題の無い行(worker・work の修理子)は memory の行
-  const subjects = new Map<string, MetaReviewSubject>();
-  const rowSubject = (taskId: string) => {
-    if (!subjects.has(taskId)) subjects.set(taskId, lineageSubjectOf(db, taskId) ?? "memory");
-    return subjects.get(taskId)!;
-  };
+/** list_precedents の行: 異議の帰責(`objection_attributed`)が窓 `(after, upTo]` にある decision —— 帰責の無い異議は cause も
+ *  wrong_memory_entries も持たないので載らない(ADR 0312 決定5)。行の判定は窓の上限までの最新(ADR 0312 決定6)で、verb は上限を
+ *  持たず、材料の節は読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と
+ *  同じものだけ —— 主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件
+ *  (ADR 0279 決定6)。読み手 memory の述語は材料の組(META_REVIEW_SUBJECTS.memory.material)そのもの。 */
+function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
+  const { objection_attributed } = readerSubject === "memory" ? META_REVIEW_SUBJECTS.memory.material : { objection_attributed: { where: rowSubjectSql(readerSubject) } };
+  const objected = new Set(materialEvents(db, { objection_attributed }, window).map((e) => e.payload.entry_id));
+  const judged = currentAttributions(db, [...objected], window.upTo);
   return listEpisodes(db, {}).flatMap((episode) => {
     // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
-    const objected = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objectedIn.get(m.eventId, after, upTo) !== undefined);
-    if (objected.length === 0 || (readerSubject !== null && rowSubject(episode.taskId) !== readerSubject)) return [];
+    const rows = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objected.has(m.eventId!));
+    if (rows.length === 0) return [];
     const events = listEvents(db, episode.taskId);
-    return objected.map((m) => ({
+    return rows.map((m) => ({
       task_id: episode.taskId,
       workspace: episode.workspace,
       agent: episode.agent,
@@ -2250,8 +2250,8 @@ function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRe
       line: m.line,
       displayed: m.displayed,
       objections: m.objections,
-      cause: m.cause,
-      wrong_memory_entries: m.wrong_memory_entries,
+      cause: judged.get(m.eventId!)?.cause ?? null,
+      wrong_memory_entries: judged.get(m.eventId!)?.wrong_memory_entries ?? null,
       completed: episode.completed,
       pr_merged: episode.prMerged,
       memory_entries_read: entriesReadBefore(episode, events, m.eventId!),
@@ -2665,7 +2665,8 @@ export function recordMemoryInjection(
 function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   const restored = restoredAs(db);
   const changes = new Map<number, Set<"created" | "invalidated">>();
-  for (const { id, payload } of materialEvents(db, ["memory_entry_created", "memory_entry_invalidated"], window)) {
+  const { memory_entry_created, memory_entry_invalidated } = META_REVIEW_SUBJECTS.memory.material;
+  for (const { id, payload } of materialEvents(db, { memory_entry_created, memory_entry_invalidated }, window)) {
     const created = payload.kind === "memory_entry_created";
     if (!created && payload.reason === "path_moved") continue;
     const row = requireEntry(db, created ? id : payload.entry_id);
@@ -2677,6 +2678,33 @@ function storeChanges(db: Db, window: MetaReviewWindow, hidden: Set<number>) {
   return listMemoryEntries(db, {}, hidden)
     .filter((entry) => changes.has(entry.id) && entry.state !== "candidate")
     .map((entry) => ({ ...metaReviewRow(entry), changes: (["created", "invalidated"] as const).filter((c) => changes.get(entry.id)!.has(c)) }));
+}
+
+/** 材料の節の停止の帰責(ADR 0312 決定7): 窓に材料の `stop_attributed` がある停止ごとに、窓の上限までの最新の判定(同じ停止では後の
+ *  判定が有効、ADR 0310 決定4)で1行 —— 初回が前の窓・第2回が今の窓なら今の窓に載る。行は Episode に依らず event から組み、読んだ / 見た
+ *  記憶の集合は載せない。`attribution_event_id` は行の判定の event(材料の記録が数える)。 */
+function stopRows(db: Db, window: Required<MetaReviewWindow>) {
+  const { stop_attributed } = META_REVIEW_SUBJECTS.memory.material;
+  const stops = new Map(materialEvents(db, { stop_attributed }, window).map((e) => [e.payload.stop_event_id, e.task_id!]));
+  return [...stops].map(([stopId, taskId]) => {
+    const events = listEvents(db, taskId).filter((e) => e.id <= window.upTo);
+    const { id, payload } = stopJudgments(events).get(stopId)!;
+    const stop = events.find((e) => e.id === stopId) as EventRowOf<"session_stopped_by_human">;
+    const spawned = sessionSpawnOf(events, stop);
+    const row = {
+      task_id: taskId,
+      workspace: getTask(db, taskId)?.workspace ?? null,
+      agent: spawned?.actor_id ?? null,
+      worker_spawned_event_id: spawned?.id ?? null,
+      stop_event_id: stopId,
+      reason: humanStopReason(db, stop.payload),
+      cause: payload.cause,
+      evidence: payload.evidence,
+      wrong_memory_entries: payload.wrong_memory_entries,
+      round: payload.round,
+    };
+    return { attribution_event_id: id, row };
+  });
 }
 
 /** meta-review の材料の節(ADR 0180 決定2・追記 #1239、provider 非依存): 読み手の窓 `(前回, 今回]` の材料を、主題ごとの部分に
@@ -2695,36 +2723,49 @@ export function buildMetaReviewMaterial(db: Db, taskId: string, agents?: readonl
 /** routing meta-review の読み手の窓の異議つき判断 —— 完了の verb が項目を計算し直すときに渡す(routing-review.ts は memory.ts を import しない)。 */
 export const routingPrecedents = (db: Db, reviewId: string) => precedentRows(db, metaReviewWindow(db, reviewId), "routing");
 
-/** memory の読み口の5つの部分: 店の変更・生きている candidate・異議つき判断・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
+/** memory の読み口の6つの部分: 店の変更・生きている candidate・異議つき判断・停止の帰責・決着した提案・枝の一覧。店の変更と枝の一覧は hidden
  *  (readerHidden)を載せない(ADR 0264 決定2)。 */
 const memoryReads = (db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) => ({
   store_changes: storeChanges(db, window, hidden),
   candidates: memoryListRows(db, "list_memory_candidates", {}),
   precedents: precedentRows(db, window, "memory"),
+  stops: stopRows(db, window),
   proposals: memoryProposalRows(db, window),
   branches: metaReviewBranches(db, hidden),
 });
 
-/** memory の6つの部分: 読み口の5つと、それらから導く判断を要する項目。 */
+/** memory の7つの部分: 読み口の6つと、それらから導く判断を要する項目。 */
 function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<number>) {
   const read = memoryReads(db, window, hidden);
   const parts = { ...read, items: judgmentItems(db, window, read) };
-  const section = materialSection("memory", window, [
-    [
-      "Store changes",
+  // 材料の kind が描く部分(ADR 0312 決定1): kind を足して部分を書かなければ、ここで compile が落ちる
+  const material = {
+    "Store changes": [
       "Rows of list_memory_entries whose entry was created or invalidated in this window, except by a memory meta-review or by the answer to its " +
         "proposal; changes says which. A moved or restored entry is shown as its latest copy. Candidates are in the next part.",
       parts.store_changes,
       "no store changes",
     ],
+    "Objected decisions": [OBJECTED_DECISIONS_NOTE, parts.precedents, "no objected decisions"],
+    "Stops attributed": [
+      "One row per human stop whose attribution was judged in this window, with the latest judgment up to this window's end: the stopped task " +
+        "and session, the human's reason, and the cause, evidence, wrong_memory_entries and round of that judgment.",
+      parts.stops.map((s) => s.row),
+      "no stops attributed",
+    ],
+  } satisfies Record<MaterialPart<"memory">, [note: string, rows: unknown[], empty: string]>;
+  // 材料の部分は写像から描く —— 書いた部分を節に並べ忘れられない(店の変更の次に candidate、残りは写像の順)
+  const { "Store changes": storeChangesPart, ...attributionParts } = material;
+  const section = materialSection("memory", window, [
+    ["Store changes", ...storeChangesPart],
     ["Live candidates", "Rows of list_memory_candidates: every candidate not invalidated, whenever it was drafted.", parts.candidates, "no live candidates"],
-    ["Objected decisions", "Rows of list_precedents for the objections raised in this window.", parts.precedents, "no objected decisions"],
+    ...Object.entries(attributionParts).map(([heading, part]) => [heading, ...part] as [string, string, unknown[], string]),
     ["Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"],
     ["Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"],
     [
       "Items to judge",
       "The items this cycle needs a judgment on, keyed as complete_memory_review takes them: candidates drafted in this window, the candidates " +
-        "and entries named by the settled proposals and by the objected decisions with cause memory, the store changes, the branches that hold " +
+        "and entries named by the settled proposals and by the objected decisions and the stops attributed with cause memory, the store changes, the branches that hold " +
         "entries without a Definition in their scope or whole-board — one item per scope that lacks one, keyed by path and scope (null = the " +
         "whole board), or a single whole-board item when whole-board entries sit at or under the path — and the entries and branches named " +
         "by the judgments of the objected decisions — a branch if an entry of its scope that is not invalidated (candidates included) sits " +
@@ -2746,7 +2787,7 @@ export type MemoryJudgmentItem = { memory_entry: number } | { branch: string; sc
 const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
 
 /** 判断を要する項目を材料の部分から導く(ADR 0278 決定5): 残高でなく窓で切る —— 窓で起草された生きている candidate、窓で決着した提案が
- *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断が名指すエントリ、店の変更(どれも本文が同じ鎖の末尾で、それが
+ *  名指す candidate / 置き換え / 失効の対象、cause memory の異議つき判断と停止の帰責が名指すエントリ、店の変更(どれも本文が同じ鎖の末尾で、それが
  *  無効化されていないものだけ —— 無効化済みには届く verb が無い、ADR 0286 決定1)。枝は配下にエントリを持ち、その scope の Definition
  *  も盤面全体の Definition も無い scope ごとの (path, scope) —— ただし path かその下に盤面全体のエントリ(一木の門と同じ集合)があれば
  *  (path, 盤面全体) の1つだけ(ADR 0282 決定2・3)。異議つき判断のうち前の memory meta-review の判断の行が名指すエントリ(鎖の末尾が
@@ -2762,7 +2803,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   const entries = new Set([
     ...parts.candidates.flatMap(({ id }) => (inWindow(id, window) ? [id] : [])),
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).flatMap(liveTail)),
-    ...parts.precedents.flatMap(({ cause, wrong_memory_entries }) => (cause === "memory" ? (wrong_memory_entries ?? []).flatMap(liveTail) : [])),
+    ...[...parts.precedents, ...parts.stops.map((s) => s.row)].flatMap(({ cause, wrong_memory_entries }) => (cause === "memory" ? (wrong_memory_entries ?? []).flatMap(liveTail) : [])),
     ...parts.store_changes.flatMap(({ id }) => liveTail(id)),
     ...objected.flatMap((j) => ("memory_entry" in j ? liveTail(j.memory_entry) : [])),
   ]);
@@ -2902,6 +2943,7 @@ export function recordMetaReviewMaterial(
             candidates: material.parts.candidates.map((e) => e.id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),
             precedent_memory_entry_ids: precedentEntryIds(material.parts.precedents),
+            stop_attributed_event_ids: material.parts.stops.map((s) => s.attribution_event_id),
             proposals: material.parts.proposals.map((p) => p.question_id),
             proposal_memory_entry_ids: proposalEntryIds(material.parts.proposals),
             branch_definition_ids: material.parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),

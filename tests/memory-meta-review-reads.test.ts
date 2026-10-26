@@ -30,7 +30,7 @@ import {
 } from "../src/memory.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
 import { getTask, logDecision, type MemoryProposal, registerTask } from "../src/tasks.js";
-import { answerQuestionViaWebui, bundledObjection, episodeOfDecision, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
+import { answerQuestionViaWebui, attributedObjection, bundledObjection, episodeOfDecision, HUMAN_WEBUI, toolCall, WORKER_SPAWNED, writerTask } from "./harness.js";
 
 
 /** meta-review の読み口(issue #619 / ADR 0120 決定2)のドメイン層。verb への写像はサーバ境界
@@ -461,7 +461,7 @@ it("meta-review の枝の一覧も応答予算で切り、next を追うと木�
 function objectedDecision({ db, task }: Pick<ReturnType<typeof board>, "db" | "task">, i: number, padding = "") {
   const decision = logDecision(db, task, `decision ${i}${padding}`, "deckhand", at, "worker");
   episodeOfDecision(db, task.id, decision);
-  const objection = bundledObjection(db, task.id, decision, at, `objection ${i}`);
+  const objection = attributedObjection(db, task.id, decision, at, `objection ${i}`);
   return { decision, objection };
 }
 

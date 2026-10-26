@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, bundledObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, attributedObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -477,7 +477,7 @@ it("routing meta-review の purpose は材料の節とその7つの部分を名�
 function objectedDecision(db: Db, taskId: string, i: number): number {
   const decision = logDecision(db, getTask(db, taskId)!, `decision ${i}`, "deckhand", at, "worker");
   episodeOfDecision(db, taskId, decision);
-  bundledObjection(db, taskId, decision, at);
+  attributedObjection(db, taskId, decision, at);
   return decision;
 }
 
@@ -494,6 +494,6 @@ it("Objected decisions は読み手 routing の list_precedents の行を載せ�
   const record = getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload;
 
   expect(material.parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
-  expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the objections raised in this window.\n${JSON.stringify(material.parts.precedents[0])}`);
+  expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.\n${JSON.stringify(material.parts.precedents[0])}`);
   expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_memory_entry_ids: [] });
 });
