@@ -2398,7 +2398,7 @@ function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }) {
         key: subject,
         label: subject,
         kind: "mono",
-        value: `last ${new Date(row.last_registered_at).toLocaleString()} \xB7 next from ${new Date(row.next_earliest_at).toLocaleString()} \xB7 ${row.material_since} material since`
+        value: `last ${new Date(row.last_registered_at).toLocaleString()} \xB7 next from ${new Date(row.next_earliest_at).toLocaleString()} \xB7 ${row.material_since} events since`
       }
     );
   }), open && /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement(Input, { label: "Period (days)", error: reason, mono: true, value: draft, onChange: (e) => setDraft(e.target.value), placeholder: period }), /* @__PURE__ */ React.createElement("p", { style: muted }, "the fewest days between two meta-reviews of the same subject (memory or routing). once past it, the board registers the next one as soon as there is something new to review."), /* @__PURE__ */ React.createElement(

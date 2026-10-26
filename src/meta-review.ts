@@ -380,7 +380,7 @@ export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin:
     throw new DomainError(`the first ${subject} meta-review was already registered: every later one is registered by the period`);
   }
   if (countMaterial(db, META_REVIEW_SUBJECTS[subject].material, { after: 0 }).count === 0) {
-    throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one change to review`);
+    throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one event that opens a review`);
   }
   if (settleAndHasUnsettled(db, subject, now, agents)) {
     throw new DomainError(`an unsettled ${subject} task or proposal question is open: settle it before starting the first ${subject} meta-review`);

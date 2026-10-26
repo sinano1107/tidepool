@@ -1543,7 +1543,7 @@ function MetaReviewSettingsCard({ settings, status, say, onSaved, edit }: {
           </div>
         ) : (
           <FieldRow key={subject} label={subject} kind="mono"
-            value={`last ${new Date(row.last_registered_at).toLocaleString()} · next from ${new Date(row.next_earliest_at).toLocaleString()} · ${row.material_since} material since`} />
+            value={`last ${new Date(row.last_registered_at).toLocaleString()} · next from ${new Date(row.next_earliest_at).toLocaleString()} · ${row.material_since} events since`} />
         );
       })}
       {open && (
