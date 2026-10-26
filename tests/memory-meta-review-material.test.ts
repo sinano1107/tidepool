@@ -269,7 +269,7 @@ it("判断を要する項目は verb と同じ鍵で並ぶ: 窓で起草され�
   const { parts, section } = memoryMaterialOf(db, review);
 
   expect(parts.items).toEqual([
-    ...[followed, drafted, written].sort((a, b) => a - b).map((entry) => ({ entry })),
+    ...[followed, drafted, written].sort((a, b) => a - b).map((memory_entry) => ({ memory_entry })),
     { branch: "tools/node", scope: "tidepool" },
   ]);
   expect(ids(parts.candidates)).toContain(older);
@@ -282,7 +282,7 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
   defineMemoryBranch(db, { scope: "tidepool", path: "notes", text: "Notes.", author: deckhand }, "worker", at);
   const [kept, dropped, outside] = ["notes", "notes", "notes"].map((path) => knowledge(db, path));
   invalidateMemoryEntry(db, { entry_id: dropped!, reason: "environment" }, HUMAN_ACTOR_ID, "webui", at);
-  const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { entry } : { branch: entry, scope: "tidepool" }) });
+  const judged = (entry: number | string) => ({ kind: "memory" as const, value: "left_as_is" as const, ...(typeof entry === "number" ? { memory_entry: entry } : { branch: entry, scope: "tidepool" }) });
   const older = register(db, "memory", true);
   objectedJudgment(db, older, judged(outside!), at);
   const previous = register(db, "memory", true);
@@ -292,7 +292,7 @@ it("窓で異議された前の memory meta-review の判断の行が名指す�
 
   const { parts, section } = memoryMaterialOf(db, review);
 
-  expect(parts.items).toEqual([{ entry: kept }, { entry: written }, { branch: "notes", scope: "tidepool" }]);
+  expect(parts.items).toEqual([{ memory_entry: kept }, { memory_entry: written }, { branch: "notes", scope: "tidepool" }]);
   expect(section).toContain("the entries and branches named by the judgments of the objected decisions");
 });
 
@@ -474,14 +474,14 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
       worker_spawned_event_id: 42,
       previous_watermark: first,
       material_watermark: second,
-      store_changes: [written, definition],
+      changed_memory_entry_ids: [written, definition],
       candidates: [drafted],
       precedents: [objected],
-      precedent_entries: [],
+      precedent_memory_entry_ids: [],
       proposals: [question],
-      proposal_entries: [rejected],
-      branches: [definition],
-      items: [...[written, definition, drafted].map((entry) => ({ entry })), { branch: "tools/node", scope: "tidepool" }],
+      proposal_memory_entry_ids: [rejected],
+      branch_definition_ids: [definition],
+      items: [...[written, definition, drafted].map((memory_entry) => ({ memory_entry })), { branch: "tools/node", scope: "tidepool" }],
       tokens: material.tokens,
       tokenizer: "gpt-tokenizer/o200k_base",
       tokenizer_version: expect.stringMatching(/^\d+\.\d+\.\d+$/),
@@ -490,7 +490,7 @@ it("節を組んだ記録は task 帰属・agent 名義の meta_review_material_
   expect(material.tokens).toBeGreaterThan(0);
 });
 
-it("決着した提案の部分の行も pin した本文の今の居場所 relocated を持ち、記録の proposal_entries は名指す entry の鎖の末尾を数える(ADR 0222 決定2・4)", () => {
+it("決着した提案の部分の行も pin した本文の今の居場所 relocated を持ち、記録の proposal_memory_entry_ids は名指す entry の鎖の末尾を数える(ADR 0222 決定2・4)", () => {
   const db = openDb(":memory:");
   const previous = register(db, "memory", true);
   const moved = candidate(db, "Moved");
@@ -503,10 +503,10 @@ it("決着した提案の部分の行も pin した本文の今の居場所 relo
   const eventId = recordMetaReviewMaterial(db, review, "auditor", 42, material, at);
 
   expect(material.parts.proposals).toMatchObject([{ question_id: question, relocated: [{ id: moved, tail_id: copy, path: "elsewhere", scope: null, invalidation_reason: null }] }]);
-  expect(getEvent(db, eventId)).toMatchObject({ payload: { proposals: [question], proposal_entries: [copy] } });
+  expect(getEvent(db, eventId)).toMatchObject({ payload: { proposals: [question], proposal_memory_entry_ids: [copy] } });
 });
 
-it("主題 memory の材料の節に載ったエントリは、その session の decision の entries_seen に入り entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は異議つき判断の部分のエントリだけ数える(ADR 0279 決定6)", () => {
+it("主題 memory の材料の節に載ったエントリは、その session の decision の memory_entries_seen に入り memory_entries_read に入らない —— 異議つき判断と決着した提案の部分は list_precedents と list_memory_proposals が返すのと同じエントリで数え、主題 routing の材料の節は異議つき判断の部分のエントリだけ数える(ADR 0279 決定6)", () => {
   const db = openDb(":memory:");
   const work = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   // objectedDecision の直挿し(episodeOfDecision)は decision の event id を Episode の id と worker_spawned の event id に兼ねるので、その session の注入はこの id で結ぶ
@@ -552,7 +552,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       cell_event_ids: [9003],
       row_change_event_ids: [9004],
       precedents: [9005],
-      precedent_entries: [routingShown],
+      precedent_memory_entry_ids: [routingShown],
       proposals: [],
       items: [],
     },
@@ -583,7 +583,7 @@ function seenOfMaterial(db: Db, review: string) {
   return { items: material.parts.items, seen: entriesSeenBefore(episode, events, decision), read: entriesReadBefore(episode, events, decision) };
 }
 
-it("reject で決着した consolidate の提案の replaces が名指す approved のエントリは、材料の節の項目に載り、その session の decision の entries_seen に入り entries_read に入らない", () => {
+it("reject で決着した consolidate の提案の replaces が名指す approved のエントリは、材料の節の項目に載り、その session の decision の memory_entries_seen に入り memory_entries_read に入らない", () => {
   const db = openDb(":memory:");
   const replaced = candidate(db, "Brief notes");
   approveMemoryProposal(db, { kind: "memory", op: "approve", candidate_id: replaced, replaces: [] }, "question-replaced", "webui", at);
@@ -596,7 +596,7 @@ it("reject で決着した consolidate の提案の replaces が名指す approv
   const { items, seen, read } = seenOfMaterial(db, register(db, "memory"));
 
   expect(db.prepare("SELECT invalidation_reason FROM memory_entries WHERE id = ?").get(replaced)).toEqual({ invalidation_reason: null });
-  expect(items).toContainEqual({ entry: replaced });
+  expect(items).toContainEqual({ memory_entry: replaced });
   expect(seen).toContain(replaced);
   expect(read).toEqual([]);
 });
@@ -650,15 +650,15 @@ it("窓で reject された candidate と、cause memory の異議つき判断�
   expect(completeMemoryReview(db, getTask(db, review)!, { judgments: [] }, "auditor", at, "worker").status).toBe("done");
 });
 
-it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5部分のどこにも載らなくても項目に載り、その session の decision の entries_seen に入り entries_read に入らない", () => {
+it("異議された前の memory meta-review の判断の行が名指す窓の外のエントリは、5部分のどこにも載らなくても項目に載り、その session の decision の memory_entries_seen に入り memory_entries_read に入らない", () => {
   const db = openDb(":memory:");
   const outside = knowledge(db, "outside");
   const previous = register(db, "memory", true);
-  objectedJudgment(db, previous, { kind: "memory", entry: outside, value: "left_as_is" }, at);
+  objectedJudgment(db, previous, { kind: "memory", memory_entry: outside, value: "left_as_is" }, at);
 
   const { items, seen, read } = seenOfMaterial(db, register(db, "memory"));
 
-  expect(items).toContainEqual({ entry: outside });
+  expect(items).toContainEqual({ memory_entry: outside });
   expect(seen).toEqual([outside]);
   expect(read).toEqual([]);
 });

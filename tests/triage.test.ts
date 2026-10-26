@@ -1359,7 +1359,7 @@ it("流し読みのエントリの no_work_repair は、帰り先の無い task 
   const rootRcaRow = logDecision(db, rootRca, "the cause is X", "auditor", at, "worker");
   const metaReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, ...HUMAN_WEBUI);
   const metaRow = logDecision(db, metaReview, "keep entry 3", "fugu", at, "worker");
-  const typedRow = appendEvent(db, { taskId: metaReview.id, actorId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "left_as_is", judgment: { kind: "memory", entry: 1, value: "left_as_is" } } });
+  const typedRow = appendEvent(db, { taskId: metaReview.id, actorId: "fugu", origin: "worker", at, payload: { kind: "decision_logged", line: "left_as_is", judgment: { kind: "memory", memory_entry: 1, value: "left_as_is" } } });
   const cancelled = registerTask(db, { type: "work", title: "dropped", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
   const cancelledRow = logDecision(db, cancelled, "split it", "deckhand", at, "worker");
   cancelTaskDirectly(db, cancelled, null, at, {}, "webui");

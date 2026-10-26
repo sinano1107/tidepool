@@ -30,10 +30,10 @@ function objected(causes: Array<Cause | null>, db: Db = openDb(":memory:")) {
   return { db, work, entries, self, auditor };
 }
 
-const behavior = (db: Db, rca: Task, entry_id: number) => proposeFromMaterial(db, rca.id, { ...draft, material_id: entry_id }, {}, "auditor", at).entry_id;
+const behavior = (db: Db, rca: Task, entry_id: number) => proposeFromMaterial(db, rca.id, { ...draft, material_id: entry_id }, {}, "auditor", at).memory_entry_id;
 const knowledge = (db: Db, rca: Task, entry_id: number) =>
   proposeFromMaterial(db, rca.id, { ...draft, material_id: entry_id, as: "knowledge", based_on_decision: logDecision(db, rca, "it was never written", "auditor", at, "worker") }, {}, "auditor", at)
-    .entry_id;
+    .memory_entry_id;
 const records = (db: Db, rca: Task) => listEvents(db, rca.id).flatMap((e) => (e.payload.kind === "proposed_from_material" ? [e.payload] : []));
 
 it("self と auditor の RCA の verb の差し替えは complete_task を伏せ complete_rca を足し、異議の修理子は差し替えない(祖先の cancel の下は tests/direct-cancel-scope.test.ts)", () => {

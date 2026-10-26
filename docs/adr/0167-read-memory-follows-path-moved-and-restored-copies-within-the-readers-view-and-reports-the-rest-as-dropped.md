@@ -1,5 +1,7 @@
 # `read_memory` は本文が同じ後継(path_moved・復元の複製)だけを読み手の視界の内側でたどり、残りは落とした理由と後継を返す
 
+**Status 追記: Precedent の `entries_read` は `memory_entries_read` に改名(issue #2578 / ADR 0311 決定5)** —— 本文の旧い名前はこの名前に読み替える。
+
 2026-09-28 の triage(issue #1048、#1038 後の記憶機構の見直し)で決定。`read_memory` は見えない id を黙って落とし(approved・未無効化・
 scope・宛先のフィルタ)、落とした理由は結果にも event にも残らなかった。注入は spawn 時の snapshot なので、session の途中で entry が
 移される・畳まれると、worker は注入の目次で見た id を `read_memory` しても空を受け取り、Episode には「読まなかった」と残る —— read の

@@ -490,7 +490,7 @@ export function foldMemory(
   if ((successor_id === undefined) === Object.values(draft).every((value) => value === undefined)) {
     throw new DomainError("fold_memory takes exactly one of successor_id (an existing approved entry) and scope, path, title, text and based_on_decision (a new knowledge entry)");
   }
-  requireNamed(db, metaReviewId, replaces.map((entry) => ({ entry })));
+  requireNamed(db, metaReviewId, replaces.map((memory_entry) => ({ memory_entry })));
   return withWriteRecord(db, { taskId: metaReviewId, agent: author.name }, at, () => {
     const replaced = replaces.map((id) => requireNotApprovedBehaviorOrExemplar(db, id));
     let successor = successor_id;
@@ -839,7 +839,7 @@ const repairActor = (repairer: Repairer): Actor => ({ activity: "worker_verb", n
 function namedObjects(db: Db, taskId: string) {
   const judged = repairJudgments(db, taskId, "memory");
   return {
-    entries: withMovedCopies(db, judged.flatMap((item) => ("entry" in item ? [item.entry] : []))),
+    entries: withMovedCopies(db, judged.flatMap((item) => ("memory_entry" in item ? [item.memory_entry] : []))),
     branches: judged.flatMap((item) => ("branch" in item ? [item] : [])),
   };
 }
@@ -865,7 +865,7 @@ function entryReach(db: Db, writer: string, entryId: number): Reach {
 function requireNamed(db: Db, writer: string, items: MemoryJudgmentItem[]): void {
   if (getTask(db, writer)?.type !== "memory_repair") return;
   const named = namedObjects(db, writer);
-  const outside = items.find((item) => ("entry" in item ? !named.entries.includes(item.entry) : !namesBranch(named, item.branch, item.scope)));
+  const outside = items.find((item) => ("memory_entry" in item ? !named.entries.includes(item.memory_entry) : !namesBranch(named, item.branch, item.scope)));
   if (outside) throw new DomainError(`${itemName(outside)} is not named by the objected judgment: a memory repair defines, folds and proposes only what that judgment names`);
 }
 
@@ -1456,7 +1456,7 @@ export function proposeMemoryChange(
   if (stray.length > 0) throw new DomainError(`op ${input.op} does not take ${stray.join(", ")}`);
   // 提案が変えるエントリ(承認の candidate・失効の target・統合の replaces)—— 後継は行き先なので数えない
   const changed = input.op === "approve" ? [input.candidate_id] : input.op === "invalidate" ? [input.target_id] : (input.replaces ?? []);
-  requireNamed(db, metaReviewId, changed.flatMap((entry) => (entry === undefined ? [] : [{ entry }])));
+  requireNamed(db, metaReviewId, changed.flatMap((memory_entry) => (memory_entry === undefined ? [] : [{ memory_entry }])));
   return db.transaction(() => {
     const since = memoryWatermark(db);
     let proposal: MemoryProposal;
@@ -2221,7 +2221,7 @@ export function listPrecedents(
 }
 
 /** list_precedents の行の decision より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
-const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.entries_read ?? []), ...(p.entries_seen ?? [])]))];
+const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.memory_entries_read ?? []), ...(p.memory_entries_seen ?? [])]))];
 
 /** list_precedents の行: 異議の event が窓 `(after, upTo]` にある decision。verb は上限を持たず、材料の節は
  *  読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と同じものだけ ——
@@ -2254,8 +2254,8 @@ function precedentRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRe
       wrong_memory_entries: m.wrong_memory_entries,
       completed: episode.completed,
       pr_merged: episode.prMerged,
-      entries_read: entriesReadBefore(episode, events, m.eventId!),
-      entries_seen: entriesSeenBefore(episode, events, m.eventId!),
+      memory_entries_read: entriesReadBefore(episode, events, m.eventId!),
+      memory_entries_seen: entriesSeenBefore(episode, events, m.eventId!),
     }));
   });
 }
@@ -2740,7 +2740,7 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
 
 /** memory meta-review の判断を要する項目(ADR 0278 決定5): エントリは id、枝は path と scope(null は盤面全体、ADR 0282 決定2)で、
  *  complete_memory_review の鍵と同じ形。 */
-export type MemoryJudgmentItem = { entry: number } | { branch: string; scope: string | null };
+export type MemoryJudgmentItem = { memory_entry: number } | { branch: string; scope: string | null };
 
 /** id の本文が同じ鎖の末尾の id(移動・復元の複製をたどる)。 */
 const bodyTail = (db: Db, restored: Map<number, number>, id: number) => sameBodyChain(db, requireEntry(db, id), restored).at(-1)!.id;
@@ -2764,7 +2764,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
     ...parts.proposals.flatMap(({ proposal }) => pinnedIds(proposal, false).flatMap(liveTail)),
     ...parts.precedents.flatMap(({ cause, wrong_memory_entries }) => (cause === "memory" ? (wrong_memory_entries ?? []).flatMap(liveTail) : [])),
     ...parts.store_changes.flatMap(({ id }) => liveTail(id)),
-    ...objected.flatMap((j) => ("entry" in j ? liveTail(j.entry) : [])),
+    ...objected.flatMap((j) => ("memory_entry" in j ? liveTail(j.memory_entry) : [])),
   ]);
   // 再掲の生死は approved の木でなく、その scope の無効化されていないエントリ(candidate も)が path かその下にあるか(ADR 0284 決定1)。
   // その scope にエントリの無い枝は、その scope の配下だったエントリの移動の鎖の末尾から今の (path, scope) を引く(エントリが鎖の末尾で
@@ -2792,7 +2792,7 @@ function judgmentItems(db: Db, window: Required<MetaReviewWindow>, parts: Return
   });
   // 木に無い path(配下が candidate だけ)の再掲は木の後に
   const offTree = new Map(objectedBranches.filter((o) => !tree.includes(o.branch)).map((o) => [itemName(o), { branch: o.branch, scope: o.scope }]));
-  return [...[...entries].sort((a, b) => a - b).map((entry) => ({ entry })), ...branches, ...offTree.values()];
+  return [...[...entries].sort((a, b) => a - b).map((memory_entry) => ({ memory_entry })), ...branches, ...offTree.values()];
 }
 
 /** 読み手の窓の判断を要する項目を今の店で計算し直す —— 完了の verb は注入した一覧の絞り込みにだけ使う(ADR 0278 追記4)。 */
@@ -2820,11 +2820,11 @@ function actedOn(db: Db, reviewId: string) {
       .flatMap((row) => [branch(row), branch(requireEntry(db, row.successor_id!))]),
   );
   return (item: MemoryJudgmentItem) =>
-    "entry" in item ? entries.has(item.entry) : [itemName(item), itemName({ ...item, scope: null })].some((name) => defined.has(name)) || moved.has(itemName(item));
+    "memory_entry" in item ? entries.has(item.memory_entry) : [itemName(item), itemName({ ...item, scope: null })].some((name) => defined.has(name)) || moved.has(itemName(item));
 }
 
 const itemName = (item: MemoryJudgmentItem) =>
-  "entry" in item ? `entry #${item.entry}` : `branch ${item.branch} ${item.scope === null ? "in the whole board" : `in scope ${item.scope}`}`;
+  "memory_entry" in item ? `memory entry #${item.memory_entry}` : `branch ${item.branch} ${item.scope === null ? "in the whole board" : `in scope ${item.scope}`}`;
 
 /** memory meta-review の完了(ADR 0278 決定2〜5・追記4): 注入した一覧のうち、今も項目で、この review の行為が判断済みにしていない
  *  ものに left_as_is が要る(骨格は completeMetaReview)。誰かが無効化したエントリは、いつ無効化されたかを問わず今の計算が項目から
@@ -2891,20 +2891,20 @@ export function recordMetaReviewMaterial(
             cell_event_ids: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
             row_change_event_ids: material.parts.rows.map((r) => r.event_id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),
-            precedent_entries: precedentEntryIds(material.parts.precedents),
+            precedent_memory_entry_ids: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),
             items: material.parts.items,
           }
         : {
             ...common,
             subject: "memory",
-            store_changes: material.parts.store_changes.map((e) => e.id),
+            changed_memory_entry_ids: material.parts.store_changes.map((e) => e.id),
             candidates: material.parts.candidates.map((e) => e.id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),
-            precedent_entries: precedentEntryIds(material.parts.precedents),
+            precedent_memory_entry_ids: precedentEntryIds(material.parts.precedents),
             proposals: material.parts.proposals.map((p) => p.question_id),
-            proposal_entries: proposalEntryIds(material.parts.proposals),
-            branches: material.parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
+            proposal_memory_entry_ids: proposalEntryIds(material.parts.proposals),
+            branch_definition_ids: material.parts.branches.flatMap((b) => b.definitions.map((d) => d.id)),
             items: material.parts.items,
           },
     at,

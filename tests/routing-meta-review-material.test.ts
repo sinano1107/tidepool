@@ -495,5 +495,5 @@ it("Objected decisions は読み手 routing の list_precedents の行を載せ�
 
   expect(material.parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
   expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the objections raised in this window.\n${JSON.stringify(material.parts.precedents[0])}`);
-  expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_entries: [] });
+  expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_memory_entry_ids: [] });
 });

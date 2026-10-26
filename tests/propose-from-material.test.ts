@@ -110,10 +110,10 @@ it("capability・preference は agent 登録の task でも entry の worker 宛
   const capabilityResult = proposeFromMaterial(db, self, { ...draft, material_id: capabilityEntry }, {}, "auditor", at);
   const preferenceResult = proposeFromMaterial(db, self, { ...draft, material_id: preferenceEntry }, {}, "auditor", at);
 
-  expect(capabilityResult.event_id).toBe(capabilityResult.entry_id);
+  expect(capabilityResult.event_id).toBe(capabilityResult.memory_entry_id);
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ ...draft, id: capabilityResult.entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest }, cause: "capability" }),
-    expect.objectContaining({ id: preferenceResult.entry_id, kind: "behavior", state: "candidate", addressee: "helmsman", cause: "preference" }),
+    expect.objectContaining({ ...draft, id: capabilityResult.memory_entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest }, cause: "capability" }),
+    expect.objectContaining({ id: preferenceResult.memory_entry_id, kind: "behavior", state: "candidate", addressee: "helmsman", cause: "preference" }),
   ]);
 });
 
@@ -123,9 +123,9 @@ it("主題つきの親(meta-review)の行からの Behavior candidate は、盤�
   const entry = objected(db, review, "capability");
   const auditor = rca(db, "rca (auditor): memory meta-review", review);
 
-  const { entry_id } = proposeFromMaterial(db, auditor.id, { ...draft, material_id: entry }, { workspace: { name: "charts" } }, "auditor", at);
+  const { memory_entry_id } = proposeFromMaterial(db, auditor.id, { ...draft, material_id: entry }, { workspace: { name: "charts" } }, "auditor", at);
 
-  expect(listMemoryEntries(db, {})).toEqual([expect.objectContaining({ id: entry_id, kind: "behavior", state: "candidate", scope: null, addressee: "deckhand" })]);
+  expect(listMemoryEntries(db, {})).toEqual([expect.objectContaining({ id: memory_entry_id, kind: "behavior", state: "candidate", scope: null, addressee: "deckhand" })]);
 });
 
 it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の子の RCA の行)からの Behavior candidate は、盤面に既定 workspace があっても scope null —— 祖先に meta-review の無い修理子の行からは今どおり task の workspace(ADR 0283 決定1)", () => {
@@ -135,7 +135,7 @@ it("meta-review の系譜の行(主題の修理子の行・RCA の行・RCA の�
     registerTask(db, { type, title, purpose: "p", completion_criteria: "c", parent_id: parent.id, workspace }, at, HUMAN_ACTOR_ID, "webui");
   const proposeOn = (objectedTask: Task) => {
     const entry = objected(db, objectedTask, "capability");
-    return proposeFromMaterial(db, rca(db, `rca (auditor): ${objectedTask.title}`, objectedTask).id, { ...draft, material_id: entry }, board, "auditor", at).entry_id;
+    return proposeFromMaterial(db, rca(db, `rca (auditor): ${objectedTask.title}`, objectedTask).id, { ...draft, material_id: entry }, board, "auditor", at).memory_entry_id;
   };
   const memoryReview = registerTask(db, { type: "review", title: "memory meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "memory" }, at, HUMAN_ACTOR_ID, "webui");
   const routingReview = registerTask(db, { type: "review", title: "routing meta-review", purpose: "p", completion_criteria: "c", meta_review_subject: "routing" }, at, HUMAN_ACTOR_ID, "webui");
@@ -171,9 +171,9 @@ it("agent 登録の task では task_ambiguity と missing_information(as: behav
   const knowledgeResult = proposeFromMaterial(db, auditor.id, { ...draft, material_id: missingInformationEntry, as: "knowledge", based_on_decision: decision }, {}, "auditor", at);
 
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ id: ambiguityResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
-    expect.objectContaining({ id: behaviorResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
-    expect.objectContaining({ id: knowledgeResult.entry_id, kind: "knowledge", state: "approved", addressee: null, source: { kind: "decision", ref: decision }, cause: null }),
+    expect.objectContaining({ id: ambiguityResult.memory_entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
+    expect.objectContaining({ id: behaviorResult.memory_entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
+    expect.objectContaining({ id: knowledgeResult.memory_entry_id, kind: "knowledge", state: "approved", addressee: null, source: { kind: "decision", ref: decision }, cause: null }),
   ]);
 });
 
@@ -188,8 +188,8 @@ it("承認で実体化した子(Registrant は human)の task_ambiguity と miss
   const behaviorResult = proposeFromMaterial(db, auditor, { ...draft, material_id: missingInformationEntry, as: "behavior" }, {}, "auditor", at);
 
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ id: ambiguityResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
-    expect.objectContaining({ id: behaviorResult.entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
+    expect.objectContaining({ id: ambiguityResult.memory_entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "task_ambiguity" }),
+    expect.objectContaining({ id: behaviorResult.memory_entry_id, kind: "behavior", state: "candidate", addressee: "tako", cause: "missing_information" }),
   ]);
 });
 
@@ -228,7 +228,7 @@ it("RCA reviewer は自分の RCA が覆う異議群の判定から起草する 
 
   expect(outside).toThrow(new DomainError(`entry ${y} is not in this review's material`));
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ id: result.entry_id, kind: "behavior", addressee: "deckhand", source: { kind: "event", ref: aJudgment }, cause: "capability" }),
+    expect.objectContaining({ id: result.memory_entry_id, kind: "behavior", addressee: "deckhand", source: { kind: "event", ref: aJudgment }, cause: "capability" }),
   ]);
 });
 
@@ -251,6 +251,6 @@ it("premise_breached の宣言への異議エントリからも提案できる",
   const result = proposeFromMaterial(db, self, { ...draft, material_id: entry }, {}, "auditor", at);
 
   expect(listMemoryEntries(db, {})).toEqual([
-    expect.objectContaining({ id: result.entry_id, kind: "behavior", state: "candidate", addressee: "deckhand", source: { kind: "event", ref: attribution } }),
+    expect.objectContaining({ id: result.memory_entry_id, kind: "behavior", state: "candidate", addressee: "deckhand", source: { kind: "event", ref: attribution } }),
   ]);
 });

@@ -677,7 +677,7 @@ it("read_memory_entries の行は、人間が原文つきで書いたエント�
   expect(entries[1]!.annotations).toEqual([{ anchor: { field: "decision", quote: "short" }, polarity: "imitate", text: "Keep the note short." }]);
 });
 
-it("session の中で read_memory_entries が返した id は、その session の Precedent の entries_seen に入り entries_read に入らない(ADR 0122 追記 #1225)", () => {
+it("session の中で read_memory_entries が返した id は、その session の Precedent の memory_entries_seen に入り memory_entries_read に入らない(ADR 0122 追記 #1225)", () => {
   const { db, task, reader, knowledge } = board();
   const spawned = appendEvent(db, { taskId: task.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const id = knowledge("tidepool", "notes");
@@ -696,7 +696,7 @@ it("session の中で read_memory_entries が返した id は、その session �
   expect(entriesReadBefore(episode, events, decision)).toEqual([]);
 });
 
-it("session の中で list_memory_entries と search_memory_entries が返した id は、その後の decision の entries_seen に入り entries_read に入らない(ADR 0083 追記6)", () => {
+it("session の中で list_memory_entries と search_memory_entries が返した id は、その後の decision の memory_entries_seen に入り memory_entries_read に入らない(ADR 0083 追記6)", () => {
   const { db, task, reader, knowledge } = board();
   const spawned = appendEvent(db, { taskId: task.id, actorId: "auditor", origin: "board", payload: WORKER_SPAWNED, at });
   const listed = knowledge("tidepool", "notes");

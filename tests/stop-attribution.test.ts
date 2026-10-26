@@ -192,7 +192,7 @@ async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: strin
 }
 
 it.each([
-  { judgment: { cause: "memory" as const, evidence: "followed a note", wrong_memory_entries: [999] }, rejected: "memory attribution rejected: entry 999 was not read before the decision" },
+  { judgment: { cause: "memory" as const, evidence: "followed a note", wrong_memory_entries: [999] }, rejected: "memory attribution rejected: memory entry 999 was not read before the decision" },
   { judgment: { cause: "capability" as const, evidence: "e", wrong_memory_entries: [1] }, rejected: "capability attribution rejected: wrong_memory_entries are only for cause memory" },
 ])("a $judgment.cause judgment the gate refuses falls to uncertain", async ({ judgment, rejected }) => {
   const b = fixture();
@@ -365,13 +365,13 @@ it("a stop RCA proposes from its stop: a Behavior candidate from the latest stop
   const propose = (entry_id: number) => proposeFromMaterial(b.db, self.id, { ...draft, material_id: entry_id }, { workspace: { name: "charts" } }, "deckhand", at);
 
   expect(() => propose(b.entry)).toThrow(`id ${b.entry} is not the stop this review was opened on`);
-  const { entry_id } = propose(stop);
+  const { memory_entry_id } = propose(stop);
 
   expect(listMemoryEntries(b.db, {})).toEqual([
-    expect.objectContaining({ ...draft, id: entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest } }),
+    expect.objectContaining({ ...draft, id: memory_entry_id, kind: "behavior", state: "candidate", scope: "charts", addressee: "deckhand", source: { kind: "event", ref: latest } }),
   ]);
   completeRca(b.db, self, { findings: [{ material: [stop], root_cause: "r" }] }, "deckhand", at, "worker");
-  expect(judgmentRows(b.db, self.id).map((r) => r.line)).toEqual([`stop ${stop} → behavior candidate #${entry_id} — r`]);
+  expect(judgmentRows(b.db, self.id).map((r) => r.line)).toEqual([`stop ${stop} → behavior candidate #${memory_entry_id} — r`]);
 });
 
 it("an RCA opened on objections refuses a stop's id", async () => {

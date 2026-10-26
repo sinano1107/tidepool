@@ -25,8 +25,8 @@ function buildPrompt(input: AttributionInput): string {
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
     `as it stood at the time. ${OBJECTION_FIELDS} When the input carries ` +
-    "written, the objected entry is a memory write the worker applied directly: written holds the entries it wrote, or for an " +
-    "invalidation the entries it dropped, and memory_read is what it read before that write. When the input " +
+    "written, the objected entry is a memory write the worker applied directly: written holds the memory entries it wrote, or for an " +
+    "invalidation the memory entries it dropped, and memory_read is what it read before that write. When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: those are their decision logs and completion reports, read them as " +
     "evidence. When present, human_stop is the human's account of why they stopped the session; " +
@@ -77,7 +77,7 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +
   'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "wrong_memory_entries" ' +
-  "(only with cause memory: the ids of the wrong entries, named from memory_read — the entries the worker " +
+  "(only with cause memory: the ids of the wrong memory entries, named from memory_read — the memory entries the worker " +
   `read before ${w.before}; never answer memory when memory_read is empty).`;
 const OBJECTION_FIELDS = responseFields({ reading: "the objected reading", before: "the decision", sound: "the decision", cites: "the decision log cites" });
 const STOP_FIELDS = responseFields({
