@@ -6,7 +6,7 @@ import type { Cause } from "./cause.js";
 import { type Db, MEMORY_FTS_DDL, MEMORY_FTS_TOKEN_CLASS, MEMORY_FTS_TOKENIZER, MEMORY_PREPROCESS_VERSION } from "./db.js";
 import { getDisplayLanguage, SUPPORTED_DISPLAY_LANGUAGES } from "./display-language.js";
 import { DomainError } from "./domain-error.js";
-import { appendEvent, currentAttributions, type EventOrigin, type EventPayload, type EventRow, type EventRowOf, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow, stopJudgments } from "./events.js";
+import { appendEvent, currentAttributions, type EventOrigin, type EventPayload, type EventRow, type EventRowOf, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionOf, sessionSpawnOf, stopJudgments } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
 import {
   attributionParts,
@@ -2247,10 +2247,10 @@ function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaRevi
     const entry = getEvent(db, id);
     if (!isDecisionLogEntry(entry)) return [];
     const events = listEvents(db, entry.task_id);
-    const spawned = sessionSpawnOf(events, entry);
-    // 完了は Episode の投影と同じ読み —— その session の窓の最初の task_completed
-    const inSession = spawned && sessionWindow(events, spawned).inSession;
-    const completed = inSession && events.find((e) => e.kind === "task_completed" && inSession(e));
+    // 完了は Episode の投影と同じ読み(sessionOf)
+    const session = sessionOf(events, entry);
+    const spawned = session?.spawned;
+    const completed = session?.completed?.payload;
     const episode = episodes.get(id);
     return [{
       task_id: entry.task_id,
@@ -2263,7 +2263,7 @@ function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaRevi
       objections: entryObjections(db, [id]).map((o) => o.comment),
       cause: judged.get(id)?.cause ?? null,
       wrong_memory_entries: judged.get(id)?.wrong_memory_entries ?? null,
-      completed: completed?.payload.kind === "task_completed" ? { result: completed.payload.result, handoffPresent: completed.payload.handoff_present } : null,
+      completed: completed ? { result: completed.result, handoffPresent: completed.handoff_present } : null,
       pr_merged: mergedPr(db, entry.task_id),
       memory_entries_read: episode ? entriesReadBefore(episode, events, id) : null,
       memory_entries_seen: episode ? entriesSeenBefore(episode, events, id) : null,
@@ -2284,7 +2284,7 @@ type MemoryCase =
 /** 出所から case を描く。帰責 event は異議された entry へ辿る。事例に辿れない出所(commit、自身の作成
  *  event など)は null。decision 種別の出所は書き手(meta-review)自身の推論で事例ではないので null —— RCA / Board call の
  *  起草の出所は帰責 event(issue #954)。handoff / result / decision 列は Episode の投影表でなく、anchor を含む session の窓
- *  (`sessionWindow`)の events から読む —— Harness にも投影の有無にも依らない(issue #960)。 */
+ *  (`sessionOf`)の events から読む —— Harness にも投影の有無にも依らない(issue #960)。 */
 function renderCase(db: Db, source: MemorySource): MemoryCase | null {
   return renderCaseWithLineIds(db, source)?.rendered ?? null;
 }
@@ -2315,8 +2315,8 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
     event?.payload.kind === "objection_attributed"
       ? objectionsById(db, entryId, event.payload.objection_event_ids)
       : entryObjections(db, [entryId]);
-  const { events, handoff, result } = caseSession(db, entry);
-  const stop = event?.payload.kind === "objection_attributed" ? events.find((e) => e.kind === "session_stopped_by_human")?.payload : undefined;
+  const { handoff, result, stopped: sessionStop } = caseSession(db, entry);
+  const stop = event?.payload.kind === "objection_attributed" ? sessionStop?.payload : undefined;
   return {
     rendered: {
       decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result,
@@ -2330,23 +2330,23 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
 const humanStopLine = (db: Db, stop: EventPayload | undefined) =>
   stop?.kind === "session_stopped_by_human" ? { human_stop: { reason: humanStopReason(db, stop) } } : {};
 
-/** anchor を含む worker session の events(id 順)と、その窓の完了の handoff / result。anchor が
- *  `worker_spawned` ならその session、そうでなければ anchor より前で最後に開いた同じ task の session ——
+/** anchor を含む worker session(`sessionOf`)の events(id 順)と、その窓の完了の handoff / result と人間の停止 ——
  *  窓の外(session 無しに書かれた entry)なら空。 */
-function caseSession(db: Db, anchor: EventRow): { events: EventRow[]; handoff: string | null; result: string | null } {
+function caseSession(
+  db: Db,
+  anchor: EventRow,
+): { events: EventRow[]; handoff: string | null; result: string | null; stopped?: EventRowOf<"session_stopped_by_human"> } {
   const empty = { events: [], handoff: null, result: null };
   if (anchor.task_id === null) return empty;
   const events = listEvents(db, anchor.task_id);
-  const spawned = sessionSpawnOf(events, anchor);
-  if (!spawned) return empty;
-  const { inSession } = sessionWindow(events, spawned);
-  const inWindow = events.filter(inSession);
-  const payload = inWindow.find((e) => e.kind === "task_completed")?.payload;
-  const completed = payload?.kind === "task_completed" ? payload : null;
+  const session = sessionOf(events, anchor);
+  if (!session) return empty;
+  const completed = session.completed?.payload;
   return {
-    events: inWindow,
+    events: events.filter(session.inSession),
     handoff: completed?.handoff_present ? (getTask(db, anchor.task_id)?.handoff_doc ?? null) : null,
     result: completed?.result ?? null,
+    stopped: session.stopped,
   };
 }
 

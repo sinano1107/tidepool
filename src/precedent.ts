@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionWindow } from "./events.js";
+import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionOf } from "./events.js";
 import { rootPrOutcome } from "./landing.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
@@ -402,9 +402,8 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
       ? readCodexLines(input.transcriptLines, spawned.payload.cli_version)
       : readClaudeLines(input.transcriptLines);
 
-  const { exited, inSession } = sessionWindow(input.events, spawned);
+  const { exited, inSession, completed } = sessionOf(input.events, spawned)!;
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
-  const completed = input.events.find((e) => e.kind === "task_completed" && inSession(e));
   markers.push(
     ...boundMarkers("decision", input.events, inSession, loggedAt),
     ...boundMarkers("memory", input.events, inSession, pulledAt),
@@ -424,10 +423,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     definitionVersion: spawned.payload.definition_version,
     extractorVersion: input.extractorVersion,
     cliVersion,
-    completed:
-      completed?.payload.kind === "task_completed"
-        ? { result: completed.payload.result, handoffPresent: completed.payload.handoff_present }
-        : null,
+    completed: completed ? { result: completed.payload.result, handoffPresent: completed.payload.handoff_present } : null,
     exitCode: exitPayload?.exit_code ?? null,
     signal: exitPayload?.signal ?? null,
     workerExitedEventId: exited?.id ?? null,
