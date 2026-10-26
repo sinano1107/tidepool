@@ -715,7 +715,7 @@ export type EventPayload =
   // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
   // 鍵の規則(ADR 0311 決定4): 配列の鍵は持っている id の物を名指す。部分の名前がそれを名指していれば、そのまま
   | (MetaReviewMaterialCommon & { subject: "memory"; changed_memory_entry_ids: number[]; candidates: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; stop_attributed_event_ids: number[]; proposals: string[]; proposal_memory_entry_ids: number[]; branch_definition_ids: number[]; items: MemoryJudgmentItem[] })
-  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
+  | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; stop_attributed_event_ids: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
   // ADR 0120 決定2 / issue #618: 盤面が主題の meta-review を登録した(登録した task に帰属)。
   // material_watermark = 登録時の events の最大 id —— 次の周期の材料はこれより後の event。
   | { kind: "meta_review_registered"; subject: "memory" | "routing"; material_watermark: number }

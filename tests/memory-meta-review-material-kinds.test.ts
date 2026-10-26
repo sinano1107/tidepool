@@ -8,7 +8,7 @@ import { META_REVIEW_SUBJECTS, type MetaReviewSubject, readMetaReviewStatus, reg
 import { getTask, logDecision, pickupTask, registerTask } from "../src/tasks.js";
 import { raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
-import { bundledObjection, episodeOfDecision, HUMAN_WEBUI, injectMemoryMaterial, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
+import { bundledObjection, episodeOfDecision, HUMAN_WEBUI, injectMemoryMaterial, injectRoutingMaterial, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
 
 /** memory meta-review の材料を kind ごとの1組で読む(ADR 0312)のドメイン層: due と節が同じ述語を読む。 */
 const at = new Date("2026-10-26T00:00:00.000Z");
@@ -223,10 +223,11 @@ it("節を組んだ記録 meta_review_material_injected(主題 memory)の stop_a
   expect(listEventsOfKinds(db, ["meta_review_material_injected"]).at(-1)!.payload).toMatchObject({ subject: "memory", stop_attributed_event_ids: [latest] });
 });
 
-type MemoryRecord = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: "memory" }>;
+type MaterialRecord<S extends MetaReviewSubject> = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: S }>;
 /** kind ごとの fixture: 呼ぶと窓の前に材料でない下ごしらえを置き、返す関数は窓にその kind の event をちょうど1つ書いて、
  *  節の記録のどの部分にどの id で載るべきかを返す。 */
-const KIND_FIXTURES: Record<keyof (typeof META_REVIEW_SUBJECTS)["memory"]["material"], (db: Db) => () => [keyof MemoryRecord, number]> = {
+type KindFixtures<S extends MetaReviewSubject, K extends keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]> = Record<K, (db: Db) => () => [keyof MaterialRecord<S>, number]>;
+const KIND_FIXTURES: KindFixtures<"memory", keyof (typeof META_REVIEW_SUBJECTS)["memory"]["material"]> = {
   memory_entry_created: (db) => () => ["changed_memory_entry_ids", knowledge(db, "written")],
   memory_entry_invalidated: (db) => {
     const dropped = knowledge(db, "dropped");
@@ -242,17 +243,42 @@ const KIND_FIXTURES: Record<keyof (typeof META_REVIEW_SUBJECTS)["memory"]["mater
   },
 };
 
-it.each(Object.entries(KIND_FIXTURES))("材料の kind %s の event が窓に1つだけあれば、due が開き(件数 1)、注入した節のその部分の記録に載る(ADR 0312 決定1)", (_, fixture) => {
+/** setup のみ: 行の主題 routing の task(routing meta-review)を登録し、下ごしらえを置いてから、それと子(停止の failure question)を
+ *  done にする —— 周期の登録は未決着の同主題 task を待つ。 */
+function onRoutingReview<T>(db: Db, setup: (review: ReturnType<typeof getTask> & {}) => T): T {
+  const review = getTask(db, register(db, "routing"))!;
+  const made = setup(review);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ? OR parent_id = ?").run(review.id, review.id);
+  return made;
+}
+
+/** routing の帰責2 kind だけ(他の kind の行の不変条件は #2594 の後)。 */
+const ROUTING_KIND_FIXTURES: KindFixtures<"routing", "objection_attributed" | "stop_attributed"> = {
+  objection_attributed: (db) => {
+    const objected = onRoutingReview(db, (review) => objectedDecision(db, review));
+    return () => (attributeObjection(db, objected, "capability"), ["precedents", objected.decision]);
+  },
+  stop_attributed: (db) => {
+    const stopped = onRoutingReview(db, (review) => stoppedSession(db, "wrong rows", review));
+    return () => ["stop_attributed_event_ids", attributeStop(db, stopped, "capability")];
+  },
+};
+
+it.each([
+  ...Object.entries(KIND_FIXTURES).map(([kind, fixture]) => ["memory", kind, fixture] as const),
+  ...Object.entries(ROUTING_KIND_FIXTURES).map(([kind, fixture]) => ["routing", kind, fixture] as const),
+])("主題 %s の材料の kind %s の event が窓に1つだけあれば、due が開き(件数 1)、注入した節のその部分の記録に載る(ADR 0312 決定1)", (subject, _, fixture) => {
   const db = openDb(":memory:");
   const inWindow = fixture(db);
-  register(db, "memory", true);
+  register(db, subject, true);
   const [part, id] = inWindow();
 
-  expect(readMetaReviewStatus(db).memory).toMatchObject({ material_since: 1 });
+  expect(readMetaReviewStatus(db)[subject]).toMatchObject({ material_since: 1 });
   registerDueMetaReviews(db, new Date(at.getTime() + 8 * 24 * 60 * 60 * 1000));
   const review = listEventsOfKinds(db, ["meta_review_registered"]).at(-1)!.task_id!;
-  expect(getTask(db, review)).toMatchObject({ meta_review_subject: "memory", status: "todo" });
-  injectMemoryMaterial(db, review, "fugu", at);
+  expect(getTask(db, review)).toMatchObject({ meta_review_subject: subject, status: "todo" });
+  if (subject === "memory") injectMemoryMaterial(db, review, "fugu", at);
+  else injectRoutingMaterial(db, review, "auditor", at);
   expect(listEventsOfKinds(db, ["meta_review_material_injected"]).at(-1)!.payload).toMatchObject({ [part]: expect.arrayContaining([id]) });
 });
 
@@ -267,4 +293,30 @@ it("routing meta-review とその修理子の行への異議の帰責・routing 
   expect(readMetaReviewStatus(db).memory).toMatchObject({ material_since: 0 });
   const { parts } = memoryMaterialOf(db, register(db, "memory"));
   expect([parts.precedents, parts.stops]).toEqual([[], []]);
+});
+
+it("routing meta-review の行への異議と、その session の停止の帰責が cause memory なら、memory と routing の両方の due を開き両方の節に載り、memory の Items to judge と list_precedents(読み手 memory)に入る —— routing の Items to judge は変わらない(ADR 0312 決定4)", () => {
+  const db = openDb(":memory:");
+  const [followed, seen] = [knowledge(db, "followed"), knowledge(db, "seen")];
+  register(db, "memory", true);
+  const routing = getTask(db, register(db, "routing"))!;
+  const objected = objectedDecision(db, routing);
+  attributeObjection(db, objected, "memory", { wrong: [followed] });
+  const stopped = stoppedSession(db, "wrong rows", routing);
+  attributeStop(db, stopped, "memory", { wrong: [seen] });
+
+  expect(readMetaReviewStatus(db)).toMatchObject({ memory: { material_since: 2 }, routing: { material_since: 2 } });
+  const memoryReview = register(db, "memory");
+  const { parts } = memoryMaterialOf(db, memoryReview);
+  expect([parts.precedents.map((p) => p.decision_event_id), parts.stops.map((s) => s.row.stop_event_id)]).toEqual([[objected.decision], [stopped.stop]]);
+  expect(listPrecedents(db, { taskId: memoryReview, agent: "fugu" }, {}, at).precedents.map((p) => p.decision_event_id)).toEqual([objected.decision]);
+  const items = injectMemoryMaterial(db, memoryReview, "fugu", at);
+  expect(items.filter((item) => "memory_entry" in item)).toEqual([{ memory_entry: followed }, { memory_entry: seen }]);
+  const branches = items.filter((item) => "branch" in item);
+  expect(() => completeMemoryReview(db, getTask(db, memoryReview)!, { judgments: branches }, "fugu", at, "worker")).toThrow(`unjudged: memory entry #${followed}, memory entry #${seen} —`);
+
+  const routingMaterial = buildMetaReviewMaterial(db, register(db, "routing"));
+  if (routingMaterial?.subject !== "routing") throw new Error("no routing material");
+  expect([routingMaterial.parts.precedents.map((p) => p.decision_event_id), routingMaterial.parts.stops.map((s) => s.row.stop_event_id)]).toEqual([[objected.decision], [stopped.stop]]);
+  expect(routingMaterial.parts.items).toEqual([{ learner: true }]);
 });

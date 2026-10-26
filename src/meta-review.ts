@@ -72,6 +72,9 @@ const NOT_OWN_PRODUCT_SQL = `json_extract(payload, '$.question_id') IS NULL
 export const rowSubjectSql = (subject: "memory" | "routing" | null) =>
   subject === null ? "1" : `IFNULL(${lineageSubjectSql("events.task_id")}, 'memory') = '${subject}'`;
 
+/** memory の読み手が受け取る帰責(ADR 0312 決定4): 行の主題が memory か、行の主題を問わず cause memory(payload の印 —— 行を読まない)。 */
+const MEMORY_ATTRIBUTION_SQL = `(${rowSubjectSql("memory")} OR json_extract(payload, '$.cause') = 'memory')`;
+
 /** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数え節が描く
  *  材料の kind → 組の写像(ADR 0312 決定1)、接続で worker の memory verb を置き換える専用 verb。 */
 export const META_REVIEW_SUBJECTS = {
@@ -125,8 +128,8 @@ export const META_REVIEW_SUBJECTS = {
     material: {
       memory_entry_created: { where: NOT_OWN_PRODUCT_SQL, part: "Store changes" },
       memory_entry_invalidated: { where: NOT_OWN_PRODUCT_SQL, part: "Store changes" },
-      objection_attributed: { where: rowSubjectSql("memory"), part: "Objected decisions" },
-      stop_attributed: { where: rowSubjectSql("memory"), part: "Stops attributed" },
+      objection_attributed: { where: MEMORY_ATTRIBUTION_SQL, part: "Objected decisions" },
+      stop_attributed: { where: MEMORY_ATTRIBUTION_SQL, part: "Stops attributed" },
     } as const satisfies MaterialMap,
     verbs: MEMORY_META_REVIEW_VERBS,
   },
@@ -137,7 +140,8 @@ export const META_REVIEW_SUBJECTS = {
         "Periodic meta-review of how the board routes work to execution settings. This cycle's material is in your prompt, in the " +
         "Routing meta-review material section: the current table and settings, the shadow rows since the previous routing meta-review " +
         "where the learner's recommendation diverged from what ran, the allocation reviews since then, the cells first seen and the rows " +
-        "humans changed since then, the decisions objected to since then, the routing proposals answered or settled since then, and the items to judge. " +
+        "humans changed since then, the decisions whose objections were attributed since then, the human stops attributed since then, " +
+        "the routing proposals answered or settled since then, and the items to judge. " +
         "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, " +
         "listing each item you leave unchanged as no_change (with a reason when it helps). " +
         "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
@@ -171,6 +175,8 @@ export const META_REVIEW_SUBJECTS = {
       allocation_reviewed: { where: NOT_OWN_PRODUCT_SQL, part: "Allocation reviews" },
       worker_exited: { where: NOT_OWN_PRODUCT_SQL, part: "Diverged shadow rows" },
       execution_settings_changed: { where: NOT_OWN_PRODUCT_SQL, part: "New cells and changed rows" },
+      objection_attributed: { where: rowSubjectSql("routing"), part: "Objected decisions" },
+      stop_attributed: { where: rowSubjectSql("routing"), part: "Stops attributed" },
     } as const satisfies MaterialMap,
     verbs: ROUTING_META_REVIEW_VERBS,
   },
@@ -236,6 +242,11 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
 /** 材料の節の "Objected decisions" の注(両主題): 窓の中で帰責の付いた異議の行(ADR 0312 決定5・6)。 */
 export const OBJECTED_DECISIONS_NOTE =
   "Rows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.";
+
+/** 材料の節の "Stops attributed" の注(両主題): 窓の中で帰責の判定された人間の停止、1停止1行(ADR 0312 決定7)。 */
+export const STOPS_ATTRIBUTED_NOTE =
+  "One row per human stop whose attribution was judged in this window, with the latest judgment up to this window's end: the stopped task " +
+  "and session, the human's reason, and the cause, evidence, wrong_memory_entries and round of that judgment.";
 
 /** 異議つき判断の行のうち、主題 `kind` の完了の verb が書いた型つきの判断(ADR 0279 決定5): 次周期の Items to judge が名指す対象を読む。 */
 export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedents: readonly { decision_event_id: number }[], kind: K) =>

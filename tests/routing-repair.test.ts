@@ -150,5 +150,5 @@ it("修理子の下の提案 question は open な間は次の routing meta-revi
   await submitAnswer({ db, pollNow() {}, landing: unusedLanding }, getTask(db, question_id)!, ["approve"], undefined, () => at, "webui");
   expect(loadExecutionSettingTable(db).find((r) => matchesRowKey(r, OPUS_ROW))?.tier).toBe("frontier");
   registerDueMetaReviews(db, afterPeriod);
-  expect(routingMaterial(db, metaReviewWindow(db, next()!.id), []).parts.proposals).toEqual([expect.objectContaining({ question_id, answer: "approve" })]);
+  expect(routingMaterial(db, metaReviewWindow(db, next()!.id), [], []).parts.proposals).toEqual([expect.objectContaining({ question_id, answer: "approve" })]);
 });
