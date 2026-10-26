@@ -164,7 +164,7 @@ it("root は対象を待つ —— 出題前は blocked でなく拾われ、出
   expect(nextSlotTask(db)?.id).toBe(other.id);
   completeTask(db, other, FULL_HANDOFF, "tako", new Date(0), "worker");
   expect(nextSlotTask(db)).toBeUndefined();
-  const scores = [{ child_id: other.id, outcome: "accepted" as const }];
+  const scores = [{ child_id: other.id, verdict: "accepted" as const }];
   expect(() => completeInterview(db, getTask(db, root.id)!, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker")).toThrow(/unfinished children/);
   answerQuestionViaWebui(db, question, ["abandon"], new Date(1));
   expect(nextSlotTask(db)?.id).toBe(root.id);
@@ -196,7 +196,7 @@ it("done の受験者は root が決着するまで盤面の一覧に残り、ro
   ]);
   completeTask(db, open, FULL_HANDOFF, "tako", new Date(0), "worker");
   expect(listBoard(db)).toHaveLength(4);
-  const scores = [done, open].map(({ id }) => ({ child_id: id, outcome: "accepted" as const }));
+  const scores = [done, open].map(({ id }) => ({ child_id: id, verdict: "accepted" as const }));
   completeInterview(db, getTask(db, root.id)!, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   expect(listBoard(db)).toEqual([]);
 });
@@ -442,7 +442,7 @@ it("報告の question への continue で root が起きて採点完了でき�
   answerQuestionViaWebui(db, report(db, root), ["continue"], new Date(1));
   expect(nextSlotTask(db)?.id).toBe(root.id);
   expect(() => report(db, root)).toThrow(DomainError);
-  const scores = children.map(({ id }) => ({ child_id: id, outcome: "rejected" as const }));
+  const scores = children.map(({ id }) => ({ child_id: id, verdict: "rejected" as const }));
   expect(completeInterview(db, getTask(db, root.id)!, { scores, handoff: FINDINGS }, "auditor", new Date(2), "worker").status).toBe("done");
 });
 
@@ -566,7 +566,7 @@ it("出題前の root・Interview でない task・受験者・決着済みの r
 
   // 採点完了で done になった root も決着済み
   const graded = scoringRoot();
-  const scores = graded.children.map(({ id }) => ({ child_id: id, outcome: "accepted" as const }));
+  const scores = graded.children.map(({ id }) => ({ child_id: id, verdict: "accepted" as const }));
   completeInterview(graded.db, graded.root, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   expect(() => retryRoot(graded.db, graded.root)).toThrow(DomainError);
   expect(otherRoots(graded.db, graded.root)).toBe(0);
@@ -752,9 +752,9 @@ const FINDINGS = { outcome: "the parser probe separates the targets" };
 it("採点完了は done の子全部をちょうど1回ずつ採点すると、各子の採点と root の完了を一度に入れる(ADR 0253 決定4)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const [accepted, rejected] = ranChildren(db, root) as [Task, Task];
-  const scores = [{ child_id: rejected.id, outcome: "rejected" as const }, { child_id: accepted.id, outcome: "accepted" as const }];
+  const scores = [{ child_id: rejected.id, verdict: "rejected" as const }, { child_id: accepted.id, verdict: "accepted" as const }];
   expect(completeInterview(db, getTask(db, root.id)!, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker").status).toBe("done");
-  const scoreOf = (task: Task) => listEvents(db, task.id).flatMap(({ payload }) => (payload.kind === "interview_scored" ? [payload.outcome] : []));
+  const scoreOf = (task: Task) => listEvents(db, task.id).flatMap(({ payload }) => (payload.kind === "interview_scored" ? [payload.verdict] : []));
   expect([scoreOf(accepted), scoreOf(rejected)]).toEqual([["accepted"], ["rejected"]]);
   expect(listEvents(db, root.id).find((event) => event.kind === "task_completed")!.payload).toMatchObject({ result: FINDINGS.outcome });
 });
@@ -768,7 +768,7 @@ it("採点完了は欠け・重複・done でない子・他の root の子・ou
   const tasks = [root, a, b, cancelled, otherRootsChild];
   const written = () => tasks.flatMap((task) => listEvents(db, task.id)).length;
   const before = written();
-  const score = (...children: Task[]) => children.map((child) => ({ child_id: child.id, outcome: "accepted" as const }));
+  const score = (...children: Task[]) => children.map((child) => ({ child_id: child.id, verdict: "accepted" as const }));
   const complete = (scores: ReturnType<typeof score>, handoff: Record<string, string> = FINDINGS) => () =>
     completeInterview(db, getTask(db, root.id)!, { scores, handoff }, "auditor", new Date(1), "worker");
   expect(complete(score(a))).toThrow(new RegExp(`unscored: ${b.id}`));
@@ -785,7 +785,7 @@ it("採点完了は欠け・重複・done でない子・他の root の子・ou
 it("採点完了は Interview の root でない task・出題前の root・未決着の子が残る root を拒み、何も入れない(ADR 0253 決定4)", () => {
   const { db, root } = registerInterview(undefined, [opusHigh, haikuNull]);
   const plain = registerTask(db, { ...PLAIN, type: "work" }, new Date(0), ...HUMAN_WEBUI);
-  const complete = (task: Task, scores: Array<{ child_id: string; outcome: "accepted" }> = []) => () =>
+  const complete = (task: Task, scores: Array<{ child_id: string; verdict: "accepted" }> = []) => () =>
     completeInterview(db, task, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   expect(complete(plain)).toThrow(/only an Interview root/);
   expect(complete(getTask(db, root.id)!)).toThrow(/pose_probe/);
@@ -793,7 +793,7 @@ it("採点完了は Interview の root でない task・出題前の root・未�
   completeTask(db, done, FULL_HANDOFF, "tako", new Date(0), "worker");
   expect(complete(open)).toThrow(/only an Interview root/);
   // done の子の採点を渡しても、未決着の子が残れば採点ごと入らない
-  expect(complete(getTask(db, root.id)!, [{ child_id: done.id, outcome: "accepted" }])).toThrow(/unfinished children/);
+  expect(complete(getTask(db, root.id)!, [{ child_id: done.id, verdict: "accepted" }])).toThrow(/unfinished children/);
   expect([root, plain, done, open].flatMap((task) => listEvents(db, task.id)).map((event) => event.kind)).not.toContain("interview_scored");
   expect([getTask(db, root.id)!.status, getTask(db, plain.id)!.status]).not.toContain("done");
 });
@@ -813,7 +813,7 @@ it("着地しない受験者は、workspace の削除の扉が数える「着地
   const [child] = poseAccepted(db, root, POSE, "auditor", new Date(0), "worker", POSED_HEAD);
   completeTask(db, child!, FULL_HANDOFF, "tako", new Date(0), "worker");
   // root も reef を指すので、採点完了させてから数える
-  completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child!.id, outcome: "accepted" }], handoff: FINDINGS }, "auditor", new Date(0), "worker");
+  completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: child!.id, verdict: "accepted" }], handoff: FINDINGS }, "auditor", new Date(0), "worker");
   // 受験者の下に生えるのは question だけ(ADR 0268 決定5)
   failureQuestion(db, child!.id, new Date(0));
   expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
@@ -1163,7 +1163,7 @@ it("開いた memory_repair を持つ root は、最後の受験者を失敗 que
 it.each(["出題", "採点"] as const)("root の%sの行への異議を commit すると root の下に RCA(self / auditor)だけが立ち、修理子は立たない —— 帰責 event は今どおり(ADR 0268 決定3)", (line) => {
   const { db, root, children } = scoringRoot();
   if (line === "採点") {
-    const scores = children.map((child) => ({ child_id: child.id, outcome: "accepted" as const }));
+    const scores = children.map((child) => ({ child_id: child.id, verdict: "accepted" as const }));
     completeInterview(db, root, { scores, handoff: FINDINGS }, "auditor", new Date(1), "worker");
   }
   const entry = (line === "出題" ? taskDecisionLog(db, root.id)[0] : taskDecisionLog(db, root.id).at(-1))!.id;

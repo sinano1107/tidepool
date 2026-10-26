@@ -447,7 +447,7 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
               rubric: latestPosedProbe(db, root.id)?.probe.rubric ?? null,
               scores: listExaminees(db, root.id).flatMap((examinee) => {
                 const scored = latestEventOfTask(db, examinee.id, "interview_scored");
-                return scored ? [{ examinee_id: examinee.id, outcome: scored.payload.outcome }] : [];
+                return scored ? [{ examinee_id: examinee.id, verdict: scored.payload.verdict }] : [];
               }),
             },
           ]

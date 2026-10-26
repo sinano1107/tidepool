@@ -60,7 +60,7 @@ const answered: Arrange = async () => {
   await t.clock.advance(HOUR);
   await callAsTask(t, c, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
-  return { id: root, args: { scores: [{ child_id: c, outcome: "accepted" }], handoff: { outcome: "findings" } } };
+  return { id: root, args: { scores: [{ child_id: c, verdict: "accepted" }], handoff: { outcome: "findings" } } };
 };
 
 it.each<[string, Arrange, Record<string, unknown>]>([

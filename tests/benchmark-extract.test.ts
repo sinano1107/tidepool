@@ -270,7 +270,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   const work = completedWork(db, AT, "deckhand");
   logDecision(db, work, "kept the parser pure", "deckhand", AT, "worker");
   settleReviews(db, AT);
-  // 子の review の no_findings より後の判断を root の側に置く —— 木を辿る順(root が先)では古い方が最後に来るので、最後は event id で決まる
+  // 子の review の nothing_to_repair より後の判断を root の側に置く —— 木を辿る順(root が先)では古い方が最後に来るので、最後は event id で決まる
   const repaired = { kind: "integration_review" as const, deliverable: work.id, value: "repaired" as const, findings: "f", repairs: [] };
   appendEvent(db, { taskId: work.id, actorId: "fugu", origin: "worker", at: AT, payload: { kind: "decision_logged", line: "repaired", judgment: repaired } });
   appendEvent(db, { taskId: work.id, actorId: "human", origin: "webui", at: AT, payload: { kind: "local_merge_executed", sha: "c0ffee" } });
@@ -314,7 +314,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   const root = getTask(db, examineeRootId(db, examinee.id))!;
   openTestInterviewRoom(db, root);
   completeTask(db, getTask(db, examinee.id)!, FULL_HANDOFF, "tako", AT, "worker");
-  completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: examinee.id, outcome: "accepted" }], handoff: { outcome: "the target wrote it" } }, "auditor", AT, "worker");
+  completeInterview(db, getTask(db, root.id)!, { scores: [{ child_id: examinee.id, verdict: "accepted" }], handoff: { outcome: "the target wrote it" } }, "auditor", AT, "worker");
 
   const { record } = extract(
     db,
@@ -366,7 +366,7 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   ]);
   // Interview の root の面接室・rubric・採点
   expect(record.interviews).toEqual([
-    { root_id: root.id, room: expect.stringContaining("tidepool-rooms-"), rubric: "tests pass", scores: [{ examinee_id: examinee.id, outcome: "accepted" }] },
+    { root_id: root.id, room: expect.stringContaining("tidepool-rooms-"), rubric: "tests pass", scores: [{ examinee_id: examinee.id, verdict: "accepted" }] },
   ]);
 });
 

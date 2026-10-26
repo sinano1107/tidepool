@@ -18,7 +18,7 @@ import {
   makeWorkspace,
   managementMcpClient,
   mcpClient,
-  NO_FINDINGS,
+  NOTHING_TO_REPAIR,
   QUIET_EXIT,
   registerWork,
   type Tidepool,
@@ -158,7 +158,7 @@ it("受理は統合点レビューがすべて完了するまで偽で、最後�
     const completionClient = await mcpClient(t.mcpBaseUrl, review.id);
     const result: any = await completionClient.callTool({
       name: "complete_integration_review",
-      arguments: NO_FINDINGS,
+      arguments: NOTHING_TO_REPAIR,
     });
     expect(result.isError ?? false).toBe(false);
     await completionClient.close();

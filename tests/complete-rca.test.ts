@@ -84,7 +84,7 @@ it("材料のエントリが所見に無い・2つの所見に入る・材料に
     completeRca(
       db,
       auditor,
-      { findings: [{ material: [a, 9999], root_cause: CAUSE, no_proposal: true }, { material: [a], root_cause: CAUSE, no_proposal: true }] },
+      { findings: [{ material: [a, 9999], root_cause: CAUSE, no_act: true }, { material: [a], root_cause: CAUSE, no_act: true }] },
       "auditor",
       at,
       "worker",
@@ -94,17 +94,17 @@ it("材料のエントリが所見に無い・2つの所見に入る・材料に
   expect(getTask(db, auditor.id)!.status).toBe("todo");
 });
 
-it("行為も no_proposal も無い所見は名指して拒まれ、何も記録されない", () => {
+it("行為も no_act も無い所見は名指して拒まれ、何も記録されない", () => {
   const { db, entries, auditor } = objected([null, null]);
   const before = listEvents(db, auditor.id).length;
 
   expect(() =>
-    completeRca(db, auditor, { findings: [{ material: [entries[0]!], root_cause: CAUSE }, { material: [entries[1]!], root_cause: CAUSE, no_proposal: true }] }, "auditor", at, "worker"),
-  ).toThrow(`no act and no no_proposal: entries ${entries[0]}`);
+    completeRca(db, auditor, { findings: [{ material: [entries[0]!], root_cause: CAUSE }, { material: [entries[1]!], root_cause: CAUSE, no_act: true }] }, "auditor", at, "worker"),
+  ).toThrow(`without an act or no_act: entries ${entries[0]}`);
   expect(listEvents(db, auditor.id)).toHaveLength(before);
 });
 
-it("所見ごとに型つきの decision_logged が1行: 行為のある所見は書いた記憶を列挙し(no_proposal は受け取って載せない)、行為の無い所見は no_proposal を持ち、完了する", () => {
+it("所見ごとに型つきの decision_logged が1行: 行為のある所見は書いた記憶を列挙し(no_act は受け取って載せない)、行為の無い所見は no_act を持ち、完了する", () => {
   const { db, entries, auditor } = objected(["capability", "missing_information", null]);
   const [a, b, c] = entries as [number, number, number];
   const candidate = behavior(db, auditor, a);
@@ -115,8 +115,8 @@ it("所見ごとに型つきの decision_logged が1行: 行為のある所見�
     auditor,
     {
       findings: [
-        { material: [a, b], root_cause: ` ${CAUSE} `, no_proposal: true },
-        { material: [c], root_cause: "the comment asks for nothing", no_proposal: true },
+        { material: [a, b], root_cause: ` ${CAUSE} `, no_act: true },
+        { material: [c], root_cause: "the comment asks for nothing", no_act: true },
       ],
     },
     "auditor",
@@ -142,26 +142,26 @@ it("所見ごとに型つきの decision_logged が1行: 行為のある所見�
     },
     {
       kind: "decision_logged",
-      line: `no_proposal: entries ${c} — the comment asks for nothing`,
-      judgment: { kind: "rca", material: [c], root_cause: "the comment asks for nothing", memories: [], repairs: [], no_proposal: true },
+      line: `no_act: entries ${c} — the comment asks for nothing`,
+      judgment: { kind: "rca", material: [c], root_cause: "the comment asks for nothing", memories: [], repairs: [], no_act: true },
     },
   ]);
 });
 
-it("同じ異議群の self と auditor の RCA(同じ agent 名)で self だけが起草すると、self は no_proposal 無しで完了でき、auditor は no_proposal で完了して行にその記憶は載らない", () => {
+it("同じ異議群の self と auditor の RCA(同じ agent 名)で self だけが起草すると、self は no_act 無しで完了でき、auditor は no_act で完了して行にその記憶は載らない", () => {
   const { db, entries, self, auditor } = objected(["capability"]);
   const [entry] = entries as [number];
   const candidate = behavior(db, self, entry);
 
-  expect(() => completeRca(db, auditor, { findings: [{ material: [entry], root_cause: CAUSE }] }, "auditor", at, "worker")).toThrow("no act and no no_proposal");
-  completeRca(db, auditor, { findings: [{ material: [entry], root_cause: CAUSE, no_proposal: true }] }, "auditor", at, "worker");
+  expect(() => completeRca(db, auditor, { findings: [{ material: [entry], root_cause: CAUSE }] }, "auditor", at, "worker")).toThrow("without an act or no_act");
+  completeRca(db, auditor, { findings: [{ material: [entry], root_cause: CAUSE, no_act: true }] }, "auditor", at, "worker");
   completeRca(db, self, { findings: [{ material: [entry], root_cause: CAUSE }] }, "auditor", at, "worker");
 
-  expect(judgmentRows(db, auditor.id).map((row) => row.line)).toEqual([`no_proposal: entries ${entry} — ${CAUSE}`]);
+  expect(judgmentRows(db, auditor.id).map((row) => row.line)).toEqual([`no_act: entries ${entry} — ${CAUSE}`]);
   expect(judgmentRows(db, self.id).map((row) => row.line)).toEqual([`entries ${entry} → behavior candidate #${candidate} — ${CAUSE}`]);
 });
 
-it("Knowledge を書いた所見は no_proposal 無しで完了できる", () => {
+it("Knowledge を書いた所見は no_act 無しで完了できる", () => {
   const { db, entries, self } = objected(["missing_information"]);
   const note = knowledge(db, self, entries[0]!);
 
@@ -172,7 +172,7 @@ it("Knowledge を書いた所見は no_proposal 無しで完了できる", () =>
   ]);
 });
 
-it("所見が2つで決着した子が2つなら、両方の行に子の id と status が載り、no_proposal は受け取って載せない(RCA 単位の近似、#2279)", () => {
+it("所見が2つで決着した子が2つなら、両方の行に子の id と status が載り、no_act は受け取って載せない(RCA 単位の近似、#2279)", () => {
   const { db, entries, auditor } = objected([null, null]);
   const [fixed, dropped] = humanDecomposeTaskViaWebui(
     db,
@@ -183,7 +183,7 @@ it("所見が2つで決着した子が2つなら、両方の行に子の id と 
   completeTask(db, fixed!, FULL_HANDOFF, "auditor", at, "worker");
   cancelTaskDirectly(db, dropped!, null, at, {}, "webui");
 
-  completeRca(db, getTask(db, auditor.id)!, { findings: entries.map((entry) => ({ material: [entry], root_cause: CAUSE, no_proposal: true as const })) }, "auditor", at, "worker");
+  completeRca(db, getTask(db, auditor.id)!, { findings: entries.map((entry) => ({ material: [entry], root_cause: CAUSE, no_act: true as const })) }, "auditor", at, "worker");
 
   expect(judgmentRows(db, auditor.id)).toEqual(
     entries.map((entry) => ({
@@ -218,8 +218,8 @@ it("RCA でない review・空の root_cause・エントリの無い所見は拒
   const review = registerTask(db, { type: "review", title: "look again", purpose: "p", completion_criteria: "c", parent_id: work.id }, at, ...HUMAN_WEBUI);
 
   expect(() => completeRca(db, review, { findings: [] }, "auditor", at, "worker")).toThrow("only an RCA completes with complete_rca");
-  expect(() => completeRca(db, self, { findings: [{ material: entries, root_cause: " ", no_proposal: true }] }, "auditor", at, "worker")).toThrow("root_cause");
+  expect(() => completeRca(db, self, { findings: [{ material: entries, root_cause: " ", no_act: true }] }, "auditor", at, "worker")).toThrow("root_cause");
   expect(() =>
-    completeRca(db, self, { findings: [{ material: entries, root_cause: CAUSE, no_proposal: true }, { material: [], root_cause: CAUSE, no_proposal: true }] }, "auditor", at, "worker"),
+    completeRca(db, self, { findings: [{ material: entries, root_cause: CAUSE, no_act: true }, { material: [], root_cause: CAUSE, no_act: true }] }, "auditor", at, "worker"),
   ).toThrow("a finding names no entries");
 });

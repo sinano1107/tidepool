@@ -189,7 +189,7 @@ export type EventPayload =
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string; judgment?: undefined }
   // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
-  | { kind: "interview_scored"; outcome: InterviewOutcome }
+  | { kind: "interview_scored"; verdict: InterviewVerdict }
   // Interview の監査(ADR 0273 決定3・4): 監査 review が出題を受理したか却下したかと findings。task_id は監査 review
   | ({ kind: "interview_audited" } & AuditVerdict)
   // ADR 0233: the columns pickup filled from a default, and with what — a set column is absent.
@@ -221,8 +221,9 @@ export type EventPayload =
   | { kind: "session_stopped_by_human"; reason?: string; reason_question_id?: string }
   // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
   // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
-  // 行でない Interview の対象の拒否(ADR 0199 決定4)も同じ kind で、子は先頭へ戻らず対象の question が開くあいだ待つ
-  | ({ kind: "row_refused" } & (RowRefusal | ListedRefusal))
+  | ({ kind: "row_refused" } & RowRefusal)
+  // 行でない Interview の対象の拒否(ADR 0199 決定4): 子は先頭へ戻らず対象の question が開くあいだ待つ
+  | ({ kind: "target_refused" } & (RowRefusal | ListedRefusal))
   // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
   // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
   | { kind: "record_container_unwritable"; path: string; reason: string }
@@ -743,18 +744,18 @@ export type EventPayload =
 export type EventKind = EventPayload["kind"];
 
 /** Interview の採点の値(ADR 0181 決定4)。採点の verb の schema と学習器が同じこの1本を読む。 */
-export const INTERVIEW_OUTCOMES = ["accepted", "rejected"] as const;
-export type InterviewOutcome = (typeof INTERVIEW_OUTCOMES)[number];
+export const INTERVIEW_VERDICTS = ["accepted", "rejected"] as const;
+export type InterviewVerdict = (typeof INTERVIEW_VERDICTS)[number];
 
-/** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は no_findings か、
+/** 完了の verb が運ぶ判断の型つきの欄(ADR 0278 決定4)。統合レビューの対象は成果物(被レビュー task の id)、値は nothing_to_repair か、
  *  修理子から導いた repaired。memory meta-review の対象はエントリ(id)か枝((path, scope)、ADR 0282 決定2)、値は left_as_is で、reason は任意。routing meta-review の
  *  対象は行((provider, model, effort))・agent(名前)・段(id)・学習器で、値は no_change、reason は任意(ADR 0278 追記5)。RCA の対象は
- *  所見(material)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_proposal を持つ(ADR 0280 決定3)。 */
+ *  所見(material)で、行為(書いた記憶・子)を列挙し、行為が無いときだけ値 no_act を持つ(ADR 0280 決定3)。 */
 export type Judgment =
   | {
       kind: "integration_review";
       deliverable: string;
-      value: "no_findings" | "repaired";
+      value: "nothing_to_repair" | "repaired";
       findings: string;
       repairs: Array<{ id: string; status: TaskStatus }>;
     }
@@ -766,12 +767,12 @@ export type Judgment =
       root_cause: string;
       memories: Array<{ id: number; kind: MemoryEntryFields["kind"] }>;
       repairs: Array<{ id: string; status: TaskStatus }>;
-      no_proposal?: true;
+      no_act?: true;
     };
 
 /** Interview の監査の判定(ADR 0273 決定3・4): 受理 / 却下と findings。監査の verb・event・root の history が同じこの形を持つ。 */
 export interface AuditVerdict {
-  verdict: InterviewOutcome;
+  verdict: InterviewVerdict;
   findings: string;
 }
 

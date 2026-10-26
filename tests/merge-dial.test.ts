@@ -9,7 +9,7 @@ import {
   HOUR,
   makeRemoteBackedWorkspace,
   mcpClient,
-  NO_FINDINGS,
+  NOTHING_TO_REPAIR,
   registerWork,
   type Tidepool,
 } from "./harness.js";
@@ -500,7 +500,7 @@ it("a risky decomposed child merges back, then its root integration PR asks for 
     await api(t.baseUrl, "POST", `/api/tasks/${review.id}/move`, { after: null });
     await t.clock.advance(HOUR); // the review is picked up
     const reviewClient = await mcpClient(t.mcpBaseUrl, review.id);
-    await reviewClient.callTool({ name: "complete_integration_review", arguments: NO_FINDINGS });
+    await reviewClient.callTool({ name: "complete_integration_review", arguments: NOTHING_TO_REPAIR });
     await reviewClient.close();
   }
 

@@ -6,7 +6,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewOutcome, type InterviewProbe, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -1507,7 +1507,7 @@ export function moveTask(
 }
 
 /** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
-export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "record_container_unwritable" | "pickup_stopped" }>;
+export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "target_refused" | "record_container_unwritable" | "pickup_stopped" }>;
 
 /** 資源の Quarantine が worker の起動前に pickup を止めた先頭復帰(ADR 0274)。 */
 export type PickupStopped = Extract<QueueReturnPayload, { kind: "pickup_stopped" }>;
@@ -2570,13 +2570,13 @@ export function repairChildren(db: Db, reviewId: string): Array<{ id: string; st
 }
 
 /** 統合レビューの完了(ADR 0278 決定2〜5): findings は必須。修理子(review が分解した work —— 完了が待つ子と同じ鍵、`awaitedChildSql`)が
- *  無ければ no_findings の印が要り、あれば値は盤面が repaired と導いて行に修理子の id と status を書く —— そのとき no_findings は受け取って
+ *  無ければ nothing_to_repair の印が要り、あれば値は盤面が repaired と導いて行に修理子の id と status を書く —— そのとき nothing_to_repair は受け取って
  *  何もしない。判断は成果物(被レビュー task)を名指す型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。未決着の修理子は
  *  finishTask が拒み、行ごと巻き戻る。 */
 export function completeIntegrationReview(
   db: Db,
   review: Task,
-  { findings, no_findings }: { findings: string; no_findings?: true },
+  { findings, nothing_to_repair }: { findings: string; nothing_to_repair?: true },
   actorId: string,
   now: Date,
   origin: EventOrigin,
@@ -2585,10 +2585,10 @@ export function completeIntegrationReview(
   if (whyBlank(findings)) throw new DomainError("complete_integration_review requires findings");
   findings = normalizeText(findings);
   const repairs = repairChildren(db, review.id);
-  if (!repairs.length && !no_findings) {
-    throw new DomainError("this review filed no repair task: pass no_findings: true if the deliverable has nothing to repair, or file the findings as repair tasks with decompose first");
+  if (!repairs.length && !nothing_to_repair) {
+    throw new DomainError("this review filed no repair task: pass nothing_to_repair: true if the deliverable has nothing to repair, or file the findings as repair tasks with decompose first");
   }
-  const value = repairs.length ? "repaired" : "no_findings";
+  const value = repairs.length ? "repaired" : "nothing_to_repair";
   const deliverable = review.parent_id!;
   const line = `${value}: deliverable ${deliverable}${repairs.length ? ` (${repairs.map(({ id, status }) => `${id} ${status}`).join(", ")})` : ""} — ${findings}`;
   return db.transaction(() => {
@@ -2757,7 +2757,7 @@ export function latestPosedProbe(db: Db, rootId: string): { probe: InterviewProb
 export function completeInterview(
   db: Db,
   root: Task,
-  { scores, handoff }: { scores: Array<{ child_id: string; outcome: InterviewOutcome }>; handoff: Partial<HandoffDoc> | undefined },
+  { scores, handoff }: { scores: Array<{ child_id: string; verdict: InterviewVerdict }>; handoff: Partial<HandoffDoc> | undefined },
   actorId: string,
   now: Date,
   origin: EventOrigin,
@@ -2778,8 +2778,8 @@ export function completeInterview(
   if (unscored.length > 0) throw new DomainError(`score every done child exactly once; unscored: ${unscored.join(", ")}`);
   // 未決着の子が残る root は、finishTask の拒否で同じ transaction ごと巻き戻る
   return db.transaction(() => {
-    for (const { child_id, outcome } of scores) {
-      appendEvent(db, { taskId: child_id, actorId, origin, payload: { kind: "interview_scored", outcome }, at: now });
+    for (const { child_id, verdict } of scores) {
+      appendEvent(db, { taskId: child_id, actorId, origin, payload: { kind: "interview_scored", verdict }, at: now });
     }
     return finishTask(db, root, handoff, actorId, now, origin);
   })();
@@ -4300,8 +4300,8 @@ interface SettledChildContext {
   /** The reject-reason steering channel (issue #40) — carried alongside
    *  `answer` so a resumed parent reads why, not just what. */
   comment?: string | null;
-  /** `cause` は断られた行でない対象の question で cancel された子だけ: その子の `row_refused` の証拠の種類。 */
-  origin_question?: { title: string; answer: string[] | null; comment: string | null; cause?: Extract<EventPayload, { kind: "row_refused" }>["cause"] };
+  /** `cause` は断られた行でない対象の question で cancel された子だけ: その子の `target_refused` の証拠の種類。 */
+  origin_question?: { title: string; answer: string[] | null; comment: string | null; cause?: Extract<EventPayload, { kind: "target_refused" }>["cause"] };
   /** 再分解が破棄した子(ADR 0121): 前提の破綻を宣言した子と、その理由。 */
   origin_breach?: { title: string; reason: string };
   /** 人間が直接 cancel した子: その reason(任意なので無ければ null)。 */
@@ -4512,7 +4512,7 @@ function cancelOrigin(
   if (!REFUSED_TARGET_KINDS.includes(question.question_quarantine_kind ?? "")) return { origin_question: { title: question.title, ...answer } };
   // 断られた対象の question の題は model を名指すので、統合復帰の history には伏せた文と証拠の種類だけを見せる(伏せた handoff、
   // ADR 0199 / ADR 0253)。spawn 前に止まっていた子には証拠が無い
-  const cause = latestEventOfTask(db, taskId, "row_refused")?.payload.cause;
+  const cause = latestEventOfTask(db, taskId, "target_refused")?.payload.cause;
   return { origin_question: { title: "the provider refused this child's Interview target", ...answer, ...(cause && { cause }) } };
 }
 

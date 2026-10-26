@@ -913,13 +913,13 @@ function rcaMaterial(db: Db, reviewId: string, stop: EventRowOf<"session_stopped
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
  *  名指して拒み何も記録しない。所見ごとの行為は記録から列挙する —— この RCA の起草の記録のうち所見の material と交わるものの記憶と、
- *  この RCA の修理子(子は全所見に載る RCA 単位の近似、#2279)。行為の無い所見だけが no_proposal を要し、行為のある所見への
- *  no_proposal は受け取って何もしない。所見1つが型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。
+ *  この RCA の修理子(子は全所見に載る RCA 単位の近似、#2279)。行為の無い所見だけが no_act を要し、行為のある所見への
+ *  no_act は受け取って何もしない。所見1つが型つきの判断ログ1行で、文は盤面が組み、完了と同じ transaction で書く。
  *  行と拒否文は id を材料の種類で名指す(異議の RCA は entries、停止の RCA は stop)。 */
 export function completeRca(
   db: Db,
   review: Task,
-  { findings, handoff }: { findings: Array<{ material: number[]; root_cause: string; no_proposal?: true }>; handoff?: Partial<HandoffDoc> },
+  { findings, handoff }: { findings: Array<{ material: number[]; root_cause: string; no_act?: true }>; handoff?: Partial<HandoffDoc> },
   actorId: string,
   now: Date,
   origin: EventOrigin,
@@ -937,7 +937,7 @@ export function completeRca(
   const missing = [...reviewMaterial].filter((id) => !given.includes(id));
   const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_material" ? [payload] : []));
   const repairs = repairChildren(db, review.id);
-  const judged = findings.map(({ material, root_cause, no_proposal }) => {
+  const judged = findings.map(({ material, root_cause, no_act }) => {
     const memories = drafted
       .filter((d) => material.includes(d.material_id))
       .flatMap(({ memory_event_id: id }) => {
@@ -945,18 +945,18 @@ export function completeRca(
         return created?.kind === "memory_entry_created" ? [{ id, kind: created.entry.kind }] : [];
       });
     const acts = [...memories.map(({ id, kind }) => `${kind === "behavior" ? "behavior candidate" : kind} #${id}`), ...repairs.map(({ id }) => `repair ${id}`)];
-    // 行為のある所見への no_proposal は受け取って載せない(ADR 0278 決定3)
-    const judgment = { kind: "rca" as const, material, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_proposal && { no_proposal }) };
+    // 行為のある所見への no_act は受け取って載せない(ADR 0278 決定3)
+    const judgment = { kind: "rca" as const, material, root_cause: normalizeText(root_cause), memories, repairs, ...(!acts.length && no_act && { no_act }) };
     const named = `${noun} ${material.join(", ")}`;
-    const line = acts.length ? `${named} → ${acts.join(", ")} — ${judgment.root_cause}` : `no_proposal: ${named} — ${judgment.root_cause}`;
-    return { judgment, line, unjustified: !acts.length && !no_proposal };
+    const line = acts.length ? `${named} → ${acts.join(", ")} — ${judgment.root_cause}` : `no_act: ${named} — ${judgment.root_cause}`;
+    return { judgment, line, unjustified: !acts.length && !no_act };
   });
   const unjustified = judged.flatMap((j) => (j.unjustified ? j.judgment.material : []));
   const refusals = [
     unknown.length > 0 && `not in this RCA's material: ${noun} ${ids(unknown)}`,
     repeated.length > 0 && `named more than once: ${noun} ${ids(repeated)}`,
     missing.length > 0 && `in no finding: ${noun} ${ids(missing)}`,
-    unjustified.length > 0 && `no act and no no_proposal: ${noun} ${ids(unjustified)} — draft from them, file a repair, or pass no_proposal: true`,
+    unjustified.length > 0 && `without an act or no_act: ${noun} ${ids(unjustified)} — draft from them, file a repair, or pass no_act: true`,
   ].filter(Boolean);
   if (refusals.length > 0) throw new DomainError(refusals.join("; "));
   return db.transaction(() => {

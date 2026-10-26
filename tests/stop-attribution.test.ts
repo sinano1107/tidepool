@@ -340,18 +340,18 @@ it("a stop RCA completes with one finding covering the stop, and refuses another
   const b = fixture();
   const stop = await stoppedAndJudged(b);
   const self = rcas(b)[0]!.task;
-  const complete = (findings: Array<{ material: number[]; root_cause: string; no_proposal?: true }>) => completeRca(b.db, self, { findings }, "deckhand", at, "worker");
+  const complete = (findings: Array<{ material: number[]; root_cause: string; no_act?: true }>) => completeRca(b.db, self, { findings }, "deckhand", at, "worker");
 
-  expect(() => complete([{ material: [b.entry], root_cause: "r", no_proposal: true }])).toThrow(`not in this RCA's material: stop ${b.entry}; in no finding: stop ${stop}`);
-  expect(() => complete([{ material: [], root_cause: "r", no_proposal: true }])).toThrow("a finding names no stop");
-  expect(() => complete([{ material: [stop], root_cause: "r", no_proposal: true }, { material: [stop], root_cause: "r", no_proposal: true }])).toThrow(`named more than once: stop ${stop}`);
+  expect(() => complete([{ material: [b.entry], root_cause: "r", no_act: true }])).toThrow(`not in this RCA's material: stop ${b.entry}; in no finding: stop ${stop}`);
+  expect(() => complete([{ material: [], root_cause: "r", no_act: true }])).toThrow("a finding names no stop");
+  expect(() => complete([{ material: [stop], root_cause: "r", no_act: true }, { material: [stop], root_cause: "r", no_act: true }])).toThrow(`named more than once: stop ${stop}`);
 
-  expect(complete([{ material: [stop], root_cause: "deleted outside the workspace", no_proposal: true }]).status).toBe("done");
+  expect(complete([{ material: [stop], root_cause: "deleted outside the workspace", no_act: true }]).status).toBe("done");
   expect(judgmentRows(b.db, self.id)).toEqual([
     {
       kind: "decision_logged",
-      line: `no_proposal: stop ${stop} — deleted outside the workspace`,
-      judgment: { kind: "rca", material: [stop], root_cause: "deleted outside the workspace", memories: [], repairs: [], no_proposal: true },
+      line: `no_act: stop ${stop} — deleted outside the workspace`,
+      judgment: { kind: "rca", material: [stop], root_cause: "deleted outside the workspace", memories: [], repairs: [], no_act: true },
     },
   ]);
 });
@@ -440,7 +440,7 @@ async function judgedUncertain(b: ReturnType<typeof fixture>) {
   b.client.scriptStopJudgment({ cause: "uncertain", evidence: "cannot tell from the log" });
   const stop = await stoppedAndJudged(b);
   const [self, auditor] = rcas(b).map((r) => r.task);
-  const settle = (rca: Task, root_cause: string) => completeRca(b.db, rca, { findings: [{ material: [stop], root_cause, no_proposal: true }] }, "deckhand", at, "worker");
+  const settle = (rca: Task, root_cause: string) => completeRca(b.db, rca, { findings: [{ material: [stop], root_cause, no_act: true }] }, "deckhand", at, "worker");
   return { stop, self: self!, auditor: auditor!, settle };
 }
 
@@ -463,9 +463,9 @@ it.each([
 
   const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, actions: null };
   const findings = [
-    `no_proposal: stop ${stop} — ignored the workspace boundary`,
+    `no_act: stop ${stop} — ignored the workspace boundary`,
     "completion report: (no outcome recorded)",
-    `no_proposal: stop ${stop} — no guard on rm`,
+    `no_act: stop ${stop} — no guard on rm`,
     "completion report: (no outcome recorded)",
   ];
   expect(b.stopInputs()).toEqual([initialInput, { ...initialInput, rca_findings: findings }]);
@@ -500,7 +500,7 @@ it("a failing second round counts only the failures after the initial judgment, 
   for (const hour of [0, 1]) await sweepAt(hour);
   b.client.scriptStopJudgment({ cause: "uncertain", evidence: "cannot tell" });
   await sweepAt(2);
-  for (const rca of rcas(b)) completeRca(b.db, rca.task, { findings: [{ material: [b.stopEvent().id], root_cause: "r", no_proposal: true }] }, "deckhand", at, "worker");
+  for (const rca of rcas(b)) completeRca(b.db, rca.task, { findings: [{ material: [b.stopEvent().id], root_cause: "r", no_act: true }] }, "deckhand", at, "worker");
   b.client.scriptStopJudgment(new Error("CLI exited 2"));
 
   for (const hour of [3, 4, 5, 6]) await sweepAt(hour);

@@ -1116,14 +1116,14 @@ export async function completeViaMcp(t: Tidepool, taskId: string, fullHandoff = 
 }
 
 /** 修理子の無い統合レビューを閉じる complete_integration_review の引数(ADR 0278 決定2)。 */
-export const NO_FINDINGS = { findings: "the deliverable meets its completion criteria", no_findings: true } as const;
+export const NOTHING_TO_REPAIR = { findings: "the deliverable meets its completion criteria", nothing_to_repair: true } as const;
 
 /** 統合レビューか —— その完了の verb が足されているかで見る(述語そのものは production の内側)。 */
 const isIntegrationReview = (db: Db, taskId: string) => taskVerbSwap(db, taskId).added.includes("complete_integration_review");
 
 /** 統合レビューを MCP の complete_integration_review の「指摘なし」で完了させる。 */
 export async function completeIntegrationReviewViaMcp(t: Tidepool, reviewId: string): Promise<any> {
-  return callAsTask(t, reviewId, "complete_integration_review", NO_FINDINGS);
+  return callAsTask(t, reviewId, "complete_integration_review", NOTHING_TO_REPAIR);
 }
 
 /** meta-review の spawn の注入を記録し、材料を返す(setup、ADR 0278 追記4): 記録を書くのは実 adapter の spawn だけで ScriptedWorker は
@@ -1312,12 +1312,12 @@ export async function completeRoutingReviewViaMcp(t: Tidepool, reviewId: string)
 /** harness の complete_rca の所見の根本原因の既定。 */
 export const RCA_ROOT_CAUSE = "the objection came from the call itself";
 
-/** RCA の材料の全エントリを1つの所見に入れた complete_rca の引数(ADR 0278 決定5 / ADR 0280)。no_proposal は行為が無い所見に要り、
+/** RCA の材料の全エントリを1つの所見に入れた complete_rca の引数(ADR 0278 決定5 / ADR 0280)。no_act は行為が無い所見に要り、
  *  行為があれば無害。handoff の outcome は complete_task の RCA と同じ完了の result を残す。 */
 export function rcaFindings(db: Db, reviewId: string, root_cause = RCA_ROOT_CAUSE) {
   const objections = latestEventOfTask(db, reviewId, "task_registered")!.payload.opened_on_event_ids ?? [];
   const entries = [...new Set(objections.map((id) => (getEvent(db, id)!.payload as Extract<EventPayload, { kind: "objection_raised" }>).entry_id))];
-  return { findings: [{ material: entries, root_cause, no_proposal: true as const }], handoff: { outcome: FULL_HANDOFF.outcome } };
+  return { findings: [{ material: entries, root_cause, no_act: true as const }], handoff: { outcome: FULL_HANDOFF.outcome } };
 }
 
 /** slot task をその種別の完了の verb で完了させる: 統合レビューは「指摘なし」、memory meta-review は項目をすべて据え置き、
@@ -1388,7 +1388,7 @@ export function settleReviews(db: Db, now: Date): void {
  *  材料の注入を記録して complete_memory_review で項目をすべて据え置き / complete_routing_review で対象をすべて no_change に、RCA は
  *  complete_rca で材料を1つの所見に、他は complete_task。 */
 export function settleReview(db: Db, review: Task, actorId: string, now: Date): Task {
-  if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NO_FINDINGS, actorId, now, "worker");
+  if (isIntegrationReview(db, review.id)) return completeIntegrationReview(db, review, NOTHING_TO_REPAIR, actorId, now, "worker");
   if (review.meta_review_subject === "memory") return completeMemoryReview(db, review, { judgments: injectMemoryMaterial(db, review.id, actorId, now) }, actorId, now, "worker");
   if (review.meta_review_subject === "routing") return completeRoutingReview(db, review, { judgments: injectRoutingMaterial(db, review.id, actorId, now) }, actorId, now, "worker", routingPrecedents(db, review.id));
   if (isRca(db, review.id)) return completeRca(db, review, rcaFindings(db, review.id), actorId, now, "worker");
@@ -1574,7 +1574,7 @@ export async function poseThroughAudit(
   return listExaminees(t.db, rootId).map(({ id }) => id);
 }
 
-/** RCA 子を worker の complete_rca で決着させる(材料を1つの所見に、no_proposal)。RCA review は盤面の名義なので人間の直接 cancel は
+/** RCA 子を worker の complete_rca で決着させる(材料を1つの所見に、no_act)。RCA review は盤面の名義なので人間の直接 cancel は
  *  届かない(ADR 0194)—— `runNow` で拾わせて完了する。 */
 export async function settleRcaByWorker(t: Tidepool, reviewId: string) {
   await runNow(t, reviewId);
