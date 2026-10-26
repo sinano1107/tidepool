@@ -22,7 +22,7 @@ import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, typ
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, memoryPromptSection, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
-import { projectWhenTranscriptCloses } from "./precedent.js";
+import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import {
@@ -2106,6 +2106,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
       // process は1つも起きない(ADR 0266 決定4)
       transcript = this.options.transcripts.open(task.id, spawnedEventId);
+      // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
+      markProjectionPending(this.options.db, spawnedEventId);
       // spawn の入力(MCP 設定・sandbox 設定)も同じ dir に置かれるので、transcript の open が器への最初の書き込みになるよう
       // その後ろで書く —— 器が書けなければ open が先に落ちて盤面全体の停止になる(ADR 0266 決定4)。open の後で落ちた書き込みは
       // spawn_failed のまま `worker_spawned` と対になる

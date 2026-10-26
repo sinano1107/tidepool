@@ -513,6 +513,22 @@ export const EXTRACTOR_VERSION = "7";
  *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
  *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
  *  失敗しても走らせて危険な状態にはならず(ADR 0083 追記 2)、盤面を落とすほうが害が大きいので失敗は記録して流す。 */
+/** 投影待ちの session(issue #2570): transcript を開いた時点から、その投影が決着する(行を書いた・書かなかった・throw した)まで立つ印。
+ *  停止の帰責の門はこの間開かない。開いた書き込みストリームはこのプロセスにしか無いので in-memory —— 再起動で消えてよい。
+ *  鍵は盤面(db)ごとの spawn の event id —— 1 process に盤面が複数立つテストで event id が重ならないように。 */
+const pendingProjections = new WeakMap<Db, Set<number>>();
+
+/** adapter が transcript を開いた直後に立てる(db を持つのは adapter)。 */
+export function markProjectionPending(db: Db, workerSpawnedEventId: number): void {
+  let pending = pendingProjections.get(db);
+  if (!pending) pendingProjections.set(db, (pending = new Set()));
+  pending.add(workerSpawnedEventId);
+}
+
+export function projectionPending(db: Db, workerSpawnedEventId: number): boolean {
+  return pendingProjections.get(db)?.has(workerSpawnedEventId) ?? false;
+}
+
 export function projectWhenTranscriptCloses(
   db: Db,
   stream: { readonly closed: boolean; once(event: "close", listener: () => void): unknown },
@@ -523,6 +539,8 @@ export function projectWhenTranscriptCloses(
       projectAndPersist(db, opts);
     } catch (err) {
       console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
+    } finally {
+      pendingProjections.get(db)?.delete(opts.workerSpawnedEventId);
     }
   };
   if (stream.closed) project();

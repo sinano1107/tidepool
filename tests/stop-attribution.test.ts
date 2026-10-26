@@ -1,6 +1,7 @@
+import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { CliAuthError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
@@ -8,7 +9,7 @@ import { appendEvent, type EventPayload, type EventRowOf, latestEventOfTask, lis
 import { loadEpisodes } from "../src/learner.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, readMemory, recordBehavior } from "../src/memory.js";
 import { META_REVIEW_SUBJECTS, materialEvents } from "../src/meta-review.js";
-import { projectAndPersist } from "../src/precedent.js";
+import { markProjectionPending, projectAndPersist, projectWhenTranscriptCloses } from "../src/precedent.js";
 import { completeRca, listHaltedRefires, markHaltedRefire, proposeFromMaterial, type RetrospectiveCallDeps, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, logDecision, pickupTask, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
@@ -171,6 +172,66 @@ it.each([
     ],
     decisions: [{ position: 1, line: "deleted the fixtures" }],
   });
+});
+
+/** setup: 理由つきで止め、adapter と同じ順で transcript の投影待ちを立てて session を閉じ、投影を閉じていない stream の close に予約する。 */
+async function stoppedPendingProjection(b: ReturnType<typeof fixture>, transcriptPath: string) {
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  markProjectionPending(b.db, b.spawned);
+  b.exit();
+  const stream = Object.assign(new EventEmitter(), { closed: false });
+  projectWhenTranscriptCloses(b.db, stream, { workerSpawnedEventId: b.spawned, transcriptPath, taskId: b.task.id });
+  return () => {
+    stream.closed = true;
+    stream.emit("close");
+  };
+}
+
+it("a stop is not judged while its session's Episode projection is pending, then once with the projected actions", async () => {
+  const b = fixture();
+  const transcriptPath = join(await tempDir("tidepool-stop-"), `${b.task.id}.${b.spawned}.stream.jsonl`);
+  writeFileSync(transcriptPath, claudeLines(b.entry).join("\n"));
+  const close = await stoppedPendingProjection(b, transcriptPath);
+
+  await b.sweep();
+  expect(b.client.stopCalls).toEqual([]);
+
+  close();
+  await b.sweep();
+
+  expect(b.stopInputs().map((i) => i.actions)).toEqual([
+    {
+      calls: [
+        { index: 0, tool: "Bash", args: "rm -rf ../other", failed: true },
+        { index: 1, tool: "mcp__tidepool__log_decision", args: null, failed: false },
+      ],
+      decisions: [{ position: 1, line: "deleted the fixtures" }],
+    },
+  ]);
+});
+
+it("a projection pending on another board with the same spawn event id does not hold this board's stop", async () => {
+  const b = fixture();
+  const other = openDb(":memory:");
+  onTestFinished(() => { other.close(); });
+  markProjectionPending(other, b.spawned);
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+
+  await b.sweep();
+
+  expect(b.client.stopCalls).toHaveLength(1);
+});
+
+it("a stop whose session's projection threw is judged with actions null after the transcript closes", async () => {
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  const b = fixture();
+  const close = await stoppedPendingProjection(b, join(await tempDir("tidepool-stop-"), "missing.stream.jsonl"));
+
+  close();
+  await b.sweep();
+
+  expect(b.stopInputs().map((i) => i.actions)).toEqual([null]);
 });
 
 it("a session whose transcript the projector could not read is judged with actions null", async () => {
