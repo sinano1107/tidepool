@@ -5,7 +5,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
 import { buildMetaReviewMaterial, completeMemoryReview, invalidateMemoryEntry, listPrecedents, recordKnowledge } from "../src/memory.js";
 import { META_REVIEW_SUBJECTS, type MetaReviewSubject, readMetaReviewStatus, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
-import { getTask, logDecision, pickupTask, registerTask } from "../src/tasks.js";
+import { getTask, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { bundledObjection, episodeOfDecision, HUMAN_WEBUI, injectMemoryMaterial, injectRoutingMaterial, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
@@ -226,8 +226,8 @@ it("節を組んだ記録 meta_review_material_injected(主題 memory)の stop_a
 type MaterialRecord<S extends MetaReviewSubject> = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: S }>;
 /** kind ごとの fixture: 呼ぶと窓の前に材料でない下ごしらえを置き、返す関数は窓にその kind の event をちょうど1つ書いて、
  *  節の記録のどの部分にどの id で載るべきかを返す。 */
-type KindFixtures<S extends MetaReviewSubject, K extends keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]> = Record<K, (db: Db) => () => [keyof MaterialRecord<S>, number]>;
-const KIND_FIXTURES: KindFixtures<"memory", keyof (typeof META_REVIEW_SUBJECTS)["memory"]["material"]> = {
+type KindFixtures<S extends MetaReviewSubject, K extends keyof (typeof META_REVIEW_SUBJECTS)[S]["material"] = keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]> = Record<K, (db: Db) => () => [keyof MaterialRecord<S>, number]>;
+const KIND_FIXTURES: KindFixtures<"memory"> = {
   memory_entry_created: (db) => () => ["changed_memory_entry_ids", knowledge(db, "written")],
   memory_entry_invalidated: (db) => {
     const dropped = knowledge(db, "dropped");
@@ -245,7 +245,7 @@ const KIND_FIXTURES: KindFixtures<"memory", keyof (typeof META_REVIEW_SUBJECTS)[
 
 /** setup のみ: 行の主題 routing の task(routing meta-review)を登録し、下ごしらえを置いてから、それと子(停止の failure question)を
  *  done にする —— 周期の登録は未決着の同主題 task を待つ。 */
-function onRoutingReview<T>(db: Db, setup: (review: ReturnType<typeof getTask> & {}) => T): T {
+function onRoutingReview<T>(db: Db, setup: (review: Task) => T): T {
   const review = getTask(db, register(db, "routing"))!;
   const made = setup(review);
   db.prepare("UPDATE tasks SET status = 'done' WHERE id = ? OR parent_id = ?").run(review.id, review.id);

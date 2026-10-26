@@ -2235,7 +2235,7 @@ const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Se
  *  (ADR 0279 決定6)。主題つきの読み手の述語は材料の組(META_REVIEW_SUBJECTS[主題].material)そのもの —— memory の読み手には cause memory の
  *  他主題の行も載る(ADR 0312 決定4)。 */
 function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
-  const { objection_attributed } = readerSubject === null ? { objection_attributed: { where: rowSubjectSql(null) } } : META_REVIEW_SUBJECTS[readerSubject].material;
+  const objection_attributed = readerSubject === null ? { where: rowSubjectSql(null) } : META_REVIEW_SUBJECTS[readerSubject].material.objection_attributed;
   const objected = new Set(materialEvents(db, { objection_attributed }, window).map((e) => e.payload.entry_id));
   const judged = currentAttributions(db, [...objected], window.upTo);
   return listEpisodes(db, {}).flatMap((episode) => {
