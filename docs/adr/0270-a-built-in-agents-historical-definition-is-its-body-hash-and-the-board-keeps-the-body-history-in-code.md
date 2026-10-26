@@ -1,5 +1,7 @@
 # 組み込み agent の当時版は本文の内容 hash で、盤面は本文の履歴表を code に持つ
 
+**Status 追記: 決定2 の旧本文の履歴表は ADR 0313 決定7 で評価し直す** —— spawn 時の prompt が記録されれば self RCA は当時版を hash で引かず記録を読む。付け替えは #2603 が持つ(2026-10-26 の grilling、issue #2554)。
+
 2026-10-17 の grilling(issue #2156)で決定。self RCA の当時版(ADR 0020)は registry commit から agent 本文を読むが、組み込み agent
 (ADR 0117)の本文は盤面の code にあって registry に無い。`fugu` の本文が空だった間は「本文が無い」の一文で済んだが、本文を持つ
 `suzumedai`(ADR 0269 決定4)が現れると、RCA は実際に走った本文を見られず、誤った当時版を証拠として渡される。ADR 0117 の 2026-09-16

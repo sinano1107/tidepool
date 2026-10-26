@@ -25,7 +25,7 @@ import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execu
 import { BOARD_WRITE_LANGUAGE_RULE } from "../src/mcp.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { listEpisodes } from "../src/precedent.js";
+import { listEpisodes, projectionPending } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
 import {
   loadRegistry,
@@ -2130,6 +2130,22 @@ describe("ClaudeCodeWorker", () => {
     expect(episode.workerExitedEventId).toBe(
       listEvents(db, task.id).find((e) => e.kind === "worker_exited")!.id,
     );
+  });
+
+  it("session の Episode の投影待ちは transcript を開いた時点から立ち、投影の決着で外れる(issue #2570)", async () => {
+    const { start, processes, emitExit, db } = await makeWorker();
+    const task = start("task-projection-pending", "tidepool", "deckhand");
+    const spawnedId = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!.id;
+    expect(projectionPending(db, spawnedId)).toBe(true);
+
+    processes[0]!.stdout.end();
+    emitExit(0, null);
+    // worker_exited を書いた後も、transcript の書き込みストリームが閉じて投影が決着するまでは立ったまま
+    expect(listEvents(db, task.id).some((e) => e.kind === "worker_exited")).toBe(true);
+    expect(projectionPending(db, spawnedId)).toBe(true);
+    await vi.waitFor(() => expect(listEpisodes(db, { workspace: "tidepool", agent: "deckhand" })).toHaveLength(1));
+
+    expect(projectionPending(db, spawnedId)).toBe(false);
   });
 
   it("worker_exited は自分を開いた worker_spawned の event id を持ち、そのセッションの transcript ファイル名を再構成できる(issue #379 code review)", async () => {

@@ -506,9 +506,22 @@ const WRITE_TOOL = new RegExp(
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
 export const EXTRACTOR_VERSION = "7";
 
-/** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
- *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
- *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
+/** 投影待ちの session(issue #2570): transcript を開いた時点から、その投影が決着する(行を書いた・書かなかった・throw した)まで立つ印。
+ *  停止の帰責の門はこの間開かない。開いた書き込みストリームはこのプロセスにしか無いので in-memory —— 再起動で消えてよい。
+ *  鍵は盤面(db)ごとの spawn の event id —— 1 process に盤面が複数立つテストで event id が重ならないように。 */
+const pendingProjections = new WeakMap<Db, Set<number>>();
+
+/** adapter が transcript を開いた直後に立てる(db を持つのは adapter)。 */
+export function markProjectionPending(db: Db, workerSpawnedEventId: number): void {
+  let pending = pendingProjections.get(db);
+  if (!pending) pendingProjections.set(db, (pending = new Set()));
+  pending.add(workerSpawnedEventId);
+}
+
+export function projectionPending(db: Db, workerSpawnedEventId: number): boolean {
+  return pendingProjections.get(db)?.has(workerSpawnedEventId) ?? false;
+}
+
 /** worker adapter の終了処理から呼ぶ(issue #356 / ADR 0083 追記10)。呼ぶのは **worker_exited を書いたあと**
  *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
  *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
@@ -523,12 +536,17 @@ export function projectWhenTranscriptCloses(
       projectAndPersist(db, opts);
     } catch (err) {
       console.error(`[worker] precedent projection failed for task ${opts.taskId}:`, err);
+    } finally {
+      pendingProjections.get(db)?.delete(opts.workerSpawnedEventId);
     }
   };
   if (stream.closed) project();
   else stream.once("close", project);
 }
 
+/** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
+ *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
+ *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
 export function projectAndPersist(
   db: Db,
   opts: { workerSpawnedEventId: number; transcriptPath: string },

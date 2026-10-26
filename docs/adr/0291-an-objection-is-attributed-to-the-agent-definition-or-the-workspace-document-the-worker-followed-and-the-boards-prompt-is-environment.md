@@ -1,5 +1,7 @@
 # 異議は従った agent 定義と workspace の文書にも帰責され、盤面の protocol 文は `environment`、どちらも worker 側には何も立てない
 
+**Status 追記: 決定2 の当時版の束(再構成)は ADR 0313 決定7 で、spawn 時に記録した prompt の部分(definition / authority / roster)に置き換える予定** —— 退けた案4 が「版の刻印が無い」と退けた protocol 文も同じ記録に残る。付け替えは派生 issue が持つ(2026-10-26 の grilling、issue #2554)。
+
 2026-10-21 の grilling(issue #1601、出どころは #1045 の sweep と ADR 0166 の既知の穴)で決定。帰責の judge の入力は
 entry・steering・decision log・読んだ記憶だけで、worker が従った agent 定義・workspace の skill や文書・盤面の protocol 文は
 渡らない。誤った定義や文書に従って外れた判断は `capability` か `uncertain` に倒れ、worker 宛の RCA と candidate が立ち、

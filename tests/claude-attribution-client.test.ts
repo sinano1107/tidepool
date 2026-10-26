@@ -165,7 +165,7 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
   await client.judge({ ...input, human_stop: { reason: "not yet answered" } }, { provider: "anthropic", model: "fable", effort: "high" });
 
   expect(prompts[0]).toContain("the human's account of why they stopped the session");
-  expect(prompts[0]).toContain('"work no longer needed" is not a cause');
+  expect(prompts[0]).toContain("a reason saying the work is no longer needed is not a cause of the objection");
   expect(prompts[0]).toContain("leave an unanswered reason unanswered");
   expect(prompts[0]).toContain('"human_stop": {\n    "reason": "not yet answered"\n  }');
 });

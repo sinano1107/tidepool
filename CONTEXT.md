@@ -297,7 +297,7 @@ agent が委譲判断の材料として受け取る worker の一覧。各行は
 
 ## Transcript(トランスクリプト)
 
-worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream と stderr の2本で**1単位**であり、どちらか一方だけが欠けた session は成立しない。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければ盤面の記録の器が書けないこととして盤面全体が止まり、踏んだ task は失敗にせず todo の先頭へ戻る(盤面全体の停止 参照、ADR 0266 / ADR 0149 追記1)。走ってから書けなくなれば盤面がその場で強制回収し(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)、その session の failure question を残したまま同じ停止も立つ — ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力(MCP 設定・sandbox 設定)は transcript ではない。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
+worker session ごとに盤面が残す root process の逐語記録(2026-09-23 の grilling、issue #909)。stdout の stream・stderr・spawn 時に harness へ渡した prompt 一式(持ち主つきの部分の列、連結すると逐語に戻る)の3本で**1単位**であり、どれか1本でも欠けた session は成立しない(ADR 0149 / ADR 0313)。盤面の記録の一部(Memory 参照 — イベント履歴と並ぶもう一方)で、Precedent が引く decision の原文はここにある(ADR 0083 追記)。**盤面は transcript を取れない session を走らせない** — 記録の口は spawn より先に開き、開けなければ盤面の記録の器が書けないこととして盤面全体が止まり、踏んだ task は失敗にせず todo の先頭へ戻る(盤面全体の停止 参照、ADR 0266 / ADR 0149 追記1)。走ってから書けなくなれば盤面がその場で強制回収し(畳み込みの猶予は「記録されない作業を続ける時間」なので置かない)、その session の failure question を残したまま同じ停止も立つ — ただし session が既に決着して後始末に入っていれば止めるものは無く、transcript が途中で切れた事実だけが記録に残る。書けないとき黙って捨てて続ける道は無い — 記録が欠けたまま走った仕事は後から監査できない。同じ dir に置かれる spawn の入力のうち code から再生できるもの(MCP 設定・sandbox 設定)は transcript ではなく、再生できない prompt は transcript である(ADR 0313 決定3)。記録の dir が消えていても盤面は作り直さない — 過去の transcript が失われた事実を隠すことになる。
 _Avoid_: worker log、stderr ログ(片方だけを指す言い方)
 
 ## 容器(Process container)
@@ -544,7 +544,7 @@ _Avoid_: 試験場、sandbox(既定 workspace の名前と衝突)、Interview �
 
 ## ベンチマーク(Benchmark)
 
-人間が外から tidepool を製品として測る器(2026-10-22 の grilling、issue #1880 / ADR 0298)。使い捨ての盤面に、期待解つきの 課題 の集まりを構成(tidepool の commit・CLI の pin・実行設定の表の行・registry の commit)ごとに走らせ、走る前に固定した基準で記録を読む。最適化プロセス(memory / routing meta-review・Interview・学習器)の判断の質を読むのはその読み方の1つ。**費用は支出の目的で分けて読む** —— 課題の行の費用はその課題が登録したものの支出(仕事の課題なら仕事、最適化の課題なら最適化)だけで、記録から学ぶ支出(振り返り Board call・meta-review・RCA・記憶と routing の修理子)、人間面の支出(AI 下書き・翻訳)、観測の支出(認証と行を確かめる probe)は走行ごとに用途で読む。どの task に付いたかでは分けない —— 異議のような人間の手順の数で増減する支出を、課題の対処の費用に混ぜないため(2026-10-22 の grilling、issue #2447)。Interview とは別物 —— Interview は盤面が自分の候補 model を段に対して選別する機構で、ベンチマークは盤面そのものを測る。
+人間が外から tidepool を製品として測る器(2026-10-22 の grilling、issue #1880 / ADR 0298)。使い捨ての盤面に、期待解つきの 課題 の集まりを構成(tidepool の commit・CLI の pin・実行設定の表の行・registry の commit)ごとに走らせ、走る前に固定した基準で記録を読む。最適化プロセス(memory / routing meta-review・Interview・学習器)の判断の質を読むのはその読み方の1つ。**費用は支出の目的で分けて読む** —— 課題の行の費用はその課題が登録したものの支出(仕事の課題なら仕事、最適化の課題なら最適化)だけで、記録から学ぶ支出(振り返り Board call・meta-review・RCA・記憶と routing の修理子)、人間面の支出(AI 下書き・翻訳)、観測の支出(認証と行を確かめる probe)は走行ごとに用途で読む。どの task に付いたかでは分けない —— 異議のような人間の手順の数で増減する支出を、課題の対処の費用に混ぜないため(2026-10-22 の grilling、issue #2447)。Interview とは別物 —— Interview は盤面が自分の候補 model を段に対して選別する機構で、ベンチマークは盤面そのものを測る。 走行の記録は2層 —— 課題の行(通否・決着・費用・agent の動き)と、session の記録(worker が受けた prompt と、盤面 verb の引数・応答の往復、全文。ADR 0313)。
 _Avoid_: 試走、コース、隔離環境での様子見(旧・#1880 の題)
 
 ## 課題(Exercise)

@@ -13,7 +13,7 @@ import { appendEvent, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
-import { EXTRACTOR_VERSION, listEpisodes } from "../src/precedent.js";
+import { EXTRACTOR_VERSION, listEpisodes, projectionPending } from "../src/precedent.js";
 import { type ContainerSpawn, ProcessContainers } from "../src/process-container.js";
 import { openQuarantineValues } from "../src/quarantine.js";
 import { loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -1131,6 +1131,23 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(episode.extractorVersion).toBe(EXTRACTOR_VERSION);
     // exit の事実は投影の入力 —— worker_exited を書いたあとに投影している証拠
     expect(episode.workerExitedEventId).toBe(events.find((e) => e.kind === "worker_exited")!.id);
+  });
+
+  it("Codex 経路の session の Episode の投影待ちは transcript を開いた時点から立ち、投影の決着で外れる(issue #2570)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-projection-pending");
+    await f.start(value);
+    const spawnedId = listEvents(f.db, value.id).find((e) => e.kind === "worker_spawned")!.id;
+    expect(projectionPending(f.db, spawnedId)).toBe(true);
+
+    f.process.processes[0]!.stdout.end();
+    f.process.emitExit(0, null);
+    // worker_exited を書いた後も、transcript の書き込みストリームが閉じて投影が決着するまでは立ったまま
+    expect(listEvents(f.db, value.id).some((e) => e.kind === "worker_exited")).toBe(true);
+    expect(projectionPending(f.db, spawnedId)).toBe(true);
+    await vi.waitFor(() => expect(listEpisodes(f.db, { workspace: "work", agent: "codex-agent" })).toHaveLength(1));
+
+    expect(projectionPending(f.db, spawnedId)).toBe(false);
   });
 
   it("stderr を <taskId>.<worker_spawned の event id>.stderr.log として stream.jsonl の隣に全量保存する(ADR 0149)", async () => {
