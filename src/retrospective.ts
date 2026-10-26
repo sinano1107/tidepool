@@ -2,7 +2,7 @@ import { z } from "zod";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID, isNonAgentActorId } from "./actor-id.js";
 import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
 import { type BoardCallAnswer, type BoardCallSetting, recordedAnswer } from "./board-call-usage.js";
-import { type PromptPart, recordedDefinition } from "./board-prose.js";
+import { BOARD_TEXT_PARTS, type RecordedDefinition, recordedDefinition } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
 import type { Db } from "./db.js";
@@ -646,12 +646,9 @@ export interface AgentDefinitionThen {
   registry_commit: string;
   builtin: boolean;
   body: string;
-  authority: { source: Extract<PromptPart, { part: "authority" }>["source"]; profile?: string; text: string } | null;
+  authority: Omit<NonNullable<RecordedDefinition["authority"]>, "part"> | null;
   roster: string | null;
 }
-
-/** 盤面の文の部分(ADR 0314 決定4)—— 持ち主は盤面で、従った結果は `environment`。 */
-const BOARD_TEXT_PARTS: ReadonlyArray<PromptPart["part"]> = ["doctrine", "interview_discipline", "protocol"];
 
 /** `spawned` の session の記録した prompt から、当時版と盤面の文を読む。記録が読めなければ当時版は null・盤面の文は空(ADR 0314 決定2)。 */
 function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<AttributionInput, "agent_definition" | "board_text"> {

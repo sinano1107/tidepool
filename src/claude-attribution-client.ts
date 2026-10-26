@@ -66,7 +66,7 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
   "worker's judgment was sound given what it had (working around or guessing past such trouble " +
   "instead of escalating is capability; following the board's own protocol text injected into every session " +
-  "(board_text: the board's doctrine and protocol as the worker was given them at its spawn) as written, " +
+  "(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline, as the worker was given them at its spawn) as written, " +
   "or a skill bundled with the harness, is environment, while misreading that text is capability); preference is the human's taste where the " +
   "worker's choice was equally valid; requirement_change is a requirement the human changed " +
   `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +

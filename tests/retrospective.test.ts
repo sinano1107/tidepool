@@ -13,7 +13,7 @@ import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires
 import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, recordPrompt, usagePanelText } from "./fakes.js";
+import { BOARD_CALL_USAGE, definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, recordPrompt, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -1910,7 +1910,7 @@ it("打ち切りの一覧も同じ照合で読む —— B の RCA が未決着�
 
 /** deckhand の spawn で記録した prompt の部分(adapter が `TranscriptStore.open` に渡す形、ADR 0313 決定2)。 */
 const DECKHAND_RECORD: PromptPart[] = [
-  { part: "definition", text: "You are Deckhand.", builtin: false, registry_commit: "c0ffee", definition_version: "1" },
+  definitionPart("You are Deckhand."),
   { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions.", source: "profile", profile: "standard" },
   { part: "roster", text: "\n\n## Roster\n\ndeckhand — General work agent" },
   { part: "doctrine", text: "\n\n## Board doctrine\n\nStay on the board." },
@@ -1990,6 +1990,15 @@ it.each(["reviewer", "repair"] as const)("Authority の部分が盤面の文(%s)
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
 
   expect(client.calls.map((c) => c.input.agent_definition?.authority)).toEqual([{ source, text: authority.text }]);
+});
+
+it("組み込みの agent の spawn の記録なら、帰責の入力の当時版は builtin を持つ(ADR 0314 決定3)", async () => {
+  const b = await definitionBoard({ system: [definitionPart("", true)] });
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.agent_definition?.builtin)).toEqual([true]);
 });
 
 it("異議された entry の後で同じ task が再 spawn されても、帰責の入力の当時版は entry の session の spawn の記録(ADR 0295 決定3 / #2374)", async () => {

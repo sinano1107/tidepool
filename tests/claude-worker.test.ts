@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -50,6 +50,7 @@ import {
 } from "../src/workspace.js";
 import {
   containerHarness,
+  definitionPart,
   FakeClock,
   FakeContainerRuntime,
   passthroughContainers,
@@ -161,9 +162,6 @@ function pickedSetting(
 
 /** The registry fixture's deckhand body — what a spawn of deckhand records as its `definition` part. */
 const DECKHAND_BODY = "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.";
-
-/** A recorded `definition` part (ADR 0313 決定2). */
-const definitionPart = (text: string, builtin = false): PromptPart => ({ part: "definition", text, builtin, registry_commit: "c0ffee", definition_version: "1" });
 
 /** The reviewer constant's Authority part as a review's spawn records it (ADR 0314 決定5). */
 const REVIEWER_AUTHORITY_PART: PromptPart = { part: "authority", text: `\n\n## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}`, source: "reviewer" };
@@ -3249,31 +3247,7 @@ describe("ClaudeCodeWorker", () => {
     // each section names its Authority's source (ADR 0314 決定5)
     expect(prompt).toContain("The Authority below came from the registry's authority profile standard.");
     // full coverage: no evidence-gap note
-    expect(prompt).not.toContain("no definition version could be resolved");
-  });
-
-  it("一部の objected entry の session の記録が無いとき、記録の読めた版を注入した上で証拠の欠落を申告する(issue #87 / ADR 0314 決定2)", async () => {
-    const { worker, setting, calls, db, logDir } = await makeWorker();
-    const objected = makeTask("objected-5", null, "deckhand", "work");
-    insertTask(db, objected);
-    const decision1 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart("You are Deckhand, LOST.")]);
-    const decision2 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart(DECKHAND_BODY)]);
-    // session 1's record is lost after the fact
-    const [lost] = listEvents(db, objected.id).filter((e) => e.kind === "worker_spawned");
-    await rm(join(logDir, `${objected.id}.${lost!.id}.prompt.json`));
-
-    const rca: Task = { ...makeTask("rca-5", null, "deckhand", "review"), parent_id: "objected-5" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-
-    expect(calls).toHaveLength(1);
-    const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    // the readable record is injected, labeled with its entry
-    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
-    expect(prompt).not.toContain("LOST");
-    // and the gap is declared, not silently absorbed
-    expect(prompt).toContain(`no definition version could be resolved for your objected entry #${decision1} (missing session record)`);
+    expect(prompt).not.toContain("no recorded definition could be read");
   });
 
   it("独立レビュー(assignee 未設定)の spawn には当時版定義を注入しない: 当事者レビューのみ(ADR 0020 part 4)", async () => {
@@ -3396,23 +3370,6 @@ describe("ClaudeCodeWorker", () => {
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(`repair is not a re-enactment).\n\n---\n\n${fenced(body)}`);
     expect(prompt).not.toContain("its body was empty");
-  });
-
-  it("記録した本文の text が違う 2 つの spawn に跨る異議は 2 節になり、同じ text の spawn は1節に畳む(ADR 0314 決定6)", async () => {
-    const { worker, setting, calls, db, logDir } = await makeWorker();
-    insertTask(db, makeTask("objected-14", null, "deckhand", "work"));
-    const first = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v1.")]);
-    const again = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v1.")]);
-    const second = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v2.")]);
-
-    const rca: Task = { ...makeTask("rca-14", null, "deckhand", "review"), parent_id: "objected-14" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-
-    const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(prompt).toContain(`### Live for your objected entries #${first}, #${again}\n`);
-    expect(prompt).toContain(`### Live for your objected entry #${second}\n`);
   });
 
   it("registry チェックアウトがタスクブランチ上にあっても、記録する commit hash と版は main のもの(ADR 0020 part 3)", async () => {

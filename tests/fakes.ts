@@ -105,6 +105,9 @@ export function recordPrompt(dir: string, taskId: string, spawnedEventId: number
   stderr.destroy();
 }
 
+/** 記録した `definition` の部分(ADR 0313 決定2)。 */
+export const definitionPart = (text: string, builtin = false): PromptPart => ({ part: "definition", text, builtin, registry_commit: "c0ffee", definition_version: "1" });
+
 /** Board call を持たない盤面の束(帰責も起草も配分評価も撃たない)。 */
 export const noRetrospectiveCalls: RetrospectiveCallDeps = {
   allocationClient: undefined,

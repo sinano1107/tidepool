@@ -154,7 +154,7 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
   expect(prompt).toContain("workspace_document is when a skill or document placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong");
   expect(prompt).toContain("only when the decision log cites that document");
   expect(prompt).toContain(
-    "following the board's own protocol text injected into every session (board_text: the board's doctrine and protocol as the worker was given them at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
+    "following the board's own protocol text injected into every session (board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline, as the worker was given them at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
   );
 });
 

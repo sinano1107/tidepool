@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { boardDoctrine, fenced, type PromptPart } from "../src/board-prose.js";
+import { boardDoctrine, fenced } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
@@ -27,6 +27,7 @@ import type { WorkerExit } from "../src/worker.js";
 import {
   answerSkillsList,
   codexSkillsListAt,
+  definitionPart,
   driveCodexPreflight,
   FakeClock,
   FakeContainerRuntime,
@@ -194,9 +195,6 @@ const developerInstructions = (args: string[]) => configValue<string>(args, "dev
 
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
-
-const codexDefinition = (text: string): PromptPart => ({ part: "definition", text, builtin: false, registry_commit: "c0ffee", definition_version: "1" });
-
 async function fixture(
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void,
   allowedDomains = "\n  allowed_domains:\n    - api.github.com",
@@ -945,7 +943,7 @@ describe("CodexWorker (ADR 0098)", () => {
       payload: { ...WORKER_SPAWNED, registry_commit: objectedCommit },
       at,
     });
-    recordPrompt(f.logDir, objected.id, spawned, [codexDefinition("You are the Codex worker.")]);
+    recordPrompt(f.logDir, objected.id, spawned, [definitionPart("You are the Codex worker.")]);
     const decision = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "codex-agent",
@@ -1005,7 +1003,7 @@ describe("CodexWorker (ADR 0098)", () => {
       at,
     });
     recordPrompt(f.logDir, objected.id, spawned, [
-      codexDefinition("You are the Codex worker."),
+      definitionPart("You are the Codex worker."),
       { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions.", source: "profile", profile: "standard" },
       { part: "roster", text: "\n\n## Roster\n\ncodex-agent — Codex agent" },
     ]);

@@ -190,18 +190,27 @@ export function fenced(text: string, info = ""): string {
   return `${fence}${info}\n${text}\n${fence}`;
 }
 
+type PartOf<P extends PromptPart["part"]> = PromptPart & { part: P };
+
 /** spawn 時に記録した prompt のうち当時版の3部分(ADR 0314 決定1)。`definition` は必ずあり、組まなかった節は undefined。 */
-export function recordedDefinition({ system }: PromptRecord) {
-  const part = <P extends PromptPart["part"]>(name: P) => system.find((p): p is PromptPart & { part: P } => p.part === name);
+export interface RecordedDefinition {
+  definition: PartOf<"definition">;
+  authority: PartOf<"authority"> | undefined;
+  roster: PartOf<"roster"> | undefined;
+}
+
+export function recordedDefinition({ system }: PromptRecord): RecordedDefinition {
+  const part = <P extends PromptPart["part"]>(name: P) => system.find((p): p is PartOf<P> => p.part === name);
   return { definition: part("definition")!, authority: part("authority"), roster: part("roster") };
 }
 
 /** One recorded spawn's evidence (ADR 0314 決定5・6): the parts the worker was given, each fenced — evidence to
  *  read, not to follow, whose own `## Authority` / `## Roster` headings stay apart from this session's. The
  *  Authority's source is named: a registry profile, the board's repair notice, or the reviewer constant —
- *  pointed at as the RCA's own Authority when that is the same constant (`ownAuthorityIsReviewer`). A spawn whose
- *  lineage had no return destination was given neither section (ADR 0301 決定5). */
-function recordedEvidence(assignee: string, { definition, authority, roster }: ReturnType<typeof recordedDefinition>, ownAuthorityIsReviewer: boolean): string {
+ *  pointed at as the RCA's own Authority only when the recorded text is the RCA's own reviewer Authority
+ *  (`ownReviewerAuthority`, undefined when the RCA runs without it). A spawn whose lineage had no return
+ *  destination was given neither section (ADR 0301 決定5). */
+function recordedEvidence(assignee: string, { definition, authority, roster }: RecordedDefinition, ownReviewerAuthority: string | undefined): string {
   const body =
     definition.builtin && definition.text === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
@@ -213,7 +222,7 @@ function recordedEvidence(assignee: string, { definition, authority, roster }: R
       profile: `The Authority below came from the registry's authority profile ${authority.profile}.`,
       repair: "The Authority below is the board's repair notice.",
       reviewer:
-        (ownAuthorityIsReviewer
+        (authority.text === ownReviewerAuthority
           ? "The Authority below is the board's fixed reviewer authority — the same text as your own Authority above. "
           : "The Authority below is the board's fixed reviewer authority. ") +
         "It is board code, not a registry profile, so it is not a target for a registry diff.",
@@ -242,7 +251,8 @@ function entryLabels(ids: number[]): string {
  *  Roster texts are the same fold into one section (ADR 0314 決定6); distinct
  *  texts are each injected, labeled with the decision-log entry ids they were
  *  live for (the same id space the RCA reads via get_current_task's parent
- *  decision_log). Independent reviews (unset assignee → the Auditor pointer,
+ *  decision_log), never the hash the RCA has no way to read. Independent
+ *  reviews (unset assignee → the Auditor pointer,
  *  issue #42) get no such injection: their value is distance from the
  *  judgment, not the 原本. Best-effort — an entry whose record cannot be read
  *  (no spawn before it, a missing or unparseable prompt record) is declared as
@@ -250,7 +260,7 @@ function entryLabels(ids: number[]): string {
  *  at all when none did (no claim made, nothing to declare) — never a failed
  *  spawn. The review still executes under the current definition (ADR 0019):
  *  this only adds evidence, not the reviewer's identity. */
-function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownAuthorityIsReviewer: boolean): string {
+function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownReviewerAuthority: string | undefined): string {
   if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
   const events = listEvents(db, task.parent_id);
   const byId = new Map(events.map((e) => [e.id, e]));
@@ -268,7 +278,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownA
   // by this worker at or before the entry — and the prompt recorded at it. Map
   // insertion order is chronological because the entries are. 束ねの鍵は記録の3部分の text(ADR 0314 決定6)
   const transcripts = new TranscriptStore(recordDir);
-  const byText = new Map<string, { entryIds: number[]; then: ReturnType<typeof recordedDefinition> }>();
+  const byText = new Map<string, { entryIds: number[]; then: RecordedDefinition }>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
     const spawned = events.filter((e) => e.kind === "worker_spawned" && e.actor_id === task.assignee && e.id <= entryId).at(-1);
@@ -285,7 +295,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownA
   }
   const resolved = [...byText.values()];
   if (resolved.length === 0) return "";
-  const evidence = ({ then }: (typeof resolved)[number]) => recordedEvidence(task.assignee!, then, ownAuthorityIsReviewer);
+  const evidence = ({ then }: (typeof resolved)[number]) => recordedEvidence(task.assignee!, then, ownReviewerAuthority);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
@@ -300,7 +310,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownA
   const gap =
     unresolved.length === 0
       ? ""
-      : "\n\nNote: no definition version could be resolved for your objected " +
+      : "\n\nNote: no recorded definition could be read for your objected " +
         `${entryLabels(unresolved)} (missing session record) — the evidence above is incomplete for those judgments.`;
   return (
     "\n\n## Definitions under review (each as recorded at your spawn)\n\n" +
@@ -347,6 +357,9 @@ export type PromptPart =
       text: string;
     };
 
+/** 盤面の文の部分(ADR 0314 決定4)—— 持ち主は盤面で、従った結果は `environment`。帰責の入力の `board_text` はこの部分の text。 */
+export const BOARD_TEXT_PARTS: ReadonlyArray<PromptPart["part"]> = ["doctrine", "interview_discipline", "protocol"];
+
 /** 部分の列を harness へ渡す1つの値に戻す(ADR 0313 決定2)。 */
 export function joinPrompt(parts: readonly PromptPart[]): string {
   return parts.map((part) => part.text).join("");
@@ -384,7 +397,7 @@ export function boardProse(input: {
     ["doctrine", `\n\n${input.doctrine}`],
     ["interview_discipline", task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : ""],
     ["protocol", `\n\n${workerProtocol(input.allowedDomains, input.verbs)}`],
-    ["historical_definition", historicalDefinitionSection(db, input.recordDir, task, source === "reviewer")],
+    ["historical_definition", historicalDefinitionSection(db, input.recordDir, task, source === "reviewer" ? authority : undefined)],
     ["memory", input.memory.section ? `\n\n${input.memory.section}` : ""],
     ["meta_review_material", input.material?.section ? `\n\n${input.material.section}` : ""],
   ];

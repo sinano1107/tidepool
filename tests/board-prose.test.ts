@@ -7,7 +7,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
-import { recordPrompt } from "./fakes.js";
+import { definitionPart, recordPrompt } from "./fakes.js";
 import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -289,7 +289,21 @@ it("異議された entry の spawn の記録が無ければ、記録の読め�
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
   expect(history).toContain(fenced("You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs."));
-  expect(history).toContain(`Note: no definition version could be resolved for your objected entry #${first} (missing session record)`);
+  expect(history).toContain(`Note: no recorded definition could be read for your objected entry #${first} (missing session record)`);
+});
+
+it("異議されたどの entry の spawn の記録も無ければ、self RCA の文面に当時版の部分は無い(ADR 0020 追記「0件解決は従来どおりセクションなし」)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const lost = recordedSpawn(db, dirs, objected, at);
+  const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
+  rmSync(join(dirs.recordDir, `${objected.id}.${lost}.prompt.json`));
+
+  const parts = boardProse(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(parts.map((part) => part.part)).not.toContain("historical_definition");
 });
 
 /** suzumedai が pickup した Interview の root。 */
@@ -435,6 +449,24 @@ it("祖先の work の cancel の前に spawn した RCA への self RCA の当�
   expect(history).not.toContain("the same text as your own");
 });
 
+it("記録した reviewer の Authority の text が今の reviewer 定数と違えば、self RCA の当時版は「同じ文」と指さない(ADR 0314 決定5)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const older = "\n\n## Authority\n\nAn older reviewer authority.";
+  recordPrompt(dirs.recordDir, objected.id, spawn(db, objected, at), [definitionPart("You are Deckhand."), { part: "authority", text: older, source: "reviewer" }]);
+  const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
+
+  const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(history).toContain(
+    "The Authority below is the board's fixed reviewer authority. It is board code, not a registry profile, so it is not a target for a registry diff.\n\n" +
+      fenced(older.trimStart()),
+  );
+  expect(history).not.toContain("the same text as your own");
+});
+
 it("assignable_to が \"*\" の authority の worker への self RCA の当時版 Roster は、registry の agent を載せ組み込み(fugu / suzumedai)を載せない —— spawn 時の Roster と同じ集合(#2602)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-23T00:00:00.000Z");
@@ -518,4 +550,6 @@ it("self RCA の当時版は historical_definition の部分 —— protocol の
 
   expect(parts.map((part) => part.part).slice(-2)).toEqual(["protocol", "historical_definition"]);
   expect(parts.at(-1)!.text).toMatch(/^\n\n## Definition under review/);
+  // RCA は registry の hash を読む手段を持たない(issue #1741)—— 記録した commit は証拠に出さない
+  expect(parts.at(-1)!.text).not.toContain(loadRegistry(dirs.registryDir, "purely-local").commit.slice(0, 7));
 });

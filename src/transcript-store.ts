@@ -82,7 +82,7 @@ export class TranscriptStore {
     workerSpawnedEventId: number,
     prompt: PromptRecord,
   ): Transcript {
-    const base = join(this.dir, `${taskId}.${workerSpawnedEventId}`);
+    const base = this.base(taskId, workerSpawnedEventId);
     const streamPath = `${base}.stream.jsonl`;
     const streamFd = writeRecord(taskId, streamPath, () => openSync(streamPath, "w"));
     const promptPath = `${base}.prompt.json`;
@@ -115,10 +115,15 @@ export class TranscriptStore {
    *  落ちた)は null —— 読み手は欄を空にして進む(決定2)。他の fs の例外は投げる。 */
   readPrompt(taskId: string, workerSpawnedEventId: number): PromptRecord | null {
     try {
-      return JSON.parse(readFileSync(join(this.dir, `${taskId}.${workerSpawnedEventId}.prompt.json`), "utf8")) as PromptRecord;
+      return JSON.parse(readFileSync(`${this.base(taskId, workerSpawnedEventId)}.prompt.json`, "utf8")) as PromptRecord;
     } catch (err) {
       if (err instanceof SyntaxError || (err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
     }
+  }
+
+  /** 1 session の transcript の3本が共有する path の頭(issue #379 / ADR 0083 追記2)。 */
+  private base(taskId: string, workerSpawnedEventId: number): string {
+    return join(this.dir, `${taskId}.${workerSpawnedEventId}`);
   }
 }
