@@ -66,3 +66,9 @@
 決定2 の「主題ごとに未決着が1本でもあれば飛ばす」の未決着に、同主題の meta-review の open な子(修理子・RCA)と、その子の下の open な
 提案 question を足す。meta-review の判断の行への異議から立つ主題の修理子(ADR 0279 決定3・4)の結果は次の review が読む材料で、
 理由は ADR 0165 決定1 と同じ。
+
+## 追記(2026-10-26 の grilling、issue #2593 / ADR 0312)
+
+決定2 の材料の列挙(candidate・帰責つき異議・店の変更)は、主題ごとの event の kind の写像(ADR 0312 決定1)で定義する。停止の帰責
+(`stop_attributed`、ADR 0310 決定5)は memory と routing の材料で、routing の材料には routing の行への帰責も入る(ADR 0312 決定3)。
+決着した提案は材料でなく産物(ADR 0151 決定1、ADR 0312 決定2)。

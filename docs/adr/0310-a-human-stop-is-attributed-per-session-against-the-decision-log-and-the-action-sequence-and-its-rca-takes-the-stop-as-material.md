@@ -55,3 +55,9 @@ transcript から盤面が投影する行動列(Episode、ADR 0083 決定8)だ�
 - **異議された行がある session では停止の帰責を撃たない**: 異議した行と無関係な挙動で止めたときの学習が落ちる。
 - **判定は両方、RCA は同じ session に既にあれば立てない**: 停止の `uncertain` を確定させる所見が来ない(第2回は自分の材料を覆う RCA
   だけを読む)。異議の commit と sweep は別の transaction でどちらが先か決まらず、登録済み RCA の材料は書き換えない。節約量は未観測。
+
+## 追記(2026-10-26 の grilling、issue #2593 / ADR 0312)
+
+決定5 の「停止の帰責 event は memory meta-review の材料」は、周期を開くだけでなく節に描くことまで含む —— 1停止1行(窓の上限までの
+最新の判定)で、cause `memory` の `wrong_memory_entries` は Items to judge に入る(ADR 0312 決定3・4・6・7)。routing の行への停止も
+routing の材料。`list_precedents` は広げない(行は注入だけで届く、ADR 0180 決定2)。
