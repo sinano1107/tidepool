@@ -2111,7 +2111,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // 組むのは open の前 —— 渡す部分の列そのものが transcript の3本目(ADR 0313 決定1)
       const system = boardProse({
         db: this.options.db,
-        registryDir: this.options.registry.dir,
+        recordDir: this.options.transcripts.dir,
         registry,
         task,
         spawnedEventId,

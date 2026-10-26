@@ -10,6 +10,7 @@ const input: BehaviorDraftInput = {
   decision_log: ["named the flag --dry"],
   memory_read: [],
   agent_definition: null,
+  board_text: [],
   index: "- cli/ — how command-line flags are named",
 };
 
@@ -112,6 +113,7 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
     decision_log: ["chose plan B"],
     memory_read: [],
     agent_definition: null,
+    board_text: [],
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
     rca_findings: ["stop 9 → no guard on rm"],
     index: "- workspace/ — where agents may write",

@@ -10,6 +10,7 @@ const input: AttributionInput = {
   decision_log: ["chose plan B", "completion report: shipped plan B"],
   memory_read: [],
   agent_definition: null,
+  board_text: [],
 };
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
@@ -133,7 +134,7 @@ it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", { cause, evidence: "e" });
 });
 
-it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・盤面の protocol 文・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4)", async () => {
+it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・reviewer / repair の Authority・盤面の文に従った結果・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4 / ADR 0314 決定4・5)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
@@ -146,11 +147,15 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
 
   const prompt = prompts[0]!;
   expect(prompt).toContain("agent_definition is when the worker's agent definition as it stood then (agent_definition: its body, authority and roster) was itself wrong");
-  expect(prompt).toContain("when agent_definition.builtin is true the body is board code: that is environment");
+  expect(prompt).toContain(
+    "when agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer or repair that Authority is board code, not a registry profile: that is environment",
+  );
   expect(prompt).toContain("never answer agent_definition when agent_definition is null");
   expect(prompt).toContain("workspace_document is when a skill or document placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong");
   expect(prompt).toContain("only when the decision log cites that document");
-  expect(prompt).toContain("following the board's own protocol text injected into every session, or a skill bundled with the harness, is environment");
+  expect(prompt).toContain(
+    "following the board's own protocol text injected into every session (board_text: the board's doctrine and protocol as the worker was given them at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
+  );
 });
 
 it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
@@ -183,6 +188,7 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
     decision_log: ["chose plan B"],
     memory_read: [],
     agent_definition: null,
+    board_text: [],
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
   };
 

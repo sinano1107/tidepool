@@ -252,89 +252,16 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
  *  名前だが、profile map は引かれない(`resolveExecutionAgent` の1分岐)——
  *  組み込みは授権を増やさないので、profile を registry にも map にも生やさない。
  *  `version` は本文の内容 hash で、spawn 記録の `definition_version` がこれを運ぶ
- *  (当時版は registry commit に無く、本文履歴表から引く —— ADR 0270 決定1)。 */
+ *  (ADR 0270 決定1)。当時の本文は spawn で記録した prompt が持つ(ADR 0314 決定1)。 */
 const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
 
-/** 組み込みごとの本文の履歴(ADR 0270 決定2): 末尾が現在の本文。本文を変える PR は
- *  旧本文を残して末尾に足す —— self RCA が記録の hash で当時の本文を引く。 */
-const BUILT_IN_BODY_HISTORY: Record<string, readonly string[]> = {
-  [DEFAULT_AUDITOR_NAME]: [""],
-  // 組み込みの Interviewer(ADR 0269 決定1): 現在の本文は空(ADR 0275 決定3・4)。規律は session を通すものを
-  // `interview` type の spawn 注入(board-prose.ts)が、verb を呼ぶ瞬間のものを verb の説明が運ぶ。旧本文は self RCA が
-  // 記録の hash で引くので残す(ADR 0270 決定2)。
-  [DEFAULT_INTERVIEWER_NAME]: [
-    `You run Interviews: one probe that every target solves, and a score for each answer.
-
-Writing the probe and rubric:
-- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
-- Make the probe self-contained in the checkout. A target that fails because the probe was ambiguous measures the probe, not the target.
-- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.
-
-Scoring:
-- Score each answer against the rubric as written — not against the best answer you saw, and not against each other.
-- Judge the deliverable and its evidence (the diff, the tests that ran, handoff claims you verified), not the confidence of the prose.
-- Answers carry no agent or model name; do not guess one.
-- Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
-- Name, for each answer, what decided its score.`,
-    // ADR 0273 決定1: 実環境を読んで面接室に環境を組む観点(#2192)
-    `You run Interviews: one probe that every target solves, and a score for each answer.
-
-Composing the environment:
-- The targets solve the probe in your working directory, the interview room, not in the real environment you read. Compose there an anonymised reproduction of the work the probe needs, not a copy of the real environment.
-- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.
-
-Writing the probe and rubric:
-- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
-- Make the probe self-contained in the environment you composed. A target that fails because the probe was ambiguous measures the probe, not the target.
-- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.
-
-Scoring:
-- Score each answer against the rubric as written — not against the best answer you saw, and not against each other.
-- Judge the deliverable and its evidence (the diff, the tests that ran, handoff claims you verified), not the confidence of the prose.
-- Answers carry no agent or model name; do not guess one.
-- Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
-- Name, for each answer, what decided its score.`,
-    // ADR 0276 決定1・2: 受験者は出題の head を fetch した自分の checkout で解く —— ignore したものは届かない(#2250)
-    `You run Interviews: one probe that every target solves, and a score for each answer.
-
-Composing the environment:
-- Compose the environment in your working directory, the interview room, not in the real environment you read: an anonymised reproduction of the work the probe needs, not a copy of the real environment. Each target solves the probe in its own fresh checkout of the room as it stands when you pose the probe.
-- Put in exactly what the probe needs and nothing more: no board vocabulary, no file that describes the board or how it works, and no name that points at the real environment. A target that can tell it is being measured, or that leans on material the probe does not need, measures the environment, not the target.
-- Do not list in .gitignore anything you want the targets to have: ignored files never reach their environment.
-
-Writing the probe and rubric:
-- Aim at the tier's quality bar. A probe every target passes, or every target fails, measures nothing; pick work whose outcome separates a target that meets the bar from one that does not.
-- Make the probe self-contained in the environment you composed. A target that fails because the probe was ambiguous measures the probe, not the target.
-- Write the rubric as observable criteria: what a passing answer does, what a failing one does, which shortfalls disqualify and which are minor. Prefer checks a second scorer would apply the same way.
-
-Scoring:
-- Score each answer against the rubric as written — not against the best answer you saw, and not against each other.
-- Judge the deliverable and its evidence (the diff, the tests that ran, handoff claims you verified), not the confidence of the prose.
-- Answers carry no agent or model name; do not guess one.
-- Do not bend the rubric after reading answers. If the answers show the probe or rubric itself was broken, say so instead of scoring around it.
-- Name, for each answer, what decided its score.`,
-    // ADR 0275 決定3: 規律は盤面が運ぶ(#2211)
-    "",
-  ],
-};
-
-function bodyHash(body: string): string {
-  return createHash("sha256").update(body).digest("hex").slice(0, 16);
-}
-
-/** 組み込み `name` の、内容 hash が `hash` の版の本文。表に無ければ undefined(ADR 0270 決定3)。 */
-export function builtInBodyAt(name: string, hash: string): string | undefined {
-  return ownEntry(BUILT_IN_BODY_HISTORY, name)?.find((body) => bodyHash(body) === hash);
-}
-
-function builtInBody(name: string): { systemPrompt: string; version: string } {
-  const systemPrompt = BUILT_IN_BODY_HISTORY[name]!.at(-1)!;
-  return { systemPrompt, version: bodyHash(systemPrompt) };
+function builtInBody(systemPrompt: string): { systemPrompt: string; version: string } {
+  return { systemPrompt, version: createHash("sha256").update(systemPrompt).digest("hex").slice(0, 16) };
 }
 
 const BUILT_IN_AUDITOR: AgentDefinition = {
   name: DEFAULT_AUDITOR_NAME,
-  ...builtInBody(DEFAULT_AUDITOR_NAME),
+  ...builtInBody(""),
   authority: REVIEWER_AUTHORITY_PROFILE.name,
   description: "Reviews work independently against its completion criteria.",
   provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
@@ -348,7 +275,8 @@ const BUILT_IN_AUDITOR: AgentDefinition = {
 const BUILT_IN_INTERVIEWER: AgentDefinition = {
   ...BUILT_IN_AUDITOR,
   name: DEFAULT_INTERVIEWER_NAME,
-  ...builtInBody(DEFAULT_INTERVIEWER_NAME),
+  // 本文は Auditor と同じく空(ADR 0275 決定3・4)。規律は session を通すものを `interview` type の spawn 注入(board-prose.ts)が、
+  // verb を呼ぶ瞬間のものを verb の説明が運ぶ
   description: "Runs Interviews: writes a discriminating probe and rubric, then scores the answers.",
   icon: "🐠",
 };
@@ -828,8 +756,7 @@ export type RegistryReachabilityCheck = () => Promise<RegistryReachability>;
 
 // stderr piped (not inherited), same as git.ts's `git()`: git narrates a
 // missing ref on stderr, and the board's console is not the place for it — the
-// message still rides the thrown error for callers that want it (registryAtCommit
-// swallows it by design).
+// message still rides the thrown error for callers that want it.
 const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
 
 /** 盤面が registry の remote-tracking ref を更新する**唯一の関数**(ADR 0052 決定2)。
@@ -915,81 +842,10 @@ function readRegistryFiles(dir: string, commit: string): Map<string, string> {
 }
 
 /** Split a `---\nfrontmatter\n---\nbody` document into its two halves, or null
- *  when the frontmatter fence is absent. One regex shared by the agent-file
- *  parser and the historical-body read (ADR 0020 part 4), so the split is
- *  spelled once. */
+ *  when the frontmatter fence is absent. */
 function splitFrontmatter(raw: string): { frontmatter: string; body: string } | null {
   const match = raw.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
   return match ? { frontmatter: match[1]!, body: match[2]! } : null;
-}
-
-/** One `agents/<name>.md` as it stood at a past commit: each field undefined
- *  when that commit's file does not carry it in a readable form. `builtin` marks
- *  a built-in standing in for a name with no file there — its body is not at the
- *  commit, and the caller reads it by content hash via `builtInBodyAt` (ADR 0270). */
-export interface AgentAtCommit {
-  body?: string;
-  authority?: string;
-  description?: string;
-  builtin?: true;
-}
-
-/** `authority` holds undefined for a profile file whose `guidance` or
- *  `assignable_to` cannot be read. */
-export interface RegistryAtCommit {
-  agents: Record<string, AgentAtCommit>;
-  authority: Record<string, { guidance: string; assignable_to: string[] } | undefined>;
-}
-
-/** The registry as it stood at a past commit, for the self RCA's 当時版 (ADR
- *  0020 part 4 and its #1741 addendum): agent bodies, each agent's `authority`
- *  name and `description`, and each profile's `guidance` / `assignable_to`.
- *  Deliberately schema-free — an older, differently-shaped registry is still
- *  valid evidence for "why did I decide", and this read must not reject it.
- *  The built-ins join under the same shadowing rule as `loadRegistry`.
- *  Best-effort: undefined when the commit is unreachable. */
-export function registryAtCommit(dir: string, commit: string): RegistryAtCommit | undefined {
-  let files: Map<string, string>;
-  try {
-    files = readRegistryFiles(dir, commit);
-  } catch {
-    return undefined;
-  }
-  const agents: Record<string, AgentAtCommit> = {};
-  const authority: RegistryAtCommit["authority"] = {};
-  for (const [path, raw] of files) {
-    if (path.startsWith("agents/")) {
-      const split = splitFrontmatter(raw);
-      const meta = looseYaml(split?.frontmatter);
-      agents[basename(path, ".md")] = {
-        body: split?.body.trim(),
-        authority: typeof meta.authority === "string" ? meta.authority : undefined,
-        description: typeof meta.description === "string" ? meta.description : undefined,
-      };
-    } else if (path.startsWith("authority/")) {
-      const { guidance, assignable_to } = looseYaml(raw);
-      authority[basename(path, ".yaml")] =
-        typeof guidance === "string" &&
-        Array.isArray(assignable_to) &&
-        assignable_to.every((name) => typeof name === "string")
-          ? { guidance, assignable_to }
-          : undefined;
-    }
-  }
-  for (const builtIn of BUILT_INS) {
-    if (!Object.hasOwn(agents, builtIn.name)) agents[builtIn.name] = { description: builtIn.description, builtin: true };
-  }
-  return { agents, authority };
-}
-
-/** YAML parsed for field reads, `{}` when absent or unparseable — a scalar
- *  document just has no fields, since every read checks its field's type. */
-function looseYaml(raw: string | undefined): Record<string, unknown> {
-  try {
-    return (parseYaml(raw ?? "") ?? {}) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
 }
 
 /** 空白だけ・null・キー不在をまとめて「書かれていない」とする(登録の門が

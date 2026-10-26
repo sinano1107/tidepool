@@ -3,6 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import Database from "better-sqlite3";
 import { z } from "zod";
 import { type BoardCallUse, listBoardCalls } from "../../../src/board-call-usage.js";
+import { fenced } from "../../../src/board-prose.js";
 import type { Db } from "../../../src/db.js";
 import { latestEventOfTask, listEvents, listEventsOfKinds } from "../../../src/events.js";
 import { executionSettingsChangeSchema, interviewTargetSchema } from "../../../src/execution-setting.js";
@@ -15,7 +16,7 @@ import { listRoutingShadow } from "../../../src/routing-review.js";
 import { parseStreamLine } from "../../../src/stream-json.js";
 import { isSettled } from "../../../src/task-status.js";
 import { getTask, interviewRoomPath, isRca, isRepairType, latestPosedProbe, listChildren, listExaminees, type Task } from "../../../src/tasks.js";
-import type { PromptRecord } from "../../../src/transcript-store.js";
+import { type PromptRecord, TranscriptStore } from "../../../src/transcript-store.js";
 
 /** 実行設定の表の1行。綴りは盤面の表の行を足す変更(`setting: "row"`)の row で、検査もその schema に任せる。 */
 const tableRowSchema = z.record(z.string(), z.unknown()).superRefine((row, ctx) => {
@@ -213,20 +214,9 @@ function sessions(db: Db, logDir: string, task: Task, files: Map<string, string>
       verbs: calls?.map((a) => a.tool.slice(VERB_PREFIX.length)) ?? null,
       record: `sessions/${task.id}.${spawned.id}.md`,
     };
-    files.set(row.record, sessionFile(row, spawned.id, readPrompt(`${base}.prompt.json`), lines && calls && verbCalls(row.harness, lines, calls)));
+    files.set(row.record, sessionFile(row, spawned.id, new TranscriptStore(logDir).readPrompt(task.id, spawned.id), lines && calls && verbCalls(row.harness, lines, calls)));
     return [row];
   });
-}
-
-/** spawn の prompt の記録。無い・parse できない(書き込みの途中で落ちた)ものは記録されていない扱い。 */
-function readPrompt(path: string): PromptRecord | null {
-  if (!existsSync(path)) return null;
-  try {
-    return JSON.parse(readFileSync(path, "utf8")) as PromptRecord;
-  } catch (err) {
-    if (err instanceof SyntaxError) return null;
-    throw err;
-  }
 }
 
 /** 盤面 verb の呼び出しごとの引数と応答の本文(ADR 0313 決定5): 行の解釈は Episode に任せ、本文だけ id で引く —— Claude は
@@ -255,12 +245,6 @@ function verbCalls(harness: string, lines: readonly string[], calls: readonly Ep
   return calls.map((call) => ({ verb: call.tool.slice(VERB_PREFIX.length), failed: call.failed, ...bodies.get(call.toolUseId) }));
 }
 
-/** 本文を中の backtick の列より長い fence で包む —— prompt の見出しや fence が session のファイルの節と混ざらない。 */
-function fenced(text: string, info = ""): string {
-  const fence = "`".repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
-  return `${fence}${info}\n${text}\n${fence}`;
-}
-
 const json = (value: unknown) => fenced(JSON.stringify(value ?? null, null, 2), "json");
 
 /** session のファイル(ADR 0313 決定4): 見出し、受けた prompt、盤面 verb の往復を transcript の順に。 */
@@ -275,7 +259,8 @@ function sessionFile(
         "## User prompt",
         fenced(prompt.user),
         ...prompt.system.flatMap((p) => [
-          `## System: ${p.part}`,
+          // authority は文の出所(ADR 0314 決定5)を見出しに添える
+          `## System: ${p.part}${p.part === "authority" ? ` (source: ${p.source}${p.profile ? ` ${p.profile}` : ""})` : ""}`,
           ...(p.part === "definition" ? [`builtin: ${p.builtin}, registry_commit: ${p.registry_commit}, definition_version: ${p.definition_version}`] : []),
           fenced(p.text),
         ]),

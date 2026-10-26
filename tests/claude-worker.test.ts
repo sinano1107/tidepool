@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { mkdir, readdir, readFile, realpath, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
@@ -8,7 +8,7 @@ import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { agentNeedsHuman } from "../src/agent.js";
 import type { BoardCall, BoardCallSpec } from "../src/board-call.js";
 import { boardHalts } from "../src/board-halt.js";
-import { boardDoctrine } from "../src/board-prose.js";
+import { boardDoctrine, fenced, type PromptPart } from "../src/board-prose.js";
 import {
   agentGitIdentityEnv,
   ClaudeCodeWorker,
@@ -29,6 +29,7 @@ import { listEpisodes, projectionPending } from "../src/precedent.js";
 import { ProcessContainers, type PtyFn } from "../src/process-container.js";
 import {
   loadRegistry,
+  REVIEWER_AUTHORITY_PROFILE,
   type Registry,
   type RegistryMode,
   refreshRegistry,
@@ -56,7 +57,7 @@ import {
   recordingSpawn,
   ScriptedWorker,
 } from "./fakes.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, markPickedUp, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
+import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
 import { FIXTURE_WORKSPACE, makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -157,32 +158,29 @@ function pickedSetting(
   return executionSettingsFor(db, (agents[resolveTaskAgent(task, agent, auditorName, DEFAULT_INTERVIEWER_NAME)] ?? agents[agent])!, task)[0]!;
 }
 
-/** The definition_version a spawn of built-in `name` records today: its body's content hash (ADR 0270 決定1). */
-function builtInVersion(registryDir: string, name: string): string {
-  return loadRegistry(registryDir, "purely-local").agents[name]!.version;
+/** The registry fixture's deckhand body — what a spawn of deckhand records as its `definition` part. */
+const DECKHAND_BODY = "You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs.";
+
+/** A recorded `definition` part (ADR 0313 決定2). */
+const definitionPart = (text: string, builtin = false): PromptPart => ({ part: "definition", text, builtin, registry_commit: "c0ffee", definition_version: "1" });
+
+/** The reviewer constant's Authority part as a review's spawn records it (ADR 0314 決定5). */
+const REVIEWER_AUTHORITY_PART: PromptPart = { part: "authority", text: `\n\n## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}`, source: "reviewer" };
+
+/** Writes the prompt a past spawn of `taskId` recorded (ADR 0313 決定1) into the worker's record container — the
+ *  self RCA reads its 当時版 from here (ADR 0314 決定1). */
+function recordPrompt(logDir: string, taskId: string, spawnedEventId: number, system: PromptPart[]): void {
+  const { stream, stderr } = new TranscriptStore(logDir).open(taskId, spawnedEventId, { harness: "claude-code", system, user: "" });
+  stream.destroy();
+  stderr.destroy();
 }
 
-/** A second registry agent for the 当時版 Roster tests (issue #1741). */
-const LOOKOUT_MD = `---\nversion: "1"\nauthority: standard\ndescription: Looks out for the board.\nprovider: anthropic\nskills: []\n---\nYou are Lookout.\n`;
-
 /** The objected task's record a self RCA anchors on (ADR 0020 part 4): `actorId`
- *  spawned from `commit` (recording `definitionVersion`), logged one decision, and a
- *  human objected to it. */
-function objectDecisionAt(
-  db: Db,
-  taskId: string,
-  actorId: string,
-  commit: string,
-  definitionVersion = WORKER_SPAWNED.definition_version,
-): number {
+ *  spawned (recording `system` as its prompt), logged one decision, and a human objected to it. */
+function objectDecisionAt(db: Db, logDir: string, taskId: string, actorId: string, system: PromptPart[]): number {
   const at = new FakeClock().now();
-  appendEvent(db, {
-    taskId,
-    actorId,
-    origin: "board",
-    payload: { ...WORKER_SPAWNED, registry_commit: commit, definition_version: definitionVersion },
-    at,
-  });
+  const spawned = appendEvent(db, { taskId, actorId, origin: "board", payload: WORKER_SPAWNED, at });
+  recordPrompt(logDir, taskId, spawned, system);
   const entryId = appendEvent(db, {
     taskId,
     actorId,
@@ -3179,11 +3177,9 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned!.payload).not.toMatchObject({ registry_commit: staleLocal });
   });
 
-  it("当事者レビュー(self RCA)の spawn には、記録 hash 時点の agent 定義本文を証拠として注入する(ADR 0020 part 4)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
+  it("当事者レビュー(self RCA)の spawn には、異議された task の spawn で記録した agent 定義本文を証拠として注入する(ADR 0020 part 4 / ADR 0314 決定1)", async () => {
+    const { worker, setting, calls, db, registryDir, logDir } = await makeWorker();
     const git = registryGit(registryDir);
-    // the version deckhand actually ran the objected task under
-    const oldHash = git("rev-parse", "main");
     // main advances: the definition is refined after the objected call. The RCA
     // still runs on the current definition (ADR 0019), but must read the 当時版
     // as evidence — so current body and 当時版 body must be distinguishable.
@@ -3196,29 +3192,8 @@ describe("ClaudeCodeWorker", () => {
 
     // the objected (parent) task, carrying deckhand's worker_spawned record and
     // the objected decision + the triage objection that anchors the RCA
-    const objected = makeTask("objected-1", null, "deckhand", "work");
-    insertTask(db, objected);
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
-      at: new FakeClock().now(),
-    });
-    const decisionId = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach X" },
-      at: new FakeClock().now(),
-    });
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "human",
-      origin: "webui",
-      payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
-      at: new FakeClock().now(),
-    });
+    insertTask(db, makeTask("objected-1", null, "deckhand", "work"));
+    objectDecisionAt(db, logDir, "objected-1", "deckhand", [definitionPart(DECKHAND_BODY)]);
 
     // self RCA: concrete assignee = the historical worker, parent = objected
     const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
@@ -3230,55 +3205,20 @@ describe("ClaudeCodeWorker", () => {
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     // executes as the current definition (ADR 0019: repair is not a re-enactment)
     expect(prompt).toContain("REFINED after the objected call");
-    // and the 当時版 body is injected as evidence for the "why did I decide" read
-    expect(prompt).toContain("the tidepool board's general work agent");
+    // and the 当時版 body is injected, fenced, as evidence for the "why did I decide" read
+    expect(prompt).toContain(`---\n\n${fenced(DECKHAND_BODY)}`);
   });
 
-  it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の版を注入し、後の再 spawn の版は使わない(ADR 0020 part 4)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
-    const git = registryGit(registryDir);
-    // v1: the version live when the objected decision was made (fixture body)
-    const v1Hash = git("rev-parse", "main");
+  it("同一 worker が objected task を複数回 spawn した場合、objected 判断時の session の記録を注入し、後の再 spawn の記録は使わない(ADR 0020 part 4)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     const objected = makeTask("objected-3", null, "deckhand", "work");
     insertTask(db, objected);
-    // spawn 1 (v1) → objected decision → objection, all in that first session
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
-      at: new FakeClock().now(),
-    });
-    const decisionId = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach X" },
-      at: new FakeClock().now(),
-    });
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "human",
-      origin: "webui",
-      payload: { kind: "objection_raised", entry_id: decisionId, comment: "reconsider X", session_id: 1 },
-      at: new FakeClock().now(),
-    });
-    // main advances and deckhand is refined; a LATER re-spawn (escalation return)
-    // runs the objected task again under v2 — must not be mistaken for 当時版
-    await writeFile(
-      join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v2.\n`,
-    );
-    git("add", "-A");
-    git("commit", "-m", "refine deckhand");
-    const v2Hash = git("rev-parse", "main");
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
-      at: new FakeClock().now(),
-    });
+    // spawn 1 → objected decision → objection, all in that first session
+    objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart(DECKHAND_BODY)]);
+    // a LATER re-spawn (escalation return) runs the objected task again under a
+    // refined definition — must not be mistaken for 当時版
+    const later = appendEvent(db, { taskId: objected.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: new FakeClock().now() });
+    recordPrompt(logDir, objected.id, later, [definitionPart("You are Deckhand, REFINED v2.")]);
 
     const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
     insertTask(db, rca);
@@ -3287,71 +3227,20 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    // the injected 当時版 evidence is v1 (the objected session), not the later v2
-    // re-spawn — `.at(-1)` would have wrongly picked v2
-    expect(prompt).toContain("the tidepool board's general work agent");
+    // the injected 当時版 evidence is the objected session's, not the later re-spawn's
+    // — `.at(-1)` would have wrongly picked it
+    expect(prompt).toContain(fenced(DECKHAND_BODY));
+    expect(prompt).not.toContain("REFINED v2");
   });
 
-  it("objected 判断が異なる版の session にまたがるとき、当時版は entry ごとに解決され、各版が entry id 付きで全部注入される(issue #87)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
-    const git = registryGit(registryDir);
+  it("objected 判断が記録の異なる session にまたがるとき、当時版は entry ごとに解決され、各記録が entry id 付きで全部注入される(issue #87)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     const objected = makeTask("objected-4", null, "deckhand", "work");
     insertTask(db, objected);
-    // session 1 under v1 (fixture body) → objected decision 1
-    const v1Hash = git("rev-parse", "main");
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: v1Hash },
-      at: new FakeClock().now(),
-    });
-    const decision1 = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach X" },
-      at: new FakeClock().now(),
-    });
-    // main advances; session 2 (escalation return) under v2 → objected decision 2
-    await writeFile(
-      join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v2.\n`,
-    );
-    git("add", "-A");
-    git("commit", "-m", "refine deckhand to v2");
-    const v2Hash = git("rev-parse", "main");
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: v2Hash },
-      at: new FakeClock().now(),
-    });
-    const decision2 = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach Y" },
-      at: new FakeClock().now(),
-    });
-    // objections land on entries from BOTH sessions
-    for (const entryId of [decision1, decision2]) {
-      appendEvent(db, {
-        taskId: objected.id,
-        actorId: "human",
-        origin: "webui",
-        payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
-        at: new FakeClock().now(),
-      });
-    }
-    // main advances again: the RCA executes under v3, distinct from both 当時版
-    await writeFile(
-      join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.5.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED v3 current.\n`,
-    );
-    git("add", "-A");
-    git("commit", "-m", "refine deckhand to v3");
+    const authority: PromptPart = { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions.", source: "profile", profile: "standard" };
+    // session 1 → objected decision 1; session 2 (escalation return) under a refined body → objected decision 2
+    const decision1 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart(DECKHAND_BODY), authority]);
+    const decision2 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart("You are Deckhand, REFINED v2."), authority]);
 
     const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
     insertTask(db, rca);
@@ -3360,71 +3249,25 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    // executes as the current definition (ADR 0019)
-    expect(prompt).toContain("REFINED v3 current");
-    // both 当時版 bodies are injected — neither session's version is folded away
-    expect(prompt).toContain("Definitions under review");
-    expect(prompt).toContain("the tidepool board's general work agent");
-    expect(prompt).toContain("REFINED v2");
-    // each version is labeled with the decision-log entry ids it was live for
-    expect(prompt).toContain(`### Live for your objected entry #${decision1}\n`);
-    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
-    // each version's Authority / Roster nest one level under its label (issue #1741)
-    expect(prompt).toContain("\n#### Authority as it stood then (profile ");
-    expect(prompt).not.toContain("\n### Authority as it stood then");
-    // the RCA has no registry in its cwd and no verb that reads a hash (issue #1741)
-    expect(prompt).not.toContain(v1Hash.slice(0, 7));
-    expect(prompt).not.toContain(v2Hash.slice(0, 7));
+    // both 当時版 bodies are injected — neither session's record is folded away
+    expect(prompt).toContain("## Definitions under review (each as recorded at your spawn)");
+    expect(prompt).toContain(`### Live for your objected entry #${decision1}\n\n---\n\n${fenced(DECKHAND_BODY)}`);
+    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n\n---\n\n${fenced("You are Deckhand, REFINED v2.")}`);
+    // each section names its Authority's source (ADR 0314 決定5)
+    expect(prompt).toContain("The Authority below came from the registry's authority profile standard.");
     // full coverage: no evidence-gap note
     expect(prompt).not.toContain("no definition version could be resolved");
   });
 
-  it("一部の objected entry の版が解決できないとき、解決できた版を注入した上で証拠の欠落を申告する(issue #87)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
-    const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
-      .toString()
-      .trim();
+  it("一部の objected entry の session の記録が無いとき、記録の読めた版を注入した上で証拠の欠落を申告する(issue #87 / ADR 0314 決定2)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     const objected = makeTask("objected-5", null, "deckhand", "work");
     insertTask(db, objected);
-    // session 1's spawn hash points at a commit the registry no longer has
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: "0000000000000000000000000000000000000000" },
-      at: new FakeClock().now(),
-    });
-    const decision1 = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach X" },
-      at: new FakeClock().now(),
-    });
-    // session 2 under the reachable main commit
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: main },
-      at: new FakeClock().now(),
-    });
-    const decision2 = appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "worker",
-      payload: { kind: "decision_logged", line: "chose approach Y" },
-      at: new FakeClock().now(),
-    });
-    for (const entryId of [decision1, decision2]) {
-      appendEvent(db, {
-        taskId: objected.id,
-        actorId: "human",
-        origin: "webui",
-        payload: { kind: "objection_raised", entry_id: entryId, comment: "reconsider", session_id: 1 },
-        at: new FakeClock().now(),
-      });
-    }
+    const decision1 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart("You are Deckhand, LOST.")]);
+    const decision2 = objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart(DECKHAND_BODY)]);
+    // session 1's record is lost after the fact
+    const [lost] = listEvents(db, objected.id).filter((e) => e.kind === "worker_spawned");
+    await rm(join(logDir, `${objected.id}.${lost!.id}.prompt.json`));
 
     const rca: Task = { ...makeTask("rca-5", null, "deckhand", "review"), parent_id: "objected-5" };
     insertTask(db, rca);
@@ -3433,34 +3276,24 @@ describe("ClaudeCodeWorker", () => {
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    // the resolvable version is injected, labeled with its entry
+    // the readable record is injected, labeled with its entry
     expect(prompt).toContain(`### Live for your objected entry #${decision2}\n`);
+    expect(prompt).not.toContain("LOST");
     // and the gap is declared, not silently absorbed
-    expect(prompt).toContain(
-      `no definition version could be resolved for your objected entry #${decision1}`,
-    );
+    expect(prompt).toContain(`no definition version could be resolved for your objected entry #${decision1} (missing session record)`);
   });
 
   it("独立レビュー(assignee 未設定)の spawn には当時版定義を注入しない: 当事者レビューのみ(ADR 0020 part 4)", async () => {
     // an auditor agent so the unset-assignee review resolves and spawns
-    const { worker, setting, calls, db, registryDir } = await makeWorker(
+    const { worker, setting, calls, db, logDir } = await makeWorker(
       {
         "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the Auditor.\n`,
       },
       { auditorName: "auditor" },
     );
-    const oldHash = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
-      .toString()
-      .trim();
     const objected = makeTask("objected-2", null, "deckhand", "work");
     insertTask(db, objected);
-    appendEvent(db, {
-      taskId: objected.id,
-      actorId: "deckhand",
-      origin: "board",
-      payload: { ...WORKER_SPAWNED, registry_commit: oldHash },
-      at: new FakeClock().now(),
-    });
+    objectDecisionAt(db, logDir, objected.id, "deckhand", [definitionPart(DECKHAND_BODY)]);
     // independent review: unset assignee → resolves to the Auditor pointer
     const audit: Task = { ...makeTask("audit-1", null, null, "review"), parent_id: "objected-2" };
     insertTask(db, audit);
@@ -3473,20 +3306,15 @@ describe("ClaudeCodeWorker", () => {
     expect(prompt).not.toContain("general work agent");
   });
 
-  it("当事者レビューの当時版には当時の Authority と Roster が profile 名の見出しで入り、後で profile を変えても当時の値が出る(issue #1741)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker({
-      "authority/standard.yaml": `guidance: |\n  Prefer reversible actions THEN.\nassignable_to:\n  - deckhand\n  - human\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
-    });
-    const git = registryGit(registryDir);
-    const then = git("rev-parse", "main");
+  it("当事者レビューの当時版には記録した Authority と Roster が fence で入り、Authority の出所に profile 名を添える(issue #1741 / ADR 0314 決定5・6)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     insertTask(db, makeTask("objected-6", null, "deckhand", "work"));
-    objectDecisionAt(db, "objected-6", "deckhand", then);
-    // the profile is edited after the objected call
-    await writeFile(
-      join(registryDir, "authority", "standard.yaml"),
-      `guidance: |\n  Escalate everything NOW.\nassignable_to:\n  - "*"\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
-    );
-    git("commit", "-am", "edit standard");
+    const roster = `\n\n## Roster\n\ndeckhand — General work agent for the tidepool board\nhuman — ${HUMAN_ROSTER_AGENT.description}`;
+    objectDecisionAt(db, logDir, "objected-6", "deckhand", [
+      definitionPart(DECKHAND_BODY),
+      { part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions THEN.", source: "profile", profile: "standard" },
+      { part: "roster", text: roster },
+    ]);
 
     const rca: Task = { ...makeTask("rca-6", null, "deckhand", "review"), parent_id: "objected-6" };
     insertTask(db, rca);
@@ -3494,97 +3322,25 @@ describe("ClaudeCodeWorker", () => {
 
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    // nested one level under the 当時版 section, after the body, profile named and no hash
-    const order = [
-      "## Definition under review",
-      "Work only through the tidepool MCP verbs.\n\n### Authority as it stood then (profile standard)\n\nPrefer reversible actions THEN.",
-      "### Roster as it stood then (profile standard)\n\n" +
-        `deckhand — General work agent for the tidepool board\nhuman — ${HUMAN_ROSTER_AGENT.description}`,
-    ].map((text) => prompt.indexOf(text));
-    expect(order.every((index) => index >= 0)).toBe(true);
-    expect(order).toEqual([...order].sort((x, y) => x - y));
-    expect(prompt).not.toContain("Escalate everything NOW.");
-    expect(prompt).not.toContain(then.slice(0, 7));
-  });
-
-  it("当時の profile の `*` は当時の commit の全 agent に展開され、組み込みは含まない(issue #1741 / ADR 0235 決定1、#2602)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
-    const git = registryGit(registryDir);
-    insertTask(db, makeTask("objected-7", null, "deckhand", "work"));
-    objectDecisionAt(db, "objected-7", "deckhand", git("rev-parse", "main"));
-    git("rm", "--quiet", "agents/lookout.md");
-    git("commit", "-m", "retire lookout");
-
-    const rca: Task = { ...makeTask("rca-7", null, "deckhand", "review"), parent_id: "objected-7" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-
-    const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
-      "### Roster as it stood then (profile standard)\n\n" +
-        "deckhand — General work agent for the tidepool board\n" +
-        "lookout — Looks out for the board.",
+      `## Definition under review (as recorded at your spawn)\n\n` +
+        "This is your agent definition as recorded at your spawn for the objected task",
     );
-    expect(prompt).not.toContain(`${DEFAULT_AUDITOR_NAME} — Reviews work independently against its completion criteria.`);
-  });
-
-  it("当時の commit に profile の yaml が無ければ、本文は注入した上で Authority / Roster の欠落を1行申告する(issue #1741)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
-    const git = registryGit(registryDir);
-    git("rm", "--quiet", "authority/standard.yaml");
-    git("commit", "-m", "hand-delete standard");
-    insertTask(db, makeTask("objected-8", null, "deckhand", "work"));
-    objectDecisionAt(db, "objected-8", "deckhand", git("rev-parse", "main"));
-    git("checkout", "HEAD~1", "--", "authority/standard.yaml");
-    git("commit", "-m", "restore standard");
-
-    const rca: Task = { ...makeTask("rca-8", null, "deckhand", "review"), parent_id: "objected-8" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-
-    const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
-      "Work only through the tidepool MCP verbs.\n\nNote: the authority profile standard could not be read at that commit",
+      `${fenced(DECKHAND_BODY)}\n\nThe Authority below came from the registry's authority profile standard.\n\n` +
+        `${fenced("## Authority\n\nPrefer reversible actions THEN.")}\n\n${fenced(roster.trimStart())}`,
     );
-    expect(prompt).not.toContain("as it stood then");
   });
 
-  it("当時の Roster の名前がその commit に無ければ黙って飛ばし、description が読めない agent は申告する(issue #1741)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
-    const git = registryGit(registryDir);
-    await writeFile(
-      join(registryDir, "authority", "standard.yaml"),
-      `guidance: Be careful.\nassignable_to:\n  - deckhand\n  - ghost\n  - lookout\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
-    );
-    await writeFile(join(registryDir, "agents", "lookout.md"), LOOKOUT_MD.replace(/^description:.*\n/m, ""));
-    git("commit", "-am", "lookout loses its description");
-    insertTask(db, makeTask("objected-9", null, "deckhand", "work"));
-    objectDecisionAt(db, "objected-9", "deckhand", git("rev-parse", "main"));
-    await writeFile(join(registryDir, "agents", "lookout.md"), LOOKOUT_MD);
-    git("commit", "-am", "restore lookout");
-
-    const rca: Task = { ...makeTask("rca-9", null, "deckhand", "review"), parent_id: "objected-9" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-
-    const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(
-      "### Roster as it stood then (profile standard)\n\n" +
-        "deckhand — General work agent for the tidepool board\n" +
-        "lookout — (description could not be read at that commit)",
-    );
-    expect(args[args.indexOf("--append-system-prompt") + 1]).not.toContain("ghost");
-  });
-
-  it("被レビュー task が review だったとき、当時の Authority は reviewer 定数を指す1行になり、Roster は当時の被レビュー task の executor で組み直す(issue #1741)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker({ "agents/lookout.md": LOOKOUT_MD });
+  it("被レビュー task が review だったとき、当時の Authority は reviewer 定数を RCA 自身の Authority と同じ文として指し、Roster は記録のまま入る(issue #1741 / ADR 0314 決定5)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     insertTask(db, makeTask("reviewed-10", null, "lookout", "work"));
-    // Executor は列でなく、当時の session の spawn までの実行の事実(ADR 0295 決定1)
-    markPickedUp(db, "reviewed-10", new FakeClock().now(), "lookout");
     insertTask(db, { ...makeTask("objected-10", null, "deckhand", "review"), parent_id: "reviewed-10" });
-    objectDecisionAt(db, "objected-10", "deckhand", registryGit(registryDir)("rev-parse", "main"));
+    objectDecisionAt(db, logDir, "objected-10", "deckhand", [
+      definitionPart(DECKHAND_BODY),
+      REVIEWER_AUTHORITY_PART,
+      { part: "roster", text: "\n\n## Roster\n\nlookout — Looks out for the board." },
+    ]);
 
     const rca: Task = { ...makeTask("rca-10", null, "deckhand", "review"), parent_id: "objected-10" };
     insertTask(db, rca);
@@ -3593,29 +3349,25 @@ describe("ClaudeCodeWorker", () => {
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
-      "### Authority as it stood then (the board's reviewer authority)\n\n" +
-        "The board's fixed reviewer authority — the same text as your own `## Authority` above. " +
+      "The Authority below is the board's fixed reviewer authority — the same text as your own Authority above. " +
         "It is board code, not a registry profile, so it is not a target for a registry diff.\n\n" +
-        "### Roster as it stood then (the board's reviewer authority)\n\nlookout — Looks out for the board.",
+        `${fenced(`## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}`)}\n\n${fenced("## Roster\n\nlookout — Looks out for the board.")}`,
     );
     expect(prompt).not.toContain("Prefer reversible actions.");
   });
 
-  it("当時の担当が組み込み Auditor だった self RCA でも当時版の節は消えず、本文の位置の1行と組み直した Roster が入る(issue #1741)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker(
+  it("当時の担当が組み込み Auditor だった self RCA でも当時版の節は消えず、本文の位置の1行と記録した Roster が入る(issue #1741)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker(
       {},
       { enumerateSkills: recordingEnumerator([]).enumerateSkills },
     );
     insertTask(db, makeTask("reviewed-11", null, "deckhand", "work"));
-    markPickedUp(db, "reviewed-11", new FakeClock().now(), "deckhand");
     insertTask(db, { ...makeTask("objected-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-11" });
-    objectDecisionAt(
-      db,
-      "objected-11",
-      DEFAULT_AUDITOR_NAME,
-      registryGit(registryDir)("rev-parse", "main"),
-      builtInVersion(registryDir, DEFAULT_AUDITOR_NAME),
-    );
+    objectDecisionAt(db, logDir, "objected-11", DEFAULT_AUDITOR_NAME, [
+      definitionPart("", true),
+      REVIEWER_AUTHORITY_PART,
+      { part: "roster", text: "\n\n## Roster\n\ndeckhand — General work agent for the tidepool board" },
+    ]);
 
     const rca: Task = { ...makeTask("rca-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-11" };
     insertTask(db, rca);
@@ -3627,29 +3379,20 @@ describe("ClaudeCodeWorker", () => {
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     expect(prompt).toContain(
       `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}, whose definition lives in board code, ` +
-        "not the registry; its body was empty at that version.\n\n### Authority as it stood then (the board's reviewer authority)",
+        "not the registry; its body was empty at that version.\n\nThe Authority below is the board's fixed reviewer authority",
     );
-    expect(prompt).toContain("This is your agent definition as the board's code carried it at the version you were spawned under");
-    expect(prompt).toContain(
-      "### Roster as it stood then (the board's reviewer authority)\n\ndeckhand — General work agent for the tidepool board",
-    );
+    expect(prompt).toContain(fenced("## Roster\n\ndeckhand — General work agent for the tidepool board"));
   });
 
-  it("組み込み suzumedai への異議の self RCA は、記録の内容 hash で引いた suzumedai の本文を当時版として出す(ADR 0270 決定3)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker(
+  it("組み込み suzumedai への異議の self RCA は、本文を持っていた spawn の記録の本文を当時版として出す —— 今の本文が空でも(ADR 0314 決定1)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker(
       {},
       { enumerateSkills: recordingEnumerator([]).enumerateSkills },
     );
     insertTask(db, makeTask("reviewed-12", null, "deckhand", "work"));
     insertTask(db, { ...makeTask("objected-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "reviewed-12" });
-    objectDecisionAt(
-      db,
-      "objected-12",
-      DEFAULT_INTERVIEWER_NAME,
-      registryGit(registryDir)("rev-parse", "main"),
-      // 本文を持っていた旧版(ADR 0270 決定2 の履歴表の行)
-      "fc043e28dba56c77",
-    );
+    const body = "You run Interviews: one probe that every target solves, and a score for each answer.";
+    objectDecisionAt(db, logDir, "objected-12", DEFAULT_INTERVIEWER_NAME, [definitionPart(body, true), REVIEWER_AUTHORITY_PART]);
 
     const rca: Task = { ...makeTask("rca-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "objected-12" };
     insertTask(db, rca);
@@ -3658,47 +3401,16 @@ describe("ClaudeCodeWorker", () => {
 
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(prompt).toContain(
-      "repair is not a re-enactment).\n\n---\n\nYou run Interviews: one probe that every target solves, and a score for each answer.",
-    );
+    expect(prompt).toContain(`repair is not a re-enactment).\n\n---\n\n${fenced(body)}`);
     expect(prompt).not.toContain("its body was empty");
   });
 
-  it("記録の内容 hash が本文履歴表に無い組み込みの spawn は、その entry が証拠の欠落として申告される(ADR 0270 決定3)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker(
-      {},
-      { enumerateSkills: recordingEnumerator([]).enumerateSkills },
-    );
-    const main = registryGit(registryDir)("rev-parse", "main");
-    insertTask(db, makeTask("reviewed-13", null, "deckhand", "work"));
-    insertTask(db, { ...makeTask("objected-13", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "reviewed-13" });
-    const unknown = objectDecisionAt(db, "objected-13", DEFAULT_AUDITOR_NAME, main, "0123456789abcdef");
-    const known = objectDecisionAt(db, "objected-13", DEFAULT_AUDITOR_NAME, main, builtInVersion(registryDir, DEFAULT_AUDITOR_NAME));
-
-    const rca: Task = { ...makeTask("rca-13", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-13" };
-    insertTask(db, rca);
-    worker.start(rca, setting(rca));
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-
-    const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(prompt).toContain(`### Live for your objected entry #${known}\n`);
-    expect(prompt).toContain(
-      "recorded at the commits you were spawned from (for a board built-in, as the board's code carried it at the version you were spawned under), ",
-    );
-    expect(prompt).not.toContain(`### Live for your objected entry #${unknown}\n`);
-    expect(prompt).toContain(
-      `no definition version could be resolved for your objected entry #${unknown} ` +
-        "(missing session record, unreachable commit, or a built-in version this board does not know)",
-    );
-  });
-
-  it("同じ registry commit で definition_version が違う 2 つの spawn に跨る異議は、2 節になる(ADR 0270 決定3)", async () => {
-    const { worker, setting, calls, db, registryDir } = await makeWorker();
-    const main = registryGit(registryDir)("rev-parse", "main");
+  it("記録した本文の text が違う 2 つの spawn に跨る異議は 2 節になり、同じ text の spawn は1節に畳む(ADR 0314 決定6)", async () => {
+    const { worker, setting, calls, db, logDir } = await makeWorker();
     insertTask(db, makeTask("objected-14", null, "deckhand", "work"));
-    const first = objectDecisionAt(db, "objected-14", "deckhand", main, "1");
-    const second = objectDecisionAt(db, "objected-14", "deckhand", main, "2");
+    const first = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v1.")]);
+    const again = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v1.")]);
+    const second = objectDecisionAt(db, logDir, "objected-14", "deckhand", [definitionPart("You are Deckhand v2.")]);
 
     const rca: Task = { ...makeTask("rca-14", null, "deckhand", "review"), parent_id: "objected-14" };
     insertTask(db, rca);
@@ -3706,7 +3418,7 @@ describe("ClaudeCodeWorker", () => {
 
     const args = calls[0]!.args;
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
-    expect(prompt).toContain(`### Live for your objected entry #${first}\n`);
+    expect(prompt).toContain(`### Live for your objected entries #${first}, #${again}\n`);
     expect(prompt).toContain(`### Live for your objected entry #${second}\n`);
   });
 

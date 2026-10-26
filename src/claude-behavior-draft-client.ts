@@ -35,7 +35,8 @@ function buildStopPrompt(input: StopBehaviorDraftInput): string {
     "human's testimony of why, and the stop's attribution says an agent should behave differently from now on. Draft ONE " +
     "behavior rule — a standing instruction a human will approve later — from that testimony weighed against what the worker " +
     "actually did: the session's whole decision log (decision_log), the memory entries it read before the stop (memory_read), " +
-    "its agent definition as it stood then (agent_definition), and its action sequence (actions). actions.calls lists the " +
+    "its agent definition as it stood then (agent_definition), the board's own text it was given (board_text), and its action " +
+    "sequence (actions). actions.calls lists the " +
     "session's tool calls in order (index, tool, the extracted argument, and whether it failed); actions.decisions places each " +
     "decision-log line at its position in that sequence; actions is null when the sequence could not be read. When the input " +
     "carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found. " +

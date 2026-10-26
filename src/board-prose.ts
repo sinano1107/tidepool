@@ -2,22 +2,10 @@
  *  その Harness に実在する機構の名前だけである。 */
 
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, listEvents } from "./events.js";
-import {
-  type AgentAtCommit,
-  type AgentDefinition,
-  type AuthorityProfile,
-  builtInBodyAt,
-  ownEntry,
-  REVIEWER_AUTHORITY_PROFILE,
-  type Registry,
-  type RegistryAtCommit,
-  type RosterAgent,
-  registryAtCommit,
-} from "./registry.js";
+import { type EventPayload, listEvents } from "./events.js";
+import { type AgentDefinition, type AuthorityProfile, ownEntry, REVIEWER_AUTHORITY_PROFILE, type Registry, type RosterAgent } from "./registry.js";
 import {
   AUTHORITY_WILDCARD,
-  getTask,
   HUMAN_ROSTER_AGENT,
   isRepairType,
   REPAIR_NOTICES,
@@ -26,6 +14,7 @@ import {
   type TaskVerbSwap,
   whyNoReturnDestination,
 } from "./tasks.js";
+import { type PromptRecord, TranscriptStore } from "./transcript-store.js";
 
 /** doctrine の Harness の語のスロット(ADR 0157 決定3)。「委譲先の語」と「Workflow 段落の有無」の2つだけ。
  *  task ごとに変わるのは別の引数 `verbs`(task ごとの verb の差し替え —— ADR 0245 決定2 / ADR 0253 決定5)で、Harness の語ではない。 */
@@ -162,16 +151,7 @@ function buildRoster(
   registryAgents: Record<string, RosterAgent & { builtin?: true }>,
   assignableTo: string[] | undefined,
 ): string | undefined {
-  const agents = rosterAgents(registryAgents, assignableTo);
-  return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
-}
-
-/** The roster's agents, before they become lines (see `buildRoster`). */
-function rosterAgents(
-  registryAgents: Record<string, RosterAgent & { builtin?: true }>,
-  assignableTo: string[] | undefined,
-): RosterAgent[] {
-  if (assignableTo === undefined || assignableTo.length === 0) return [];
+  if (assignableTo === undefined || assignableTo.length === 0) return undefined;
   const wildcard = assignableTo.includes(AUTHORITY_WILDCARD);
   const explicitNames = assignableTo.filter((name) => name !== AUTHORITY_WILDCARD);
   const agentNames = wildcard ? Object.keys(registryAgents) : explicitNames;
@@ -179,24 +159,22 @@ function rosterAgents(
     .map((name) => ownEntry(registryAgents, name))
     .filter((agent): agent is RosterAgent => agent !== undefined && agent.builtin !== true);
   if (explicitNames.includes(HUMAN_ROSTER_AGENT.name)) agents.push(HUMAN_ROSTER_AGENT);
-  return agents;
+  return agents.length > 0 ? agents.map(rosterLine).join("\n") : undefined;
 }
 
-/** Wraps a built roster (or nothing) as a Roster section — by default the
- *  trailing `## Roster` of the system prompt, or the 当時版's nested `heading` —
- *  its own heading (CONTEXT.md's Roster term) rather
+/** Wraps a built roster (or nothing) as the trailing `## Roster` of the
+ *  system prompt — its own heading (CONTEXT.md's Roster term) rather
  *  than folded into `## Authority`, since it names delegates, not authority. */
-function rosterSection(roster: string | undefined, heading = "## Roster"): string {
-  return roster === undefined ? "" : `\n\n${heading}\n\n${roster}`;
+function rosterSection(roster: string | undefined): string {
+  return roster === undefined ? "" : `\n\n## Roster\n\n${roster}`;
 }
 
-/** Wraps authority guidance as an Authority section (`## Authority` unless the
- *  当時版 passes its nested `heading`), or omits the
+/** Wraps authority guidance as an Authority section, or omits the
  *  section entirely when guidance is empty (issue #488: `standard`'s
  *  template guidance is `""`, and an empty heading would be a lie with
  *  nothing under it). */
-function authoritySection(guidance: string, heading = "## Authority"): string {
-  return guidance === "" ? "" : `\n\n${heading}\n\n${guidance}`;
+function authoritySection(guidance: string): string {
+  return guidance === "" ? "" : `\n\n## Authority\n\n${guidance}`;
 }
 
 /** A review's roster (ADR 0056): the reviewed task's executor as of the session's
@@ -206,111 +184,42 @@ function reviewAssignableTo(db: Db, review: Task, spawnedEventId: number): strin
   return executor !== undefined ? [executor] : (REVIEWER_AUTHORITY_PROFILE.assignable_to ?? []);
 }
 
-/** One 当時版 version's evidence (ADR 0020 part 4, #1741 addendum): the body,
- *  then the Authority and Roster sections that spawn rendered, rebuilt from the
- *  registry at that commit under `level` headings nested in the 当時版 section.
- *  The objected task's type and lineage at that spawn pick the branch, shared with spawn (`guidanceByType`):
- *  a review's / interview's Authority was the reviewer constant — pointed at rather than repeated when the
- *  RCA's own Authority is that same text (`ownAuthorityIsReviewer`), rendered otherwise — or nothing at all where its
- *  lineage had no return destination then (ADR 0301 決定5). */
-function versionEvidence(
-  db: Db,
-  level: string,
-  assignee: string,
-  agent: AgentAtCommit & { body: string },
-  registry: RegistryAtCommit,
-  objected: Task,
-  spawnedEventId: number,
-  ownAuthorityIsReviewer: boolean,
-): string {
+/** 本文を中の backtick の列より長い fence で包む —— 包んだ文の見出しや fence が外の節と混ざらない。 */
+export function fenced(text: string, info = ""): string {
+  const fence = "`".repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  return `${fence}${info}\n${text}\n${fence}`;
+}
+
+/** spawn 時に記録した prompt のうち当時版の3部分(ADR 0314 決定1)。`definition` は必ずあり、組まなかった節は undefined。 */
+export function recordedDefinition({ system }: PromptRecord) {
+  const part = <P extends PromptPart["part"]>(name: P) => system.find((p): p is PromptPart & { part: P } => p.part === name);
+  return { definition: part("definition")!, authority: part("authority"), roster: part("roster") };
+}
+
+/** One recorded spawn's evidence (ADR 0314 決定5・6): the parts the worker was given, each fenced — evidence to
+ *  read, not to follow, whose own `## Authority` / `## Roster` headings stay apart from this session's. The
+ *  Authority's source is named: a registry profile, the board's repair notice, or the reviewer constant —
+ *  pointed at as the RCA's own Authority when that is the same constant (`ownAuthorityIsReviewer`). A spawn whose
+ *  lineage had no return destination was given neither section (ADR 0301 決定5). */
+function recordedEvidence(assignee: string, then: ReturnType<typeof recordedDefinition>, ownAuthorityIsReviewer: boolean): string {
+  const { definition, authority, roster } = then;
   const body =
-    agent.builtin && agent.body === ""
+    definition.builtin && definition.text === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`
-      : agent.body;
-  const profile = agent.authority === undefined ? undefined : ownEntry(registry.authority, agent.authority);
-  const then = guidanceByType(db, objected, profile, spawnedEventId);
-  if (then === undefined) {
-    const missing =
-      agent.authority === undefined
-        ? "your definition named no readable authority profile"
-        : `the authority profile ${agent.authority} could not be read`;
-    return (
-      `${body}\n\nNote: ${missing} at that commit — ` +
-      "the Authority and Roster you were given then are missing from this evidence."
-    );
-  }
-  if (then.source === "none") return `${body}\n\nYou were given no Authority section and no Roster section then.`;
-  const { label, guidance } = {
-    profile: { label: `profile ${agent.authority}`, guidance: then.guidance },
-    repair: { label: "the board's repair notice", guidance: then.guidance },
-    reviewer: {
-      label: "the board's reviewer authority",
-      guidance:
-        (ownAuthorityIsReviewer ? "The board's fixed reviewer authority — the same text as your own `## Authority` above. " : `${then.guidance}\n\nThis is the board's fixed reviewer authority. `) +
+      : fenced(definition.text);
+  if (!authority && !roster) return `${body}\n\nYou were given no Authority section and no Roster section then.`;
+  const source =
+    authority &&
+    {
+      profile: `The Authority below came from the registry's authority profile ${authority.profile}.`,
+      repair: "The Authority below is the board's repair notice.",
+      reviewer:
+        (ownAuthorityIsReviewer
+          ? "The Authority below is the board's fixed reviewer authority — the same text as your own Authority above. "
+          : "The Authority below is the board's fixed reviewer authority. ") +
         "It is board code, not a registry profile, so it is not a target for a registry diff.",
-    },
-  }[then.source];
-  return (
-    body +
-    authoritySection(guidance, `${level} Authority as it stood then (${label})`) +
-    rosterSection(buildRoster(rosterSourceAt(registry), then.rosterAssignableTo), `${level} Roster as it stood then (${label})`)
-  );
-}
-
-/** The 当時版 Roster's source: the registry's agents at that commit. A name whose description is
- *  unreadable stays listed: dropping it would read as "not in your roster". */
-function rosterSourceAt(registry: RegistryAtCommit): Record<string, RosterAgent & { builtin?: true }> {
-  return Object.fromEntries(
-    Object.entries(registry.agents).map(([name, { description, builtin }]) => [
-      name,
-      { name, description: description ?? "(description could not be read at that commit)", builtin },
-    ]),
-  );
-}
-
-/** One 当時版 version (ADR 0020 part 4): the registry at the spawn's commit and the agent's entry in it —
- *  a built-in's body is not in the registry commit and is read by the recorded content hash from the
- *  board's history (ADR 0270 決定3). undefined when the commit is unreachable, the agent is absent, or
- *  its body cannot be read. */
-function versionAt(
-  registryDir: string,
-  assignee: string,
-  commit: string,
-  version: string,
-): { agent: AgentAtCommit & { body: string }; registry: RegistryAtCommit } | undefined {
-  const registry = registryAtCommit(registryDir, commit);
-  const atCommit = registry && ownEntry(registry.agents, assignee);
-  const body = atCommit?.builtin ? builtInBodyAt(assignee, version) : atCommit?.body;
-  return registry && atCommit && body !== undefined ? { agent: { ...atCommit, body }, registry } : undefined;
-}
-
-/** 帰責の judge に渡す当時版の束(ADR 0291 決定1・2): self RCA の注入と同じ読み口で spawn の (registry_commit,
- *  definition_version) から引く本文と、spawn が描いた Authority の散文・Roster の行(session の task の type と spawn の時点の系譜で
- *  選ぶ —— spawn と同じ `guidanceByType`。帰り先の無い系譜では空。profile はその commit のもの)、それに組み込みかどうか。 */
-export interface AgentDefinitionThen {
-  registry_commit: string;
-  builtin: boolean;
-  body: string;
-  authority: { guidance: string; assignable_to: string[] };
-  roster: RosterAgent[];
-}
-
-/** `spawned` の session の当時版の束。本文か、要る profile が引けなければ null。 */
-export function agentDefinitionThen(db: Db, registryDir: string, spawned: EventRow): AgentDefinitionThen | null {
-  const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
-  const at = versionAt(registryDir, spawned.actor_id, registry_commit, definition_version);
-  if (!at) return null;
-  const profile = at.agent.authority === undefined ? undefined : ownEntry(at.registry.authority, at.agent.authority);
-  const then = guidanceByType(db, getTask(db, spawned.task_id!)!, profile, spawned.id);
-  if (!then) return null;
-  const assignable_to = then.rosterAssignableTo ?? [];
-  return {
-    registry_commit,
-    builtin: at.agent.builtin === true,
-    body: at.agent.body,
-    authority: { guidance: then.guidance, assignable_to },
-    roster: rosterAgents(rosterSourceAt(at.registry), assignable_to),
-  };
+    }[authority.source];
+  return [body, source, authority && fenced(authority.text.trimStart()), roster && fenced(roster.text.trimStart())].filter(Boolean).join("\n\n");
 }
 
 /** "entry #3" / "entries #3, #5" — decision-log event ids, the same id space
@@ -324,28 +233,25 @@ function entryLabels(ids: number[]): string {
  *  Review: "self = 確定値") — hanging off the objected task (parent). Its
  *  evidence is the agent definition as it stood *when each objected decision
  *  was made*: 当時版 is resolved per objected log entry (issue #87) — the
- *  `worker_spawned` session (the strict agent version, ADR 0001) that was
- *  live when that entry was written, read from the committed registry at its
- *  hash. Anchoring on the entries — not simply the latest spawn — keeps a
- *  later escalation-return re-spawn under a refined definition from being
- *  mistaken for the 当時版; resolving per entry — not folding to one anchor —
- *  keeps judgments that span sessions under different versions from being
- *  read against a definition that never shaped them. Entries all resolving
- *  to one version (the common case) produce a single section; distinct
- *  versions are each injected, labeled with the decision-log entry ids they
- *  were live for (the same id space the RCA reads via get_current_task's
- *  parent decision_log), never the hash the RCA has no way to read. Each
- *  version carries the Authority and Roster that spawn rendered (#1741
- *  addendum). Independent reviews
- *  (unset assignee → the Auditor pointer, issue #42) get no such injection:
- *  their value is distance from the judgment, not the 原本. Best-effort — an
- *  entry whose version cannot be resolved (a kill left no record, an
- *  unreachable commit) is declared as an evidence gap when other versions
- *  did resolve, and degrades to no section at all when none did (no claim
- *  made, nothing to declare) — never a failed spawn. The review still
- *  executes under the current definition (ADR 0019): this only adds
- *  evidence, not the reviewer's identity. */
-function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ownAuthorityIsReviewer: boolean): string {
+ *  `worker_spawned` session that was live when that entry was written, read
+ *  from the prompt recorded at that spawn (ADR 0314 決定1). Anchoring on the
+ *  entries — not simply the latest spawn — keeps a later escalation-return
+ *  re-spawn under a refined definition from being mistaken for the 当時版;
+ *  resolving per entry — not folding to one anchor — keeps judgments that span
+ *  sessions under different definitions from being read against a definition
+ *  that never shaped them. Spawns whose recorded definition, Authority and
+ *  Roster texts are the same fold into one section (ADR 0314 決定6); distinct
+ *  texts are each injected, labeled with the decision-log entry ids they were
+ *  live for (the same id space the RCA reads via get_current_task's parent
+ *  decision_log). Independent reviews (unset assignee → the Auditor pointer,
+ *  issue #42) get no such injection: their value is distance from the
+ *  judgment, not the 原本. Best-effort — an entry whose record cannot be read
+ *  (no spawn before it, a missing or unparseable prompt record) is declared as
+ *  an evidence gap when other entries did resolve, and degrades to no section
+ *  at all when none did (no claim made, nothing to declare) — never a failed
+ *  spawn. The review still executes under the current definition (ADR 0019):
+ *  this only adds evidence, not the reviewer's identity. */
+function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownAuthorityIsReviewer: boolean): string {
   if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
   const events = listEvents(db, task.parent_id);
   const byId = new Map(events.map((e) => [e.id, e]));
@@ -360,122 +266,85 @@ function historicalDefinitionSection(db: Db, registryDir: string, task: Task, ow
     ),
   ].sort((a, b) => a - b);
   // per entry: the spawn live when it was written — the latest worker_spawned
-  // by this worker at or before the entry. Map insertion order is
-  // chronological because the entries are. 束ねの鍵は (registry_commit, definition_version)
-  // —— 同じ commit でも盤面だけが更新された組み込みの spawn は別の版(ADR 0270 決定3)
-  const byVersion = new Map<string, Array<{ entryId: number; spawnedEventId: number }>>();
+  // by this worker at or before the entry — and the prompt recorded at it. Map
+  // insertion order is chronological because the entries are. 束ねの鍵は記録の3部分の text(ADR 0314 決定6)
+  const transcripts = new TranscriptStore(recordDir);
+  const byText = new Map<string, { entryIds: number[]; then: ReturnType<typeof recordedDefinition> }>();
   const unresolved: number[] = [];
   for (const entryId of objectedEntryIds) {
-    const spawned = events
-      .filter(
-        (e) => e.kind === "worker_spawned" && e.actor_id === task.assignee && e.id <= entryId,
-      )
-      .at(-1);
-    if (!spawned) {
+    const spawned = events.filter((e) => e.kind === "worker_spawned" && e.actor_id === task.assignee && e.id <= entryId).at(-1);
+    const prompt = spawned && transcripts.readPrompt(task.parent_id, spawned.id);
+    if (!prompt) {
       unresolved.push(entryId);
       continue;
     }
-    const { registry_commit, definition_version } = spawned.payload as Extract<
-      EventPayload,
-      { kind: "worker_spawned" }
-    >;
-    const key = JSON.stringify([registry_commit, definition_version]);
-    byVersion.set(key, [...(byVersion.get(key) ?? []), { entryId, spawnedEventId: spawned.id }]);
+    const then = recordedDefinition(prompt);
+    const key = JSON.stringify([then.definition.text, then.authority?.text ?? null, then.roster?.text ?? null]);
+    const bundle = byText.get(key);
+    if (bundle) bundle.entryIds.push(entryId);
+    else byText.set(key, { entryIds: [entryId], then });
   }
-  const objected = getTask(db, task.parent_id)!;
-  type Version = { spawnedEventId: number } & NonNullable<ReturnType<typeof versionAt>>;
-  const evidence = (level: string, { agent, registry, spawnedEventId }: Version) =>
-    versionEvidence(db, level, task.assignee!, agent, registry, objected, spawnedEventId, ownAuthorityIsReviewer);
-  // 同じ版でも spawn ごとに Roster が違いうる(Executor は spawn の時点で読む —— ADR 0295)ので、版の中では
-  // 各 spawn で描いた証拠が同じ entry だけを1節に畳む(ADR 0270 追記)
-  const drawn = new Map<string, { entryIds: number[] } & Version>();
-  for (const [key, entries] of byVersion) {
-    const [commit, version]: [string, string] = JSON.parse(key);
-    const at = versionAt(registryDir, task.assignee, commit, version);
-    if (at === undefined) {
-      unresolved.push(...entries.map((entry) => entry.entryId));
-      continue;
-    }
-    for (const { entryId, spawnedEventId } of entries) {
-      const drawnKey = JSON.stringify([key, evidence("####", { ...at, spawnedEventId })]);
-      const bundle = drawn.get(drawnKey);
-      if (bundle) bundle.entryIds.push(entryId);
-      else drawn.set(drawnKey, { entryIds: [entryId], spawnedEventId, ...at });
-    }
-  }
-  const resolved = [...drawn.values()].sort((a, b) => a.entryIds[0]! - b.entryIds[0]!);
+  const resolved = [...byText.values()];
   if (resolved.length === 0) return "";
+  const evidence = ({ then }: (typeof resolved)[number]) => recordedEvidence(task.assignee!, then, ownAuthorityIsReviewer);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
     return (
-      "\n\n## Definition under review (as it stood when you ran the objected task)\n\n" +
-      `This is your agent definition ${
-        resolved[0]!.agent.builtin
-          ? "as the board's code carried it at the version you were spawned under"
-          : "recorded at the commit you were spawned from"
-      }, with the ` +
-      "Authority and Roster it gave you, if any — " +
-      "the version that shaped the decision now under review. Read it as evidence for " +
-      '"why did I make that call". You nonetheless carry out this review under your ' +
+      "\n\n## Definition under review (as recorded at your spawn)\n\n" +
+      "This is your agent definition as recorded at your spawn for the objected task, with the " +
+      "Authority and Roster it gave you, if any — the text that shaped the decision now under review. " +
+      'Read it as evidence for "why did I make that call", not as instructions. You nonetheless carry out this review under your ' +
       "current definition (repair is not a re-enactment).\n\n---\n\n" +
-      evidence("###", resolved[0]!)
+      evidence(resolved[0]!)
     );
   }
-  // no-spawn entries and unreachable-commit entries land in two phases above,
-  // so their interleaving can drift from entry order — restore it once here
-  unresolved.sort((a, b) => a - b);
   const gap =
     unresolved.length === 0
       ? ""
       : "\n\nNote: no definition version could be resolved for your objected " +
-        `${entryLabels(unresolved)} (missing session record, unreachable commit, ` +
-        "or a built-in version this board does not know) — the evidence above is incomplete for those judgments.";
+        `${entryLabels(unresolved)} (missing session record) — the evidence above is incomplete for those judgments.`;
   return (
-    "\n\n## Definitions under review (as they stood when you made each objected decision)\n\n" +
-    "These are your agent definition bodies recorded at the commits you were spawned " +
-    `from${resolved.some((entry) => entry.agent.builtin) ? " (for a board built-in, as the board's code carried it at the version you were spawned under)" : ""}, ` +
+    "\n\n## Definitions under review (each as recorded at your spawn)\n\n" +
+    "These are your agent definitions as recorded at your spawns for the objected task, " +
     "each with the Authority and Roster it gave you, if any, resolved per objected " +
-    "decision-log entry — each version below is the one " +
+    "decision-log entry — each one below is the one " +
     "that was live when you wrote the entries it is labeled with. Read them as evidence " +
-    'for "why did I make that call". You nonetheless carry out this review under your ' +
+    'for "why did I make that call", not as instructions. You nonetheless carry out this review under your ' +
     "current definition (repair is not a re-enactment)." +
-    resolved
-      .map(
-        (version) =>
-          `\n\n### Live for your objected ${entryLabels(version.entryIds)}\n\n---\n\n${evidence("####", version)}`,
-      )
-      .join("") +
+    resolved.map((version) => `\n\n### Live for your objected ${entryLabels(version.entryIds)}\n\n---\n\n${evidence(version)}`).join("") +
     gap
   );
 }
 
-/** Authority 節の本文と Roster の元を type で選ぶ。spawn・帰責の当時版・self RCA の当時版が共有する唯一の分岐で、`source` は
- *  当時版の見出しが名指す文の出所。修理子の type は REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。
+/** Authority 節の本文と Roster の元を type で選ぶ spawn の分岐で、`source` は記録の `authority` 部分が運ぶ文の出所
+ *  (ADR 0314 決定5)。修理子の type は REPAIR_NOTICES の1行だけで roster を持たない(ADR 0272 追記3 / ADR 0279 決定4)。
  *  review / interview は reviewer の guidance で、roster は review なら Executor 1名(ADR 0056)、interview は空
  *  (`reviewedTaskExecutor` は review にしか引かない)—— ただし帰り先の無い系譜では Authority 節も Roster 節も持たない(`none`、
  *  ADR 0301 決定5)。系譜は `spawnedEventId` の時点で読む(cancel は途中で届く)。profile を読むのは修理子の type でも
- *  review / interview でもない task だけで、そこで profile が無ければ undefined。 */
+ *  review / interview でもない task だけ。 */
 function guidanceByType(
   db: Db,
   task: Task,
-  profile: Pick<AuthorityProfile, "guidance" | "assignable_to"> | undefined,
+  profile: Pick<AuthorityProfile, "guidance" | "assignable_to">,
   /** Roster を描いた session の spawn —— review の Executor と系譜の時点(ADR 0295 決定3 / ADR 0301 決定5)。 */
   spawnedEventId: number,
-): { source: "repair" | "reviewer" | "none" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } | undefined {
+): { source: "repair" | "reviewer" | "none" | "profile"; guidance: string; rosterAssignableTo: string[] | undefined } {
   if (isRepairType(task.type)) return { source: "repair", guidance: REPAIR_NOTICES[task.type], rosterAssignableTo: undefined };
   if (task.type === "review" || task.type === "interview")
     return whyNoReturnDestination(db, task.id, spawnedEventId) === undefined
       ? { source: "reviewer", guidance: REVIEWER_AUTHORITY_PROFILE.guidance, rosterAssignableTo: reviewAssignableTo(db, task, spawnedEventId) }
       : { source: "none", guidance: "", rosterAssignableTo: undefined };
-  return profile && { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
+  return { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
 /** 盤面が書いた文面の持ち主つきの部分(ADR 0313 決定2)。`text` は自分の区切り(先頭の空行や見出し)を含み、順に空文字で
  *  連結した値が harness へ渡す値になる。`definition` は誰の・どの版の本文かを `worker_spawned` と同じ値で添える。 */
 export type PromptPart =
   | { part: "definition"; text: string; builtin: boolean; registry_commit: string; definition_version: string }
+  /** `source` は Authority 節の文の出所(ADR 0314 決定5)—— registry の profile(`profile` に名前)・盤面の reviewer 定数・修理子の通知。 */
+  | { part: "authority"; text: string; source: "profile" | "reviewer" | "repair"; profile?: string }
   | {
-      part: "authority" | "roster" | "doctrine" | "interview_discipline" | "protocol" | "historical_definition" | "memory" | "meta_review_material";
+      part: "roster" | "doctrine" | "interview_discipline" | "protocol" | "historical_definition" | "memory" | "meta_review_material";
       text: string;
     };
 
@@ -493,7 +362,8 @@ export function joinPrompt(parts: readonly PromptPart[]): string {
  *  持たない(ADR 0272 追記3)。当事者レビュー(self RCA)は当時版の定義を証拠として持つ(ADR 0020 part 4)。 */
 export function boardProse(input: {
   db: Db;
-  registryDir: string;
+  /** 記録の器(transcript の dir)—— self RCA の当時版を記録した prompt から読む(ADR 0314 決定1)。 */
+  recordDir: string;
   registry: Registry;
   task: Task;
   /** この文面で起こす session の `worker_spawned` の id(ADR 0295 決定3)。 */
@@ -508,14 +378,14 @@ export function boardProse(input: {
   material: { section: string } | null;
 }): PromptPart[] {
   const { db, task } = input;
-  const { source, guidance, rosterAssignableTo } = guidanceByType(db, task, input.profile, input.spawnedEventId)!;
-  const sections: Array<[Exclude<PromptPart["part"], "definition">, string]> = [
-    ["authority", authoritySection(guidance)],
+  const { source, guidance, rosterAssignableTo } = guidanceByType(db, task, input.profile, input.spawnedEventId);
+  const authority = authoritySection(guidance);
+  const sections: Array<[Exclude<PromptPart["part"], "definition" | "authority">, string]> = [
     ["roster", rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))],
     ["doctrine", `\n\n${input.doctrine}`],
     ["interview_discipline", task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : ""],
     ["protocol", `\n\n${workerProtocol(input.allowedDomains, input.verbs)}`],
-    ["historical_definition", historicalDefinitionSection(db, input.registryDir, task, source === "reviewer")],
+    ["historical_definition", historicalDefinitionSection(db, input.recordDir, task, source === "reviewer")],
     ["memory", input.memory.section ? `\n\n${input.memory.section}` : ""],
     ["meta_review_material", input.material?.section ? `\n\n${input.material.section}` : ""],
   ];
@@ -527,6 +397,10 @@ export function boardProse(input: {
       registry_commit: input.registry.commit,
       definition_version: input.definition.version,
     },
+    // 帰り先の無い系譜(`none`)と guidance が空の profile は Authority 節を持たない
+    ...(authority === "" || source === "none"
+      ? []
+      : [{ part: "authority" as const, text: authority, source, ...(source === "profile" && { profile: input.profile.name }) }]),
     ...sections.filter(([, text]) => text !== "").map(([part, text]) => ({ part, text })),
   ];
 }

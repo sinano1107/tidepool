@@ -1,12 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { afterEach, expect, it } from "vitest";
-import { agentDefinitionThen } from "../src/board-prose.js";
 import { openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { listEvents } from "../src/events.js";
 import { editTask, getTask, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
-import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, queueChild, queueWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
-import { makeRegistry } from "./registry-fixture.js";
+import { api, bootTidepool, defaultingTo, FULL_HANDOFF, HOUR, HUMAN_WEBUI, mcpClient, queueChild, queueWork, type Tidepool } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -205,18 +202,4 @@ it("pickup 済みの task でも、assignee / workspace の値が変わらない
 
   expect(edited.title).toBe("renamed");
   expect(listEvents(db, task.id).filter((e) => e.kind === "task_edited").map((e) => (e.payload as { field: string }).field)).toEqual(["title"]);
-});
-
-it("拒否の後も、review の spawn の当時版の Roster は spawn が描いた [deckhand] のまま(#2369 の再現)", async () => {
-  const { db, task } = returnedAfterPickup();
-  const review = registerTask(db, { type: "review", title: "r", purpose: "p", completion_criteria: "c", parent_id: task.id }, at, ...HUMAN_WEBUI);
-  const registryDir = await makeRegistry();
-  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
-  appendEvent(db, { taskId: review.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
-  const spawned = listEvents(db, review.id).find((e) => e.kind === "worker_spawned")!;
-
-  expect(() => editTask(db, task, { assignee: "navigator" }, at, "webui")).toThrow(DomainError);
-  const then = agentDefinitionThen(db, registryDir, spawned);
-  expect(then?.authority.assignable_to).toEqual(["deckhand"]);
-  expect(then?.roster.map((agent) => agent.name)).toEqual(["deckhand"]);
 });

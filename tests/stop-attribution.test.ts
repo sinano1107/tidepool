@@ -64,6 +64,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       decision_log: ["deleted the fixtures"],
       memory_read: [{ id: memory, kind: "behavior", title: "Keep fixtures", text: "Keep the fixtures." }],
       agent_definition: null,
+      board_text: [],
       actions: null,
     },
   ]);
@@ -471,7 +472,7 @@ it.each([
   await b.sweep(at, deps);
 
   expect(drafter.stopCalls.map((c) => c.input)).toEqual([
-    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, actions: null, index: null },
+    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], actions: null, index: null },
   ]);
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({
@@ -523,7 +524,7 @@ it.each([
   await b.sweep(at, deps);
   await b.sweep(at, deps);
 
-  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, actions: null };
+  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], actions: null };
   const findings = [
     `no_act: stop ${stop} — ignored the workspace boundary`,
     "completion report: (no outcome recorded)",

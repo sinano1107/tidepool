@@ -295,7 +295,7 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
     "def456",
     "tako@3",
     "You are tako, a careful generalist who writes small, tested changes.",
-    "authority",
+    "## System: authority (source: profile standard)",
     "\n\n## Authority\n\nYou may decompose into children assigned to your roster.",
     "roster",
     "\n\n## Roster\n\n- deckhand: writes code in one workspace",

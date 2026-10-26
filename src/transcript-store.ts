@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { closeSync, createWriteStream, openSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
+import { closeSync, createWriteStream, openSync, readFileSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { PromptPart } from "./board-prose.js";
 import type { Harness } from "./registry.js";
@@ -109,5 +109,16 @@ export class TranscriptStore {
       stream: watch("stream", streamPath, createWriteStream("", { fd: streamFd })),
       stderr: watch("stderr", stderrPath, createWriteStream("", { fd: stderrFd })),
     };
+  }
+
+  /** `open` が書いた spawn の prompt(ADR 0314 決定1)。無い・parse できない記録(記録の dir が後から失われた・書き込みの途中で
+   *  落ちた)は null —— 読み手は欄を空にして進む(決定2)。他の fs の例外は投げる。 */
+  readPrompt(taskId: string, workerSpawnedEventId: number): PromptRecord | null {
+    try {
+      return JSON.parse(readFileSync(join(this.dir, `${taskId}.${workerSpawnedEventId}.prompt.json`), "utf8")) as PromptRecord;
+    } catch (err) {
+      if (err instanceof SyntaxError || (err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
   }
 }
