@@ -268,7 +268,7 @@ const BUILT_IN_AUDITOR: AgentDefinition = {
   builtin: true,
 };
 
-/** 組み込みの Interviewer(ADR 0269 決定1): Auditor と同じ機構で、本文だけが違う。 */
+/** 組み込みの Interviewer(ADR 0269 決定1): Auditor と同じ機構・同じ空の本文で、名前・説明・icon だけが違う。 */
 const BUILT_IN_INTERVIEWER: AgentDefinition = {
   ...BUILT_IN_AUDITOR,
   name: DEFAULT_INTERVIEWER_NAME,
