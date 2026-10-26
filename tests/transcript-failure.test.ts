@@ -186,18 +186,10 @@ for (const [harness, boot] of HARNESSES) {
 it("prompt の記録を書けない器では open が prompt のファイルの絶対 path を名指す RecordContainerError で落ちる —— stream と同じ記録の器の停止の入口(ADR 0313 決定1 / ADR 0266 決定3)", async () => {
   const dir = await tempDir("transcript-store-");
   await mkdir(join(dir, "task-p.7.prompt.json"));
-  const store = new TranscriptStore(dir);
+  const open = () => new TranscriptStore(dir).open("task-p", 7, { harness: "claude-code", system: [], user: "u" });
 
-  const thrown = (() => {
-    try {
-      store.open("task-p", 7, { harness: "claude-code", system: [], user: "u" });
-    } catch (error) {
-      return error;
-    }
-  })();
-
-  expect(thrown).toBeInstanceOf(RecordContainerError);
-  expect((thrown as RecordContainerError).path).toBe(join(dir, "task-p.7.prompt.json"));
+  expect(open).toThrow(RecordContainerError);
+  expect(open).toThrow(expect.objectContaining({ path: join(dir, "task-p.7.prompt.json") }));
 });
 
 /** transcript の open 以外で落ちる launch の同期の失敗 —— 器の失敗ではない。Claude は skill 列挙の continuation の中で、

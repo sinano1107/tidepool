@@ -84,20 +84,15 @@ export class TranscriptStore {
     const base = join(this.dir, `${taskId}.${workerSpawnedEventId}`);
     const streamPath = `${base}.stream.jsonl`;
     const streamFd = writeRecord(taskId, streamPath, () => openSync(streamPath, "w"));
+    const promptPath = `${base}.prompt.json`;
     const stderrPath = `${base}.stderr.log`;
     let stderrFd: number;
     try {
+      // prompt は書き切って閉じるので、stderr より先に置けば落ちたとき閉じる fd は stream の1本だけ
+      writeRecord(taskId, promptPath, () => writeFileSync(promptPath, JSON.stringify(prompt)));
       stderrFd = writeRecord(taskId, stderrPath, () => openSync(stderrPath, "w"));
     } catch (err) {
       closeSync(streamFd);
-      throw err;
-    }
-    const promptPath = `${base}.prompt.json`;
-    try {
-      writeRecord(taskId, promptPath, () => writeFileSync(promptPath, JSON.stringify(prompt)));
-    } catch (err) {
-      closeSync(streamFd);
-      closeSync(stderrFd);
       throw err;
     }
     let reported = false;
