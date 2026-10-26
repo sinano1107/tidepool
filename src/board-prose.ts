@@ -256,9 +256,9 @@ function entryLabels(ids: number[]): string {
  *  issue #42) get no such injection: their value is distance from the
  *  judgment, not the 原本. Best-effort — an entry whose record cannot be read
  *  (no spawn before it, a missing or unparseable prompt record) is declared as
- *  an evidence gap when other entries did resolve, and degrades to no section
- *  at all when none did (no claim made, nothing to declare) — never a failed
- *  spawn. The review still executes under the current definition (ADR 0019):
+ *  an evidence gap, even when none resolved. No section is added only when
+ *  this worker has no objected entry (ADR 0020 Status 追記 / issue #2619) —
+ *  never a failed spawn. The review still executes under the current definition (ADR 0019):
  *  this only adds evidence, not the reviewer's identity. */
 function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownReviewerAuthority: string | undefined): string {
   if (task.type !== "review" || task.assignee === null || task.parent_id === null) return "";
@@ -274,6 +274,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownR
         .filter((entryId) => byId.get(entryId)?.actor_id === task.assignee),
     ),
   ].sort((a, b) => a - b);
+  if (objectedEntryIds.length === 0) return "";
   // per entry: the spawn live when it was written — the latest worker_spawned
   // by this worker at or before the entry — and the prompt recorded at it. Map
   // insertion order is chronological because the entries are. 束ねの鍵は記録の3部分の text(ADR 0314 決定6)
@@ -294,7 +295,12 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownR
     else byText.set(key, { entryIds: [entryId], then });
   }
   const resolved = [...byText.values()];
-  if (resolved.length === 0) return "";
+  if (resolved.length === 0) {
+    return (
+      "\n\n## Definition under review (as recorded at your spawn)\n\n" +
+      `No recorded definition could be read for your objected ${entryLabels(unresolved)} (missing session record) — the text that shaped the decision now under review is not available as evidence.`
+    );
+  }
   const evidence = ({ then }: (typeof resolved)[number]) => recordedEvidence(task.assignee!, then, ownReviewerAuthority);
   // 「current definition」の括弧は ADR 0019(修理は再演ではない)
   if (resolved.length === 1 && unresolved.length === 0) {
