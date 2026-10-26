@@ -2094,6 +2094,20 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
+  it("spawn 時に渡した prompt 一式を <taskId>.<event id>.prompt.json として stream / stderr の隣に残す —— system の連結が --append-system-prompt、user が -p の値(ADR 0313 決定1・2)", async () => {
+    const { start, calls, logDir, db } = await makeWorker();
+    start("task-prompt");
+    const spawnedId = listEvents(db, "task-prompt").find((e) => e.kind === "worker_spawned")!.id;
+    const args = calls[0]!.args;
+
+    const recorded = JSON.parse(await readFile(join(logDir, `task-prompt.${spawnedId}.prompt.json`), "utf8"));
+
+    expect(recorded.harness).toBe("claude-code");
+    expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(args[args.indexOf("--append-system-prompt") + 1]);
+    expect(recorded.system[0]).toMatchObject({ part: "definition", builtin: false });
+    expect(recorded.user).toBe(args[args.indexOf("-p") + 1]);
+  });
+
   it("同一タスクを2回 spawn すると、両方の worker session の transcript が別ファイルで残る(issue #379)", async () => {
     const { worker, start, setting, logDir } = await makeWorker();
     const task = start("task-retry");
@@ -2104,6 +2118,7 @@ describe("ClaudeCodeWorker", () => {
       const files = (await readdir(logDir)).filter((name) => name.startsWith("task-retry."));
       expect(files.filter((name) => name.endsWith(".stream.jsonl"))).toHaveLength(2);
       expect(files.filter((name) => name.endsWith(".stderr.log"))).toHaveLength(2);
+      expect(files.filter((name) => name.endsWith(".prompt.json"))).toHaveLength(2);
     });
   });
 

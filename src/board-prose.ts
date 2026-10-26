@@ -5,6 +5,7 @@ import type { Db } from "./db.js";
 import { type EventPayload, type EventRow, listEvents } from "./events.js";
 import {
   type AgentAtCommit,
+  type AgentDefinition,
   type AuthorityProfile,
   builtInBodyAt,
   ownEntry,
@@ -469,8 +470,18 @@ function guidanceByType(
   return profile && { source: "profile", guidance: profile.guidance, rosterAssignableTo: profile.assignable_to };
 }
 
-/** 盤面が書いた文面の全体(ADR 0157 決定1)。節の順序は Harness を問わず
- *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → Memory。
+/** 盤面が書いた文面の持ち主つきの部分(ADR 0313 決定2)。`text` は自分の区切り(先頭の空行や見出し)を含み、順に空文字で
+ *  連結した値が harness へ渡す値になる。`definition` は誰の・どの版の本文かを `worker_spawned` と同じ値で添える。 */
+export type PromptPart =
+  | { part: "definition"; text: string; builtin: boolean; registry_commit: string; definition_version: string }
+  | {
+      part: "authority" | "roster" | "doctrine" | "interview_discipline" | "protocol" | "historical_definition" | "memory" | "meta_review_material";
+      text: string;
+    };
+
+/** 盤面が書いた文面の全体(ADR 0157 決定1)を持ち主つきの部分の列で返す(ADR 0313 決定2)。節の順序は Harness を問わず
+ *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → 記憶の注入 →
+ *  主題の材料(ADR 0180 決定2・ADR 0279 決定2)。組まなかった節は列に無い。
  *  doctrine は adapter が自分の語彙で組んで渡す(決定2)。review task は registry の
  *  profile でなく reviewer の authority と、被レビュー task の executor 1名の roster を
  *  持つ(ADR 0056)—— 帰り先の無い系譜ではどちらも持たない(ADR 0301 決定5)。修理子の type は Authority 節が REPAIR_NOTICES の1行だけで roster を
@@ -482,16 +493,35 @@ export function boardProse(input: {
   task: Task;
   /** この文面で起こす session の `worker_spawned` の id(ADR 0295 決定3)。 */
   spawnedEventId: number;
-  systemPrompt: string;
+  definition: Pick<AgentDefinition, "systemPrompt" | "version" | "builtin">;
   profile: AuthorityProfile;
   doctrine: string;
   allowedDomains: string[] | undefined;
   /** task ごとの verb の差し替え(adapter が doctrine を組んだのと同じ値)。 */
   verbs: TaskVerbSwap;
-  memorySection: string | null;
-}): string {
+  memory: { section: string | null };
+  material: { section: string } | null;
+}): PromptPart[] {
   const { db, task } = input;
   const { source, guidance, rosterAssignableTo } = guidanceByType(db, task, input.profile, input.spawnedEventId)!;
-  const discipline = task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : "";
-  return `${input.systemPrompt}${authoritySection(guidance)}${rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))}\n\n${input.doctrine}${discipline}\n\n${workerProtocol(input.allowedDomains, input.verbs)}${historicalDefinitionSection(db, input.registryDir, task, source === "reviewer")}${input.memorySection ? `\n\n${input.memorySection}` : ""}`;
+  const sections: Array<[Exclude<PromptPart["part"], "definition">, string]> = [
+    ["authority", authoritySection(guidance)],
+    ["roster", rosterSection(buildRoster(input.registry.agents, rosterAssignableTo))],
+    ["doctrine", `\n\n${input.doctrine}`],
+    ["interview_discipline", task.type === "interview" ? `\n\n${INTERVIEW_DISCIPLINE}` : ""],
+    ["protocol", `\n\n${workerProtocol(input.allowedDomains, input.verbs)}`],
+    ["historical_definition", historicalDefinitionSection(db, input.registryDir, task, source === "reviewer")],
+    ["memory", input.memory.section ? `\n\n${input.memory.section}` : ""],
+    ["meta_review_material", input.material?.section ? `\n\n${input.material.section}` : ""],
+  ];
+  return [
+    {
+      part: "definition",
+      text: input.definition.systemPrompt,
+      builtin: input.definition.builtin === true,
+      registry_commit: input.registry.commit,
+      definition_version: input.definition.version,
+    },
+    ...sections.filter(([, text]) => text !== "").map(([part, text]) => ({ part, text })),
+  ];
 }

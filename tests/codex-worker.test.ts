@@ -692,6 +692,21 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
+  it("spawn 時に渡した prompt 一式を stream / stderr の隣の prompt.json に残す —— system の連結が末尾の空行ごと developer_instructions、user が user turn(ADR 0313 決定1・2 / ADR 0124 Consequences)", async () => {
+    const f = await fixture();
+    const value = task(f.db, "codex-prompt-record");
+    await f.start(value);
+    const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
+    const args = f.process.calls[0]!.args;
+
+    const recorded = JSON.parse(readFileSync(join(f.logDir, `${value.id}.${spawned.id}.prompt.json`), "utf8"));
+
+    expect(recorded.harness).toBe("codex");
+    expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(developerInstructions(args));
+    expect(recorded.system[0]).toMatchObject({ part: "definition", text: "You are the Codex worker.", builtin: false, definition_version: "1.2.3" });
+    expect(recorded.user).toBe(args.at(-1));
+  });
+
   it.each([
     ["work", task],
     ["主題 memory の meta-review", metaReviewTask],

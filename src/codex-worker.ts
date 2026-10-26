@@ -36,7 +36,6 @@ import {
   buildMemoryInjection,
   buildMetaReviewMaterial,
   type InjectionQuery,
-  memoryPromptSection,
   memoryRepairVerbs,
   recordMemoryInjection,
   recordMetaReviewMaterial,
@@ -1427,21 +1426,27 @@ export class CodexWorker implements WorkerAdapter {
       recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
       // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から、この spawn の id で組む(ADR 0295 決定4)。
-      // Codex は次の part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である
-      const developerInstructions = `${boardProse({
+      // Codex は次の part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である(ADR 0124 Consequences)
+      // —— 記録が渡した値の逐語であるよう、その空行は最後の部分に載せる(ADR 0313 決定2)
+      const parts = boardProse({
         db: this.options.db,
         registryDir: this.options.registry.dir,
         registry,
         task,
         spawnedEventId: spawned,
-        systemPrompt: agent.definition.systemPrompt,
+        definition: agent.definition,
         profile: agent.profile,
         doctrine: codexDoctrine(verbs),
         verbs,
         allowedDomains: workspace.allowed_domains,
-        memorySection: memoryPromptSection(memory, material),
-      })}\n\n`;
-      const transcript = this.options.transcripts.open(task.id, spawned);
+        memory,
+        material,
+      });
+      const last = parts.pop()!;
+      const system = [...parts, { ...last, text: `${last.text}\n\n` }];
+      const developerInstructions = system.map((part) => part.text).join("");
+      const user = taskPrompt(task);
+      const transcript = this.options.transcripts.open(task.id, spawned, { harness: "codex", system, user });
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
       markProjectionPending(this.options.db, spawned);
       const child = this.containers.open(task.id).spawn(
@@ -1452,7 +1457,7 @@ export class CodexWorker implements WorkerAdapter {
           "-C", workspacePath,
           "-m", setting.model,
           ...configArgs(spawnConfig({ ...input, developerInstructions, taskTemp, skills: checked.skills })),
-          taskPrompt(task),
+          user,
         ],
         { cwd: workspacePath, env },
       );

@@ -9,6 +9,14 @@ import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees
 import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 
+/** 文面の全体 —— 持ち主つきの部分を順に空文字で連結した値が harness へ渡る値(ADR 0313 決定2)。 */
+const joined = (input: Parameters<typeof boardProse>[0]) =>
+  boardProse(input)
+    .map((part) => part.text)
+    .join("");
+/** 記憶の店に何も無い spawn の注入(節は空)。 */
+const NO_MEMORY = { section: "" };
+
 /** 帰り先の無い系譜で走った task の当時版が Authority 節の代わりに写す1文(ADR 0301 決定5)。 */
 const NO_AUTHORITY_THEN = "You were given no Authority section and no Roster section then.";
 
@@ -69,18 +77,19 @@ async function repairProse(profile: AuthorityProfile, type: "memory_repair" | "r
   const task = registerTask(db, { type, title: "memory repair", purpose: "p", completion_criteria: "c", parent_id: parent.id }, at, ...HUMAN_WEBUI);
   expect(whyNoReturnDestination(db, task.id)).toMatch(/^the cancel of ancestor/);
   const verbs = taskVerbSwap(db, task.id);
-  return boardProse({
+  return joined({
     db,
     registryDir: "",
     registry: loadRegistry(await makeRegistry(), "purely-local"),
     task,
     spawnedEventId: spawn(db, task, at),
-    systemPrompt: "",
+    definition: { systemPrompt: "", version: "0.0.0" },
     profile,
     doctrine: boardDoctrine(CLAUDE, verbs),
     verbs,
     allowedDomains: undefined,
-    memorySection: null,
+    memory: NO_MEMORY,
+    material: null,
   });
 }
 
@@ -125,20 +134,25 @@ async function selfRcaProse(db: Db, objected: Task, at: Date, afterSpawn = () =>
 
 /** reviewer の authority で走る task の spawn `spawnedEventId` の文面(registry は `registryDir` の main、定義本文は `systemPrompt`)。 */
 function reviewProse(db: Db, registryDir: string, task: Task, spawnedEventId: number, systemPrompt = "") {
+  return joined(reviewInput(db, registryDir, task, spawnedEventId, systemPrompt));
+}
+
+function reviewInput(db: Db, registryDir: string, task: Task, spawnedEventId: number, systemPrompt = ""): Parameters<typeof boardProse>[0] {
   const verbs = taskVerbSwap(db, task.id);
-  return boardProse({
+  return {
     db,
     registryDir,
     registry: loadRegistry(registryDir, "purely-local"),
     task,
     spawnedEventId,
-    systemPrompt,
+    definition: { systemPrompt, version: "0.0.0" },
     profile: REVIEWER_AUTHORITY_PROFILE,
     doctrine: boardDoctrine(CLAUDE, verbs),
     verbs,
     allowedDomains: undefined,
-    memorySection: null,
-  });
+    memory: NO_MEMORY,
+    material: null,
+  };
 }
 
 it.each(REPAIR_NOTICES)("%s の task への self RCA の当時版は、Authority が修理の1行で Roster 節が無い —— spawn と同じ type の分岐(#2366)", async (type, notice) => {
@@ -373,4 +387,67 @@ it("祖先の work の cancel の後に spawn した RCA への self RCA の当�
   expect(prose).toContain(NO_AUTHORITY_THEN);
   expect(prose).not.toContain("Authority as it stood then");
   expect(prose).not.toContain("Roster as it stood then");
+});
+
+it("文面は持ち主つきの部分の列で、組んだ節だけを順に持ち、各部分は自分の区切りを含む —— 記憶の注入と主題の材料は別の部分(ADR 0313 決定2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const registry = loadRegistry(registryDir, "purely-local");
+  const task = registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+  const verbs = taskVerbSwap(db, task.id);
+
+  const parts = boardProse({
+    db,
+    registryDir,
+    registry,
+    task,
+    spawnedEventId: spawn(db, task, at),
+    definition: { systemPrompt: "You are Deckhand.", version: "0.3.1" },
+    profile: { name: "standard", guidance: "Prefer reversible actions.", assignable_to: ["*"] },
+    doctrine: "## Board doctrine\n\nStay on the board.",
+    verbs,
+    allowedDomains: undefined,
+    memory: { section: "## Memory\n\nThe tide is high." },
+    material: { section: "## Routing meta-review material\n\nThree routes." },
+  });
+
+  expect(parts.map((part) => part.part)).toEqual(["definition", "authority", "roster", "doctrine", "protocol", "memory", "meta_review_material"]);
+  expect(parts[0]).toEqual({ part: "definition", text: "You are Deckhand.", builtin: false, registry_commit: registry.commit, definition_version: "0.3.1" });
+  expect(parts[1]).toEqual({ part: "authority", text: "\n\n## Authority\n\nPrefer reversible actions." });
+  expect(parts[2]!.text).toMatch(/^\n\n## Roster\n\n/);
+  expect(parts[3]).toEqual({ part: "doctrine", text: "\n\n## Board doctrine\n\nStay on the board." });
+  expect(parts.slice(5)).toEqual([
+    { part: "memory", text: "\n\n## Memory\n\nThe tide is high." },
+    { part: "meta_review_material", text: "\n\n## Routing meta-review material\n\nThree routes." },
+  ]);
+});
+
+it("組み込みの agent の定義の部分は builtin 旗を持ち、記憶の節が空で材料の無い spawn は memory も meta_review_material も列に無い —— Interview の root は規律の部分を持つ(ADR 0313 決定2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const root = interviewRoot(db, at);
+  const suzumedai = loadRegistry(registryDir, "purely-local").agents.suzumedai!;
+
+  const parts = boardProse({ ...reviewInput(db, registryDir, root, spawn(db, root, at, "suzumedai")), definition: suzumedai });
+
+  expect(parts.map((part) => part.part)).toEqual(["definition", "doctrine", "interview_discipline", "protocol"]);
+  expect(parts[0]).toMatchObject({ builtin: true, definition_version: suzumedai.version });
+  expect(parts[2]!.text).toMatch(/^\n\n## Interview discipline\n/);
+});
+
+it("self RCA の当時版は historical_definition の部分 —— protocol の後に置く(ADR 0313 決定2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const registryDir = await makeRegistry();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const commit = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir }).toString().trim();
+  appendEvent(db, { taskId: objected.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, registry_commit: commit } });
+  const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
+
+  const parts = boardProse(reviewInput(db, registryDir, rca, spawn(db, rca, at)));
+
+  expect(parts.map((part) => part.part).slice(-2)).toEqual(["protocol", "historical_definition"]);
+  expect(parts.at(-1)!.text).toMatch(/^\n\n## Definition under review/);
 });
