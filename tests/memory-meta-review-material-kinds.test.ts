@@ -226,7 +226,8 @@ it("節を組んだ記録 meta_review_material_injected(主題 memory)の stop_a
 type MaterialRecord<S extends MetaReviewSubject> = Extract<EventPayload, { kind: "meta_review_material_injected"; subject: S }>;
 /** kind ごとの fixture: 呼ぶと窓の前に材料でない下ごしらえを置き、返す関数は窓にその kind の event をちょうど1つ書いて、
  *  節の記録のどの部分にどの id で載るべきかを返す。 */
-type KindFixtures<S extends MetaReviewSubject, K extends keyof (typeof META_REVIEW_SUBJECTS)[S]["material"] = keyof (typeof META_REVIEW_SUBJECTS)[S]["material"]> = Record<K, (db: Db) => () => [keyof MaterialRecord<S>, number]>;
+type MaterialKind<S extends MetaReviewSubject> = keyof (typeof META_REVIEW_SUBJECTS)[S]["material"];
+type KindFixtures<S extends MetaReviewSubject, K extends MaterialKind<S> = MaterialKind<S>> = Record<K, (db: Db) => () => [keyof MaterialRecord<S>, number]>;
 const KIND_FIXTURES: KindFixtures<"memory"> = {
   memory_entry_created: (db) => () => ["changed_memory_entry_ids", knowledge(db, "written")],
   memory_entry_invalidated: (db) => {
@@ -282,7 +283,7 @@ it.each([
   expect(listEventsOfKinds(db, ["meta_review_material_injected"]).at(-1)!.payload).toMatchObject({ [part]: expect.arrayContaining([id]) });
 });
 
-it("routing meta-review とその修理子の行への異議の帰責・routing meta-review の session の停止の帰責は、memory の due を開かず memory の節にも載らない(ADR 0312 決定3)", () => {
+it("routing meta-review とその修理子の行への異議の帰責・routing meta-review の session の停止の帰責は、cause が memory でなければ memory の due を開かず memory の節にも載らない(ADR 0312 決定3)", () => {
   const db = openDb(":memory:");
   register(db, "memory", true);
   const routing = getTask(db, register(db, "routing"))!;

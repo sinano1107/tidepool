@@ -239,14 +239,27 @@ export function materialSection(subject: MetaReviewSubject, window: Required<Met
   ].join("\n");
 }
 
-/** 材料の節の "Objected decisions" の注(両主題): 窓の中で帰責の付いた異議の行(ADR 0312 決定5・6)。 */
-export const OBJECTED_DECISIONS_NOTE =
-  "Rows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.";
+/** 材料の節の部分: 見出しの下の注・1行1 JSON の行・空の印。 */
+export type MaterialPartRows = [note: string, rows: unknown[], empty: string];
 
-/** 材料の節の "Stops attributed" の注(両主題): 窓の中で帰責の判定された人間の停止、1停止1行(ADR 0312 決定7)。 */
-export const STOPS_ATTRIBUTED_NOTE =
-  "One row per human stop whose attribution was judged in this window, with the latest judgment up to this window's end: the stopped task " +
-  "and session, the human's reason, and the cause, evidence, wrong_memory_entries and round of that judgment.";
+/** 帰責の2部分(両主題、ADR 0312 決定3): 窓の中で帰責の付いた異議の行(決定5・6)と、窓の中で帰責の判定された人間の停止の1停止1行(決定7)。 */
+export const attributionParts = (precedents: unknown[], stops: ReadonlyArray<{ row: unknown }>) =>
+  ({
+    "Objected decisions": [
+      "Rows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.",
+      precedents,
+      "no objected decisions",
+    ],
+    "Stops attributed": [
+      "One row per human stop whose attribution was judged in this window, with the latest judgment up to this window's end: the stopped task " +
+        "and session, the human's reason, and the cause, evidence, wrong_memory_entries and round of that judgment.",
+      stops.map((s) => s.row),
+      "no stops attributed",
+    ],
+  }) satisfies Record<string, MaterialPartRows>;
+
+/** 写像の部分を、写像の順で materialSection の部分に並べる。 */
+export const partEntries = (parts: Record<string, MaterialPartRows>) => Object.entries(parts).map(([heading, part]) => [heading, ...part] as [string, ...MaterialPartRows]);
 
 /** 異議つき判断の行のうち、主題 `kind` の完了の verb が書いた型つきの判断(ADR 0279 決定5): 次周期の Items to judge が名指す対象を読む。 */
 export const objectedJudgments = <K extends MetaReviewSubject>(db: Db, precedents: readonly { decision_event_id: number }[], kind: K) =>

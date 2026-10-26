@@ -20,19 +20,20 @@ import {
 } from "./execution-setting.js";
 import { type Cell, cellJson, loadEpisodes, loadSeeds, type RoutingEpisode, type TrackRecord } from "./learner.js";
 import {
+  attributionParts,
   completeMetaReview,
   injectedMaterial,
   inWindow,
   type MaterialPart,
+  type MaterialPartRows,
   type MetaReviewWindow,
   materialSection,
   metaReviewWindow,
-  OBJECTED_DECISIONS_NOTE,
   objectedJudgments,
+  partEntries,
   previousMetaReviewWatermark,
   ROUTING_META_REVIEW_VERBS,
   repairJudgments,
-  STOPS_ATTRIBUTED_NOTE,
 } from "./meta-review.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
@@ -463,9 +464,8 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
       [...cells, ...rows],
       "no new cells or changed rows",
     ],
-    "Objected decisions": [OBJECTED_DECISIONS_NOTE, parts.precedents, "no objected decisions"],
-    "Stops attributed": [STOPS_ATTRIBUTED_NOTE, parts.stops.map((s) => s.row), "no stops attributed"],
-  } satisfies Record<MaterialPart<"routing">, [note: string, rows: unknown[], empty: string]>;
+    ...attributionParts(parts.precedents, parts.stops),
+  } satisfies Record<MaterialPart<"routing">, MaterialPartRows>;
   const section = materialSection("routing", window, [
     [
       "Table and settings",
@@ -473,7 +473,7 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
       [parts.settings],
       "no settings",
     ],
-    ...Object.entries(material).map(([heading, part]) => [heading, ...part] as [string, string, unknown[], string]),
+    ...partEntries(material),
     ["Settled proposals", "Proposals of read_routing_settings answered or settled as observed in this window.", parts.proposals, "no settled proposals"],
     [
       "Items to judge",

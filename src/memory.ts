@@ -9,10 +9,12 @@ import { DomainError } from "./domain-error.js";
 import { appendEvent, currentAttributions, type EventOrigin, type EventPayload, type EventRow, type EventRowOf, getEvent, isDecisionLogEntry, listEvents, listEventsOfKinds, sessionSpawnOf, sessionWindow, stopJudgments } from "./events.js";
 import { landingAnnotation, settledByObservation } from "./landing.js";
 import {
+  attributionParts,
   completeMetaReview,
   injectedMaterial,
   inWindow,
   type MaterialPart,
+  type MaterialPartRows,
   MEMORY_META_REVIEW_VERBS,
   MEMORY_REPAIR_VERBS,
   META_REVIEW_SUBJECTS,
@@ -21,13 +23,12 @@ import {
   materialEvents,
   materialSection,
   metaReviewWindow,
-  OBJECTED_DECISIONS_NOTE,
   objectedJudgments,
   objectedRowIds,
+  partEntries,
   previousMetaReviewWatermark,
   repairJudgments,
   rowSubjectSql,
-  STOPS_ATTRIBUTED_NOTE,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
@@ -2748,15 +2749,14 @@ function memoryMaterial(db: Db, window: Required<MetaReviewWindow>, hidden: Set<
       parts.store_changes,
       "no store changes",
     ],
-    "Objected decisions": [OBJECTED_DECISIONS_NOTE, parts.precedents, "no objected decisions"],
-    "Stops attributed": [STOPS_ATTRIBUTED_NOTE, parts.stops.map((s) => s.row), "no stops attributed"],
-  } satisfies Record<MaterialPart<"memory">, [note: string, rows: unknown[], empty: string]>;
+    ...attributionParts(parts.precedents, parts.stops),
+  } satisfies Record<MaterialPart<"memory">, MaterialPartRows>;
   // 材料の部分は写像から描く —— 書いた部分を節に並べ忘れられない(店の変更の次に candidate、残りは写像の順)
-  const { "Store changes": storeChangesPart, ...attributionParts } = material;
+  const { "Store changes": storeChangesPart, ...attributions } = material;
   const section = materialSection("memory", window, [
     ["Store changes", ...storeChangesPart],
     ["Live candidates", "Rows of list_memory_candidates: every candidate not invalidated, whenever it was drafted.", parts.candidates, "no live candidates"],
-    ...Object.entries(attributionParts).map(([heading, part]) => [heading, ...part] as [string, string, unknown[], string]),
+    ...partEntries(attributions),
     ["Settled proposals", "Rows of list_memory_proposals answered or settled as stale in this window.", parts.proposals, "no settled proposals"],
     ["Branches", "Rows of list_memory_branches: the whole tree.", parts.branches, "no branches"],
     [

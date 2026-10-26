@@ -712,7 +712,7 @@ export type EventPayload =
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4。エントリの項目の id も seen に数える、issue #2307)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
   // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed(allocation_review_event_ids)、新しいセルの初観測(cell_event_ids —— worker_exited、本番の session の無い種のセルは種の event)、人間が変えた行(row_change_event_ids —— execution_settings_changed)、
-  // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
+  // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、停止の帰責(stop_attributed_event_ids —— memory と同じ、ADR 0312 決定3)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
   // 鍵の規則(ADR 0311 決定4): 配列の鍵は持っている id の物を名指す。部分の名前がそれを名指していれば、そのまま
   | (MetaReviewMaterialCommon & { subject: "memory"; changed_memory_entry_ids: number[]; candidates: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; stop_attributed_event_ids: number[]; proposals: string[]; proposal_memory_entry_ids: number[]; branch_definition_ids: number[]; items: MemoryJudgmentItem[] })
   | (MetaReviewMaterialCommon & { subject: "routing"; shadow: number[]; shadow_rows: number; shadow_rows_multi_candidate: number; allocation_review_event_ids: number[]; cell_event_ids: number[]; row_change_event_ids: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; stop_attributed_event_ids: number[]; proposals: string[]; items: RoutingJudgmentItem[] })
