@@ -150,7 +150,17 @@ it starts.
 - `record.json` holds the same rows with each session's agent and board-verb sequence, and the run-level sections:
   `spend` (each section by use, subject or task type, with its total; the learning and unclassified sessions listed
   with their agent and board-verb sequence),
-  `human_steps`, `decision_rows`, `proposals`, `shadow`, `memory_writes`, `interviews`.
+  `human_steps`, `decision_rows`, `proposals`, `shadow`, `memory_writes`, `interviews`. Each session row's `record`
+  is the relative path of its session file.
+- `sessions/<task id>.<worker_spawned event id>.md` is one file per session the record counts (exercise trees,
+  learning, unclassified): the prompt the worker received (the user prompt, then each system part under its own
+  heading, the definition with its builtin flag and version) and every board verb call in transcript order with
+  its arguments and response in full as JSON. A response is the text the worker saw, so a response cut to the
+  response budget ends with the board's `[tidepool: response cut to …]` marker. An error result is marked
+  `(error)`. Other tools (Bash, Read, …) are not shown. A session whose prompt was not recorded says so in one
+  line. The worker's stderr is never read.
+- To follow an exercise down, read its row in `summary.md`, then its session rows in `record.json`, then the
+  session files those rows name.
 - Compare two records only when their `config` blocks differ in the axis you mean to compare.
 
 ## Exercises

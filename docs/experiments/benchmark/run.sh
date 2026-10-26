@@ -390,10 +390,11 @@ extract_record() {
   } | jq -s --argjson steps "$(vm 'cat ~/bench/human-steps.jsonl 2> /dev/null || true' | jq -s .)" '{config: .[0], exercises: .[1:], human_steps: $steps}' > "$input"
   limactl copy "$input" "$BENCH_VM:bench/input.json"
   rm -f "$input"
-  vm "source ~/bench/env && cd ~/bench && $TSX run \"\$TIDEPOOL_DB\" \"\$TIDEPOOL_WORKER_LOGS\" input.json results"
   OUT="$RESULTS/$(date +%Y-%m-%d)-$LABEL"
-  mkdir -p "$OUT"
-  limactl copy "$BENCH_VM:bench/results/record.json" "$BENCH_VM:bench/results/summary.md" "$OUT/"
+  # The VM writes the record under the run's own name, so the directory copied into $RESULTS lands as $OUT (scp and rsync nest it alike)
+  vm "source ~/bench/env && cd ~/bench && $TSX run \"\$TIDEPOOL_DB\" \"\$TIDEPOOL_WORKER_LOGS\" input.json \"results/${OUT##*/}\""
+  mkdir -p "$RESULTS"
+  limactl copy -r "$BENCH_VM:bench/results/${OUT##*/}" "$RESULTS/"
 }
 
 # Paused, then stopped: the state stays for the human to read (ADR 0298 決定7), and --serve brings it back paused.

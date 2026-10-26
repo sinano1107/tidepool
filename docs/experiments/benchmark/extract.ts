@@ -8,12 +8,14 @@ import { latestEventOfTask, listEvents, listEventsOfKinds } from "../../../src/e
 import { executionSettingsChangeSchema, interviewTargetSchema } from "../../../src/execution-setting.js";
 import { settledByObservation } from "../../../src/landing.js";
 import { firstMetaReviewSchema, type MetaReviewSubject, metaReviewSettingsChangeSchema } from "../../../src/meta-review.js";
-import { EXTRACTOR_VERSION, projectEpisode } from "../../../src/precedent.js";
+import { type EpisodeAction, EXTRACTOR_VERSION, projectEpisode } from "../../../src/precedent.js";
 import { questionKindOf } from "../../../src/question-kind.js";
 import { requiredTextSchema } from "../../../src/required-text-schema.js";
 import { listRoutingShadow } from "../../../src/routing-review.js";
+import { parseStreamLine } from "../../../src/stream-json.js";
 import { isSettled } from "../../../src/task-status.js";
 import { getTask, interviewRoomPath, isRca, isRepairType, latestPosedProbe, listChildren, listExaminees, type Task } from "../../../src/tasks.js";
+import type { PromptRecord } from "../../../src/transcript-store.js";
 
 /** 実行設定の表の1行。綴りは盤面の表の行を足す変更(`setting: "row"`)の row で、検査もその schema に任せる。 */
 const tableRowSchema = z.record(z.string(), z.unknown()).superRefine((row, ctx) => {
@@ -187,30 +189,97 @@ function subtree(db: Db, root: Task): Task[] {
 }
 
 /** worker session 1本: 走らせた agent・Harness・費用(worker_exited の値 = Claude の result 行の total_cost_usd、Codex は null)と、
- *  transcript から読んだ盤面の verb の列。transcript は盤面が書く名前(`<task>.<worker_spawned の id>.stream.jsonl`)で開き、
- *  dir を一覧しない —— 同じ dir の `.stderr.log` は秘密を含みうるので開かない。 */
-function sessions(db: Db, logDir: string, task: Task) {
+ *  transcript から読んだ盤面の verb の列、session のファイル(`files` に書く)の相対 path。transcript は盤面が書く名前
+ *  (`<task>.<worker_spawned の id>.stream.jsonl` / `.prompt.json`)で開き、dir を一覧しない —— 同じ dir の `.stderr.log` は秘密を
+ *  含みうるので開かない(ADR 0313 決定6)。 */
+function sessions(db: Db, logDir: string, task: Task, files: Map<string, string>) {
   const events = listEvents(db, task.id);
   return events.flatMap((spawned) => {
     if (spawned.payload.kind !== "worker_spawned") return [];
     const exited = events.find((e) => e.payload.kind === "worker_exited" && e.payload.worker_spawned_event_id === spawned.id)?.payload;
-    const path = join(logDir, `${task.id}.${spawned.id}.stream.jsonl`);
-    const verbs = existsSync(path)
-      ? projectEpisode({ transcriptLines: readFileSync(path, "utf8").split("\n"), events, workerSpawnedEventId: spawned.id, extractorVersion: EXTRACTOR_VERSION })
-          .actions.filter((a) => a.tool.startsWith(VERB_PREFIX))
-          .map((a) => a.tool.slice(VERB_PREFIX.length))
-      : null;
-    return [
-      {
-        task_id: task.id,
-        agent: spawned.actor_id,
-        // 欄の無い古い worker_spawned は Claude —— 投影器(projectEpisode)と同じ読み
-        harness: spawned.payload.harness ?? "claude-code",
-        cost_usd: exited?.kind === "worker_exited" ? (exited.usage?.estimated_cost_usd ?? null) : null,
-        verbs,
-      },
-    ];
+    const base = join(logDir, `${task.id}.${spawned.id}`);
+    const lines = existsSync(`${base}.stream.jsonl`) ? readFileSync(`${base}.stream.jsonl`, "utf8").split("\n") : null;
+    const calls =
+      lines &&
+      projectEpisode({ transcriptLines: lines, events, workerSpawnedEventId: spawned.id, extractorVersion: EXTRACTOR_VERSION }).actions.filter((a) =>
+        a.tool.startsWith(VERB_PREFIX),
+      );
+    const row = {
+      task_id: task.id,
+      agent: spawned.actor_id,
+      // 欄の無い古い worker_spawned は Claude —— 投影器(projectEpisode)と同じ読み
+      harness: spawned.payload.harness ?? "claude-code",
+      cost_usd: exited?.kind === "worker_exited" ? (exited.usage?.estimated_cost_usd ?? null) : null,
+      verbs: calls?.map((a) => a.tool.slice(VERB_PREFIX.length)) ?? null,
+      record: `sessions/${task.id}.${spawned.id}.md`,
+    };
+    files.set(row.record, sessionFile(row, spawned.id, readPrompt(`${base}.prompt.json`), lines && calls && verbCalls(lines, calls)));
+    return [row];
   });
+}
+
+/** spawn の prompt の記録。無い・parse できない(書き込みの途中で落ちた)ものは記録されていない扱い。 */
+function readPrompt(path: string): PromptRecord | null {
+  if (!existsSync(path)) return null;
+  try {
+    return JSON.parse(readFileSync(path, "utf8")) as PromptRecord;
+  } catch (err) {
+    if (err instanceof SyntaxError) return null;
+    throw err;
+  }
+}
+
+/** 盤面 verb の呼び出しごとの引数と応答の本文(ADR 0313 決定5): 行の解釈は Episode に任せ、本文だけ id で引く —— Claude は
+ *  `tool_use.input` と(後の行の)`tool_result.content`、Codex は `mcp_tool_call` の `arguments` と `result.content`。 */
+function verbCalls(lines: readonly string[], calls: readonly EpisodeAction[]) {
+  const bodies = new Map<string, { input?: unknown; result?: unknown }>();
+  const body = (id: unknown) => {
+    if (!bodies.has(String(id))) bodies.set(String(id), {});
+    return bodies.get(String(id))!;
+  };
+  for (const line of lines) {
+    const parsed = parseStreamLine(line);
+    const item = parsed?.item as Record<string, unknown> | undefined;
+    if (parsed?.type === "item.completed" && item?.type === "mcp_tool_call") Object.assign(body(item.id), { input: item.arguments, result: (item.result as { content?: unknown } | null)?.content });
+    const content = (parsed?.message as { content?: unknown } | undefined)?.content;
+    for (const block of Array.isArray(content) ? (content as Record<string, unknown>[]) : []) {
+      if (block.type === "tool_use") body(block.id).input = block.input;
+      if (block.type === "tool_result") body(block.tool_use_id).result = block.content;
+    }
+  }
+  return calls.map((call) => ({ verb: call.tool.slice(VERB_PREFIX.length), failed: call.failed, ...bodies.get(call.toolUseId) }));
+}
+
+/** 本文を中の backtick の列より長い fence で包む —— prompt の見出しや fence が session のファイルの節と混ざらない。 */
+function fenced(text: string, info = ""): string {
+  const fence = "`".repeat(Math.max(2, ...(text.match(/`+/g) ?? []).map((run) => run.length)) + 1);
+  return `${fence}${info}\n${text}\n${fence}`;
+}
+
+const json = (value: unknown) => fenced(JSON.stringify(value ?? null, null, 2), "json");
+
+/** session のファイル(ADR 0313 決定4): 見出し、受けた prompt、盤面 verb の往復を transcript の順に。 */
+function sessionFile(
+  row: { task_id: string; agent: string; harness: string },
+  spawnedId: number,
+  prompt: PromptRecord | null,
+  calls: ReturnType<typeof verbCalls> | null,
+): string {
+  const parts = prompt
+    ? [
+        "## User prompt",
+        fenced(prompt.user),
+        ...prompt.system.flatMap((p) => [
+          `## System: ${p.part}`,
+          ...(p.part === "definition" ? [`builtin: ${p.builtin}, registry_commit: ${p.registry_commit}, definition_version: ${p.definition_version}`] : []),
+          fenced(p.text),
+        ]),
+      ]
+    : ["prompt not recorded"];
+  const verbs = calls
+    ? calls.flatMap((call, i) => [`### ${i + 1}. ${call.verb}${call.failed ? " (error)" : ""}`, "Arguments:", json(call.input), "Response:", json(call.result)])
+    : ["transcript not recorded"];
+  return [`# ${row.task_id} · session ${spawnedId}`, `agent: ${row.agent}, harness: ${row.harness}, worker_spawned: ${spawnedId}`, ...parts, "## Board verbs", ...verbs, ""].join("\n\n");
 }
 
 /** 費用を Harness(Provider)ごとに足し、費用の無いものは和に入れず数える —— 部分和を全額と読ませない。 */
@@ -295,7 +364,7 @@ function shadowRows(db: Db) {
 }
 
 /** 課題1つの列。着地の question は着地する task の子ではなく、その task を名指す。 */
-function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { exercise, task_id, test_exit }: ExerciseRun) {
+function exerciseRecord(db: Db, logDir: string, files: Map<string, string>, boardTasks: readonly Task[], { exercise, task_id, test_exit }: ExerciseRun) {
   const root = getTask(db, task_id);
   if (!root) throw new Error(`exercise ${exercise.name}: no task ${task_id} on the board`);
   const tree = subtree(db, root);
@@ -321,7 +390,7 @@ function exerciseRecord(db: Db, logDir: string, boardTasks: readonly Task[], { e
     if (latestEventOfTask(db, task.id, "task_registered")?.payload.opened_on_event_ids?.length && !isRca(db, task.id)) repairs[task.type] = (repairs[task.type] ?? 0) + 1;
   }
   // 記録から学ぶ task(RCA review と記憶・routing の修理子)は走行の節に置き、課題の行の費用から外す
-  const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task));
+  const treeSessions = [...tasks, ...replaced].filter((task) => learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task, files));
   const { cost_usd, unpriced } = tally(treeSessions.map(priced));
   return {
     name: exercise.name,
@@ -374,7 +443,7 @@ const SECTION_OF_USE = {
 
 /** 走行の支出の節(ADR 0299 決定5): Board call の行は用途ごとに Provider で、記録から学ぶ session は置き場ごとに Harness で足す。
  *  どの課題の木にも、どの節にも入らない worker session は未分類として並べる。 */
-function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: ReturnType<typeof exerciseRecord>[]) {
+function spend(db: Db, logDir: string, files: Map<string, string>, boardTasks: readonly Task[], exercises: ReturnType<typeof exerciseRecord>[]) {
   const calls = listBoardCalls(db);
   /** 節の Board call の行(用途ごと)と、節の総和(Provider / Harness ごと)。 */
   const section = (name: (typeof SECTION_OF_USE)[BoardCallUse], sessionEntries: readonly Priced[] = []) => {
@@ -384,7 +453,7 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
   // agent と verb の列は課題の行と同じく session ごとに残す —— 課題の行の sessions は行の費用と一致させるので、ここに並べる
   const learningSessions = boardTasks.flatMap((task) => {
     const group = learningGroup(db, task);
-    return group === null ? [] : sessions(db, logDir, task).map((s) => ({ group, ...s }));
+    return group === null ? [] : sessions(db, logDir, task, files).map((s) => ({ group, ...s }));
   });
   const learning = learningSessions.map((s) => ({ group: s.group, ...priced(s) }));
   const onExercise = new Set(exercises.flatMap((e) => e.sessions.map((s) => s.task_id)));
@@ -393,7 +462,7 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
     learning: { ...section("learning", learning), sessions: tallyBy(learning), worker_sessions: learningSessions },
     human_surface: section("human_surface"),
     observation: section("observation"),
-    unclassified: boardTasks.filter((task) => !onExercise.has(task.id) && learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task)),
+    unclassified: boardTasks.filter((task) => !onExercise.has(task.id) && learningGroup(db, task) === null).flatMap((task) => sessions(db, logDir, task, files)),
   };
 }
 
@@ -401,12 +470,14 @@ function spend(db: Db, logDir: string, boardTasks: readonly Task[], exercises: R
 export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], config: RunConfig, humanSteps: readonly HumanStep[]) {
   // 盤面の task すべて(一覧の読み口は決着した木を落とすので、登録の event から引く)
   const boardTasks = listEventsOfKinds(db, ["task_registered"]).flatMap((e) => (e.task_id === null ? [] : [getTask(db, e.task_id)!]));
-  const exercises = runs.map((run) => exerciseRecord(db, logDir, boardTasks, run));
+  // session のファイル(相対 path → 本文)。session の行が path を持つ
+  const sessionFiles = new Map<string, string>();
+  const exercises = runs.map((run) => exerciseRecord(db, logDir, sessionFiles, boardTasks, run));
   const record = {
     config,
     exercises,
     human_steps: humanSteps,
-    spend: spend(db, logDir, boardTasks, exercises),
+    spend: spend(db, logDir, sessionFiles, boardTasks, exercises),
     decision_rows: boardTasks.flatMap((review) =>
       review.meta_review_subject === null
         ? []
@@ -454,7 +525,7 @@ export function extract(db: Db, logDir: string, runs: readonly ExerciseRun[], co
         : [],
     ),
   };
-  return { record, markdown: summary(exercises, record.spend, humanSteps) };
+  return { record, markdown: summary(exercises, record.spend, humanSteps), sessionFiles };
 }
 
 const minutes = (ms: number) => `${Math.round(ms / 60_000)}m`;
@@ -534,7 +605,7 @@ const readOnly = (path: string) => new Database(path, { readonly: true, fileMust
  *  `current-root` は retry の後の今の root の id を印字する(harness が決着待ちの poll ごとに呼ぶ)。
  *  `position` は列の項目ごとの再開の位置を JSON で印字する(harness が列を始める前に呼ぶ)。
  *  `first-meta-review` は人間の段の初回の meta-review の root と決着を JSON で印字する(harness がその段の poll ごとに呼ぶ)。
- *  `run` は record.json と summary.md を書く。どれも盤面と同じ commit の checkout から走らせる。 */
+ *  `run` は record.json・summary.md と session ごとのファイル(`sessions/`)を書く。どれも盤面と同じ commit の checkout から走らせる。 */
 function main([command, ...args]: string[]): void {
   if (command === "check" && args.length === 1) {
     loadSequence(args[0]!);
@@ -559,10 +630,11 @@ function main([command, ...args]: string[]): void {
   const parsed = runInputSchema.safeParse(JSON.parse(readFileSync(inputPath, "utf8")));
   if (!parsed.success) throw new Error(`${inputPath}:\n${z.prettifyError(parsed.error)}`);
   const runs = parsed.data.exercises.map(({ dir, task_id, test_exit }) => ({ exercise: loadExercise(dir), task_id, test_exit }));
-  const { record, markdown } = extract(readOnly(dbPath), logDir, runs, parsed.data.config, parsed.data.human_steps);
-  mkdirSync(outDir, { recursive: true });
+  const { record, markdown, sessionFiles } = extract(readOnly(dbPath), logDir, runs, parsed.data.config, parsed.data.human_steps);
+  mkdirSync(join(outDir, "sessions"), { recursive: true });
   writeFileSync(join(outDir, "record.json"), `${JSON.stringify(record, null, 2)}\n`);
   writeFileSync(join(outDir, "summary.md"), markdown);
+  for (const [path, text] of sessionFiles) writeFileSync(join(outDir, path), text);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.filename) main(process.argv.slice(2));

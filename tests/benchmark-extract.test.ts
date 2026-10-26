@@ -184,9 +184,10 @@ const interviewExercise = (name: string): Exercise =>
     interview: { hypothesis: "h", tier: "standard", targets: [{ provider: "anthropic", model: "claude-opus-5-5", effort: "high" }] },
   }) as Exercise;
 
-/** fixture の transcript を、盤面の TranscriptStore と同じ名前(`<task>.<worker_spawned の id>.stream.jsonl`)で worker-logs に置く。 */
+/** fixture の transcript(stream と prompt)を、盤面の TranscriptStore と同じ名前(`<task>.<worker_spawned の id>.stream.jsonl` /
+ *  `.prompt.json`)で worker-logs に置く。 */
 function placeTranscript(logs: string, fixture: string, taskId: string, spawnedId: number): void {
-  copyFileSync(join(import.meta.dirname, "fixtures", fixture), join(logs, `${taskId}.${spawnedId}.stream.jsonl`));
+  for (const file of ["stream.jsonl", "prompt.json"]) copyFileSync(join(import.meta.dirname, "fixtures", `${fixture}.${file}`), join(logs, `${taskId}.${spawnedId}.${file}`));
 }
 
 /** 盤面が刻む worker session 1本(worker_spawned と worker_exited)。費用は盤面が result 行の total_cost_usd を写した値で、Codex は null。 */
@@ -201,20 +202,20 @@ function session(db: Db, taskId: string, agent: string, harness: "claude-code" |
 const workTask = (db: Db, title: string) => registerTask(db, { type: "work", title, purpose: "p", completion_criteria: "c" }, AT, ...HUMAN_WEBUI).id;
 
 /** #386 の Claude の session(2.1.237)と run A(#1231)の Codex の session(0.147.0)を、それぞれ別の task に置いた盤面。 */
-function claudeAndCodexBoard(): { db: Db; logs: string; claudeTask: string; codexTask: string } {
+function claudeAndCodexBoard(): { db: Db; logs: string; claudeTask: string; codexTask: string; claudeSpawned: number; codexSpawned: number } {
   const db = openDb(":memory:");
   const [claudeTask, codexTask] = [workTask(db, "claude"), workTask(db, "codex")] as [string, string];
   // fixture の result 行の total_cost_usd
   const claudeSpawned = session(db, claudeTask, "tako", "claude-code", 0.7102510000000001);
   const codexSpawned = session(db, codexTask, "codex-agent", "codex", null);
   const logs = scratch();
-  placeTranscript(logs, "worker-session-2.1.237.stream.jsonl", claudeTask, claudeSpawned);
-  placeTranscript(logs, "worker-session-codex-0.147.0.stream.jsonl", codexTask, codexSpawned);
-  return { db, logs, claudeTask, codexTask };
+  placeTranscript(logs, "worker-session-2.1.237", claudeTask, claudeSpawned);
+  placeTranscript(logs, "worker-session-codex-0.147.0", codexTask, codexSpawned);
+  return { db, logs, claudeTask, codexTask, claudeSpawned, codexSpawned };
 }
 
 it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の verb 呼び出し列が出て、費用は Harness 併記で worker_exited の値", () => {
-  const { db, logs, claudeTask, codexTask } = claudeAndCodexBoard();
+  const { db, logs, claudeTask, codexTask, claudeSpawned, codexSpawned } = claudeAndCodexBoard();
 
   const { record } = extract(
     db,
@@ -236,6 +237,7 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
       harness: "claude-code",
       cost_usd: 0.7102510000000001,
       verbs: ["get_current_task", "log_decision", "log_decision", "log_decision", "complete_task"],
+      record: `sessions/${claudeTask}.${claudeSpawned}.md`,
     },
   ]);
   expect(claude).toMatchObject({ cost_usd_by_harness: { "claude-code": 0.7102510000000001 }, unpriced_sessions_by_harness: {} });
@@ -247,10 +249,178 @@ it("fixture の stream.jsonl(Claude と Codex)から agent ごとの盤面の ve
       harness: "codex",
       cost_usd: null,
       verbs: ["get_current_task", "read_memory", "log_decision", "read_memory", "search_memory", "complete_task"],
+      record: `sessions/${codexTask}.${codexSpawned}.md`,
     },
   ]);
   // 費用の無い session は和に入れず数える —— 部分和を全額と読まない
   expect(codex).toMatchObject({ cost_usd_by_harness: {}, unpriced_sessions_by_harness: { codex: 1 } });
+});
+
+/** 文字列が順に現れる(前の出現より後ろにある)こと。 */
+function expectInOrder(text: string, parts: readonly string[]): void {
+  let from = 0;
+  for (const part of parts) {
+    const at = text.indexOf(part, from);
+    expect(at, part).toBeGreaterThanOrEqual(from);
+    from = at + part.length;
+  }
+}
+
+it("session ごとのファイルに、受けた prompt(user と部分ごとの本文)と盤面 verb の引数・応答の全文が transcript の順に出る", () => {
+  const { db, logs, claudeTask, codexTask, claudeSpawned, codexSpawned } = claudeAndCodexBoard();
+
+  const { sessionFiles } = extract(
+    db,
+    logs,
+    [
+      { exercise: exercise("claude"), task_id: claudeTask, test_exit: 0 },
+      { exercise: exercise("codex"), task_id: codexTask, test_exit: 1 },
+    ],
+    CONFIG,
+    [],
+  );
+
+  const claude = sessionFiles.get(`sessions/${claudeTask}.${claudeSpawned}.md`)!;
+  // 見出し: task・agent・Harness・spawn の event id
+  expectInOrder(claude, [claudeTask, "tako", "claude-code", String(claudeSpawned)]);
+  // get_current_task の応答は transcript の本文のまま全文(fixture の tool_result の text)
+  const firstResult = fs
+    .readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8")
+    .split("\n")
+    .flatMap((line) => (line.includes('"tool_use_id":"toolu_01JDPubsAp5MZDERRsjJ7wNc"') ? [JSON.parse(line).message.content[0].content[0].text as string] : []))[0]!;
+  expectInOrder(claude, [
+    "Work on your current task. Start by calling get_current_task.",
+    "definition",
+    "builtin: false",
+    "def456",
+    "tako@3",
+    "You are tako, a careful generalist who writes small, tested changes.",
+    "authority",
+    "\n\n## Authority\n\nYou may decompose into children assigned to your roster.",
+    "roster",
+    "\n\n## Roster\n\n- deckhand: writes code in one workspace",
+    "doctrine",
+    '\n\n## Board doctrine\n\nLog each decision with `log_decision`:\n\n```\nlog_decision({ line: \"...\" })\n```',
+    "protocol",
+    "\n\n## Protocol\n\nCall `get_current_task` first and `complete_task` last.",
+    "get_current_task",
+    JSON.stringify(firstResult),
+    "log_decision",
+    '"line": "kept the note to three bullets"',
+    '"{\\"logged\\":true,\\"event_id\\":6}"',
+    '"{\\"logged\\":true,\\"event_id\\":7}"',
+    '"line": "subagent reported notes.md word count as 62"',
+    '"{\\"logged\\":true,\\"event_id\\":8}"',
+    "complete_task",
+    '"outcome": "Created notes.md with 3 bullets on tide pools',
+    '\\"status\\":\\"done\\"',
+  ]);
+
+  const codex = sessionFiles.get(`sessions/${codexTask}.${codexSpawned}.md`)!;
+  // 組み込みの定義は本文が空でも節があり、builtin 旗と版が出る。最後の部分は末尾の空行ごと
+  expectInOrder(codex, [
+    codexTask,
+    "codex-agent",
+    "codex",
+    String(codexSpawned),
+    "Task: exp1231 canary\nPurpose: measure\nCompletion criteria: follow the user prompt",
+    "definition",
+    "builtin: true",
+    "auditor@builtin-7",
+    "doctrine",
+    "\n\n## Board doctrine\n\nRead the memory before you decide.",
+    "protocol",
+    "\n\n## Protocol\n\nCall get_current_task first and complete_task last.\n\n",
+    "get_current_task",
+    '\\"id\\":\\"t1231\\"',
+    "read_memory",
+    '"ids": [\n',
+    "unknown memory id: 999",
+    "search_memory",
+    '"query": "x"',
+    "search backend exploded (protocol-level throw)",
+    "complete_task",
+  ]);
+});
+
+it("切れた応答は目印ごと無変更で出て、盤面 verb 以外の tool は出ず、エラーの応答には印が付く", () => {
+  const { db, logs, claudeTask, codexTask, claudeSpawned, codexSpawned } = claudeAndCodexBoard();
+  // 応答予算で切れた応答(ADR 0195 決定5 の目印)と is_error の応答を持つ Claude の session
+  const cut = workTask(db, "cut");
+  const cutSpawned = session(db, cut, "tako", "claude-code", null);
+  const marker = "[tidepool: response cut to the 40000-byte response budget by a board defect — read_history returned 91234 bytes. The text above is incomplete.]";
+  const use = (id: string, name: string, input: unknown) => ({ type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } });
+  const result = (id: string, text: string, isError?: true) => ({
+    type: "user",
+    message: { content: [{ type: "tool_result", tool_use_id: id, content: [{ type: "text", text }], ...(isError ? { is_error: true } : {}) }] },
+  });
+  writeFileSync(
+    join(logs, `${cut}.${cutSpawned}.stream.jsonl`),
+    [
+      use("toolu_a", "mcp__tidepool__read_history", { task_id: "t1" }),
+      use("toolu_b", "Bash", { command: "cat /etc/hostname" }),
+      result("toolu_b", "bench-host"),
+      result("toolu_a", `{"events":[{"id":1,"kind":"task_registered"}\n${marker}`),
+      use("toolu_c", "mcp__tidepool__log_decision", {}),
+      result("toolu_c", "line is required", true),
+    ]
+      .map((line) => JSON.stringify(line))
+      .join("\n"),
+  );
+
+  const { sessionFiles } = extract(
+    db,
+    logs,
+    [
+      { exercise: exercise("claude"), task_id: claudeTask, test_exit: 0 },
+      { exercise: exercise("codex"), task_id: codexTask, test_exit: 0 },
+      { exercise: exercise("cut"), task_id: cut, test_exit: 0 },
+    ],
+    CONFIG,
+    [],
+  );
+
+  const cutFile = sessionFiles.get(`sessions/${cut}.${cutSpawned}.md`)!;
+  expect(cutFile).toContain(JSON.stringify(`{"events":[{"id":1,"kind":"task_registered"}\n${marker}`));
+  expect(cutFile).not.toContain("cat /etc/hostname");
+  expect(cutFile).not.toContain("bench-host");
+  expectInOrder(cutFile, ["read_history", "log_decision (error)", "line is required"]);
+  expect(cutFile.match(/\(error\)/g)).toHaveLength(1);
+  // fixture の Write / Agent / Bash の入出力は出ない
+  const claude = sessionFiles.get(`sessions/${claudeTask}.${claudeSpawned}.md`)!;
+  for (const notBoard of ["wc -w /srv/tidepool", "File created successfully", "Count words in notes.md", "Operation not permitted"]) expect(claude).not.toContain(notBoard);
+  // Codex の失敗した item(status: failed)は印が付き、成功には付かない
+  const codex = sessionFiles.get(`sessions/${codexTask}.${codexSpawned}.md`)!;
+  expectInOrder(codex, ["read_memory (error)", "unknown memory id: 999", "search_memory (error)", "search backend exploded"]);
+  expect(codex.match(/\(error\)/g)).toHaveLength(2);
+});
+
+it("prompt.json が無い・parse できない session は「prompt not recorded」になり、行と verb の往復は残る", () => {
+  const { db, logs, claudeTask, codexTask, claudeSpawned, codexSpawned } = claudeAndCodexBoard();
+  rmSync(join(logs, `${claudeTask}.${claudeSpawned}.prompt.json`));
+  // 書き込みの途中で落ちた記録(#2606 の ENOSPC の疑い)
+  writeFileSync(join(logs, `${codexTask}.${codexSpawned}.prompt.json`), '{"harness":"codex","system":[{"part":"defin');
+
+  const { record, sessionFiles } = extract(
+    db,
+    logs,
+    [
+      { exercise: exercise("claude"), task_id: claudeTask, test_exit: 0 },
+      { exercise: exercise("codex"), task_id: codexTask, test_exit: 0 },
+    ],
+    CONFIG,
+    [],
+  );
+
+  for (const [{ sessions: [row] }, verb] of [
+    [record.exercises[0]!, '"line": "kept the note to three bullets"'],
+    [record.exercises[1]!, "unknown memory id: 999"],
+  ] as const) {
+    const file = sessionFiles.get(row!.record)!;
+    expectInOrder(file, ["prompt not recorded", verb]);
+    expect(file).not.toContain("## User prompt");
+    expect(file).not.toContain("## System");
+  }
 });
 
 it("transcript が無い session は verb 列が null で、行は落とさない", () => {
@@ -370,15 +540,16 @@ it("harness の helper で組んだ盤面(task・判断ログ・meta-review の�
   ]);
 });
 
-it("同じディレクトリに .stderr.log を置いても抽出はそれを開かず、中身は記録に出ない", () => {
+it("同じディレクトリに .stderr.log を置いても抽出はそれを開かず、中身は記録にも session のファイルにも出ない", () => {
   const { db, logs, claudeTask, codexTask } = claudeAndCodexBoard();
   const secret = "SECRET-MARKER-7f3a9c";
-  for (const name of fs.readdirSync(logs)) writeFileSync(join(logs, name.replace(".stream.jsonl", ".stderr.log")), `token=${secret}\n`);
+  // stream の隣にだけ置く —— prompt.json の名前は置換されず、prompt を秘密で上書きしてしまう
+  for (const name of fs.readdirSync(logs).filter((n) => n.endsWith(".stream.jsonl"))) writeFileSync(join(logs, name.replace(".stream.jsonl", ".stderr.log")), `token=${secret}\n`);
   vi.mocked(fs.readFileSync).mockClear();
   vi.mocked(fs.openSync).mockClear();
   vi.mocked(fs.createReadStream).mockClear();
 
-  const { record, markdown } = extract(
+  const { record, markdown, sessionFiles } = extract(
     db,
     logs,
     [
@@ -390,10 +561,12 @@ it("同じディレクトリに .stderr.log を置いても抽出はそれを開
   );
 
   const opened = [fs.readFileSync, fs.openSync, fs.createReadStream].flatMap((f) => vi.mocked(f).mock.calls.map(([path]) => String(path)));
-  // transcript は開いている(spy が効いている)が、stderr は1本も開いていない
+  // transcript の stream と prompt は開いている(spy が効いている)が、stderr は1本も開いていない
   expect(opened.filter((path) => path.endsWith(".stream.jsonl"))).toHaveLength(2);
+  expect(opened.filter((path) => path.endsWith(".prompt.json"))).toHaveLength(2);
   expect(opened.filter((path) => path.endsWith(".stderr.log"))).toEqual([]);
-  expect(JSON.stringify(record) + markdown).not.toContain(secret);
+  expect(fs.readdirSync(logs).filter((n) => n.endsWith(".stderr.log"))).toHaveLength(2);
+  expect(JSON.stringify(record) + markdown + [...sessionFiles.values()].join("")).not.toContain(secret);
 });
 
 it("所要時間は登録から木の最後の event までで、pickup 待ち・人間待ち(重なりは1度、観測で閉じた question は閉じた時刻まで)・盤面の時間に分かれ、人間が見ただけの event は伸ばさない", () => {
@@ -641,11 +814,14 @@ it("どの課題の木にもどの節にも入らない worker session は未分
   const work = workTask(db, "the exercise");
   session(db, work, "deckhand", "claude-code", 1);
   const stray = workTask(db, "registered by hand during the run");
-  session(db, stray, "deckhand", "codex", null);
+  const straySpawned = session(db, stray, "deckhand", "codex", null);
 
-  const { record } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG, []);
+  const { record, sessionFiles } = extract(db, scratch(), [{ exercise: exercise("work"), task_id: work, test_exit: 0 }], CONFIG, []);
 
-  expect(record.spend.unclassified).toEqual([{ task_id: stray, agent: "deckhand", harness: "codex", cost_usd: null, verbs: null }]);
+  const path = `sessions/${stray}.${straySpawned}.md`;
+  expect(record.spend.unclassified).toEqual([{ task_id: stray, agent: "deckhand", harness: "codex", cost_usd: null, verbs: null, record: path }]);
+  // 未分類の session もファイルを持つ
+  expect(sessionFiles.get(path)).toContain(stray);
 });
 
 /** 盤面の記録の module で Board call の行を1つ書く(費用 null は測れない)。 */

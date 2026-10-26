@@ -123,7 +123,9 @@ case "$sub" in
         at_call "$CASE_DIR/state/position" position "$(jq -c '[.items[] | {root: null, outcome: null}]' "$CASE_DIR/bench/run.json")" ;;
       *"first-meta-review"*) at_call "$CASE_DIR/state/first-meta-review" first-meta-review '{"root":null,"settled":false}' ;;
       *"export EXERCISE_DIR"*) exit "$TEST_EXIT" ;;
-      *"extract.ts run"*) mkdir -p "$CASE_DIR/bench/results" && touch "$CASE_DIR/bench/results/record.json" "$CASE_DIR/bench/results/summary.md" ;;
+      *"extract.ts run"*)
+        out="$CASE_DIR/bench/$(tr -d '"' <<< "${cmd##* }")"
+        mkdir -p "$out/sessions" && touch "$out/record.json" "$out/summary.md" "$out/sessions/root1.1.md" ;;
     esac
     ;;
   copy)
@@ -295,7 +297,7 @@ steps() {
     -e 's/^curl GET [^ ]* \/settings\/execution.*/read-table/' \
     -e 's/^limactl copy .* tidepool-bench:bench\/input.json$/copy-input/' \
     -e 's/^vm\([^)]*\) .*extract.ts run .*/extract/' \
-    -e 's/^limactl copy tidepool-bench:bench\/results\/.*/copy-results/' \
+    -e 's/^limactl copy -r tidepool-bench:bench\/results\/.*/copy-results/' \
     -e 's/^curl POST [^ ]* \/pause .*"paused":false.*/unpause/' \
     -e 's/^curl POST [^ ]* \/pause.*/pause/' \
     -e 's/^vm\([^)]*\) systemctl --user stop tidepool-bench$/board-stop/' \
@@ -394,6 +396,8 @@ check "new run: nothing deletes the run's state after the extraction" "" \
   "$(sed -n '/extract.ts run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
 check "new run: the record lands in results/<date>-<label> and its path is printed" "1" \
   "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-run" <<< "$output")"
+check "new run: the whole results directory reaches the host, session files included" "./record.json ./sessions/root1.1.md ./summary.md" \
+  "$(cd "$CASE_DIR/results/$(date +%Y-%m-%d)-run" && find . -type f | sort | xargs)"
 check "new run: prints where to open the WebUI" "1" "$(grep -c 'http://127.0.0.1:4700/auth?token=TKN' <<< "$output")"
 
 # period_days from the sequence is set before the first registration.
