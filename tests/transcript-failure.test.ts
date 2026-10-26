@@ -7,7 +7,7 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
-import { type Transcript, TranscriptStore } from "../src/transcript-store.js";
+import { type PromptRecord, RecordContainerError, type Transcript, TranscriptStore } from "../src/transcript-store.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -45,8 +45,8 @@ const teardown = async () => (await api(t.baseUrl, "GET", "/api/queue")).json.te
 /** 盤面に渡す transcript の器。テストは開かれた session の stream をここから取って落とす。 */
 class RecordingTranscripts extends TranscriptStore {
   readonly opened = new Map<string, Transcript>();
-  override open(taskId: string, workerSpawnedEventId: number) {
-    const opened = super.open(taskId, workerSpawnedEventId);
+  override open(taskId: string, workerSpawnedEventId: number, prompt: PromptRecord) {
+    const opened = super.open(taskId, workerSpawnedEventId, prompt);
     this.opened.set(taskId, opened);
     return opened;
   }
@@ -182,6 +182,15 @@ for (const [harness, boot] of HARNESSES) {
     expect(await status(behind.id)).toBe("todo");
   });
 }
+
+it("prompt の記録を書けない器では open が prompt のファイルの絶対 path を名指す RecordContainerError で落ちる —— stream と同じ記録の器の停止の入口(ADR 0313 決定1 / ADR 0266 決定3)", async () => {
+  const dir = await tempDir("transcript-store-");
+  await mkdir(join(dir, "task-p.7.prompt.json"));
+  const open = () => new TranscriptStore(dir).open("task-p", 7, { harness: "claude-code", system: [], user: "u" });
+
+  expect(open).toThrow(RecordContainerError);
+  expect(open).toThrow(expect.objectContaining({ path: join(dir, "task-p.7.prompt.json") }));
+});
 
 /** transcript の open 以外で落ちる launch の同期の失敗 —— 器の失敗ではない。Claude は skill 列挙の continuation の中で、
  *  器の外に置いた spawn の入力の dir が無い。 */

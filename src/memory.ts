@@ -2632,11 +2632,6 @@ export function memoryIndex(
   })();
 }
 
-/** spawn 文面の記憶の枠(両 adapter が共有): 注入の節(指針の節か INDEX)の後ろに主題の材料の節が続く(ADR 0180 決定2・ADR 0279 決定2)。 */
-export function memoryPromptSection(injection: Pick<MemoryInjection, "section">, material: { section: string } | null): string | null {
-  return [injection.section, material?.section].filter(Boolean).join("\n\n") || null;
-}
-
 /** spawn 直後の注入記録(task 帰属、worker_spawned の直後に両 adapter が書く)。 */
 export function recordMemoryInjection(
   db: Db,

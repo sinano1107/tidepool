@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { closeSync, createWriteStream, openSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { PromptPart } from "./board-prose.js";
+import type { Harness } from "./registry.js";
 
 /** 盤面の記録の器(worker transcript を置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
  *  どの task の・どの path への書き込みが・どの例外で落ちたかを運ぶ —— 原因の所在は断言しない。 */
@@ -43,6 +45,14 @@ export interface TranscriptFailure {
   path: string;
 }
 
+/** spawn 時に harness へ渡した prompt 一式(ADR 0313 決定1・2)。`system` を順に空文字で連結した値が Claude の
+ *  `--append-system-prompt` / Codex の `developer_instructions`、`user` が Claude の `-p` / Codex の user turn。 */
+export interface PromptRecord {
+  harness: Harness;
+  system: PromptPart[];
+  user: string;
+}
+
 /** 開いた session の transcript。`stream` の path は fd から作った stream が持たないので別に運ぶ。 */
 export interface Transcript {
   streamPath: string;
@@ -50,9 +60,9 @@ export interface Transcript {
   stderr: WriteStream;
 }
 
-/** worker session ごとの transcript(CONTEXT.md「Transcript」—— stream と stderr の2本で
- *  1単位)を開く盤面側の器(ADR 0149 決定5)。容器(`ProcessContainers`)と同じ立て付けで、
- *  adapter は開いた2本へ pipe するだけである。記録の器への書き込み(この open・解放の検査)と
+/** worker session ごとの transcript(CONTEXT.md「Transcript」—— stream・stderr・prompt の3本で
+ *  1単位、ADR 0313 決定1)を開く盤面側の器(ADR 0149 決定5)。容器(`ProcessContainers`)と同じ立て付けで、
+ *  adapter は開いた stream と stderr へ pipe するだけである —— prompt は open が書き切って閉じる。記録の器への書き込み(この open・解放の検査)と
  *  その失敗方針はこの module 1箇所に住む —— 書けなければ `RecordContainerError`、走ってからなら `onFailed`。順序は
  *  データ依存で固定される —— open は `worker_spawned` の event id を要り、spawn は
  *  open が返した2本へ pipe する。
@@ -66,17 +76,22 @@ export class TranscriptStore {
 
   /** `worker_spawned` の後・spawn の前に同期で開く。開けなければ `RecordContainerError` が呼び手へ返り、
    *  盤面全体の停止になる(ADR 0266 決定4 / ADR 0149 追記1)。ファイル名は event id でセッションごとに一意
-   *  (issue #379 / ADR 0083 追記2)。 */
+   *  (issue #379 / ADR 0083 追記2)。prompt は spawn の前にここで書き切って閉じるので、走ってから書けなくなる経路を持たない。 */
   open(
     taskId: string,
     workerSpawnedEventId: number,
+    prompt: PromptRecord,
   ): Transcript {
     const base = join(this.dir, `${taskId}.${workerSpawnedEventId}`);
     const streamPath = `${base}.stream.jsonl`;
     const streamFd = writeRecord(taskId, streamPath, () => openSync(streamPath, "w"));
+    const promptPath = `${base}.prompt.json`;
     const stderrPath = `${base}.stderr.log`;
     let stderrFd: number;
     try {
+      // prompt は書き切って閉じるので、stderr より先に置けば落ちたとき閉じる fd は stream の1本だけ
+      const promptJson = JSON.stringify(prompt);
+      writeRecord(taskId, promptPath, () => writeFileSync(promptPath, promptJson));
       stderrFd = writeRecord(taskId, stderrPath, () => openSync(stderrPath, "w"));
     } catch (err) {
       closeSync(streamFd);

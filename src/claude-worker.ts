@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse } from "./board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
@@ -21,7 +21,7 @@ import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
-import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, memoryPromptSection, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
+import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
@@ -2103,9 +2103,30 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       });
       recordMemoryInjection(this.options.db, task.id, agent.name, spawnedEventId, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawnedEventId, material, this.options.clock.now());
+      // who the agent is (registry definition body) and what this task type's
+      // authority sounds like (ADR 0056: review overrides the registry profile),
+      // stitched at spawn time. A party review (self RCA) additionally carries
+      // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
+      // (spec #586 C) and, for a meta-review, its material (ADR 0180) come last.
+      // 組むのは open の前 —— 渡す部分の列そのものが transcript の3本目(ADR 0313 決定1)
+      const system = boardProse({
+        db: this.options.db,
+        registryDir: this.options.registry.dir,
+        registry,
+        task,
+        spawnedEventId,
+        definition,
+        profile,
+        // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
+        doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
+        verbs,
+        allowedDomains: workspace.allowed_domains,
+        memory,
+        material,
+      });
       // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
       // process は1つも起きない(ADR 0266 決定4)
-      transcript = this.options.transcripts.open(task.id, spawnedEventId);
+      transcript = this.options.transcripts.open(task.id, spawnedEventId, { harness: "claude-code", system, user: prompt });
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
       markProjectionPending(this.options.db, spawnedEventId);
       // spawn の入力(MCP 設定・sandbox 設定)も同じ dir に置かれるので、transcript の open が器への最初の書き込みになるよう
@@ -2237,26 +2258,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // the capability check are for.
           "--settings",
           sandboxSettingsPath,
-          // who the agent is (registry definition body) and what this task type's
-          // authority sounds like (ADR 0056: review overrides the registry profile),
-          // stitched at spawn time. A party review (self RCA) additionally carries
-          // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
-          // (spec #586 C) comes last.
           "--append-system-prompt",
-          boardProse({
-            db: this.options.db,
-            registryDir: this.options.registry.dir,
-            registry,
-            task,
-            spawnedEventId,
-            systemPrompt: definition.systemPrompt,
-            profile,
-            // ADR 0157 決定2: 委譲先は Agent tool、Workflow tool も実在するので禁止の段落が出る。decompose を伏せた task は分けない(ADR 0247 決定3)
-            doctrine: boardDoctrine({ delegate: "the Agent tool", workflow: true }, verbs),
-            verbs,
-            allowedDomains: workspace.allowed_domains,
-            memorySection: memoryPromptSection(memory, material),
-          }),
+          joinPrompt(system),
         ],
         // the agent's own commits are stamped with the agent's identity (issue
         // #53), merged over the inherited env — never a token (ADR 0024). The
