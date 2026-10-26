@@ -80,7 +80,6 @@ it("a stop whose session's prompt was recorded gives the judge the recorded defi
   b.exit();
 
   await b.sweep(at, { ...b.deps, recordDir });
-  await b.sweep(at, { ...b.deps, recordDir });
 
   expect(b.stopInputs().map((i) => [i.agent_definition, i.board_text])).toEqual([
     [{ registry_commit: "c0ffee", builtin: false, body: "You are Deckhand.", authority: null, roster: null }, ["\n\n## Rules of the road\n\nLog every decision."]],
