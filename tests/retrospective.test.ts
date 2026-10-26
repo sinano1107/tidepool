@@ -12,9 +12,8 @@ import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEn
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { reportProviderUsage } from "../src/throttle.js";
-import { TranscriptStore } from "../src/transcript-store.js";
 import { commitTriage, raiseObjection, startTriage, TRIAGE_TIMEOUT } from "../src/triage.js";
-import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, usagePanelText } from "./fakes.js";
+import { BOARD_CALL_USAGE, FakeAttributionClient, FakeBehaviorDraftClient, healthyUsageText, noRetrospectiveCalls, recordPrompt, usagePanelText } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -1936,9 +1935,7 @@ async function definitionBoard({ system = DECKHAND_RECORD, sessionTask }: { syst
   const task = sessionTask?.(b.db) ?? b.task;
   const spawn = (parts: PromptPart[]) => {
     const spawned = appendEvent(b.db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
-    const { stream, stderr } = new TranscriptStore(recordDir).open(task.id, spawned, { harness: "claude-code", system: parts, user: "" });
-    stream.destroy();
-    stderr.destroy();
+    recordPrompt(recordDir, task.id, spawned, parts);
     return spawned;
   };
   const spawned = spawn(system);

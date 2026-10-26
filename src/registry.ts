@@ -255,13 +255,10 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
  *  (ADR 0270 決定1)。当時の本文は spawn で記録した prompt が持つ(ADR 0314 決定1)。 */
 const BUILT_IN_AUDITOR_SKILLS = ["@workspace"];
 
-function builtInBody(systemPrompt: string): { systemPrompt: string; version: string } {
-  return { systemPrompt, version: createHash("sha256").update(systemPrompt).digest("hex").slice(0, 16) };
-}
-
 const BUILT_IN_AUDITOR: AgentDefinition = {
   name: DEFAULT_AUDITOR_NAME,
-  ...builtInBody(""),
+  systemPrompt: "",
+  version: createHash("sha256").update("").digest("hex").slice(0, 16),
   authority: REVIEWER_AUTHORITY_PROFILE.name,
   description: "Reviews work independently against its completion criteria.",
   provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),

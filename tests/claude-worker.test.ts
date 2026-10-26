@@ -55,6 +55,7 @@ import {
   passthroughContainers,
   recordingPty,
   recordingSpawn,
+  recordPrompt,
   ScriptedWorker,
 } from "./fakes.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, openTestExamineeCheckout, openTestInterviewRoom, POSED_HEAD, poseAccepted, quarantineQuestion, WORKER_SPAWNED } from "./harness.js";
@@ -166,14 +167,6 @@ const definitionPart = (text: string, builtin = false): PromptPart => ({ part: "
 
 /** The reviewer constant's Authority part as a review's spawn records it (ADR 0314 決定5). */
 const REVIEWER_AUTHORITY_PART: PromptPart = { part: "authority", text: `\n\n## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}`, source: "reviewer" };
-
-/** Writes the prompt a past spawn of `taskId` recorded (ADR 0313 決定1) into the worker's record container — the
- *  self RCA reads its 当時版 from here (ADR 0314 決定1). */
-function recordPrompt(logDir: string, taskId: string, spawnedEventId: number, system: PromptPart[]): void {
-  const { stream, stderr } = new TranscriptStore(logDir).open(taskId, spawnedEventId, { harness: "claude-code", system, user: "" });
-  stream.destroy();
-  stderr.destroy();
-}
 
 /** The objected task's record a self RCA anchors on (ADR 0020 part 4): `actorId`
  *  spawned (recording `system` as its prompt), logged one decision, and a human objected to it. */

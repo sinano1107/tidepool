@@ -201,8 +201,7 @@ export function recordedDefinition({ system }: PromptRecord) {
  *  Authority's source is named: a registry profile, the board's repair notice, or the reviewer constant —
  *  pointed at as the RCA's own Authority when that is the same constant (`ownAuthorityIsReviewer`). A spawn whose
  *  lineage had no return destination was given neither section (ADR 0301 決定5). */
-function recordedEvidence(assignee: string, then: ReturnType<typeof recordedDefinition>, ownAuthorityIsReviewer: boolean): string {
-  const { definition, authority, roster } = then;
+function recordedEvidence(assignee: string, { definition, authority, roster }: ReturnType<typeof recordedDefinition>, ownAuthorityIsReviewer: boolean): string {
   const body =
     definition.builtin && definition.text === ""
       ? `You ran then as the board's built-in ${assignee}, whose definition lives in board code, not the registry; its body was empty at that version.`

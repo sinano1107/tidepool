@@ -33,6 +33,7 @@ import {
   fakeAppServerCall,
   passthroughContainers,
   recordingSpawn,
+  recordPrompt,
 } from "./fakes.js";
 import {
   bootTidepool,
@@ -194,13 +195,6 @@ const developerInstructions = (args: string[]) => configValue<string>(args, "dev
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
 
-/** 異議された task の過去の spawn が記録した prompt(ADR 0313 決定1)を fixture の記録の器に書く —— self RCA の当時版はここから読む
- *  (ADR 0314 決定1)。 */
-function recordPrompt(logDir: string, taskId: string, spawnedEventId: number, system: PromptPart[]): void {
-  const { stream, stderr } = new TranscriptStore(logDir).open(taskId, spawnedEventId, { harness: "codex", system, user: "" });
-  stream.destroy();
-  stderr.destroy();
-}
 const codexDefinition = (text: string): PromptPart => ({ part: "definition", text, builtin: false, registry_commit: "c0ffee", definition_version: "1" });
 
 async function fixture(

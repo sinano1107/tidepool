@@ -663,7 +663,7 @@ function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<At
       registry_commit: definition.registry_commit,
       builtin: definition.builtin,
       body: definition.text,
-      authority: authority ? { source: authority.source, ...(authority.profile !== undefined && { profile: authority.profile }), text: authority.text } : null,
+      authority: authority ? { source: authority.source, profile: authority.profile, text: authority.text } : null,
       roster: roster?.text ?? null,
     },
     board_text: prompt.system.flatMap((part) => (BOARD_TEXT_PARTS.includes(part.part) ? [part.text] : [])),

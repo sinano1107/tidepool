@@ -7,7 +7,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
-import { TranscriptStore } from "../src/transcript-store.js";
+import { recordPrompt } from "./fakes.js";
 import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -160,9 +160,7 @@ function recordedSpawn(db: Db, { registryDir, recordDir }: BoardDirs, task: Task
     memory: NO_MEMORY,
     material: null,
   });
-  const { stream, stderr } = new TranscriptStore(recordDir).open(task.id, spawnedEventId, { harness: "claude-code", system, user: "" });
-  stream.destroy();
-  stderr.destroy();
+  recordPrompt(recordDir, task.id, spawnedEventId, system);
   return spawnedEventId;
 }
 
