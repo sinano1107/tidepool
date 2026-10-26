@@ -157,8 +157,8 @@ it starts.
   heading, the definition with its builtin flag and version) and every board verb call in transcript order with
   its arguments and response in full as JSON. A response is the text the worker saw, so a response cut to the
   response budget ends with the board's `[tidepool: response cut to …]` marker. An error result is marked
-  `(error)`. Other tools (Bash, Read, …) are not shown. A session whose prompt was not recorded says so in one
-  line. The worker's stderr is never read.
+  `(error)`. Other tools (Bash, Read, …) are not shown. A session whose prompt or transcript was not recorded says
+  so in one line. The worker's stderr is never read.
 - To follow an exercise down, read its row in `summary.md`, then its session rows in `record.json`, then the
   session files those rows name.
 - Compare two records only when their `config` blocks differ in the axis you mean to compare.

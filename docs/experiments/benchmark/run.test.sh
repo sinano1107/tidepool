@@ -322,6 +322,8 @@ input_json() { jq -c "${1:-.}" "$CASE_DIR/bench/input.json"; }
 reset_case
 printf 'interview\n' > "$CASE_DIR/state/type/root1"
 printf 'todo\ndone\n' > "$CASE_DIR/state/status/root1"
+# An earlier run today under the same label left a session file the new record does not name
+mkdir -p "$CASE_DIR/results/$(date +%Y-%m-%d)-run/sessions" && touch "$CASE_DIR/results/$(date +%Y-%m-%d)-run/sessions/stale.md"
 run_harness
 check "new run: exits 0" "0" "$rc"
 check "new run: runs the whole sequence in order (CLI pins after the checkout move, the exercises in declared order, the next registered only after the previous settled)" "gate-vm-status
@@ -396,7 +398,7 @@ check "new run: nothing deletes the run's state after the extraction" "" \
   "$(sed -n '/extract.ts run/,$p' <<< "$log" | grep -E 'rm -rf|reset-failed' || true)"
 check "new run: the record lands in results/<date>-<label> and its path is printed" "1" \
   "$(grep -c "Run record: $CASE_DIR/results/$(date +%Y-%m-%d)-run" <<< "$output")"
-check "new run: the whole results directory reaches the host, session files included" "./record.json ./sessions/root1.1.md ./summary.md" \
+check "new run: the whole results directory reaches the host, session files included and the last same-label run's gone" "./record.json ./sessions/root1.1.md ./summary.md" \
   "$(cd "$CASE_DIR/results/$(date +%Y-%m-%d)-run" && find . -type f | sort | xargs)"
 check "new run: prints where to open the WebUI" "1" "$(grep -c 'http://127.0.0.1:4700/auth?token=TKN' <<< "$output")"
 

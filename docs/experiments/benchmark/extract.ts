@@ -213,7 +213,7 @@ function sessions(db: Db, logDir: string, task: Task, files: Map<string, string>
       verbs: calls?.map((a) => a.tool.slice(VERB_PREFIX.length)) ?? null,
       record: `sessions/${task.id}.${spawned.id}.md`,
     };
-    files.set(row.record, sessionFile(row, spawned.id, readPrompt(`${base}.prompt.json`), lines && calls && verbCalls(lines, calls)));
+    files.set(row.record, sessionFile(row, spawned.id, readPrompt(`${base}.prompt.json`), lines && calls && verbCalls(row.harness, lines, calls)));
     return [row];
   });
 }
@@ -230,14 +230,22 @@ function readPrompt(path: string): PromptRecord | null {
 }
 
 /** 盤面 verb の呼び出しごとの引数と応答の本文(ADR 0313 決定5): 行の解釈は Episode に任せ、本文だけ id で引く —— Claude は
- *  `tool_use.input` と(後の行の)`tool_result.content`、Codex は `mcp_tool_call` の `arguments` と `result.content`。 */
-function verbCalls(lines: readonly string[], calls: readonly EpisodeAction[]) {
+ *  `tool_use.input` と(後の行の)`tool_result.content`、Codex は `mcp_tool_call` の `arguments` と `result.content`。
+ *  どちらの形で引くかは投影器と同じく Harness で選ぶ。 */
+function verbCalls(harness: string, lines: readonly string[], calls: readonly EpisodeAction[]) {
   const bodies = new Map<string, { input?: unknown; result?: unknown }>();
-  const body = (id: unknown) => bodies.get(String(id)) ?? bodies.set(String(id), {}).get(String(id))!;
+  const body = (id: unknown) => {
+    const key = String(id);
+    if (!bodies.has(key)) bodies.set(key, {});
+    return bodies.get(key)!;
+  };
   for (const line of lines) {
     const parsed = parseStreamLine(line);
-    const item = parsed?.item as Record<string, unknown> | undefined;
-    if (parsed?.type === "item.completed" && item?.type === "mcp_tool_call") Object.assign(body(item.id), { input: item.arguments, result: (item.result as { content?: unknown } | null)?.content });
+    if (harness === "codex") {
+      const item = parsed?.item as Record<string, unknown> | undefined;
+      if (parsed?.type === "item.completed" && item?.type === "mcp_tool_call") Object.assign(body(item.id), { input: item.arguments, result: (item.result as { content?: unknown } | null)?.content });
+      continue;
+    }
     const content = (parsed?.message as { content?: unknown } | undefined)?.content;
     for (const block of Array.isArray(content) ? (content as Record<string, unknown>[]) : []) {
       if (block.type === "tool_use") body(block.id).input = block.input;

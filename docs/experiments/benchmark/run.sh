@@ -393,6 +393,8 @@ extract_record() {
   OUT="$RESULTS/$(date +%Y-%m-%d)-$LABEL"
   # The VM writes the record under the run's own name, so the directory copied into $RESULTS lands as $OUT (scp and rsync nest it alike)
   vm "source ~/bench/env && cd ~/bench && $TSX run \"\$TIDEPOOL_DB\" \"\$TIDEPOOL_WORKER_LOGS\" input.json \"results/${OUT##*/}\""
+  # A new run under the same date and label replaces the record, so the last one's session files go with it
+  rm -rf "$OUT/sessions"
   mkdir -p "$RESULTS"
   limactl copy -r "$BENCH_VM:bench/results/${OUT##*/}" "$RESULTS/"
 }
