@@ -1,5 +1,7 @@
 # transcript を取れない session は走らせず、transcript は盤面側の器として spawn より先に開く
 
+**Status 追記: 決定1 の「stream と stderr の2本で1単位」は ADR 0313 決定1 で3本になった** —— spawn 時に harness へ渡した prompt 一式(`<task>.<worker_spawned の id>.prompt.json`)が3本目で、開く順序と器の失敗方針は同じ(2026-10-26 の grilling、issue #2554)。
+
 2026-09-23 の grilling(issue #909)で決定。worker の transcript / stderr の write stream(Claude)と `'data'` handler 内の `appendFileSync`(Codex)はどちらも書き込み失敗を扱っておらず、logDir の消失・権限・`ENOSPC` で盤面のプロセスごと落ちうる(#908 のテストで ENOENT の形を観測、本番は未観測)。現状調査と `file:line` は issue #909 のコメントに置く。
 
 ## 決定
