@@ -3,7 +3,7 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import { TIER_DEFINITION_RULE } from "./meta-review.js";
-import type { BehaviorDraft, BehaviorDraftClient, BehaviorDraftInput, StopBehaviorDraftInput } from "./retrospective.js";
+import { type BehaviorDraft, type BehaviorDraftClient, type BehaviorDraftInput, OBJECTION_HUMAN_STOP_RULE, type StopBehaviorDraftInput } from "./retrospective.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
 const draftSchema = z.object({
@@ -22,9 +22,7 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "differently from now on. Draft ONE behavior rule — a standing instruction a human will approve " +
     "later — from the objected entry, the steering, and the task's decision log as it stood at the " +
     "time. When the input carries rca_findings, the task's root-cause reviews have settled: draft " +
-    `from what they found. ${responseFields("the worker who wrote the entry")} ` +
-    "When present, human_stop is the human's account of why they stopped the session; " +
-    '\"work no longer needed\" is not a cause of the objection, and leave an unanswered reason unanswered.\n\n' +
+    `from what they found. ${responseFields("the worker who wrote the entry")} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

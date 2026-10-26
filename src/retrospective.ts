@@ -60,6 +60,12 @@ export interface AttributionInput {
   rca_findings?: string[];
 }
 
+/** 異議の帰責と起草の prompt が `human_stop` に添える文(ADR 0308 決定1): 「要らなくなった」類の理由は異議の cause に使わない。
+ *  理由 question の選択肢の文言ではなく類で書く —— 選択肢は消える(ADR 0310 決定7)。 */
+export const OBJECTION_HUMAN_STOP_RULE =
+  "When present, human_stop is the human's account of why they stopped the session; a reason saying the work is no " +
+  "longer needed is not a cause of the objection, and leave an unanswered reason unanswered.";
+
 /** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
  *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` は
  *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。
