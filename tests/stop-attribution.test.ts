@@ -224,7 +224,8 @@ it("a projection pending on another board with the same spawn event id does not 
 });
 
 it("a stop whose session's projection threw is judged with actions null after the transcript closes", async () => {
-  vi.spyOn(console, "error").mockImplementation(() => {});
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
   const b = fixture();
   const close = stoppedPendingProjection(b, join(await tempDir("tidepool-stop-"), "missing.stream.jsonl"));
 
