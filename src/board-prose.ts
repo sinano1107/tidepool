@@ -258,11 +258,11 @@ function versionEvidence(
 
 /** The 当時版 Roster's source: the registry's agents at that commit. A name whose description is
  *  unreadable stays listed: dropping it would read as "not in your roster". */
-function rosterSourceAt(registry: RegistryAtCommit): Record<string, RosterAgent> {
+function rosterSourceAt(registry: RegistryAtCommit): Record<string, RosterAgent & { builtin?: true }> {
   return Object.fromEntries(
-    Object.entries(registry.agents).map(([name, { description }]) => [
+    Object.entries(registry.agents).map(([name, { description, builtin }]) => [
       name,
-      { name, description: description ?? "(description could not be read at that commit)" },
+      { name, description: description ?? "(description could not be read at that commit)", builtin },
     ]),
   );
 }

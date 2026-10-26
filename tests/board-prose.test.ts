@@ -362,6 +362,19 @@ it("祖先の work の cancel の前に spawn した RCA への self RCA の当�
   expect(prose).not.toContain("the same text as your own");
 });
 
+it("assignable_to が \"*\" の authority の worker への self RCA の当時版 Roster は、registry の agent を載せ組み込み(fugu / suzumedai)を載せない —— spawn 時の Roster と同じ集合(#2602)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-23T00:00:00.000Z");
+  const work = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c", assignee: "deckhand" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
+
+  const prose = await selfRcaProse(db, work, at);
+
+  const roster = prose.split("Roster as it stood then")[1] ?? "";
+  expect(roster).toContain("deckhand — General work agent for the tidepool board");
+  expect(roster).not.toContain("fugu");
+  expect(roster).not.toContain("suzumedai");
+});
+
 it("祖先の work の cancel の後に spawn した RCA への self RCA の当時版は、Authority 節も Roster 節も無かったことを写す —— cancel は spawn の前に記録されたものだけ数える(ADR 0301 決定5)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-23T00:00:00.000Z");
