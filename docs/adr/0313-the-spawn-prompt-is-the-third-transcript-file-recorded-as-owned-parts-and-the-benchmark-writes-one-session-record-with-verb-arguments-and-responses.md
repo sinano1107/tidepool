@@ -1,5 +1,7 @@
 # spawn 時の prompt は transcript の3本目として持ち主つきの部分の列で記録し、ベンチマークは session ごとに prompt と verb の往復を全文で出す
 
+**Status 追記: 決定2 の `authority` 部分は出所の印 `source`(profile / reviewer / repair)を持つ(ADR 0314 決定5)、決定7 の派生は ADR 0314 で決着** —— 帰責 judge と self RCA は記録の部分を読み、再構成は消える(2026-10-26 の grilling、issue #2603)。
+
 2026-10-26 の triage → grilling(issue #2554、spec #2439 / ADR 0298 の派生)で決定。走行の記録の抽出(#2440)は session の盤面 verb を名前
 だけ写し、worker が受けた system prompt はどこにも残っていなかった —— `--append-system-prompt` / `developer_instructions` で渡すだけで、
 transcript の `init` 行にも event にも無い。記録から再構成できるのは agent 定義・Authority・Roster まで(ADR 0291 決定2 の読み口)で、

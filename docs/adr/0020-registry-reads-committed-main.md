@@ -1,5 +1,7 @@
 # registry はコミット済み main から読む — spawn は版を観測記録し、self RCA には当時版を注入する
 
+**Status 追記: 決定3 と追記(entry ごとの解決・組み込みの履歴表)が当時版を引く出所は、ADR 0314 決定1 で spawn 時に記録した prompt の部分になった** —— 版の観測(決定2)はそのまま、本文を記録の版から組み直す読み口と「到達不能 commit」の欠落は消え、欠落は記録が読めない場合だけになる(2026-10-26 の grilling、issue #2603)。
+
 2026-07-15 の grilling(ADR 0019 と同セッション)で決定。従来 `src/registry.ts` はワーキングツリーを `readFileSync` していた。branch discipline により registry チェックアウトの HEAD は registry-edit タスクのブランチへ移動するため、ワーキングツリー読みは「人間の merge を通っていない内容が spawn に効く」抜け道だった(保護 workspace の床の破れ)。また worker session は「どの版の定義で走ったか」をどこにも記録せず、ADR 0001 の "commit hash = strict agent version" は概念だけで観測がなかった — RCA は当時のプロンプトという第一級の証拠を、git log のタイムスタンプ推定という考古学でしか得られなかった。
 
 決定は3点:
