@@ -122,17 +122,15 @@ function objectedRowOf(db: Db, kind: "decision_logged" | "task_completed" | "pre
   const task = pickupTask(db, registerTask(db, { type: "work", title: "parser", purpose: "parse", completion_criteria: "works", workspace: "reef" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
   appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   const worker = (payload: TaskScopedPayload) => appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "worker", at, payload });
-  const [entry, line] = ((): [number, string] => {
-    if (kind === "decision_logged") return [logDecision(db, task, "deleted the fixtures", "deckhand", at, "worker"), "deleted the fixtures"];
-    if (kind === "task_completed") return [worker({ kind: "task_completed", handoff_present: true, result: "parsed the charts" }), "completion report: parsed the charts"];
-    if (kind === "premise_breached") {
-      const based_on_decision = logDecision(db, task, "module M parses", "deckhand", at, "worker");
-      return [worker({ kind: "premise_breached", line: "module M is broken", based_on_decision }), "module M is broken"];
-    }
-    const wrote = recordKnowledge(db, { scope: "tidepool", path: "charts", title: "Charts", text: "Charts.", source: { commit: "0a46a46" }, author: deckhand }, "worker", at, task.id);
-    return [wrote.event_id, `wrote knowledge #${wrote.entry_id} "Charts" at charts (tidepool)`];
-  })();
-  return { ...objectedEntry(db, task.id, entry), line };
+  const objected = (entry: number, line: string) => ({ ...objectedEntry(db, task.id, entry), line });
+  if (kind === "decision_logged") return objected(logDecision(db, task, "deleted the fixtures", "deckhand", at, "worker"), "deleted the fixtures");
+  if (kind === "task_completed") return objected(worker({ kind: "task_completed", handoff_present: true, result: "parsed the charts" }), "completion report: parsed the charts");
+  if (kind === "premise_breached") {
+    const based_on_decision = logDecision(db, task, "module M parses", "deckhand", at, "worker");
+    return objected(worker({ kind: "premise_breached", line: "module M is broken", based_on_decision }), "module M is broken");
+  }
+  const wrote = recordKnowledge(db, { scope: "tidepool", path: "charts", title: "Charts", text: "Charts.", source: { commit: "0a46a46" }, author: deckhand }, "worker", at, task.id);
+  return objected(wrote.event_id, `wrote knowledge #${wrote.entry_id} "Charts" at charts (tidepool)`);
 }
 
 /** setup のみ: 門を通った異議の帰責を直に置く。 */
