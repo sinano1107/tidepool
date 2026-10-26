@@ -402,6 +402,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
       ? readCodexLines(input.transcriptLines, spawned.payload.cli_version)
       : readClaudeLines(input.transcriptLines);
 
+  // anchor が spawn 自身なら sessionOf はその session を返す(窓の外になりえない)
   const { exited, inSession, completed } = sessionOf(input.events, spawned)!;
   const exitPayload = exited?.payload.kind === "worker_exited" ? exited.payload : null;
   markers.push(

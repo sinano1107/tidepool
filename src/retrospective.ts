@@ -468,7 +468,7 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
 }
 
 /** 1つの worker session: その task の event・開いた spawn・窓の判定。 */
-type Session = { events: EventRow[]; spawned: EventRow; inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean };
+type Session = { events: EventRow[] } & NonNullable<ReturnType<typeof sessionOf>>;
 
 /** 帰責の扉が開いた停止と、その有効な(最新の)判定(無ければ undefined)。 */
 type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human">; session: Session; judged: EventRowOf<"stop_attributed"> | undefined };
