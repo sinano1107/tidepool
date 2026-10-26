@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardDoctrine, boardProse, fenced, joinPrompt } from "../src/board-prose.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent } from "../src/events.js";
+import { appendEvent, listEvents } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
 import { definitionPart, recordPrompt } from "./fakes.js";
@@ -292,7 +292,7 @@ it("異議された entry の spawn の記録が無ければ、記録の読め�
   expect(history).toContain(`Note: no recorded definition could be read for your objected entry #${first} (missing session record)`);
 });
 
-it("異議されたどの entry の spawn の記録も無ければ、self RCA の文面に当時版の部分は無い(ADR 0020 追記「0件解決は従来どおりセクションなし」)", async () => {
+it("異議されたどの entry の spawn の記録も無ければ、self RCA の当時版は見出しと欠落の1行だけを持つ(ADR 0020 Status 追記 / issue #2619)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-26T00:00:00.000Z");
   const dirs = await boardDirs();
@@ -300,6 +300,26 @@ it("異議されたどの entry の spawn の記録も無ければ、self RCA �
   const lost = recordedSpawn(db, dirs, objected, at);
   const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
   rmSync(join(dirs.recordDir, `${objected.id}.${lost}.prompt.json`));
+
+  const parts = boardProse(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  const entryId = listEvents(db, objected.id).find((event) => event.kind === "decision_logged")!.id;
+  const history = parts.find((part) => part.part === "historical_definition")?.text;
+  expect(history).toBe(
+    "\n\n## Definition under review (as recorded at your spawn)\n\n" +
+      `No recorded definition could be read for your objected entry #${entryId} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
+  );
+  expect(history).not.toContain("Read it as evidence");
+  expect(history).not.toContain("```");
+});
+
+it("異議された entry が別の actor の行だけなら、この worker の self RCA に当時版の部分は無い(ADR 0020 Status 追記 / issue #2619)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-26T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  recordedSpawn(db, dirs, objected, at);
+  const rca = rcaOf(db, objected, at, "fugu", "deckhand");
 
   const parts = boardProse(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
