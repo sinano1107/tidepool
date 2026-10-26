@@ -781,11 +781,6 @@ export function listEpisodes(
     )
     .all(...rows.map((r) => r.id)) as MarkerRow[];
   const decisions = decisionOutcomes(db, markerRows);
-  // merge 済みの PR —— 盤面の merge と merge の観測の両方(ADR 0079 決定4)。根の PR の決着の1本の読みで読む(ADR 0265 決定2)
-  const mergedPr = (taskId: string) => {
-    const outcome = rootPrOutcome(db, taskId);
-    return outcome?.state === "MERGED" ? outcome.prNumber : null;
-  };
 
   return rows.map((row) => ({
     workerSpawnedEventId: row.worker_spawned_event_id,
@@ -805,7 +800,7 @@ export function listEpisodes(
     workerExitedEventId: row.worker_exited_event_id,
     lines: JSON.parse(row.lines) as EpisodeLineStats,
     unrecognizedFormat: row.unrecognized_format === 1,
-    prMerged: mergedPr(row.task_id),
+    prMerged: mergedPr(db, row.task_id),
     actions: actionRows
       .filter((a) => a.episode_id === row.id)
       .map((a) => ({
@@ -845,6 +840,40 @@ export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): Marker
   ).map((m) => m.kind);
 }
 
+/** 判断・記憶の書き込みのマーカーの event id ごとの Episode(今の投影器の版) —— `ids` のマーカーを持つ session だけを読む。 */
+export function episodesOfMarkers(db: Db, ids: readonly number[]): Map<number, StoredEpisode> {
+  if (ids.length === 0) return new Map();
+  const rows = db
+    .prepare(
+      `SELECT m.event_id, e.worker_spawned_event_id FROM episode_markers m JOIN episodes e ON e.id = m.episode_id
+        WHERE e.extractor_version = ? AND m.kind IN ('decision', 'memory_write') AND m.event_id IN (${ids.map(() => "?").join(", ")})`,
+    )
+    .all(EXTRACTOR_VERSION, ...ids) as Array<{ event_id: number; worker_spawned_event_id: number }>;
+  const episodes = new Map<number, StoredEpisode>();
+  for (const spawn of new Set(rows.map((r) => r.worker_spawned_event_id))) {
+    for (const episode of listEpisodes(db, { workerSpawnedEventId: spawn })) episodes.set(spawn, episode);
+  }
+  return new Map(rows.flatMap((r) => (episodes.has(r.worker_spawned_event_id) ? [[r.event_id, episodes.get(r.worker_spawned_event_id)!] as const] : [])));
+}
+
+/** merge 済みの PR —— 盤面の merge と merge の観測の両方(ADR 0079 決定4)。根の PR の決着の1本の読みで読む(ADR 0265 決定2)。 */
+export function mergedPr(db: Db, taskId: string): number | null {
+  const outcome = rootPrOutcome(db, taskId);
+  return outcome?.state === "MERGED" ? outcome.prNumber : null;
+}
+
+/** 表示済み(異議の分母、ADR 0083 決定7)の log entry —— `ids` のうち `log_entry_displayed` を持つもの。 */
+export function displayedEntries(db: Db, ids: readonly number[]): Set<number> {
+  if (ids.length === 0) return new Set();
+  const rows = db
+    .prepare(
+      `SELECT json_extract(payload, '$.entry_id') AS entry_id FROM events
+        WHERE kind = 'log_entry_displayed' AND json_extract(payload, '$.entry_id') IN (${ids.map(() => "?").join(", ")})`,
+    )
+    .all(...ids) as Array<{ entry_id: number }>;
+  return new Set(rows.map((r) => r.entry_id));
+}
+
 /** decision 以外のマーカー、および events から何も見つからなかった decision の
  *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
 const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null, wrong_memory_entries: null });
@@ -865,14 +894,7 @@ function decisionOutcomes(db: Db, markerRows: MarkerRow[]): Map<number, Decision
     if (entry) entry.line = row.line;
   }
   for (const o of entryObjections(db, ids)) out.get(o.entry_id)!.objections.push(o.comment);
-  for (const row of db
-    .prepare(
-      `SELECT json_extract(payload, '$.entry_id') AS entry_id FROM events
-        WHERE kind = 'log_entry_displayed' AND json_extract(payload, '$.entry_id') IN (${placeholders})`,
-    )
-    .all(...ids) as Array<{ entry_id: number }>) {
-    out.get(row.entry_id)!.displayed = true;
-  }
+  for (const id of displayedEntries(db, ids)) out.get(id)!.displayed = true;
   // cause は entry の今の判定 —— 最後の異議群の判定(ADR 0170 決定2)
   for (const [entryId, { cause, wrong_memory_entries }] of currentAttributions(db, ids)) Object.assign(out.get(entryId)!, { cause, wrong_memory_entries });
   return out;

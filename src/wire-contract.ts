@@ -157,8 +157,8 @@ interface MemorySettings {
   injection_token_cap: number;
 }
 
-/** 主題ごとの初回の状態(src/meta-review.ts の readMetaReviewStatus、ADR 0300 決定2)。未実施なら盤面の始まりからの材料、
- *  登録済みなら前回の登録・次に周期が立てられる最早の時刻・次の回の窓に入る材料の件数。 */
+/** 主題ごとの初回の状態(src/meta-review.ts の readMetaReviewStatus、ADR 0300 決定2)。未実施なら盤面の始まりからの回を開く event の数、
+ *  登録済みなら前回の登録・次に周期が立てられる最早の時刻・次の回を開く event の数(節の行数ではない、ADR 0312 追記)。 */
 type MetaReviewStatus =
   | { first_review: "not_started"; material: number; first_material_at: string | null }
   | { first_review: "registered"; last_registered_at: string; next_earliest_at: string; material_since: number };

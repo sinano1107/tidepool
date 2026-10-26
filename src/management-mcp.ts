@@ -744,8 +744,8 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
       description:
         "Read, per subject (memory and routing), where its meta-reviews stand. The period only registers a subject's meta-reviews after its first " +
         "meta-review, which the human starts with start_first_meta_review once the material looks enough to judge from. Before that: material, the " +
-        "count of the subject's material since the board started, and first_material_at. After it: last_registered_at, next_earliest_at (when the " +
-        "period can register the next one), and material_since, the count of material the next one will read.",
+        "number of the subject's events since the board started that open a review, and first_material_at. After it: last_registered_at, next_earliest_at " +
+        "(when the period can register the next one), and material_since, the number of events since the last registration that open the next one.",
     },
     async () => toolResult(readMetaReviewStatus(deps.db)),
   );

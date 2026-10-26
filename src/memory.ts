@@ -31,7 +31,7 @@ import {
   rowSubjectSql,
 } from "./meta-review.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
-import { entriesReadBefore, entriesSeenBefore, listEpisodes } from "./precedent.js";
+import { displayedEntries, entriesReadBefore, entriesSeenBefore, episodesOfMarkers, mergedPr } from "./precedent.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
@@ -2206,9 +2206,9 @@ function memoryProposalRows(db: Db, window?: MetaReviewWindow) {
     });
 }
 
-/** meta-review の Precedent の読み口(issue #619): 異議つき decision マーカーを cause・outcome と、その decision より前に
+/** meta-review の Precedent の読み口(issue #619): 異議つきの log entry の行(precedentRows)を cause・outcome と、その行より前に
  *  読んだ / 見た記憶つきで返す。既定の `since_watermark` は読み手と同主題の前回の meta-review 登録の
- *  watermark で、異議の帰責の event がそれより後の decision だけを返す —— 古い decision への新しい帰責も材料である。 */
+ *  watermark で、異議の帰責の event がそれより後の行だけを返す —— 古い行への新しい帰責も材料である。 */
 export function listPrecedents(
   db: Db,
   reader: Pick<MemoryReader, "taskId" | "agent">,
@@ -2220,46 +2220,54 @@ export function listPrecedents(
     const since = read.args.since_watermark ?? previousMetaReviewWatermark(db, reader.taskId);
     // 読み手の主題も祖先から読む —— 主題の修理子は親の主題の行を読む(ADR 0279 決定6)
     const rows = precedentRows(db, { after: since }, lineageSubjectOf(db, reader.taskId));
-    // 境目の鍵は decision の event id(異議つき decision マーカー1つに1行)
+    // 境目の鍵は行の log entry の event id(異議つきの entry 1つに1行)
     const packed = packItems(read, "precedents", rows, {}, { keyOf: (p) => p.decision_event_id, every: PENDING_EVENT_ID }) as Packed<{ precedents: typeof rows; event_id: number }>;
     return recordPull(db, reader, { verb: "list_precedents", input: read.args, returned_ids: precedentEntryIds(packed.precedents) }, packed, at);
   })();
 }
 
-/** list_precedents の行の decision より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
+/** list_precedents の行より前に読んだ / 見た記憶。pull と材料の節の記録が同じ id を数える。 */
 const precedentEntryIds = (rows: ReturnType<typeof precedentRows>) => [...new Set(rows.flatMap((p) => [...(p.memory_entries_read ?? []), ...(p.memory_entries_seen ?? [])]))];
 
-/** list_precedents の行: 異議の帰責(`objection_attributed`)が窓 `(after, upTo]` にある decision —— 帰責の無い異議は cause も
- *  wrong_memory_entries も持たないので載らない(ADR 0312 決定5)。行の判定は窓の上限までの最新(ADR 0312 決定6)で、verb は上限を
- *  持たず、材料の節は読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は task の主題(lineageSubjectOf)が読み手の主題と
- *  同じものだけ —— 主題の無い行(worker・work の修理子)は memory の読み手に載り、主題の無い読み手(Interview の root)は全件
- *  (ADR 0279 決定6)。主題つきの読み手の述語は材料の組(META_REVIEW_SUBJECTS[主題].material)そのもの —— memory の読み手には cause memory の
- *  他主題の行も載る(ADR 0312 決定4)。 */
+/** list_precedents の行: 異議の帰責(`objection_attributed`)が窓 `(after, upTo]` にある log entry —— 帰責の無い異議は cause も
+ *  wrong_memory_entries も持たないので載らない(ADR 0312 決定5)。行は Episode のマーカーでなく帰責 event から選び、異議を打てる4種
+ *  (判断・完了・前提破れ・記憶の書き込み)のどれでも載る(ADR 0312 追記・ADR 0252 追記)。Episode は読んだ / 見た記憶にだけ使い、
+ *  マーカーの位置が無ければその2欄は null、session の spawn が無ければ spawn の id と agent も null(停止の行と同じ)。行の判定は窓の
+ *  上限までの最新(ADR 0312 決定6)で、verb は上限を持たず、材料の節は読み手の登録の watermark を上限にする(ADR 0180 決定2)。行は
+ *  task の主題(lineageSubjectOf)が読み手の主題と同じものだけ —— 主題の無い行(worker・work の修理子)は memory の読み手に載り、
+ *  主題の無い読み手(Interview の root)は全件(ADR 0279 決定6)。主題つきの読み手の述語は材料の組(META_REVIEW_SUBJECTS[主題].material)
+ *  そのもの —— memory の読み手には cause memory の他主題の行も載る(ADR 0312 決定4)。 */
 function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaReviewSubject | null) {
   const objection_attributed = readerSubject === null ? { where: rowSubjectSql(null) } : META_REVIEW_SUBJECTS[readerSubject].material.objection_attributed;
-  const objected = new Set(materialEvents(db, { objection_attributed }, window).map((e) => e.payload.entry_id));
-  const judged = currentAttributions(db, [...objected], window.upTo);
-  return listEpisodes(db, {}).flatMap((episode) => {
-    // 異議された記憶の書き込みも判断の行として載る(ADR 0252 決定5)
-    const rows = episode.markers.filter((m) => (m.kind === "decision" || m.kind === "memory_write") && objected.has(m.eventId!));
-    if (rows.length === 0) return [];
-    const events = listEvents(db, episode.taskId);
-    return rows.map((m) => ({
-      task_id: episode.taskId,
-      workspace: episode.workspace,
-      agent: episode.agent,
-      worker_spawned_event_id: episode.workerSpawnedEventId,
-      decision_event_id: m.eventId!,
-      line: m.line,
-      displayed: m.displayed,
-      objections: m.objections,
-      cause: judged.get(m.eventId!)?.cause ?? null,
-      wrong_memory_entries: judged.get(m.eventId!)?.wrong_memory_entries ?? null,
-      completed: episode.completed,
-      pr_merged: episode.prMerged,
-      memory_entries_read: entriesReadBefore(episode, events, m.eventId!),
-      memory_entries_seen: entriesSeenBefore(episode, events, m.eventId!),
-    }));
+  const objected = [...new Set(materialEvents(db, { objection_attributed }, window).map((e) => e.payload.entry_id))].sort((a, b) => a - b);
+  const judged = currentAttributions(db, objected, window.upTo);
+  const displayed = displayedEntries(db, objected);
+  const episodes = episodesOfMarkers(db, objected);
+  return objected.flatMap((id) => {
+    const entry = getEvent(db, id);
+    if (!isDecisionLogEntry(entry)) return [];
+    const events = listEvents(db, entry.task_id);
+    const spawned = sessionSpawnOf(events, entry);
+    // 完了は Episode の投影と同じ読み —— その session の窓の最初の task_completed
+    const inSession = spawned && sessionWindow(events, spawned).inSession;
+    const completed = inSession && events.find((e) => e.kind === "task_completed" && inSession(e));
+    const episode = episodes.get(id);
+    return [{
+      task_id: entry.task_id,
+      workspace: getTask(db, entry.task_id)?.workspace ?? null,
+      agent: spawned?.actor_id ?? null,
+      worker_spawned_event_id: spawned?.id ?? null,
+      decision_event_id: id,
+      line: objectedEntryText(entry),
+      displayed: displayed.has(id),
+      objections: entryObjections(db, [id]).map((o) => o.comment),
+      cause: judged.get(id)?.cause ?? null,
+      wrong_memory_entries: judged.get(id)?.wrong_memory_entries ?? null,
+      completed: completed?.payload.kind === "task_completed" ? { result: completed.payload.result, handoffPresent: completed.payload.handoff_present } : null,
+      pr_merged: mergedPr(db, entry.task_id),
+      memory_entries_read: episode ? entriesReadBefore(episode, events, id) : null,
+      memory_entries_seen: episode ? entriesSeenBefore(episode, events, id) : null,
+    }];
   });
 }
 

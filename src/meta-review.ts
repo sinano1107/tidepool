@@ -246,7 +246,7 @@ export type MaterialPartRows = [note: string, rows: unknown[], empty: string];
 export const attributionParts = (precedents: unknown[], stops: ReadonlyArray<{ row: unknown }>) =>
   ({
     "Objected decisions": [
-      "Rows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.",
+      "Rows of list_precedents for the log rows (decisions, completion reports, premise breaches and memory writes) whose objections were attributed in this window, each with its latest attribution up to this window's end.",
       precedents,
       "no objected decisions",
     ],
@@ -380,7 +380,7 @@ export function startFirstMetaReview(db: Db, subject: MetaReviewSubject, origin:
     throw new DomainError(`the first ${subject} meta-review was already registered: every later one is registered by the period`);
   }
   if (countMaterial(db, META_REVIEW_SUBJECTS[subject].material, { after: 0 }).count === 0) {
-    throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one change to review`);
+    throw new DomainError(`there is no ${subject} meta-review material yet: the first ${subject} meta-review needs at least one event that opens a review`);
   }
   if (settleAndHasUnsettled(db, subject, now, agents)) {
     throw new DomainError(`an unsettled ${subject} task or proposal question is open: settle it before starting the first ${subject} meta-review`);
@@ -418,8 +418,8 @@ export function readMetaReviewSettings(db: Db): MetaReviewSettings {
 
 const periodMs = (db: Db) => readMetaReviewSettings(db).period_days * 24 * 60 * 60 * 1000;
 
-/** 人間の面が主題ごとに読む初回の状態(ADR 0300 決定2): 未実施なら盤面の始まりからの材料の件数と最初の材料の時刻、登録済みなら
- *  前回の登録の時刻・次に周期が立てられる最早の時刻・次の回の窓に入る材料の件数(窓の起点は前回の登録、取り消された回の窓は次の回が
+/** 人間の面が主題ごとに読む初回の状態(ADR 0300 決定2): 未実施なら盤面の始まりからの回を開く event の数と最初の材料の時刻、登録済みなら
+ *  前回の登録の時刻・次に周期が立てられる最早の時刻・次の回を開く event の数(節の行数ではない、ADR 0312 追記。窓の起点は前回の登録、取り消された回の窓は次の回が
  *  読むのでその前の完了した回 —— ADR 0193 決定3)。件数は行を読み込まず数える。 */
 export function readMetaReviewStatus(db: Db) {
   const status = (subject: MetaReviewSubject) => {

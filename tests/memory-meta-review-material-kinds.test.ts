@@ -2,7 +2,7 @@ import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import type { Cause } from "../src/cause.js";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds, type TaskScopedPayload } from "../src/events.js";
 import { buildMetaReviewMaterial, completeMemoryReview, invalidateMemoryEntry, listPrecedents, recordKnowledge } from "../src/memory.js";
 import { META_REVIEW_SUBJECTS, type MetaReviewSubject, readMetaReviewStatus, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { getTask, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
@@ -102,11 +102,35 @@ it("cause memory の停止の帰責が名指すエントリは、鎖の末尾が
   expect(completeMemoryReview(db, getTask(db, review)!, { judgments: items }, "fugu", at, "worker").status).toBe("done");
 });
 
+/** setup のみ: log entry に束ね済みの異議を1つ置く(帰責はまだ無い)。`decision` は異議を打てる4種のどれでもよい。 */
+const objectedEntry = (db: Db, taskId: string, decision: number) => ({ taskId, decision, objection: bundledObjection(db, taskId, decision, at) });
+
+/** setup のみ: work task の判断の行を置き、束ね済みの異議を1つ置く —— Episode は置かない(投影の無い session)。 */
+const unprojectedDecision = (db: Db, work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI)) =>
+  objectedEntry(db, work.id, logDecision(db, work, "deleted the fixtures", "deckhand", at, "worker"));
+
 /** setup のみ: work task の判断の行を episode に載せ、束ね済みの異議を1つ置く(帰責はまだ無い)。 */
-function objectedDecision(db: Db, work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI)) {
-  const decision = logDecision(db, work, "deleted the fixtures", "deckhand", at, "worker");
-  episodeOfDecision(db, work.id, decision);
-  return { taskId: work.id, decision, objection: bundledObjection(db, work.id, decision, at) };
+function objectedDecision(db: Db, work?: Task) {
+  const objected = unprojectedDecision(db, work);
+  episodeOfDecision(db, objected.taskId, objected.decision);
+  return objected;
+}
+
+/** setup のみ: workspace reef の work task の session を deckhand が開き、その session に異議を打てる種類 `kind` の行を1つ書いて
+ *  束ね済みの異議を1つ置く(Episode は置かない)。`line` は帰責の入力の行の文。 */
+function objectedRowOf(db: Db, kind: "decision_logged" | "task_completed" | "premise_breached" | "memory_written") {
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "parser", purpose: "parse", completion_criteria: "works", workspace: "reef" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
+  appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const worker = (payload: TaskScopedPayload) => appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "worker", at, payload });
+  const objected = (entry: number, line: string) => ({ ...objectedEntry(db, task.id, entry), line });
+  if (kind === "decision_logged") return objected(logDecision(db, task, "deleted the fixtures", "deckhand", at, "worker"), "deleted the fixtures");
+  if (kind === "task_completed") return objected(worker({ kind: "task_completed", handoff_present: true, result: "parsed the charts" }), "completion report: parsed the charts");
+  if (kind === "premise_breached") {
+    const based_on_decision = logDecision(db, task, "module M parses", "deckhand", at, "worker");
+    return objected(worker({ kind: "premise_breached", line: "module M is broken", based_on_decision }), "module M is broken");
+  }
+  const wrote = recordKnowledge(db, { scope: "tidepool", path: "charts", title: "Charts", text: "Charts.", source: { commit: "0a46a46" }, author: deckhand }, "worker", at, task.id);
+  return objected(wrote.event_id, `wrote knowledge #${wrote.entry_id} "Charts" at charts (tidepool)`);
 }
 
 /** setup のみ: 門を通った異議の帰責を直に置く。 */
@@ -265,9 +289,20 @@ const ROUTING_KIND_FIXTURES: KindFixtures<"routing", "objection_attributed" | "s
   },
 };
 
+/** 異議つき判断の行は Episode でなく帰責 event から選ぶ(ADR 0312 追記・ADR 0252 追記): Episode の無い判断と、判断以外の3種の行への帰責。 */
+const attributedInWindow = (db: Db, objected: ReturnType<typeof objectedEntry>) => (): ["precedents", number] => (attributeObjection(db, objected, "capability"), ["precedents", objected.decision]);
+const OBJECTED_ROW_FIXTURES = [
+  ["memory", "objection_attributed(Episode の無い判断)", (db: Db) => attributedInWindow(db, unprojectedDecision(db))],
+  ["routing", "objection_attributed(Episode の無い判断)", (db: Db) => attributedInWindow(db, onRoutingReview(db, (review) => unprojectedDecision(db, review)))],
+  ...(["task_completed", "premise_breached", "memory_written"] as const).map(
+    (kind) => ["memory", `objection_attributed(${kind} の行)`, (db: Db) => attributedInWindow(db, objectedRowOf(db, kind))] as const,
+  ),
+] as const;
+
 it.each([
   ...Object.entries(KIND_FIXTURES).map(([kind, fixture]) => ["memory", kind, fixture] as const),
   ...Object.entries(ROUTING_KIND_FIXTURES).map(([kind, fixture]) => ["routing", kind, fixture] as const),
+  ...OBJECTED_ROW_FIXTURES,
 ])("主題 %s の材料の kind %s の event が窓に1つだけあれば、due が開き(件数 1)、注入した節のその部分の記録に載る(ADR 0312 決定1)", (subject, _, fixture) => {
   const db = openDb(":memory:");
   const inWindow = fixture(db);
@@ -320,4 +355,86 @@ it("routing meta-review の行への異議と、その session の停止の帰�
   if (routingMaterial?.subject !== "routing") throw new Error("no routing material");
   expect([routingMaterial.parts.precedents.map((p) => p.decision_event_id), routingMaterial.parts.stops.map((s) => s.row.stop_event_id)]).toEqual([[objected.decision], [stopped.stop]]);
   expect(routingMaterial.parts.items).toEqual([{ learner: true }]);
+});
+
+it.each(["decision_logged", "task_completed", "premise_breached", "memory_written"] as const)(
+  "%s の行への cause memory の帰責は、Episode が無くても節の Objected decisions と list_precedents に帰責の入力と同じ文の1行で載り、名指すエントリが Items to judge に入る —— 読んだ / 見た記憶は null、spawn と完了は session の event から(ADR 0312 追記)",
+  (kind) => {
+    const db = openDb(":memory:");
+    const followed = knowledge(db, "followed");
+    const objected = objectedRowOf(db, kind);
+    register(db, "memory", true);
+    attributeObjection(db, objected, "memory", { wrong: [followed] });
+    expect(readMetaReviewStatus(db).memory).toMatchObject({ material_since: 1 });
+    const review = register(db, "memory");
+
+    const { parts, section } = memoryMaterialOf(db, review);
+
+    const row = {
+      task_id: objected.taskId,
+      workspace: "reef",
+      agent: "deckhand",
+      worker_spawned_event_id: listEventsOfKinds(db, ["worker_spawned"]).at(-1)!.id,
+      decision_event_id: objected.decision,
+      line: objected.line,
+      displayed: false,
+      objections: ["redo it"],
+      cause: "memory",
+      wrong_memory_entries: [followed],
+      completed: kind === "task_completed" ? { result: "parsed the charts", handoffPresent: true } : null,
+      pr_merged: null,
+      memory_entries_read: null,
+      memory_entries_seen: null,
+    };
+    expect(listPrecedents(db, { taskId: review, agent: "fugu" }, {}, at).precedents).toEqual([row]);
+    expect(partOf(section, "Objected decisions")).toContain(JSON.stringify(row));
+    expect(parts.items.filter((item) => "memory_entry" in item)).toEqual([{ memory_entry: followed }]);
+  },
+);
+
+it.each(["memory", "routing"] as const)(
+  "spawn も Episode も無い判断(主題 %s の行)への cause memory の帰責は、material_since 1 で、その主題の節の Objected decisions と list_precedents に1行で載り(spawn・agent・読んだ / 見た記憶は null)、名指すエントリが memory の Items to judge に入る(ADR 0312 追記)",
+  (subject) => {
+    const db = openDb(":memory:");
+    const followed = knowledge(db, "followed");
+    const objected = subject === "memory" ? unprojectedDecision(db) : onRoutingReview(db, (review) => unprojectedDecision(db, review));
+    register(db, "memory", true);
+    attributeObjection(db, objected, "memory", { wrong: [followed] });
+    expect(readMetaReviewStatus(db)[subject]).toMatchObject({ material_since: 1 });
+    const review = register(db, subject);
+
+    const { section } = buildMetaReviewMaterial(db, review)!;
+
+    const row = {
+      task_id: objected.taskId,
+      workspace: null,
+      agent: null,
+      worker_spawned_event_id: null,
+      decision_event_id: objected.decision,
+      line: "deleted the fixtures",
+      displayed: false,
+      objections: ["redo it"],
+      cause: "memory",
+      wrong_memory_entries: [followed],
+      completed: null,
+      pr_merged: null,
+      memory_entries_read: null,
+      memory_entries_seen: null,
+    };
+    expect(listPrecedents(db, { taskId: review, agent: "fugu" }, {}, at).precedents).toEqual([row]);
+    expect(partOf(section, "Objected decisions")).toContain(JSON.stringify(row));
+    const memoryReview = subject === "memory" ? review : register(db, "memory");
+    expect(memoryMaterialOf(db, memoryReview).parts.items.filter((item) => "memory_entry" in item)).toEqual([{ memory_entry: followed }]);
+  },
+);
+
+it("同じ停止の初回 uncertain と第2回の判定が同じ窓にあれば、件数は 2(due を開く event の数)で Stops attributed は1行 —— 件数と行数の一致は不変条件に入れない(ADR 0312 追記 #2609)", () => {
+  const db = openDb(":memory:");
+  register(db, "memory", true);
+  const stopped = stoppedSession(db);
+  attributeStop(db, stopped, "uncertain");
+  attributeStop(db, stopped, "capability", { round: "after_rca" });
+
+  expect(readMetaReviewStatus(db).memory).toMatchObject({ material_since: 2 });
+  expect(memoryMaterialOf(db, register(db, "memory")).parts.stops.map(({ row }) => [row.stop_event_id, row.cause])).toEqual([[stopped.stop, "capability"]]);
 });

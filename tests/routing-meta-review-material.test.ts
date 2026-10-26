@@ -498,6 +498,6 @@ it("Objected decisions は読み手 routing の list_precedents の行を載せ�
   const record = getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload;
 
   expect(material.parts.precedents).toEqual(listPrecedents(db, { taskId: review, agent: "auditor" }, {}, at).precedents);
-  expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the decisions whose objections were attributed in this window, each with its latest attribution up to this window's end.\n${JSON.stringify(material.parts.precedents[0])}`);
+  expect(material.section).toContain(`### Objected decisions\n\nRows of list_precedents for the log rows (decisions, completion reports, premise breaches and memory writes) whose objections were attributed in this window, each with its latest attribution up to this window's end.\n${JSON.stringify(material.parts.precedents[0])}`);
   expect(record).toMatchObject({ precedents: material.parts.precedents.map((p) => p.decision_event_id), precedent_memory_entry_ids: [] });
 });

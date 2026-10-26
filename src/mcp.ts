@@ -1396,11 +1396,12 @@ function registerPrecedentRead(server: McpServer, deps: McpDeps, run: MetaReview
     "list_precedents",
     {
       description:
-        "List objected decisions and objected memory writes from past worker sessions: the line, objections and their attributed cause, " +
-        "the session outcome, and the memory entry ids read (memory_entries_read) and seen (memory_entries_seen) before the decision. " +
+        "List the objected log rows from past worker sessions — decisions, completion reports, premise breaches and memory writes — whose objections were attributed: " +
+        "the line, objections and their attributed cause, the session outcome, and the memory entry ids read (memory_entries_read) and seen (memory_entries_seen) " +
+        "before the row (null when the session has no projected transcript). " +
         "When the cause is memory, wrong_memory_entries names the ids of the entries the worker read and followed that were wrong; otherwise it is null. " +
-        "Rows are limited to your subject: a routing meta-review or routing repair sees the decisions of routing meta-reviews and their children, a memory meta-review " +
-        "or memory repair every other decision, and an Interview all of them. " +
+        "Rows are limited to your subject: a routing meta-review or routing repair sees the rows of routing meta-reviews and their children, a memory meta-review " +
+        "or memory repair every other row, and an Interview all of them. " +
         "Defaults to objections since the previous completed meta-review of your subject (for an Interview or a repair, the board's start); pass since_watermark (an event id) to look further back. " +
         nextDescription("list_precedents", "precedents"),
       inputSchema: { since_watermark: z.number().int().min(0).optional(), next },
