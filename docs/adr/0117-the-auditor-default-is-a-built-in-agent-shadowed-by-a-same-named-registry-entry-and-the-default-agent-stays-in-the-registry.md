@@ -53,4 +53,4 @@ shadow 可)で、役割ポインタは決定4 の2本に `TIDEPOOL_INTERVIEWER` 
 ## 追記(2026-10-17 の grilling、issue #2156 / ADR 0270)
 
 帰結の 2026-09-16 追記が預けた「盤面の版」は ADR 0270 で決まった: 組み込みの当時版の鍵は本文の内容 hash で、`definition_version` の
-固定文字列 `"built-in"` は廃止、盤面は本文の履歴表を code に持つ。
+固定文字列 `"built-in"` は廃止、盤面は本文の履歴表を code に持つ(履歴表は ADR 0314 決定7 で撤回 —— 当時の本文は spawn 時に記録した prompt から読む。内容 hash の鍵は残る)。

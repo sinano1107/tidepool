@@ -1,5 +1,7 @@
 # Executor は review の session の spawn を時点として event log から読み、assignee 列は読まない
 
+**Status 追記: 決定3 のうち self RCA の当時版と帰責の入力は、ADR 0314 決定1 で spawn 時に記録した prompt の部分を読む** —— 時点の読みを呼び直さず、spawn がその読みで描いた記録を読む(時点を記録に写さない線はそのまま)。帰結の束ねの鍵(版 + 描いた Roster)は ADR 0314 決定6 で記録の text の一致になった(2026-10-26 の grilling、issue #2603)。
+
 2026-10-21 の grilling(issue #2374、族: #2373)で決定。ADR 0054 は Executor を event log の事実と定めつつ「`assignee` 列に値が
 あればそのまま返す」として列を先に読み、ADR 0292 は Edit の扉を閉じて「Executor の読みは ADR 0054 のまま」とした。だが列を動かす
 手は Edit の他に2つ残る —— 未実行の親の pickup の埋め(ADR 0233 決定2)と、一度も pickup されていない task への Edit(ADR 0233

@@ -261,7 +261,7 @@ authority profile の必須フィールド。**人間の merge 判断がどの�
 
 そのタスクを**実行したという事実**。Assignee が前を向いた値(誰が実行することになるか)であるのに対し、Executor は後ろを向いた値であり、出所は盤面の event log —— ポインタへの参照ではなく確定値である。pickup 済みの task では列と一致する(列は pickup で書かれ、その後 Edit で動かない —— Edit 参照、ADR 0292)が、別概念である: 未指定の assignee は「その時のポインタ」を意味し、pickup 前の列は実行者でなく前を向いた札にすぎない。Executor の読みは列を読まない(2026-10-21 の grilling、issue #2374)—— 列を先に読んでいた間は、未実行の親の列が pickup の埋めや pickup 前の Edit で後から動くと、動く前に読んだ値と割れた。
 
-「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054、時点は ADR 0295)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。Executor は**時点つきの事実**である: review の session を spawn した時点までの event log が示す実行者で、その時点より前に実行の事実が無ければ「まだ居ない」が答えである。spawn の Roster・live の免除・`direct` 印・当時版(self RCA の注入と帰責の入力)は、同じ時点で同じ log を読む1つの読みを共有する(issue #2374)。時点より後の出来事 —— 未実行の親の pickup、列を書かない review type の親(ADR 0233 決定3)の再 pickup(issue #2373)—— は読みに入らない。
+「誰が実行したか」を問う読み口は、`assignee` 列ではなく event log を読まねばならない(ADR 0054、時点は ADR 0295)。今日その問いを持つのは2つ — 当事者レビューの「self」(異議されたログエントリを実際に書いた worker。Review 参照)と、ADR 0013 の免除が指す被レビュータスクの実行者(`task_completed` を書いた worker、無ければ最後に `task_picked_up` した worker)。どちらも歴史的事実であり、ADR 0020 が当事者レビューに当時版の agent 定義と authority profile を注入するのと同じ筋である。Executor は**時点つきの事実**である: review の session を spawn した時点までの event log が示す実行者で、その時点より前に実行の事実が無ければ「まだ居ない」が答えである。spawn の Roster・live の免除・`direct` 印は、同じ時点で同じ log を読む1つの読みを共有する(issue #2374)。当時版(self RCA の注入と帰責の入力)はその読みを呼び直さず、spawn がその読みで描いて Transcript に記録した prompt の部分を読む(ADR 0314)。時点より後の出来事 —— 未実行の親の pickup、列を書かない review type の親(ADR 0233 決定3)の再 pickup(issue #2373)—— は読みに入らない。
 
 ## Registrant(登録者)
 
