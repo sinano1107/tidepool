@@ -1,5 +1,7 @@
 # 初回の帰責は撃ち直さず、撃てなかった・失敗した entry は未帰責のまま RCA に倒し、記録は判断だけを持つ
 
+**Status 追記: `memory_draft_failed` の `entry_id` は `log_entry_id` に改名(issue #2578 / ADR 0311 決定3・5)** —— 決定2 の「`memory_draft_failed` と同じ形」は、`objection_attribution_failed` の `entry_id` が `memory_draft_failed` では `log_entry_id` の名前で並ぶと読み替える。
+
 2026-09-28 の grilling(issue #1063、ADR 0164 の派生)で決定。ADR 0164 は起草と第2回の帰責を「結果の不在で拾って盤面が撃ち直す」と
 置いた。初回の帰責の失敗はそこに含めず、`uncertain` + 散文の evidence を `objection_attributed` に書いて RCA を立てる従来の倒し方の
 ままだった(ADR 0115 決定2)。撃ち直しの機構ができた今、初回も撃ち直すのか、失敗を判断の `uncertain` と分けるのかを決める。

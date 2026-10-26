@@ -70,7 +70,7 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   "or a skill bundled with the harness, is environment); preference is the human's taste where the " +
   "worker's choice was equally valid; requirement_change is a requirement the human changed " +
   `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +
-  "was itself wrong — the shortfall is the entry's, not the worker's; agent_definition is when the worker's agent " +
+  "was itself wrong — the shortfall is the memory entry's, not the worker's; agent_definition is when the worker's agent " +
   `definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and ${w.sound} ` +
   "was sound against it — but when agent_definition.builtin is true the body is board code: that is environment; " +
   "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
