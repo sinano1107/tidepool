@@ -2097,14 +2097,17 @@ describe("ClaudeCodeWorker", () => {
   it("spawn 時に渡した prompt 一式を <taskId>.<event id>.prompt.json として stream / stderr の隣に残す —— system の連結が --append-system-prompt、user が -p の値(ADR 0313 決定1・2)", async () => {
     const { start, calls, logDir, db } = await makeWorker();
     start("task-prompt");
-    const spawnedId = listEvents(db, "task-prompt").find((e) => e.kind === "worker_spawned")!.id;
+    const spawned = listEvents(db, "task-prompt").find((e) => e.kind === "worker_spawned")!;
+    const spawnedId = spawned.id;
     const args = calls[0]!.args;
 
     const recorded = JSON.parse(await readFile(join(logDir, `task-prompt.${spawnedId}.prompt.json`), "utf8"));
 
     expect(recorded.harness).toBe("claude-code");
     expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(args[args.indexOf("--append-system-prompt") + 1]);
-    expect(recorded.system[0]).toMatchObject({ part: "definition", builtin: false });
+    // 定義の部分の版は worker_spawned と同じ値
+    const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
+    expect(recorded.system[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
     expect(recorded.user).toBe(args[args.indexOf("-p") + 1]);
   });
 

@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse } from "./board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
@@ -2107,7 +2107,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // authority sounds like (ADR 0056: review overrides the registry profile),
       // stitched at spawn time. A party review (self RCA) additionally carries
       // the 当時版 definition as evidence (ADR 0020 part 4); the memory section
-      // (spec #586 C) comes last. 組むのは open の前 —— 渡す部分の列そのものが transcript の3本目(ADR 0313 決定1)
+      // (spec #586 C) and, for a meta-review, its material (ADR 0180) come last.
+      // 組むのは open の前 —— 渡す部分の列そのものが transcript の3本目(ADR 0313 決定1)
       const system = boardProse({
         db: this.options.db,
         registryDir: this.options.registry.dir,
@@ -2258,7 +2259,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           "--settings",
           sandboxSettingsPath,
           "--append-system-prompt",
-          system.map((part) => part.text).join(""),
+          joinPrompt(system),
         ],
         // the agent's own commits are stamped with the agent's identity (issue
         // #53), merged over the inherited env — never a token (ADR 0024). The

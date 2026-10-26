@@ -9,7 +9,7 @@ import { boardDoctrine } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
 import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, humanEntryInput, type InjectionQuery, recordBehavior, recordKnowledge } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
@@ -703,7 +703,9 @@ describe("CodexWorker (ADR 0098)", () => {
 
     expect(recorded.harness).toBe("codex");
     expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(developerInstructions(args));
-    expect(recorded.system[0]).toMatchObject({ part: "definition", text: "You are the Codex worker.", builtin: false, definition_version: "1.2.3" });
+    // 定義の部分の版は worker_spawned と同じ値
+    const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
+    expect(recorded.system[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
     expect(recorded.user).toBe(args.at(-1));
   });
 

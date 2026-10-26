@@ -13,7 +13,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse } from "./board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
@@ -1426,8 +1426,8 @@ export class CodexWorker implements WorkerAdapter {
       recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
       // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から、この spawn の id で組む(ADR 0295 決定4)。
-      // Codex は次の part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は文面の一部である(ADR 0124 Consequences)
-      // —— 記録が渡した値の逐語であるよう、その空行は最後の部分に載せる(ADR 0313 決定2)
+      // Codex は developer item の中で次の content part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は
+      // 文面の一部である(ADR 0124 Consequences)—— 記録が渡した値の逐語であるよう、その空行は列の最後の部分に載せる(ADR 0313 決定2)
       const parts = boardProse({
         db: this.options.db,
         registryDir: this.options.registry.dir,
@@ -1444,7 +1444,7 @@ export class CodexWorker implements WorkerAdapter {
       });
       const last = parts.pop()!;
       const system = [...parts, { ...last, text: `${last.text}\n\n` }];
-      const developerInstructions = system.map((part) => part.text).join("");
+      const developerInstructions = joinPrompt(system);
       const user = taskPrompt(task);
       const transcript = this.options.transcripts.open(task.id, spawned, { harness: "codex", system, user });
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない

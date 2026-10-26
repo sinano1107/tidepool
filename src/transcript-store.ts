@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { closeSync, createWriteStream, openSync, rmSync, type WriteStream, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { PromptPart } from "./board-prose.js";
+import type { Harness } from "./registry.js";
 
 /** 盤面の記録の器(worker transcript を置く dir)への書き込みが fs の例外で落ちた(ADR 0266 決定3)。
  *  どの task の・どの path への書き込みが・どの例外で落ちたかを運ぶ —— 原因の所在は断言しない。 */
@@ -47,7 +48,7 @@ export interface TranscriptFailure {
 /** spawn 時に harness へ渡した prompt 一式(ADR 0313 決定1・2)。`system` を順に空文字で連結した値が Claude の
  *  `--append-system-prompt` / Codex の `developer_instructions`、`user` が Claude の `-p` / Codex の user turn。 */
 export interface PromptRecord {
-  harness: "claude-code" | "codex";
+  harness: Harness;
   system: PromptPart[];
   user: string;
 }
@@ -75,7 +76,7 @@ export class TranscriptStore {
 
   /** `worker_spawned` の後・spawn の前に同期で開く。開けなければ `RecordContainerError` が呼び手へ返り、
    *  盤面全体の停止になる(ADR 0266 決定4 / ADR 0149 追記1)。ファイル名は event id でセッションごとに一意
-   *  (issue #379 / ADR 0083 追記2)。prompt はここで書き切るので、走ってから書けなくなる経路を持たない(ADR 0313 決定1)。 */
+   *  (issue #379 / ADR 0083 追記2)。prompt は spawn の前にここで書き切って閉じるので、走ってから書けなくなる経路を持たない。 */
   open(
     taskId: string,
     workerSpawnedEventId: number,
@@ -89,7 +90,8 @@ export class TranscriptStore {
     let stderrFd: number;
     try {
       // prompt は書き切って閉じるので、stderr より先に置けば落ちたとき閉じる fd は stream の1本だけ
-      writeRecord(taskId, promptPath, () => writeFileSync(promptPath, JSON.stringify(prompt)));
+      const promptJson = JSON.stringify(prompt);
+      writeRecord(taskId, promptPath, () => writeFileSync(promptPath, promptJson));
       stderrFd = writeRecord(taskId, stderrPath, () => openSync(stderrPath, "w"));
     } catch (err) {
       closeSync(streamFd);

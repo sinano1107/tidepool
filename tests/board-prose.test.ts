@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { boardDoctrine, boardProse } from "../src/board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt } from "../src/board-prose.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -10,12 +10,9 @@ import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER
 import { makeRegistry } from "./registry-fixture.js";
 
 /** 文面の全体 —— 持ち主つきの部分を順に空文字で連結した値が harness へ渡る値(ADR 0313 決定2)。 */
-const joined = (input: Parameters<typeof boardProse>[0]) =>
-  boardProse(input)
-    .map((part) => part.text)
-    .join("");
-/** 記憶の店に何も無い spawn の注入(節は空)。 */
-const NO_MEMORY = { section: "" };
+const joined = (input: Parameters<typeof boardProse>[0]) => joinPrompt(boardProse(input));
+/** 記憶の店に見える approved が無い spawn の注入(節は null)。 */
+const NO_MEMORY = { section: null };
 
 /** 帰り先の無い系譜で走った task の当時版が Authority 節の代わりに写す1文(ADR 0301 決定5)。 */
 const NO_AUTHORITY_THEN = "You were given no Authority section and no Roster section then.";

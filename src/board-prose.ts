@@ -479,6 +479,11 @@ export type PromptPart =
       text: string;
     };
 
+/** 部分の列を harness へ渡す1つの値に戻す(ADR 0313 決定2)。 */
+export function joinPrompt(parts: readonly PromptPart[]): string {
+  return parts.map((part) => part.text).join("");
+}
+
 /** 盤面が書いた文面の全体(ADR 0157 決定1)を持ち主つきの部分の列で返す(ADR 0313 決定2)。節の順序は Harness を問わず
  *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → 記憶の注入 →
  *  主題の材料(ADR 0180 決定2・ADR 0279 決定2)。組まなかった節は列に無い。
