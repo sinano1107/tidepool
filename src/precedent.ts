@@ -522,9 +522,6 @@ export function projectionPending(db: Db, workerSpawnedEventId: number): boolean
   return pendingProjections.get(db)?.has(workerSpawnedEventId) ?? false;
 }
 
-/** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
- *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
- *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
 /** worker adapter の終了処理から呼ぶ(issue #356 / ADR 0083 追記10)。呼ぶのは **worker_exited を書いたあと**
  *  —— でなければ exit / usage 参照が投影に入らない。投影は transcript の**書き込みストリームが閉じたあと** ——
  *  stdout は pipe なので読み切り(child の "close")の時点でもファイルが flush 済みとは限らない。派生表なので
@@ -547,6 +544,9 @@ export function projectWhenTranscriptCloses(
   else stream.once("close", project);
 }
 
+/** 1つの worker session を投影して派生表に書く。同じ session を同じ投影器の版で
+ *  二度書くことはない(`UNIQUE (worker_spawned_event_id, extractor_version)`)—
+ *  戻り値は書いた episode の id、既にあるか投影できなかったときは null。 */
 export function projectAndPersist(
   db: Db,
   opts: { workerSpawnedEventId: number; transcriptPath: string },

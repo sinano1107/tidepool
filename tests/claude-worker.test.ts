@@ -2140,6 +2140,9 @@ describe("ClaudeCodeWorker", () => {
 
     processes[0]!.stdout.end();
     emitExit(0, null);
+    // worker_exited を書いた後も、transcript の書き込みストリームが閉じて投影が決着するまでは立ったまま
+    expect(listEvents(db, task.id).some((e) => e.kind === "worker_exited")).toBe(true);
+    expect(projectionPending(db, spawnedId)).toBe(true);
     await vi.waitFor(() => expect(listEpisodes(db, { workspace: "tidepool", agent: "deckhand" })).toHaveLength(1));
 
     expect(projectionPending(db, spawnedId)).toBe(false);

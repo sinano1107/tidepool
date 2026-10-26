@@ -1142,6 +1142,9 @@ describe("CodexWorker (ADR 0098)", () => {
 
     f.process.processes[0]!.stdout.end();
     f.process.emitExit(0, null);
+    // worker_exited を書いた後も、transcript の書き込みストリームが閉じて投影が決着するまでは立ったまま
+    expect(listEvents(f.db, value.id).some((e) => e.kind === "worker_exited")).toBe(true);
+    expect(projectionPending(f.db, spawnedId)).toBe(true);
     await vi.waitFor(() => expect(listEpisodes(f.db, { workspace: "work", agent: "codex-agent" })).toHaveLength(1));
 
     expect(projectionPending(f.db, spawnedId)).toBe(false);
