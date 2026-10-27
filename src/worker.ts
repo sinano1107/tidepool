@@ -43,7 +43,10 @@ export interface WorkerAdapter {
    *  走る)。
    *
    *  `query` は関連 leaf を何で引くか(ADR 0175): pickup が訳した英語の view か、訳せなかった理由。
-   *  無ければ訳す対象外。task の文面は原語のまま運ぶ。 */
+   *  無ければ訳す対象外。task の文面は原語のまま運ぶ。
+   *
+   *  spawn までに await を挟む実装は、session が終わった(停止・解放・再 pickup)あとの継続で spawn しない ——
+   *  各 await の後に `liveSession` を読み、閉じていれば何も書かずに終わる(#1973)。 */
   start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): void;
   /** 畳み込み停止(graceful stop): `taskId` の session に、自己終了と作業の
    *  畳み込みを促す合図を送る。**送達のみで、従われる保証はない** — 合図の
