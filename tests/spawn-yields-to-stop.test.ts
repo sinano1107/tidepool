@@ -125,12 +125,12 @@ const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${
 const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
 const teardown = async () => (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
 
-/** 1回目だけ保留する口。2回目以降(retry の pickup)はすぐ通す。 */
-function holdFirst() {
+/** `nth` 回目の呼び出しだけ保留する口。他(retry の pickup など)はすぐ通す。 */
+function holdNth(nth = 1) {
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   let calls = 0;
-  return { release, wait: () => (++calls === 1 ? held : Promise.resolve()) };
+  return { release, calls: () => calls, wait: () => (++calls === nth ? held : Promise.resolve()) };
 }
 
 async function bootWithAdapter(
@@ -160,7 +160,7 @@ async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
       "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
     ...(workspace && { "workspaces.yaml": `${workspace.name}:\n  path: ${workspace.path}\n` }),
   });
-  const hold = holdFirst();
+  const hold = holdNth();
   const boot = (dir?: string) =>
     bootWithAdapter(
       (deps) =>
@@ -197,11 +197,9 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
   const codexHome = await tempDir("spawn-yields-codex-home-");
   let released = false;
   const inner = fakeAppServerCall((args, cwds) => answerSkillsList(released ? "closed" : "one-enabled")(args, cwds)).call;
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => (release = resolve));
-  let calls = 0;
+  const hold = holdNth(holdAt);
   const boardCall = (async (...args: Parameters<typeof inner>) => {
-    if (++calls === holdAt) await held;
+    await hold.wait();
     return inner(...args);
   }) as BoardCall;
   const proc = await bootWithAdapter(
@@ -231,9 +229,9 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
     proc,
     release: () => {
       released = true;
-      release();
+      hold.release();
     },
-    boardCalls: () => calls,
+    boardCalls: hold.calls,
   };
 }
 
@@ -296,7 +294,7 @@ async function expectNothingWrittenByTheWindow(taskId: string) {
 
 /** 1回目の訳を保留する注入 query の翻訳(scheduler の pickup の最後の await)。 */
 class HeldTranslationClient extends FakeTranslationClient {
-  readonly hold = holdFirst();
+  readonly hold = holdNth();
   override async translate(fragments: string[], language: string) {
     await this.hold.wait();
     return super.translate(fragments, language);
