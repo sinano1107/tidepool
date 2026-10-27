@@ -21,9 +21,11 @@ code は shadow 行を pickup の窓に1回だけ載せ、due は `worker_exited
    (ADR 0272 決定4 追記 / ADR 0110 決定4 Status 追記)で、ADR 0151 決定3(同主題の自身の産物)より広い。
 4. **窓で切る部分が今の状態で行を落とすのは、同じ event が別の部分に現れるか、due の where も同じ条件を持つときだけ。** 種のセルは
    どちらも満たさなかった: 表に行の無い (セル, 段) の種を落としていたが、Interview の対象は表に無いセルが前提(ADR 0199 決定5)
-   なので主経路が隠れていた。種のセルは表の行の有無を問わず部分と `list_routing_cells` に出し(段が消えていれば `tier_retired`、
-   項目にはしない —— ADR 0278 追記5)、節での (セル, 段) の最新の種は `upTo` 以下で選ぶ(停止の行の ADR 0312 決定6 と同形)。
-   spec #2190 の「読み手は行のある (セル, 段) の種だけを読む」は学習器に狭まる。
+   なので主経路が隠れていた。種のセルは同じ段に行があるかを問わず部分と `list_routing_cells` に出し(段が消えていれば
+   `tier_retired`)、節での (セル, 段) の最新の種は `upTo` 以下で選ぶ(停止の行の ADR 0312 決定6 と同形)。項目は今までどおり
+   (provider, model, effort) が今の表にある行で段は問わない(ADR 0278 追記5)—— 別の段に同じ model の行があれば、その行を測った段へ
+   移す判断が項目になり、Interview の結果が表に戻る閉路が繋がる。spec #2190 の「読み手は行のある (セル, 段) の種だけを読む」は
+   学習器に狭まる。
 5. **受け入れた隙間は2つ(#2650 / #2651 に起票)。** 学習器の分岐が落ちて shadow 行を書けなかった pickup(due は開くが行が無い)と、人間の扉で起こした初回の
    登録が pickup の await 中に落ちた行(spawn が次の窓に落ち、行は `worker_spawned_event_id: null` で載る —— 未起動と未達を同じ
    null が指す)。盤面の登録は poll の先頭で pickup と交わらない。
@@ -33,8 +35,8 @@ code は shadow 行を pickup の窓に1回だけ載せ、due は `worker_exited
 - **outcome を変える event を kind に列挙し、行を再掲する** —— `episodeOutcome` の入力の一覧を写像にもう1度書く二重定義。#2593 が消した形。
 - **outcome の着地を盤面が event に記録する** —— 受理は導出(ADR 0111 決定1)で、導出の記録は写しになる。
 - **exit で切る** —— outcome は exit でも決まらない。**spawn で切る** —— spawn に届かなかった pickup が乖離率の分母から落ちる。
-- **`worker_exited` の where に「そのセルの最初の exit」を入れる** —— 全 exit を spawn の payload と join して走査し、due の判定が履歴に
-  比例する(ADR 0300 帰結)。件数で満たす。
+- **`worker_exited` の where に「そのセルの最初の exit」を入れる** —— poll ごとの due の判定で、窓の exit ごとに全 exit を spawn の payload と
+  join して走査する(kind の索引は #1031 で未着手)。件数で満たすほうが where は event の性質だけで済む。
 - **行が消えたら Interview を中止する** —— 対象は表に無いセルが前提で、向きが逆。
 - **隙間を ADR の例外として列挙する** —— 2箇所を手で揃える同期を文書の形で戻す。決定4 の規則と不変条件のテストで塞ぐ。
 
