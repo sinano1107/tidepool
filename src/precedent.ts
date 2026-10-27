@@ -823,6 +823,11 @@ export function listEpisodes(
   }));
 }
 
+/** どの投影器の版でも、この session の Episode 行があるか(ADR 0315 決定4 —— 版を上げた再投影は明示の backfill の仕事)。 */
+export function hasEpisodeOfAnyVersion(db: Db, workerSpawnedEventId: number): boolean {
+  return db.prepare("SELECT 1 FROM episodes WHERE worker_spawned_event_id = ?").get(workerSpawnedEventId) !== undefined;
+}
+
 /** 1 session の行動列マーカーの種別だけを順に返す(配分評価の入力、ADR 0111
  *  決定4)。episode 行が無ければ null —— 投影前の session を「マーカーが1つも無かった」と混ぜない。 */
 export function episodeMarkerKinds(db: Db, workerSpawnedEventId: number): MarkerKind[] | null {

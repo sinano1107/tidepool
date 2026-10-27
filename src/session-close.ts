@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { stderrTail } from "./child-stream.js";
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEventsOfKinds } from "./events.js";
-import { projectAndPersist } from "./precedent.js";
+import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
 export const taskTempPrefix = (harness: "claude" | "codex", taskId: string) => `tidepool-${harness}-${taskId}-`;
@@ -28,14 +28,12 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
   const exited = new Set(events.flatMap((e) => (e.payload.kind === "worker_exited" ? [e.payload.worker_spawned_event_id] : [])));
   const latestSpawn = new Map<string | null, number>();
   for (const e of events) if (e.payload.kind === "worker_spawned") latestSpawn.set(e.task_id, e.id);
-  const projected = db.prepare("SELECT 1 FROM episodes WHERE worker_spawned_event_id = ?");
   for (const spawned of events) {
     if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
     const taskId = spawned.task_id;
     const base = join(opts.logDir, `${taskId}.${spawned.id}`);
-    // どの版でも Episode があれば触れない(決定4)—— 版を上げた再投影は明示の backfill の仕事
     const project = () => {
-      if (!projected.get(spawned.id)) projectAndPersist(db, { workerSpawnedEventId: spawned.id, transcriptPath: `${base}.stream.jsonl` });
+      if (!hasEpisodeOfAnyVersion(db, spawned.id)) projectAndPersist(db, { workerSpawnedEventId: spawned.id, transcriptPath: `${base}.stream.jsonl` });
     };
     try {
       // 後の spawn があれば窓は既に閉じている —— exit を書くと次の session に重なり、一時領域は後の session のもの

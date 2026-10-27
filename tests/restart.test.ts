@@ -171,7 +171,7 @@ function silenceRecoveryLog() {
   onTestFinished(() => { silenced.mockRestore(); });
 }
 
-it("前提検査が通った起動は、前の盤面が閉じ切らなかった session を観測していない印の exit で閉じ、Episode を投影して task temp を消す(ADR 0315)", async () => {
+it("前提検査が通った起動は、前の盤面が閉じ切らなかった session を観測していない印の exit で閉じ、Episode を投影する(ADR 0315。記録の形と task temp は tests/session-close.test.ts)", async () => {
   t = await bootTidepool();
   const task = queueWork(t, "interrupted by restart");
   await t.clock.advance(HOUR);
@@ -181,9 +181,8 @@ it("前提検査が通った起動は、前の盤面が閉じ切らなかった 
   t = await bootTidepool({ dir: t.dir });
 
   const [exited] = exitsOf(left.spawned);
-  expect(exited?.payload).toMatchObject({ exit_observed: false, exit_code: null, stderr_tail: "lost the board", output_closed: false });
+  expect(exited?.payload).toMatchObject({ exit_observed: false });
   expect(episodeOf(left.spawned)?.workerExitedEventId).toBe(exited!.id);
-  expect(existsSync(left.temp)).toBe(false);
 });
 
 it("前提検査が落ちた起動では session を閉じず、Harness Containment の確認回答の受理で閉じる(ADR 0315 決定1)", async () => {

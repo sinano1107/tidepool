@@ -2387,7 +2387,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       const usage = lastResult ? toUsage(lastResult, streamObserved) : null;
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
-      // 投影は transcript の close を待つ購読なので、下の2つの一撃より先に登録しても投影そのものは後ろに来る
+      // 下の2つの一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
+      // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
       closeSession(
         this.options.db,
         {
