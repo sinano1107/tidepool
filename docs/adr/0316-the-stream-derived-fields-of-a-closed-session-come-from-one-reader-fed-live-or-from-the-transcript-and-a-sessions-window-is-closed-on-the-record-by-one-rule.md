@@ -1,9 +1,9 @@
-# 閉じた session の stream 由来の欄は1つの読み手から作り、出所は live の pipe か記録済みの transcript、session の終わりは1つの規則で読む
+# 閉じた session の stream 由来の欄は1つの読み手から作り、出所は live の pipe か記録済みの transcript、session の窓を記録の上で閉じる位置は1つの規則で読む
 
 2026-10-27 の triage → grilling(issue #2632、#2600 / ADR 0315 の族の根)で決定。session を閉じる関数は ADR 0315 決定1 で1本になったが、
 `worker_exited` の stream 由来の欄(消費・model の差し替え・拒否・advisor・最後の発話・CLI の報告した失敗)を作るのは adapter の
-メモリ上の観測だけで、起動時の復旧は同じ bytes が transcript にあるのに読まず、欄を null に固定していた。「session が終わった」の
-規則も読み手ごとに違っていた(exit のポインタ / 次の spawn / 最後の pickup の後の決着 kind / transcript ファイルの存在)。
+メモリ上の観測だけで、起動時の復旧は同じ bytes が transcript にあるのに読まず、欄を null に固定していた。記録の上で session の窓を閉じる
+位置の規則も読み手ごとに違っていた(exit のポインタ / 次の spawn / 最後の pickup の後の決着 kind / transcript ファイルの存在)。
 実測・読み手の表・`file:line` は #2632 と #2633 のコメントに置く。
 
 ## 決定
@@ -23,7 +23,8 @@
 3. **読み手は観測を返すだけで、帰結は live の呼び手だけが撃つ。** CLI 認証失敗の quarantine、行の拒否の通知、failure question と
    cap の後始末、tool surface の検査(stream の途中で session を止める)は live の観測から撃つものであり、復旧は撃たない
    (ADR 0315 決定6 の続きを決めるのは failure question のまま)。
-4. **session の終わりは1つの規則で読み、記録の事実にはしない。** 規則は「その spawn を指す `worker_exited` → 無ければ spawn の
+4. **session の窓を記録の上で閉じる位置は1つの規則で読み、記録の事実にはしない。** session の終わり(回収済み観測、ADR 0109 決定2)は
+   記録に event が無く、読み手は exit の記録で代用してきた —— その代用の規則を1つにする。規則は「その spawn を指す `worker_exited` → 無ければ spawn の
    窓にある process を持たない決着(`spawn_failed` / `record_container_unwritable`、ADR 0118 決定1 の never-ran)→ 無ければ同じ task
    の次の `worker_spawned`」で、exit と never-ran の決着が両方あれば exit を優先する。session の窓(Episode の投影・学習器・決定ログの
    anchor)、後始末の決着の導出、起動時の復旧、明示の backfill がこの1つを読む。後始末の決着は主語が pickup なので(`pickup_stopped`
@@ -46,7 +47,7 @@
 
 ## 帰結
 
-- CONTEXT.md の Worker session(復旧が閉じるときに読むもの、session の終わりの規則)。
+- CONTEXT.md の Worker session(復旧が閉じるときに読むもの、窓を閉じる位置の規則)。
 - ADR 0315 決定2 に Status 追記(欄の範囲の反転)、Status 追記の「判定の形は #2632 で決める」は本 ADR 決定4 を指す。
-- 記録の形の変更は無い(欄は増えず、既存の欄が埋まるだけ)。実装は2 slice: session の終わりの規則(#2633)→ 読み手と復旧の
+- 記録の形の変更は無い(欄は増えず、既存の欄が埋まるだけ)。実装は2 slice: 窓を閉じる位置の規則(#2633)→ 読み手と復旧の
   再生(#2632)。
