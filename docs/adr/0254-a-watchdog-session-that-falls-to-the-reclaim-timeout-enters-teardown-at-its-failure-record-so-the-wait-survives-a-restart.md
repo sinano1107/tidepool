@@ -1,5 +1,7 @@
 # 回収 timeout に落ちた watchdog の session は失敗の記録の瞬間に後始末へ入り、梯子の底の待ちは再起動を越える
 
+**Status 追記: 決定2 の受理の門から走る復旧に、前の盤面が閉じ切らなかった session の記録を閉じる段が1つ増える(ADR 0315 決定1・3)** —— 対象は起動時点の event id 以下の spawn に限り、走行中の別 Harness の session には書かない。
+
 2026-10-14 の triage / grilling(issue #648)で決定。watchdog の時間制限の梯子が回収 timeout に落ちると、failure question と
 Containment question は立つが、延期した tree rule を「どの session のために待っているか」は watchdog の in-memory にしか無かった。
 盤面を再起動すると起動時の復旧はその session を拾わず、確認回答は何も走らせずに受理され、tree rule の走っていない workspace へ

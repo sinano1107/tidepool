@@ -1,5 +1,7 @@
 # 人間の停止は session を単位に帰責され、判事と RCA は判断ログと行動列に照らし、RCA の材料は停止そのものである —— 帰責の単位は観測の単位
 
+**Status 追記: 決定1 の門(session が閉じている)は、起動時の復旧が書いた exit の記録でも開く(ADR 0315 決定2・6)** —— 停止の後に盤面が落ちた session の停止も帰責される。
+
 **Status 追記: 決定4 の「材料 id 欄」「材料にした event の id」は登録の欄 `opened_on_event_ids` を指す(issue #2577 で `objection_event_ids` から改名)** —— 起草 verb は `propose_from_material`(引数 `material_id`)、帰責の `entries` は `wrong_memory_entries`。
 
 **Status 追記: 決定3 の「session が閉じていて」は、その session の Episode の投影の決着(行を書いた・書かなかった・throw した)を含む(issue #2570)** —— spec #2557 の「sweep を撃つ poll は後始末の完走による slot 解放の後に来るので、判事の時点で Episode は投影済み」は成り立たない。投影は `worker_exited` より後に transcript の書き込みストリームの close で走り、その間に無関係な契機の poll が入りうる。

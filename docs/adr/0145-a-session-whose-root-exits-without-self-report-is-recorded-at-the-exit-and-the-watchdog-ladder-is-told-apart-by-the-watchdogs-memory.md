@@ -1,5 +1,7 @@
 # self-report なしに root が exit した session は exit の瞬間に失敗を記録し、梯子の中かどうかは watchdog の記憶で見分ける
 
+**Status 追記: 再起動中断の session にも exit の記録が付く(ADR 0315 決定2・3)** —— 盤面が観測していない exit として印を持ち、failure question の retry / abandon は変わらない。
+
 **Status 追記: 決定5 の「Codex の上限到達による exit は除外しない」は ADR 0261 で置き換え** —— 読み直した使用量で上限到達と認めた exit は、報告なき exit ではなく上限到達による中断になる。
 
 **Status 追記: 決定1 の「exit を観測した時点で」は ADR 0309 で「exit の事実と上限到達の分類が揃った時点」に** —— Codex の使用量の読み直し中は exit を記録して待ち、決めない(issue #2547)。
