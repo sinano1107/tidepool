@@ -4,6 +4,8 @@
 
 **Status 追記: 決定5 の異議つき判断の行は、Episode のマーカーでなく event から選ぶ —— 決定7 の停止の行と同形(issue #2609)。** 窓の `objection_attributed` の `entry_id` が指す log entry が行で、異議を打てる4種(判断・完了・前提破れ・記憶の書き込み)のどれでも載る —— 帰責は種類を問わず撃たれるので、材料になる行の集合はそれに揃える(完了の行への異議を学習の入力に数える ADR 0083 の線)。Episode は 判断より前に読んだ / 見た記憶の計算にだけ使い、投影が無ければその2欄は null(既に nullable)、session の spawn が無い行は spawn の id と agent も null。これで「due が数えたのにどの部分にも出ない帰責」—— 投影の無い・未完の session の判断、完了の行・前提破れの行への帰責 —— が無くなる。異議の帰責に投影の門を足す案は、投影の障害を学習の遅れに変えるので退けた。ADR 0252 決定5 の「書き込みの記録は Episode の マーカーになり」は記録の説明で、行の選び方ではない。
 
+**Status 追記: 決定1 の「行の形は読み口の verb と同じ」に例外が1つ、退けた案が #2594 に送った routing の shadow 行の窓は決着(issue #2594 / ADR 0319)。** routing の節の shadow 行は `list_routing_shadow` の行から `outcome` を除く —— pickup 時点の行の outcome は導出がまだ無く `excluded` と描かれ、最終の除外と区別できないため。shadow 行は `task_picked_up` に乗り、routing の kind の where はどれも部分に現れる event だけを数える(review 自身の exit・既知のセルの exit は件数で、行でない設定の変更は文脈で)。
+
 2026-10-26 の triage → grilling(issue #2593、#2572 / #2592 の族の根)で決定。ADR 0180 決定1 は「材料 = due が数えた集合そのもの」と
 置いたが、code は due を「event の kind × 窓」、節の各部分を「読み口の verb の行」で別々に選んでいて、一致していたのは店の変更だけだった。
 停止の帰責は due が数えるのに節に無く(#2572)、routing の行への帰責は memory の due が数えて routing の節にだけ載り(#2592)、

@@ -1,5 +1,7 @@
 # memory meta-review の材料は盤面が spawn 時に注入し、leaf の検査は材料から読み、重複の相手は scope を通した検索で探す
 
+**Status 追記: 追記 #1239 の「shadow 行の outcome と配分評価の分布が既に運ぶ」は「shadow 行の実績(両セルの受理 / 却下の数)が運ぶ」と読み替え、shadow 行は pickup の窓に乗る(issue #2594 / ADR 0319)。** session の outcome は pickup 時点にも exit 時点にも無く、行単位の outcome は節に載せず読み口で読む。
+
 2026-10-01 の triage / grilling(issue #1226)で決定。memory meta-review の task の完了基準は「前回の meta-review 以降の
 candidate と店の変更をすべて」処理せよと言うが、その集合を返す読み口が無く、review は前回の watermark も知らされない
 まま、`list_memory_entries` の全ページを読むしかなかった。purpose は `list_memory_candidates` も `list_precedents` も名指して

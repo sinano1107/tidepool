@@ -2,6 +2,8 @@
 
 **Status 追記: 決定1 の「受験者はここ(面接室)で解く」は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で「出題の head から fetch した自分の checkout で解く」に変わった(2026-10-19)。root が面接室で組むこと、面接室を決着後も消さないこと、決定8 の止める単位(root id)はそのまま。**
 
+**Status 追記: 決定7 の種は、routing meta-review の材料の節と `list_routing_cells` に表の行の有無を問わず出る(issue #2594 / ADR 0319)。** 対象は表に無いセルが前提(ADR 0199 決定5)なので、行のある種だけを出すと種が review に届かなかった。学習器が行のある (セル, 段) の種だけで移る規則(spec #2190)は変えない。
+
 2026-10-18 の grilling(issue #2184 —— #2011 / #2091 / #921 の根、#1898 もここで決着)で決定。Interview は盤面全体の主張
 「この model はこの段の品質を満たすか」を測るのに、乗り物は本番の workspace 1つで、受験者は root の workspace を写して走って
 いた(ADR 0253 決定1 / ADR 0267 決定5)。門の盤面では本番の workspace が tidepool 自身1つしか無く、受験者は checkout から測られて
