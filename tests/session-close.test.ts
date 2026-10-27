@@ -25,12 +25,11 @@ async function board(sessions = 1) {
     writeFileSync(join(logDir, `${task.id}.${id}.stderr.log`), "warming up\nlost the board\n");
     spawns.push(id);
   }
-  const close = (watermark = maxEventId(db)) => closeUnclosedSessions(db, { logDir, tmpDir, watermark, now: at });
+  const close = (watermark = Number.MAX_SAFE_INTEGER) => closeUnclosedSessions(db, { logDir, tmpDir, watermark, now: at });
   const exits = () => listEvents(db, task.id).filter((e) => e.kind === "worker_exited");
   return { db, logDir, tmpDir, task, spawns, close, exits };
 }
 
-const maxEventId = (db: Db) => (db.prepare("SELECT MAX(id) AS id FROM events").get() as { id: number }).id;
 const episodeOf = (db: Db, spawned: number) => listEpisodes(db, {}).find((e) => e.workerSpawnedEventId === spawned);
 
 it("exit の記録が無い session は、観測していない印の exit で閉じ、Episode がその exit を指す", async () => {
@@ -117,7 +116,7 @@ it("transcript の無い session は記録して流し、他の session は投�
 
 it("watermark より後の spawn には触れない —— 走行中の別の盤面の session", async () => {
   const b = await board();
-  const watermark = maxEventId(b.db);
+  const watermark = b.spawns.at(-1)!;
   const running = spawnOnAnotherTask(b.db);
 
   b.close(watermark);
@@ -138,14 +137,13 @@ it.each([
   const neverRan = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   // spawn の失敗は transcript を開いた後(空の stream が残る)、記録の器の失敗は transcript が無い
   if (kind === "spawn_failed") writeFileSync(join(b.logDir, `${b.task.id}.${neverRan}.stream.jsonl`), "");
-  appendEvent(b.db, {
+  const watermark = appendEvent(b.db, {
     taskId: b.task.id,
     actorId: "deckhand",
     origin: "board",
     at,
     payload: kind === "spawn_failed" ? { kind, error_code: "ENOENT", message: "spawn claude ENOENT" } : { kind, path: b.logDir, reason: "EACCES" },
   });
-  const watermark = maxEventId(b.db);
   if (laterSpawn) appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   const temp = join(b.tmpDir, `tidepool-claude-${b.task.id}-never`);
   mkdirSync(temp);

@@ -16,8 +16,8 @@ import {
   isDecisionLogEntry,
   latestEventOfTask,
   listEventsOfKinds,
-  NEVER_RAN_KINDS,
   parseEventRow,
+  SESSION_WINDOW_KINDS,
   SKIM_TASK_SQL,
   sessionSpawnOf,
   taskDecisionLog,
@@ -750,7 +750,7 @@ export function listLog(db: Db, defaultWorkspaceName?: string): LogEntry[] {
   const attributions = currentAttributions(db);
   // session の窓を切るのに要るのは spawn・exit・never-ran の決着だけ。窓の規則は task で絞るので盤面全体を1回で引いて渡す
   // ponytail: エントリ数 × session 数の走査。盤面が育って一覧が重くなったら task ごとに束ねる
-  const sessionEvents = listEventsOfKinds(db, ["worker_spawned", "worker_exited", ...NEVER_RAN_KINDS]);
+  const sessionEvents = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   // Interview ごとに1回だけ引く —— 同じ root の行は同じグループ
   const groups = new Map<string, NonNullable<LogEntry["interview"]>>();
   // task ごとに1回だけ系譜を読む

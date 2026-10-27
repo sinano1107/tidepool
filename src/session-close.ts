@@ -2,7 +2,7 @@ import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { stderrTail } from "./child-stream.js";
 import type { Db } from "./db.js";
-import { appendEvent, type EventPayload, listEventsOfKinds, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
+import { appendEvent, type EventPayload, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "./events.js";
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
@@ -24,7 +24,7 @@ export function closeSession(
 /** 前の盤面が閉じ切らなかった session を閉じる起動時の復旧(ADR 0315 決定1〜5)。対象は `watermark`(起動時点の最大 event id)
  *  以下の spawn だけ —— 受理の門から走るとき、走行中の別の盤面の session に偽の exit を書かない。1件の失敗は記録して流す。 */
 export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: string; watermark: number; now: Date }): void {
-  const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", ...NEVER_RAN_KINDS]);
+  const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
     if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
     // ponytail: spawn ごとに盤面全体の event を舐める O(n²)。起動が遅くなったら task ごとに分けて渡す

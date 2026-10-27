@@ -552,7 +552,7 @@ export function projectAndPersist(
   if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) return null;
   // 投影器の入力は既存の task 単位の read API そのまま(issue #356 の「events 側の read API を新設しない」)
   const events = listEvents(db, spawned.task_id);
-  // process を1つも持たなかった session には Episode が無い(ADR 0316 決定4 / #2633)—— backfill と起動時の復旧が通る
+  // process を1つも持たなかった session には Episode が無い(ADR 0316 決定4 / #2633)—— 明示の backfill がここで止まる(起動時の復旧は呼ぶ前に飛ばす)
   if (sessionWindow(events, spawned).neverRan) return null;
   const episode = projectEpisode({
     transcriptLines: readFileSync(opts.transcriptPath, "utf8").split("\n"),
