@@ -7,6 +7,7 @@ import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
 import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
+import { recordHumanStop } from "../src/watchdog.js";
 import { definitionPart, recordPrompt } from "./fakes.js";
 import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
@@ -200,6 +201,82 @@ function reviewInput(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, 
   };
 }
 
+it("停止の self RCA は止められた session の定義・Authority・Roster を stop #id 付きで読む(ADR 0310 決定2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-27T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  recordedSpawn(db, dirs, task, at);
+  recordHumanStop(db, task.id, "wrong approach", at, "webui");
+  const stop = listEvents(db, task.id).find((event) => event.kind === "session_stopped_by_human")!;
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: task.id, assignee: "deckhand", opened_on_event_ids: [stop.id] }, at, ...HUMAN_WEBUI);
+
+  const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(history).toContain(`## Definition under review (as recorded at your spawn) — stop #${stop.id}`);
+  expect(history).toContain(fenced("You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs."));
+  expect(history).toContain(fenced("## Authority\n\nPrefer reversible actions. Anything irreversible is outside your authority.\n"));
+  expect(history).toContain("## Roster");
+  expect(history).toContain("deckhand — General work agent for the tidepool board");
+});
+
+it("停止の self RCA の記録が読めなければ、stop #id の見出しと欠落の1行だけを出す(ADR 0314 決定2)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-27T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const lost = recordedSpawn(db, dirs, task, at);
+  recordHumanStop(db, task.id, "wrong approach", at, "webui");
+  const stop = listEvents(db, task.id).find((event) => event.kind === "session_stopped_by_human")!;
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: task.id, assignee: "deckhand", opened_on_event_ids: [stop.id] }, at, ...HUMAN_WEBUI);
+  rmSync(join(dirs.recordDir, `${task.id}.${lost}.prompt.json`));
+
+  const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(history).toBe(
+    `\n\n## Definition under review (as recorded at your spawn) — stop #${stop.id}\n\n` +
+      `No recorded definition could be read for your stop #${stop.id} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
+  );
+});
+
+it("当時版はこの RCA の材料だけを覆い、同じ worker の別 session の異議を載せない(ADR 0171 決定2・3 / #2627)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-27T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const entries: number[] = [];
+  const objections = ["Covered first", "Outside material", "Covered last"].map((body) => {
+    const spawned = spawn(db, task, at);
+    recordPrompt(dirs.recordDir, task.id, spawned, [definitionPart(body)]);
+    const entry = logDecision(db, task, "a decision", "deckhand", at, "worker");
+    entries.push(entry);
+    return appendEvent(db, { taskId: task.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entry, comment: "why?", session_id: entry } });
+  });
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: task.id, assignee: "deckhand", opened_on_event_ids: [objections[2]!, objections[0]!] }, at, ...HUMAN_WEBUI);
+
+  const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(history).toContain(`### Live for your objected entry #${entries[0]}\n\n---\n\n${fenced("Covered first")}`);
+  expect(history).toContain(`### Live for your objected entry #${entries[2]}\n\n---\n\n${fenced("Covered last")}`);
+  expect(history).not.toContain("Outside material");
+  expect(history).not.toContain(`entry #${entries[1]}`);
+});
+
+it.each([undefined, "deckhand"])("停止に異議もあるとき、assignee %s の材料無し review と auditor RCA には当時版を注入しない(ADR 0020 決定3)", async (assignee) => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-27T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  recordedSpawn(db, dirs, task, at);
+  const selfRca = rcaOf(db, task, at, "deckhand", "deckhand");
+  recordHumanStop(db, task.id, "wrong approach", at, "webui");
+  const stop = listEvents(db, task.id).find((event) => event.kind === "session_stopped_by_human")!;
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: task.id, assignee, opened_on_event_ids: assignee ? undefined : [stop.id] }, at, ...HUMAN_WEBUI);
+
+  expect(historical(reviewInput(db, dirs, selfRca, spawn(db, selfRca, at)))).toContain("## Definition under review");
+  expect(historical(reviewInput(db, dirs, rca, spawn(db, rca, at)))).toBe("");
+});
+
 it.each(REPAIR_NOTICES)("%s の task への self RCA の当時版は、Authority が修理の1行で Roster 節が無い —— spawn と同じ type の分岐(#2366)", async (type, notice) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-21T00:00:00.000Z");
@@ -240,9 +317,8 @@ it("異議された entry が同じ定義の2つの spawn にまたがり、spaw
   pickupTask(db, parent, "deckhand", at, { assignee: "deckhand" });
   recordedSpawn(db, dirs, objected, at);
   const afterPickup = logDecision(db, objected, "kept the finding", "deckhand", at, "worker");
-  object(beforePickup);
-  object(afterPickup);
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  const objections = [object(beforePickup), object(afterPickup)];
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: objections }, at, ...HUMAN_WEBUI);
 
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
@@ -261,11 +337,11 @@ it("2つの spawn で Executor が違っても記録した Roster の text が�
   const object = (entryId: number) =>
     appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
   recordedSpawn(db, dirs, objected, at);
-  object(logDecision(db, objected, "found nothing to repair", "deckhand", at, "worker"));
+  const first = object(logDecision(db, objected, "found nothing to repair", "deckhand", at, "worker"));
   pickupTask(db, parent, "retired-agent", at, { assignee: "retired-agent" });
   recordedSpawn(db, dirs, objected, at);
-  object(logDecision(db, objected, "kept the finding", "deckhand", at, "worker"));
-  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand" }, at, ...HUMAN_WEBUI);
+  const second = object(logDecision(db, objected, "kept the finding", "deckhand", at, "worker"));
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: [first, second] }, at, ...HUMAN_WEBUI);
 
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
@@ -282,8 +358,9 @@ it("異議された entry の spawn の記録が無ければ、記録の読め�
   const lost = recordedSpawn(db, dirs, objected, at);
   const first = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
   recordedSpawn(db, dirs, objected, at);
-  const rca = rcaOf(db, objected, at, "deckhand", "deckhand");
-  appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: first, comment: "why?", session_id: 0 } });
+  const second = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
+  const objections = [first, second].map((entryId) => appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } }));
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: objections }, at, ...HUMAN_WEBUI);
   rmSync(join(dirs.recordDir, `${objected.id}.${lost}.prompt.json`));
 
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));

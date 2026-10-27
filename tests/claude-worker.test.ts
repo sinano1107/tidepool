@@ -3189,6 +3189,10 @@ describe("ClaudeCodeWorker", () => {
     // self RCA: concrete assignee = the historical worker, parent = objected
     const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
@@ -3213,6 +3217,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
@@ -3235,6 +3243,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
 
     expect(calls).toHaveLength(1);
@@ -3285,6 +3297,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-6", null, "deckhand", "review"), parent_id: "objected-6" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
 
     const args = calls[0]!.args;
@@ -3311,6 +3327,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-10", null, "deckhand", "review"), parent_id: "objected-10" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
 
     const args = calls[0]!.args;
@@ -3338,6 +3358,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-11", null, DEFAULT_AUDITOR_NAME, "review"), parent_id: "objected-11" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
     // the built-in's finite skill list launches after the async skill enumeration
     await vi.waitFor(() => expect(calls).toHaveLength(1));
@@ -3363,6 +3387,10 @@ describe("ClaudeCodeWorker", () => {
 
     const rca: Task = { ...makeTask("rca-12", null, DEFAULT_INTERVIEWER_NAME, "review"), parent_id: "objected-12" };
     insertTask(db, rca);
+    appendEvent(db, { taskId: rca.id, actorId: "human", origin: "webui", at: new FakeClock().now(), payload: {
+      kind: "task_registered", type: "review", title: rca.title,
+      opened_on_event_ids: listEvents(db, rca.parent_id!).filter((event) => event.kind === "objection_raised").map((event) => event.id),
+    } });
     worker.start(rca, setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 

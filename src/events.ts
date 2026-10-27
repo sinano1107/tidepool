@@ -1041,6 +1041,17 @@ export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): E
   return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
 }
 
+/** RCA の登録材料 → 異議された行または停止 → その session の spawn(ADR 0171 / ADR 0310)。
+ *  登録の記録が無い review は材料無し。spawn が引けなくても anchor は証拠の欠落を申告するために残す。 */
+export function rcaMaterialAnchors(db: Db, reviewId: string): Array<{ anchor: EventRow; spawned: EventRow | undefined }> {
+  const material = latestEventOfTask(db, reviewId, "task_registered")?.payload.opened_on_event_ids ?? [];
+  return material.flatMap((id) => {
+    const event = getEvent(db, id);
+    const anchor = event?.payload.kind === "objection_raised" ? getEvent(db, event.payload.entry_id) : event?.kind === "session_stopped_by_human" ? event : undefined;
+    return anchor ? [{ anchor, spawned: sessionSpawnOf(listEvents(db, anchor.task_id!), anchor) }] : [];
+  });
+}
+
 /** `anchor` を含む worker session(`sessionSpawnOf` の規則)と、その窓の完了(最初の `task_completed`)と人間の停止(最初の
  *  `session_stopped_by_human`)。窓の外なら undefined。session の完了と停止はここでだけ読む —— Episode の投影・meta-review の材料・
  *  case 描画・帰責の入力が同じ値を見る(issue #2615)。db を取らない純関数(issue #356)。 */
