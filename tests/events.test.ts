@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
-import { appendEvent, currentAttributions, latestEventOfTask, listEventsOfKinds } from "../src/events.js";
-import { api, bootTidepool, bundledObjection, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, seedFixtureBoard, type Tidepool } from "./harness.js";
+import { appendEvent, currentAttributions, type EventPayload, type EventRow, latestEventOfTask, listEventsOfKinds, sessionWindow } from "../src/events.js";
+import { api, bootTidepool, bundledObjection, FIXTURE_OTHER_TASK, FIXTURE_TASK, HOUR, mcpClient, QUIET_EXIT, seedFixtureBoard, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 let t: Tidepool;
 afterEach(() => t?.stop());
@@ -113,4 +113,37 @@ it("今の判定の読み口は、同じ異議群に initial と after_rca の�
   const later = attribute("preference", "after_rca");
 
   expect(currentAttributions(db).get(7)).toMatchObject({ id: later, cause: "preference", round: "after_rca" });
+});
+
+/** 1つの task の event 列(id は 1 から順)。 */
+const taskEvents = (...payloads: EventPayload[]): EventRow[] =>
+  payloads.map((payload, i) => ({ id: i + 1, task_id: "t", actor_id: "deckhand", origin: "board", kind: payload.kind, payload, created_at: "2026-10-27T00:00:00Z" }));
+const exitOf = (spawnedId: number): EventPayload => ({ kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
+const SPAWN_FAILED: EventPayload = { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" };
+const UNWRITABLE: EventPayload = { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" };
+
+it.each([
+  ["spawn_failed", SPAWN_FAILED],
+  ["record_container_unwritable", UNWRITABLE],
+])("never-ran の決着(%s)は session の窓を閉じ、決着の後・次の spawn の前の event は窓の外(ADR 0316 決定4)", (_, settled) => {
+  const events = taskEvents(WORKER_SPAWNED, settled, { kind: "task_picked_up" }, WORKER_SPAWNED);
+  const window = sessionWindow(events, events[0]!);
+
+  expect(events.map((e) => window.inSession(e))).toEqual([false, true, false, false]);
+  expect({ exited: window.exited, neverRan: window.neverRan, hasNextSpawn: window.hasNextSpawn }).toEqual({ exited: undefined, neverRan: true, hasNextSpawn: true });
+});
+
+it("exit と never-ran の決着が両方あれば exit で閉じ、never-ran ではない(ADR 0316 決定4)", () => {
+  const events = taskEvents(WORKER_SPAWNED, SPAWN_FAILED, exitOf(1), { kind: "task_picked_up" });
+  const window = sessionWindow(events, events[0]!);
+
+  expect(events.map((e) => window.inSession(e))).toEqual([false, true, true, false]);
+  expect({ exited: window.exited?.id, neverRan: window.neverRan }).toEqual({ exited: 3, neverRan: false });
+});
+
+it("次の spawn の後の決着は前の session を never-ran にしない —— 窓は次の spawn で閉じる", () => {
+  const events = taskEvents(WORKER_SPAWNED, WORKER_SPAWNED, SPAWN_FAILED);
+
+  expect(sessionWindow(events, events[0]!).neverRan).toBe(false);
+  expect(sessionWindow(events, events[1]!).neverRan).toBe(true);
 });

@@ -13,7 +13,7 @@ import { quarantineFailedTeardown } from "../src/failed-teardown.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { FAILED_TEARDOWN_QUESTION_TITLE, openQuarantineQuestion, openQuarantineValues, quarantineStops, registerQuarantine } from "../src/quarantine.js";
 import { Slot } from "../src/slot.js";
-import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, type Task } from "../src/tasks.js";
+import { cancelTaskDirectly, completeTask, escalateTask, getTask, listBoard, moveTask, nextSlotTask, pickupTask, registerTask, resolveTaskAgent, returnToQueueHead, type Task } from "../src/tasks.js";
 import { sessionInTeardown as markedSession, markTeardown, resumeUnfinishedTeardown, runTeardown, teardownStep } from "../src/teardown.js";
 import { queueReturnHandler, recordHumanStop, rowRefusalHandler, spawnFailureHandler, startWatchdog, transcriptFailureHandler, type Watchdog } from "../src/watchdog.js";
 import {
@@ -26,7 +26,7 @@ import {
   workspaceNeedsHuman,
 } from "../src/workspace.js";
 import { FakeClock, FakeContainerRuntime, ScriptedWorker } from "./fakes.js";
-import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT } from "./harness.js";
+import { answerQuestionViaWebui, commitWork, FULL_HANDOFF, failTeardownMark, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -1029,4 +1029,19 @@ it("再起動後の確認回答は、起動時の復旧がすでに枠を握っ�
   expect(markedSession(f.db)?.taskId).toBe(f.task.id);
   expect(restarted.slot.currentTaskId).toBe(f.task.id);
   expect(restarted.triggered).toEqual([]);
+});
+
+it.each([
+  ["exit が無ければ process を持たなかった session", false, { neverRan: true }],
+  ["exit があれば走った session —— exit が never-ran の決着に勝つ", true, { completion: false }],
+] as const)("spawn の後に記録の器の失敗で先頭へ戻った pickup の後始末は、%s(ADR 0316 決定4)", (_, exited, step) => {
+  const db = openDb(":memory:");
+  onTestFinished(() => { db.close(); });
+  const at = new Date("2026-10-27T00:00:00Z");
+  const task = pickupTask(db, registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
+  const spawned = appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  if (exited) appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  returnToQueueHead(db, task, { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" }, at);
+
+  expect(teardownStep(db, task.id)).toEqual(step);
 });

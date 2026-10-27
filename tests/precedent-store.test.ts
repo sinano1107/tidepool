@@ -6,7 +6,7 @@ import { appendEvent, getEvent, type TaskScopedPayload } from "../src/events.js"
 import { listPrecedents } from "../src/memory.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { backfillEpisodes, listEpisodes, projectAndPersist } from "../src/precedent.js";
-import { attributedObjection, bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, writeFixtureTranscript } from "./harness.js";
+import { attributedObjection, bundledObjection, FIXTURE_SPAWNED_EVENT_ID, FIXTURE_TASK, seedFixtureBoard, WORKER_SPAWNED, writeFixtureTranscript } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const logDir = () => tempDir("tidepool-precedent-");
@@ -165,6 +165,19 @@ it("decision マーカーの outcome は読み出し時に entry_id で結ばれ
     handoffPresent: true,
   });
   expect(episode!.exitCode).toBe(0);
+});
+
+it("backfill は process を持たなかった session を、transcript ファイルがあっても投影しない(ADR 0316 決定4 / #2633)", async () => {
+  const db = seedFixtureBoard();
+  const dir = await logDir();
+  const at = new Date("2026-08-20T07:00:00.000Z");
+  const neverRan = appendEvent(db, { taskId: FIXTURE_TASK, actorId: "tako", origin: "board", at, payload: WORKER_SPAWNED });
+  appendEvent(db, { taskId: FIXTURE_TASK, actorId: "tako", origin: "board", at, payload: { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" } });
+  writeFixtureTranscript(dir, `${FIXTURE_TASK}.${neverRan}.stream.jsonl`);
+
+  backfillEpisodes(db, dir);
+
+  expect(listEpisodes(db, {}).map((e) => e.workerSpawnedEventId)).not.toContain(neverRan);
 });
 
 it("読み口は同じ (workspace, agent) の Episode を時系列(session を開いた順)で返す", async () => {

@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionOf } from "./events.js";
+import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionOf, sessionWindow } from "./events.js";
 import { rootPrOutcome } from "./landing.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
@@ -550,11 +550,13 @@ export function projectAndPersist(
 ): number | null {
   const spawned = getEvent(db, opts.workerSpawnedEventId);
   if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) return null;
+  // 投影器の入力は既存の task 単位の read API そのまま(issue #356 の「events 側の read API を新設しない」)
+  const events = listEvents(db, spawned.task_id);
+  // process を1つも持たなかった session には Episode が無い(ADR 0316 決定4 / #2633)—— 明示の backfill がここで止まる(起動時の復旧は呼ぶ前に飛ばす)
+  if (sessionWindow(events, spawned).neverRan) return null;
   const episode = projectEpisode({
     transcriptLines: readFileSync(opts.transcriptPath, "utf8").split("\n"),
-    // 投影器の入力は既存の task 単位の read API そのまま(issue #356 の
-    // 「events 側の read API を新設しない」)
-    events: listEvents(db, spawned.task_id),
+    events,
     workerSpawnedEventId: opts.workerSpawnedEventId,
     extractorVersion: EXTRACTOR_VERSION,
   });
