@@ -470,9 +470,11 @@ export function startScheduler(deps: {
   async function quarantineWithRepoAccessGuidance(
     workspace: WorkspaceConfig,
     err: unknown,
-    /** pickup の継続の門(#1973): 修復の問い合わせの間に session が終わっていれば quarantine せず undefined。 */
+    /** pickup の継続の門(#1973): 失敗が届いた時点か修復の問い合わせの後に session が終わっていれば、問い合わせも quarantine も
+     *  せず undefined —— 資源の事実は次の pickup が同じ準備でやり直す。 */
     live: () => boolean,
   ): Promise<ResourceStop | undefined> {
+    if (!live()) return undefined;
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
     const ref = parseGitHubRepo(workspace.repo);
@@ -531,7 +533,8 @@ export function startScheduler(deps: {
       // the worker starts, the workspace already sits on the task branch
       const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
       // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、先頭へ戻して後始末を通す
-      const stopped = (stop: ResourceStop) => () => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop });
+      // 停止が無い(準備の失敗が session の終わった後に届いた、#1973)なら一撃も無い
+      const stopped = (stop: ResourceStop | undefined) => stop && (() => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop }));
       if (resolve) {
         let drift: (() => void) | undefined;
         const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
@@ -567,19 +570,16 @@ export function startScheduler(deps: {
         const place = taskRunPlace(db, picked, resolved);
         for (const read of place.reads.filter(isRemoteBacked)) {
           try {
-            await freshenPlaceAtPickup(read, { githubAuth, registry });
+            await freshenPlaceAtPickup(read, { githubAuth, registry, live });
           } catch (err) {
-            const stop = live() && (await quarantineWithRepoAccessGuidance(read, err, live));
-            return stop ? stopped(stop) : undefined;
+            return stopped(await quarantineWithRepoAccessGuidance(read, err, live));
           }
           if (!live()) return;
         }
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, live });
         } catch (err) {
-          // 準備の失敗が停止の後に届いたら捨てる —— 資源の事実は次の pickup が同じ準備でやり直す
-          const stop = live() && (await quarantineWithRepoAccessGuidance(place, err, live));
-          return stop ? stopped(stop) : undefined;
+          return stopped(await quarantineWithRepoAccessGuidance(place, err, live));
         }
         if (!live()) return;
       }
@@ -588,6 +588,8 @@ export function startScheduler(deps: {
       if (!live()) return;
       worker.start(started, setting, query);
     } catch (err) {
+      // await の後に届いた想定外の throw(修復の問い合わせの reject など)も、session が終わっていれば何も書かない(#1973)
+      if (!live()) return;
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止
       if (err instanceof RecordContainerError) return () => onRecordContainerFailed(picked.id, err);
       // ADR 0118 / ADR 0294 決定3: worker が1度も走らなかった pickup。観測点がこの event を書き、

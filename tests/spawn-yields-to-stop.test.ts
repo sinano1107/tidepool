@@ -6,6 +6,7 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
+import type { RepoSlug } from "../src/github.js";
 import type { GitHubAuth } from "../src/github-auth.js";
 import type { Provider } from "../src/provider.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
@@ -18,6 +19,7 @@ import {
   answerSkillsList,
   FakeAttributionClient,
   FakeContainerRuntime,
+  FakeGitHubClient,
   FakeTranslationClient,
   fakeAppServerCall,
   healthyOpenai,
@@ -68,7 +70,7 @@ describe("spawn の無い session の停止の決着(ADR 0118 決定1 / ADR 0274
     client.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
 
     refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
 
     expect(client.stopCalls).toEqual([]);
     expect(listChildren(db, task.id).filter((child) => child.type === "review")).toEqual([]);
@@ -125,12 +127,13 @@ const events = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${
 const status = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}`)).json.status;
 const teardown = async () => (await api(t.baseUrl, "GET", "/api/queue")).json.teardown;
 
-/** `nth` 回目の呼び出しだけ保留する口。他(retry の pickup など)はすぐ通す。 */
+/** `nth` 回目の呼び出しだけ保留する口。他(retry の pickup など)はすぐ通す。`fail` は保留を落とす。 */
 function holdNth(nth = 1) {
   let release!: () => void;
-  const held = new Promise<void>((resolve) => (release = resolve));
+  let fail!: (err: Error) => void;
+  const held = new Promise<void>((resolve, reject) => ((release = resolve), (fail = reject)));
   let calls = 0;
-  return { release, calls: () => calls, wait: () => (++calls === nth ? held : Promise.resolve()) };
+  return { release, fail, calls: () => calls, wait: () => (++calls === nth ? held : Promise.resolve()) };
 }
 
 async function bootWithAdapter(
@@ -180,7 +183,7 @@ async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
       { workspace, dir },
     );
   const proc = await boot();
-  return { proc, release: hold.release, boardCalls: () => 0, reboot: () => boot(t.dir) };
+  return { proc, release: hold.release, reboot: () => boot(t.dir) };
 }
 
 /** Codex adapter。`holdAt` 番目の Board call(1 = skill 列挙、2 = 封じ込め観測)を保留する。1回目の pickup の観測は skill が
@@ -195,9 +198,9 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });
   const codexHome = await tempDir("spawn-yields-codex-home-");
-  let released = false;
-  const inner = fakeAppServerCall((args, cwds) => answerSkillsList(released ? "closed" : "one-enabled")(args, cwds)).call;
   const hold = holdNth(holdAt);
+  // 1回目の pickup の観測(2本目の Board call)だけが skill を開いたままと答える。retry の pickup は3本目から
+  const inner = fakeAppServerCall((args, cwds) => answerSkillsList(hold.calls() <= 2 ? "one-enabled" : "closed")(args, cwds)).call;
   const boardCall = (async (...args: Parameters<typeof inner>) => {
     await hold.wait();
     return inner(...args);
@@ -225,18 +228,11 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
       }),
     "openai",
   );
-  return {
-    proc,
-    release: () => {
-      released = true;
-      hold.release();
-    },
-    boardCalls: hold.calls,
-  };
+  return { proc, release: hold.release, boardCalls: hold.calls };
 }
 
 const WINDOWS = [
-  ["Claude の skill 列挙", bootClaudeHeldInEnumeration, 0],
+  ["Claude の skill 列挙", bootClaudeHeldInEnumeration, undefined],
   // 列挙の間に届いた停止の後は、観測の Board call も撃たない
   ["Codex の skill 列挙", () => bootCodexHeldAt(1), 1],
   ["Codex の封じ込め観測", () => bootCodexHeldAt(2), 2],
@@ -244,7 +240,8 @@ const WINDOWS = [
 
 for (const [window, boot, boardCallsAtStop] of WINDOWS) {
   it(`${window}の窓に届いた人間の停止に spawn は譲り、何も書かずに終わる —— retry の session は自分の容器で1本だけ spawn する`, async () => {
-    const { proc, release, boardCalls } = await boot();
+    const booted = await boot();
+    const { proc, release } = booted;
     const task = queueWork(t, "stopped in the window");
     await t.clock.advance(HOUR);
     await settle();
@@ -259,7 +256,7 @@ for (const [window, boot, boardCallsAtStop] of WINDOWS) {
     await settle();
 
     expect(proc.calls).toHaveLength(0);
-    expect(boardCalls()).toBe(boardCallsAtStop);
+    if ("boardCalls" in booted) expect(booted.boardCalls()).toBe(boardCallsAtStop);
     const kinds = (await events(task.id)).map((e) => e.kind);
     expect(kinds).not.toContain("worker_spawned");
     expect(kinds).not.toContain("spawn_failed");
@@ -285,10 +282,10 @@ for (const [window, boot, boardCallsAtStop] of WINDOWS) {
 }
 
 /** 停止の記録(failure question)以外に、窓の継続が何も書いていないこと。 */
-async function expectNothingWrittenByTheWindow(taskId: string) {
+async function expectNothingWrittenByTheWindow(taskId: string, title: string) {
   const kinds = (await events(taskId)).map((e) => e.kind);
   for (const kind of ["worker_spawned", "spawn_failed", "pickup_stopped"]) expect(kinds).not.toContain(kind);
-  expect((await questions(t)).map((q) => q.title)).toEqual([`stopped by human: ${getTask(t.db, taskId)!.title}`]);
+  expect((await questions(t)).map((q) => q.title)).toEqual([`stopped by human: ${title}`]);
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.halts).toEqual([]);
 }
 
@@ -301,12 +298,14 @@ class HeldTranslationClient extends FakeTranslationClient {
   }
 }
 
-it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後、worker は start されず、窓の継続は何も書かない", async () => {
+it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後、worker は start されず、窓の継続は何も書かない —— task ブランチに乗った checkout は今日どおり退避して休止位置へ戻る", async () => {
+  const workspace = await makeWorkspace("sandbox");
   const translationClient = new HeldTranslationClient();
-  t = await bootTidepool({ translationClient, watchdog: WATCHDOG });
-  const task = queueWork(t, "潮汐グラフのずれを直す");
+  t = await bootTidepool({ workspace, resolveWorkspace: () => workspace, translationClient, watchdog: WATCHDOG });
+  const title = "潮汐グラフのずれを直す";
+  const task = queueWork(t, title);
   await t.clock.advance(HOUR);
-  expect(t.containers.created).toContain(task.id);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
 
   expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" })).status).toBe(200);
   await t.clock.advance(WATCHDOG.grace);
@@ -315,35 +314,80 @@ it("scheduler の pickup の窓(注入 query の翻訳)に届いた停止の後�
   await settle();
 
   expect(t.worker.started).toEqual([]);
-  await expectNothingWrittenByTheWindow(task.id);
+  await expectNothingWrittenByTheWindow(task.id, title);
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(await teardown()).toBeUndefined();
 });
 
-/** remote 正本を持つ checkout を盤面が追跡し、pickup の追従(token の取得)を保留する。`settle` で保留を解くか落とす。 */
-async function bootTrackedHeldInFreshen() {
-  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
-  let settleToken!: (failure?: Error) => void;
-  const held = new Promise<void>((resolve, reject) => (settleToken = (failure) => (failure ? reject(failure) : resolve())));
-  let calls = 0;
-  const githubAuth = { ensureToken: () => (++calls === 1 ? held : Promise.resolve()) } as unknown as GitHubAuth;
+/** remote 正本を持つ checkout を盤面が追跡し、pickup の追従(token の取得)を保留して止める。返す `token` で保留を解くか落とす。 */
+async function stoppedWhileFreshening() {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
+  const token = holdNth();
+  const githubAuth = { ensureToken: token.wait } as unknown as GitHubAuth;
   t = await bootTidepool({ workspace, resolveWorkspace: () => workspace, githubAuth, watchdog: WATCHDOG });
   const task = queueWork(t, "stopped while freshening");
   await t.clock.advance(HOUR);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" })).status).toBe(200);
-  return { workspace, task, settleToken };
+  return { workspace, publish, task, token };
 }
 
 it("remote 正本の追従の窓で止めた session の準備の失敗は捨てられ、後始末は休止位置の checkout に触れず workspace を quarantine しない", async () => {
-  const { workspace, task, settleToken } = await bootTrackedHeldInFreshen();
-  settleToken(new Error("fatal: could not read from remote repository"));
+  const { workspace, task, token } = await stoppedWhileFreshening();
+  token.fail(new Error("fatal: could not read from remote repository"));
   await settle();
   await t.clock.advance(WATCHDOG.grace);
   await settle();
 
   expect(t.worker.started).toEqual([]);
-  await expectNothingWrittenByTheWindow(task.id);
+  await expectNothingWrittenByTheWindow(task.id, task.title);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(await teardown()).toBeUndefined();
+});
+
+it("追従の token が停止の後に届いても、準備は git に進まない —— fetch も task ブランチも無く、checkout は休止位置のまま", async () => {
+  const { workspace, publish, task, token } = await stoppedWhileFreshening();
+  const before = git(workspace.path, "rev-parse", "refs/remotes/origin/main");
+  publish("merged.txt", "landed on the remote\n", "merge on the remote");
+  token.release();
+  await settle();
+  await t.clock.advance(WATCHDOG.grace);
+  await settle();
+
+  expect(t.worker.started).toEqual([]);
+  await expectNothingWrittenByTheWindow(task.id, task.title);
+  expect(git(workspace.path, "rev-parse", "refs/remotes/origin/main")).toBe(before);
+  expect(git(workspace.path, "branch", "--list", `task/${task.id}`)).toBe("");
+  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(await teardown()).toBeUndefined();
+});
+
+/** 準備の失敗の修復の問い合わせ(`tokenRefusal`)を保留する GitHub。 */
+class HeldRefusalGitHub extends FakeGitHubClient {
+  readonly hold = holdNth();
+  override async tokenRefusal(ref: RepoSlug) {
+    await this.hold.wait();
+    return super.tokenRefusal(ref);
+  }
+}
+
+it("準備の失敗の修復の問い合わせの間に止めた session は、その問い合わせが落ちても spawn_failed も quarantine も書かない", async () => {
+  // remote 正本を宣言しながら origin を持たない checkout —— 追従は宣言のずれで落ち、修復の問い合わせへ進む
+  const workspace = { ...(await makeWorkspace("sandbox")), repo: "https://github.com/acme/sandbox.git" };
+  const github = new HeldRefusalGitHub();
+  t = await bootTidepool({ workspace, resolveWorkspace: () => workspace, github, watchdog: WATCHDOG });
+  const task = queueWork(t, "stopped while repairing");
+  await t.clock.advance(HOUR);
+  expect(github.hold.calls()).toBe(1);
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "wrong direction" })).status).toBe(200);
+  github.hold.fail(new Error("broker unreachable"));
+  await settle();
+  await t.clock.advance(WATCHDOG.grace);
+  await settle();
+
+  expect(t.worker.started).toEqual([]);
+  await expectNothingWrittenByTheWindow(task.id, task.title);
   expect(await teardown()).toBeUndefined();
 });
 
@@ -365,22 +409,8 @@ it("Claude の列挙の窓で止めた session の後始末が再起動で途切
 
   expect(proc.calls).toEqual([]);
   expect((await events(task.id)).map((e) => e.kind)).not.toContain("worker_exited");
-  await expectNothingWrittenByTheWindow(task.id);
+  await expectNothingWrittenByTheWindow(task.id, task.title);
   expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(await status(task.id)).toBe("blocked");
-  expect(await teardown()).toBeUndefined();
-});
-
-it("追従の窓で止めた session の準備が task ブランチへ checkout し終えていれば、後始末は今日どおり退避して休止位置へ戻す", async () => {
-  const { workspace, task, settleToken } = await bootTrackedHeldInFreshen();
-  settleToken();
-  await settle();
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
-  await t.clock.advance(WATCHDOG.grace);
-  await settle();
-
-  expect(t.worker.started).toEqual([]);
-  await expectNothingWrittenByTheWindow(task.id);
-  expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect(await teardown()).toBeUndefined();
 });

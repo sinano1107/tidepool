@@ -786,17 +786,19 @@ function assertRegistryRoleAgrees(
  *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その場所の quarantine —— だからである(scheduler 側の
  *  try/catch 1つが全部受ける)。順序は意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
-export async function freshenPlaceAtPickup(
-  place: WorkspaceConfig,
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource },
-): Promise<void> {
+export async function freshenPlaceAtPickup(place: WorkspaceConfig, board: PickupPrep): Promise<void> {
   assertOwnGitDirectory(place.path);
   assertRegistryRoleAgrees(place, board.registry);
   assertRemoteDeclarationMatchesClone(place);
   await ensureWorkspaceToken(place, board.githubAuth);
+  if (board.live?.() === false) return;
   refreshWorkspace(place, board.githubAuth);
   parkOnProtectedBranch(place, outsideTheGate);
 }
+
+/** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
+ *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
+type PickupPrep = { githubAuth?: GitHubAuth; registry?: RegistrySource; live?: () => boolean };
 
 /** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。読む場所には当てない —— タスクブランチも基準も
  *  走る場所だけのもの(実環境に root のブランチを立てない、ADR 0273 決定2)。 */
@@ -804,9 +806,10 @@ export async function prepareWorkspaceAtPickup(
   db: Db,
   workspace: WorkspaceConfig,
   task: Task,
-  board: { githubAuth?: GitHubAuth; registry?: RegistrySource } = {},
+  board: PickupPrep = {},
 ): Promise<void> {
   await freshenPlaceAtPickup(workspace, board);
+  if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
   // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `refreshWorkspace` が `refs/remotes` を、休止位置の ff が
   // 保護ブランチを動かすので、前に撮ると盤面自身の書き込みが違反として立つ

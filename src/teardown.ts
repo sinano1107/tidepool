@@ -282,17 +282,17 @@ function clearTeardown(db: Db, taskId: string): void {
  *  retry)のどれでも閉じる。pickup は時刻でなく event id で見分ける(時刻を進めない retry で衝突する)。status は `in_progress` と
  *  比べず冒頭の値と比べる —— 盤面の継続の冒頭は必ず `in_progress` で、pickup を経ずに adapter を直接走らせる呼び手を閉じない。 */
 export function liveSession(db: Db, taskId: string): () => boolean {
-  const record = () =>
-    JSON.stringify(
-      db
-        .prepare(
-          "SELECT status, teardown_started_at, " +
-            "(SELECT MAX(id) FROM events WHERE task_id = tasks.id AND kind = 'task_picked_up') AS pickup FROM tasks WHERE id = ?",
-        )
-        .get(taskId),
-    );
+  const record = () => {
+    const row = db.prepare("SELECT status, teardown_started_at FROM tasks WHERE id = ?").get(taskId) as
+      | { status: Task["status"]; teardown_started_at: string | null }
+      | undefined;
+    return { ...row, pickup: latestEventOfTask(db, taskId, "task_picked_up")?.id };
+  };
   const started = record();
-  return () => record() === started;
+  return () => {
+    const now = record();
+    return now.status === started.status && now.teardown_started_at === started.teardown_started_at && now.pickup === started.pickup;
+  };
 }
 
 /** 後始末が未了の session(あれば)。concurrency = 1 なので高々1つである。
