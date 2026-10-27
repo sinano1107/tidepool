@@ -1006,7 +1006,7 @@ export function listEvents(db: Db, taskId: string): EventRow[] {
 
 /** spawn の後に書かれうる、process を1つも持たなかった pickup の決着(ADR 0118 決定1 の never-ran)。`pickup_stopped` は
  *  spawn より前にしか書かれないので入らない。決着の kind の対応表はこれ1つ(ADR 0316 決定4)。 */
-export const NEVER_RAN_KINDS = ["spawn_failed", "record_container_unwritable"] as const satisfies readonly EventKind[];
+export const NEVER_RAN_KINDS: readonly EventKind[] = ["spawn_failed", "record_container_unwritable"];
 
 /** 1つの worker session に属するイベントの窓。窓を記録の上で閉じる位置の規則はここ1つ(ADR 0316 決定4)で、
  *  Precedent の投影・学習器・決定ログの anchor・後始末の決着・起動時の復旧が読む。
@@ -1032,7 +1032,7 @@ export function sessionWindow(
     .filter((e) => e.kind === "worker_spawned" && e.task_id === spawned.task_id && e.id > spawned.id)
     .reduce((first, e) => Math.min(first, e.id), Number.POSITIVE_INFINITY);
   const settled = events.find(
-    (e) => (NEVER_RAN_KINDS as readonly EventKind[]).includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < nextSpawnedId,
+    (e) => NEVER_RAN_KINDS.includes(e.kind) && e.task_id === spawned.task_id && e.id > spawned.id && e.id < nextSpawnedId,
   );
   const end = exited ?? settled;
   const endExclusive = end ? end.id + 1 : nextSpawnedId;

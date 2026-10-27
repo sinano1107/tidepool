@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { type EventKind, latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
+import { latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
@@ -82,7 +82,7 @@ function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Se
   const spawned = events.find((e) => e.kind === "worker_spawned");
   const neverRan = spawned
     ? sessionWindow(events, spawned).neverRan
-    : events.some((e) => e.kind === "pickup_stopped" || (NEVER_RAN_KINDS as readonly EventKind[]).includes(e.kind));
+    : events.some((e) => e.kind === "pickup_stopped" || NEVER_RAN_KINDS.includes(e.kind));
   return neverRan ? "never_ran" : "released";
 }
 
