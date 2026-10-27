@@ -664,6 +664,18 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
 });
 
+it("process を持たなかった session は、そのタスクが次の session で受理されても excluded —— 受理されたのは次の session(ADR 0118 決定1 / ADR 0316 決定4、loadEpisodes)", () => {
+  const b = bareBoard();
+  const { task, spawnedId: neverRanId } = spawnedWork(b, "a");
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at: b.clock.now(), payload: { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" } });
+  const rerunId = recordSpawn(b, task.id);
+  accept(b, task.id);
+
+  const episodes = loadEpisodes(b.db);
+  const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect({ neverRan: outcomeOf(neverRanId), rerun: outcomeOf(rerunId) }).toEqual({ neverRan: "excluded", rerun: "accepted" });
+});
+
 it.each(REPAIR_TYPES)("spawn を持つ %s は episode になり、完了しても完了時レビューが無いので excluded、capability の帰責があれば rejected(ADR 0272 決定4 の追記・決定5 / ADR 0115 決定5 / ADR 0279 決定4、loadEpisodes)", (type) => {
   const b = bareBoard();
   const repair = pickupTask(b.db, queueMemoryRepair(b, type), WORKER, b.clock.now())!;

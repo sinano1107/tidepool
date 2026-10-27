@@ -1,7 +1,7 @@
 import type { Allocation } from "./allocation-review.js";
 import type { Cause } from "./cause.js";
 import type { Db } from "./db.js";
-import { type EventPayload, type EventRow, listEventsOfKinds, objectionBundles, sessionWindow, stopJudgments, swapsMain } from "./events.js";
+import { type EventPayload, type EventRow, listEventsOfKinds, NEVER_RAN_KINDS, objectionBundles, sessionWindow, stopJudgments, swapsMain } from "./events.js";
 import { type ExecutionSetting, matchesRowKey } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
@@ -223,7 +223,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
     .all() as Array<Pick<Task, "id" | "workspace"> & { accepted: number; interview: number }>;
   // work 側の task だけに絞る(spawn を持つ work 側の task —— session の窓も配分の評価も spawn のタスクの event しか見ない)
   const workIds = new Set<string | null>(tasks.map((t) => t.id));
-  const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
+  const events = listEventsOfKinds(db, ["worker_spawned", "worker_exited", ...NEVER_RAN_KINDS, "allocation_reviewed"]).filter((e) => workIds.has(e.task_id));
   // 異議群ごとの有効な判定(同じ異議群では後の event が有効)をすべて —— 前の異議群の capability を後の異議群の
   // preference で消さない(ADR 0170 決定3)
   const attributions = [...objectionBundles(db).values()].flat().flatMap((b) => (b.attribution ? [{ ...b.attribution, task_id: b.task_id }] : []));

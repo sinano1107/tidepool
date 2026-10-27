@@ -1,7 +1,7 @@
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
-import { type EventKind, latestEventOfTask } from "./events.js";
+import { type EventKind, latestEventOfTask, listEvents, NEVER_RAN_KINDS, sessionWindow } from "./events.js";
 import { quarantineFailedTeardown } from "./failed-teardown.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { openQuarantineValues } from "./quarantine.js";
@@ -64,26 +64,25 @@ export interface TeardownStep {
 
 type Settlement = "completed" | "released" | "interrupted" | "never_ran";
 
-/** 盤面が process を持たないまま決着させた pickup の event(ADR 0274 決定3 / ADR 0266 / ADR 0118 決定5)。 */
-const NO_PROCESS_STOP_KINDS = ["pickup_stopped", "record_container_unwritable", "spawn_failed"] as const satisfies readonly EventKind[];
-
 /** 後始末中の status と、最後の pickup の後に盤面が刻んだ決着の event が経路を一意に定める(ADR 0113 決定3 /
  *  ADR 0274 決定3)。`in_progress` / `done` 以外(`todo` / `cancelled`)は status では分けられない —— process を1つも
  *  持たなかった session の `todo` はエスカレーション・分解と同じ値で、後始末の途中で人間が直接 cancel すれば
  *  `cancelled` になる —— ので、process を持たない pickup の event(資源の停止・記録の器・spawn の失敗、ADR 0118
- *  決定1)の有無で `never_ran` / `released` を分ける。復旧・確認回答・回収済み観測と、読み口の経路フィールドが
- *  この1点を通る —— 経路を表す永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
+ *  決定1)の有無で `never_ran` / `released` を分ける。最後の pickup に spawn があれば session の窓の never-ran
+ *  (`sessionWindow`、exit が勝つ —— ADR 0316 決定4)を読み、無ければ pickup の後の決着 kind を見る(`pickup_stopped` は
+ *  spawn より前にしか書かれない)。復旧・確認回答・回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す
+ *  永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
 function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Settlement {
   if (task?.status === "in_progress") return "interrupted";
   if (task?.status === "done") return "completed";
-  const neverRan =
-    (task?.status === "todo" || task?.status === "cancelled") &&
-    db
-      .prepare(
-        `SELECT 1 FROM events WHERE task_id = ? AND kind IN (${NO_PROCESS_STOP_KINDS.map(() => "?").join(", ")})
-           AND id > (SELECT MAX(id) FROM events WHERE task_id = ? AND kind = 'task_picked_up')`,
-      )
-      .get(task.id, ...NO_PROCESS_STOP_KINDS, task.id) !== undefined;
+  if (task?.status !== "todo" && task?.status !== "cancelled") return "released";
+  const pickup = latestEventOfTask(db, task.id, "task_picked_up");
+  if (!pickup) return "released";
+  const events = listEvents(db, task.id).filter((e) => e.id > pickup.id);
+  const spawned = events.find((e) => e.kind === "worker_spawned");
+  const neverRan = spawned
+    ? sessionWindow(events, spawned).neverRan
+    : events.some((e) => e.kind === "pickup_stopped" || (NEVER_RAN_KINDS as readonly EventKind[]).includes(e.kind));
   return neverRan ? "never_ran" : "released";
 }
 

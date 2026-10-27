@@ -126,6 +126,39 @@ it("watermark より後の spawn には触れない —— 走行中の別の盤
   expect(b.exits()).toHaveLength(1);
 });
 
+it.each([
+  ["spawn_failed", false],
+  ["spawn_failed", true],
+  ["record_container_unwritable", false],
+  ["record_container_unwritable", true],
+] as const)("process を持たなかった session(%s、後の spawn: %s)は閉じない —— exit も Episode も一時領域の削除も無く、2度の起動でも記録しない(ADR 0316 決定4 / #2633)", async (kind, laterSpawn) => {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+  const b = await board(0);
+  const neverRan = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  // spawn の失敗は transcript を開いた後(空の stream が残る)、記録の器の失敗は transcript が無い
+  if (kind === "spawn_failed") writeFileSync(join(b.logDir, `${b.task.id}.${neverRan}.stream.jsonl`), "");
+  appendEvent(b.db, {
+    taskId: b.task.id,
+    actorId: "deckhand",
+    origin: "board",
+    at,
+    payload: kind === "spawn_failed" ? { kind, error_code: "ENOENT", message: "spawn claude ENOENT" } : { kind, path: b.logDir, reason: "EACCES" },
+  });
+  const watermark = maxEventId(b.db);
+  if (laterSpawn) appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
+  const temp = join(b.tmpDir, `tidepool-claude-${b.task.id}-never`);
+  mkdirSync(temp);
+
+  b.close(watermark);
+  b.close(watermark);
+
+  expect(b.exits()).toEqual([]);
+  expect(episodeOf(b.db, neverRan)).toBeUndefined();
+  expect(existsSync(temp)).toBe(true);
+  expect(silenced).not.toHaveBeenCalled();
+});
+
 /** 別の task に transcript の無い spawn を1つ刻む。 */
 function spawnOnAnotherTask(db: Db): number {
   const task = pickupTask(db, registerTask(db, { type: "work", title: "other", purpose: "other", completion_criteria: "works" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
