@@ -366,6 +366,8 @@ export function startWatchdog(deps: {
   pollNow: () => void;
   /** Absent → receive exits and classify them, without time-based watchdog ticks. */
   config?: WatchdogConfig;
+  /** 前の盤面が閉じ切らなかった session を閉じる復旧(ADR 0315 決定1)。受理の門で後始末の復旧より先に走る。 */
+  closeLeftOpenSessions?: () => void;
 }): Watchdog {
   const { db, clock, slot, worker, containers, workspace, resolveWorkspace } = deps;
   const config: WatchdogConfig = deps.config ?? { timeLimits: {}, grace: 0 };
@@ -634,6 +636,13 @@ export function startWatchdog(deps: {
     advanceStop(task, rec, limit);
   }
 
+  // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
+  // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
+  // 起動時の復旧と同じ門を通して走らせる。閉じ切らなかった session を閉じる復旧はその直前に(ADR 0315 決定1)
+  const resumeTeardown = () => {
+    deps.closeLeftOpenSessions?.();
+    void resumeUnfinishedTeardown(teardown);
+  };
   const cancel = deps.config ? clock.setInterval(tick, WATCHDOG_TICK) : () => {};
   return {
     stop: cancel,
@@ -644,18 +653,16 @@ export function startWatchdog(deps: {
       pending !== null && containers.pendingReclaim(pending)
         ? `the container for task ${pending}`
         : undefined,
-    // 再起動を越えた梯子の底(ADR 0254 決定2): 前提検査が落ちた起動では、起動時の復旧は
-    // 枠を握らず、後始末の印だけが行に残る。受理の検査は前提検査を読み直しているので、
-    // 起動時の復旧と同じ門を通して走らせる
-    resumeTeardown: () => void resumeUnfinishedTeardown(teardown),
+    resumeTeardown,
     acceptReclaimed: () => {
       if (pending === null) {
-        void resumeUnfinishedTeardown(teardown);
+        resumeTeardown();
         return;
       }
       // 「検査を回答時にもう一度走らせる」— 呼び出し側も先に見ているが、受理の
       // 直前でもう一度読む(1資源1枚の quarantine と同じ posture)
       if (containers.pendingReclaim(pending)) return;
+      deps.closeLeftOpenSessions?.();
       const taskId = pending;
       pending = null;
       // slot が解放される瞬間に tree rule が走る、の対を閉じる(CONTEXT.md

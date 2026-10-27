@@ -1128,6 +1128,8 @@ describe("CodexWorker (ADR 0098)", () => {
         advisor: null,
       },
     });
+    // 観測していない印は起動時の復旧だけが書く(ADR 0315 決定2)
+    expect(exited?.payload).not.toHaveProperty("exit_observed");
     const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
     // transcript は盤面側の器への pipe なので、ファイルに届くのは非同期(ADR 0149)
     await vi.waitFor(() =>

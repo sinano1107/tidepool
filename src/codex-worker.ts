@@ -46,6 +46,7 @@ import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
+import { closeSession, taskTempPrefix } from "./session-close.js";
 
 
 import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
@@ -1348,7 +1349,7 @@ export class CodexWorker implements WorkerAdapter {
       executable: this.options.executable,
       hook,
     };
-    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-codex-${task.id}-`)));
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), taskTempPrefix("codex", task.id))));
     // 削除の失敗で session の後始末を止めない(issue #705)
     const removeTaskTemp = () => {
       try {
@@ -1522,26 +1523,24 @@ export class CodexWorker implements WorkerAdapter {
               refusals: [],
             }
           : null;
-        appendEvent(this.options.db, {
-          taskId: task.id,
-          actorId: agent.name,
-          origin: "board",
-          payload: {
-            kind: "worker_exited",
-            ...exit,
-            worker_spawned_event_id: spawned,
-            output_closed: outputClosed,
-            usage: normalized,
+        // ADR 0083 追記10: Claude adapter と同じ閉じる1本で、worker_exited を書いたあとに Precedent を投影する(ADR 0315 決定1)。
+        closeSession(
+          this.options.db,
+          {
+            taskId: task.id,
+            actorId: agent.name,
+            payload: {
+              kind: "worker_exited",
+              ...exit,
+              worker_spawned_event_id: spawned,
+              output_closed: outputClosed,
+              usage: normalized,
+            },
+            at: this.options.clock.now(),
           },
-          at: this.options.clock.now(),
-        });
-        removeTaskTemp();
-        // ADR 0083 追記10: Claude adapter と同じく worker_exited を書いたあとに Precedent を投影する。
-        projectWhenTranscriptCloses(this.options.db, transcript.stream, {
-          workerSpawnedEventId: spawned,
-          transcriptPath: transcript.streamPath,
-          taskId: task.id,
-        });
+          removeTaskTemp,
+          () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
+        );
       };
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。

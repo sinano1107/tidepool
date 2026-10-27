@@ -37,6 +37,7 @@ import {
   LANGUAGE_AND_OUTPUT_STYLE_PINNED,
   workspaceSettingsDisposition,
 } from "./sandbox.js";
+import { closeSession, taskTempPrefix } from "./session-close.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
 import {
   isRootAssistant,
@@ -2017,7 +2018,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // ADR 0257 決定2: the session's task temp. Removed at settle, on a spawn
     // failure, and on any throw between here and the spawn; a failed removal only
     // logs, never stopping the rest of the cleanup (issue #705).
-    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), `tidepool-claude-${task.id}-`)));
+    const taskTemp = realpathSync(mkdtempSync(join(tmpdir(), taskTempPrefix("claude", task.id))));
     const removeTaskTemp = () => {
       try {
         rmSync(taskTemp, { recursive: true, force: true });
@@ -2385,20 +2386,26 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());
       }
       const usage = lastResult ? toUsage(lastResult, streamObserved) : null;
-      appendEvent(this.options.db, {
-        taskId: task.id,
-        actorId: agent.name,
-        origin: "board",
-        payload: {
-          kind: "worker_exited",
-          ...exit,
-          worker_spawned_event_id: spawnedEventId,
-          output_closed: outputClosed,
-          usage,
+      // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
+      // 下の2つの一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
+      // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
+      closeSession(
+        this.options.db,
+        {
+          taskId: task.id,
+          actorId: agent.name,
+          payload: {
+            kind: "worker_exited",
+            ...exit,
+            worker_spawned_event_id: spawnedEventId,
+            output_closed: outputClosed,
+            usage,
+          },
+          at: this.options.clock.now(),
         },
-        at: this.options.clock.now(),
-      });
-      removeTaskTemp();
+        removeTaskTemp,
+        () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawnedEventId, transcriptPath, taskId: task.id }),
+      );
       // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
       // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
       if (refusalCause) {
@@ -2410,12 +2417,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
       this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit, capInterrupted);
-      // issue #356: この session の Precedent を投影する —— worker_exited を書いたあと。
-      projectWhenTranscriptCloses(this.options.db, transcript.stream, {
-        workerSpawnedEventId: spawnedEventId,
-        transcriptPath,
-        taskId: task.id,
-      });
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても

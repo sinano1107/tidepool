@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
 import { CliAuthError } from "../src/cli-auth.js";
 import { type Db, openDb } from "../src/db.js";
@@ -15,7 +15,7 @@ import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, l
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls, recordPrompt } from "./fakes.js";
-import { HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-10-25T00:00:00Z");
@@ -657,4 +657,28 @@ it("after the second round the stop is read by its second judgment: the history'
     decisions: ["deleted the fixtures"], handoff: null, result: null, human_stop: { reason: "deleting unrelated files" },
   });
   expect(b.judged().map((j) => j.cause)).toEqual(["uncertain", "capability"]);
+});
+
+describe("盤面の境界", () => {
+  let t: Tidepool | undefined;
+  afterEach(() => t?.stop());
+
+  it("人間が止めた session の exit を見ないまま盤面が落ちても、次の起動の復旧が閉じて停止は行動列つきで帰責される(ADR 0315 / ADR 0310 決定1)", async () => {
+    const attributionClient = new FakeAttributionClient();
+    attributionClient.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
+    const options = { attributionClient, watchdog: { timeLimits: {}, grace: HOUR } };
+    t = await bootTidepool(options);
+    const task = await registerWork(t, "running");
+    t.containers.hold(task.id);
+    // 偽の worker は spawn も transcript も刻まないので setup が置く
+    const spawned = appendEvent(t.db, { taskId: task.id, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+    writeFileSync(join(t.dir, `${task.id}.${spawned}.stream.jsonl`), toolCall(1, "Bash", null).join("\n"));
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${task.id}/stop`, { reason: "deleting unrelated files" })).status).toBe(200);
+    await t.stopServer();
+
+    t = await bootTidepool({ ...options, dir: t.dir });
+
+    await vi.waitFor(() => expect(attributionClient.stopCalls).toHaveLength(1));
+    expect(attributionClient.stopCalls[0]!.input.actions?.calls.map((c) => c.tool)).toEqual(["Bash"]);
+  });
 });

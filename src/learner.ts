@@ -267,7 +267,8 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         swapped: usage?.model_swaps.some(swapsMain) ?? false,
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,
-      duration_ms: exited ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,
+      // 観測していない exit の時刻は復旧した起動の時刻で、session の終わりではない(ADR 0315 決定2)
+      duration_ms: exited?.payload.kind === "worker_exited" && exited.payload.exit_observed !== false ? Date.parse(exited.created_at) - Date.parse(spawned.created_at) : null,
       allocations,
     };
   });

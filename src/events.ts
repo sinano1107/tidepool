@@ -481,6 +481,12 @@ export type EventPayload =
       // timeout after the root's exit, so this record holds only what had
       // been read by then.
       output_closed: boolean;
+      // ADR 0315 決定2: the board did not observe this exit — the next boot's
+      // recovery closed a session the previous board left open. Written only
+      // by that recovery; absent means the adapter observed the exit. exit_code,
+      // signal and usage are then unknown (null) and so is the duration: this
+      // record's time is the recovering boot's, not the session's end.
+      exit_observed?: false;
       usage: TokenUsage & {
         /** issue #33 判断6: what the advisor **actually did** this session, as
          *  against worker_spawned.advisor's "what the board asked for". null

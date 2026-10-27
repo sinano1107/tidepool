@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
@@ -55,6 +56,7 @@ import {
 } from "./registry.js";
 import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } from "./retrospective.js";
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
+import { closeUnclosedSessions } from "./session-close.js";
 import { Slot } from "./slot.js";
 import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
@@ -393,6 +395,11 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // a restart (#9) — no graceful-drain machinery exists or is needed.
   // 失敗の記録の瞬間に後始末へ入る(ADR 0254 決定1)。tree rule はここでは撃たない —— 前提検査が
   // 通った起動ではこの下の起動時の復旧が、通らなかった起動では確認回答の受理が走らせる(ADR 0109 決定5)
+  // ADR 0315 決定1・3: 前の盤面が閉じ切らなかった session を閉じる復旧。対象の線(watermark)はこの起動の時点の最大 event id ——
+  // 受理の門から走るとき、この盤面が後から spawn した session に偽の exit を書かない
+  const watermark = (db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM events").get() as { id: number }).id;
+  const closeLeftOpenSessions = () =>
+    closeUnclosedSessions(db, { logDir: options.transcripts.dir, tmpDir: tmpdir(), watermark, now: options.clock.now() });
   const interrupted = db
     .prepare("SELECT id FROM tasks WHERE status = 'in_progress' AND teardown_started_at IS NULL")
     .get() as { id: string } | undefined;
@@ -408,6 +415,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       options.clock.now(),
     );
   }
+  // 前提検査が通った起動だけ、後始末の復旧より前に同期で(通らなかった起動では受理の門が走らせる)
+  if (runtimePreflight.available) closeLeftOpenSessions();
   // issue #382: sparse-checkout survives a board crash while the in-memory
   // reclamation callback does not. Only restore after the container preflight
   // proves no process from the previous board can still hot-load the hooks.
@@ -629,6 +638,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     githubAuth: options.githubAuth,
     pollNow,
     config: options.watchdog,
+    closeLeftOpenSessions,
   });
   // Human stop needs the timed ladder; the exit receiver also serves boards without it.
   const stopSession = options.watchdog ? watchdog.stopSession : undefined;
