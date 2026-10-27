@@ -7,7 +7,7 @@ import {
   watch,
   writeFileSync,
 } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
   type ContainerRuntime,
   type ContainerRuntimeCapability,
@@ -37,6 +37,35 @@ export function containerRuntimeFor(
 ): ContainerRuntime {
   if (platform === "linux") return cgroupContainerRuntime(paths);
   return unmeasuredContainerRuntime(platform);
+}
+
+/** 盤面の合成 root が使う容器機構(ADR 0318 決定1)。Linux では容器機構の前提に
+ *  **platform supervisor** の存在を足す: 盤面自身の unit が service であること —— service は
+ *  main process の死で止まり、既定の `KillMode=control-group` が配下の容器ごと殺す。scope や
+ *  login session にはその主が居ない。conformance script と canary は盤面を起こさず
+ *  `containerRuntimeFor` を `--scope` で使うので、この検査はここでだけ掛ける。 */
+export function boardContainerRuntimeFor(
+  platform: NodeJS.Platform,
+  paths: CgroupPaths = DEFAULT_PATHS,
+): ContainerRuntime {
+  const runtime = containerRuntimeFor(platform, paths);
+  if (platform !== "linux") return runtime;
+  return {
+    ...runtime,
+    preflight(live) {
+      const capability = runtime.preflight(live);
+      if (!capability.available) return capability; // 最初に落ちた前提の文だけを出す
+      // 前提が成立していれば `0::` 行は読める
+      const unit = basename(ownCgroup(paths) ?? "");
+      if (unit.endsWith(".service")) return capability;
+      return unavailable(
+        `the board runs in ${unit}, not in a systemd service — a scope or a login session has no supervisor ` +
+          "that kills the board's containers when the board dies, so its workers would outlive it. " +
+          "Restart the board as a systemd service (on a Mac: scripts/vm-board.sh). " +
+          "This check cannot pass within the same board process, so answer this question from the restarted board",
+      );
+    },
+  };
 }
 
 const unavailable = (reason: string): ContainerRuntimeCapability => ({ available: false, reason });

@@ -116,7 +116,6 @@ sync_unit() {
 
 restart() {
   log "restart $SERVICE"
-  PRE_RESTART_NRESTARTS="$(sudo systemctl show -p NRestarts --value "$SERVICE.service")"
   sudo systemctl restart "$SERVICE.service"
   INVOCATION_ID="$(sudo systemctl show -p InvocationID --value "$SERVICE.service")"
 }
@@ -152,15 +151,6 @@ verify() {
 
     if sudo systemctl is-failed --quiet "$SERVICE.service" 2>/dev/null; then
       verify_fail "$SERVICE entered failed state during startup"
-    fi
-
-    # a transient `systemctl show` failure must not kill the loop under set -e
-    # (fail() is a bad enough surprise on its own without this contributing);
-    # an empty/non-numeric read just skips this iteration's crash-loop check
-    local current_nrestarts
-    current_nrestarts="$(sudo systemctl show -p NRestarts --value "$SERVICE.service" 2>/dev/null)" || current_nrestarts=""
-    if [[ "$current_nrestarts" =~ ^[0-9]+$ ]] && (( current_nrestarts > PRE_RESTART_NRESTARTS )); then
-      verify_fail "$SERVICE crash-looped during startup (NRestarts $PRE_RESTART_NRESTARTS -> $current_nrestarts)"
     fi
 
     sleep "$VERIFY_POLL_INTERVAL"

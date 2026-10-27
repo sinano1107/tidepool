@@ -75,8 +75,8 @@ rows() {
 
 refuse_if_gate_board_running() {
   if [[ "$(limactl list --format '{{.Status}}' "$GATE_VM" 2> /dev/null || true)" == "Running" ]] \
-    && limactl shell "$GATE_VM" -- systemctl --user is-active --quiet tidepool-board.scope; then
-    fail "the gate board is running in '$GATE_VM' — stop it first, or the run takes its usage window: limactl shell $GATE_VM -- systemctl --user stop tidepool-board.scope"
+    && limactl shell "$GATE_VM" -- systemctl --user is-active --quiet tidepool-board.service; then
+    fail "the gate board is running in '$GATE_VM' — stop it first, or the run takes its usage window: limactl shell $GATE_VM -- systemctl --user stop tidepool-board"
   fi
 }
 

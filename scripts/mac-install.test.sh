@@ -277,7 +277,8 @@ assert_contains "fresh: prints the start line" \
 assert_contains "fresh: prints the update line" \
   "limactl shell tidepool -- bash -lc 'cd ~/tidepool && git pull && npm install'" "$output"
 assert_contains "fresh: prints the stop line" \
-  "limactl shell tidepool -- systemctl --user stop tidepool-board.scope" "$output"
+  "limactl shell tidepool -- systemctl --user stop tidepool-board" "$output"
+assert_not_contains "fresh: the board is no longer a scope" "tidepool-board.scope" "$output"
 assert_contains "fresh: points at the first-boot bootstrap URL" "bootstrap" "$output"
 
 # --- resume after an interruption -------------------------------------------
@@ -381,11 +382,14 @@ assert_eq "piped stdin: trailing input does not abort the run" "0" "$rc"
 assert_not_contains "piped stdin: stops reading fd 0 once main is done" "LEAKED-TRAILER" "$output"
 
 # --- vm-board.sh ------------------------------------------------------------
-# Runs inside the VM, launched by `limactl shell -- <path>`: no login shell, no
-# rc files, so it has to put ~/.local/bin on PATH and source the env itself.
+# The board runs as a transient service: the user manager starts it, so it
+# inherits neither vm-board.sh's environment nor its directory. The stub
+# systemd-run models that by running the command after `--` in a scrubbed
+# environment with only HOME, the way the manager does; the stub npm reports
+# what the board would start with.
 
 reset_case
-mkdir -p "$CASE_DIR/tidepool" "$CASE_DIR/.tidepool" "$STUB_DIR"
+mkdir -p "$CASE_DIR/tidepool" "$CASE_DIR/.tidepool" "$CASE_DIR/.local/bin" "$STUB_DIR"
 cat > "$CASE_DIR/.tidepool/env" <<'ENV'
 export TIDEPOOL_REGISTRY="$HOME/tidepool-registry"
 export TIDEPOOL_DB="$HOME/.tidepool/board.sqlite"
@@ -393,16 +397,25 @@ ENV
 cat > "$STUB_DIR/systemd-run" <<'STUB'
 #!/bin/bash
 echo "systemd-run $*"
+while [ "$1" != "--" ]; do shift; done
+shift
+cd /
+exec env -i HOME="$HOME" PATH=/usr/bin:/bin "$@"
+STUB
+cat > "$CASE_DIR/.local/bin/npm" <<'STUB'
+#!/bin/bash
+echo "npm $*"
 echo "TIDEPOOL_REGISTRY=$TIDEPOOL_REGISTRY"
 echo "cwd=$PWD"
 echo "PATH=$PATH"
 STUB
-chmod +x "$STUB_DIR/systemd-run"
+chmod +x "$STUB_DIR/systemd-run" "$CASE_DIR/.local/bin/npm"
 board_out=$(env PATH="$STUB_DIR:/usr/bin:/bin" HOME="$CASE_DIR" \
   bash "$SCRIPT_DIR/vm-board.sh" 2>&1) && rc=0 || rc=$?
 assert_eq "vm-board: exits 0" "0" "$rc"
-assert_contains "vm-board: hands the board its own delegated cgroup scope" \
-  "systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start" "$board_out"
+assert_contains "vm-board: runs the board as a foreground transient service with a delegated cgroup" \
+  "systemd-run --user --unit tidepool-board -p Delegate=yes --pty --pipe --wait -G -- bash -lc" "$board_out"
+assert_contains "vm-board: the service starts the board" "npm start" "$board_out"
 assert_contains "vm-board: exports the environment file to the board" \
   "TIDEPOOL_REGISTRY=$CASE_DIR/tidepool-registry" "$board_out"
 assert_contains "vm-board: starts from the checkout" "cwd=$CASE_DIR/tidepool" "$board_out"

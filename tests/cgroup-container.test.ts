@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
-import { type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
+import { boardContainerRuntimeFor, type CgroupPaths, containerRuntimeFor } from "../src/cgroup-container.js";
 import type { ContainerRuntimeCapability } from "../src/process-container.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -67,6 +67,70 @@ it("自分の cgroup 配下に容器を作れなければ不成立 — 理由は
   const capability = linux(paths).preflight();
 
   expect(reason(capability)).toContain("Delegate=yes");
+});
+
+/** 盤面がどの unit の中で起こされたか。`/proc/self/cgroup` の `0::` 行をその unit の
+ *  cgroup に向け、その dir を作る(他の前提は成立させたまま unit の種類だけを変える)。 */
+function startedUnder(paths: CgroupPaths, cgroup: string): CgroupPaths {
+  mkdirSync(join(paths.mount, cgroup), { recursive: true });
+  writeFileSync(paths.selfCgroup, `0::${cgroup}\n`);
+  return paths;
+}
+
+const SCOPE = "/user.slice/user-501.slice/user@501.service/app.slice/tidepool-board.scope";
+
+it("盤面が scope の中で起こされたら不成立 — 盤面が死んだとき容器を殺す supervisor が居ない(ADR 0318 決定1)", async () => {
+  const paths = startedUnder(await fakeCgroupfs(), SCOPE);
+
+  const capability = boardContainerRuntimeFor("linux", paths).preflight();
+
+  expect(reason(capability)).toContain("tidepool-board.scope");
+  expect(reason(capability)).toContain("systemd service");
+  expect(reason(capability)).toContain("scripts/vm-board.sh");
+  // 同じ process の中では直らない —— 確認 question は立て直した盤面から答える
+  expect(reason(capability)).toContain("restarted board");
+});
+
+it("login session の中で起こされた盤面も不成立 — session も盤面の死で容器を殺さない", async () => {
+  const paths = startedUnder(await fakeCgroupfs(), "/user.slice/user-501.slice/session-4.scope");
+
+  expect(reason(boardContainerRuntimeFor("linux", paths).preflight())).toContain("session-4.scope");
+});
+
+it("service の中で起こされた盤面は成立 — Mac の transient service も Pi の恒久の service も", async () => {
+  for (const unit of ["/user.slice/user-501.slice/user@501.service/app.slice/tidepool-board.service", "/system.slice/tidepool.service"]) {
+    const paths = startedUnder(await fakeCgroupfs(), unit);
+
+    expect(boardContainerRuntimeFor("linux", paths).preflight()).toEqual({ available: true });
+  }
+});
+
+it("容器機構の前提が先に落ちたら、その文だけが出る — supervisor の不成立を重ねない", async () => {
+  const paths = startedUnder(await fakeCgroupfs(), SCOPE);
+  rmSync(join(paths.mount, "cgroup.controllers"));
+
+  const capability = boardContainerRuntimeFor("linux", paths).preflight();
+
+  expect(capability).toEqual(containerRuntimeFor("linux", paths).preflight());
+  expect(reason(capability)).toContain("cgroup v2 is not mounted");
+});
+
+it("容器機構そのものの前提検査は scope でも成立 — 盤面を起こさない conformance と canary は `--scope` のまま動く", async () => {
+  const paths = startedUnder(await fakeCgroupfs(), SCOPE);
+
+  expect(containerRuntimeFor("linux", paths).preflight()).toEqual({ available: true });
+});
+
+it("盤面の容器機構は稼働中の容器を残骸と読まず、容器は自分の cgroup 配下に作る", async () => {
+  const unit = "/system.slice/tidepool.service";
+  const paths = startedUnder(await fakeCgroupfs(), unit);
+  const runtime = boardContainerRuntimeFor("linux", paths);
+  runtime.create("task-42");
+  const own = join(paths.mount, unit);
+  writeFileSync(join(own, "container-task-42", "cgroup.events"), "populated 1\nfrozen 0\n");
+
+  expect(runtime.preflight(new Set(["task-42"]))).toEqual({ available: true });
+  expect(reason(runtime.preflight())).toContain(join(own, "container-task-42"));
 });
 
 /** kernel の代わりに `cgroup.events` を書く(容器は create 済みであること)。 */
