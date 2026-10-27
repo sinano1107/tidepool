@@ -420,7 +420,7 @@ function judgmentItems(
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map(({ id, name }) => ({ tier_id: id, tier: name })), { learner: true }];
 }
 
-/** routing の材料の節の8つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、pickup の窓の乖離した shadow 行と
+/** routing の材料の節の8つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、前回以降の pickup の乖離した shadow 行と
  *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセル・人間が変えた行と閉じた本番 session の件数、異議つき判断
  *  (ADR 0279 決定6)、停止の帰責(ADR 0312 決定7)、窓の中で決着した提案、判断を要する項目。行はそれぞれの読み口と同じ —— shadow 行だけは
  *  outcome を除く(review が読むのは集計、ADR 0319 決定2)。異議つき判断と停止の帰責の行は memory.ts の行を呼び手が渡す(import の循環を避ける)。 */
@@ -442,7 +442,7 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
     allocations,
     cells,
     rows,
-    // 既知のセルの exit は初観測に出ないので、窓で閉じた本番 session は件数で載る(ADR 0319 決定3・4)
+    // 既知のセルの exit は初観測に出ないので、窓で閉じた本番 session は件数で載る(ADR 0319 決定3)
     closed_sessions: materialEvents(db, { worker_exited: META_REVIEW_SUBJECTS.routing.material.worker_exited }, window).length,
     precedents,
     stops,

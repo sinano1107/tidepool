@@ -35,15 +35,13 @@ const DAY = 24 * HOUR;
 const ROUTING_READS = ["list_routing_shadow", "list_allocations", "list_routing_cells", "read_routing_settings"];
 const TRACK = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
-const material = routingMaterialViaWebui;
-
 async function openRoutingReviews(tp: Tidepool): Promise<any[]> {
   return ((await api(tp.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "routing");
 }
 
 it("前回登録が無ければ routing の材料があっても poll は登録せず、扉で起こした初回は盤面名義で frontier・assignee null・workspace null で登録され、登録の経路は人間(ADR 0300 決定2)", async () => {
   t = await bootTidepool();
-  await material(t);
+  await routingMaterialViaWebui(t);
   await t.clock.advance(HOUR);
   expect(await openRoutingReviews(t)).toEqual([]);
 
@@ -84,12 +82,12 @@ it("worker_spawned だけでは routing の材料にならない", async () => {
 it("同主題の open な task があれば登録せず、完了後は前回 watermark 以降の材料で次の周期に登録される", async () => {
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
-  await material(t);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
 
-  await material(t);
+  await routingMaterialViaWebui(t);
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、同主題が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
@@ -101,7 +99,7 @@ it("同主題の open な task があれば登録せず、完了後は前回 wat
 it("親 task の meta_review_subject が routing の open な提案 question があれば登録しない —— 提案の kind では数えない", async () => {
   t = await bootTidepool();
   expect((await api(t.baseUrl, "POST", "/api/settings/meta-review", { period_days: 1 })).status).toBe(200);
-  await material(t);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
@@ -114,7 +112,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
   const { question_id } = proposeMemoryChange(t.db, first.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", t.clock.now());
   expect((await completeRoutingReviewViaMcp(t, first.id)).isError).not.toBe(true);
 
-  await material(t);
+  await routingMaterialViaWebui(t);
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、親が routing の提案 question が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
@@ -127,7 +125,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
 /** slot に入った routing meta-review とその接続。 */
 async function boardWithRoutingReview() {
   t = await bootTidepool();
-  await material(t);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const [review] = await openRoutingReviews(t);

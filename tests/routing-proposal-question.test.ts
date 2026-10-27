@@ -103,8 +103,8 @@ it("approve で表の行が提案の値になり、推奨どおりに数えら�
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
 
     expect(await row("claude-opus-5-5")).toEqual({ ...OPUS, tier: "frontier" });
-    // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)—— 読まれるのは setup の材料の行の編集だけ
-    expect((await call("list_routing_cells", { since_watermark: 0 })).rows.filter((r: any) => r.row.model === OPUS.model)).toEqual([]);
+    // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)—— 読まれるのは setup の材料の行の編集(moonshot)だけ
+    expect((await call("list_routing_cells", { since_watermark: 0 })).rows.map((r: any) => r.row.provider)).toEqual(["moonshot"]);
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toEqual(
       expect.objectContaining({ answers: [{ answer: "approve", recommendation_accepted: true }] }),
     );

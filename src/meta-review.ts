@@ -64,7 +64,7 @@ type MaterialMap = { [K in EventKind]?: MaterialPredicate };
 type MaterialWhere = { [K in EventKind]?: Pick<MaterialPredicate, "where"> };
 
 /** 同じ主題の meta-review 自身の産物を除く印(ADR 0151 決定3): 提案 question への回答が刻んだ question_id と、review の直接書き込みの
- *  activity(無効化は payload の、作成は entry の書き手の)。店の変更(と routing の kind)の組だけが持つ。 */
+ *  activity(無効化は payload の、作成は entry の書き手の)。店の変更と routing の `allocation_reviewed`・`execution_settings_changed` の組だけが持つ。 */
 const NOT_OWN_PRODUCT_SQL = `json_extract(payload, '$.question_id') IS NULL
   AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`;
 

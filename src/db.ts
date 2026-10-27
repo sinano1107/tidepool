@@ -534,7 +534,7 @@ export function openDb(path: string): Db {
     -- {board: {accepted, rejected}, workspace: {accepted, rejected}, seed: {kind, event_id} | null}(本番の観測だけで疑似観測を
     -- 含まない、書いた時点の値で数え直さない。seed はそのセル・その段の種 —— ADR 0273 決定7)。
     -- candidates: 除外を当てた後の候補の行数 —— 1 なら推薦は必ず表と一致する(ADR 0181 決定5)。
-    -- event_watermark: 書いた時点の events の最大 id。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
+    -- event_watermark: この行が乗る pickup の task_picked_up の id(書き手が結ぶ、ADR 0319 決定1)。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
     -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
     -- Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2・3 / ADR 0273 決定6): interview root が持つ (provider, model, effort) の一覧。
     -- 表の行でなくてよく、価格を持たない。effort の NULL は「無い」という値(ADR 0218 決定5)。段は root の tier_id(測る段)。

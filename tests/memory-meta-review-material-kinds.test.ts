@@ -277,7 +277,7 @@ function onRoutingReview<T>(db: Db, setup: (review: Task) => T): T {
   return made;
 }
 
-/** routing の帰責2 kind だけ(他の kind の行の不変条件は #2594 の後)。 */
+/** routing の帰責2 kind だけ(他の kind の行の不変条件は tests/routing-meta-review-material-kinds.test.ts)。 */
 const ROUTING_KIND_FIXTURES: KindFixtures<"routing", "objection_attributed" | "stop_attributed"> = {
   objection_attributed: (db) => {
     const objected = onRoutingReview(db, (review) => objectedDecision(db, review));

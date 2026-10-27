@@ -151,6 +151,7 @@ it("shadow の部分は窓 `前回 < event_watermark <= 今回`(行が乗る pic
   expect(parts.shadow_rows_multi_candidate).toBe(2);
   const verbRows = listRoutingShadow(db, review, { diverged_only: true }).shadow;
   expect(verbRows.map((row) => row.task_id)).toEqual([inside, atUpTo, later]);
+  expect(listRoutingShadow(db, review, { diverged_only: true, since_watermark: after }).shadow.map((row) => row.task_id)).toEqual([inside, atUpTo, later]);
   for (const { outcome: _, ...row } of verbRows.slice(0, 2)) expect(section).toContain(JSON.stringify(row));
   expect(section).not.toContain('"outcome"');
   expect(section).toContain("3 shadow rows were written in this window, 2 of them with two or more candidates");
