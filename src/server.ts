@@ -315,7 +315,7 @@ export interface ServerOptions {
   };
   /** 容器機構(ADR 0099 決定2 の唯一の新 seam)。**省略できない** — 既定を持つと、
    *  配線を1本忘れた盤面が黙って弱い回収へ落ちる(ADR 0099 決定5 が禁じている
-   *  状態そのもの)。本番の選択は合成 root の `containerRuntimeFor(platform)`。 */
+   *  状態そのもの)。本番の選択は合成 root の `boardContainerRuntimeFor(platform)`。 */
   containerRuntime: ContainerRuntime;
   /** transcript の器(ADR 0149 決定5)。`containerRuntime` と同じく**省略できない** ——
    *  既定を持つと、失敗の一撃が配線されない器で黙って走る。 */

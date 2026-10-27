@@ -95,7 +95,7 @@ case "$sub" in
     name="$1"; shift; shift # --
     if [ "$1" != bash ]; then
       echo "vm($name) $*" >> "$CMD_LOG"
-      [ "$name" = tidepool-board ] && [ "$*" = "systemctl --user is-active --quiet tidepool-board.scope" ] && exit $((1 - GATE_ACTIVE))
+      [ "$name" = tidepool-board ] && [ "$*" = "systemctl --user is-active --quiet tidepool-board.service" ] && exit $((1 - GATE_ACTIVE))
       exit 0
     fi
     cmd="$3"
@@ -422,7 +422,7 @@ GATE_STATUS=Running
 GATE_ACTIVE=1
 run_harness
 check "gate running: exits non-zero" "1" "$rc"
-check "gate running: says how to stop it" "1" "$(grep -c 'systemctl --user stop tidepool-board.scope' <<< "$output")"
+check "gate running: says how to stop it" "1" "$(grep -c 'systemctl --user stop tidepool-board$' <<< "$output")"
 check "gate running: no call reaches the benchmark VM" "gate-vm-status
 gate-board-unit" "$(steps)"
 

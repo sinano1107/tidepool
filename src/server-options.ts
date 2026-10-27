@@ -14,7 +14,7 @@ import {
 import type { HumanCredential } from "./auth.js";
 import type { BoardCall } from "./board-call.js";
 import type { BoardStatePath } from "./board-state.js";
-import { containerRuntimeFor } from "./cgroup-container.js";
+import { boardContainerRuntimeFor } from "./cgroup-container.js";
 import { ClaudeAllocationClient } from "./claude-allocation-client.js";
 import { ClaudeAttributionClient } from "./claude-attribution-client.js";
 import { ClaudeBehaviorDraftClient } from "./claude-behavior-draft-client.js";
@@ -894,8 +894,9 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     // ADR 0099 決定2/5: どの容器機構でこのホストの worker を封じるか。選ぶ場所が
     // 合成 root なのは、platform の判定が env の判定と同じ層だから。実測した機構が
     // 無い platform は fail-closed な機構を受け取り、boot 時の前提検査が pickup を
-    // 止める(macOS の実測は #465)。
-    containerRuntime: containerRuntimeFor(platform),
+    // 止める(macOS の実測は #465)。盤面が死んだとき容器を殺す platform supervisor の
+    // 検査はここでだけ足す(ADR 0318 決定1)。
+    containerRuntime: boardContainerRuntimeFor(platform),
     // ADR 0149: worker session の transcript の器。置き場は worker ログの dir
     transcripts: new TranscriptStore(board.logDir),
     watchdog: WATCHDOG,

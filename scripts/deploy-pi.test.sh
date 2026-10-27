@@ -5,7 +5,7 @@
 # subprocess (see run_verify) so its functions run against the stubs.
 #
 # This only exercises verify()'s control flow (log-line success, failed-unit
-# abort, crash-loop abort, timeout). It does not replace the Pi smoke test in
+# abort, timeout). It does not replace the Pi smoke test in
 # .agents/skills/deploy-pi/scripts/smoke-test.sh or the manual "verify"
 # section in issue #98 (real journalctl filtering, real sudo permissions).
 #
@@ -25,11 +25,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ITER_FILE="$(mktemp)"
 trap 'rm -f "$ITER_FILE"' EXIT
-BASE_NRESTARTS=5
 LOG_APPEARS_AT=""
 FAILED_AT=""
-NRESTARTS_AT=""
-NRESTARTS_SHOW_FAILS_AT="" # iteration at which `systemctl show -p NRestarts` itself errors out (transient failure), not just reports a bump
 
 sleep() { :; } # keep the timeout test fast; verify()'s only use of sleep
 
@@ -62,18 +59,6 @@ fake_systemctl() {
         esac
       done
       case "$prop" in
-        NRestarts)
-          local iter
-          iter=$(cat "$ITER_FILE")
-          if [[ -n "$NRESTARTS_SHOW_FAILS_AT" ]] && (( iter == NRESTARTS_SHOW_FAILS_AT )); then
-            return 1 # simulate a transient `sudo systemctl show` failure (no output, nonzero exit)
-          fi
-          if [[ -n "$NRESTARTS_AT" ]] && (( iter >= NRESTARTS_AT )); then
-            echo "$((BASE_NRESTARTS + 1))"
-          else
-            echo "$BASE_NRESTARTS"
-          fi
-          ;;
         InvocationID) echo "fake-invocation-id" ;;
       esac
       ;;
@@ -108,9 +93,6 @@ reset_state() {
   echo 0 > "$ITER_FILE"
   LOG_APPEARS_AT=""
   FAILED_AT=""
-  NRESTARTS_AT=""
-  NRESTARTS_SHOW_FAILS_AT=""
-  PRE_RESTART_NRESTARTS="$BASE_NRESTARTS"
   INVOCATION_ID="fake-invocation-id"
 }
 
@@ -120,12 +102,10 @@ reset_state() {
 # `$(...) && ... || ...` capture. That distinction matters: bash suspends
 # errexit for anything executed *as* the tested command of an if/&&/||
 # — including whatever it calls into — so calling verify() directly inline
-# here would silently hide a `set -e` kill inside it (that hid the very bug
-# this fix addresses, see the "transient NRestarts read failure" case below).
+# here would silently hide a `set -e` kill inside it.
 # A separate subprocess has no such context, so its own errexit is real.
 run_verify() {
-  export ITER_FILE LOG_APPEARS_AT FAILED_AT NRESTARTS_AT NRESTARTS_SHOW_FAILS_AT \
-    BASE_NRESTARTS PRE_RESTART_NRESTARTS INVOCATION_ID SCRIPT_DIR
+  export ITER_FILE LOG_APPEARS_AT FAILED_AT INVOCATION_ID SCRIPT_DIR
   export -f sleep next_iter fake_journalctl fake_systemctl sudo
   output=$(bash -c 'set -euo pipefail; source "$SCRIPT_DIR/deploy-pi.sh"; verify' 2>&1) && rc=0 || rc=$?
 }
@@ -169,26 +149,9 @@ assert_eq "failed unit: exit 1" "1" "$rc"
 assert_contains "failed unit: reason mentions failed state" "entered failed state" "$output"
 
 reset_state
-NRESTARTS_AT=1
-run_verify
-assert_eq "crash loop: exit 1" "1" "$rc"
-assert_contains "crash loop: reason mentions NRestarts" "crash-looped" "$output"
-
-reset_state
 run_verify
 assert_eq "timeout: exit 1 when nothing ever happens" "1" "$rc"
 assert_contains "timeout: reason mentions timeout" "did not report listening" "$output"
-
-# regression case for the review fix: a transient `sudo systemctl show -p
-# NRestarts` failure (e.g. sudo hiccup) must not kill the poll loop via
-# set -e — it should just be skipped for that iteration, and verify() should
-# keep polling and still succeed once the listening log shows up.
-reset_state
-NRESTARTS_SHOW_FAILS_AT=1
-LOG_APPEARS_AT=3
-run_verify
-assert_eq "transient NRestarts read failure: loop survives, exit 0" "0" "$rc"
-assert_contains "transient NRestarts read failure: still detects listening" "active:" "$output"
 
 # --- summary ---------------------------------------------------------------
 

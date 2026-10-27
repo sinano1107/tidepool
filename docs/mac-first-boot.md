@@ -67,11 +67,19 @@ it.
 To stop the board, from the Mac:
 
 ```bash
-limactl shell tidepool -- systemctl --user stop tidepool-board.scope
+limactl shell tidepool -- systemctl --user stop tidepool-board
 ```
 
 That ends everything the board was running — the board itself and anything still inside a worker
-container — and the `limactl shell` and `caffeinate` on the Mac end with it.
+container — and the `limactl shell` and `caffeinate` on the Mac end with it. Ctrl-C in the
+terminal the board runs in does the same as stop: running sessions are not wound down, and each
+comes back as a retry question.
+
+If the board falls over, type the start line again. The reason it fell over is in its journal:
+
+```bash
+limactl shell tidepool -- journalctl --user -u tidepool-board
+```
 
 ## Update Tidepool
 
@@ -106,7 +114,7 @@ limactl shell tidepool -- ss -ltnp | grep -E ':4589|:4590'
 Expect `node` on `127.0.0.1:4589` and `127.0.0.1:4590`, and nothing on `0.0.0.0` or `*`.
 
 ```bash
-limactl shell tidepool -- systemctl --user is-active tidepool-board.scope
+limactl shell tidepool -- systemctl --user is-active tidepool-board
 ```
 Expect `active`.
 

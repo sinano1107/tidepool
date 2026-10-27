@@ -156,8 +156,11 @@ print_next_steps() {
   log "open that in your browser first, then the WebUI at http://127.0.0.1:4589."
   log "To stop the board:"
   echo
-  echo "  limactl shell $VM -- systemctl --user stop tidepool-board.scope"
+  echo "  limactl shell $VM -- systemctl --user stop tidepool-board"
   echo
+  log "Ctrl-C in the same terminal also stops it, the same as stop: running sessions are not"
+  log "wound down and come back as a retry question. If the board falls over, type the start"
+  log "line again; the reason is in: limactl shell $VM -- journalctl --user -u tidepool-board"
   log "To update Tidepool later (your decision, never automatic):"
   echo
   echo "  limactl shell $VM -- bash -lc 'cd ~/tidepool && git pull && npm install'"

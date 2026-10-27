@@ -35,6 +35,7 @@ import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { buildMetaReviewMaterial, completeMemoryReview, moveMemoryByMetaReview, recordKnowledge, recordMetaReviewMaterial, routingPrecedents } from "../src/memory.js";
 import { type MetaReviewSubject, registerMetaReview } from "../src/meta-review.js";
 import { EXTRACTOR_VERSION } from "../src/precedent.js";
+import type { ContainerRuntime } from "../src/process-container.js";
 import type { ProfileAdmin } from "../src/profile-create.js";
 import type { Provider } from "../src/provider.js";
 import { openQuarantineQuestion, type QuarantineKind, type QuarantineResolvers, quarantineAgent } from "../src/quarantine.js";
@@ -217,8 +218,9 @@ export interface BootOptions {
   /** Per-task-type absolute time limits (#9). */
   watchdog?: WatchdogConfig;
   /** 容器機構(ADR 0099 決定2)。boot 前にスクリプトしたいテストだけが渡す
-   *  (機構前提検査の不成立など)。Absent → 既定の fake。 */
-  containerRuntime?: FakeContainerRuntime;
+   *  (機構前提検査の不成立など)。Absent → 既定の fake。fake でない機構を渡した盤面では
+   *  `t.containers` は配線されない fake になる(`workerAdapter` と `t.worker` と同じ)。 */
+  containerRuntime?: ContainerRuntime;
   /** transcript の器(ADR 0149)。session の stream を取って落としたいテストだけが渡す。
    *  Absent → 盤面の dir に開く既定の器。 */
   transcripts?: TranscriptStore;
@@ -349,7 +351,8 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
   const dbPath = join(dir, "board.sqlite");
   const clock = new FakeClock();
   const worker = new ScriptedWorker(clock, options.workerId);
-  const containers = options.containerRuntime ?? new FakeContainerRuntime();
+  const containers =
+    options.containerRuntime instanceof FakeContainerRuntime ? options.containerRuntime : new FakeContainerRuntime();
   const github = options.github ?? new FakeGitHubClient();
   const push = new FakePushClient();
   // 盤面の接続は1本。テストが直接 SQL を撃つ `t.db` も、盤面が使うのも同じ handle で、
@@ -371,7 +374,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
       worker.onWorkerExited = deps.onWorkerExited;
       return worker;
     }),
-    containerRuntime: containers,
+    containerRuntime: options.containerRuntime ?? containers,
     transcripts: options.transcripts ?? new TranscriptStore(dir),
     workspace: options.workspace,
     resolveWorkspace: options.resolveWorkspace,
