@@ -53,7 +53,7 @@ function trimStderrTail(text: string): string {
  *  bare newline) — 実内容の無い stderr を空文字で残すと「捕捉が欠落した」形と
  *  紛れるので、null 側に倒す。A trailing "\n" terminates the last line rather
  *  than opening an empty one. */
-function stderrTail(text: string): string | null {
+export function stderrTail(text: string): string | null {
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
   const tail = lines.slice(-STDERR_TAIL_LINES).join("\n");

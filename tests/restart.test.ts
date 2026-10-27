@@ -1,10 +1,15 @@
-import { writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { enumerateHostSkills } from "../src/claude-worker.js";
 import { openDb } from "../src/db.js";
+import { appendEvent, listEventsOfKinds } from "../src/events.js";
+import { listEpisodes } from "../src/precedent.js";
 import { getTask, listBoard } from "../src/tasks.js";
-import { FakeContainerRuntime } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, questions, queueWork, type Tidepool } from "./harness.js";
+import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
+import { FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, makeWorkspace, QUIET_EXIT, questions, queueWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -61,7 +66,7 @@ const watchdog = { timeLimits: { work: 90 * 60 * 1000 }, grace: 30 * 60 * 1000, 
 
 /** 再起動中断の後始末(issue #1936): 未 commit の変更を残して `in_progress` のまま盤面が落ち、
  *  容器機構の前提検査が落ちた起動で立ち上がる —— 前の盤面の process が残っていないことは証明されていない。 */
-async function interruptedThenBootWithFailedPreflight(harnessContainment?: () => Promise<{ available: true }>) {
+async function interruptedThenBootWithFailedPreflight(harnessContainment?: () => Promise<{ available: true }>, beforeReboot?: (taskId: string) => void) {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog, harnessContainment });
   const task = queueWork(t, "interrupted by restart");
@@ -69,6 +74,7 @@ async function interruptedThenBootWithFailedPreflight(harnessContainment?: () =>
   await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([task.id]));
   writeFileSync(join(ws.path, "wip.txt"), "unfinished work\n");
   await t.stopServer();
+  beforeReboot?.(task.id);
 
   const runtime = new FakeContainerRuntime();
   runtime.scriptPreflight("previous session may still be alive");
@@ -136,4 +142,125 @@ it("後始末の印が書けなかった起動は、再起動中断の failure q
   expect(getTask(db, task.id)?.status).toBe("in_progress");
   expect(listBoard(db).filter((x) => x.type === "question")).toEqual([]);
   db.close();
+});
+
+// ── 前の盤面が閉じ切らなかった session(issue #2600 / ADR 0315)──────────────────
+
+/** setup: 止めた盤面の記録に、閉じ切らなかった session を1つ置く —— spawn(と `exited` なら exit)、stderr、task temp。
+ *  `transcript: false` は記録の dir から transcript が欠けた形で、返る `writeTranscript` が後から置く。 */
+function leaveOpenSession(dir: string, taskId: string, { exited = false, transcript = true } = {}) {
+  const db = openDb(join(dir, "board.sqlite"));
+  const at = new Date();
+  const spawned = appendEvent(db, { taskId, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
+  if (exited) appendEvent(db, { taskId, actorId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  db.close();
+  const writeTranscript = () => writeFileSync(join(dir, `${taskId}.${spawned}.stream.jsonl`), toolCall(1, "Bash", null).join("\n"));
+  if (transcript) writeTranscript();
+  writeFileSync(join(dir, `${taskId}.${spawned}.stderr.log`), "lost the board\n");
+  const temp = mkdtempSync(join(tmpdir(), `tidepool-claude-${taskId}-`));
+  onTestFinished(() => rmSync(temp, { recursive: true, force: true }));
+  return { spawned, temp, writeTranscript };
+}
+
+const exitsOf = (spawned: number) => listEventsOfKinds(t.db, ["worker_exited"]).filter((e) => e.payload.worker_spawned_event_id === spawned);
+const episodeOf = (spawned: number) => listEpisodes(t.db, { workerSpawnedEventId: spawned })[0];
+
+/** 記録の dir から欠けた transcript の投影は、起動時に記録して流れる(ADR 0315 決定4)。 */
+function silenceRecoveryLog() {
+  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
+  onTestFinished(() => { silenced.mockRestore(); });
+}
+
+it("前提検査が通った起動は、前の盤面が閉じ切らなかった session を観測していない印の exit で閉じ、Episode を投影して task temp を消す(ADR 0315)", async () => {
+  t = await bootTidepool();
+  const task = queueWork(t, "interrupted by restart");
+  await t.clock.advance(HOUR);
+  await t.stopServer();
+  const left = leaveOpenSession(t.dir, task.id);
+
+  t = await bootTidepool({ dir: t.dir });
+
+  const [exited] = exitsOf(left.spawned);
+  expect(exited?.payload).toMatchObject({ exit_observed: false, exit_code: null, stderr_tail: "lost the board", output_closed: false });
+  expect(episodeOf(left.spawned)?.workerExitedEventId).toBe(exited!.id);
+  expect(existsSync(left.temp)).toBe(false);
+});
+
+it("前提検査が落ちた起動では session を閉じず、Harness Containment の確認回答の受理で閉じる(ADR 0315 決定1)", async () => {
+  let left!: ReturnType<typeof leaveOpenSession>;
+  const { runtime } = await interruptedThenBootWithFailedPreflight(async () => ({ available: true }) as const, (taskId) => {
+    left = leaveOpenSession(t.dir, taskId);
+  });
+  expect(exitsOf(left.spawned)).toEqual([]);
+  expect(existsSync(left.temp)).toBe(true);
+  const confirmations = await vi.waitFor(async () => {
+    const found = (await questions(t)).filter((q) => q.question_quarantine_kind === "harnessContainment");
+    expect(found).toHaveLength(2);
+    return found;
+  });
+
+  runtime.scriptPreflight(); // 修理済み
+  for (const question of confirmations) {
+    expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+  }
+
+  expect(exitsOf(left.spawned)).toHaveLength(1);
+  expect(episodeOf(left.spawned)).toBeDefined();
+  expect(existsSync(left.temp)).toBe(false);
+});
+
+it("回収 timeout の確認回答の受理でも復旧が走り、この起動の後に spawn した session には何も書かない(ADR 0315 決定3)", async () => {
+  silenceRecoveryLog();
+  const containers = new FakeContainerRuntime();
+  const options = { containerRuntime: containers, watchdog, harnessContainment: async () => ({ available: true }) as const };
+  t = await bootTidepool(options);
+  const previous = queueWork(t, "the previous board's session");
+  await t.stopServer();
+  const left = leaveOpenSession(t.dir, previous.id, { exited: true, transcript: false });
+  t = await bootTidepool({ ...options, dir: t.dir });
+  expect(episodeOf(left.spawned)).toBeUndefined();
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([previous.id]));
+  containers.hold(previous.id);
+  // この起動が spawn した走行中の session(偽の worker は spawn を刻まないので setup が置く)
+  const running = appendEvent(t.db, { taskId: previous.id, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: WORKER_SPAWNED });
+  await t.clock.advance(watchdog.timeLimits.work);
+  await t.clock.advance(watchdog.grace);
+  await t.clock.advance(watchdog.reclaimTimeout);
+  containers.fireEmpty(previous.id);
+  left.writeTranscript(); // 記録の dir が戻った
+
+  const containment = (await questions(t)).find((q) => q.question_quarantine_kind === "containment")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${containment.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+
+  expect(episodeOf(left.spawned)).toBeDefined();
+  expect(exitsOf(running)).toEqual([]);
+});
+
+it("待っている回収の無い Containment の確認回答の受理でも復旧が走る(ADR 0315 決定1)", async () => {
+  silenceRecoveryLog();
+  t = await bootTidepool();
+  const previous = queueWork(t, "the previous board's session");
+  await t.stopServer();
+  const left = leaveOpenSession(t.dir, previous.id, { exited: true, transcript: false });
+  const recorder = recordingSpawn();
+  const runtime = new FakeContainerRuntime(recorder.spawn);
+  t = await bootTidepool({ dir: t.dir, containerRuntime: runtime, hostSkills: enumerateHostSkills, harnessContainment: async () => ({ available: true }) });
+  // Board call の容器が回収 timeout まで空にならない —— 盤面全体の Containment quarantine(watchdog の待つ回収は無い)
+  const pending = api(t.baseUrl, "GET", "/api/skills");
+  await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
+  const container = runtime.created[0]!;
+  runtime.hold(container);
+  recorder.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", skills: [] })}\n`);
+  await new Promise((resolve) => setImmediate(resolve));
+  recorder.emitExit(0, null);
+  await pending;
+  await t.clock.advance(RECLAIM_TIMEOUT);
+  runtime.fireEmpty(container);
+  await new Promise((resolve) => setImmediate(resolve));
+  left.writeTranscript();
+
+  const containment = (await questions(t)).find((q) => q.question_quarantine_kind === "containment")!;
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${containment.id}/answer`, { answers: ["repaired by hand"] })).status).toBe(200);
+
+  expect(episodeOf(left.spawned)).toBeDefined();
 });

@@ -738,6 +738,18 @@ it.each([
   expect(episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome).toBe(outcome);
 });
 
+it.each([
+  [undefined, HOUR],
+  [false, null],
+] as const)("exit_observed %s の session の所要時間は %s —— 観測していない exit の時刻は起動時刻(ADR 0315 決定2、loadEpisodes)", (exit_observed, duration) => {
+  const b = bareBoard();
+  const { task, spawnedId } = spawnedWork(b, "closed by recovery");
+  const at = new Date(b.clock.now().getTime() + HOUR);
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: false, usage: null, ...(exit_observed === undefined ? {} : { exit_observed }) } });
+
+  expect(loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === spawnedId)?.duration_ms).toBe(duration);
+});
+
 // ── 種(issue #2194 / ADR 0273 決定7)──────────────────────────────────
 
 const opusTarget = { provider: "anthropic", model: "claude-opus-5-5", effort: "high" } as const;
