@@ -1,5 +1,7 @@
 # 前の盤面が閉じ切らなかった session は次の起動時の復旧が閉じ、観測していない exit は印を持つ exit の記録で表す
 
+**Status 追記: 決定3 の対象から、process を1つも持たなかった session(ADR 0118 決定1、`spawn_failed` / `record_container_unwritable` で閉じた spawn)は除く(issue #2633)** —— 復旧が exit も Episode も書かない。判定の形(位置かポインタか)は #2632 で決める。
+
 2026-10-27 の triage → grilling(issue #2600、#2570 の派生)で決定。session を閉じる仕事 —— `worker_exited` を書く、Episode を投影する、
 task の一時領域を消す —— は Claude / Codex adapter の終了処理にしか無く、盤面が session の途中か投影の前に落ちると誰もやり直さなかった。
 欠けた session は routing 学習器・memory meta-review の Precedent・停止の帰責(ADR 0310 の門は `worker_exited` を見る)から抜け、
