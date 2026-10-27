@@ -951,7 +951,7 @@ describe("CodexWorker (ADR 0098)", () => {
       payload: { kind: "decision_logged", line: "chose approach X" },
       at,
     });
-    appendEvent(f.db, {
+    const objection = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "human",
       origin: "webui",
@@ -966,7 +966,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     const rca = registerTask(
       f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained" },
+      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
       at,
       ...HUMAN_WEBUI,
     );
@@ -1014,7 +1014,7 @@ describe("CodexWorker (ADR 0098)", () => {
       payload: { kind: "decision_logged", line: "chose approach X" },
       at,
     });
-    appendEvent(f.db, {
+    const objection = appendEvent(f.db, {
       taskId: objected.id,
       actorId: "human",
       origin: "webui",
@@ -1023,7 +1023,7 @@ describe("CodexWorker (ADR 0098)", () => {
     });
     await f.start(registerTask(
       f.db,
-      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca-1741", purpose: "why X", completion_criteria: "explained" },
+      { type: "review", assignee: "codex-agent", workspace: "work", parent_id: objected.id, title: "codex-rca-1741", purpose: "why X", completion_criteria: "explained", opened_on_event_ids: [objection] },
       at,
       ...HUMAN_WEBUI,
     ));

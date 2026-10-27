@@ -24,6 +24,7 @@ import {
   listEvents,
   listEventsOfKinds,
   objectionBundles,
+  rcaMaterialAnchors,
   sessionOf,
   sessionSpawnOf,
   stopJudgments,
@@ -921,9 +922,8 @@ function learnedFrom(db: Db, review: Task, material_id: number): { worker: strin
 
 /** 材料が停止の RCA のその停止(ADR 0310 決定4): 登録の opened_on_event_ids が指す event が停止なら。材料が異議の RCA・RCA でない task は undefined。 */
 export function materialStop(db: Db, reviewId: string): EventRowOf<"session_stopped_by_human"> | undefined {
-  const [id] = latestEventOfTask(db, reviewId, "task_registered")?.payload.opened_on_event_ids ?? [];
-  const event = id === undefined ? undefined : getEvent(db, id);
-  return event?.payload.kind === "session_stopped_by_human" ? (event as EventRowOf<"session_stopped_by_human">) : undefined;
+  const [material] = rcaMaterialAnchors(db, reviewId);
+  return material?.anchor.payload.kind === "session_stopped_by_human" ? (material.anchor as EventRowOf<"session_stopped_by_human">) : undefined;
 }
 
 /** 材料が停止の RCA の get_current_task に注入する、止められた session の行動列(ADR 0310 決定2・4、判事と同じ形)。他の task には欄ごと無い。 */
@@ -939,14 +939,8 @@ function stoppedSession(db: Db, stop: EventRowOf<"session_stopped_by_human">): {
 }
 
 /** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
-function rcaMaterial(db: Db, reviewId: string, stop: EventRowOf<"session_stopped_by_human"> | undefined): Set<number> {
-  if (stop) return new Set([stop.id]);
-  return new Set(
-    (latestEventOfTask(db, reviewId, "task_registered")!.payload.opened_on_event_ids ?? []).flatMap((id) => {
-      const objection = getEvent(db, id)?.payload;
-      return objection?.kind === "objection_raised" ? [objection.entry_id] : [];
-    }),
-  );
+function rcaMaterial(db: Db, reviewId: string): Set<number> {
+  return new Set(rcaMaterialAnchors(db, reviewId).map(({ anchor }) => anchor.id));
 }
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
@@ -967,7 +961,7 @@ export function completeRca(
   const noun = stop ? "stop" : "entries";
   if (findings.some((f) => f.material.length === 0)) throw new DomainError(`a finding names no ${noun}`);
   if (findings.some((f) => whyBlank(f.root_cause))) throw new DomainError("every finding requires a root_cause");
-  const reviewMaterial = rcaMaterial(db, review.id, stop);
+  const reviewMaterial = rcaMaterial(db, review.id);
   const given = findings.flatMap((f) => f.material);
   const ids = (list: number[]) => [...new Set(list)].join(", ");
   const unknown = given.filter((id) => !reviewMaterial.has(id));
