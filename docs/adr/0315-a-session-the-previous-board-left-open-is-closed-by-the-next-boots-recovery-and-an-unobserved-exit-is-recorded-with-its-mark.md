@@ -19,9 +19,14 @@ task の一時領域は残る(#1955)。Lima VM の実測(盤面を `kill -9`、�
    復旧だけが書き、adapter は書かない(欄が無い = 観測した)。盤面が持たない値(exit code・signal・消費)は欠測、読み切りは false
    (ADR 0201 の「読み切る前に終わった」はそのまま当たる)、stderr の末尾は盤面側に残る記録から埋め、CLI の報告した失敗と最後の発話は
    埋めない —— transcript が記録の正本(ADR 0149)で、行動列は Episode が運ぶ。
+   所要時間も導かない(欠測)—— 復旧の記録の時刻は起動の時刻で、session の終わりではない。読み手(学習器の所要時間、routing
+   meta-review の材料)は exit の記録の時刻からではなく、この印で欠測を知る。
 3. **対象は、対応する `worker_exited` の無い `worker_spawned` のうち、起動時点の最大 event id 以下のもの。** task の状態では選ばない ——
    停止や watchdog で後始末の印が付いた後に落ちた session は status が決着していても exit の記録は無い。起動時点の watermark は、受理の門
    から走る復旧が、走行中の別 Harness の session(spawn 済みで exit 前)に偽の exit を書かないための線である。
+   同じ task に後の spawn があれば exit の記録は書かず、投影だけする —— session の窓は次の spawn で既に閉じていて(`sessionWindow`)、
+   後から id の大きい exit を書くと窓が次の session に重なる。再起動中断では失敗の記録(起動列の failure question)が exit の記録より
+   先になる —— ADR 0145 の「exit の瞬間に失敗を記録」の順はこの経路だけ逆で、窓の読み手はどちらの順にも依らない。
 4. **投影は、どの投影器の版でも Episode の無い spawn だけ、1件ずつ失敗を記録して流す。** 全走査の backfill(`backfillEpisodes`)は
    明示の操作のまま残し、起動では撃たない —— 冪等判定より先に transcript を読むので起動ごとに全件読み直し、版を上げた起動は全件を
    同期で再投影する。transcript が無い・読めない session は記録の dir が後から失われた印(ADR 0314 決定2)で、起動を落とさない。
@@ -38,6 +43,9 @@ task の一時領域は残る(#1955)。Lima VM の実測(盤面を `kill -9`、�
 - **`output_closed` を3値にする** —— 読み切りの有無とは別の事実(盤面がその場に居なかった)を同じ欄に畳む。
 - **一時領域の置き場を起動時に全掃除する** —— 決定5。
 - **孤児(盤面が落ちた後も走り続ける worker)の予防をここで決める** —— 別の機構(監督者が誰か)で、別 issue(#2600 のコメント参照)。
+- **閉じる処理を記録(exit の事実 + transcript)から導く1本にし、usage も transcript から取り直す** —— 根の設計で、この issue の後も残る
+  損失(観測していない exit の usage・refusal・model swap が null)を塞ぐ。族の根の issue で決める(#2600 のコメント参照)。本 ADR は
+  その最初の slice で、閉じる関数は live と復旧で1本にする(写しを4つにしない)。
 
 ## 帰結
 
