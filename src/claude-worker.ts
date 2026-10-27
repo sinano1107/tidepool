@@ -8,17 +8,13 @@ import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
-import {
-  isCapInterruptionEnvelope,
-  isCliAuthFailureEnvelope,
-  quarantineCliAuthForProvider,
-  rowRefusalCause,
-} from "./cli-auth.js";
+import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
+import { quarantineCliAuthForProvider } from "./cli-auth.js";
 import type { Clock } from "./clock.js";
 import { type ContainmentCapability, quarantineContainment } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { type AdvisorRecord, appendEvent, type EventPayload, type ModelSwap, type ResourceStop, type RowRefusal, type RowRefusalCause, swapsMain } from "./events.js";
+import { appendEvent, type ResourceStop, type RowRefusal } from "./events.js";
 import { type ExecutionSetting, MOONSHOT_DEFAULT_MODEL } from "./execution-setting.js";
 import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
@@ -27,7 +23,6 @@ import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./p
 import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
 import {
   loadRegistry,
-  ownEntry,
   type Registry,
   type RegistrySource,
 } from "./registry.js";
@@ -39,19 +34,7 @@ import {
 } from "./sandbox.js";
 import { closeSession, taskTempPrefix } from "./session-close.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
-import {
-  isRootAssistant,
-  parseStreamLine,
-  readAdvisorOutcomes,
-  readInitAutoMemoryPath,
-  readInitField,
-  readInitMcpServers,
-  readInitModel,
-  readModelSwap,
-  readRootRefusal,
-  readSubagentModel,
-  readSubagentStart,
-} from "./stream-json.js";
+import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServers } from "./stream-json.js";
 import {
   carriesReadOnly,
   type PickupStopped,
@@ -816,292 +799,6 @@ export function agentGitIdentityEnv(agentName: string): Record<string, string> {
     GIT_AUTHOR_EMAIL: email,
     GIT_COMMITTER_NAME: agentName,
     GIT_COMMITTER_EMAIL: email,
-  };
-}
-
-type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
-
-/** The stream-json CLI's own final `result` event shape (vendor-specific,
- *  hence kept private to this adapter — ADR 0005) — only the fields
- *  worker_exited needs. */
-interface StreamResultEvent {
-  total_cost_usd: number;
-  usage: {
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_input_tokens: number;
-    cache_creation_input_tokens: number;
-    /** issue #33: present only on newer CLIs, and only ever describing the
-     *  **final turn** (measured) — an earlier turn's `advisor_message` is gone
-     *  by the time this line is written. The one place the CLI names the
-     *  advisor's resolved model id. */
-    iterations?: unknown;
-  };
-  /** Per-model breakdown, keyed by resolved model id — the only place the
-   *  advisor's own token/cost slice can be read off. Optional because a result
-   *  line without it must still yield usage rather than being discarded. */
-  modelUsage?: unknown;
-}
-
-/** One entry of the result line's per-model breakdown, narrowed on read (the
- *  keys are vendor camelCase and only some are needed). */
-interface ModelUsageEntry {
-  inputTokens: number;
-  outputTokens: number;
-  costUSD: number;
-}
-
-function isModelUsageEntry(value: unknown): value is ModelUsageEntry {
-  if (typeof value !== "object" || value === null) return false;
-  const { inputTokens, outputTokens, costUSD } = value as Record<string, unknown>;
-  return (
-    typeof inputTokens === "number" &&
-    typeof outputTokens === "number" &&
-    typeof costUSD === "number"
-  );
-}
-
-/** One entry of the result line's per-model breakdown, narrowed for
- *  `worker_exited.usage.models` (ADR 0094 決定2). Composed on top of
- *  `isModelUsageEntry` rather than widening it: that predicate is shared with
- *  `advisorUsage`, whose contract (issue #307) stays exactly as it was. */
-interface ModelUsageBreakdownEntry extends ModelUsageEntry {
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-}
-
-function isModelUsageBreakdownEntry(value: unknown): value is ModelUsageBreakdownEntry {
-  if (!isModelUsageEntry(value)) return false;
-  const { cacheReadInputTokens, cacheCreationInputTokens } = value as Partial<ModelUsageBreakdownEntry>;
-  return typeof cacheReadInputTokens === "number" && typeof cacheCreationInputTokens === "number";
-}
-
-/** The advisor's resolved model id, from the only surface that names it: an
- *  `advisor_message` entry in the final turn's iterations (issue #33, measured
- *  2026-08-04). null when the session's last consultation happened in an
- *  earlier turn — the CLI keeps nothing about it.
- *
- *  There is deliberately no fallback. Subtracting the main model from
- *  `modelUsage`'s keys does not identify the advisor: the breakdown can also
- *  carry the CLI's internal helper model (measured — three keys for one
- *  consultation), so the remainder is not a single answer, and a rule that is
- *  right only when that helper happens not to have run would make the field's
- *  meaning depend on something the board cannot observe. */
-function advisorModelFrom(result: StreamResultEvent): string | null {
-  const { iterations } = result.usage;
-  if (!Array.isArray(iterations)) return null;
-  for (const entry of iterations) {
-    if (typeof entry !== "object" || entry === null) continue;
-    const { type, model } = entry as Record<string, unknown>;
-    if (type === "advisor_message" && typeof model === "string") return model;
-  }
-  return null;
-}
-
-/** Fail-closed like the rest of this file's vendor-shape handling
- *  (`checkUsage`'s try/catch, the quarantine-on-drift paths in `start()`): a
- *  `result` line whose `usage`/`total_cost_usd` don't match the expected
- *  shape is treated as no result at all, never cast through blind and left
- *  to throw later inside a stdout "data" handler. */
-function isStreamResultEvent(value: unknown): value is StreamResultEvent {
-  if (typeof value !== "object" || value === null) return false;
-  const { total_cost_usd, usage } = value as Record<string, unknown>;
-  if (typeof total_cost_usd !== "number") return false;
-  if (typeof usage !== "object" || usage === null) return false;
-  const { input_tokens, output_tokens, cache_read_input_tokens, cache_creation_input_tokens } =
-    usage as Record<string, unknown>;
-  return (
-    typeof input_tokens === "number" &&
-    typeof output_tokens === "number" &&
-    typeof cache_read_input_tokens === "number" &&
-    typeof cache_creation_input_tokens === "number"
-  );
-}
-
-/** The decoded-line form. A line that isn't a `result`, or one whose shape
- *  doesn't match, simply isn't one — the last *accepted* result line already
- *  seen wins. `is_error: true` is not a usage self-report either (issue
- *  #534). */
-export function readResultEvent(parsed: Record<string, unknown> | null): StreamResultEvent | null {
-  if (parsed === null || parsed.type !== "result") return null;
-  if (parsed.is_error === true) return null;
-  return isStreamResultEvent(parsed) ? parsed : null;
-}
-
-/** ADR 0188: the failure the CLI reported on an `is_error` result line, verbatim — the
- *  API error's `result` (with its status when numeric), else the CLI-side `errors`.
- *  Display only, read separately so `readResultEvent` keeps dropping these lines (#534).
- *  The last `is_error` line is kept whole, so one without text leaves null, not an earlier line's text. */
-function readErrorResult(parsed: Record<string, unknown> | null): Record<string, unknown> | null {
-  return parsed?.type === "result" && parsed.is_error === true ? parsed : null;
-}
-
-/** ADR 0189: root のモデルが書いた最後の空でない text。CLI が合成した `<synthetic>` の行(ADR 0188 の主語)と
- *  subagent の行は読まない。text の無い行は null —— 前の行の文を残す。 */
-function readRootText(parsed: Record<string, unknown> | null): string | null {
-  if (!isRootAssistant(parsed)) return null;
-  const message = parsed.message as { model?: unknown; content?: unknown } | undefined;
-  if (message?.model === "<synthetic>" || !Array.isArray(message?.content)) return null;
-  const texts = message.content.filter(
-    (block): block is { text: string } => block?.type === "text" && typeof block.text === "string" && block.text !== "",
-  );
-  return texts.at(-1)?.text ?? null;
-}
-
-function reportedError(line: Record<string, unknown> | null): string | null {
-  if (line === null) return null;
-  const { result, errors, api_error_status: status } = line;
-  const text = (typeof result === "string" && result) || (Array.isArray(errors) ? errors.join("\n") : "");
-  if (!text) return null;
-  return typeof status === "number" ? `API error status ${status}: ${text}` : text;
-}
-
-function isCliAuthFailure(parsed: Record<string, unknown> | null): boolean {
-  return parsed?.type === "result" && isCliAuthFailureEnvelope(parsed);
-}
-
-/** 上限到達による中断(ADR 0104 決定2)。`isCliAuthFailure` と同じ形 — 判定は
- *  `result` envelope の構造化フィールド一点であり、stream 中の `rate_limit_event`
- *  も本文の「session limit」も根拠にしない。 */
-function isCapInterruption(parsed: Record<string, unknown> | null): boolean {
-  return parsed?.type === "result" && isCapInterruptionEnvelope(parsed);
-}
-
-/** 行の拒否(ADR 0184 決定3・ADR 0187 決定1)の証拠の種類。`isCapInterruption` と同じく result 行だけを
- *  読む —— 2.1.261〜2.1.284 はこの code を assistant 行にだけ載せる(#1267)。 */
-function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause | null {
-  return parsed?.type === "result" ? rowRefusalCause(parsed) : null;
-}
-
-/** What the stdout scan collected while the stream ran — the session's advisor
- *  (issue #33), its model swaps and refusals (ADR 0215) and its subagents'
- *  models (issue #2432). All are needed at exit and none survives on the
- *  result line: the consultations, failed calls and refusals happen in
- *  assistant lines, the swaps, subagent launches and the main model's resolved
- *  id on system lines, the subagents' resolved models on tool_result lines. */
-interface StreamObservation {
-  /** Advisor calls whose result carried advice, seen on the parent thread (ADR 0214). */
-  consultations: number;
-  /** Failed advisor calls' `error_code`, verbatim and in order (ADR 0214). */
-  failedCalls: (string | null)[];
-  /** The init line's resolved main model, used only to decide whether the
-   *  advisor's own usage is separable from it. */
-  mainModel: string | null;
-  /** ADR 0215: `usage.model_swaps` as it will be written. */
-  modelSwaps: ModelSwap[];
-  /** ADR 0215: `usage.refusals` keyed by `message.id` — one message splits into
-   *  several assistant lines, one per block, so a refusal counts once per id. */
-  refusals: Map<unknown, string | null>;
-  /** issue #2432: the subagents seen on the stream, keyed by `tool_use_id`, with the resolved
-   *  model observed for each — null while none has been. An unpairable id gets a key of its own. */
-  subagents: Map<unknown, string | null>;
-}
-
-/** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
- *  on positive evidence — at least one consultation or failed call actually
- *  observed on the stream (ADR 0214) — so "the board pinned an advisor" alone
- *  never produces a row that claims one was attached. */
-function toAdvisorRecord(
-  result: StreamResultEvent,
-  observed: StreamObservation,
-): AdvisorRecord | null {
-  if (observed.consultations === 0 && observed.failedCalls.length === 0) return null;
-  const model = advisorModelFrom(result);
-  return {
-    model,
-    consultations: observed.consultations,
-    usage: advisorUsage(result, model, observed),
-    failed_calls: observed.failedCalls,
-  };
-}
-
-/** The advisor's own token/cost slice, or null when it cannot be measured
- *  (see the field's own doc in events.ts). Five ways it is unmeasurable:
- *
- *  - the advisor's resolved id was never reported;
- *  - it resolved to the same model as the main one, which merges both into a
- *    single per-model entry, leaving no way to tell whose tokens are whose
- *    (measured);
- *  - **the main model's resolved id was never observed** — a session whose
- *    init line was missing or carried no `model`. Then separability itself is
- *    unknown: the two may well have resolved to the same id, in which case the
- *    per-model entry read below is the merged one and publishing it would
- *    report the session's combined usage as the advisor's. "Could not be
- *    measured" must not turn into a confident wrong number;
- *  - **the main model was swapped** mid-session (ADR 0215 決定4) — the init
- *    line's model is then not the one that ran, so the comparison above says
- *    nothing. A `local` swap leaves the session's model as it was;
- *  - **something else ran, or may have run, on the advisor's model** (issue
- *    #2432) — `modelUsage` sums per model id, so its tokens sit in the
- *    advisor's entry: a subagent resolved to the advisor's id, a subagent
- *    launch with no resolved model observed by exit (a nested one, or a
- *    renamed field), or a `local` swap to the advisor's id. Not subtracted
- *    (ADR 0094 決定2). */
-function advisorUsage(
-  result: StreamResultEvent,
-  model: string | null,
-  observed: StreamObservation,
-): AdvisorRecord["usage"] {
-  if (model === null || observed.mainModel === null || model === observed.mainModel) return null;
-  if (observed.modelSwaps.some((swap) => swapsMain(swap) || swap.to === model)) return null;
-  if ([...observed.subagents.values()].some((resolved) => resolved === null || resolved === model)) return null;
-  const breakdown = result.modelUsage;
-  if (typeof breakdown !== "object" || breakdown === null) return null;
-  const entry = ownEntry(breakdown as Record<string, unknown>, model);
-  if (!isModelUsageEntry(entry)) return null;
-  return {
-    input_tokens: entry.inputTokens,
-    output_tokens: entry.outputTokens,
-    estimated_cost_usd: entry.costUSD,
-  };
-}
-
-type ModelBreakdown = NonNullable<WorkerExitedUsage>["models"];
-
-/** ADR 0094 決定2: the result line's per-model breakdown carried into
- *  `worker_exited.usage.models` as observed, board vocabulary only — no
- *  attribution is inferred here (that is left to a reader pairing this with
- *  `worker_spawned.advisor`, per the field's own doc comment in events.ts).
- *
- *  Fail-closed and all-or-nothing, the same posture as `isStreamResultEvent`:
- *  `modelUsage` absent or not an object, or any single entry missing one of
- *  the five numeric fields, omits `models` entirely rather than publish a
- *  partial breakdown that would read as complete. */
-function modelBreakdownFrom(result: StreamResultEvent): ModelBreakdown {
-  const breakdown = result.modelUsage;
-  if (typeof breakdown !== "object" || breakdown === null) return undefined;
-  const models: NonNullable<ModelBreakdown> = {};
-  for (const [modelId, entry] of Object.entries(breakdown as Record<string, unknown>)) {
-    if (!isModelUsageBreakdownEntry(entry)) return undefined;
-    models[modelId] = {
-      input_tokens: entry.inputTokens,
-      output_tokens: entry.outputTokens,
-      cache_read_tokens: entry.cacheReadInputTokens,
-      cache_creation_tokens: entry.cacheCreationInputTokens,
-      estimated_cost_usd: entry.costUSD,
-    };
-  }
-  return models;
-}
-
-/** Translates the CLI's vendor-shaped result event into the board's own
- *  worker_exited usage vocabulary (ADR 0005 / issue #32): total_cost_usd
- *  becomes estimated_cost_usd, no CLI field names leak past this point.
- *
- *  The advisor field is the one part that cannot be built from the result line
- *  alone — see StreamObservation. */
-function toUsage(result: StreamResultEvent, observed: StreamObservation): WorkerExitedUsage {
-  const models = modelBreakdownFrom(result);
-  return {
-    input_tokens: result.usage.input_tokens,
-    output_tokens: result.usage.output_tokens,
-    cache_read_tokens: result.usage.cache_read_input_tokens,
-    cache_creation_tokens: result.usage.cache_creation_input_tokens,
-    estimated_cost_usd: result.total_cost_usd,
-    advisor: toAdvisorRecord(result, observed),
-    ...(models !== undefined ? { models } : {}),
-    model_swaps: observed.modelSwaps,
-    refusals: [...observed.refusals.values()],
   };
 }
 
@@ -2290,52 +1987,23 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // stderr は CLI レベルの失敗(spawn 即死・limit 強制終了・認証エラー)が
     // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
     child.stderr.pipe(transcript.stderr);
-    // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
+    // stdout の読み手と同じ tee 形: worker_exited がファイルを読み返さず
     // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ
     const finishStderrTail = readStderrTail(child.stderr);
-    // teed alongside the file write (issue #32): tracks the latest
-    // stream-json `result` line so worker_exited can report usage/cost at
-    // exit without re-reading the file back off disk
-    let lastResult: StreamResultEvent | null = null;
-    let cliAuthFailed = false;
-    let capInterrupted = false;
-    let refusalCause: RowRefusalCause | null = null;
-    let lastErrorResult: Record<string, unknown> | null = null;
-    let lastMessage: string | null = null;
+    // teed alongside the file write (issue #32): the one reader (ADR 0316 決定1) collects what
+    // worker_exited needs at exit without re-reading the file back off disk
+    const streamObserved = claudeStreamObservation();
     // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
     let toolSurfaceObserved = false;
-    // issue #33 判断6: neither of these survives to the result line — the
-    // consultations are assistant-line blocks and the resolved main model is on
-    // the init line — so they are accumulated while the stream runs. The stdout
-    // scan already reads every line, so the added cost is a filter per line.
-    const streamObserved: StreamObservation = { consultations: 0, failedCalls: [], mainModel: null, modelSwaps: [], refusals: new Map(), subagents: new Map() };
-    // 1行の観測はここ1か所 —— stream のループと exit の flush が同じ集合を通す(issue #1301)。
-    // 行は1度だけ decode し、全観測が同じ `parsed` を読む(see parseStreamLine)
-    const observe = (parsed: Record<string, unknown> | null) => {
-      lastResult = readResultEvent(parsed) ?? lastResult;
-      cliAuthFailed ||= isCliAuthFailure(parsed);
-      capInterrupted ||= isCapInterruption(parsed);
-      refusalCause ??= rowRefusalOf(parsed);
-      lastErrorResult = readErrorResult(parsed) ?? lastErrorResult;
-      lastMessage = readRootText(parsed) ?? lastMessage;
-      for (const outcome of readAdvisorOutcomes(parsed)) {
-        if (outcome === "consulted") streamObserved.consultations++;
-        else streamObserved.failedCalls.push(outcome.failed);
-      }
-      streamObserved.mainModel = readInitModel(parsed) ?? streamObserved.mainModel;
-      const swap = readModelSwap(parsed);
-      if (swap) streamObserved.modelSwaps.push(swap);
-      const started = readSubagentStart(parsed);
-      if (started) streamObserved.subagents.set(started.id ?? {}, null);
-      const resolved = readSubagentModel(parsed);
-      if (resolved) streamObserved.subagents.set(resolved.id ?? {}, resolved.model);
-      const refusal = readRootRefusal(parsed);
-      if (refusal && !streamObserved.refusals.has(refusal.id)) streamObserved.refusals.set(refusal.id, refusal.category);
+    // 行は1度だけ decode し、読み手と live だけの tool surface の検査が同じ `parsed` を読む(issue #1301)。
+    // stream のループと exit の flush が同じこれを通す
+    const flushStdout = readLines(child.stdout, (line) => {
+      const parsed = parseStreamLine(line);
+      observeClaudeLine(streamObserved, parsed);
       if (!toolSurfaceObserved) {
         toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
       }
-    };
-    const flushStdout = readLines(child.stdout, (line) => observe(parseStreamLine(line)));
+    });
     this.running.set(task.id, child);
     // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH
     // misconfig) fires "error" but never "exit" — the process never comes
@@ -2367,13 +2035,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // and read as a false "missing usage" — same status as an actual kill,
       // which it isn't
       flushStdout();
-      const exit: WorkerExit = {
-        exit_code: code,
-        signal,
-        stderr_tail: finishStderrTail(),
-        reported_error: reportedError(lastErrorResult),
-        last_message: lastMessage,
-      };
+      const { usage, ...reported } = claudeExitFields(streamObserved);
+      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), ...reported };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
@@ -2382,10 +2045,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // session was spawned to speak (a spawn-time fact), never inferred from
       // the envelope — every provider, the board's own included (ADR 0098 決定6),
       // quarantines only its own agents' pickup.
-      if (cliAuthFailed) {
+      if (streamObserved.cliAuthFailed) {
         quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());
       }
-      const usage = lastResult ? toUsage(lastResult, streamObserved) : null;
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
       // 下の2つの一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
       // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
@@ -2408,15 +2070,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       );
       // ADR 0184 決定4: 行の拒否も同じ位置で exit の一撃より先に渡す。帰属は spawn 時の行で、
       // Provider では分岐しない(moonshot の 404 もこの1本を通る)。
-      if (refusalCause) {
+      if (streamObserved.refusalCause) {
         this.options.onRowRefused?.(
           task.id,
-          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: refusalCause },
+          { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: streamObserved.refusalCause },
           this.containers.reclaimed(task.id),
         );
       }
       // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
-      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit, capInterrupted);
+      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit, streamObserved.capInterrupted);
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても

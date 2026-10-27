@@ -483,9 +483,11 @@ export type EventPayload =
       output_closed: boolean;
       // ADR 0315 決定2: the board did not observe this exit — the next boot's
       // recovery closed a session the previous board left open. Written only
-      // by that recovery; absent means the adapter observed the exit. exit_code,
-      // signal and usage are then unknown (null) and so is the duration: this
-      // record's time is the recovering boot's, not the session's end.
+      // by that recovery; absent means the adapter observed the exit. exit_code
+      // and signal are then unknown (null) and so is the duration: this
+      // record's time is the recovering boot's, not the session's end. The
+      // stream-derived fields (usage, reported_error, last_message) are filled
+      // when the transcript has them (ADR 0316 決定2).
       exit_observed?: false;
       usage: TokenUsage & {
         /** issue #33 判断6: what the advisor **actually did** this session, as
