@@ -36,12 +36,12 @@ const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, re
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting) => ({ recommended, actual, basis: "prior" as const, recommended_record: none, actual_record: none, candidates: 2 });
 
 const work = (db: Db) => registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-const spawn = (db: Db, taskId: string, run: ExecutionSetting = opus) =>
-  appendEvent(db, { taskId, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, advisor: null, provider: run.provider, model: run.model, effort: run.effort, tier_id: run.tier_id, source: run.source } });
+const spawn = (db: Db, taskId: string) =>
+  appendEvent(db, { taskId, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, advisor: null, provider: opus.provider, model: opus.model, effort: opus.effort, tier_id: opus.tier_id, source: opus.source } });
 const exit = (db: Db, taskId: string, spawned: number) =>
   appendEvent(db, { taskId, actorId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, advisor: null, model_swaps: [], refusals: [], usage: null } });
 /** setup のみ: work task を pickup して(列は動かさない)、その pickup に乗る shadow 行を書く。返り値は行の id。 */
-const pickedUpWithShadow = (db: Db, taskId: string, recommended: ExecutionSetting, actual: ExecutionSetting = opus) => recordShadow(db, taskId, shadow(recommended, actual), at, markPickedUp(db, taskId, at));
+const pickedUpWithShadow = (db: Db, taskId: string, recommended: ExecutionSetting) => recordShadow(db, taskId, shadow(recommended, opus), at, markPickedUp(db, taskId, at));
 
 type Target = { provider: "anthropic"; model: string; effort: string };
 /** setup のみ: 1対象の Interview を段 `tier` で出題し、受験者を完了させる。採点は返す関数で(root を done にし、採点の event id を返す)。 */

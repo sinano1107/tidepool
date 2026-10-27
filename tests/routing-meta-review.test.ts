@@ -35,7 +35,6 @@ const DAY = 24 * HOUR;
 const ROUTING_READS = ["list_routing_shadow", "list_allocations", "list_routing_cells", "read_routing_settings"];
 const TRACK = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
-/** routing の材料を1つ(setup —— 人間が表の行を編集する)。 */
 const material = routingMaterialViaWebui;
 
 async function openRoutingReviews(tp: Tidepool): Promise<any[]> {
