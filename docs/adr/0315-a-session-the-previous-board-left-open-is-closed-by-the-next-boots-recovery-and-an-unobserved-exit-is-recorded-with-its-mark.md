@@ -1,6 +1,8 @@
 # 前の盤面が閉じ切らなかった session は次の起動時の復旧が閉じ、観測していない exit は印を持つ exit の記録で表す
 
-**Status 追記: 決定3 の対象から、process を1つも持たなかった session(ADR 0118 決定1、`spawn_failed` / `record_container_unwritable` で閉じた spawn)は除く(issue #2633)** —— 復旧が exit も Episode も書かない。判定の形(位置かポインタか)は #2632 で決める。
+**Status 追記: 決定3 の対象から、process を1つも持たなかった session(ADR 0118 決定1、`spawn_failed` / `record_container_unwritable` で閉じた spawn)は除く(issue #2633)** —— 復旧が exit も Episode も書かない。判定の形は [ADR 0316](0316-the-stream-derived-fields-of-a-closed-session-come-from-one-reader-fed-live-or-from-the-transcript-and-a-sessions-end-is-read-by-one-rule.md) 決定4(session の終わりの1つの規則、位置で対にする)。
+
+**Status 追記2: 決定2 の「盤面が持たない値(消費)は欠測、CLI の報告した失敗と最後の発話は埋めない」は [ADR 0316](0316-the-stream-derived-fields-of-a-closed-session-come-from-one-reader-fed-live-or-from-the-transcript-and-a-sessions-end-is-read-by-one-rule.md) 決定2 で反転(issue #2632)** —— 復旧は記録済みの transcript を live と同じ読み手で読み、stream 由来の欄を全部埋める。欠測のまま残るのは exit code・signal・読み切り・`usage_recheck`・分類・所要時間。印(`exit_observed`)と「復旧の記録の時刻は起動の時刻」はそのまま。
 
 2026-10-27 の triage → grilling(issue #2600、#2570 の派生)で決定。session を閉じる仕事 —— `worker_exited` を書く、Episode を投影する、
 task の一時領域を消す —— は Claude / Codex adapter の終了処理にしか無く、盤面が session の途中か投影の前に落ちると誰もやり直さなかった。
