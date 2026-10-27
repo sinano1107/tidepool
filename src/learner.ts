@@ -264,7 +264,7 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
         accepted: task.accepted === 1 && !hasNextSpawn,
         causes,
         allocations,
-        swapped: usage?.model_swaps.some(swapsMain) ?? false,
+        swapped: exited?.payload.kind === "worker_exited" && exited.payload.model_swaps.some(swapsMain),
       }),
       cost_usd: usage?.estimated_cost_usd ?? null,
       // 観測していない exit の時刻は復旧した起動の時刻で、session の終わりではない(ADR 0315 決定2)

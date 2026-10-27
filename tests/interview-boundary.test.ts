@@ -861,7 +861,7 @@ it("Interview の種は、置かれた窓の list_routing_cells に行のある�
   // 受験者の session の記録(scripted worker は刻まない)
   const { advisor, ...setting } = t.worker.startedSettings.at(-1)!;
   const spawned = appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { ...WORKER_SPAWNED, ...setting, advisor: advisor ?? null } });
-  appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  appendEvent(t.db, { taskId: childId, actorId: "fake-worker", origin: "board", at: t.clock.now(), payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
   await callAsTask(t, childId, "complete_task", { handoff: FULL_HANDOFF });
   await t.clock.advance(HOUR);
   await callAsTask(t, root.id, "complete_interview", { scores: [{ child_id: childId, verdict: "accepted" }], handoff: FINDINGS });

@@ -196,15 +196,15 @@ it("review の公開注入 context は対象 worker のモデル・価格・実�
       ...QUIET_EXIT,
       worker_spawned_event_id: spawned,
       output_closed: true,
+      advisor: null,
+      model_swaps: [],
+      refusals: [],
       usage: {
         input_tokens: 100,
         output_tokens: 20,
         cache_read_tokens: 0,
         cache_creation_tokens: 0,
         estimated_cost_usd: 12.345,
-        advisor: null,
-        model_swaps: [],
-        refusals: [],
       },
     },
   });

@@ -49,8 +49,8 @@ function board() {
         kind: "worker_exited",
         ...QUIET_EXIT,
         worker_spawned_event_id: spawned,
-        output_closed: true,
-        usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: Object.fromEntries(models.map((m) => [m, tokens])) },
+        output_closed: true, advisor: null, model_swaps: [], refusals: [],
+        usage: { ...tokens, models: Object.fromEntries(models.map((m) => [m, tokens])) },
       },
     });
   };

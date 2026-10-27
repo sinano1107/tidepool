@@ -500,8 +500,8 @@ it("advisor pin ありで相談0回の session は、盤面の記録から読ん
       kind: "worker_exited",
       ...QUIET_EXIT,
       worker_spawned_event_id: spawnedId,
-      output_closed: true,
-      usage: { ...tokens, advisor: null, model_swaps: [], refusals: [], models: { "claude-opus-5-5": tokens } },
+      output_closed: true, advisor: null, model_swaps: [], refusals: [],
+      usage: { ...tokens, models: { "claude-opus-5-5": tokens } },
     },
   });
   finish(b, earlier.id);
@@ -654,7 +654,7 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   const b = bareBoard();
   const { task, spawnedId: refusedId } = spawnedWork(b, "a");
   const at = b.clock.now();
-  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: refusedId, output_closed: true, usage: null } });
   appendEvent(b.db, { taskId: task.id, actorId: "tidepool", origin: "board", at, payload: { kind: "row_refused", provider: "anthropic", model: WORKER_SPAWNED.model, worker_spawned_event_id: refusedId, cause: "api_404" } });
   const rerunId = recordSpawn(b, task.id);
   accept(b, task.id);
@@ -695,7 +695,7 @@ it("人間が止めた session は停止の帰責が capability なら rejected�
     const at = b.clock.now();
     const append = (payload: TaskScopedPayload, actorId = WORKER) => appendEvent(b.db, { taskId: task.id, actorId, origin: "board", at, payload });
     const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" }, "human");
-    append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
+    append({ kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
     // 判定は session が閉じた後に書かれる —— 窓に入るのは停止 event
     append({ kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the worker removed ../other", wrong_memory_entries: null, round: "initial" }, "board");
     accept(b, task.id);
@@ -728,6 +728,19 @@ it("main が替わった session は受理でも却下でも excluded —— 仕
   expect(episodeOutcome({ ...facts, accepted: false, allocations: [{ allocation: "underpowered", cause: "capability" }] })).toBe("excluded");
 });
 
+it("消費の報告が無く main が替わった session は capability の帰責があっても excluded(loadEpisodes)", () => {
+  const b = bareBoard();
+  const { task, spawnedId } = spawnedWork(b, "swapped without report");
+  attribute(b, task.id, logDecision(b.db, task, "took the shortcut", WORKER, b.clock.now(), "worker"), "capability");
+  appendEvent(b.db, {
+    taskId: task.id, actorId: WORKER, origin: "board", at: b.clock.now(),
+    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: null,
+      model_swaps: [{ from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" }], refusals: [], advisor: null },
+  });
+
+  expect(loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === spawnedId)?.outcome).toBe("excluded");
+});
+
 it.each([
   ["session", "excluded"],
   [null, "excluded"],
@@ -742,7 +755,7 @@ it.each([
     actorId: WORKER,
     origin: "board",
     at: b.clock.now(),
-    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: { ...tokens, advisor: null, model_swaps: [swap], refusals: ["cyber"] } },
+    payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, advisor: null, model_swaps: [swap], refusals: ["cyber"], usage: { ...tokens } },
   });
   accept(b, task.id);
 
@@ -757,7 +770,7 @@ it.each([
   const b = bareBoard();
   const { task, spawnedId } = spawnedWork(b, "closed by recovery");
   const at = new Date(b.clock.now().getTime() + HOUR);
-  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: false, usage: null, ...(exit_observed === undefined ? {} : { exit_observed }) } });
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: false, usage: null, ...(exit_observed === undefined ? {} : { exit_observed }) } });
 
   expect(loadEpisodes(b.db).find((e) => e.worker_spawned_event_id === spawnedId)?.duration_ms).toBe(duration);
 });

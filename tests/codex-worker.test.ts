@@ -1119,13 +1119,13 @@ describe("CodexWorker (ADR 0098)", () => {
       kind: "worker_exited",
       exit_code: 0,
       signal: null,
+      advisor: null,
       usage: {
         input_tokens: 93,
         output_tokens: 30,
         cache_read_tokens: 20,
         cache_creation_tokens: 7,
         estimated_cost_usd: null,
-        advisor: null,
       },
     });
     // 観測していない印は起動時の復旧だけが書く(ADR 0315 決定2)

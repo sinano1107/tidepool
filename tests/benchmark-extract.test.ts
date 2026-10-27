@@ -194,8 +194,8 @@ function placeTranscript(logs: string, fixture: string, taskId: string, spawnedI
 function session(db: Db, taskId: string, agent: string, harness: "claude-code" | "codex", cost: number | null): number {
   const at = new Date("2026-10-09T00:00:00.000Z");
   const spawned = appendEvent(db, { taskId, actorId: agent, origin: "board", at, payload: { ...WORKER_SPAWNED, harness } });
-  const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: cost, advisor: null, model_swaps: [], refusals: [], models: {} };
-  appendEvent(db, { taskId, actorId: agent, origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
+  const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: cost, models: {} };
+  appendEvent(db, { taskId, actorId: agent, origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
   return spawned;
 }
 

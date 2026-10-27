@@ -33,7 +33,7 @@ function fixture({ task = work, spawn = {}, worker = "deckhand" }: { task?: (db:
   client.scriptStopJudgment({ cause: "capability", evidence: "deleted files outside the workspace" });
   const deps: RetrospectiveCallDeps = { ...noRetrospectiveCalls, attributionClient: client };
   const exit = (session = spawned) =>
-    appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
+    appendEvent(db, { taskId: picked.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], worker_spawned_event_id: session, output_closed: true, usage: null, ...QUIET_EXIT } });
   const sweep = async (now = at, with_ = deps) => {
     refireRetrospectiveCalls(db, with_, now);
     await new Promise((resolve) => setImmediate(resolve));

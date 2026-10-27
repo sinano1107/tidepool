@@ -34,7 +34,7 @@ function buildPrompt(input: AllocationReviewInput): string {
     "to re-litigate. The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor. " +
     "Judge only whether the execution setting was appropriate for this task's " +
     "outcome, and what caused any shortfall. A null usage (the session filed no consumption report), " +
-    "actions (the action counts were not observed), or usage.advisor.usage (the advisor's share of the " +
+    "actions (the action counts were not observed), or advisor.usage (the advisor's share of the " +
     "consumption could not be measured) means that value was not observed — never zero, never \"did nothing\", " +
     "never zero cost; do not read it as evidence either way. " +
     "The token counts in usage cover the worker's main thread only, and leave out context compaction. " +

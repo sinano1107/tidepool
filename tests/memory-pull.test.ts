@@ -838,7 +838,7 @@ it("停止の帰責を出所に持つ Behavior の case は、止められた se
   const spawned = append(WORKER_SPAWNED);
   append({ kind: "decision_logged", line: "cleaned the parent directory" });
   const stop = append({ kind: "session_stopped_by_human", reason: "deleting files outside the workspace" });
-  append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawned, output_closed: true, usage: null });
+  append({ kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawned, output_closed: true, usage: null });
   const attributed = append({ kind: "stop_attributed", stop_event_id: stop, cause: "preference", evidence: "e", wrong_memory_entries: null, round: "initial" });
   const id = approvedBehavior(db, "Stay in the workspace", { event_id: attributed });
 
@@ -879,7 +879,7 @@ it("episode 行の無い同じ task の複数 session は、それぞれの窓�
   const append = (payload: TaskScopedPayload) => appendEvent(db, { taskId: FIXTURE_TASK, actorId: "tako", origin: "worker", payload, at });
   // 2つ目の session: decision を書かずに exit
   const silent = append(WORKER_SPAWNED);
-  append({ kind: "worker_exited", ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: silent, output_closed: true, usage: null });
+  append({ kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: silent, output_closed: true, usage: null });
   // 3つ目の session: decision を書いたが完了していない(exit も無い)
   const open = append(WORKER_SPAWNED);
   const retried = append({ kind: "decision_logged", line: "retried with a shorter note" });
