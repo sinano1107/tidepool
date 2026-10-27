@@ -60,7 +60,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
             exit_code: null,
             signal: null,
             stderr_tail: readStderrTail(`${base}.stderr.log`),
-            ...streamExitFields(spawned.payload.harness, transcript ? transcriptPath : null),
+            ...streamExitFields(spawned.payload.harness, transcriptPath),
             worker_spawned_event_id: spawned.id,
             output_closed: false,
           },
@@ -77,10 +77,10 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
 
 /** live の adapter と同じ読み手に transcript の行を食わせる(ADR 0316 決定1)。読み手は投影器と同じく `worker_spawned.harness` で選ぶ。
  *  末尾の改行の無い行も1行として読む(live の flush と同じ)。無い・読めない transcript は欄を欠測にする —— 閉じる事実は変わらない(決定2)。 */
-function streamExitFields(harness: "claude-code" | "codex", path: string | null) {
+function streamExitFields(harness: "claude-code" | "codex", path: string) {
   let lines: string[];
   try {
-    lines = path === null ? [] : readFileSync(path, "utf8").split("\n");
+    lines = readFileSync(path, "utf8").split("\n");
   } catch {
     lines = [];
   }

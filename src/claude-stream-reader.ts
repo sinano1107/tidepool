@@ -178,7 +178,7 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
  *  happen in assistant lines, the swaps, subagent launches and the main model's
  *  resolved id on system lines, the subagents' resolved models on tool_result
  *  lines. */
-export interface StreamObservation {
+interface StreamObservation {
   /** issue #32: the latest accepted `result` line, for usage/cost at exit. */
   lastResult: StreamResultEvent | null;
   /** ADR 0097 / ADR 0104 / ADR 0184: observations only — the live caller fires

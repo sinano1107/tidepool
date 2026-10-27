@@ -73,8 +73,7 @@ export function parseJsonl(line: string): unknown {
   }
 }
 
-
-export interface CodexStreamObservation {
+interface CodexStreamObservation {
   usage: TokenUsage | null;
   reportedError: string | null;
   lastMessage: string | null;
