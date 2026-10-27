@@ -165,12 +165,6 @@ function leaveOpenSession(dir: string, taskId: string, { exited = false, transcr
 const exitsOf = (spawned: number) => listEventsOfKinds(t.db, ["worker_exited"]).filter((e) => e.payload.worker_spawned_event_id === spawned);
 const episodeOf = (spawned: number) => listEpisodes(t.db, { workerSpawnedEventId: spawned })[0];
 
-/** 記録の dir から欠けた transcript の投影は、起動時に記録して流れる(ADR 0315 決定4)。 */
-function silenceRecoveryLog() {
-  const silenced = vi.spyOn(console, "error").mockImplementation(() => {});
-  onTestFinished(() => { silenced.mockRestore(); });
-}
-
 it("前提検査が通った起動は、前の盤面が閉じ切らなかった session を観測していない印の exit で閉じ、Episode を投影する(ADR 0315。記録の形と task temp は tests/session-close.test.ts)", async () => {
   t = await bootTidepool();
   const task = queueWork(t, "interrupted by restart");
@@ -209,7 +203,6 @@ it("前提検査が落ちた起動では session を閉じず、Harness Containm
 });
 
 it("回収 timeout の確認回答の受理でも復旧が走り、この起動の後に spawn した session には何も書かない(ADR 0315 決定3)", async () => {
-  silenceRecoveryLog();
   const containers = new FakeContainerRuntime();
   const options = { containerRuntime: containers, watchdog, harnessContainment: async () => ({ available: true }) as const };
   t = await bootTidepool(options);
@@ -236,7 +229,6 @@ it("回収 timeout の確認回答の受理でも復旧が走り、この起動�
 });
 
 it("待っている回収の無い Containment の確認回答の受理でも復旧が走る(ADR 0315 決定1)", async () => {
-  silenceRecoveryLog();
   t = await bootTidepool();
   const previous = queueWork(t, "the previous board's session");
   await t.stopServer();

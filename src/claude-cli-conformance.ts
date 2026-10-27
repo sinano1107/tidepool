@@ -1,12 +1,12 @@
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { BOARD_CALL_ONE_TURN_FLAGS } from "./claude-board-call-runner.js";
+import { readResultEvent } from "./claude-stream-reader.js";
 import {
   checkAutoMemoryClosed,
   pinnedModelFlags,
   probeToolSurfaceCapability,
   readInitReport,
-  readResultEvent,
   readToolSurface,
 } from "./claude-worker.js";
 import type { ModelProbe, ModelProbeResult } from "./cli-auth.js";
