@@ -23,7 +23,8 @@ code が `systemd-run --scope` を選び、scope は main process を持たな�
    して token を使う)・crash の隠蔽・復旧の重複という問いが生まれ、得るのは人間が打つ1行だけである。
 4. **起動の形は2つのまま**(本人のマシン: 人間が前景で起こす transient service、無人常駐ホスト: boot で起こす恒久の service)。差は
    ADR 0090 のホストの形の軸に従う。property の写しが2つ残るが、効く property(service であること・Delegate)は決定1 の検査が守る。
-5. **盤面を起こさない `--scope` 起動(conformance script、version-bump 手順、canary)は据え置く。** 人間が付き添う短時間の run で、
+5. **盤面を起こさない `--scope` 起動(conformance script、canary)は据え置く。** version-bump 手順のうち盤面を起こす行(新しい DB での起動)は
+   決定2 の形にする。 人間が付き添う短時間の run で、
    不変条件の主語ではない。
 
 ## 退けた案

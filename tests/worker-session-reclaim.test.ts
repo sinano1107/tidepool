@@ -193,25 +193,21 @@ it("容器機構の前提が boot 時に不成立なら、黙って弱い回収�
   expect(t.worker.started).toEqual([]);
 });
 
-it("盤面が scope の中で起こされたら、platform supervisor が居ないことを理由に pickup が止まる(ADR 0318 決定1)", async () => {
+it("盤面が scope の中で起こされたら、platform supervisor が居ないという実の機構の理由が確認 question に載る(ADR 0318 決定1)", async () => {
   // 合成 root が組むのと同じ実の機構を、偽の cgroupfs(cgroup v2 も Delegate も成立)の上に
   const mount = await tempDir("tidepool-cgroupfs-");
   const scope = "/user.slice/user-501.slice/user@501.service/app.slice/tidepool-board.scope";
   writeFileSync(join(mount, "cgroup.controllers"), "");
   mkdirSync(join(mount, scope), { recursive: true });
   writeFileSync(join(mount, "proc-self-cgroup"), `0::${scope}\n`);
-  t = await bootTidepool({
-    containerRuntime: boardContainerRuntimeFor("linux", { mount, selfCgroup: join(mount, "proc-self-cgroup") }),
-    watchdog,
-  });
+  const containers = boardContainerRuntimeFor("linux", { mount, selfCgroup: join(mount, "proc-self-cgroup") });
+  t = await bootTidepool({ containerRuntime: containers, watchdog });
 
+  // 文の中身は domain 層、pickup の停止は上の case が持つ。ここは実の機構の理由が question に載る写像だけ
+  const capability = containers.preflight();
+  expect(capability.available).toBe(false);
   const quarantine = await containmentQuestion();
-  expect(quarantine.purpose).toContain("not in a systemd service");
-  expect(quarantine.purpose).toContain("scripts/vm-board.sh");
-
-  queueWork(t, "long haul");
-  await t.clock.advance(HOUR);
-  expect(t.worker.started).toEqual([]);
+  expect(quarantine.purpose).toContain(capability.available ? "" : capability.reason);
 });
 
 it("容器機構の前提は pickup と quarantine 回答時にも読み直される — boot 時だけの検査ではない", async () => {

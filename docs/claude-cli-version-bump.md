@@ -49,7 +49,7 @@ the database `~/.tidepool/env` points at was written by an older checkout. Don't
 this run on a fresh database instead:
 
 ```bash
-caffeinate -i -s limactl shell tidepool -- bash -lc 'source ~/.tidepool/env && export TIDEPOOL_DB=~/.tidepool/version-bump-<version>.sqlite PATH="$HOME/.local/bin:$PATH" && cd ~/tidepool && exec systemd-run --user --scope --unit tidepool-board -p Delegate=yes -- npm start'
+caffeinate -i -s limactl shell tidepool -- bash -lc 'exec systemd-run --user --unit tidepool-board -p Delegate=yes --pty --pipe --wait -G -- bash -lc "export PATH=\"\$HOME/.local/bin:\$PATH\" && source \"\$HOME/.tidepool/env\" && export TIDEPOOL_DB=\"\$HOME/.tidepool/version-bump-<version>.sqlite\" && cd \"\$HOME/tidepool\" && exec npm start"'
 ```
 
 ## 4. Run the five canaries
