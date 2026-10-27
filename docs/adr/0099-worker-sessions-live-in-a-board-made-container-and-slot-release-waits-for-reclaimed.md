@@ -1,5 +1,7 @@
 # Worker session は盤面が作る容器の中で生き、slot 解放は回収済み観測を待つ
 
+**Status 追記: 決定6 の「platform supervisor への委譲」は、supervisor が居る形で起こされていることを盤面が起動時に検査するものになった(ADR 0318 決定1)** —— Mac の門の scope 形には supervisor が居らず、孤児が残っていた(issue #2630)。
+
 2026-08-24 の grilling(issue #459)で決定。#195 のスパイクで、watchdog の force stop が CLI root だけを終了し子孫 process の回収を保証していないことが判明した。これは Codex 固有ではなく、Claude 経路でも同じ穴が実装調査で確認された(現状調査は issue #459 のコメントに置く)。残存 process は slot 解放後も workspace を書き、concurrency=1 と slot-release tree rule の前提を破る。
 
 ## 決定

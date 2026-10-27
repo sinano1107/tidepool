@@ -1,5 +1,7 @@
 # 本人の Mac 上の盤面は ambient な CLI ログインで動き、setup-token は無人ホストの形
 
+**Status 追記: 決定2 の前景は transient な systemd service(`systemd-run --pty --pipe --wait -G`)で起こす形になった(ADR 0318 決定2)** —— 前景も caffeinate の寿命も変わらず、盤面の死で systemd が worker 容器ごと殺す。自動再起動はどちらのホストの形にも無い(ADR 0318 決定3)。
+
 issue #364 のグリリング(2026-08-20)で決定。友人テスト(#367)は「各自の Mac に各自の盤面、各自の Claude
 契約」であり、Pi の立ち上げ手順(deploy-pi)しか無かった。Mac の手順を1本にするにあたり、ADR 0070 が定めた
 `claude setup-token`(`CLAUDE_CODE_OAUTH_TOKEN` を盤面の env に置く)を Mac でも要求するかが問いになった。

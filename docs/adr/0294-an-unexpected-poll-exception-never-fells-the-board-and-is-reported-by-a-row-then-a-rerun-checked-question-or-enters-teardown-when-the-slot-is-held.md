@@ -1,5 +1,7 @@
 # poll の想定外の例外は盤面を落とさない —— 何も握っていなければ行で報せて次の poll に任せ、続けば撃ち直しで確かめる question を立て、slot を握っていれば worker が走らなかった pickup として後始末へ入る
 
+**Status 追記: 前提行の「Mac の盤面は `systemd-run --scope` で起こす者が居ない」は、起動の形が transient service に変わった後も「落ちた盤面を立て直すのは人間」として成り立つ(ADR 0318 決定2・3)** —— 決定は変わらない。
+
 2026-10-21 の grilling(issue #945)で決定。scheduler の `poll()` は想定外の例外を受けておらず、`pollNow` の void された鎖が reject を
 引き継ぐので、Node の既定で盤面の process が落ち、同じ process に乗る人間面(WebUI・管理 MCP)も一緒に消えていた。Mac の盤面は
 `systemd-run --scope` で起こす者が居ない。着地の pass・tick(ADR 0229 決定1)・通知の tick はみな例外を閉じており、poll だけが外に
