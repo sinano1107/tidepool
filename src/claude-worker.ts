@@ -42,6 +42,7 @@ import {
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
+import { liveSession } from "./teardown.js";
 import { tierNames } from "./tier.js";
 import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
@@ -1615,8 +1616,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }, routing, query);
       return;
     }
+    // 列挙の間に session が終わったら(停止・解放・再 pickup)、継続は何も書かずに終わる —— 記録は停止の側が持つ(#1973)
+    const live = liveSession(this.options.db, task.id);
     // a rejected probe is the same "could not enumerate" as null — never the old wedge
     void this.enumerateSkills(place.path).catch(() => null).then((enumerated) => {
+      if (!live()) return;
       if (enumerated === null) {
         // spawn failure with no fail-open (ADR 0025 point 6): the deny list
         // could not be resolved, so no process starts and the allowlist is

@@ -74,6 +74,7 @@ import {
   unrowedExaminees,
   unrowedTarget,
 } from "./tasks.js";
+import { liveSession } from "./teardown.js";
 import {
   blockedProviderUsageResources,
   evaluateAndReportProviderUsage,
@@ -469,13 +470,16 @@ export function startScheduler(deps: {
   async function quarantineWithRepoAccessGuidance(
     workspace: WorkspaceConfig,
     err: unknown,
-  ): Promise<ResourceStop> {
+    /** pickup の継続の門(#1973): 修復の問い合わせの間に session が終わっていれば quarantine せず undefined。 */
+    live: () => boolean,
+  ): Promise<ResourceStop | undefined> {
     // 宣言そのものが無い(`isRemoteBacked` が偽)workspace も、非 GitHub の remote と
     // 同じ `undefined` に落ちる —— どちらもこの扉を持たない
     const ref = parseGitHubRepo(workspace.repo);
     let guidance: string | null = null;
     // 仲介の断りも到達失敗も `tokenRefusal` が理由の文字列に畳むので、ここは投げない
     if (github && ref) guidance = (await repairRepoAccess(github, ref)).guidance;
+    if (!live()) return undefined;
     // 案内は元の原因を**置き換えず**に連結する —— なぜ落ちたか(生の git のエラー)と
     // 何をすれば直るかは別の情報で、どちらも人間の1つの question に載る
     const cause = guidance
@@ -514,6 +518,9 @@ export function startScheduler(deps: {
     });
     // await の窓で人間の扉が head を書き換えた(issue #972): slot は空けたまま、次の poll が選び直す
     if (!picked) return;
+    // ここから `worker.start` までの await の間に session が終わったら(人間の停止)、継続は何も書かずに終わる ——
+    // 記録は停止の要求と後始末が持つ(#1973 / ADR 0305)。各 await の後・次の副作用の前に読む
+    const live = liveSession(db, picked.id);
     try {
       onPicked();
       slot.occupy(picked.id);
@@ -562,17 +569,23 @@ export function startScheduler(deps: {
           try {
             await freshenPlaceAtPickup(read, { githubAuth, registry });
           } catch (err) {
-            return stopped(await quarantineWithRepoAccessGuidance(read, err));
+            const stop = live() && (await quarantineWithRepoAccessGuidance(read, err, live));
+            return stop ? stopped(stop) : undefined;
           }
+          if (!live()) return;
         }
         try {
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry });
         } catch (err) {
-          return stopped(await quarantineWithRepoAccessGuidance(place, err));
+          // 準備の失敗が停止の後に届いたら捨てる —— 資源の事実は次の pickup が同じ準備でやり直す
+          const stop = live() && (await quarantineWithRepoAccessGuidance(place, err, live));
+          return stop ? stopped(stop) : undefined;
         }
+        if (!live()) return;
       }
       const started = { ...picked, ...content };
       const query = await injectionQuery(started);
+      if (!live()) return;
       worker.start(started, setting, query);
     } catch (err) {
       // ADR 0266 決定4: transcript の open が器に書けなかった —— spawn_failed ではなく盤面全体の停止

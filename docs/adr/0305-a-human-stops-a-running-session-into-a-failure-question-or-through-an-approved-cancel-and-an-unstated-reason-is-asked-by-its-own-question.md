@@ -33,6 +33,7 @@
    `origin_question_id` を `cancelOrigin` が辿るのと同じ型で、question の行を読みに行く読み手を作らない。
 3. **止められるのは人間だけ、対象は slot を握るどの session でも。** agent には開かない(Pause と同じ「自己停止の経路を開かない」の線)。
    型は問わない —— 受験者を止めれば受験者の failure question(ADR 0263 決定9)が立つ。slot が空、または既に後始末中なら DomainError で拒む。
+   **追記(issue #1973): process を持たない session も止められる。** slot を取ってから `worker_spawned` までの窓で止めた session の spawn は停止に譲り、後始末は never-ran の枝を通る —— ADR 0118 決定1(session は容器を開いた瞬間に始まる)と ADR 0274 決定3 の帰結。
 4. **記録と面。** 停止の事実は event(`session_stopped_by_human`、理由があればそれを、無ければ理由 question の id を載せる)で両出口が共有する。失敗 question の題は
    `stopped by human: <title>`(cap の `watchdog killed task:` と並ぶ)。畳んでいる間は slot 行の後始末中の表示に「人間の停止」と理由を足し、
    新しい状態は作らない。

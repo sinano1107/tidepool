@@ -66,11 +66,13 @@ type Settlement = "completed" | "released" | "interrupted" | "never_ran";
 
 /** 後始末中の status と、最後の pickup の後に盤面が刻んだ決着の event が経路を一意に定める(ADR 0113 決定3 /
  *  ADR 0274 決定3)。`in_progress` / `done` 以外(`todo` / `cancelled`)は status では分けられない —— process を1つも
- *  持たなかった session の `todo` はエスカレーション・分解と同じ値で、後始末の途中で人間が直接 cancel すれば
- *  `cancelled` になる —— ので、process を持たない pickup の event(資源の停止・記録の器・spawn の失敗、ADR 0118
- *  決定1)の有無で `never_ran` / `released` を分ける。最後の pickup に spawn があれば session の窓の never-ran
- *  (`sessionWindow`、exit が勝つ —— ADR 0316 決定4)を読み、無ければ pickup の後の決着 kind を見る(`pickup_stopped` は
- *  spawn より前にしか書かれない)。復旧・確認回答・回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す
+ *  持たなかった session の `todo` はエスカレーション・分解・人間の停止(failure question)と同じ値で、停止承認付き cancel と
+ *  後始末の途中の直接 cancel は `cancelled` になる —— ので、process を持たない pickup の event(資源の停止・記録の器・
+ *  spawn の失敗、ADR 0118 決定1)の有無で `never_ran` / `released` を分ける。最後の pickup に spawn があれば session の窓の
+ *  never-ran(`sessionWindow`、exit が勝つ —— ADR 0316 決定4)を読み、無ければ pickup の後の決着 kind を見る(`pickup_stopped` は
+ *  spawn より前にしか書かれない)。spawn の無い人間の停止もここで never-ran になる —— spawn は窓の停止に譲る(#1973)ので、
+ *  停止の event が spawn より前にあることが process の無い証拠である。`NEVER_RAN_KINDS` には足さない(`sessionWindow` が spawn の
+ *  後の停止まで never-ran に読む)。復旧・確認回答・回収済み観測と、読み口の経路フィールドがこの1点を通る —— 経路を表す
  *  永続事実は持たないので、対応表がここ以外に増えたらそれは写しである。 */
 function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Settlement {
   if (task?.status === "in_progress") return "interrupted";
@@ -82,7 +84,7 @@ function settlementOf(db: Db, task: Pick<Task, "id" | "status"> | undefined): Se
   const spawned = events.find((e) => e.kind === "worker_spawned");
   const neverRan = spawned
     ? sessionWindow(events, spawned).neverRan
-    : events.some((e) => e.kind === "pickup_stopped" || NEVER_RAN_KINDS.includes(e.kind));
+    : events.some((e) => e.kind === "pickup_stopped" || e.kind === "session_stopped_by_human" || NEVER_RAN_KINDS.includes(e.kind));
   return neverRan ? "never_ran" : "released";
 }
 
@@ -272,6 +274,25 @@ export function markTeardown(db: Db, taskId: string, now: Date): void {
 
 function clearTeardown(db: Db, taskId: string): void {
   db.prepare("UPDATE tasks SET teardown_started_at = NULL WHERE id = ?").run(taskId);
+}
+
+/** slot を取ってから `worker_spawned` を書くまでの継続の門(#1973 / ADR 0118 決定1 / ADR 0305): その継続が属する pickup が
+ *  まだ生きた session か。継続の冒頭で呼んで pickup の記録(status・後始末の印・最後の `task_picked_up` の id)を取り、返った述語を
+ *  各 await の後・次の副作用の前に読む —— 後始末の印が置かれた・status が動いた・別の pickup が来た(停止 → 解放 → 同じ task の
+ *  retry)のどれでも閉じる。pickup は時刻でなく event id で見分ける(時刻を進めない retry で衝突する)。status は `in_progress` と
+ *  比べず冒頭の値と比べる —— 盤面の継続の冒頭は必ず `in_progress` で、pickup を経ずに adapter を直接走らせる呼び手を閉じない。 */
+export function liveSession(db: Db, taskId: string): () => boolean {
+  const record = () =>
+    JSON.stringify(
+      db
+        .prepare(
+          "SELECT status, teardown_started_at, " +
+            "(SELECT MAX(id) FROM events WHERE task_id = tasks.id AND kind = 'task_picked_up') AS pickup FROM tasks WHERE id = ?",
+        )
+        .get(taskId),
+    );
+  const started = record();
+  return () => record() === started;
 }
 
 /** 後始末が未了の session(あれば)。concurrency = 1 なので高々1つである。

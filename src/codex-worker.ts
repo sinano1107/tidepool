@@ -51,6 +51,7 @@ import { closeSession, taskTempPrefix } from "./session-close.js";
 
 
 import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { liveSession } from "./teardown.js";
 
 
 import { tierNames } from "./tier.js";
@@ -773,9 +774,12 @@ export async function codexWorkspaceContainment(options: {
   /** 実体の path(realpath 済み)。 */
   workspace: string;
   config: (skills: string) => string[];
+  /** spawn の前の検査だけが渡す継続の門(#1973): 列挙の間に session が終わっていれば観測の Board call を撃たずに投げる。 */
+  live?: () => boolean;
 }): Promise<{ skills: string; capability: ContainmentCapability; observed: unknown }> {
   const through = (kind: string) => codexCommandThrough(options.call, kind, CODEX_PREFLIGHT_LIMIT_MS);
   const skills = await enumerateSkills(through("Codex skill enumeration"), options.executable, options.env, options.workspace);
+  if (options.live?.() === false) throw new Error("the session ended during Codex skill enumeration");
   const config = options.config(skills);
   const [observed] = await callAppServer(
     through("Codex skill observation"),
@@ -1308,7 +1312,9 @@ export class CodexWorker implements WorkerAdapter {
     };
     const env = workerEnv(this.options.executable, this.options.codexHome, taskTemp, agent.name);
     // ADR 0259 決定2・3・6: spawn の前に Codex 自身の列挙で skill を閉じ、閉じた設定の下で観測する。ここから先は
-    // scheduler の catch の外なので、失敗は自分で spawn_failed に落とす(Claude adapter の skill 列挙と同じ形)
+    // scheduler の catch の外なので、失敗は自分で spawn_failed に落とす(Claude adapter の skill 列挙と同じ形)。
+    // 列挙・観測の間に session が終わったら(停止・解放・再 pickup)、task temp だけ片付けて何も書かずに終わる(#1973)
+    const live = liveSession(this.options.db, task.id);
     return (async () => {
       let checked: Awaited<ReturnType<typeof codexWorkspaceContainment>>;
       try {
@@ -1318,14 +1324,17 @@ export class CodexWorker implements WorkerAdapter {
           env,
           workspace: workspacePath,
           config: (skills) => spawnConfig({ ...input, taskTemp, skills }),
+          live,
         });
       } catch (error) {
+        if (!live()) return removeTaskTemp();
         spawnFailed({
           error_code: null,
           message: `${SKILL_CHECK_FAILED}; the worker was not spawned (no fail-open): ${String(error)}`,
         });
         return;
       }
+      if (!live()) return removeTaskTemp();
       if (!checked.capability.available) {
         removeTaskTemp();
         // 閉じきれないのはこの checkout の Codex だけなので、止めるのは (codex, workspace) の組(ADR 0259 決定1・3)
