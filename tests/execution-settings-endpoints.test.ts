@@ -20,6 +20,7 @@ import {
   managementMcpClient,
   mcpClient,
   registerWork,
+  routingMaterialViaWebui,
   runNow,
   startFirstMetaReviewViaWebui,
   type Tidepool,
@@ -361,7 +362,7 @@ it("学習器の降格は settings タブと管理MCP の扉から直接でき�
 it("人間の直接の降格は open な降格提案を観測で決着させ、routing_proposal_stale に崩れた pin を残す", async () => {
   t = await bootTidepool();
   promote();
-  await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" });
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");

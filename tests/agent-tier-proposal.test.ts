@@ -5,7 +5,7 @@ import { registerQuarantine, tableRowValue } from "../src/quarantine.js";
 import { RegistryPushFailedError } from "../src/registry-write.js";
 import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, HOUR, HUMAN_WEBUI, mcpClient, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** agent の既定 tier の提案(issue #920 / ADR 0150 決定1・2・5)のサーバ境界: 提案 verb、回答での registry への commit と修正値、
  *  push 失敗・前提の崩れ、due 判定時と表の編集での陳腐化。registry 書き込みは fake(`agentAdmin.changeTier`)、実 git の書き込みは
@@ -46,7 +46,7 @@ function fakeRegistry() {
 /** routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
 async function boardWithRoutingReview(registry = fakeRegistry()) {
   t = await bootTidepool({ agentAdmin: registry.agentAdmin });
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");
@@ -357,7 +357,7 @@ it("根拠の行の編集は tier の提案を観測で決着させ、無関係�
 
 it("registry の無い盤面では tier の提案は断られる", async () => {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");

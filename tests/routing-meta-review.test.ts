@@ -14,10 +14,12 @@ import {
   executionSetting,
   HOUR,
   HUMAN_WEBUI,
+  markPickedUp,
   mcpClient,
   QUIET_EXIT,
   readFollowingNext,
   registerWork,
+  routingMaterialViaWebui,
   rowSession,
   startFirstMetaReviewViaWebui,
   type Tidepool,
@@ -33,10 +35,8 @@ const DAY = 24 * HOUR;
 const ROUTING_READS = ["list_routing_shadow", "list_allocations", "list_routing_cells", "read_routing_settings"];
 const TRACK = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 
-/** routing の材料を1つ(setup —— 人間が優先順位の既定を変える)。 */
-async function material(tp: Tidepool, value: "cost" | "quality" = "cost") {
-  expect((await api(tp.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value })).status).toBe(200);
-}
+/** routing の材料を1つ(setup —— 人間が表の行を編集する)。 */
+const material = routingMaterialViaWebui;
 
 async function openRoutingReviews(tp: Tidepool): Promise<any[]> {
   return ((await api(tp.baseUrl, "GET", "/api/tasks")).json as any[]).filter((task) => task.meta_review_subject === "routing");
@@ -90,7 +90,7 @@ it("同主題の open な task があれば登録せず、完了後は前回 wat
   await t.clock.advance(HOUR);
   const [first] = await openRoutingReviews(t);
 
-  await material(t, "quality");
+  await material(t);
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、同主題が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
@@ -115,7 +115,7 @@ it("親 task の meta_review_subject が routing の open な提案 question が
   const { question_id } = proposeMemoryChange(t.db, first.id, { op: "approve", candidate_id: candidate, rationale: "r" }, "auditor", t.clock.now());
   expect((await completeRoutingReviewViaMcp(t, first.id)).isError).not.toBe(true);
 
-  await material(t, "quality");
+  await material(t);
   await t.clock.advance(2 * DAY); // 周期は過ぎ材料もあるが、親が routing の提案 question が open
   expect((await openRoutingReviews(t)).map((task) => task.id)).toEqual([first.id]);
 
@@ -191,7 +191,7 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
     expect((await api(t.baseUrl, "POST", `/api/tasks/${question_id}/answer`, { answers: ["reject"], comment: `${i} ${"潮".repeat(1_000)}` })).status).toBe(200);
     const { id } = registerTask(t.db, { type: "work", title: `w${i}`, purpose: "p", completion_criteria: "c" }, now, ...HUMAN_WEBUI);
     const run = executionSetting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
-    recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now);
+    recordShadow(t.db, id, { recommended: run, actual: run, basis: "prior", recommended_record: TRACK, actual_record: TRACK, candidates: 2 }, now, markPickedUp(t.db, id, now));
     const spawned = appendEvent(t.db, { taskId: id, actorId: `agent-${i}-${"a".repeat(2_500)}`, origin: "board", at: now, payload: { ...WORKER_SPAWNED, model: run.model, source: run.source } });
     const tokens = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0 };
     appendEvent(t.db, { taskId: id, actorId: "board", origin: "board", at: now, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, advisor: null, model_swaps: [], refusals: [], usage: { ...tokens, models: {} } } });
@@ -223,6 +223,7 @@ it("読み口4本は続き(next)だけを受けて続きの応答を返し、nex
 
 it("読み口4本と list_precedents は routing の task から引数ごと写る", async () => {
   const { client, call } = await boardWithRoutingReview();
+  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
   try {
     for (const verb of ["list_routing_shadow", "list_allocations", "list_routing_cells"]) {
       const read = await call(verb, { since_watermark: 0 });

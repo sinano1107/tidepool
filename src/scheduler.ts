@@ -10,7 +10,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, type ResourceStop } from "./events.js";
+import { appendEvent, latestEventOfTask, type ResourceStop } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -504,7 +504,7 @@ export function startScheduler(deps: {
     task: Task,
     setting: ExecutionSetting,
     content: Partial<TaskContent>,
-    onPicked: () => void,
+    onPicked: (pickupEventId: number) => void,
   ): Promise<(() => void) | void> {
     // resolveTaskAgent is the three-value read CONTEXT.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor
@@ -524,7 +524,8 @@ export function startScheduler(deps: {
     // 記録は停止の要求と後始末が持つ(#1973 / ADR 0305)。各 await の後・次の副作用の前に読む
     const live = liveSession(db, picked.id);
     try {
-      onPicked();
+      // 呼び手には pickupTask が書いた task_picked_up の id を渡す —— shadow 行はこの event に乗る(ADR 0319 決定1)
+      onPicked(latestEventOfTask(db, picked.id, "task_picked_up")!.id);
       slot.occupy(picked.id);
       // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
       // かった pickup でも、force / reclaimed の相手はもう存在している。
@@ -959,10 +960,10 @@ export function startScheduler(deps: {
       // 昇格中に学習器が倒れた pickup は shadow の組が無いので残さない
       // 行は pickup が成立してから書く —— await の窓で取りやめた pickup(issue #972)に shadow を残さない。
       // pin で走る Interview の子は選ぶ余地を持たないので残さない
-      const recordShadowRow = () => {
+      const recordShadowRow = (pickupEventId: number) => {
         if (!isWorkSide(head.type) || head.interview_target_id !== null || !(branched || !promoted)) return;
         try {
-          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now());
+          recordShadow(db, head.id, (branched ?? branch(head, selectable(candidates, entryExcluded))).shadow, clock.now(), pickupEventId);
         } catch (err) {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }

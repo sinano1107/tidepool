@@ -7,7 +7,7 @@ import { recordShadow, type TrackRecord } from "../src/learner.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { proposeRoutingChange } from "../src/routing-review.js";
 import { getTask, listBoard, listChildren, registerTask } from "../src/tasks.js";
-import { divergedSession, executionSetting, HUMAN_WEBUI, NO_RECORD, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
+import { divergedSession, executionSetting, HUMAN_WEBUI, markPickedUp, NO_RECORD, routingJudgmentRepairTask, WORKER_SPAWNED } from "./harness.js";
 
 /** 学習器の昇格 / 降格の提案の根拠(ADR 0181 追記 #2438)のドメイン層: 根拠の検査と、盤面が根拠の shadow 行から組む detail。MCP の
  *  inputSchema が evidence を通すことはサーバ境界の tests/routing-proposal-question.test.ts、flag の直接の変更での決着は tests/execution-settings-endpoints.test.ts が言う。 */
@@ -44,7 +44,7 @@ it("根拠は乖離した shadow 行の session の worker_spawned に限る —
   // review の session: pickup に shadow 行を書かない
   const reviewSession = appendEvent(db, { taskId: review, actorId: "auditor", origin: "board", at, payload: WORKER_SPAWNED });
   const run = executionSetting("anthropic", "claude-opus-5-5");
-  recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
+  recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at, markPickedUp(db, work, at));
   const matched = appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
 
   expect(() => propose("promote", [registered])).toThrow(`evidence ${registered} is not a worker_spawned event`);
@@ -109,7 +109,7 @@ it("引用の外の乖離も盤面が1行で見せる —— フラグの最後�
   divergedSession(db, at, { learner: true });
   const run = executionSetting("anthropic", "claude-opus-5-5");
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-  for (const candidates of [2, 1]) recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates }, at);
+  for (const candidates of [2, 1]) recordShadow(db, work, { recommended: run, actual: run, basis: "data", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates }, at, markPickedUp(db, work, at));
 
   const { question_id } = propose("promote", [cited]);
 

@@ -37,6 +37,7 @@ import {
   questions,
   readFollowingNext,
   registerQuestion,
+  routingMaterialViaWebui,
   runNow,
   servedQuarantineQuestion,
   startFirstMetaReviewViaWebui,
@@ -404,7 +405,8 @@ it("監査の pickup は読む面接室を remote へ追従させない —— �
 it("面接室の quarantine が開いている間、root 配下の監査と root の行への異議の RCA はキューで外れ、slot が空いても拾われず、回答で解けると監査が拾われて走る(issue #2265 / ADR 0273 追記)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  // 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
   await api(t.baseUrl, "POST", "/api/triage/start");
@@ -430,7 +432,8 @@ it("面接室の quarantine が開いている間、root 配下の監査と root
 it("(Harness, 面接室)の封じ込めの組が開いている間、root 配下の監査はキューで外れる(issue #2265 / ADR 0273 追記)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
-  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  // 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
 
@@ -983,7 +986,8 @@ async function lastExaminee() {
       interview_targets: [opus46, sonnet55, haiku45],
     })
   ).json;
-  // 実行設定の変更(boot)は routing の材料 —— 初回の routing meta-review を root の後ろに並べる
+  // 初回の routing meta-review を root の後ろに並べる
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await callAsTask(t, root.id, "log_decision", { line: `chose the parser probe over the lexer one ${ROOT_MARK}` });
   const rootKnowledge = { path: "parser", title: `parser ${TREE_MEMORY}`, text: `the parser ${TREE_MEMORY}`, source: { commit: "0a46a46" } };

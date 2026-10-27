@@ -918,9 +918,10 @@ export async function unhandledRejectionsDuring(body: () => Promise<unknown>): P
   return rejections;
 }
 
-/** setup のみ: task を一度 pickup された形にする(列も status も動かさない)—— 人間名義の review 子が付ける(ADR 0292 決定2)。 */
-export function markPickedUp(db: Db, taskId: string, at: Date, actorId = "deckhand"): void {
-  appendEvent(db, { taskId, actorId, origin: "board", at, payload: { kind: "task_picked_up" } });
+/** setup のみ: task を一度 pickup された形にする(列も status も動かさない)—— 人間名義の review 子が付ける(ADR 0292 決定2)。返り値は
+ *  `task_picked_up` の id(shadow 行が乗る event、ADR 0319 決定1)。 */
+export function markPickedUp(db: Db, taskId: string, at: Date, actorId = "deckhand"): number {
+  return appendEvent(db, { taskId, actorId, origin: "board", at, payload: { kind: "task_picked_up" } });
 }
 
 /** setup のみ: 対象1つの Interview を登録して probe を出し、その受験者を返す。 */
@@ -1232,7 +1233,7 @@ export const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, wor
  *  返り値は2つの worker_spawned の id(出所 agent、task の順)。 */
 export function routedOpusSessions(db: Db, at: Date): number[] {
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c", tier: "standard", workspace: "reef" }, at, ...HUMAN_WEBUI).id;
-  recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at);
+  recordShadow(db, work, { recommended: executionSetting("anthropic", "claude-sonnet-5-5"), actual: executionSetting("anthropic", OPUS_ROW.model), basis: "prior", recommended_record: NO_RECORD, actual_record: NO_RECORD, candidates: 2 }, at, markPickedUp(db, work, at));
   const spawn = (tier: "agent" | "task") =>
     appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null, tier_id: tierIdOf(db, "standard"), source: { tier, provider: "rank" } } });
   const evidence = [spawn("agent"), spawn("task")];
@@ -1258,7 +1259,7 @@ export function divergedSession(
   const chosen = executionSetting("anthropic", learnerModel, { tier_id, source: { tier: "task", provider: learner ? "learner" : "rank" } });
   const [recommended, actual] = learner ? [table, chosen] : [chosen, table];
   const [recommended_record, actual_record] = learner ? [tableRecord, learnerRecord] : [learnerRecord, tableRecord];
-  recordShadow(db, work, { recommended, actual, basis: "data", recommended_record, actual_record, candidates: 2 }, at);
+  recordShadow(db, work, { recommended, actual, basis: "data", recommended_record, actual_record, candidates: 2 }, at, markPickedUp(db, work, at));
   return appendEvent(db, {
     taskId: work,
     actorId: "deckhand",
@@ -1361,6 +1362,14 @@ export async function completeIntegrationReviews(t: Tidepool, taskId: string): P
     const result = await completeIntegrationReviewViaMcp(t, review.id);
     if (result.isError) throw new Error(`review completion failed: ${JSON.stringify(result)}`);
   }
+}
+
+/** setup のみ: routing の材料を1つ書く —— 人間が settings タブで表の moonshot の行の出力価格を1つ上げる(行でない設定の変更は
+ *  routing の材料でない、ADR 0319 決定3)。economy の価格の並びで最後のままなのでどの pickup の選択も変えず、Items to judge にその行が1つ載る。 */
+export async function routingMaterialViaWebui(t: Tidepool): Promise<void> {
+  const row = readExecutionSettings(t.db).table.find((r) => r.provider === "moonshot")!;
+  const written = await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "row", key: { provider: row.provider, model: row.model, effort: row.effort }, row: { ...row, price_out: row.price_out + 1 } });
+  expect(written.status, JSON.stringify(written.json)).toBe(200);
 }
 
 /** 主題の初回の meta-review を人間の扉(WebUI)で起こす(setup)。周期の登録は初回を立てない(ADR 0300 決定2)ので、材料を書いて

@@ -2,13 +2,13 @@ import { expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting, loadExecutionSettingTable } from "../src/execution-setting.js";
-import { loadEpisodes, observedInTier, recordShadow, selectorBranch } from "../src/learner.js";
+import { loadEpisodes, loadSeeds, observedInTier, recordShadow, selectorBranch } from "../src/learner.js";
 import { toolResult } from "../src/mcp.js";
 import { registerMetaReview } from "../src/meta-review.js";
 import { listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, decomposedChild, executionSetting, HUMAN_WEBUI, QUIET_EXIT, RESPONSE_BUDGET_BYTES, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, decomposedChild, executionSetting, HUMAN_WEBUI, markPickedUp, QUIET_EXIT, RESPONSE_BUDGET_BYTES, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** 主題 routing の meta-review の読み口(issue #917 / spec #916 C)のドメイン層。verb への写像はサーバ境界
  *  (tests/routing-meta-review.test.ts)が言う。 */
@@ -91,12 +91,12 @@ it("list_routing_shadow は shadow 行をその pickup が開いた session の 
   const diverged = work("diverged");
   const agreed = work("agreed");
   // 分かれた pickup が2回: 1回目は spawn に辿り着かず、2回目の session が capability で退けられた
-  recordShadow(db, diverged.id, shadow(sol, opus, "prior"), at);
-  recordShadow(db, diverged.id, shadow(sol, opus, "prior"), at);
+  recordShadow(db, diverged.id, shadow(sol, opus, "prior"), at, markPickedUp(db, diverged.id, at));
+  recordShadow(db, diverged.id, shadow(sol, opus, "prior"), at, markPickedUp(db, diverged.id, at));
   const second = spawn(diverged.id, "reef-crab", opus);
   exit(diverged.id, second, [], 1.25);
   allocate(diverged.id, second, { judge, allocation: "underpowered", cause: "capability", evidence: "e" });
-  recordShadow(db, agreed.id, shadow(opus, opus, "data"), at);
+  recordShadow(db, agreed.id, shadow(opus, opus, "data"), at, markPickedUp(db, agreed.id, at));
   spawn(agreed.id, "deckhand", opus);
   const reader = routingReview();
 
@@ -115,8 +115,8 @@ it("shadow 行は session が走った段(消した段なら tier_retired)と文
   const { db, spawn, routingReview } = board();
   const parent = registerTask(db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c", workspace: "reef" }, at, ...HUMAN_WEBUI);
   const child = decomposedChild(db, parent, "child", "scout", at);
-  recordShadow(db, child.id, shadow(sol, opus, "prior"), at);
-  recordShadow(db, child.id, shadow(sol, opus, "prior"), at);
+  recordShadow(db, child.id, shadow(sol, opus, "prior"), at, markPickedUp(db, child.id, at));
+  recordShadow(db, child.id, shadow(sol, opus, "prior"), at, markPickedUp(db, child.id, at));
   applyExecutionSettingsChange(db, { setting: "insert_tier", name: "scratch", description: "d", position: 0 }, "webui", at);
   spawn(child.id, "deckhand", { ...opus, tier_id: tierIdOf(db, "scratch") });
   applyExecutionSettingsChange(db, { setting: "delete_tier", name: "scratch" }, "webui", at);
@@ -139,8 +139,8 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
   rejectedSession(sol);
   const later = work("later");
   const branch = (promoted: boolean) => selectorBranch({ promoted, candidates: [opus, sol], ...observedInTier(loadEpisodes(db), [], opus.tier_id, null) }).shadow;
-  recordShadow(db, later.id, branch(false), at);
-  recordShadow(db, later.id, branch(true), at);
+  recordShadow(db, later.id, branch(false), at, markPickedUp(db, later.id, at));
+  recordShadow(db, later.id, branch(true), at, markPickedUp(db, later.id, at));
   const reader = routingReview();
   const opusRecord = { board: { accepted: 0, rejected: 2 }, workspace: { accepted: 0, rejected: 2 } };
   const solRecord = { board: { accepted: 0, rejected: 1 }, workspace: { accepted: 0, rejected: 1 } };
@@ -159,7 +159,7 @@ it("shadow 行は書いた時点の両セルの受理数・却下数と除外後
 it("読み口の既定の窓は読み手より前に完了した routing の登録の watermark から —— 読み手自身の登録も memory の登録も窓を動かさない", () => {
   const { db, work, spawn, exit, allocate, routingReview } = board();
   const before = work("before");
-  recordShadow(db, before.id, shadow(opus, opus, "prior"), at);
+  recordShadow(db, before.id, shadow(opus, opus, "prior"), at, markPickedUp(db, before.id, at));
   const old = spawn(before.id, "deckhand", sol);
   exit(before.id, old, ["gpt-5.6-sol"]);
   allocate(before.id, old, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });
@@ -167,7 +167,7 @@ it("読み口の既定の窓は読み手より前に完了した routing の登�
   applyExecutionSettingsChange(db, { setting: "row", key: solKey, row: { ...solKey, tier: "standard", price_in: 1, price_out: 2 } }, "webui", at);
   routingReview(true); // 前回
   const after = work("after");
-  recordShadow(db, after.id, shadow(opus, opus, "prior"), at);
+  recordShadow(db, after.id, shadow(opus, opus, "prior"), at, markPickedUp(db, after.id, at));
   const fresh = spawn(after.id, "deckhand", opus);
   exit(after.id, fresh, ["claude-opus-5-5-20261001"]); // セルは使用量の内訳の鍵でなく pin の綴り(ADR 0182 決定3)
   allocate(after.id, fresh, { judge, allocation: "overpowered", cause: "uncertain", evidence: "e" });
@@ -279,7 +279,7 @@ it("effort「無い」のセルは shadow 行と list_routing_cells で effort n
   const { db, work, spawn, exit, routingReview } = board();
   const haiku = executionSetting("anthropic", "claude-haiku-4-5-20251001", { effort: null });
   const task = work("t");
-  recordShadow(db, task.id, shadow(haiku, haiku, "prior"), at);
+  recordShadow(db, task.id, shadow(haiku, haiku, "prior"), at, markPickedUp(db, task.id, at));
   const seen = exit(task.id, spawn(task.id, "deckhand", haiku), [haiku.model]);
   const reader = routingReview();
 
@@ -316,20 +316,27 @@ it("list_routing_cells のセルはその provider / model / effort の種を段
   });
 });
 
-it("list_routing_cells の種は行のある (セル, 段) のものだけ —— 消した行と段を移した行の種は、event が残っても載らない(spec #2190)", () => {
+it("list_routing_cells の種は表の行の有無を問わず載る —— 消した行と段を移した行の種も event の段で載り、学習器は移した先の段でその種を読まない(ADR 0319 決定4)", () => {
   const { db, routingReview } = board();
   const change = (c: object) => applyExecutionSettingsChange(db, c as never, "webui", at)!;
   const row = (model: string, tier = "economy") => ({ provider: "anthropic" as const, tier, model, effort: "low", price_in: 1, price_out: 5 });
   const key = (model: string) => ({ provider: "anthropic", model, effort: "low" });
   const kept = change({ setting: "row", row: row("claude-haiku-5-5"), seed: { comment: "kept" } });
-  change({ setting: "row", row: row("claude-haiku-5-6"), seed: { comment: "deleted" } });
+  const deleted = change({ setting: "row", row: row("claude-haiku-5-6"), seed: { comment: "deleted" } });
   change({ setting: "delete_row", ...key("claude-haiku-5-6") });
-  change({ setting: "row", row: row("claude-haiku-5-7"), seed: { comment: "moved" } });
+  const moved = change({ setting: "row", row: row("claude-haiku-5-7"), seed: { comment: "moved" } });
   change({ setting: "row", key: key("claude-haiku-5-7"), row: row("claude-haiku-5-7", "standard") });
 
-  expect(listRoutingCells(db, routingReview(), { since_watermark: 0 }).cells).toEqual([
-    { cell: { ...key("claude-haiku-5-5"), advisor: null }, first_observed_event_id: null, seeds: [{ tier: "economy", kind: "human", event_id: kept }] },
-  ]);
+  expect(listRoutingCells(db, routingReview(), { since_watermark: 0 }).cells).toEqual(
+    [
+      ["claude-haiku-5-5", kept],
+      ["claude-haiku-5-6", deleted],
+      ["claude-haiku-5-7", moved],
+    ].map(([model, event_id]) => ({ cell: { ...key(model as string), advisor: null }, first_observed_event_id: null, seeds: [{ tier: "economy", kind: "human", event_id }] })),
+  );
+  const movedRow = executionSetting("anthropic", "claude-haiku-5-7", { effort: "low", tier_id: tierIdOf(db, "standard") });
+  const standard = observedInTier(loadEpisodes(db), loadSeeds(db), movedRow.tier_id, null);
+  expect(selectorBranch({ promoted: false, candidates: [movedRow], ...standard }).shadow.actual_record.seed).toBeNull();
 });
 
 it("list_routing_cells は窓の中で種が置かれたセルを、初観測が窓より前でも載せる(ADR 0273 決定7)", () => {
@@ -382,7 +389,7 @@ it("list_routing_shadow / list_allocations / list_routing_cells は予算を超�
   const tasks = Array.from({ length: 20 }, (_, i) => {
     const task = work(`w${i}`);
     const run = executionSetting("anthropic", `model-${i}-${"m".repeat(2_500)}`);
-    recordShadow(db, task.id, shadow(run, run, "prior"), at);
+    recordShadow(db, task.id, shadow(run, run, "prior"), at, markPickedUp(db, task.id, at));
     const spawned = spawn(task.id, `agent-${i}-${"a".repeat(2_500)}`, run);
     exit(task.id, spawned);
     allocate(task.id, spawned, { judge, allocation: "appropriate", cause: "uncertain", evidence: "e" });

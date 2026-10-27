@@ -14,7 +14,7 @@ import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/q
 import { listExaminees } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -705,7 +705,8 @@ async function refuseUnrowedTarget(targets: object[], results: ModelProbeResult[
 
 it("「走らせ直す」は、その id の検査がまだ断られれば拒まれて question が開いたまま子も止まり、通れば子が pickup に戻る", async () => {
   const board = await refuseUnrowedTarget([SONNET_MEDIUM], [{ status: "refused", reason: "API returned 404 for this model id" }, { status: "runs" }]);
-  // 断られた session の終了は routing の材料 —— 子が止まっている間に初回の routing meta-review を起こして枠を握らせる
+  // 子が止まっている間に初回の routing meta-review を起こして枠を握らせる(受験者の session の終了は routing の材料でない、ADR 0319 決定3)
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await settle();
   const [child] = board.childIds;
@@ -829,7 +830,8 @@ it("probe の破綻の報告の retry は、「この対象は測らない」で
   board.proc.emitExitAt(board.proc.processes.length - 1, 0, null);
   await settle();
   await t.clock.advance(HOUR);
-  // 終わった session は routing の材料 —— root が枠を握っている間に初回の routing meta-review を起こし、新しい root より前に並べる
+  // root が枠を握っている間に初回の routing meta-review を起こし、新しい root より前に並べる(受験者の session の終了は routing の材料でない、ADR 0319 決定3)
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   expect((await callAsTask(t, board.rootId, "report_broken_probe", { reason: "the probe is broken", recommendation: "retry" })).isError).toBeFalsy();
   const broken = (await questions(t)).find((q) => q.parent_id === board.rootId && q.status === "todo")!;
