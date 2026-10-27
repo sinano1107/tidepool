@@ -1,5 +1,7 @@
 # advisor の相談は助言が返った呼び出しだけを数え、失敗した呼び出しは逐語で同じ記録に残す
 
+**Status 追記: 決定4 の「`usage` を丸ごと受け取るので届く」は [ADR 0317](0317-what-the-board-counted-off-the-stream-sits-beside-usage-not-inside-it-and-survives-a-session-with-no-consumption-report.md) 決定3 で形が変わる(issue #2637)** —— record は `usage` の外、`worker_exited` の直下へ出し、配分評価の入力に名指しの欄として渡す。経路(同じ event)と決定1〜3 はそのまま。
+
 2026-10-08 の grilling(issue #1524)で決定。盤面は `server_tool_use(name: "advisor")` を相談1回と数えていたが、
 #1425 の VM 実測で、呼び出しのあと `advisor_tool_result_error`(`too_many_requests` / `unavailable`)が返り、
 exit 0 で完走する session を2本見た。この session の `worker_exited.usage.advisor` は「相談1回・model 不明」になり、

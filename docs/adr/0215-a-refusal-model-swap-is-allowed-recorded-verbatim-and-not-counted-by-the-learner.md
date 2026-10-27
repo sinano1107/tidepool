@@ -1,5 +1,7 @@
 # refusal による差し替えは止めず、逐語で記録し、学習器は数えない
 
+**Status 追記: 決定3 の置き場(`worker_exited.usage` の中)は [ADR 0317](0317-what-the-board-counted-off-the-stream-sits-beside-usage-not-inside-it-and-survives-a-session-with-no-consumption-report.md) 決定1 で反転(issue #2637)** —— 差し替えと拒否は `usage` の外、`worker_exited` の直下に置き、消費の報告(result 行)の無い session でも残す。advisor との同居と判定の形はそのまま。
+
 2026-10-08 の grilling(issue #1523)で決定。#1425 の VM 実測(CLI 2.1.286)で、Fable の応答が Provider の safeguard に止められ、
 CLI が `system/model_refusal_fallback` を出して以降を `claude-opus-4-8` で続けた session を1本見た。盤面はこの行を読まず、
 `worker_spawned` の pin(Fable の行)の実績として学習器に数え、advisor の分離判定も走っていない model と比べていた。固定版の
