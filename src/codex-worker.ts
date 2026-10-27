@@ -29,7 +29,7 @@ import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl }
 import type { ContainmentCapability } from "./containment.js";
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
-import { appendEvent, type EventPayload, type ResourceStop } from "./events.js";
+import { appendEvent, type ResourceStop } from "./events.js";
 import type { ExecutionSetting } from "./execution-setting.js";
 import { git } from "./git.js";
 import type { CodexWorkspaceCheck } from "./harness-containment.js";
@@ -1425,23 +1425,23 @@ export class CodexWorker implements WorkerAdapter {
       const settle = (code: number | null, signal: NodeJS.Signals | null, outputClosed: boolean) => {
         this.running.delete(task.id);
         flushStdout();
-        const { usage, ...reported } = codexExitFields(streamObserved);
-        const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), ...reported };
+        const fields = codexExitFields(streamObserved);
+        const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), reported_error: fields.reported_error, last_message: fields.last_message };
         const probe = this.options.usageProbe;
         if (!streamObserved.turnFailed || !probe) {
-          record(exit, outputClosed, usage);
+          record(exit, outputClosed, fields);
           this.options.onWorkerExited?.(task.id, exit, false);
           return;
         }
         // ADR 0309: exit の逐語は即時に渡し、分類は worker_exited を書いてから解決する。
         const classification = recheckUsage(probe, this.options.clock.now()).then((usage_recheck) => {
           exit.usage_recheck = usage_recheck;
-          record(exit, outputClosed, usage);
+          record(exit, outputClosed, fields);
           return usage_recheck.result === "full";
         });
         this.options.onWorkerExited?.(task.id, exit, classification);
       };
-      const record = (exit: WorkerExit, outputClosed: boolean, usage: Extract<EventPayload, { kind: "worker_exited" }>["usage"]) => {
+      const record = (exit: WorkerExit, outputClosed: boolean, fields: ReturnType<typeof codexExitFields>) => {
         // ADR 0083 追記10: Claude adapter と同じ閉じる1本で、worker_exited を書いたあとに Precedent を投影する(ADR 0315 決定1)。
         closeSession(
           this.options.db,
@@ -1453,7 +1453,7 @@ export class CodexWorker implements WorkerAdapter {
               ...exit,
               worker_spawned_event_id: spawned,
               output_closed: outputClosed,
-              usage,
+              ...fields,
             },
             at: this.options.clock.now(),
           },

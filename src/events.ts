@@ -40,12 +40,11 @@ export interface ListedRefusal {
 
 /** What the advisor **actually did** in one worker session (issue #33 判断6),
  *  as against `worker_spawned.advisor`'s "what the board asked for". Carried by
- *  `worker_exited.usage.advisor`, where null means neither a consultation nor a
+ *  `worker_exited.advisor`, where null means neither a consultation nor a
  *  failed call was observed at all — see that field for what the null
  *  deliberately collapses.
  *
- *  Named rather than inlined because the adapter builds it in two pieces and
- *  would otherwise spell `NonNullable<NonNullable<…>["advisor"]>` at each. */
+ *  Named because the stream reader builds the record and its usage separately. */
 export interface AdvisorRecord {
   /** The resolved model id the advisor actually ran as — `opus` resolves
    *  differently per host CLI version (measured), so the alias in
@@ -56,7 +55,8 @@ export interface AdvisorRecord {
    *  available either — that breakdown can hold the CLI's internal helper
    *  model too, so subtracting the main model does not leave one answer. A
    *  failed call leaves no resolved id either (#1524 triage), so a
-   *  failure-only session reports null here too. */
+   *  failure-only session reports null here too. No consumption report also
+   *  leaves this null (ADR 0317 決定2). */
   model: string | null;
   /** How many times the parent thread consulted, counted off the stream. A
    *  consultation is a call whose result came back as advice — a call that
@@ -84,7 +84,7 @@ export interface AdvisorRecord {
    *  actions; only the advisor block is absent. */
   consultations: number;
   /** The advisor's own slice of the session's consumption — the same shape the
-   *  enclosing `usage` reports for the main model, hence the same name
+   *  sibling `worker_exited.usage` reports for the main model, hence the same name
    *  (CONTEXT.md's Worker session: 「トークン消費の内訳と推定ドル」). It is
    *  deliberately **not** called `spend`: this codebase already spells
    *  Spend-down(使い切り)that way, and one word for two unrelated concepts
@@ -357,7 +357,7 @@ export type EventPayload =
   // This is what the board *asked for*, never what ran: a capability-
   // insufficient advisor is accepted at launch and silently left unattached
   // (measured). Whether it actually ran lives on the other half of the pair,
-  // worker_exited.usage.advisor.
+  // worker_exited.advisor.
   | {
       kind: "worker_spawned";
       registry_commit: string;
@@ -486,26 +486,33 @@ export type EventPayload =
       // by that recovery; absent means the adapter observed the exit. exit_code
       // and signal are then unknown (null) and so is the duration: this
       // record's time is the recovering boot's, not the session's end. The
-      // stream-derived fields (usage, reported_error, last_message) are filled
+      // stream-derived fields (usage, model_swaps, refusals, advisor, reported_error, last_message) are filled
       // when the transcript has them (ADR 0316 決定2).
       exit_observed?: false;
+      /** issue #33 判断6: what the advisor **actually did** this session, as
+       *  against worker_spawned.advisor's "what the board asked for". null
+       *  means neither a consultation nor a failed call was observed at all
+       *  — which deliberately collapses "configured, attached, never
+       *  called" with "configured, silently never attached". Only an advisor
+       *  result of either observed type on the stream — advice or an error
+       *  (ADR 0214) — is positive
+       *  evidence of attachment, and the sole discriminator the
+       *  CLI offers is one English warning line on stderr; matching it
+       *  would be a detector that degrades silently when the vendor
+       *  rewords it — the exact shape ADR 0041 exists to refuse. The two
+       *  differ in cause but not in effect (neither session had an advisor
+       *  influence it), so the statistics this field feeds are unharmed;
+       *  the warning is still retained verbatim in stderr_tail for the
+       *  operational question. */
+      advisor: AdvisorRecord | null;
+      /** ADR 0215 決定3: stream で観測した差し替え、出た順。`scope: "local"` も載る。常に置き、無ければ `[]`。
+       *  消費の報告と独立に worker_exited の直下に残す(ADR 0317 決定1)。 */
+      model_swaps: ModelSwap[];
+      /** ADR 0215 決定3: root の assistant 行の拒否(`stop_reason: "refusal"`)の `stop_details.category`、
+       *  出た順、`message.id` ごとに1つ(1 message は block ごとに複数行に割れる)。null は分類の無い拒否。
+       *  同じ model で続いた拒否も数える。subagent の行は数えない。常に置き、無ければ `[]`。 */
+      refusals: (string | null)[];
       usage: TokenUsage & {
-        /** issue #33 判断6: what the advisor **actually did** this session, as
-         *  against worker_spawned.advisor's "what the board asked for". null
-         *  means neither a consultation nor a failed call was observed at all
-         *  — which deliberately collapses "configured, attached, never
-         *  called" with "configured, silently never attached". Only an advisor
-         *  result of either observed type on the stream — advice or an error
-         *  (ADR 0214) — is positive
-         *  evidence of attachment, and the sole discriminator the
-         *  CLI offers is one English warning line on stderr; matching it
-         *  would be a detector that degrades silently when the vendor
-         *  rewords it — the exact shape ADR 0041 exists to refuse. The two
-         *  differ in cause but not in effect (neither session had an advisor
-         *  influence it), so the statistics this field feeds are unharmed;
-         *  the warning is still retained verbatim in stderr_tail for the
-         *  operational question. */
-        advisor: AdvisorRecord | null;
         /** ADR 0094 決定2: the CLI result line's per-model `modelUsage` carried
          *  as observed, keyed by the model id the CLI reports for that entry.
          *  The map as a whole is whole-session on Claude (ADR 0297 決定1),
@@ -528,13 +535,6 @@ export type EventPayload =
          *  whether one ran, only that this field could not be filled in;
          *  same fail-closed, all-or-nothing posture as `isStreamResultEvent`. */
         models?: Record<string, TokenUsage>;
-        /** ADR 0215 決定3: stream で観測した差し替え、出た順。`scope: "local"` も載る。常に置き、無ければ `[]`。
-         *  advisor の相談と同じく stream の事実だが、result 行の無い session は usage ごと null で残らない。 */
-        model_swaps: ModelSwap[];
-        /** ADR 0215 決定3: root の assistant 行の拒否(`stop_reason: "refusal"`)の `stop_details.category`、
-         *  出た順、`message.id` ごとに1つ(1 message は block ごとに複数行に割れる)。null は分類の無い拒否。
-         *  同じ model で続いた拒否も数える。subagent の行は数えない。常に置き、無ければ `[]`。 */
-        refusals: (string | null)[];
       } | null;
     }
   // issue #127: Node's spawn() itself failing (ENOENT/EACCES/PATH misconfig —

@@ -2722,19 +2722,19 @@ describe("ClaudeCodeWorker", () => {
       // このセッションを開いた worker_spawned を指す(issue #379)
       worker_spawned_event_id: spawned?.id,
       output_closed: true,
+      // issue #33: この agent には advisor capability が無いので、そもそも
+      // 相談は起こりえない。既存欄の意味は変わっていない(トークンは main
+      // モデル・親スレッドのみ、コストはセッション総額)。
+      advisor: null,
+      // ADR 0215: 欄は常に置かれる
+      model_swaps: [],
+      refusals: [],
       usage: {
         input_tokens: 100,
         output_tokens: 50,
         cache_read_tokens: 10,
         cache_creation_tokens: 5,
         estimated_cost_usd: 0.1234,
-        // issue #33: この agent には advisor capability が無いので、そもそも
-        // 相談は起こりえない。既存欄の意味は変わっていない(トークンは main
-        // モデル・親スレッドのみ、コストはセッション総額)。
-        advisor: null,
-        // ADR 0215: 欄は常に置かれる
-        model_swaps: [],
-        refusals: [],
       },
     });
   });
@@ -3046,7 +3046,7 @@ describe("ClaudeCodeWorker", () => {
     const spawned = listEvents(db, "task-killed").find((e) => e.kind === "worker_spawned");
     const exited = listEvents(db, "task-killed").find((e) => e.kind === "worker_exited");
     expect(exited?.payload).toEqual({
-      kind: "worker_exited",
+      kind: "worker_exited", advisor: null, model_swaps: [], refusals: [],
       exit_code: null,
       signal: "SIGKILL",
       stderr_tail: null,
@@ -3611,10 +3611,10 @@ describe("advisor capability (issue #33)", () => {
   const initLine = (model: string) =>
     `${JSON.stringify({ type: "system", subtype: "init", model })}\n`;
 
-  const usageOf = (db: ReturnType<typeof openDb>, id: string) => {
+  const exitFieldsOf = (db: ReturnType<typeof openDb>, id: string) => {
     const exited = listEvents(db, id).find((e) => e.kind === "worker_exited");
     const payload = exited!.payload as Extract<EventPayload, { kind: "worker_exited" }>;
-    return payload.usage;
+    return { usage: payload.usage, advisor: payload.advisor, model_swaps: payload.model_swaps, refusals: payload.refusals };
   };
 
   it("相談が観測されたセッションは、解決済み advisor id・相談回数・分離した消費を記録する(判断6)", async () => {
@@ -3624,38 +3624,40 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-usage")).toEqual({
-      // 既存欄の意味は**変えない** — トークンは main モデル・親スレッドのみ、
-      // コストはセッション総額(advisor 込み)。過去行との比較可能性を守る。
-      input_tokens: 4,
-      output_tokens: 31,
-      cache_read_tokens: 61644,
-      cache_creation_tokens: 13114,
-      estimated_cost_usd: 0.2999,
+    expect(exitFieldsOf(db, "task-advisor-usage")).toEqual({
+      usage: {
+        // 既存欄の意味は**変えない** — トークンは main モデル・親スレッドのみ、
+        // コストはセッション総額(advisor 込み)。過去行との比較可能性を守る。
+        input_tokens: 4,
+        output_tokens: 31,
+        cache_read_tokens: 61644,
+        cache_creation_tokens: 13114,
+        estimated_cost_usd: 0.2999,
+        // ADR 0094 決定2: 観測された per-model 内訳。帰属は推論しない —— この
+        // モデルが advisor だと分かるのは、この event と同じセッションの
+        // `worker_spawned.advisor` を読者が突き合わせるからで、ここでは決めない。
+        models: {
+          "claude-sonnet-5": {
+            input_tokens: 4,
+            output_tokens: 31,
+            cache_read_tokens: 61644,
+            cache_creation_tokens: 13114,
+            estimated_cost_usd: 0.0968847,
+          },
+          "claude-opus-5": {
+            input_tokens: 38484,
+            output_tokens: 313,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 38484,
+            estimated_cost_usd: 0.200245,
+          },
+        },
+      },
       advisor: {
         model: "claude-opus-5",
         consultations: 1,
         usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 },
         failed_calls: [],
-      },
-      // ADR 0094 決定2: 観測された per-model 内訳。帰属は推論しない —— この
-      // モデルが advisor だと分かるのは、この event と同じセッションの
-      // `worker_spawned.advisor` を読者が突き合わせるからで、ここでは決めない。
-      models: {
-        "claude-sonnet-5": {
-          input_tokens: 4,
-          output_tokens: 31,
-          cache_read_tokens: 61644,
-          cache_creation_tokens: 13114,
-          estimated_cost_usd: 0.0968847,
-        },
-        "claude-opus-5": {
-          input_tokens: 38484,
-          output_tokens: 313,
-          cache_read_tokens: 0,
-          cache_creation_tokens: 38484,
-          estimated_cost_usd: 0.200245,
-        },
       },
       model_swaps: [],
       refusals: [],
@@ -3673,7 +3675,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_03"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
+    expect(exitFieldsOf(db, "task-advisor-count")?.advisor).toMatchObject({ consultations: 3 });
   });
 
   // ADR 0214 決定1: 数えるのは結果の型。呼び出しと結果が別の行でも1行でも同じ数になる。
@@ -3687,7 +3689,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_04", { result: failure("too_many_requests") }));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-two-lines")?.advisor).toMatchObject({
+    expect(exitFieldsOf(db, "task-advisor-two-lines")?.advisor).toMatchObject({
       consultations: 2,
       failed_calls: ["unavailable", "too_many_requests"],
     });
@@ -3712,7 +3714,7 @@ describe("advisor capability (issue #33)", () => {
       }),
     );
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-failed-only")?.advisor).toEqual({
+    expect(exitFieldsOf(db, "task-advisor-failed-only")?.advisor).toEqual({
       model: null,
       consultations: 0,
       usage: null,
@@ -3730,7 +3732,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_04", { result: failure("too_many_requests") }));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-mixed")?.advisor).toMatchObject({
+    expect(exitFieldsOf(db, "task-advisor-mixed")?.advisor).toMatchObject({
       consultations: 1,
       failed_calls: ["unavailable", null, "too_many_requests"],
     });
@@ -3745,7 +3747,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(assistantLine([{ type: "server_tool_use", id: "srvtoolu_02", name: "advisor", input: {} }]));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-neither")?.advisor).toBeNull();
+    expect(exitFieldsOf(db, "task-advisor-neither")?.advisor).toBeNull();
   });
 
   it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
@@ -3755,7 +3757,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(resultLine());
     processes[0]!.stdout.write(advisorCall("srvtoolu_01").trimEnd());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-final-chunk")?.advisor).toMatchObject({ consultations: 1 });
+    expect(exitFieldsOf(db, "task-advisor-final-chunk")?.advisor).toMatchObject({ consultations: 1 });
   });
 
   // 通常の tool_use(MCP verb 等)を advisor と数え間違えない — 数えるのは
@@ -3770,13 +3772,13 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-noise")?.advisor).toMatchObject({ consultations: 1 });
+    expect(exitFieldsOf(db, "task-advisor-noise")?.advisor).toMatchObject({ consultations: 1 });
   });
 
   // 判断6 の眼目。能力不足の advisor は exit 0 で完走し、stderr に警告1行を残して
   // 未 attach のまま終わる —— 盤面から見て成功セッションと区別が付かない。
   // `advisor: null` が、そのセッションで advisor が**走らなかった**ことを言う。
-  it("advisor をピン留めしても相談が1本も観測されなければ usage.advisor は null(判断6)", async () => {
+  it("advisor をピン留めしても相談が1本も観測されなければ worker_exited.advisor は null(判断6)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-silent");
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
@@ -3787,7 +3789,7 @@ describe("advisor capability (issue #33)", () => {
       cache_creation_input_tokens: 13114,
     } }));
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-silent")?.advisor).toBeNull();
+    expect(exitFieldsOf(db, "task-advisor-silent")?.advisor).toBeNull();
   });
 
   // 「設定されていて一度も相談しなかった」と「設定されたが未 attach のまま走った」は
@@ -3812,7 +3814,7 @@ describe("advisor capability (issue #33)", () => {
     emitExit(0, null);
     const exited = listEvents(db, "task-advisor-warning").find((e) => e.kind === "worker_exited");
     expect(exited!.payload).toMatchObject({ exit_code: 0, stderr_tail: warning });
-    expect(usageOf(db, "task-advisor-warning")?.advisor).toBeNull();
+    expect(exitFieldsOf(db, "task-advisor-warning")?.advisor).toBeNull();
   });
 
   // 同一モデルペアでは `modelUsage` が1キーに合算されて消費を分離できない(実測)。
@@ -3839,7 +3841,7 @@ describe("advisor capability (issue #33)", () => {
       }),
     );
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-same-model")?.advisor).toEqual({
+    expect(exitFieldsOf(db, "task-advisor-same-model")?.advisor).toEqual({
       model: "claude-sonnet-5",
       consultations: 1,
       usage: null,
@@ -3874,7 +3876,7 @@ describe("advisor capability (issue #33)", () => {
       }),
     );
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-earlier-turn")?.advisor).toEqual({
+    expect(exitFieldsOf(db, "task-advisor-earlier-turn")?.advisor).toEqual({
       model: null,
       consultations: 1,
       usage: null,
@@ -3894,7 +3896,7 @@ describe("advisor capability (issue #33)", () => {
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-no-init")?.advisor).toEqual({
+    expect(exitFieldsOf(db, "task-advisor-no-init")?.advisor).toEqual({
       model: "claude-opus-5",
       consultations: 1,
       usage: null,
@@ -3923,13 +3925,13 @@ describe("advisor capability (issue #33)", () => {
       })}\n`,
     );
     emitExit(0, null);
-    expect(usageOf(db, "task-advisor-no-modelusage")).toMatchObject({
-      estimated_cost_usd: 0.3,
+    expect(exitFieldsOf(db, "task-advisor-no-modelusage")).toMatchObject({
+      usage: { estimated_cost_usd: 0.3 },
       advisor: { model: null, consultations: 1, usage: null },
     });
     // ADR 0094 決定2: modelUsage を持たない result 行では models も丸ごと省略
     // する —— 部分的な内訳を「完全」と誤読させないための all-or-nothing。
-    expect("models" in usageOf(db, "task-advisor-no-modelusage")!).toBe(false);
+    expect("models" in exitFieldsOf(db, "task-advisor-no-modelusage").usage!).toBe(false);
   });
 
   // ADR 0094 決定2: 1エントリでも五項目のうち欠けがあれば内訳全体を省略する
@@ -3958,17 +3960,16 @@ describe("advisor capability (issue #33)", () => {
       }),
     );
     emitExit(0, null);
-    const usage = usageOf(db, "task-models-malformed-entry")!;
-    expect("models" in usage).toBe(false);
+    const fields = exitFieldsOf(db, "task-models-malformed-entry");
+    expect("models" in fields.usage!).toBe(false);
     // advisorUsage は既存の三項目 narrowing のままなので、advisor 側の判定は
     // 影響を受けない(このセルは main と別モデルなので分離できる)。
-    expect(usage.advisor).toMatchObject({ model: "claude-opus-5" });
+    expect(fields.advisor).toMatchObject({ model: "claude-opus-5" });
   });
 
   // 未知のモデルは exit 1・stdout 完全に空(実測)。result 行が無いので usage は
-  // null のまま —— `advisor` 欄が生えるのは usage がある行だけであり、欠測が
-  // 「advisor なしで走った」に化けない。
-  it("stdout が空のまま exit 1 したセッションは usage null のまま(advisor 欄も生えない)", async () => {
+  // null のまま、相談も失敗も無いので advisor も null。
+  it("stdout が空のまま exit 1 したセッションは usage null のまま", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-exit1");
     processes[0]!.stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
@@ -4047,7 +4048,7 @@ describe("advisor capability (issue #33)", () => {
       }
     });
 
-    it("model_refusal_fallback の行は出た順に usage.model_swaps へ逐語で載り、scope が local の行も載る(決定2・3)", async () => {
+    it("model_refusal_fallback の行は出た順に worker_exited.model_swaps へ逐語で載り、scope が local の行も載る(決定2・3)", async () => {
       const exits: WorkerExit[] = [];
       const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
       start("task-swaps");
@@ -4060,13 +4061,13 @@ describe("advisor capability (issue #33)", () => {
       processes[0]!.stdout.write(swapLine({ scope: undefined, api_refusal_category: undefined }));
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
-      expect(usageOf(db, "task-swaps")?.model_swaps).toEqual([
+      expect(exitFieldsOf(db, "task-swaps")?.model_swaps).toEqual([
         { from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" },
         { from: "claude-opus-4-8", to: "claude-opus-5", scope: "local", category: "bio" },
         { from: "claude-fable-5-1", to: "claude-opus-4-8", scope: null, category: null },
       ]);
-      // 報告なき exit の文面(watchdog)へは usage の写しで渡る(決定5)
-      expect(exits[0]?.model_swaps).toEqual(usageOf(db, "task-swaps")?.model_swaps);
+      // 報告なき exit の文面(watchdog)へは直下の欄の写しで渡る(決定5)
+      expect(exits[0]?.model_swaps).toEqual(exitFieldsOf(db, "task-swaps")?.model_swaps);
     });
 
     // #1523 の grilling の session で観測した1段目の形: 1 message が block ごとに3行に割れ、3本とも refusal
@@ -4084,7 +4085,7 @@ describe("advisor capability (issue #33)", () => {
         parent_tool_use_id: null,
       })}\n`;
 
-    it("root の拒否は message.id ごとに1つ、分類を出た順に usage.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
+    it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
       const { start, processes, emitExit, db } = await makeWorker();
       start("task-refusals");
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
@@ -4102,7 +4103,7 @@ describe("advisor capability (issue #33)", () => {
       processes[0]!.stdout.write(swapLine());
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
-      expect(usageOf(db, "task-refusals")?.refusals).toEqual(["cyber", null]);
+      expect(exitFieldsOf(db, "task-refusals")?.refusals).toEqual(["cyber", null]);
     });
 
     it("差し替えも拒否も無い session でも model_swaps と refusals は空の列で置かれる", async () => {
@@ -4111,18 +4112,20 @@ describe("advisor capability (issue #33)", () => {
       processes[0]!.stdout.write(initLine("claude-sonnet-5"));
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
-      expect(usageOf(db, "task-no-swap")).toMatchObject({ model_swaps: [], refusals: [] });
+      expect(exitFieldsOf(db, "task-no-swap")).toMatchObject({ model_swaps: [], refusals: [] });
     });
 
-    // 決定3: result 行の無い session は usage ごと null(failed_calls と同じ性質)
-    it("result 行の無い session は、stream で見た差し替えと拒否があっても usage null のまま", async () => {
-      const { start, processes, emitExit, db } = await makeWorker();
+    // ADR 0317: 消費の報告が無くても failure question へ差し替えを渡す。
+    it("result 行の無い session の差し替えは onWorkerExited へ渡り、usage は null のまま", async () => {
+      const exits: WorkerExit[] = [];
+      const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
       start("task-swap-killed");
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
       processes[0]!.stdout.write(refusalLine("msg_01", { type: "text", text: "no" }));
       processes[0]!.stdout.write(swapLine());
       emitExit(null, "SIGKILL");
-      expect(usageOf(db, "task-swap-killed")).toBeNull();
+      expect(exitFieldsOf(db, "task-swap-killed").usage).toBeNull();
+      expect(exits[0]?.model_swaps).toEqual([{ from: "claude-fable-5-1", to: "claude-opus-4-8", scope: "session", category: "cyber" }]);
     });
 
     // 決定4: 分離の判定が比べる init の model が、差し替え後は走っていない model になる
@@ -4135,7 +4138,7 @@ describe("advisor capability (issue #33)", () => {
         processes[0]!.stdout.write(swapLine({ scope }));
         processes[0]!.stdout.write(resultLine());
         emitExit(0, null);
-        return usageOf(db, id)?.advisor;
+        return exitFieldsOf(db, id)?.advisor;
       };
       const separated = { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 };
       expect(await run("task-swap-session", "session")).toEqual({ model: "claude-opus-5", consultations: 1, usage: null, failed_calls: [] });
@@ -4159,7 +4162,7 @@ describe("advisor capability (issue #33)", () => {
         tool_use_result: { status, resolvedModel },
       })}\n`;
 
-    /** main sonnet × advisor opus、最後の呼び出しに相談がある session に `lines` を挟んで流し、usage 全体を返す。 */
+    /** main sonnet × advisor opus、最後の呼び出しに相談がある session に `lines` を挟んで流し、stream 由来の欄を返す。 */
     const run = async (id: string, lines: string[]) => {
       const { start, processes, emitExit, db } = await makeAdvisorWorker();
       start(id);
@@ -4168,17 +4171,19 @@ describe("advisor capability (issue #33)", () => {
       processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
-      return usageOf(db, id);
+      return exitFieldsOf(db, id);
     };
     const separated = { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 };
     // model / consultations / failed_calls と models は、どの場合でも変わらない
-    const expectAdvisorUsage = (usage: Awaited<ReturnType<typeof run>>, advisorUsage: typeof separated | null) =>
-      expect(usage).toMatchObject({
-        advisor: { model: "claude-opus-5", consultations: 1, usage: advisorUsage, failed_calls: [] },
-        models: {
-          "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
-          "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
+    const expectAdvisorUsage = (fields: Awaited<ReturnType<typeof run>>, advisorUsage: typeof separated | null) =>
+      expect(fields).toMatchObject({
+        usage: {
+          models: {
+            "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
+            "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
+          },
         },
+        advisor: { model: "claude-opus-5", consultations: 1, usage: advisorUsage, failed_calls: [] },
       });
 
     it("subagent が走っていない、または advisor と別の model で返った session は数字のまま", async () => {

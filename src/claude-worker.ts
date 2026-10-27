@@ -2039,8 +2039,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // and read as a false "missing usage" — same status as an actual kill,
       // which it isn't
       flushStdout();
-      const { usage, ...reported } = claudeExitFields(streamObserved);
-      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), ...reported };
+      const fields = claudeExitFields(streamObserved);
+      const exit: WorkerExit = { exit_code: code, signal, stderr_tail: finishStderrTail(), reported_error: fields.reported_error, last_message: fields.last_message };
       // this diagnostic used to live in defaultSpawn (console.error only);
       // promoted here alongside the worker_exited write so an operator
       // tailing logs still sees a crash, not just the audit record (issue #32)
@@ -2065,7 +2065,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
             ...exit,
             worker_spawned_event_id: spawnedEventId,
             output_closed: outputClosed,
-            usage,
+            ...fields,
           },
           at: this.options.clock.now(),
         },
@@ -2082,7 +2082,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         );
       }
       // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
-      this.options.onWorkerExited?.(task.id, usage?.model_swaps.length ? { ...exit, model_swaps: usage.model_swaps } : exit, streamObserved.capInterrupted);
+      this.options.onWorkerExited?.(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, streamObserved.capInterrupted);
     };
     // ADR 0109 決定4: root process の exit は、容器に残るものが**孤児である証拠**で
     // ある —— 行儀よく exit するのを待たずに強制回収を撃つ。読み切りより先に撃っても

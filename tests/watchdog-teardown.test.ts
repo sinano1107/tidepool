@@ -1040,7 +1040,7 @@ it.each([
   const at = new Date("2026-10-27T00:00:00Z");
   const task = pickupTask(db, registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at)!;
   const spawned = appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
-  if (exited) appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  if (exited) appendEvent(db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
   returnToQueueHead(db, task, { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" }, at);
 
   expect(teardownStep(db, task.id)).toEqual(step);

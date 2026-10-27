@@ -40,7 +40,7 @@ it.each(["deleting unrelated files", undefined])("attribution receives the same 
 it("a stop in a later retry session does not enter the first session's attribution", async () => {
   const b = fixture();
   // Setup: the first worker exited, then a retry started on the same task.
-  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", worker_spawned_event_id: b.spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], worker_spawned_event_id: b.spawned, output_closed: true, usage: null, ...QUIET_EXIT } });
   appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
   recordHumanStop(b.db, b.task.id, "retry went wrong", at, "webui");
 

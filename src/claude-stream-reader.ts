@@ -196,9 +196,9 @@ interface StreamObservation {
   /** The init line's resolved main model, used only to decide whether the
    *  advisor's own usage is separable from it. */
   mainModel: string | null;
-  /** ADR 0215: `usage.model_swaps` as it will be written. */
+  /** ADR 0215: `worker_exited.model_swaps` as it will be written. */
   modelSwaps: ModelSwap[];
-  /** ADR 0215: `usage.refusals` keyed by `message.id` — one message splits into
+  /** ADR 0215: `worker_exited.refusals` keyed by `message.id` — one message splits into
    *  several assistant lines, one per block, so a refusal counts once per id. */
   refusals: Map<unknown, string | null>;
   /** issue #2432: the subagents seen on the stream, keyed by `tool_use_id`, with the resolved
@@ -206,20 +206,20 @@ interface StreamObservation {
   subagents: Map<unknown, string | null>;
 }
 
-/** The advisor half of worker_exited's usage (issue #33 判断6). Non-null only
+/** The advisor record of worker_exited (issue #33 判断6). Non-null only
  *  on positive evidence — at least one consultation or failed call actually
  *  observed on the stream (ADR 0214) — so "the board pinned an advisor" alone
  *  never produces a row that claims one was attached. */
 function toAdvisorRecord(
-  result: StreamResultEvent,
+  result: StreamResultEvent | null,
   observed: StreamObservation,
 ): AdvisorRecord | null {
   if (observed.consultations === 0 && observed.failedCalls.length === 0) return null;
-  const model = advisorModelFrom(result);
+  const model = result ? advisorModelFrom(result) : null;
   return {
     model,
     consultations: observed.consultations,
-    usage: advisorUsage(result, model, observed),
+    usage: result ? advisorUsage(result, model, observed) : null,
     failed_calls: observed.failedCalls,
   };
 }
@@ -296,10 +296,8 @@ function modelBreakdownFrom(result: StreamResultEvent): ModelBreakdown {
 /** Translates the CLI's vendor-shaped result event into the board's own
  *  worker_exited usage vocabulary (ADR 0005 / issue #32): total_cost_usd
  *  becomes estimated_cost_usd, no CLI field names leak past this point.
- *
- *  The advisor field is the one part that cannot be built from the result line
- *  alone — see StreamObservation. */
-function toUsage(result: StreamResultEvent, observed: StreamObservation): WorkerExitedUsage {
+ */
+function toUsage(result: StreamResultEvent): WorkerExitedUsage {
   const models = modelBreakdownFrom(result);
   return {
     input_tokens: result.usage.input_tokens,
@@ -307,10 +305,7 @@ function toUsage(result: StreamResultEvent, observed: StreamObservation): Worker
     cache_read_tokens: result.usage.cache_read_input_tokens,
     cache_creation_tokens: result.usage.cache_creation_input_tokens,
     estimated_cost_usd: result.total_cost_usd,
-    advisor: toAdvisorRecord(result, observed),
     ...(models !== undefined ? { models } : {}),
-    model_swaps: observed.modelSwaps,
-    refusals: [...observed.refusals.values()],
   };
 }
 
@@ -355,9 +350,12 @@ export function observeClaudeLine(observed: StreamObservation, parsed: Record<st
 /** 観測 → `worker_exited` の stream 由来の欄。live の settle と起動時の復旧が同じこれを呼ぶ(ADR 0316 決定1)。 */
 export function claudeExitFields(
   observed: StreamObservation,
-): Pick<Extract<EventPayload, { kind: "worker_exited" }>, "usage" | "reported_error" | "last_message"> {
+): Pick<Extract<EventPayload, { kind: "worker_exited" }>, "usage" | "reported_error" | "last_message" | "model_swaps" | "refusals" | "advisor"> {
   return {
-    usage: observed.lastResult ? toUsage(observed.lastResult, observed) : null,
+    usage: observed.lastResult ? toUsage(observed.lastResult) : null,
+    model_swaps: observed.modelSwaps,
+    refusals: [...observed.refusals.values()],
+    advisor: toAdvisorRecord(observed.lastResult, observed),
     reported_error: reportedError(observed.lastErrorResult),
     last_message: observed.lastMessage,
   };

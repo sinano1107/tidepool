@@ -43,7 +43,7 @@ it("exit の記録が無い session は、観測していない印の exit で�
 
   const [exited] = b.exits();
   expect(exited?.payload).toEqual({
-    kind: "worker_exited",
+    kind: "worker_exited", advisor: null, model_swaps: [], refusals: [],
     exit_observed: false,
     exit_code: null,
     signal: null,
@@ -73,7 +73,7 @@ it("閉じた session の task の一時領域だけを消し、他の task の�
 
 it("exit はあるが Episode の無い session は投影だけ補い、2つ目の exit を書かない", async () => {
   const b = await board();
-  const exited = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: b.spawns[0]!, output_closed: true, usage: null } });
+  const exited = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: b.spawns[0]!, output_closed: true, usage: null } });
 
   b.close();
 
@@ -98,7 +98,7 @@ it("古い投影器の版の Episode を持つ session は選ばない", async (
   b.db
     .prepare("INSERT INTO episodes (worker_spawned_event_id, extractor_version, task_id, agent, lines) VALUES (?, ?, ?, 'deckhand', '{}')")
     .run(b.spawns[0], `${EXTRACTOR_VERSION}-old`, b.task.id);
-  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: b.spawns[0]!, output_closed: true, usage: null } });
+  appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: b.spawns[0]!, output_closed: true, usage: null } });
 
   b.close();
 
@@ -182,21 +182,34 @@ function liveCodex(lines: string[]) {
   return codexExitFields(observed);
 }
 
+it.each([false, true])("Claude の読み手は消費の報告が無くても stream の観測を残す(is_error: %s)", (errorResult) => {
+  const lines = CLAUDE_STREAM.filter((line) => JSON.parse(line).type !== "result");
+  lines.push(JSON.stringify({ type: "assistant", message: { content: [{ type: "advisor_tool_result", tool_use_id: "s2", content: { type: "advisor_tool_result_error", error_code: "unavailable" } }] } }));
+  if (errorResult) lines.push(JSON.stringify({ ...JSON.parse(CLAUDE_RESULT), is_error: true, api_error_status: 429 }));
+
+  expect(liveClaude(lines)).toMatchObject({
+    usage: null,
+    model_swaps: [{ from: "claude-sonnet-5", to: "claude-haiku-5", scope: "local", category: "cyber" }],
+    refusals: ["cyber"],
+    advisor: { model: null, consultations: 1, failed_calls: ["unavailable"], usage: null },
+  });
+});
+
 it("Claude の読み手は行の列から usage 一式・CLI の報告した失敗・最後の発話を作る", () => {
   expect(liveClaude(CLAUDE_STREAM)).toEqual({
+    advisor: { model: "claude-opus-5", consultations: 1, usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 }, failed_calls: [] },
+    model_swaps: [{ from: "claude-sonnet-5", to: "claude-haiku-5", scope: "local", category: "cyber" }],
+    refusals: ["cyber"],
     usage: {
       input_tokens: 4,
       output_tokens: 31,
       cache_read_tokens: 61644,
       cache_creation_tokens: 13114,
       estimated_cost_usd: 0.2999,
-      advisor: { model: "claude-opus-5", consultations: 1, usage: { input_tokens: 38484, output_tokens: 313, estimated_cost_usd: 0.200245 }, failed_calls: [] },
       models: {
         "claude-sonnet-5": { input_tokens: 4, output_tokens: 31, cache_read_tokens: 61644, cache_creation_tokens: 13114, estimated_cost_usd: 0.0968847 },
         "claude-opus-5": { input_tokens: 38484, output_tokens: 313, cache_read_tokens: 0, cache_creation_tokens: 38484, estimated_cost_usd: 0.200245 },
       },
-      model_swaps: [{ from: "claude-sonnet-5", to: "claude-haiku-5", scope: "local", category: "cyber" }],
-      refusals: ["cyber"],
     },
     reported_error: "API error status 500: Overloaded",
     last_message: "parser done",
@@ -205,10 +218,15 @@ it("Claude の読み手は行の列から usage 一式・CLI の報告した失�
 
 it("Codex の読み手は行の列から正規化した usage・`turn.failed` の文・最後の発話を作る", () => {
   expect(liveCodex(CODEX_STREAM)).toEqual({
-    usage: { input_tokens: 50, output_tokens: 7, cache_read_tokens: 40, cache_creation_tokens: 10, estimated_cost_usd: null, advisor: null, model_swaps: [], refusals: [] },
+    usage: { input_tokens: 50, output_tokens: 7, cache_read_tokens: 40, cache_creation_tokens: 10, estimated_cost_usd: null },
+    advisor: null, model_swaps: [], refusals: [],
     reported_error: "stream disconnected",
     last_message: "parsed",
   });
+});
+
+it("Codex の読み手は消費の報告が無くても空の stream 観測を常に返す", () => {
+  expect(liveCodex([])).toEqual({ usage: null, model_swaps: [], refusals: [], advisor: null, reported_error: null, last_message: null });
 });
 
 it.each([
@@ -240,7 +258,12 @@ it("result 行の無い transcript では usage は欠測、最後の発話は�
 
   b.close();
 
-  expect(b.exits()[0]?.payload).toMatchObject({ exit_observed: false, usage: null, last_message: "parser done" });
+  expect(b.exits()[0]?.payload).toMatchObject({
+    exit_observed: false, usage: null, last_message: "parser done",
+    model_swaps: [{ from: "claude-sonnet-5", to: "claude-haiku-5", scope: "local", category: "cyber" }],
+    refusals: ["cyber"],
+    advisor: { model: null, consultations: 1, failed_calls: [], usage: null },
+  });
 });
 
 it("復旧は stream の帰結を撃たない —— 認証失敗・上限到達・行の拒否の result 行があっても quarantine も question も立たない(ADR 0316 決定3)", async () => {

@@ -196,8 +196,8 @@ it("再 spawn で注入の記録が2つあれば最新の記録の項目を読�
   register(db, true);
   const work = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
   const spawned = appendEvent(db, { taskId: work, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, ...OPUS_ROW, advisor: null } });
-  const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5, advisor: null, model_swaps: [], refusals: [], models: {} };
-  appendEvent(db, { taskId: work, actorId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
+  const usage = { input_tokens: 1, output_tokens: 1, cache_read_tokens: 0, cache_creation_tokens: 0, estimated_cost_usd: 0.5, models: {} };
+  appendEvent(db, { taskId: work, actorId: "board", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage } });
   applyExecutionSettingsChange(db, { setting: "delete_row", ...OPUS_ROW }, "webui", at);
   const review = register(db);
   const first = injectRoutingMaterial(db, review.id, "auditor", at);

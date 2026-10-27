@@ -118,7 +118,7 @@ it("今の判定の読み口は、同じ異議群に initial と after_rca の�
 /** 1つの task の event 列(id は 1 から順)。 */
 const taskEvents = (...payloads: EventPayload[]): EventRow[] =>
   payloads.map((payload, i) => ({ id: i + 1, task_id: "t", actor_id: "deckhand", origin: "board", kind: payload.kind, payload, created_at: "2026-10-27T00:00:00Z" }));
-const exitOf = (spawnedId: number): EventPayload => ({ kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
+const exitOf = (spawnedId: number): EventPayload => ({ kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawnedId, output_closed: true, usage: null });
 const SPAWN_FAILED: EventPayload = { kind: "spawn_failed", error_code: "ENOENT", message: "spawn claude ENOENT" };
 const UNWRITABLE: EventPayload = { kind: "record_container_unwritable", path: "/logs", reason: "EACCES" };
 

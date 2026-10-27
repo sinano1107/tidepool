@@ -404,7 +404,7 @@ const codexEvents = (): EventRow[] => {
     { id: 400, task_id: task, actor_id: "codex-agent", origin: "board", kind: "worker_spawned", payload: { ...WORKER_SPAWNED, harness: "codex", cli_version: "codex-cli 0.147.0" }, created_at: at },
     { id: 500, task_id: task, actor_id: "codex-agent", origin: "worker", kind: "memory_pulled", payload: { kind: "memory_pulled", verb: "read_memory", input: {}, returned_ids: [7], watermark: 3 }, created_at: at },
     { id: 501, task_id: task, actor_id: "codex-agent", origin: "worker", kind: "decision_logged", payload: { kind: "decision_logged", line: "chose path A" }, created_at: at },
-    { id: 502, task_id: task, actor_id: "codex-agent", origin: "board", kind: "worker_exited", payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: 400, output_closed: true, usage: null }, created_at: at },
+    { id: 502, task_id: task, actor_id: "codex-agent", origin: "board", kind: "worker_exited", payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: 400, output_closed: true, usage: null }, created_at: at },
   ];
 };
 const projectCodex = (transcriptLines = codexTranscriptLines()) =>

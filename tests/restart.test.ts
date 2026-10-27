@@ -152,7 +152,7 @@ function leaveOpenSession(dir: string, taskId: string, { exited = false, transcr
   const db = openDb(join(dir, "board.sqlite"));
   const at = new Date();
   const spawned = appendEvent(db, { taskId, actorId: "fake-worker", origin: "board", at, payload: WORKER_SPAWNED });
-  if (exited) appendEvent(db, { taskId, actorId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
+  if (exited) appendEvent(db, { taskId, actorId: "fake-worker", origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, usage: null } });
   db.close();
   const writeTranscript = () => writeFileSync(join(dir, `${taskId}.${spawned}.stream.jsonl`), toolCall(1, "Bash", null).join("\n"));
   if (transcript) writeTranscript();

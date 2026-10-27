@@ -15,6 +15,9 @@ const input: AllocationReviewInput = {
   },
   tier: "economy",
   usage: null,
+  model_swaps: [],
+  refusals: [],
+  advisor: null,
   actions: null,
 };
 
@@ -46,9 +49,9 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(args[1]).toContain('"model": "sonnet"');
   expect(args[1]).toContain('"tier": "economy"');
   expect(args[1]).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
-  // usage / actions / usage.advisor.usage の null は観測なしであって 0 でも「何もしなかった」でもない(ADR 0083 追記10)
+  // usage / actions / advisor.usage の null は観測なしであって 0 でも「何もしなかった」でもない(ADR 0083 追記10)
   expect(args[1]).toContain(
-    'A null usage (the session filed no consumption report), actions (the action counts were not observed), or usage.advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost; do not read it as evidence either way.',
+    'A null usage (the session filed no consumption report), actions (the action counts were not observed), or advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost; do not read it as evidence either way.',
   );
   // 上位の token 欄は親スレッドの通常の推論だけで compaction も入らず、Claude の models / cost は subagent・advisor・compaction を含み、
   // Codex の subagent と compaction の消費は観測されない(ADR 0297 決定1・2)

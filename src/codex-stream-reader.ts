@@ -94,9 +94,12 @@ export function observeCodexLine(observed: CodexStreamObservation, event: unknow
  *  Codex は advisor・差し替え・拒否を観測しないので空で正規化する。 */
 export function codexExitFields(
   observed: CodexStreamObservation,
-): Pick<Extract<EventPayload, { kind: "worker_exited" }>, "usage" | "reported_error" | "last_message"> {
+): Pick<Extract<EventPayload, { kind: "worker_exited" }>, "usage" | "reported_error" | "last_message" | "model_swaps" | "refusals" | "advisor"> {
   return {
-    usage: observed.usage ? { ...observed.usage, advisor: null, model_swaps: [], refusals: [] } : null,
+    usage: observed.usage,
+    advisor: null,
+    model_swaps: [],
+    refusals: [],
     reported_error: observed.reportedError,
     last_message: observed.lastMessage,
   };

@@ -22,9 +22,12 @@ const usage = {
   cache_read_tokens: 0,
   cache_creation_tokens: 0,
   estimated_cost_usd: 1.5,
-  advisor: null,
-  model_swaps: [],
-  refusals: [],
+};
+
+const observations = {
+  model_swaps: [{ from: "sonnet", to: "opus", scope: "session" as const, category: "cyber" }],
+  refusals: ["cyber", null],
+  advisor: { model: null, consultations: 1, failed_calls: ["unavailable"], usage: null },
 };
 
 it("配分評価の入力は verdict・findings・実行設定と出所・走った段・usage・行動列マーカーの計数から組まれる", () => {
@@ -40,6 +43,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・走っ
         worker_spawned_event_id: 7,
         output_closed: true,
         usage,
+        ...observations,
       },
       markers: ["decision", "advisor", "commit", "advisor", "compaction"],
     }),
@@ -55,6 +59,7 @@ it("配分評価の入力は verdict・findings・実行設定と出所・走っ
     },
     tier: "standard",
     usage,
+    ...observations,
     actions: { advisor_consultations: 2, compactions: 1, commits: 1 },
   });
 });
@@ -69,7 +74,7 @@ it("usage と Precedent の episode が無い(投影前の)session は null で�
       exited: undefined,
       markers: null,
     }),
-  ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null });
+  ).toMatchObject({ verdict: null, findings: null, tier: "economy", usage: null, actions: null, model_swaps: [], refusals: [], advisor: null });
 });
 
 it("Codex の session は Episode があっても行動列が観測なし(null)—— compaction が stdout に出ないので、空のマーカー列を 0 回として渡さない(ADR 0083 追記10)", () => {
@@ -205,7 +210,7 @@ async function reviewedWork(t: Tidepool, options: { session: boolean } = { sessi
       origin: "board",
       at: t.clock.now(),
       payload: {
-        kind: "worker_exited",
+        kind: "worker_exited", advisor: null, model_swaps: [], refusals: [],
         ...QUIET_EXIT,
         worker_spawned_event_id: spawnedId,
         output_closed: true,
