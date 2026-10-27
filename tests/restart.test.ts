@@ -244,10 +244,12 @@ it("待っている回収の無い Containment の確認回答の受理でも復
   const recorder = recordingSpawn();
   const runtime = new FakeContainerRuntime(recorder.spawn);
   t = await bootTidepool({ dir: t.dir, containerRuntime: runtime, hostSkills: enumerateHostSkills, harnessContainment: async () => ({ available: true }) });
+  // 起動の pickup が開く worker の容器と Board call の容器の順を固定する
+  await vi.waitFor(() => expect(t.worker.started.map((x) => x.id)).toEqual([previous.id]));
   // Board call の容器が回収 timeout まで空にならない —— 盤面全体の Containment quarantine(watchdog の待つ回収は無い)
   const pending = api(t.baseUrl, "GET", "/api/skills");
   await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
-  const container = runtime.created[0]!;
+  const container = runtime.created.find((id) => id !== previous.id)!;
   runtime.hold(container);
   recorder.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", skills: [] })}\n`);
   await new Promise((resolve) => setImmediate(resolve));
