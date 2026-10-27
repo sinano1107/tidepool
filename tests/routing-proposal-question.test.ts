@@ -3,7 +3,7 @@ import { appendEvent } from "../src/events.js";
 import { createBehaviorCandidate, proposeMemoryChange } from "../src/memory.js";
 import { registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, rowSession, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, completeRoutingReviewViaMcp, divergedSession, HOUR, HUMAN_WEBUI, managementMcpClient, mcpClient, routingMaterialViaWebui, rowSession, startFirstMetaReviewViaWebui, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 /** routing の行の提案 question(issue #918 / ADR 0150 決定1・2)のサーバ境界: 提案 verb、付帯子としての question、回答での
  *  適用と修正値、pin の陳腐化、過去の提案の読み口。pin の照合と修正値の合成はドメイン層(tests/execution-setting.test.ts)が言う。 */
@@ -15,7 +15,7 @@ const OPUS = { provider: "anthropic", tier: "standard", model: "claude-opus-5-5"
 /** routing の材料で poll させ、slot に入った routing meta-review の接続を返す。 */
 async function boardWithRoutingReview() {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");
@@ -103,8 +103,8 @@ it("approve で表の行が提案の値になり、推奨どおりに数えら�
     expect((await answer(questionId, { answers: ["approve"] })).status).toBe(200);
 
     expect(await row("claude-opus-5-5")).toEqual({ ...OPUS, tier: "frontier" });
-    // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)
-    expect((await call("list_routing_cells", { since_watermark: 0 })).rows).toEqual([]);
+    // 適用は回答の印を持ち、人間が変えた行として meta-review に読まれない(ADR 0151)—— 読まれるのは setup の材料の行の編集(moonshot)だけ
+    expect((await call("list_routing_cells", { since_watermark: 0 })).rows.map((r: any) => r.row.provider)).toEqual(["moonshot"]);
     expect((await events(questionId)).find((e) => e.kind === "question_answered").payload).toEqual(
       expect.objectContaining({ answers: [{ answer: "approve", recommendation_accepted: true }] }),
     );

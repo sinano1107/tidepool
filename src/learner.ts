@@ -277,8 +277,9 @@ export function loadEpisodes(db: Db): RoutingEpisode[] {
 /** 盤面境界の読み口: 学習器の種を (セル, 段) ごとに1つ —— 同じ (セル, 段) は出所を問わず event id の最新が勝つ(ADR 0273 決定7)。
  *  Interview の種は受験者の受理の採点で、セルは対象、段は root の段(測る段)。採点が確定するのは root の完了なので、root が
  *  done のものだけ(cancelled は種にしない —— ADR 0251 決定4)。却下の採点は種を置かず、前の受理を消しもしない。人間の種は
- *  行を足す扉の「観測ありとして始める」で、セルは足した行、段はそのとき焼いた段の id。 */
-export function loadSeeds(db: Db): Seed[] {
+ *  行を足す扉の「観測ありとして始める」で、セルは足した行、段はそのとき焼いた段の id。`upTo` は event id の上限 —— routing の材料の節は
+ *  窓の上限までの最新を読む(ADR 0319 決定4)。 */
+export function loadSeeds(db: Db, upTo = Number.MAX_SAFE_INTEGER): Seed[] {
   const rows = db
     .prepare(
       `SELECT e.id AS event_id, it.provider, it.model, it.effort, root.tier_id, 'interview' AS kind
@@ -286,14 +287,14 @@ export function loadSeeds(db: Db): Seed[] {
        JOIN tasks examinee ON examinee.id = e.task_id
        JOIN interview_targets it ON it.id = examinee.interview_target_id
        JOIN tasks root ON root.id = it.task_id
-       WHERE e.kind = 'interview_scored' AND json_extract(e.payload, '$.verdict') = 'accepted' AND root.status = 'done'
+       WHERE e.kind = 'interview_scored' AND json_extract(e.payload, '$.verdict') = 'accepted' AND root.status = 'done' AND e.id <= @upTo
        UNION ALL
        SELECT id, json_extract(payload, '$.row.provider'), json_extract(payload, '$.row.model'), json_extract(payload, '$.row.effort'),
          json_extract(payload, '$.tier_id'), 'human'
-       FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.seed') IS NOT NULL
+       FROM events WHERE kind = 'execution_settings_changed' AND json_extract(payload, '$.seed') IS NOT NULL AND id <= @upTo
        ORDER BY event_id`,
     )
-    .all() as Array<Seed["cell"] & Omit<Seed, "cell">>;
+    .all({ upTo }) as Array<Seed["cell"] & Omit<Seed, "cell">>;
   const seeds = new Map<string, Seed>();
   for (const { event_id, tier_id, kind, ...cell } of rows) {
     seeds.set(JSON.stringify([cell.provider, cell.model, cell.effort, tier_id]), { cell, tier_id, kind, event_id });
@@ -328,11 +329,12 @@ export function selectorBranch(input: Parameters<typeof recommend>[0] & { promot
   };
 }
 
-/** shadow 行の書き手(盤面境界、spec #541): work 側の task(`isWorkSide`)の pickup 直前に、selector の分岐が決めた組を1行残す。返り値は行の id。 */
-export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date): number {
+/** shadow 行の書き手(盤面境界、spec #541): work 側の task(`isWorkSide`)の pickup が成立した直後に、selector の分岐が決めた組を1行
+ *  残す。行は pickup の event に乗る —— `event_watermark` はその `task_picked_up` の id(ADR 0319 決定1)。返り値は行の id。 */
+export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof selectorBranch>["shadow"], now: Date, pickupEventId: number): number {
   const { lastInsertRowid } = db.prepare(
     `INSERT INTO learner_shadow (task_id, cell_recommended, cell_actual, source, basis, record_recommended, record_actual, candidates, event_watermark, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM events), ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     taskId,
     cellJson(cellOf(shadow.recommended)),
@@ -342,6 +344,7 @@ export function recordShadow(db: Db, taskId: string, shadow: ReturnType<typeof s
     JSON.stringify(shadow.recommended_record),
     JSON.stringify(shadow.actual_record),
     shadow.candidates,
+    pickupEventId,
     now.toISOString(),
   );
   return Number(lastInsertRowid);

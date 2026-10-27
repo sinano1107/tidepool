@@ -8,7 +8,7 @@ import { registerMetaReview } from "../src/meta-review.js";
 import { listRoutingCells, listRoutingShadow, proposeRoutingChange, type RoutingObject, readRoutingSettings } from "../src/routing-review.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { tierIdOf } from "../src/tier.js";
-import { answerQuestionViaWebui, attributedObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
+import { answerQuestionViaWebui, attributedObjection, divergedSession, episodeOfDecision, executionSetting, HUMAN_WEBUI, markPickedUp, objectedJudgment, QUIET_EXIT, rowSession, WORKER_SPAWNED } from "./harness.js";
 
 /** routing meta-review の材料の節(ADR 0180 追記 #1239)のドメイン層。spawn の prompt に入ることは両 adapter のテストが言う。 */
 const at = new Date("2026-10-01T00:00:00.000Z");
@@ -126,32 +126,34 @@ it("表と設定は read_routing_settings の提案以外の全部で、窓で�
   expect(section).toContain(JSON.stringify(readExecutionSettings(db)));
 });
 
-it("shadow の部分は窓 `前回 <= event_watermark < 今回` の乖離した行だけを list_routing_shadow の行で載せ、全行数は一致した行を含み、候補が2行以上あった行の数を並べる —— 前回より前と今回以後の行は行にも数にも入らない", () => {
+it("shadow の部分は窓 `前回 < event_watermark <= 今回`(行が乗る pickup の event の窓)の乖離した行だけを list_routing_shadow の行から outcome を除いて載せ、全行数は一致した行を含み、候補が2行以上あった行の数を並べる —— 前回以前と今回より後の行は行にも数にも入らず、list_routing_shadow の since_watermark も同じ境界(ADR 0319 決定1・2)", () => {
   const { db, work } = board();
   register(db, true);
   const review = register(db);
   const [after, upTo] = listEventsOfKinds(db, ["meta_review_registered"]).map((e) => e.payload.material_watermark) as [number, number];
-  // setup のみ: 境界の watermark を直接置く(recordShadow は書いた時点の最大 id を焼く)
+  // setup のみ: 境界の watermark を pickup の event id として直接渡す
   const shadowAt = (title: string, watermark: number, recommended = sol, candidates = 2) => {
     const taskId = work(title);
-    recordShadow(db, taskId, shadow(recommended, opus, candidates), at);
-    db.prepare("UPDATE learner_shadow SET event_watermark = ? WHERE id = (SELECT MAX(id) FROM learner_shadow)").run(watermark);
+    recordShadow(db, taskId, shadow(recommended, opus, candidates), at, watermark);
     return taskId;
   };
   shadowAt("before", after - 1);
-  const atAfter = shadowAt("at-after", after);
+  shadowAt("at-after", after);
   shadowAt("matched", after + 1, opus, 1);
   const inside = shadowAt("inside", upTo - 1);
-  shadowAt("at-up-to", upTo);
-  shadowAt("later", upTo + 1);
+  const atUpTo = shadowAt("at-up-to", upTo);
+  const later = shadowAt("later", upTo + 1);
 
   const { parts, section } = routingMaterialOf(db, review);
 
-  expect(parts.shadow.map((row) => row.task_id)).toEqual([atAfter, inside]);
+  expect(parts.shadow.map((row) => row.task_id)).toEqual([inside, atUpTo]);
   expect(parts.shadow_rows).toBe(3);
   expect(parts.shadow_rows_multi_candidate).toBe(2);
-  const verbRows = listRoutingShadow(db, review, { diverged_only: true }).shadow.filter((row) => [atAfter, inside].includes(row.task_id));
-  for (const row of verbRows) expect(section).toContain(JSON.stringify(row));
+  const verbRows = listRoutingShadow(db, review, { diverged_only: true }).shadow;
+  expect(verbRows.map((row) => row.task_id)).toEqual([inside, atUpTo, later]);
+  expect(listRoutingShadow(db, review, { diverged_only: true, since_watermark: after }).shadow.map((row) => row.task_id)).toEqual([inside, atUpTo, later]);
+  for (const { outcome: _, ...row } of verbRows.slice(0, 2)) expect(section).toContain(JSON.stringify(row));
+  expect(section).not.toContain('"outcome"');
   expect(section).toContain("3 shadow rows were written in this window, 2 of them with two or more candidates");
 });
 
@@ -261,8 +263,8 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
   const evidence = divergedSession(db, at);
   const previous = register(db, true);
   const task = work("t");
-  const diverged = recordShadow(db, task, shadow(sol, opus), at);
-  recordShadow(db, task, shadow(opus, opus, 1), at);
+  const diverged = recordShadow(db, task, shadow(sol, opus), at, markPickedUp(db, task, at));
+  recordShadow(db, task, shadow(opus, opus, 1), at, markPickedUp(db, task, at));
   const spawned = spawn(task, "deckhand", opus);
   const seen = exit(task, spawned);
   const annotation = allocate(task, spawned, "appropriate");
@@ -291,6 +293,7 @@ it("節を組んだ記録は主題 routing と、乖離した shadow 行の id�
       shadow_rows_multi_candidate: 1,
       allocation_review_event_ids: [annotation],
       cell_event_ids: [seen],
+      closed_sessions: 1,
       row_change_event_ids: [rowEdit],
       stop_attributed_event_ids: [],
       proposals: [question],
@@ -309,10 +312,11 @@ it("Items to judge は complete_routing_review の鍵で評価の対象を並べ
   const { db, work, spawn, exit, allocate } = board();
   register(db, true);
   const ran = work("ran");
-  recordShadow(db, ran, shadow(sol, executionSetting("anthropic", "claude-opus-5-5")), at);
+  recordShadow(db, ran, shadow(sol, executionSetting("anthropic", "claude-opus-5-5")), at, markPickedUp(db, ran, at));
   allocate(ran, spawn(ran, "deckhand", executionSetting("anthropic", "claude-opus-5-5", { source: { tier: "agent", provider: "rank" } })), "overpowered");
   // session に辿り着かなかった乖離 shadow 行は走っていない
-  recordShadow(db, work("never spawned"), shadow(opus, executionSetting("openai", "gpt-5.6-sol")), at);
+  const neverSpawned = work("never spawned");
+  recordShadow(db, neverSpawned, shadow(opus, executionSetting("openai", "gpt-5.6-sol")), at, markPickedUp(db, neverSpawned, at));
   applyExecutionSettingsChange(db, { setting: "row", row: haikuRow }, "webui", at);
   const observed = work("observed");
   const spawned = spawn(observed, "reef-crab", executionSetting("openai", "gpt-5.6-terra", { source: { tier: "task", provider: "rank" } }));
@@ -352,7 +356,7 @@ it("乖離 shadow 行で走った行が spawn の前に表から消されてい�
   const { db, work, spawn, allocate } = board();
   register(db, true);
   const ran = work("ran");
-  recordShadow(db, ran, shadow(opus, executionSetting("openai", "gpt-5.6-sol")), at);
+  recordShadow(db, ran, shadow(opus, executionSetting("openai", "gpt-5.6-sol")), at, markPickedUp(db, ran, at));
   spawn(ran, "deckhand", executionSetting("openai", "gpt-5.6-sol"));
   applyExecutionSettingsChange(db, { setting: "delete_row", provider: "openai", model: "gpt-5.6-sol", effort: "high" }, "webui", at);
   applyExecutionSettingsChange(db, { setting: "insert_tier", name: "careful", description: "Careful work.", position: 1 }, "webui", at);
@@ -389,7 +393,7 @@ it("人間が足した行が同じ窓で走って初観測になれば、走っ�
   applyExecutionSettingsChange(db, { setting: "row", row: haikuRow }, "webui", at);
   const task = work("t");
   const run = executionSetting("anthropic", "claude-haiku-5-5", { effort: "low" });
-  recordShadow(db, task, shadow(opus, run), at);
+  recordShadow(db, task, shadow(opus, run), at, markPickedUp(db, task, at));
   exit(task, spawn(task, "deckhand", run));
   const review = register(db);
 

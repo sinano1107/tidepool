@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { SEED_TIERS } from "../src/tier.js";
-import { api, bootTidepool, HOUR, mcpClient, rowSession, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
+import { api, bootTidepool, HOUR, mcpClient, routingMaterialViaWebui, rowSession, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 
 /** 段を足して行を移す提案(issue #1424 / ADR 0200 決定8)のサーバ境界: 提案 verb と pin、approve での段の挿入と行の移動、
  *  修正値、修正後の名前の衝突で回答ごと拒むこと、隣の段・移す行の変更での陳腐化。pin の照合と修正値の形はドメイン層
@@ -16,7 +16,7 @@ const CAREFUL = { name: "careful", description: "Work where standard missed a cr
 /** routing の材料で poll させ、slot に入った routing meta-review から opus の行を standard と frontier の間の新しい段へ移す提案を立てる。 */
 async function boardWithAddTierProposal() {
   t = await bootTidepool();
-  expect((await api(t.baseUrl, "POST", "/api/settings/execution", { setting: "priority", value: "cost" })).status).toBe(200);
+  await routingMaterialViaWebui(t);
   await startFirstMetaReviewViaWebui(t, "routing");
   await t.clock.advance(HOUR);
   const review = ((await api(t.baseUrl, "GET", "/api/tasks")).json as any[]).find((task) => task.meta_review_subject === "routing");

@@ -553,6 +553,7 @@ it("主題 memory の材料の節に載ったエントリは、その session �
       shadow_rows_multi_candidate: 0,
       allocation_review_event_ids: [9002],
       cell_event_ids: [9003],
+      closed_sessions: 1,
       row_change_event_ids: [9004],
       precedents: [9005],
       precedent_memory_entry_ids: [routingShown],

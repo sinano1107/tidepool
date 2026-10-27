@@ -382,6 +382,21 @@ it("work task の pickup ごとに shadow 行が1件記録され、selector の�
   expect(shadowRows(b)).toHaveLength(1);
 });
 
+it("scheduler が書く shadow 行は、その pickup の task_picked_up の event に乗る —— pickup の直後に別の event が挟まっても行の watermark は pickup の id(ADR 0319 決定1)", async () => {
+  const b = scheduledBoard({ candidates: () => [opus, sol] });
+  const work = queueWork(b, "learned");
+  // setup のみ: pickup の event の直後に盤面スコープの event を1つ挟む
+  b.db.exec(`CREATE TEMP TRIGGER wedge AFTER INSERT ON events WHEN NEW.kind = 'task_picked_up' BEGIN
+    INSERT INTO events (task_id, actor_id, origin, kind, payload, created_at) VALUES (NULL, 'human', 'webui', 'meta_review_settings_changed', '{"kind":"meta_review_settings_changed","period_days":7}', NEW.created_at);
+  END`);
+  await b.clock.advance(HOUR);
+
+  const [pickedUp] = listEventsOfKinds(b.db, ["task_picked_up"]).filter((e) => e.task_id === work.id);
+  expect(listEventsOfKinds(b.db, ["meta_review_settings_changed"]).map((e) => e.id)).toEqual([pickedUp!.id + 1]);
+  const since = (watermark: number) => listRoutingShadow(b.db, "", { since_watermark: watermark }).shadow.map((row) => row.task_id);
+  expect([since(pickedUp!.id - 1), since(pickedUp!.id)]).toEqual([[work.id], []]);
+});
+
 /** `run` で走って完了した session がある盤面にする。`causes` を渡すとその session の1つの entry が異議群ごとに
  *  `causes` と帰責される —— capability があれば学習器はその行を下げる。渡さなければ受理された観測になる —— 学習器は
  *  未観測の候補へ移らない(ADR 0181)ので、移る先に観測を置くのに使う。 */

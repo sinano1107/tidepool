@@ -26,7 +26,9 @@ import {
   inWindow,
   type MaterialPart,
   type MaterialPartRows,
+  META_REVIEW_SUBJECTS,
   type MetaReviewWindow,
+  materialEvents,
   materialSection,
   metaReviewWindow,
   objectedJudgments,
@@ -74,8 +76,8 @@ export function listRoutingShadow(db: Db, readerTaskId: string, input: ReadWindo
   return packItems(read, "shadow", shadow, {}, { keyOf: (_, i) => kept[i]!.id }) as Packed<{ shadow: typeof shadow }>;
 }
 
-/** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W は event W より後に書かれたので、窓
- *  `(after, upTo]` の行は `after <= W < upTo`。session は窓で切らない。 */
+/** list_routing_shadow の行(ページ割り前、learner_shadow の id つき)。行の watermark W はその pickup の `task_picked_up` の id なので、
+ *  窓は event と同じ `(after, upTo]`(ADR 0319 決定1)。session は窓で切らない。 */
 function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaReviewWindow) {
   const rows = db
     .prepare(
@@ -96,7 +98,7 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
   }>;
   const episodes = loadEpisodes(db);
   return rows.flatMap((row, i) => {
-    if (row.event_watermark < after || row.event_watermark >= upTo) return [];
+    if (!inWindow(row.event_watermark, { after, upTo })) return [];
     const diverged = row.cell_recommended !== row.cell_actual;
     // ponytail: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
     const next = rows.slice(i + 1).find((r) => r.task_id === row.task_id)?.event_watermark ?? Infinity;
@@ -219,9 +221,10 @@ export function readRoutingSettings(db: Db, input: { next?: string }) {
 }
 
 /** list_routing_cells の2種の行(ページ割り前): 窓 `(after, upTo]` に本番の初観測か種の event があるセルと、窓の中の人間の行の
- *  編集。受験者の session は観測ではないので初観測に数えない。セルはその provider / model / effort の種を段ごとに運ぶが、行の
- *  ある (セル, 段) の種だけ —— 行を消しても種の event は残るが、読み手は読まない(spec #2190 / ADR 0273 決定7)。本番の session の
- *  まだ無い種のセルは advisor null・初観測 null で載る。 */
+ *  編集。受験者の session は観測ではないので初観測に数えない。セルはその provider / model / effort の種を段ごとに運び、表の行の
+ *  有無も段の生死も問わない —— Interview の対象は表に無いセルが前提(ADR 0199 決定5)で、消した段の種は `tier_retired` を添える
+ *  (ADR 0319 決定4)。(セル, 段) の種は窓の上限までの最新(読み口は上限なしで全期間)。本番の session のまだ無い種のセルは
+ *  advisor null・初観測 null で載る。 */
 function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number | null }>();
   for (const e of loadEpisodes(db)) {
@@ -233,17 +236,12 @@ function cellRows(db: Db, window: MetaReviewWindow) {
   const rows = listEventsOfKinds(db, ["execution_settings_changed"], window).flatMap(({ id, origin, created_at, payload: p }) =>
     p.setting === "row" && p.question_id === undefined ? [{ event_id: id, origin, created_at, ...(p.key && { key: p.key }), row: p.row, ...(p.seed && { seed: p.seed }) }] : [],
   );
-  const table = loadExecutionSettingTable(db);
-  const liveTiers = new Map(liveTierRows(db).map((t) => [t.id, t.name]));
-  const seeds = loadSeeds(db).flatMap(({ cell, tier_id, kind, event_id }) => {
-    const tier = liveTiers.get(tier_id);
-    return tier !== undefined && table.some((row) => row.tier === tier && matchesRowKey(row, cell)) ? [{ cell, tier, kind, event_id }] : [];
-  });
+  const seeds = loadSeeds(db, window.upTo).map(({ cell, tier_id, kind, event_id }) => ({ cell, ...tierOf(db, tier_id), kind, event_id }));
   for (const { cell } of seeds) {
     if (![...firstSeen.values()].some((c) => matchesRowKey(c.cell, cell))) firstSeen.set(cellJson({ ...cell, advisor: null }), { cell: { ...cell, advisor: null }, first_observed_event_id: null });
   }
   const cells = [...firstSeen.values()]
-    .map((c) => ({ ...c, seeds: seeds.filter((s) => matchesRowKey(c.cell, s.cell)).map(({ tier, kind, event_id }) => ({ tier, kind, event_id })) }))
+    .map((c) => ({ ...c, seeds: seeds.filter((s) => matchesRowKey(c.cell, s.cell)).map(({ cell: _, ...seed }) => seed) }))
     .filter((c) => (c.first_observed_event_id !== null && inWindow(c.first_observed_event_id, window)) || c.seeds.some((s) => inWindow(s.event_id, window)));
   return { cells, rows };
 }
@@ -422,10 +420,10 @@ function judgmentItems(
   return [...rows.values(), ...[...agents].map((agent) => ({ agent })), ...[...tiers].map(({ id, name }) => ({ tier_id: id, tier: name })), { learner: true }];
 }
 
-/** routing の材料の節の8つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、窓の中の乖離した shadow 行と
- *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセルと人間が変えた行、異議つき判断(ADR 0279 決定6)、停止の帰責
- *  (ADR 0312 決定7)、窓の中で決着した提案、判断を要する項目。行はそれぞれの読み口と同じ。異議つき判断と停止の帰責の行は memory.ts の行を
- *  呼び手が渡す(import の循環を避ける)。 */
+/** routing の材料の節の8つの部分(ADR 0180 追記 #1239): 今の表と設定(窓でなく spawn 時点)、前回以降の pickup の乖離した shadow 行と
+ *  全行数と候補が2行以上あった行数(ADR 0181 決定5)、配分評価の分布、新しいセル・人間が変えた行と閉じた本番 session の件数、異議つき判断
+ *  (ADR 0279 決定6)、停止の帰責(ADR 0312 決定7)、窓の中で決着した提案、判断を要する項目。行はそれぞれの読み口と同じ —— shadow 行だけは
+ *  outcome を除く(review が読むのは集計、ADR 0319 決定2)。異議つき判断と停止の帰責の行は memory.ts の行を呼び手が渡す(import の循環を避ける)。 */
 export function routingMaterial<P extends { decision_event_id: number }, S extends { attribution_event_id: number; row: object }>(
   db: Db,
   window: Required<MetaReviewWindow>,
@@ -444,6 +442,8 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
     allocations,
     cells,
     rows,
+    // 既知のセルの exit は初観測に出ないので、窓で閉じた本番 session は件数で載る(ADR 0319 決定3)
+    closed_sessions: materialEvents(db, { worker_exited: META_REVIEW_SUBJECTS.routing.material.worker_exited }, window).length,
     precedents,
     stops,
     proposals: listRoutingProposals(db, window),
@@ -452,15 +452,20 @@ export function routingMaterial<P extends { decision_event_id: number }, S exten
   // 材料の kind が描く部分(ADR 0312 決定1): kind を足して部分を書かなければ、ここで compile が落ちる。節の順はこの写像の順
   const material = {
     "Diverged shadow rows": [
-      `Rows of list_routing_shadow written in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
+      `Rows of list_routing_shadow, without their outcome, for the pickups in this window where the learner's recommendation and the cell that ran differ. ${parts.shadow_rows} shadow ` +
         `rows were written in this window, ${parts.shadow_rows_multi_candidate} of them with two or more candidates; both counts include matched rows, ` +
-        "and a row with one candidate always matches. Track records count production sessions only. A record's seed, when not null, is an accepted score of a done Interview or a row a human added as observed: it makes the cell observed in that tier and weighs one accepted session in place of the table's prior. Read the matched rows, and rows before this window, with list_routing_shadow.",
-      parts.shadow.map(({ id: _, ...row }) => row),
+        "and a row with one candidate always matches. Track records count production sessions only. A record's seed, when not null, is an accepted score of a done Interview or a row a human added as observed: it makes the cell observed in that tier and weighs one accepted session in place of the table's prior. " +
+        "A session's outcome is not settled at its pickup: read a row's outcome with list_routing_shadow. A null worker_spawned_event_id means the pickup has not reached a spawn yet or never started a worker. " +
+        "Read the matched rows, and rows before this window, with list_routing_shadow.",
+      // review が読むのは行が pickup 時点で運ぶ実績で、outcome はまだ決まっていない —— 行単位の outcome は読み口で(ADR 0319 決定2)
+      parts.shadow.map(({ id: _, outcome: __, ...row }) => row),
       "no diverged shadow rows",
     ],
     "Allocation reviews": ["Rows of list_allocations counting the annotations written in this window.", allocations.groups, "no allocation reviews"],
     "New cells and changed rows": [
-      "The cells and rows of list_routing_cells: cells first observed or seeded in this window, and execution-setting rows humans wrote in this window.",
+      "The cells and rows of list_routing_cells: cells first observed or seeded in this window, and execution-setting rows humans wrote in this window. " +
+        "A cell's seeds are listed whether or not the table has a row for it in that tier; a seed's tier_retired marks a tier since deleted. " +
+        `${parts.closed_sessions} production sessions closed in this window; a session on a cell observed before shows only in this count.`,
       [...cells, ...rows],
       "no new cells or changed rows",
     ],

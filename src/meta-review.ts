@@ -7,7 +7,7 @@ import { type ListAgentTiers, readExecutionSettings, settleStaleProposals } from
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { unsettledSql } from "./task-status.js";
-import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, lineageSubjectSql, metaReviewSubjectOf, registerTask, type Task } from "./tasks.js";
+import { finishTask, getTask, type HandoffDoc, isRepairType, lineageSubjectOf, lineageSubjectSql, metaReviewSubjectOf, registerTask, type Task, workSideTypeSql } from "./tasks.js";
 
 /** worker の memory verb。主題 memory の meta-review の接続では `MEMORY_META_REVIEW_VERBS` に置き換わる
  *  (ADR 0122 決定2)。MCP の登録と Codex の `enabled_tools` が同じ差を写す。 */
@@ -64,7 +64,7 @@ type MaterialMap = { [K in EventKind]?: MaterialPredicate };
 type MaterialWhere = { [K in EventKind]?: Pick<MaterialPredicate, "where"> };
 
 /** 同じ主題の meta-review 自身の産物を除く印(ADR 0151 決定3): 提案 question への回答が刻んだ question_id と、review の直接書き込みの
- *  activity(無効化は payload の、作成は entry の書き手の)。店の変更(と routing の kind)の組だけが持つ。 */
+ *  activity(無効化は payload の、作成は entry の書き手の)。店の変更と routing の `allocation_reviewed`・`execution_settings_changed` の組だけが持つ。 */
 const NOT_OWN_PRODUCT_SQL = `json_extract(payload, '$.question_id') IS NULL
   AND COALESCE(json_extract(payload, '$.activity'), json_extract(payload, '$.entry.author.activity')) IS NOT 'meta_review'`;
 
@@ -74,6 +74,10 @@ export const rowSubjectSql = (subject: "memory" | "routing" | null) =>
 
 /** memory の読み手が受け取る帰責(ADR 0312 決定4): 行の主題が memory か、行の主題を問わず cause memory(payload の印 —— 行を読まない)。 */
 const MEMORY_ATTRIBUTION_SQL = `(${rowSubjectSql("memory")} OR json_extract(payload, '$.cause') = 'memory')`;
+
+/** 本番の session の event(ADR 0319 決定3): event の task が work 側(学習器の観測の領域、ADR 0272 決定4 追記)で受験者でない。
+ *  shadow 行を書く pickup と、閉じた本番 session の exit が持つ。 */
+const PRODUCTION_SESSION_SQL = `EXISTS (SELECT 1 FROM tasks WHERE tasks.id = events.task_id AND ${workSideTypeSql("tasks")} AND tasks.interview_target_id IS NULL)`;
 
 /** 周期 meta-review の主題(ADR 0120 決定2・ADR 0150 決定7): 登録する task の欄(文面と review のティア)、due 判定が数え節が描く
  *  材料の kind → 組の写像(ADR 0312 決定1)、接続で worker の memory verb を置き換える専用 verb。 */
@@ -144,8 +148,8 @@ export const META_REVIEW_SUBJECTS = {
         "the routing proposals answered or settled since then, and the items to judge. " +
         "Every item to judge needs a judgment: propose a change to it, or leave it unchanged. End the session with complete_routing_review, " +
         "listing each item you leave unchanged as no_change (with a reason when it helps). " +
-        "A diverged row is a pickup whose recommended and actual cells differ, with how that episode ended; the section counts every " +
-        "shadow row of the window but lists only the diverged ones — read the matched rows, and anything before the previous meta-review, " +
+        "A diverged row is a pickup whose recommended and actual cells differ, with the track records it carried at that pickup; the section counts every " +
+        "shadow row of the window but lists only the diverged ones, without outcomes (read a row's outcome with list_routing_shadow) — read the matched rows, and anything before the previous meta-review, " +
         "with list_routing_shadow, list_allocations and list_routing_cells (since_watermark). The allocation reviews are grouped by tier " +
         "source, row, tier, agent, workspace and the writer of the task's text (an overpowered verdict under an agent's default tier is not a " +
         "writer's declaration), and " +
@@ -171,10 +175,14 @@ export const META_REVIEW_SUBJECTS = {
       completion_criteria:
         "every item to judge in this cycle's material is either proposed on or listed as no_change in complete_routing_review, and each change the evidence supports is proposed",
     },
+    // どの kind も部分に現れる event だけを数える(ADR 0319 決定3): shadow 行は pickup の event に乗り、exit は初観測のセルか閉じた
+    // session の件数、設定の変更は表の行、採点は受理だけ(種のセル)
     material: {
+      task_picked_up: { where: PRODUCTION_SESSION_SQL, part: "Diverged shadow rows" },
       allocation_reviewed: { where: NOT_OWN_PRODUCT_SQL, part: "Allocation reviews" },
-      worker_exited: { where: NOT_OWN_PRODUCT_SQL, part: "Diverged shadow rows" },
-      execution_settings_changed: { where: NOT_OWN_PRODUCT_SQL, part: "New cells and changed rows" },
+      worker_exited: { where: PRODUCTION_SESSION_SQL, part: "New cells and changed rows" },
+      execution_settings_changed: { where: `json_extract(payload, '$.setting') = 'row' AND ${NOT_OWN_PRODUCT_SQL}`, part: "New cells and changed rows" },
+      interview_scored: { where: "json_extract(payload, '$.verdict') = 'accepted'", part: "New cells and changed rows" },
       objection_attributed: { where: rowSubjectSql("routing"), part: "Objected decisions" },
       stop_attributed: { where: rowSubjectSql("routing"), part: "Stops attributed" },
     } as const satisfies MaterialMap,
