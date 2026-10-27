@@ -1987,7 +1987,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // stderr は CLI レベルの失敗(spawn 即死・limit 強制終了・認証エラー)が
     // 唯一証拠を残す面 — stream.jsonl の隣に全量保存する(issue #125)
     child.stderr.pipe(transcript.stderr);
-    // stdout の lastResult と同じ tee 形: worker_exited がファイルを読み返さず
+    // stdout の読み手と同じ tee 形: worker_exited がファイルを読み返さず
     // に末尾要約を載せられるよう、イベント用の末尾だけをメモリに保つ
     const finishStderrTail = readStderrTail(child.stderr);
     // teed alongside the file write (issue #32): the one reader (ADR 0316 決定1) collects what

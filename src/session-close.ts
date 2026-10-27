@@ -6,6 +6,7 @@ import { codexExitFields, codexStreamObservation, observeCodexLine, parseJsonl }
 import type { Db } from "./db.js";
 import { appendEvent, type EventPayload, listEventsOfKinds, SESSION_WINDOW_KINDS, sessionWindow } from "./events.js";
 import { hasEpisodeOfAnyVersion, projectAndPersist } from "./precedent.js";
+import type { Harness } from "./registry.js";
 import { parseStreamLine } from "./stream-json.js";
 
 /** session の一時領域の名前の頭(ADR 0257 決定2)。adapter の mkdtemp と起動時の復旧の削除が共有する(ADR 0315 決定5)。 */
@@ -30,7 +31,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
     if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
-    // ponytail: spawn ごとに盤面全体の event を舐める O(n²)。起動が遅くなったら task ごとに分けて渡す
+    // ponytail: spawn ごとに盤面全体の event を舐める O(n²)、transcript も読み手と投影器で2度読む。起動が遅くなったら task ごとに分けて渡し、読みを1度にする
     const window = sessionWindow(events, spawned);
     // process を1つも持たなかった session は閉じない —— exit も Episode も一時領域の削除も無い(ADR 0316 決定4 / #2633)
     if (window.neverRan) continue;
@@ -77,7 +78,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
 
 /** live の adapter と同じ読み手に transcript の行を食わせる(ADR 0316 決定1)。読み手は投影器と同じく `worker_spawned.harness` で選ぶ。
  *  末尾の改行の無い行も1行として読む(live の flush と同じ)。無い・読めない transcript は欄を欠測にする —— 閉じる事実は変わらない(決定2)。 */
-function streamExitFields(harness: "claude-code" | "codex", path: string) {
+function streamExitFields(harness: Harness, path: string) {
   let lines: string[];
   try {
     lines = readFileSync(path, "utf8").split("\n");

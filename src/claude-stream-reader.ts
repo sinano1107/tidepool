@@ -18,7 +18,7 @@ import {
 type WorkerExitedUsage = Extract<EventPayload, { kind: "worker_exited" }>["usage"];
 
 /** The stream-json CLI's own final `result` event shape (vendor-specific,
- *  hence kept private to this adapter — ADR 0005) — only the fields
+ *  hence kept private to this reader — ADR 0005) — only the fields
  *  worker_exited needs. */
 interface StreamResultEvent {
   total_cost_usd: number;
@@ -94,8 +94,8 @@ function advisorModelFrom(result: StreamResultEvent): string | null {
   return null;
 }
 
-/** Fail-closed like the rest of this file's vendor-shape handling
- *  (`checkUsage`'s try/catch, the quarantine-on-drift paths in `start()`): a
+/** Fail-closed like the adapter's vendor-shape handling (claude-worker.ts:
+ *  `checkUsage`'s try/catch, the quarantine-on-drift paths in `start()`): a
  *  `result` line whose `usage`/`total_cost_usd` don't match the expected
  *  shape is treated as no result at all, never cast through blind and left
  *  to throw later inside a stdout "data" handler. */
