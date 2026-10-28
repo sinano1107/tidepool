@@ -187,7 +187,7 @@ export type EventPayload =
   // judgment: 完了の verb が運ぶ判断(ADR 0278 決定4)。line は盤面が組む文で、読み手は今までどおり line を読む
   | { kind: "decision_logged"; line: string; interview_probe?: undefined; head?: undefined; judgment?: Judgment }
   | { kind: "decision_logged"; line: string; interview_probe: InterviewProbe; head: string; judgment?: undefined }
-  // Interview の採点(ADR 0199 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
+  // Interview の採点(ADR 0111 決定6 / ADR 0253 決定4 / ADR 0181 決定4): interview の root が統合復帰で、伏せた handoff を rubric で採点した結果。task_id は
   // 採点された受験者、worker は root の agent。root が done なら、学習器は受理をその対象と root の段の種に読む(ADR 0273 決定7、loadSeeds)。
   | { kind: "interview_scored"; verdict: InterviewVerdict }
   // Interview の監査(ADR 0273 決定3・4): 監査 review が出題を受理したか却下したかと findings。task_id は監査 review
