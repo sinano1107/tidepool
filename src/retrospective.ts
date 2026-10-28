@@ -258,8 +258,13 @@ export interface StopBehaviorDraftInput extends StopAttributionInput {
   index: string | null;
 }
 
-/** 起草の入力は帰責の入力に INDEX を足すだけ —— record も親の record に `index` の1文を足す(ADR 0324 決定1)。 */
-const INDEX_FIELD = "The index is the workspace's memory branches with their definitions (null when the store is empty).";
+/** 起草の入力は帰責の入力に INDEX を足すだけ —— record も親の record に `index` の1文を足す(ADR 0324 決定1)。branch / definition の
+ *  意味はここに書かない: `index` の値は spawn 注入と同じ節で、冒頭の `INJECTION_PREAMBLE`(memory.ts)が「各行は branch とその
+ *  definition(そこに何が filed されるか)」と定義する —— 入力の中身が意味を語る語(ADR 0324 決定3、#2684)。null のとき preamble も
+ *  来ないが、prompt が branch を使うのは「既存の branch の下に置け」の1か所で、index が無ければ乗る判断も無い。視界は spawn 注入と
+ *  同じ worker のもの(scope は learnedScope —— 主題つき task なら盤面全体、ADR 0279 決定1 —— と worker の addressee)で、null は
+ *  その視界に approved のエントリが無いこと。store が空とも workspace とも違うので文は worker の視界で言う。 */
+const INDEX_FIELD = "The index is the memory branches the worker could see, with their definitions (null when it could see none).";
 export const BEHAVIOR_DRAFT_INPUT_FIELDS = { ...ATTRIBUTION_INPUT_FIELDS, index: INDEX_FIELD } satisfies Record<keyof BehaviorDraftInput, string>;
 export const STOP_BEHAVIOR_DRAFT_INPUT_FIELDS = { ...STOP_ATTRIBUTION_INPUT_FIELDS, index: INDEX_FIELD } satisfies Record<keyof StopBehaviorDraftInput, string>;
 
