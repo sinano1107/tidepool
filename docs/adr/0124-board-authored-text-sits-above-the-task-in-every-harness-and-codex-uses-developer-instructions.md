@@ -1,5 +1,6 @@
 # 盤面が書いた文面は Harness を問わず task 本文より上の層に置き、Codex では `developer_instructions` がその層である
 
+**Status 追記: Claude の user turn も決定1 の形(最初に呼ぶ verb、title、purpose、completion criteria)を持つ(ADR 0320 決定2)** —— それまで Claude は verb の指示だけで、文面は `get_current_task` でしか届いていなかった(2026-10-28 の grilling、issue #2662)。
 **Status 追記: 「生成系 Board call では置換が適する余地がある。その検討は #456」は ADR 0296 決定6 で決着** —— 答えを取りに行く Board call は Codex では組み込み prompt を置換し、Claude では `--system-prompt` で同じ数行を渡す。worker session の `developer_instructions` の線は変わらない(2026-10-21 の grilling、issue #456)。
 
 2026-09-17 の grilling(issue #598)で決定。#592(PR #596)の議論で、Codex adapter が agent 定義本文・authority・Memory
