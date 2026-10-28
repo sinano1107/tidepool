@@ -49,9 +49,11 @@ it("a blocked parent is skipped and get_current_task exposes the parent context"
       handoff_doc: null,
       history: [
         {
+          id: expect.any(Number),
           decision: "separate the phase calculation",
           children: [
             {
+              id: child.id,
               title: "compute moon phase from date",
               purpose: "parent widget needs the raw number",
               completion_criteria: "phase function passes known-date checks",

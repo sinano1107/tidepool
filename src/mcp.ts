@@ -54,7 +54,7 @@ import {
 } from "./registry.js";
 import { requiredTextSchema } from "./required-text-schema.js";
 import { nextDescription, packItems, readPosition } from "./response-budget.js";
-import { completeRca, materialStop, proposeFromMaterial, stopMaterialActions } from "./retrospective.js";
+import { completeRca, materialStop, proposeFromMaterial, rcaMaterial, stopMaterialActions } from "./retrospective.js";
 import { completeRoutingReview, listAllocations, listRoutingCells, listRoutingShadow, proposeRoutingChange, readRoutingSettings, routingRepairVerbs } from "./routing-review.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { Slot } from "./slot.js";
@@ -81,6 +81,7 @@ import {
   interviewFields,
   interviewRoomPath,
   interviewTargets,
+  isRca,
   isRepairType,
   isSubjectReaderRca,
   joinHistory,
@@ -573,7 +574,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
-        // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0199)
+        // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0111 決定6)
         const targets = listExaminees(deps.db, task.id).length === 0 && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
@@ -586,6 +587,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...auditedProbeEnvelope(deps, task),
             // ADR 0310 決定4: 材料が停止の RCA には止められた session の行動列(無条件に読むので注入、ADR 0180)
             ...stopMaterialActions(deps.db, task.id),
+            // ADR 0322 決定4: purpose の散文が名指す材料の id を、complete_rca の引数と同じ名前で
+            ...(isRca(deps.db, task.id) && { material: rcaMaterial(deps.db, task.id) }),
             // ADR 0272 決定3 / ADR 0279 決定4: 修理子の verb を伏せた理由(spawn の文面と同じ1行)。帰り先の無い task には何も足さない(ADR 0301 決定5)
             ...(isRepairType(task.type) && { [task.type]: REPAIR_NOTICES[task.type] }),
             // ADR 0321: 親の文面も pickup で凍結される。verb は issue も行の文面も読み直さない。
@@ -878,11 +881,11 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         description:
           "Complete this RCA, in one call. " +
           (stopRca
-            ? "Your review was opened on a human stop (its material, quoted in your purpose as \"stop <id>: <reason>\"; get_current_task's actions is " +
+            ? "Your review was opened on a human stop (its id is material in get_current_task; get_current_task's actions is " +
               "that session's action sequence — calls are its tool calls in order with a failed mark, decisions place each logged decision among " +
               "them, and null means the session left no readable sequence): findings is one finding {material: [the stop id], root_cause: one line}. A missing, repeated or " +
               "other id is refused, named by id, and nothing is recorded. "
-            : "findings groups the objected entries your review was opened on (its material, each quoted in your purpose as \"entry <id>: ...\") by root cause: " +
+            : "findings groups the objected entries your review was opened on (their ids are material in get_current_task) by root cause: " +
               "each finding is {material: [entry ids], root_cause: one line}, and every material entry goes in exactly one finding. A missing, " +
               "repeated or non-material entry is refused, named by id, and nothing is recorded. ") +
           "The board records one decision line per finding " +
@@ -1125,7 +1128,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
       {
         description:
           "Read the history of one of this Interview's evidence tasks (get_current_task's interview.evidence_task_ids): its own decisions, " +
-          "its completion with the handoff_doc, and the allocation reviews of its sessions, in the order they happened. " +
+          "memory writes and premise breaches, its completion with the handoff_doc, and the allocation reviews of its sessions, in the order they happened. " +
           "A task that is not an evidence task of this Interview is refused. " +
           nextDescription("read_evidence_history", "history rows"),
         inputSchema: { task_id: requiredTextSchema.optional(), next },

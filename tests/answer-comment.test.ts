@@ -80,7 +80,9 @@ it("復帰した親の get_current_task に、reject 理由の comment が answe
     const payload = JSON.parse(result.content[0].text);
     expect(payload.history).toEqual([
       {
+        id: expect.any(Number),
         child_outside_the_decomposition: {
+          id: question.id,
           title: escalation.questions[0]!.title,
           purpose: escalation.context,
           completion_criteria: "a human answer is recorded",

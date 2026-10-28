@@ -96,7 +96,7 @@ it.each([
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
-    expect(JSON.parse(result.content[0].text).history).toContainEqual({ stopped_by_human: { reason: expected } });
+    expect(JSON.parse(result.content[0].text).history).toContainEqual({ id: expect.any(Number), stopped_by_human: { reason: expected } });
     const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
     expect(detail.human_stops).toContainEqual({ id: expect.any(Number), reason: expected });
   } finally {
@@ -143,14 +143,14 @@ async function runningRca(material: "stop" | "objection", transcript?: string[])
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
     expect(payload.id).toBe(rca.id);
-    return payload;
+    return { payload, material: material === "stop" ? stop : entry };
   } finally {
     await client.close();
   }
 }
 
 it("get_current_task of an RCA opened on a stop carries the stopped session's actions", async () => {
-  const payload = await runningRca("stop", [
+  const { payload } = await runningRca("stop", [
     '{"type":"assistant","uuid":"u1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"rm -rf ../other"}}]}}',
     '{"type":"user","uuid":"u2","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}',
   ]);
@@ -159,9 +159,24 @@ it("get_current_task of an RCA opened on a stop carries the stopped session's ac
 });
 
 it("get_current_task of an RCA opened on a stop whose session has no Episode says actions null", async () => {
-  expect(await runningRca("stop")).toHaveProperty("actions", null);
+  expect((await runningRca("stop")).payload).toHaveProperty("actions", null);
 });
 
 it("get_current_task of an RCA opened on objections carries no actions", async () => {
-  expect(await runningRca("objection")).not.toHaveProperty("actions");
+  expect((await runningRca("objection")).payload).not.toHaveProperty("actions");
+});
+
+it.each(["stop", "objection"] as const)("get_current_task of an RCA opened on a %s carries the material ids complete_rca takes, and complete_rca's description points at them (ADR 0322 決定4)", async (material) => {
+  const { payload, material: opened } = await runningRca(material);
+
+  expect(payload.material).toEqual([opened]);
+  const client = await mcpClient(t.mcpBaseUrl, payload.id);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "complete_rca")!.description).toContain("material in get_current_task");
+  } finally {
+    await client.close();
+  }
+  const completed = await callAsTask(t, payload.id, "complete_rca", { findings: [{ material: payload.material, root_cause: "no guard on rm", no_act: true }] });
+  expect(completed.isError).toBeFalsy();
 });

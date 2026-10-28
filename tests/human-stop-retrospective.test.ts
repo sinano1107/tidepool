@@ -32,7 +32,7 @@ it.each(["deleting unrelated files", undefined])("attribution receives the same 
 
   expect(b.client.calls[0]!.input).toMatchObject({
     human_stop: { reason: reason ?? "not yet answered" },
-    decision_log: ["deleted the fixtures"],
+    decision_log: [{ id: b.entry, line: "deleted the fixtures" }],
   });
 });
 
@@ -84,8 +84,8 @@ it("second-round attribution and drafting resolve the later answer without chang
 
   expect(b.client.calls[0]!.input.human_stop).toEqual({ reason: "not yet answered" });
   expect([b.client.calls[1]!.input, drafter.calls[0]!.input].map((i) => ({ stop: i.human_stop, log: i.decision_log }))).toEqual([
-    { stop: { reason: "deleting unrelated files" }, log: ["deleted the fixtures"] },
-    { stop: { reason: "deleting unrelated files" }, log: ["deleted the fixtures"] },
+    { stop: { reason: "deleting unrelated files" }, log: [{ id: b.entry, line: "deleted the fixtures" }] },
+    { stop: { reason: "deleting unrelated files" }, log: [{ id: b.entry, line: "deleted the fixtures" }] },
   ]);
 });
 

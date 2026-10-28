@@ -31,7 +31,7 @@ it.each(["wrong direction", undefined])("human stop records the board failure qu
   expect(stop!.payload).toEqual({ kind: "session_stopped_by_human", ...(reason ? { reason } : { reason_question_id: expect.any(String) }) });
   expect(sessionInTeardown(db)).toMatchObject({ taskId: task.id });
   expect(sessionInTeardown(db)).toHaveProperty("humanStop", { reason: reason ?? null });
-  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ stopped_by_human: { reason: reason ?? "not yet answered" } });
+  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ id: stop!.id, stopped_by_human: { reason: reason ?? "not yet answered" } });
   expect(presentTask(db, getTask(db, task.id)!).status).toBe("blocked");
 });
 
@@ -125,11 +125,11 @@ it("the stop history resolves the pending question and its nonblank free-text an
   pickupTask(db, task, "deckhand", now);
   recordHumanStop(db, task.id, undefined, now, "webui");
   const reason = getTask(db, listBoard(db).find((q) => q.question_stop_reason_task_id === task.id)!.id)!;
-  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ stopped_by_human: { reason: "not yet answered" } });
+  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ id: expect.any(Number), stopped_by_human: { reason: "not yet answered" } });
   expect(() => answerQuestion(db, reason, [" \n "], now, undefined, undefined, undefined, "webui")).toThrow("answers cannot be blank");
   answerQuestion(db, reason, ["  parser was deleting unrelated files  "], now, undefined, undefined, undefined, "webui");
   expect(getTask(db, reason.id)!.status).toBe("done");
-  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ stopped_by_human: { reason: "parser was deleting unrelated files" } });
+  expect(taskHistoryRows(db, task.id).at(-1)?.entry).toEqual({ id: expect.any(Number), stopped_by_human: { reason: "parser was deleting unrelated files" } });
 });
 
 it("a supplied stop reason needs no reason question", () => {

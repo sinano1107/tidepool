@@ -5,9 +5,10 @@ import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AttributionInput = {
   entry_id: 7,
-  entry: "chose plan B",
+  entry: { id: 7, line: "chose plan B" },
+  actor: "deckhand",
   steering: ["plan A was the agreed plan"],
-  decision_log: ["chose plan B", "completion report: shipped plan B"],
+  decision_log: [{ id: 7, line: "chose plan B" }, { id: 8, line: "completion report: shipped plan B" }],
   memory_read: [],
   agent_definition: null,
   board_text: [],
@@ -206,12 +207,12 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
   });
   const stop: StopAttributionInput = {
     human_stop: { reason: "deleting files outside the workspace" },
-    decision_log: ["chose plan B"],
+    decision_log: [{ id: 7, line: "chose plan B" }],
     memory_read: [],
     agent_definition: null,
     board_text: [],
     task: null,
-    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
+    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ id: 7, position: 1, line: "chose plan B" }] },
   };
 
   await expect(client.judgeStop(stop, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);

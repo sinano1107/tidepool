@@ -218,7 +218,7 @@ it("shadow 行は session の task の workspace を運び、approve で登録�
   await runNow(t, root.id);
   const read: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: work.id });
   expect(read.isError).toBeFalsy();
-  expect(JSON.parse(read.content[0].text).history).toContainEqual({ decision: "split the migration in two" });
+  expect(JSON.parse(read.content[0].text).history).toContainEqual({ id: expect.any(Number), decision: "split the migration in two" });
 });
 
 it("verb は根拠を欠く提案・表に無い model の対象・表の行と一致する対象・effort の述語に外れる対象・根拠の workspace でない実環境を拒み、question は立たない", async () => {

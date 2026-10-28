@@ -230,16 +230,16 @@ function recordedEvidence(assignee: string, { definition, authority, roster }: R
   return [body, source, authority && fenced(authority.text.trimStart()), roster && fenced(roster.text.trimStart())].filter(Boolean).join("\n\n");
 }
 
-/** "entry #3" / "entries #3, #5" — decision-log event ids, the same id space
- *  the RCA reads via get_current_task's parent decision_log (issue #87). */
+/** "entry 3" / "entries 3, 5" — decision-log event ids as a noun and the bare number (ADR 0322 決定6), the ids the RCA reads
+ *  as its `material` and as the parent history rows' `id`. */
 function entryLabels(ids: number[]): string {
-  return `${ids.length === 1 ? "entry" : "entries"} ${ids.map((id) => `#${id}`).join(", ")}`;
+  return `${ids.length === 1 ? "entry" : "entries"} ${ids.join(", ")}`;
 }
 
 /** Self RCA(親を持つ review、assignee は当時の worker)の証拠は登録材料から読む(ADR 0171 決定1〜3)。
  *  材料の異議が指す entry、または材料の停止を anchor に、その session の worker_spawned で記録した prompt の
  *  definition / authority / roster を注入する(ADR 0310 決定2 / ADR 0314 決定1)。最新の spawn からは引かない。
- *  同じ text の記録は1節に畳み、異なる版はそれぞれが live だった entry id で名指す。停止は stop #id で名指す。
+ *  同じ text の記録は1節に畳み、異なる版はそれぞれが live だった entry id で名指す。停止は stop id で名指す。
  *  独立監査(assignee 無し)には注入しない(ADR 0020 決定3)。材料の記録が読めないときは欠落を申告し、全件読めなければ
  *  見出しと欠落の1行だけを出す。節が無いのはこの review の材料が無いときだけ(ADR 0020 Status 追記 / #2619 / #2625)。
  *  review 自身は現在の定義で実行する(ADR 0019)。当時版は証拠であり、reviewer の identity は変えない。 */
@@ -250,7 +250,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownR
     .map((material) => [material.anchor.id, material])).values()].sort((a, b) => a.anchor.id - b.anchor.id);
   if (anchors.length === 0) return "";
   const stop = anchors[0]!.anchor.kind === "session_stopped_by_human";
-  const heading = "\n\n## Definition under review (as recorded at your spawn)" + (stop ? ` — stop #${anchors[0]!.anchor.id}` : "") + "\n\n";
+  const heading = "\n\n## Definition under review (as recorded at your spawn)" + (stop ? ` — stop ${anchors[0]!.anchor.id}` : "") + "\n\n";
   // 束ねの鍵は記録の3部分の text(ADR 0314 決定6)。anchor の順は判断の順。
   const transcripts = new TranscriptStore(recordDir);
   const byText = new Map<string, { entryIds: number[]; then: RecordedDefinition }>();
@@ -272,7 +272,7 @@ function historicalDefinitionSection(db: Db, recordDir: string, task: Task, ownR
   if (resolved.length === 0) {
     return (
       heading +
-      `No recorded definition could be read for your ${stop ? `stop #${unresolved[0]}` : `objected ${entryLabels(unresolved)}`} (missing session record) — the text that shaped the decision now under review is not available as evidence.`
+      `No recorded definition could be read for your ${stop ? `stop ${unresolved[0]}` : `objected ${entryLabels(unresolved)}`} (missing session record) — the text that shaped the decision now under review is not available as evidence.`
     );
   }
   const evidence = ({ then }: (typeof resolved)[number]) => recordedEvidence(task.assignee!, then, ownReviewerAuthority);

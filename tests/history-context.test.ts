@@ -31,6 +31,7 @@ it("get_current_task exposes the current task's decisions as a chronological his
     const payload = JSON.parse(result.content[0].text);
     expect(payload.history).toEqual([
       {
+        id: expect.any(Number),
         decision: "sound the western channel before plotting the route",
         children: [],
       },
@@ -75,7 +76,9 @@ it("a resumed parent history carries every field of a done question child", asyn
     const payload = JSON.parse(result.content[0].text);
     expect(payload.history).toEqual([
       {
+        id: expect.any(Number),
         child_outside_the_decomposition: {
+          id: question.id,
           title: "which harbor?",
           purpose: "the route depends on human preference",
           completion_criteria: "a human answer is recorded",
@@ -134,15 +137,18 @@ it("a child sees every sibling in registration-event order under its decision, i
     const payload = JSON.parse(result.content[0].text);
     expect(payload.parent.history).toEqual([
       {
+        id: expect.any(Number),
         decision: "depth and current can be measured independently",
         children: [
           {
+            id: expect.any(String),
             title: "measure depth",
             purpose: "find the safe channel",
             completion_criteria: "depth readings cover every waypoint",
             status: "todo",
           },
           {
+            id: current.id,
             title: "measure current",
             purpose: "predict vessel drift",
             completion_criteria: "current vectors cover every waypoint",
@@ -177,10 +183,12 @@ it("history orders decisions, completion, and children outside decomposition by 
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
     expect(payload.parent.history).toEqual([
-      { decision: "publish soundings in fathoms", children: [] },
-      { completion: FULL_HANDOFF.outcome },
+      { id: expect.any(Number), decision: "publish soundings in fathoms", children: [] },
+      { id: expect.any(Number), completion: FULL_HANDOFF.outcome },
       {
+        id: expect.any(Number),
         child_outside_the_decomposition: {
+          id: review.id,
           title: "review: publish the harbor chart",
           purpose:
             'read-only review of "publish the harbor chart"\'s deliverable against its completion criteria',
@@ -230,6 +238,7 @@ it("a resumed parent history carries a done work child's full handoff document",
     const result: any = await resumedClient.callTool({ name: "get_current_task", arguments: {} });
     const payload = JSON.parse(result.content[0].text);
     expect(payload.history[0].children[0]).toEqual({
+      id: child.id,
       title: "verify the entrance",
       purpose: "establish the safe approach",
       completion_criteria: "the approach is verified",

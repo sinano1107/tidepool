@@ -136,6 +136,7 @@ it("破綻の question に abandon + comment で答えると、親の history �
   const originQuestion = { title: question.title, answer: ["abandon"], comment: "M は作り直す" };
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
+      id: expect.any(Number),
       decision: "human split",
       children: [
         expect.objectContaining({ title: "A", status: "cancelled", origin_question: originQuestion }),
@@ -188,6 +189,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
   ).toThrow(DomainError);
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
+      id: expect.any(Number),
       decision: "split T",
       children: [
         expect.objectContaining({ title: "A", status: "held", premise_breach: "module M is broken" }),
@@ -202,6 +204,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
   const breach = { title: "A", reason: "module M is broken" };
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
+      id: expect.any(Number),
       decision: "split T",
       children: [
         expect.objectContaining({ title: "A", status: "cancelled", origin_breach: breach }),
@@ -209,7 +212,7 @@ it("再分解は破綻した判断の未決着の子を宣言の出自つきで 
         expect.objectContaining({ title: "C", status: "done" }),
       ],
     },
-    { decision: "replan around M", children: [expect.objectContaining({ title: "X", status: "todo" })] },
+    { id: expect.any(Number), decision: "replan around M", children: [expect.objectContaining({ title: "X", status: "todo" })] },
   ]);
   expect(nextSlotTask(db)?.title).toBe("X");
   db.close();
@@ -224,8 +227,8 @@ it("続行の後、親の時系列は宣言の欄を持たず、親の続行の1
   continueDecomposition(db, getTask(db, parent.id)!, "M is fine", "tako", at, "worker");
 
   expect(joinHistory(taskHistoryRows(db, parent.id, a!.id))).toEqual([
-    { decision: "split T", children: [expect.not.objectContaining({ premise_breach: expect.anything() })] },
-    { decision: "M is fine", children: [] },
+    { id: expect.any(Number), decision: "split T", children: [expect.not.objectContaining({ premise_breach: expect.anything() })] },
+    { id: expect.any(Number), decision: "M is fine", children: [] },
   ]);
   db.close();
 });
@@ -250,6 +253,7 @@ it("破綻が開いたまま木が直接 cancel されると、cancel された�
 
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
+      id: expect.any(Number),
       decision: "split T",
       children: [
         expect.not.objectContaining({ premise_breach: expect.anything() }),
