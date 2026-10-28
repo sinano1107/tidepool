@@ -351,7 +351,7 @@ it("prompt-input の user item に載った AGENTS.md の層だけを、見出�
   });
   expect(observedAgentsMdLayer(JSON.stringify(project))).toEqual(["# AGENTS.md instructions for /home/board/workspace"]);
 
-  // 同じ文面が user item に載っているだけの形は AGENTS.md の層に数えない
+  // 同じ文面が developer item に載っているだけの形は AGENTS.md の層に数えない
   const items = JSON.parse(promptInput("no-marker")) as Array<{ role: string; content: Array<{ type: string; text: string }> }>;
   items.find((item) => item.role === "developer")!.content.push({ type: "input_text", text: GLOBAL_AGENTS_MD });
   expect(observedAgentsMdLayer(JSON.stringify(items))).toEqual([]);

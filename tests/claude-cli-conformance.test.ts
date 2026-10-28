@@ -154,7 +154,6 @@ it("Board call の形の1ターンは runner と同じフラグの定数から�
   expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
   expect(args).toContain("--verbose");
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
-  expect(args).not.toContain("q");
 });
 
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {

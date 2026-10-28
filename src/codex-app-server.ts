@@ -163,18 +163,16 @@ export const codexCommandThrough =
         // 読まずに exit した process への書き込み(EPIPE)で盤面を落とさない —— 失敗は exit code が言う
         stdin.on("error", () => {});
         const until = options.until;
-        if (until) {
-          let open = true;
-          let seen = "";
-          proc.stdout.on("data", (chunk: string) => {
-            seen += chunk;
-            if (open && until(seen)) {
-              open = false;
-              stdin.end();
-            }
-          });
-          stdin.write(options.input ?? "");
-        }
+        let open = true;
+        let seen = "";
+        proc.stdout.on("data", (chunk: string) => {
+          seen += chunk;
+          if (open && until(seen)) {
+            open = false;
+            stdin.end();
+          }
+        });
+        stdin.write(options.input ?? "");
         return read;
       }),
     )) ?? { exitCode: null, stdout: "", stderr: `the ${kind} Board call did not complete (limit, spawn failure, or no container)` };

@@ -861,7 +861,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(developer).toContain('Spawn subagents with fork_turns: "none"; this session keeps no rollout, so forking the parent thread\'s history always fails.');
   });
 
-  it("Interview の pin の子の developer_instructions には、Claude と同じ分けない doctrine が載る(ADR 0245 決定2)", async () => {
+  it("Interview の pin の子の user turn の盤面部分には、Claude と同じ分けない doctrine が載る(ADR 0245 決定2)", async () => {
     const f = await fixture();
     await f.start(pinnedChild(f.db));
     const developer = boardText(f.process.calls[0]!.args);
@@ -869,13 +869,13 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(developer).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
   });
 
-  it("出題前の Interview の root の developer_instructions には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
+  it("出題前の Interview の root の user turn の盤面部分には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
     const f = await fixture();
     await f.start(interviewRoot(f.db));
     expect(boardText(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
   });
 
-  it("出題済みの Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
+  it("出題済みの Interview の root の user turn の盤面部分には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const f = await fixture();
     await f.start(posedInterviewRoot(f.db));
     expect(boardText(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
@@ -1047,7 +1047,7 @@ describe("CodexWorker (ADR 0098)", () => {
       ...HUMAN_WEBUI,
     ));
 
-    // 文面そのものは claude-worker.test.ts が釘付けする(ADR 0107 決定3)。ここは developer instructions に届くことだけ
+    // 文面そのものは claude-worker.test.ts が釘付けする(ADR 0107 決定3)。ここは記録した盤面部分に届くことだけ
     const developer = boardText(f.process.calls[0]!.args);
     expect(developer).toContain("The Authority below came from the registry's authority profile standard.");
     expect(developer).toContain(fenced("## Roster\n\ncodex-agent — Codex agent"));
