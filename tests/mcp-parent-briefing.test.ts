@@ -154,19 +154,17 @@ it("stored の親の異議 RCA も記録の user ごとに束ね、重複材料�
 it("RCA の spawn はあっても記録が失われた anchor は text: null に束ね、pickup 後の記録の削除は文面を変えない(ADR 0321)", async () => {
   t = await bootTidepool();
   const parent = registerTask(t.db, { type: "work", title: "parent", purpose: "p", completion_criteria: "c" }, t.clock.now(), ...HUMAN_WEBUI);
-  const lost = session(parent, "lost user", ["first"]).entries[0]!;
+  const lost = session(parent, "lost user", ["first"]);
   const kept = session(parent, "kept user", ["second"]);
   const alsoLost = session(parent, "also lost", ["third"]);
-  const child = rca(parent, [objection(parent, alsoLost.entries[0]!), objection(parent, kept.entries[0]!), objection(parent, lost)]);
+  const child = rca(parent, [objection(parent, alsoLost.entries[0]!), objection(parent, kept.entries[0]!), objection(parent, lost.entries[0]!)]);
   // 1本目と3本目の記録だけが pickup 前に失われた。
-  const events = (await api(t.baseUrl, "GET", `/api/tasks/${parent.id}/events`)).json;
-  const firstSpawn = events.find((event: any) => event.kind === "worker_spawned").id;
-  for (const spawned of [firstSpawn, alsoLost.spawned]) rmSync(join(t.dir, `${parent.id}.${spawned}.prompt.json`));
+  for (const spawned of [lost.spawned, alsoLost.spawned]) rmSync(join(t.dir, `${parent.id}.${spawned}.prompt.json`));
   await t.clock.advance(HOUR);
   rmSync(join(t.dir, `${parent.id}.${kept.spawned}.prompt.json`));
 
   expect((await context(child.id)).parent.briefing_as_spawned).toEqual([
-    { text: null, for: [lost, alsoLost.entries[0]] },
+    { text: null, for: [lost.entries[0], alsoLost.entries[0]] },
     { text: "kept user", for: [kept.entries[0]] },
   ]);
 });
