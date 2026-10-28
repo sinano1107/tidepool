@@ -244,7 +244,7 @@ it("停止と異議の帰責の prompt は task を spawn で渡した文面と�
     expect(prompt).toContain(
       "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
         "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
-        "task is null when the session's record could not be read: judge from the rest.",
+        "task is null when the session's record could not be read: judge from the rest; environment is",
     );
   }
   expect(prompts[0]).toContain(JSON.stringify(task));
