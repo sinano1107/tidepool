@@ -4,14 +4,11 @@ import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import {
+  ATTRIBUTION_INPUT_FIELDS,
   type AttributionClient,
   type AttributionInput,
   type AttributionJudgment,
-  LOG_ROW_RULE,
-  OBJECTION_ACTOR_RULE,
-  OBJECTION_HUMAN_STOP_RULE,
-  OBJECTION_WRITTEN_RULE,
-  RCA_FINDINGS_RULE,
+  STOP_ATTRIBUTION_INPUT_FIELDS,
   type StopAttributionInput,
 } from "./retrospective.js";
 
@@ -29,15 +26,16 @@ const judgmentSchema = z.object({
  *  whose shortfall the objection points at — so a matter of taste or a
  *  requirement that changed afterwards is never read as a worker failure. */
 function buildPrompt(input: AttributionInput): string {
+  const f = ATTRIBUTION_INPUT_FIELDS;
   return (
     "You are the attribution judge of a work-tracking board. A human reviewing a worker's " +
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
-    "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
-    `as it stood at the time. ${OBJECTION_FIELDS} ${OBJECTION_WRITTEN_RULE} ${LOG_ROW_RULE} When the input ` +
+    `shortfall it points at — from ${f.entry}, ${f.steering}, and the task's decision log. ${f.entry_id} ` +
+    `${OBJECTION_FIELDS} ${f.written} ${f.decision_log} When the input ` +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: read them as " +
-    `evidence. ${RCA_FINDINGS_RULE} ${OBJECTION_ACTOR_RULE} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
+    `evidence. ${f.rca_findings} ${f.actor} ${f.human_stop}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
@@ -46,60 +44,63 @@ function buildPrompt(input: AttributionInput): string {
  *  human's observation of a whole session, so the judge names no entry and
  *  weighs the reason as testimony against what the worker actually did. */
 function buildStopPrompt(input: StopAttributionInput): string {
+  const f = STOP_ATTRIBUTION_INPUT_FIELDS;
   return (
-    "You are the attribution judge of a work-tracking board. A human stopped a running worker session; human_stop.reason " +
-    "is the human's testimony of why. It is an observation, not a verdict: weigh it against what the worker actually did. " +
-    "Judge whose shortfall the stop points at from that testimony, the session's whole decision log (decision_log), the " +
-    "memory entries the worker read before the stop (memory_read), its agent definition as it stood then (agent_definition), " +
-    "the board's own text it was given (board_text), the task text it was given (task), and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
-    "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line (by its id) at its " +
-    "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
-    "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
+    `You are the attribution judge of a work-tracking board. A human stopped a running worker session; ${f.human_stop}. ` +
+    "It is an observation, not a verdict: weigh it against what the worker actually did. " +
+    `Judge whose shortfall the stop points at from that testimony and the rest of the input, including ${f.actions}. ` +
+    "actions is null when the session's action sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
     "evidence — a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
     "changed, is requirement_change. When the input carries rca_findings, an earlier judgment of this stop was uncertain and the " +
     "root-cause reviews of the stop have since settled: read them as evidence. " +
-    `${LOG_ROW_RULE} ${RCA_FINDINGS_RULE} ${STOP_FIELDS}\n\n` +
+    `${f.decision_log} ${f.rca_findings} ${STOP_FIELDS}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
 
 /** The judgment fields both questions share: the cause vocabulary, evidence and wrong_memory_entries. `w` names what is judged —
- *  the objected entry's decision, or the stopped session's conduct. */
-const responseFields = (w: { reading: string; before: string; sound: string; cites: string }) =>
+ *  the objected entry's decision, or the stopped session's conduct; `f` is the input's own field descriptions (ADR 0324 決定1). */
+const responseFields = (
+  w: { reading: string; before: string; sound: string; cites: string },
+  f: Pick<typeof ATTRIBUTION_INPUT_FIELDS, "memory_read" | "agent_definition" | "board_text" | "task">,
+) =>
   "Respond with ONLY a single JSON object (no markdown fences, no " +
   'prose) with these fields: "cause" (one of ' +
   `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
   "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
   `for ${w.reading} or omitting a fact the worker needed; ` +
   // ADR 0320 決定3: cause を照らす「task が求めたこと」は入力の task(spawn で渡した user turn の逐語)
-  "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
+  `task is ${f.task}; judge ` +
   "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
   "task is null when the session's record could not be read: judge from the rest; environment is the worker's " +
   "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
   "worker's judgment was sound given what it had (working around or guessing past such trouble " +
-  "instead of escalating is capability; following the board's own protocol text injected into every session " +
-  "(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline, as the worker was given them at its spawn) as written, " +
+  `instead of escalating is capability; following ${f.board_text} as written, ` +
   "or a skill bundled with the harness, is environment, while misreading that text is capability); preference is the human's taste where the " +
   "worker's choice was equally valid; requirement_change is a requirement the human changed " +
   `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +
-  "was itself wrong — the shortfall is the memory entry's, not the worker's; agent_definition is when the worker's agent " +
-  `definition as it stood then (agent_definition: its body, authority and roster) was itself wrong and ${w.sound} ` +
-  "was sound against it — agent_definition holds the text the worker was given at its spawn; but when " +
+  "was itself wrong — the shortfall is the memory entry's, not the worker's; agent_definition is when " +
+  `${f.agent_definition} was itself wrong and ${w.sound} was sound against it; but when ` +
   "agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer " +
-  "or repair that Authority is board code, not a registry profile: that is environment; " +
+  "or repair rather than profile, that Authority is board code: that is environment; " +
   "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
   "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +
   'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "wrong_memory_entries" ' +
-  "(only with cause memory: the ids of the wrong memory entries, named from memory_read — the memory entries the worker " +
-  `read before ${w.before}; never answer memory when memory_read is empty).`;
-const OBJECTION_FIELDS = responseFields({ reading: "the objected reading", before: "the decision", sound: "the decision", cites: "the decision log cites" });
-const STOP_FIELDS = responseFields({
-  reading: "what the worker did",
-  before: "the stop",
-  sound: "the worker's conduct",
-  cites: "the decision log or the action sequence shows the worker reading",
-});
+  `(only with cause memory: the ids of the wrong memory entries, named from ${f.memory_read}; never answer memory when memory_read is empty).`;
+const OBJECTION_FIELDS = responseFields(
+  { reading: "the objected reading", before: "the decision", sound: "the decision", cites: "the decision log cites" },
+  ATTRIBUTION_INPUT_FIELDS,
+);
+const STOP_FIELDS = responseFields(
+  {
+    reading: "what the worker did",
+    before: "the stop",
+    sound: "the worker's conduct",
+    cites: "the decision log or the action sequence shows the worker reading",
+  },
+  STOP_ATTRIBUTION_INPUT_FIELDS,
+);
 
 /** The real AttributionClient (issue #574): a headless one-shot `claude -p`
  *  call through the same runner as the draft and allocation clients; the
