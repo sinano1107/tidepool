@@ -43,6 +43,7 @@ import type {
   RepoRef,
   RepoSlug,
 } from "../src/github.js";
+import { IssueGoneError } from "../src/github.js";
 import type { HarnessContainmentCheck } from "../src/harness-containment.js";
 import type { Landing } from "../src/landing.js";
 import type { InjectionQuery } from "../src/memory.js";
@@ -471,7 +472,7 @@ export class FakeGitHubClient implements GitHubClient {
   private issueGate: Promise<void> | null = null;
   private nextNumber = 1;
   private ciStatus: CiStatus = "success";
-  private issues = new Map<number, Issue>();
+  private issues = new Map<number, Issue & { state?: "open" | "closed" }>();
   readonly issueListFetches: RepoRef[] = [];
   private issueList: OpenIssue[] | null = null;
   private issueListFailure: Error | null = null;
@@ -622,6 +623,12 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
+    const { state, ...issue } = await this.getIssueWithState(ref);
+    if (state === "closed") throw new IssueGoneError(ref, "closed");
+    return issue;
+  }
+
+  async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
     this.issueFetches.push(ref);
     if (this.issueGate) await this.issueGate;
     const perNumberFailure = this.issueFailures.get(ref.number);
@@ -629,7 +636,7 @@ export class FakeGitHubClient implements GitHubClient {
     if (this.issueFailure) throw this.issueFailure;
     const issue = this.issues.get(ref.number);
     if (!issue) throw new Error(`no issue scripted for #${ref.number}`);
-    return issue;
+    return { ...issue, state: issue.state ?? "open" };
   }
 
   scriptFailure(err: Error | null): void {
@@ -663,7 +670,7 @@ export class FakeGitHubClient implements GitHubClient {
   }
 
   /** Scripts what getIssue(ref) returns for a given issue number (issue #49). */
-  scriptIssue(number: number, issue: Issue): void {
+  scriptIssue(number: number, issue: Issue & { state?: "open" | "closed" }): void {
     this.issues.set(number, issue);
   }
 

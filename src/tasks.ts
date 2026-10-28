@@ -1000,7 +1000,7 @@ export function countUnsettledWorkAssignedTo(db: Db, name: string): number {
  *  deferring to the issue body rather than a field the issue doesn't have —
  *  none of the three is ever stored, this runs fresh at every use (spawn and
  *  UI display). */
-function deriveTaskContentFromIssue(issue: Issue): TaskContent {
+export function deriveTaskContentFromIssue(issue: Issue): TaskContent {
   return {
     title: issue.title,
     purpose:

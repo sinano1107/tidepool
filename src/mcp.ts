@@ -68,7 +68,6 @@ import {
   completeIntegrationReview,
   completeInterview,
   completeTask,
-  contentSourceFor,
   continueDecomposition,
   declarePremiseBreach,
   decomposeTask,
@@ -397,24 +396,6 @@ function runReleasingVerb(
   });
 }
 
-/** The parent's briefing in get_current_task (issue #49, ADR 0016): an issue-backed
- *  task's stored title/purpose/completion_criteria are only the "#N" placeholder
- *  (rowToTask), so contentSourceFor resolves the real thing here. The slot task's
- *  own briefing is the spawn-time text the slot holds (ADR 0320 決定1); the
- *  parent's is outside that decision (#2663). The workspace thunk stays lazy: an
- *  ordinary task's briefing must not trigger workspace resolution
- *  (resolveOrQuarantine can quarantine a name as a side effect). An issue that
- *  dies mid-slot makes expand() reject and surfaces as a plain tool error. */
-async function taskContext(deps: McpDeps, task: Task) {
-  const content = await contentSourceFor(task, deps.github, () => {
-    const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
-    const workspace =
-      resolve && resolveOrQuarantine(deps.db, resolve, task.workspace, deps.clock.now());
-    return workspace ? workspace.path : undefined;
-  }).expand();
-  return { id: task.id, ...content };
-}
-
 /** interview の root の envelope の構造欄(ADR 0273 決定2・9): 登録の欄、測る段の名前と説明、実環境の在り処(cwd の面接室の外で
  *  読みに開いている)と、その宣言のうち受験者に効く部分。 */
 function interviewEnvelope(deps: McpDeps, task: Task) {
@@ -607,7 +588,8 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
             ...stopMaterialActions(deps.db, task.id),
             // ADR 0272 決定3 / ADR 0279 決定4: 修理子の verb を伏せた理由(spawn の文面と同じ1行)。帰り先の無い task には何も足さない(ADR 0301 決定5)
             ...(isRepairType(task.type) && { [task.type]: REPAIR_NOTICES[task.type] }),
-            parent: parent && { ...(await taskContext(deps, parent)), handoff_doc: parent.handoff_doc },
+            // ADR 0321: 親の文面も pickup で凍結される。verb は issue も行の文面も読み直さない。
+            parent: parent && { id: parent.id, ...deps.slot.parentBriefing, handoff_doc: parent.handoff_doc },
           };
         const packed = packItems(read, parent ? ["parent.history", "history"] : ["history"], rows.map((row) => row.entry), envelope || {}, {
           keyOf: (_, i) => rows[i]!.id,

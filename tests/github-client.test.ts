@@ -302,6 +302,18 @@ it("getIssue は close 済み issue に対して IssueGoneError(closed) を投�
   expect((err as IssueGoneError).reason).toBe("closed");
 });
 
+it("getIssueWithState は closed の親の title / body / 全コメントと状態を返す(ADR 0321)", async () => {
+  const dir = await fakeGhIssueView(JSON.stringify({
+    title: "closed parent", body: "original request", comments: [{ body: "final comment" }], state: "CLOSED",
+  }));
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+
+  expect(await new GhCliClient(await makeAuth()).getIssueWithState({ path: "/tmp", number: 49 })).toEqual({
+    title: "closed parent", body: "original request", comments: ["final comment"], state: "closed",
+  });
+});
+
 /** Stands in for a failing `gh issue view`: writes the given stderr and
  *  exits 1, the process-boundary shape of both a not-found issue and an
  *  outage — the classifier has only this surface to tell them apart. */
