@@ -2,7 +2,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { projectAndPersist } from "../src/precedent.js";
 import { getTask, logDecision, registerTask } from "../src/tasks.js";
 import { api, bootTidepool, bundledObjection, callAsTask, FULL_HANDOFF, managementMcpClient, mcpClient, nextPoll, questions, registerWork, type Tidepool, WORKER_SPAWNED } from "./harness.js";
@@ -96,7 +96,7 @@ it.each([
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {
     const result: any = await client.callTool({ name: "get_current_task", arguments: {} });
-    expect(JSON.parse(result.content[0].text).history).toContainEqual({ stopped_by_human: { reason: expected } });
+    expect(JSON.parse(result.content[0].text).history).toContainEqual({ id: expect.any(Number), stopped_by_human: { reason: expected } });
     const detail = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json;
     expect(detail.human_stops).toContainEqual({ id: expect.any(Number), reason: expected });
   } finally {
@@ -164,4 +164,21 @@ it("get_current_task of an RCA opened on a stop whose session has no Episode say
 
 it("get_current_task of an RCA opened on objections carries no actions", async () => {
   expect(await runningRca("objection")).not.toHaveProperty("actions");
+});
+
+it.each(["stop", "objection"] as const)("get_current_task of an RCA opened on a %s carries the material ids complete_rca takes, and complete_rca's description points at them (ADR 0322 決定4)", async (material) => {
+  const payload = await runningRca(material);
+  const stopped = payload.parent.id;
+  const expected = material === "stop" ? listEvents(t.db, stopped).filter((e) => e.kind === "session_stopped_by_human") : taskDecisionLog(t.db, stopped);
+
+  expect(payload.material).toEqual(expected.map((e) => e.id));
+  const client = await mcpClient(t.mcpBaseUrl, payload.id);
+  try {
+    const { tools } = await client.listTools();
+    expect(tools.find((tool) => tool.name === "complete_rca")!.description).toContain("material in get_current_task");
+  } finally {
+    await client.close();
+  }
+  const completed = await callAsTask(t, payload.id, "complete_rca", { findings: [{ material: payload.material, root_cause: "no guard on rm", no_act: true }] });
+  expect(completed.isError).toBeFalsy();
 });

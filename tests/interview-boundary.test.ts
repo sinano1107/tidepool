@@ -255,7 +255,8 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   const review = (await api(t.baseUrl, "GET", "/api/tasks")).json.find((task: any) => task.parent_id === evidence.id);
   expect(review.type).toBe("review");
   const allocation = { kind: "allocation_reviewed", review_task_id: other.id, worker_spawned_event_id: 1, judge: { provider: "anthropic", model: "claude-opus-4-6", effort: "high" }, allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } as const;
-  appendEvent(t.db, { taskId: evidence.id, actorId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
+  const reviewed = appendEvent(t.db, { taskId: evidence.id, actorId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
+  const [decided, completed] = taskDecisionLog(t.db, evidence.id).map((e) => e.id);
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
   await runNow(t, root.id);
 
@@ -263,9 +264,9 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   expect(read.isError).toBeFalsy();
   // 根拠の task 自身の行だけ —— 完了時レビュー(子)の行は返さない
   expect(JSON.parse(read.content[0].text).history).toEqual([
-    { decision: "chose a hand-written lexer" },
-    { completion: FULL_HANDOFF.outcome, handoff_doc: expect.stringContaining(FULL_HANDOFF.outcome) },
-    { allocation_review: { allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } },
+    { id: decided, decision: "chose a hand-written lexer" },
+    { id: completed, completion: FULL_HANDOFF.outcome, handoff_doc: expect.stringContaining(FULL_HANDOFF.outcome) },
+    { id: reviewed, allocation_review: { allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } },
   ]);
   const refused: any = await callAsTask(t, root.id, "read_evidence_history", { task_id: other.id });
   expect(refused.isError).toBe(true);
@@ -338,7 +339,7 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   await runNow(t, retried.id);
   expect(t.worker.started.at(-1)!.id).toBe(retried.id);
   const current = JSON.parse((await callAsTask(t, retried.id, "get_current_task", {})).content[0].text);
-  expect(current.history).toContainEqual({ retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
+  expect(current.history).toContainEqual({ id: expect.any(Number), retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("cancelled");
   expect(existsSync(join(roomOf(first.id), ".git"))).toBe(true);
 });

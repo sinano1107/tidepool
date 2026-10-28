@@ -39,14 +39,15 @@ import { isSettled } from "./task-status.js";
 import { finishTask, getTask, getTextAuthor, type HandoffDoc, humanStopReason, isRca, lineageSubjectOf, listChildren, repairChildren, resolvedStopReason, type Task } from "./tasks.js";
 import { boardCallRow } from "./throttle.js";
 import { TranscriptStore } from "./transcript-store.js";
-import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById, RCA_CAUSES, registerRcaReview, requireLogEntry } from "./triage.js";
+import { entryObjections, type LogRow, listObjectedEntries, logRow, objectionsById, RCA_CAUSES, registerRcaReview, requireLogEntry } from "./triage.js";
 
 /** Board call に渡す入力(ADR 0115 決定2): 異議されたエントリ本文・その steering 列・
  *  当時の decision log(異議されたタスクの decision_logged と完了エントリ)。agent
  *  定義本文・model 名・価格は渡さない —— 判断に要らず、配分評価の線と同じ。
- *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。
- *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)の decision log と
- *  完了 result を並べたもの。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
+ *  `entry_id` は Fake が entry ごとに応答を引く鍵で、model に意味は無い。`entry` と `decision_log` は worker と同じ `{ id, line }` の行で、
+ *  `actor` は裁く行を書いた actor(ADR 0322 決定5 / 追記)。
+ *  `rca_findings` は第2回(#575)だけが足す: その異議群を覆う RCA 子(self / auditor、ADR 0171 決定2)ごとの decision log と
+ *  完了 result(`RcaFinding`)。`memory_read` は worker がその decision の前に読んだ記憶(ADR 0166 決定2)。
  *  `human_stop` は同じ session の人間の停止と生で解いた理由。decision log の切れ目では切らない(ADR 0308)。
  *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。
  *  `agent_definition` は異議された entry の session の spawn で記録した当時版の部分で、記録が読めなければ null(ADR 0291 決定2 /
@@ -54,16 +55,26 @@ import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById
  *  `task` は同じ記録の `user`(spawn で渡した task の文面)の逐語で、記録が読めなければ null(ADR 0320 決定3)。 */
 export interface AttributionInput {
   entry_id: number;
-  entry: string;
+  entry: LogRow;
+  actor: string;
   steering: string[];
-  decision_log: string[];
+  decision_log: LogRow[];
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
   task: string | null;
   human_stop?: { reason: string };
   written?: AttributionInput["memory_read"];
-  rca_findings?: string[];
+  rca_findings?: RcaFinding[];
+}
+
+/** RCA 子1つの所見(ADR 0322 決定5 / 追記): 判事は `review` と `actor` で出所と当事者を引く。self の actor は登録時の assignee
+ *  (材料 session の worker)、auditor は null。 */
+export interface RcaFinding {
+  review: "self" | "auditor";
+  task_id: string;
+  actor: string | null;
+  entries: LogRow[];
 }
 
 /** 異議の帰責と起草の prompt が `human_stop` に添える文(ADR 0308 決定1): 「要らなくなった」類の理由は異議の cause に使わない。
@@ -83,16 +94,16 @@ export const OBJECTION_WRITTEN_RULE =
  *  `rca_findings` は第2回だけが足す: その停止を材料にした RCA 子(self / auditor)の decision log と完了 result(ADR 0310 決定4)。 */
 export interface StopAttributionInput {
   human_stop: { reason: string };
-  decision_log: string[];
+  decision_log: LogRow[];
   memory_read: AttributionInput["memory_read"];
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
   task: string | null;
   actions: {
     calls: Array<{ index: number; tool: string; args: string | null; failed: boolean }>;
-    decisions: Array<{ position: number | null; line: string | null }>;
+    decisions: Array<{ id: number | null; position: number | null; line: string | null }>;
   } | null;
-  rca_findings?: string[];
+  rca_findings?: RcaFinding[];
 }
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
@@ -282,9 +293,10 @@ export async function attributeObjections(
     objected.map(async (o) => {
       const input: AttributionInput = {
         entry_id: o.entry.id,
-        entry: objectedEntryText(o.entry),
+        entry: logRow(o.entry),
+        actor: o.entry.actor_id,
         steering: o.comments,
-        decision_log: decisionLogText(db, o.entry.task_id),
+        decision_log: decisionLogRows(db, o.entry.task_id),
         ...sessionReads(db, deps.recordDir, o.entry),
         ...writtenBodies(db, o.entry),
         ...sessionHumanStop(db, o.entry),
@@ -320,6 +332,14 @@ const rcaChildren = (db: Db, objectedId: string, bundle: number) => {
   const covering = new Set(db.prepare(`SELECT e.task_id ${COVERING_CHILD}`).pluck().all({ objectedId, bundle }));
   return listChildren(db, objectedId).filter((c) => c.type === "review" && covering.has(c.id));
 };
+
+/** 第2回の判事と起草が読む RCA 子1つの所見(要素はここでだけ組む、ADR 0322 追記)。 */
+const rcaFinding = (db: Db, review: Task): RcaFinding => ({
+  review: review.assignee === null ? "auditor" : "self",
+  task_id: review.id,
+  actor: review.assignee,
+  entries: decisionLogRows(db, review.id),
+});
 
 const settledAll = (tasks: Task[]) => tasks.every((r) => isSettled(r.status));
 
@@ -390,7 +410,7 @@ function secondRoundInput(db: Db, recordDir: string | undefined, objectedId: str
   );
   return {
     ...objectionInput(db, recordDir, attribution, initial ? readCut(initial) : bundleRegistered(db, objectedId, bundleName(attribution))),
-    rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).flatMap((r) => decisionLogText(db, r.id)),
+    rca_findings: rcaChildren(db, objectedId, bundleName(attribution)).map((r) => rcaFinding(db, r)),
   };
 }
 
@@ -463,20 +483,21 @@ function registerStopRcas(db: Db, taskId: string, stopId: number, worker: string
 function stopInput(db: Db, recordDir: string | undefined, { task_id, stop, session }: StopTarget, round: AttributionRound): StopAttributionInput {
   return {
     human_stop: { reason: humanStopReason(db, stop.payload) },
-    decision_log: session.events.filter(isDecisionLogEntry).filter(session.inSession).map(objectedEntryText),
+    decision_log: session.events.filter(isDecisionLogEntry).filter(session.inSession).map(logRow),
     ...readsIn(db, recordDir, stop, session),
     actions: sessionActions(db, session.spawned.id),
-    ...(round === "after_rca" && { rca_findings: rcaChildren(db, task_id, stop.id).flatMap((r) => decisionLogText(db, r.id)) }),
+    ...(round === "after_rca" && { rca_findings: rcaChildren(db, task_id, stop.id).map((r) => rcaFinding(db, r)) }),
   };
 }
 
-/** session の行動列: Episode の行動の index・tool 名・引数・失敗の印と、判断の行の位置の印。Episode が無い・読めない session は null。 */
+/** session の行動列: Episode の行動の index・tool 名・引数・失敗の印と、判断の行の位置の印(`id` は marker の event id、ADR 0322 決定5)。
+ *  Episode が無い・読めない session は null。 */
 function sessionActions(db: Db, spawnedId: number): StopAttributionInput["actions"] {
   const [episode] = listEpisodes(db, { workerSpawnedEventId: spawnedId });
   if (!episode || episode.unrecognizedFormat) return null;
   return {
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
-    decisions: episode.markers.flatMap(({ kind, position, line }) => (kind === "decision" ? [{ position, line }] : [])),
+    decisions: episode.markers.flatMap(({ kind, eventId, position, line }) => (kind === "decision" ? [{ id: eventId, position, line }] : [])),
   };
 }
 
@@ -597,7 +618,7 @@ export function listHaltedRefires(db: Db): HaltedRefire[] {
       {
         refire: t.refire,
         target,
-        entry: { id: entry_id, text: objectedEntryText(entry) },
+        entry: { id: entry_id, text: logRow(entry).line },
         task: titled(t.task_id),
         // 最後の異議群が未帰責の entry は cause が空(ADR 0168 決定3 / ADR 0170 決定2)
         cause: current.get(entry_id)?.cause ?? null,
@@ -620,9 +641,10 @@ function objectionInput(db: Db, recordDir: string | undefined, attribution: Seco
   const entry = requireLogEntry(db, attribution.entry_id);
   return {
     entry_id: entry.id,
-    entry: objectedEntryText(entry),
+    entry: logRow(entry),
+    actor: entry.actor_id,
     steering: objectionsById(db, entry.id, attribution.objection_event_ids).map((o) => o.comment),
-    decision_log: decisionLogText(db, entry.task_id, before),
+    decision_log: decisionLogRows(db, entry.task_id, before),
     ...sessionReads(db, recordDir, entry),
     ...writtenBodies(db, entry),
     ...sessionHumanStop(db, entry),
@@ -814,12 +836,12 @@ const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Tas
 /** 初回の帰責の判定が読んだ decision log の切れ目(この event id より前、#1572)。 */
 const readCut = (initial: Attribution) => (initial.decision_log_through === undefined ? initial.id : initial.decision_log_through + 1);
 
-/** そのタスクの decision log を人間が読んだ本文の列に(`before` を渡せばその event id
+/** そのタスクの decision log を人間が読んだ行の列に(`before` を渡せばその event id
  *  より前のものだけ = 当時の log)。 */
-function decisionLogText(db: Db, taskId: string, before = Number.POSITIVE_INFINITY): string[] {
+function decisionLogRows(db: Db, taskId: string, before = Number.POSITIVE_INFINITY): LogRow[] {
   return taskDecisionLog(db, taskId)
     .filter((e) => e.id < before)
-    .map(objectedEntryText);
+    .map(logRow);
 }
 
 /** 人間が書いたエントリか —— 宛先となる agent を持たない(self RCA も立たない)。 */
@@ -943,9 +965,10 @@ function stoppedSession(db: Db, stop: EventRowOf<"session_stopped_by_human">): {
   return { events, spawned: sessionSpawnOf(events, stop)! };
 }
 
-/** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。 */
-function rcaMaterial(db: Db, reviewId: string): Set<number> {
-  return new Set(rcaMaterialAnchors(db, reviewId).map(({ anchor }) => anchor.id));
+/** RCA の材料: 停止ならその停止 event、異議なら登録の異議 id が指すエントリ(ADR 0278 決定5)。complete_rca が検査し、
+ *  get_current_task が `material` で渡す同じ id の列(ADR 0322 決定4)。 */
+export function rcaMaterial(db: Db, reviewId: string): number[] {
+  return [...new Set(rcaMaterialAnchors(db, reviewId).map(({ anchor }) => anchor.id))].sort((a, b) => a - b);
 }
 
 /** RCA の完了(ADR 0278 決定2〜5 / ADR 0280): 材料の各エントリはちょうど1つの所見に入り、足りない・重なる・材料に無いエントリは
@@ -969,9 +992,9 @@ export function completeRca(
   const reviewMaterial = rcaMaterial(db, review.id);
   const given = findings.flatMap((f) => f.material);
   const ids = (list: number[]) => [...new Set(list)].join(", ");
-  const unknown = given.filter((id) => !reviewMaterial.has(id));
+  const unknown = given.filter((id) => !reviewMaterial.includes(id));
   const repeated = given.filter((id, i) => given.indexOf(id) !== i);
-  const missing = [...reviewMaterial].filter((id) => !given.includes(id));
+  const missing = reviewMaterial.filter((id) => !given.includes(id));
   const drafted = listEvents(db, review.id).flatMap(({ payload }) => (payload.kind === "proposed_from_material" ? [payload] : []));
   const repairs = repairChildren(db, review.id);
   const judged = findings.map(({ material, root_cause, no_act }) => {

@@ -41,10 +41,11 @@ it("review タスクの get_current_task に、親(レビュー対象)の histor
       (await api(t.baseUrl, "GET", `/api/tasks/${reviewed.id}`)).json.handoff_doc,
     );
     expect(payload.parent.history[0]).toEqual({
+      id: expect.any(Number),
       decision: "kept the API surface small",
       children: [],
     });
-    expect(payload.parent.history[1]).toEqual({ completion: FULL_HANDOFF.outcome });
+    expect(payload.parent.history[1]).toEqual({ id: expect.any(Number), completion: FULL_HANDOFF.outcome });
     expect(payload.parent.decision_log).toBeUndefined();
   } finally {
     await reviewClient.close();
@@ -75,9 +76,11 @@ it("review でない子にも親の history / handoff doc が同じ形で含ま�
     expect(payload.parent.handoff_doc).toBeNull();
     expect(payload.parent.history).toEqual([
       {
+        id: expect.any(Number),
         decision: "split the context child",
         children: [
           {
+            id: child.id,
             title: "child 3",
             purpose: "purpose",
             completion_criteria: "criteria",

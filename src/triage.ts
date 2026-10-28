@@ -165,12 +165,17 @@ interface ObjectionPair {
   objection_event_ids: number[];
 }
 
-/** The text of a log entry as the human read it — a decision's line, or the
- *  completion report — shared by the repair / RCA purposes and the Board call. */
-export function objectedEntryText(entry: DecisionLogEntry): string {
-  return entry.payload.kind === "task_completed"
-    ? `completion report: ${entry.payload.result ?? "(no outcome recorded)"}`
-    : entry.payload.line;
+/** A log entry as the human read it, named by its event id. */
+export interface LogRow {
+  id: number;
+  line: string;
+}
+
+/** The one copy of a log entry for its readers (ADR 0322 追記) — the judges and the drafter, the repair / RCA
+ *  purposes, precedents, memory cases and the halted refire rows: a decision's line, or the completion report. */
+export function logRow(entry: DecisionLogEntry): LogRow {
+  const line = entry.payload.kind === "task_completed" ? `completion report: ${entry.payload.result ?? "(no outcome recorded)"}` : entry.payload.line;
+  return { id: entry.id, line };
 }
 
 /** One objection (`objection_raised`) against a log entry — a steering comment. */
@@ -236,7 +241,8 @@ function renderObjectionPairs(
         const judgment = judgments?.get(pair.entry.id);
         const judged =
           judgment && judgment.cause !== "uncertain" ? `\nboard judged: ${judgment.cause} — ${judgment.evidence}` : "";
-        const quoted = entryIds ? `entry ${pair.entry.id}: ${objectedEntryText(pair.entry)}` : objectedEntryText(pair.entry);
+        const row = logRow(pair.entry);
+        const quoted = entryIds ? `entry ${row.id}: ${row.line}` : row.line;
         return `> ${quoted}\n${pair.comments.map((comment) => `- ${comment}`).join("\n")}${judged}`;
       })
       .join("\n\n")

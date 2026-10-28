@@ -3265,8 +3265,8 @@ describe("ClaudeCodeWorker", () => {
     const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
     // both 当時版 bodies are injected — neither session's record is folded away
     expect(prompt).toContain("## Definitions under review (each as recorded at your spawn)");
-    expect(prompt).toContain(`### Live for your objected entry #${decision1}\n\n---\n\n${fenced(DECKHAND_BODY)}`);
-    expect(prompt).toContain(`### Live for your objected entry #${decision2}\n\n---\n\n${fenced("You are Deckhand, REFINED v2.")}`);
+    expect(prompt).toContain(`### Live for your objected entry ${decision1}\n\n---\n\n${fenced(DECKHAND_BODY)}`);
+    expect(prompt).toContain(`### Live for your objected entry ${decision2}\n\n---\n\n${fenced("You are Deckhand, REFINED v2.")}`);
     // each section names its Authority's source (ADR 0314 決定5)
     expect(prompt).toContain("The Authority below came from the registry's authority profile standard.");
     // full coverage: no evidence-gap note

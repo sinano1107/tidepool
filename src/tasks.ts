@@ -6,7 +6,7 @@ import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { DomainError } from "./domain-error.js";
 import { whyInvalidEffort } from "./effort.js";
-import { type AuditVerdict, appendEvent, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
+import { type AuditVerdict, appendEvent, type DecisionLogEntry, type EventOrigin, type EventPayload, getEvent, type InterviewProbe, type InterviewVerdict, isDecisionLogEntry, latestEventOfTask, listEvents, type ResolvedFromDefault, stopJudgments, type TaskScopedPayload, taskDecisionLog } from "./events.js";
 import type { AddTierAmendment, ExecutionSettingRow, InterviewAmendment, RoutingRowChange } from "./execution-setting.js";
 import type { GitHubClient, Issue, IssueRef } from "./github.js";
 import type { MemoryAmendment } from "./memory.js";
@@ -4312,8 +4312,8 @@ type HistoryChildContext = TaskContent &
   Omit<SettledChildContext, "title" | "status"> & {
     status: BoardTask["status"];
     you?: true;
-    /** 受験者だけ: complete_interview の採点が名指す id。 */
-    id?: string;
+    /** 散文(判断ログの行の「repair <task id>」、complete_interview の採点)が名指す task id(ADR 0322 決定2)。 */
+    id: string;
     /** この子が宣言して、まだ閉じていない前提の破綻の理由(ADR 0121)。 */
     premise_breach?: string;
     /** 決着した監査だけ(ADR 0273 決定3)。 */
@@ -4328,19 +4328,36 @@ function auditVerdict(db: Db, taskId: string): { audit?: AuditVerdict } {
   return { audit };
 }
 
-interface DecisionHistoryEntry {
-  decision: string;
-  children: HistoryChildContext[];
+/** 判断ログの人間向けの行(HUMAN_FACING_KINDS)の history の行。 */
+type LogHistoryEntry = { id: number } & ({ decision: string } | { completion: string | null } | { memory_written: string } | { premise_breached: string });
+
+/** 判断ログの人間向けの行を history の行にする唯一の builder(ADR 0322 追記)。worker の history も Interview の根拠 history もこれを通る ——
+ *  HUMAN_FACING_KINDS に種が増えて case が無ければ戻り値の型で落ちる。 */
+function logHistoryEntry({ id, payload }: DecisionLogEntry): LogHistoryEntry {
+  switch (payload.kind) {
+    case "decision_logged":
+      return { id, decision: payload.line };
+    case "task_completed":
+      return { id, completion: payload.result };
+    case "memory_written":
+      return { id, memory_written: payload.line };
+    case "premise_breached":
+      return { id, premise_breached: payload.line };
+  }
 }
 
-type TaskHistoryEntry =
-  | DecisionHistoryEntry
+/** 行の `id` はその行の event id(ADR 0322 決定2): 判断は decision_logged、停止は停止 event、retry は interview_retried、分解外の子は登録 event。 */
+type TaskHistoryEntry = { id: number } & (
+  | { decision: string; children: HistoryChildContext[] }
   | { completion: string | null }
+  | { memory_written: string }
+  | { premise_breached: string }
   /** cause / evidence は停止の帰責があるときだけ(ADR 0310 決定5)。 */
   | { stopped_by_human: { reason: string; cause?: Cause; evidence?: string } }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
-  | { child_outside_the_decomposition: HistoryChildContext };
+  | { child_outside_the_decomposition: HistoryChildContext }
+);
 
 /** Resolve a stop's reason for history, retrospective calls and memory cases (ADR 0305 / 0308). */
 export function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
@@ -4368,16 +4385,19 @@ export function joinHistory(rows: readonly Omit<HistoryRow, "id">[]): TaskHistor
   return out;
 }
 
-/** 根拠の task の history(ADR 0273 決定9): その task 自身の判断ログの行・完了の行(handoff つき)・配分評価の行を event の順に。子や
+/** 根拠の task の history(ADR 0273 決定9): その task 自身の判断ログの行(完了は handoff つき)・配分評価の行を event の順に。子や
  *  受験者の行は載せない。Interview の根拠でない task は拒む。 */
 export function evidenceHistoryRows(db: Db, rootId: string, taskId: string) {
   const evidence = interviewFields(db, rootId)?.evidence_task_ids ?? [];
   if (!evidence.includes(taskId)) throw new DomainError(`${taskId} is not an evidence task of this Interview — one of ${evidence.join(", ")}`);
   const { handoff_doc } = getTask(db, taskId)!;
-  return listEvents(db, taskId).flatMap(({ id, payload }): Array<{ id: number; entry: object }> => {
-    if (payload.kind === "decision_logged") return [{ id, entry: { decision: payload.line } }];
-    if (payload.kind === "task_completed") return [{ id, entry: { completion: payload.result, handoff_doc } }];
-    if (payload.kind === "allocation_reviewed") return [{ id, entry: { allocation_review: { allocation: payload.allocation, cause: payload.cause, evidence: payload.evidence } } }];
+  return listEvents(db, taskId).flatMap((event): Array<{ id: number; entry: object }> => {
+    const { id, payload } = event;
+    if (isDecisionLogEntry(event)) {
+      const entry = logHistoryEntry(event);
+      return [{ id, entry: "completion" in entry ? { ...entry, handoff_doc } : entry }];
+    }
+    if (payload.kind === "allocation_reviewed") return [{ id, entry: { id, allocation_review: { allocation: payload.allocation, cause: payload.cause, evidence: payload.evidence } } }];
     return [];
   });
 }
@@ -4389,6 +4409,7 @@ export function evidenceHistoryRows(db: Db, rootId: string, taskId: string) {
  *  「この対象にだけ届く」と failure の Interview の帰結の一文だけを外す(issue #1932 / ADR 0263 決定9)。 */
 export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string): HistoryRow[] {
   type WorkingDecision = {
+    id: number;
     decision: string;
     children: Array<{ eventId: number; child: HistoryChildContext }>;
   };
@@ -4400,25 +4421,20 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
   // 受験者は出題の判断の下に並べる(対象 → root で引く、ADR 0267 決定1)
   let posed: number | undefined;
   for (const event of taskDecisionLog(db, taskId)) {
-    if (event.payload.kind === "decision_logged") {
-      const decision = { decision: event.payload.line, children: [] };
+    const entry = logHistoryEntry(event);
+    if ("decision" in entry) {
+      const decision = { ...entry, children: [] };
       decisions.set(event.id, decision);
-      if (event.payload.interview_probe) posed = event.id;
+      if (event.payload.kind === "decision_logged" && event.payload.interview_probe) posed = event.id;
       timeline.push({ eventId: event.id, kind: "decision", value: decision });
-    } else if (event.payload.kind === "task_completed") {
-      timeline.push({
-        eventId: event.id,
-        kind: "entry",
-        value: {
-          completion: event.payload.result,
-        },
-      });
+    } else {
+      timeline.push({ eventId: event.id, kind: "entry", value: entry });
     }
   }
   const retried = latestEventOfTask(db, taskId, "interview_retried");
   if (retried) {
     const { kind: _, ...retry_of } = retried.payload;
-    timeline.push({ eventId: retried.id, kind: "entry", value: { retry_of } });
+    timeline.push({ eventId: retried.id, kind: "entry", value: { id: retried.id, retry_of } });
   }
   const examinee = getTask(db, taskId)?.interview_target_id != null;
   const events = listEvents(db, taskId);
@@ -4427,7 +4443,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     if (event.payload.kind === "session_stopped_by_human") {
       const judged = judgments.get(event.id)?.payload;
       const stopped_by_human = { reason: humanStopReason(db, event.payload), ...(judged && { cause: judged.cause, evidence: judged.evidence }) };
-      timeline.push({ eventId: event.id, kind: "entry", value: { stopped_by_human } });
+      timeline.push({ eventId: event.id, kind: "entry", value: { id: event.id, stopped_by_human } });
     }
   }
   for (const child of [...listChildren(db, taskId), ...listExaminees(db, taskId)]) {
@@ -4440,8 +4456,8 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
-      // 受験者は採点のために id を持つ。誰がどの model で走ったかは載せない(伏せた handoff、ADR 0199)
-      ...(child.interview_target_id !== null && { id: child.id }),
+      // 誰がどの model で走ったかは載せない(伏せた handoff は agent / model を伏せる、ADR 0111 決定6 / ADR 0253 決定4)。id は伏せない(ADR 0322 決定1)
+      id: child.id,
       ...(child.premise_breach_decision !== null && { premise_breach: premiseBreachReason(db, child.id) }),
       ...(child.status === "done" && child.type === "work"
         ? { handoff_doc: child.handoff_doc }
@@ -4465,7 +4481,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       timeline.push({
         eventId: registered.id,
         kind: "entry",
-        value: { child_outside_the_decomposition: context },
+        value: { id: registered.id, child_outside_the_decomposition: context },
       });
     }
   }
@@ -4473,11 +4489,12 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
     .sort((a, b) => a.eventId - b.eventId)
     .flatMap((item): HistoryRow[] => {
       if (item.kind === "entry") return [{ id: item.eventId, entry: item.value }];
-      const { decision, children } = item.value;
-      if (children.length === 0) return [{ id: item.eventId, decision: item.eventId, entry: { decision, children: [] } }];
+      const { id, decision, children } = item.value;
+      if (children.length === 0) return [{ id: item.eventId, decision: item.eventId, entry: { id, decision, children: [] } }];
+      // 行の `id`(paging の鍵)は子の登録 event、entry の `id` は判断の event(ADR 0322 決定2)
       return children
         .sort((a, b) => a.eventId - b.eventId)
-        .map(({ eventId, child }) => ({ id: eventId, decision: item.eventId, entry: { decision, children: [child] } }));
+        .map(({ eventId, child }) => ({ id: eventId, decision: item.eventId, entry: { id, decision, children: [child] } }));
     });
 }
 

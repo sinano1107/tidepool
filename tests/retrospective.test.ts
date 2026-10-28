@@ -7,7 +7,7 @@ import type { PromptPart } from "../src/board-prose.js";
 import type { Cause } from "../src/cause.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
-import { appendEvent, listEvents } from "../src/events.js";
+import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { buildMemoryInjection, defineMemoryBranch, humanEntryInput, listMemoryEntries, readMemory, readMemoryEntries, recordBehavior, recordKnowledge, recordMemoryInjection, searchMemory } from "../src/memory.js";
 import { attributeObjections, completeRca, type GatedJudgment, listHaltedRefires, refireRetrospectiveCalls } from "../src/retrospective.js";
 import { cancelTaskDirectly, completeTask, listChildren, logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
@@ -55,6 +55,10 @@ afterEach(() => t?.stop());
 const RCA_OUTCOME = `completion report: ${FULL_HANDOFF.outcome}`;
 /** RCA の所見の行の文(harness の complete_rca は材料を1つの所見に no_act で入れる、ADR 0280 決定3)。 */
 const noAct = (entry: number, rootCause = RCA_ROOT_CAUSE) => `no_act: entries ${entry} — ${rootCause}`;
+/** 判事の入力の行(ADR 0322 決定5): 文を釘付けし、id は行の形だけを見る。 */
+const rows = (...lines: string[]) => lines.map((line) => ({ id: expect.any(Number), line }));
+/** 第2回の rca_findings の RCA 子1つ(self は assignee の actor を持つ)。 */
+const finding = (review: "self" | "auditor", ...lines: string[]) => ({ review, task_id: expect.any(String), actor: review === "self" ? expect.any(String) : null, entries: rows(...lines) });
 
 async function objectedWork(t: Tidepool, title: string, lines: string[]) {
   const task = await registerWork(t, title);
@@ -309,9 +313,10 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
     {
       input: {
         entry_id: first.id,
-        entry: "chose plan B",
+        entry: { id: first.id, line: "chose plan B" },
+        actor: t.worker.id,
         steering: ["plan A was the agreed plan", "and plan B breaks the fixtures"],
-        decision_log: ["chose plan B", "dropped the cache layer", "completion report: shipped plan B"],
+        decision_log: rows("chose plan B", "dropped the cache layer", "completion report: shipped plan B"),
         memory_read: [],
         agent_definition: null,
         board_text: [],
@@ -464,14 +469,15 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
   ]);
   expect(s.attributionClient.calls[1]?.input).toEqual({
     entry_id: s.entry.id,
-    entry: "skipped the fixtures",
+    entry: { id: s.entry.id, line: "skipped the fixtures" },
+    actor: t.worker.id,
     steering: ["bring the fixtures back"],
-    decision_log: ["skipped the fixtures", "completion report: done as specified"],
+    decision_log: rows("skipped the fixtures", "completion report: done as specified"),
     memory_read: [],
     agent_definition: null,
     board_text: [],
     task: null,
-    rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
+    rca_findings: [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required")],
   });
 });
 
@@ -556,9 +562,10 @@ it.each([
       {
         input: {
           entry_id: s.entry.id,
-          entry: "skipped the fixtures",
+          entry: { id: s.entry.id, line: "skipped the fixtures" },
+          actor: t.worker.id,
           steering: ["always keep the fixtures"],
-          decision_log: ["skipped the fixtures", "completion report: done as specified"],
+          decision_log: rows("skipped the fixtures", "completion report: done as specified"),
           memory_read: [],
           agent_definition: null,
           board_text: [],
@@ -654,7 +661,7 @@ it.each([
     expect(s.behaviorDraftClient.calls.map((c) => c.input)).toEqual([
       expect.objectContaining({
         entry_id: s.entry.id,
-        rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
+        rca_findings: [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required")],
       }),
     ]);
   },
@@ -836,7 +843,7 @@ it("第2回の帰責の失敗は after_rca を書かず失敗 event を残し、
 
   const second = (await attributions(t, s.task.id)).find((e: any) => e.payload.round === "after_rca");
   expect(second.payload).toMatchObject({ cause: "capability", round: "after_rca" });
-  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id), RCA_OUTCOME], [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id), RCA_OUTCOME]]);
+  expect(s.attributionClient.calls.map((c) => c.input.rca_findings)).toEqual([undefined, [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id), RCA_OUTCOME)], [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id), RCA_OUTCOME)]]);
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
   ]);
@@ -1155,14 +1162,15 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
   });
   expect(s.attributionClient.calls[1]?.input).toEqual({
     entry_id: s.entry.id,
-    entry: "skipped the fixtures",
+    entry: { id: s.entry.id, line: "skipped the fixtures" },
+    actor: t.worker.id,
     steering: ["always keep the fixtures"],
-    decision_log: ["skipped the fixtures", "completion report: done as specified"],
+    decision_log: rows("skipped the fixtures", "completion report: done as specified"),
     memory_read: [],
     agent_definition: null,
     board_text: [],
     task: null,
-    rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
+    rca_findings: [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required")],
   });
   expect(await behaviors(t)).toEqual([
     expect.objectContaining({ addressee: t.worker.id, source: { kind: "event", ref: second.id }, author: { activity: "board", name: "tidepool" } }),
@@ -1705,6 +1713,51 @@ it("盤面全体で起草した candidate が一木の門に当たると、例�
 
 // 異議群を覆う RCA 子(ADR 0171 / issue #1124)—— ドメイン層
 
+it("2人の actor の行が同じ session で異議されると、第2回の rca_findings は RCA ごとに1要素で、self は RCA の assignee を actor に、auditor は null を持つ(ADR 0322 決定5 / 追記)", async () => {
+  const db = openDb(":memory:");
+  try {
+    const registered = registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI);
+    const task = pickupTask(db, registered, "deckhand", at)!;
+    const deckhands = logDecision(db, task, "skipped the fixtures", "deckhand", at, "worker");
+    const bosuns = logDecision(db, task, "dropped the cache", "bosun", at, "worker");
+    startTriage(db, at);
+    raiseObjection(db, deckhands, "keep the fixtures", at);
+    raiseObjection(db, bosuns, "keep the cache", at);
+    const client = new FakeAttributionClient();
+    const deps = { ...noRetrospectiveCalls, attributionClient: client };
+    commitTriage(db, at, [], new Map());
+    const rcas = listChildren(db, task.id).filter((c) => c.type === "review");
+    expect(rcas.map((r) => r.assignee)).toEqual(["deckhand", "bosun", null]);
+    for (const rca of rcas) completeRca(db, rca, rcaFindings(db, rca.id, `finding from ${rca.assignee ?? "auditor"}`), "auditor", at, "worker");
+    const [deckhandsRca, bosunsRca, auditor] = rcas.map((r) => ({ task_id: r.id, rows: taskDecisionLog(db, r.id).map((e) => ({ id: e.id, line: expect.any(String) })) }));
+
+    refireRetrospectiveCalls(db, deps, at);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(client.calls.map((c) => [c.input.entry, c.input.actor, c.input.rca_findings])).toEqual([
+      [
+        { id: deckhands, line: "skipped the fixtures" },
+        "deckhand",
+        [
+          { review: "self", task_id: deckhandsRca!.task_id, actor: "deckhand", entries: deckhandsRca!.rows },
+          { review: "auditor", task_id: auditor!.task_id, actor: null, entries: auditor!.rows },
+        ],
+      ],
+      [
+        { id: bosuns, line: "dropped the cache" },
+        "bosun",
+        [
+          { review: "self", task_id: bosunsRca!.task_id, actor: "bosun", entries: bosunsRca!.rows },
+          { review: "auditor", task_id: auditor!.task_id, actor: null, entries: auditor!.rows },
+        ],
+      ],
+    ]);
+    expect(client.calls[0]!.input.rca_findings![0]!.entries.map((e) => e.line)).toEqual([noAct(deckhands, "finding from deckhand"), RCA_OUTCOME]);
+  } finally {
+    db.close();
+  }
+});
+
 it.each([
   ["初回 uncertain", true, false],
   ["未帰責", false, false],
@@ -1735,9 +1788,9 @@ it.each([
     await new Promise((resolve) => setImmediate(resolve));
 
     const material = {
-      decision_log: ["skipped the fixtures"],
+      decision_log: rows("skipped the fixtures"),
       steering: ["keep the fixtures"],
-      rca_findings: [noAct(entry, "finding from rca (self): t"), RCA_OUTCOME, noAct(entry, "finding from rca (auditor): t"), RCA_OUTCOME],
+      rca_findings: [finding("self", noAct(entry, "finding from rca (self): t"), RCA_OUTCOME), finding("auditor", noAct(entry, "finding from rca (auditor): t"), RCA_OUTCOME)],
     };
     expect(client.calls.at(-1)!.input).toMatchObject(material);
     expect(drafter.calls.map((c) => c.input)).toEqual([expect.objectContaining(material)]);
@@ -1797,8 +1850,8 @@ it.each([
     }
 
     const judged = cause === "uncertain" ? 2 : 1;
-    expect(client.calls.map((c) => c.input.decision_log)).toEqual(Array(judged).fill(["skipped the fixtures"]));
-    expect(drafter.calls.map((c) => c.input.decision_log)).toEqual(Array(retry ? 2 : 1).fill(["skipped the fixtures"]));
+    expect(client.calls.map((c) => c.input.decision_log)).toEqual(Array(judged).fill(rows("skipped the fixtures")));
+    expect(drafter.calls.map((c) => c.input.decision_log)).toEqual(Array(retry ? 2 : 1).fill(rows("skipped the fixtures")));
     expect(listMemoryEntries(db, {}).map((m) => m.title)).toEqual(["Keep fixtures"]);
   } finally {
     db.close();
@@ -1823,7 +1876,7 @@ it("修理子の無い未帰責の異議群(cancelled の task への異議)も�
     refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(client.calls.map((c) => c.input.decision_log)).toEqual([["skipped the fixtures"]]);
+    expect(client.calls.map((c) => c.input.decision_log)).toEqual([rows("skipped the fixtures")]);
   } finally {
     db.close();
   }
@@ -1855,7 +1908,7 @@ it("判断の行と記憶の行が混在した task の未帰責の異議群は�
     refireRetrospectiveCalls(db, { ...noRetrospectiveCalls, attributionClient: client }, at);
     await new Promise((resolve) => setImmediate(resolve));
 
-    const atCommit = ["skipped the fixtures", expect.stringContaining('"Skip fixtures"')];
+    const atCommit = [{ id: decision, line: "skipped the fixtures" }, { id: wrote, line: expect.stringContaining('"Skip fixtures"') }];
     expect(client.calls.map((c) => c.input.decision_log)).toEqual([atCommit, atCommit]);
   } finally {
     db.close();
@@ -1908,7 +1961,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.entry_id, c.input.steering, c.input.rca_findings])).toEqual([
-    [s.x, ["A's direction"], ["A's finding from rca (self): t", noAct(s.x), RCA_OUTCOME, "A's finding from rca (auditor): t", noAct(s.x), RCA_OUTCOME]],
+    [s.x, ["A's direction"], [finding("self", "A's finding from rca (self): t", noAct(s.x), RCA_OUTCOME), finding("auditor", "A's finding from rca (auditor): t", noAct(s.x), RCA_OUTCOME)]],
   ]);
 });
 
@@ -1922,7 +1975,7 @@ it.each([
   await s.sweep();
 
   expect(s.client.calls.map((c) => [c.input.steering, c.input.rca_findings])).toEqual([
-    [["B's direction"], ["B's finding from rca (self): t", noAct(s.y), RCA_OUTCOME, "B's finding from rca (auditor): t", noAct(s.y), RCA_OUTCOME]],
+    [["B's direction"], [finding("self", "B's finding from rca (self): t", noAct(s.y), RCA_OUTCOME), finding("auditor", "B's finding from rca (auditor): t", noAct(s.y), RCA_OUTCOME)]],
   ]);
 });
 

@@ -158,9 +158,10 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
   expect(client.calls.map(({ input }) => input)).toEqual([
     {
       entry_id: wrote.event_id,
-      entry: `wrote knowledge #${wrote.entry_id} "Squash" at build (charts)`,
+      entry: { id: wrote.event_id, line: `wrote knowledge #${wrote.entry_id} "Squash" at build (charts)` },
+      actor: "deckhand",
       steering: ["the note is wrong"],
-      decision_log: [`wrote knowledge #${wrote.entry_id} "Squash" at build (charts)`],
+      decision_log: [{ id: wrote.event_id, line: `wrote knowledge #${wrote.entry_id} "Squash" at build (charts)` }],
       memory_read: [{ id: read, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
       agent_definition: null,
       board_text: [],
@@ -169,9 +170,10 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
     },
     {
       entry_id: drop,
-      entry: `dropped #${dropped} (capability)`,
+      entry: { id: drop, line: `dropped #${dropped} (capability)` },
+      actor: "auditor",
       steering: ["that note was right"],
-      decision_log: [`dropped #${dropped} (capability)`],
+      decision_log: [{ id: drop, line: `dropped #${dropped} (capability)` }],
       memory_read: [],
       agent_definition: null,
       board_text: [],

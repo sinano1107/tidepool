@@ -201,7 +201,7 @@ function reviewInput(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, 
   };
 }
 
-it("停止の self RCA は止められた session の定義・Authority・Roster を stop #id 付きで読む(ADR 0310 決定2)", async () => {
+it("停止の self RCA は止められた session の定義・Authority・Roster を stop id 付きで読む(ADR 0310 決定2)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-27T00:00:00.000Z");
   const dirs = await boardDirs();
@@ -213,14 +213,14 @@ it("停止の self RCA は止められた session の定義・Authority・Roster
 
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
-  expect(history).toContain(`## Definition under review (as recorded at your spawn) — stop #${stop.id}`);
+  expect(history).toContain(`## Definition under review (as recorded at your spawn) — stop ${stop.id}`);
   expect(history).toContain(fenced("You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs."));
   expect(history).toContain(fenced("## Authority\n\nPrefer reversible actions. Anything irreversible is outside your authority.\n"));
   expect(history).toContain("## Roster");
   expect(history).toContain("deckhand — General work agent for the tidepool board");
 });
 
-it("停止の self RCA の記録が読めなければ、stop #id の見出しと欠落の1行だけを出す(ADR 0314 決定2)", async () => {
+it("停止の self RCA の記録が読めなければ、stop id の見出しと欠落の1行だけを出す(ADR 0314 決定2)", async () => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-27T00:00:00.000Z");
   const dirs = await boardDirs();
@@ -234,8 +234,8 @@ it("停止の self RCA の記録が読めなければ、stop #id の見出しと
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
   expect(history).toBe(
-    `\n\n## Definition under review (as recorded at your spawn) — stop #${stop.id}\n\n` +
-      `No recorded definition could be read for your stop #${stop.id} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
+    `\n\n## Definition under review (as recorded at your spawn) — stop ${stop.id}\n\n` +
+      `No recorded definition could be read for your stop ${stop.id} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
   );
 });
 
@@ -256,10 +256,10 @@ it("当時版はこの RCA の材料だけを覆い、同じ worker の別 sessi
 
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
-  expect(history).toContain(`### Live for your objected entry #${entries[0]}\n\n---\n\n${fenced("Covered first")}`);
-  expect(history).toContain(`### Live for your objected entry #${entries[2]}\n\n---\n\n${fenced("Covered last")}`);
+  expect(history).toContain(`### Live for your objected entry ${entries[0]}\n\n---\n\n${fenced("Covered first")}`);
+  expect(history).toContain(`### Live for your objected entry ${entries[2]}\n\n---\n\n${fenced("Covered last")}`);
   expect(history).not.toContain("Outside material");
-  expect(history).not.toContain(`entry #${entries[1]}`);
+  expect(history).not.toContain(`entry ${entries[1]}`);
 });
 
 it.each([undefined, "deckhand"])("停止に異議もあるとき、assignee %s の材料無し review と auditor RCA には当時版を注入しない(ADR 0020 決定3)", async (assignee) => {
@@ -323,7 +323,7 @@ it("異議された entry が同じ定義の2つの spawn にまたがり、spaw
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
   const [, first, second] = history.split(/\n### Live for your objected /);
-  expect([first?.split("\n", 1)[0], second?.split("\n", 1)[0]]).toEqual([`entry #${beforePickup}`, `entry #${afterPickup}`]);
+  expect([first?.split("\n", 1)[0], second?.split("\n", 1)[0]]).toEqual([`entry ${beforePickup}`, `entry ${afterPickup}`]);
   expect(first).not.toContain("## Roster");
   expect(second).toContain(fenced("## Roster\n\ndeckhand — General work agent for the tidepool board"));
 });
@@ -366,7 +366,7 @@ it("異議された entry の spawn の記録が無ければ、記録の読め�
   const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
   expect(history).toContain(fenced("You are Deckhand, the tidepool board's general work agent.\nWork only through the tidepool MCP verbs."));
-  expect(history).toContain(`Note: no recorded definition could be read for your objected entry #${first} (missing session record)`);
+  expect(history).toContain(`Note: no recorded definition could be read for your objected entry ${first} (missing session record)`);
 });
 
 it("異議されたどの entry の spawn の記録も無ければ、self RCA の当時版は見出しと欠落の1行だけを持つ(ADR 0020 Status 追記 / issue #2619)", async () => {
@@ -384,10 +384,27 @@ it("異議されたどの entry の spawn の記録も無ければ、self RCA �
   const history = parts.find((part) => part.part === "historical_definition")?.text;
   expect(history).toBe(
     "\n\n## Definition under review (as recorded at your spawn)\n\n" +
-      `No recorded definition could be read for your objected entry #${entryId} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
+      `No recorded definition could be read for your objected entry ${entryId} (missing session record) — the text that shaped the decision now under review is not available as evidence.`,
   );
   expect(history).not.toContain("Read it as evidence");
   expect(history).not.toContain("```");
+});
+
+it("証拠節は複数の entry を名詞と裸の番号で名指し、# を付けない(ADR 0322 決定6)", async () => {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-28T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const lost = recordedSpawn(db, dirs, objected, at);
+  const first = logDecision(db, objected, "kept the old index", "deckhand", at, "worker");
+  const second = logDecision(db, objected, "kept the old schema", "deckhand", at, "worker");
+  const objections = [first, second].map((entryId) => appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } }));
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: objections }, at, ...HUMAN_WEBUI);
+  rmSync(join(dirs.recordDir, `${objected.id}.${lost}.prompt.json`));
+
+  const history = historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+
+  expect(history).toContain(`No recorded definition could be read for your objected entries ${first}, ${second} (missing session record)`);
 });
 
 it("異議された entry が別の actor の行だけなら、この worker の self RCA に当時版の部分は無い(ADR 0020 Status 追記 / issue #2619)", async () => {

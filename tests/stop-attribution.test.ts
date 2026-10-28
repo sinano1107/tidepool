@@ -61,7 +61,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
   expect(b.stopInputs()).toEqual([
     {
       human_stop: { reason: "deleting unrelated files" },
-      decision_log: ["deleted the fixtures"],
+      decision_log: [{ id: b.entry, line: "deleted the fixtures" }],
       memory_read: [{ id: memory, kind: "behavior", title: "Keep fixtures", text: "Keep the fixtures." }],
       agent_definition: null,
       board_text: [],
@@ -114,7 +114,7 @@ it("the judge reads only the stopped session's decisions, not an earlier session
 
   await b.sweep();
 
-  expect(b.stopInputs().map((i) => i.decision_log)).toEqual([["removed ../other"]]);
+  expect(b.stopInputs().map((i) => i.decision_log)).toEqual([[{ id: expect.any(Number), line: "removed ../other" }]]);
 });
 
 it("an unanswered stop is not judged until its reason question is answered, then with the answer", async () => {
@@ -203,7 +203,7 @@ it.each([
       { index: 0, tool, args: "rm -rf ../other", failed: true },
       { index: 1, tool: "mcp__tidepool__log_decision", args: null, failed: false },
     ],
-    decisions: [{ position: 1, line: "deleted the fixtures" }],
+    decisions: [{ id: b.entry, position: 1, line: "deleted the fixtures" }],
   });
 });
 
@@ -238,7 +238,7 @@ it("a stop is not judged while its session's Episode projection is pending, then
         { index: 0, tool: "Bash", args: "rm -rf ../other", failed: true },
         { index: 1, tool: "mcp__tidepool__log_decision", args: null, failed: false },
       ],
-      decisions: [{ position: 1, line: "deleted the fixtures" }],
+      decisions: [{ id: b.entry, position: 1, line: "deleted the fixtures" }],
     },
   ]);
 });
@@ -275,6 +275,18 @@ it("a session whose transcript the projector could not read is judged with actio
   await b.sweep();
 
   expect(b.stopInputs().map((i) => i.actions)).toEqual([null]);
+});
+
+it("the stop judge's decision_log rows and actions.decisions name the decision by its event id, a decision the transcript never bound included (ADR 0322 決定5)", async () => {
+  const b = fixture();
+  const unbound = logDecision(b.db, getTask(b.db, b.task.id)!, "kept the parser", "deckhand", at, "worker");
+  await stoppedWithTranscript(b, claudeLines(b.entry));
+
+  await b.sweep();
+
+  const [input] = b.stopInputs();
+  expect(input!.decision_log).toEqual([{ id: b.entry, line: "deleted the fixtures" }, { id: unbound, line: "kept the parser" }]);
+  expect(input!.actions!.decisions).toEqual([{ id: b.entry, position: 1, line: "deleted the fixtures" }, { id: unbound, position: null, line: "kept the parser" }]);
 });
 
 /** setup: 理由つきで止め、session を閉じ、その transcript を投影する。 */
@@ -341,6 +353,7 @@ it("the history's stop row carries the judgment's cause and evidence", async () 
   await b.sweep();
 
   expect(taskHistoryRows(b.db, b.task.id).find((r) => "stopped_by_human" in r.entry)?.entry).toEqual({
+    id: b.stopEvent().id,
     stopped_by_human: { reason: "deleting unrelated files", cause: "capability", evidence: "deleted files outside the workspace" },
   });
 });
@@ -513,7 +526,7 @@ it.each([
   await b.sweep(at, deps);
 
   expect(drafter.stopCalls.map((c) => c.input)).toEqual([
-    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null },
+    { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null },
   ]);
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({
@@ -580,12 +593,14 @@ it.each([
   await b.sweep(at, deps);
   await b.sweep(at, deps);
 
-  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null };
+  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null };
+  const entries = (rootCause: string) => [
+    { id: expect.any(Number), line: `no_act: stop ${stop} — ${rootCause}` },
+    { id: expect.any(Number), line: "completion report: (no outcome recorded)" },
+  ];
   const findings = [
-    `no_act: stop ${stop} — ignored the workspace boundary`,
-    "completion report: (no outcome recorded)",
-    `no_act: stop ${stop} — no guard on rm`,
-    "completion report: (no outcome recorded)",
+    { review: "self", task_id: self.id, actor: "deckhand", entries: entries("ignored the workspace boundary") },
+    { review: "auditor", task_id: auditor.id, actor: null, entries: entries("no guard on rm") },
   ];
   expect(b.stopInputs()).toEqual([initialInput, { ...initialInput, rca_findings: findings }]);
   expect(b.judged()).toEqual([
@@ -689,6 +704,7 @@ it("after the second round the stop is read by its second judgment: the history'
   const [initial, second] = b.judgments();
   expect(drafter.stopCalls).toHaveLength(1);
   expect(taskHistoryRows(b.db, b.task.id).find((r) => "stopped_by_human" in r.entry)?.entry).toEqual({
+    id: b.stopEvent().id,
     stopped_by_human: { reason: "deleting unrelated files", cause: "capability", evidence: "the RCAs found the worker removed ../other" },
   });
   expect({ before: outcomeBefore, after: outcome() }).toEqual({ before: "excluded", after: "rejected" });

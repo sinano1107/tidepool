@@ -5,9 +5,10 @@ import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,
-  entry: "named the flag --dry",
+  entry: { id: 7, line: "named the flag --dry" },
+  actor: "deckhand",
   steering: ["always spell it --dry-run"],
-  decision_log: ["named the flag --dry"],
+  decision_log: [{ id: 7, line: "named the flag --dry" }],
   memory_read: [],
   agent_definition: null,
   board_text: [],
@@ -117,13 +118,13 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
   });
   const stop: StopBehaviorDraftInput = {
     human_stop: { reason: "deleting files outside the workspace" },
-    decision_log: ["chose plan B"],
+    decision_log: [{ id: 7, line: "chose plan B" }],
     memory_read: [],
     agent_definition: null,
     board_text: [],
     task: null,
-    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
-    rca_findings: ["stop 9 → no guard on rm"],
+    actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ id: 7, position: 1, line: "chose plan B" }] },
+    rca_findings: [{ review: "auditor", task_id: "r", actor: null, entries: [{ id: 10, line: "stop 9 → no guard on rm" }] }],
     index: "- workspace/ — where agents may write",
   };
 

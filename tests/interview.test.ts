@@ -244,7 +244,7 @@ it("受験者の failure question の context は答えとコメントがこの�
   expect(getTask(db, question.id)!.purpose).toMatch(ONLY_THIS_TARGET);
   answerQuestionViaWebui(db, question, ["retry"], new Date(0), { comment: "use the streaming API" });
   const [row] = taskHistoryRows(db, failed.id).map((r) => r.entry);
-  expect(row).toEqual({ child_outside_the_decomposition: expect.objectContaining({ answer: ["retry"], comment: "use the streaming API" }) });
+  expect(row).toEqual({ id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({ answer: ["retry"], comment: "use the streaming API" }) });
   expect(JSON.stringify(row)).not.toMatch(ONLY_THIS_TARGET);
   expect(JSON.stringify(row)).not.toMatch(/interview/i);
 });
@@ -259,7 +259,7 @@ it("受験者が escalate した question の context は、agent の書いた c
   expect(purpose.slice(ESCALATION.context.length)).toMatch(ONLY_THIS_TARGET);
   answerQuestionViaWebui(db, question, ["toml"], new Date(0), { comment: "toml only" });
   expect(taskHistoryRows(db, failed.id).map((r) => r.entry)).toEqual([
-    { child_outside_the_decomposition: expect.objectContaining({ purpose: ESCALATION.context, answer: ["toml"], comment: "toml only" }) },
+    { id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({ purpose: ESCALATION.context, answer: ["toml"], comment: "toml only" }) },
   ]);
 });
 
@@ -274,7 +274,7 @@ it("本番の work の failure と escalation の question の context は「こ
   const questions = listChildren(db, task.id);
   for (const q of questions) expect(q.purpose).not.toMatch(ONLY_THIS_TARGET);
   expect(taskHistoryRows(db, task.id).map((r) => r.entry)).toEqual(
-    questions.map((q) => ({ child_outside_the_decomposition: expect.objectContaining({ purpose: q.purpose, comment: q.question_answer_comment }) })),
+    questions.map((q) => ({ id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({ purpose: q.purpose, comment: q.question_answer_comment }) })),
   );
 });
 
@@ -287,7 +287,7 @@ it("retry 後の受験者の failure question の history は失敗の理由と�
   const history = taskHistoryRows(db, failed.id).map((row) => row.entry);
   expect(JSON.stringify(history)).not.toMatch(/interview/i);
   expect(history).toEqual([
-    { child_outside_the_decomposition: expect.objectContaining({
+    { id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({
       purpose: `The worker exceeded its time limit. Last utterance: still parsing.\n\n` +
         `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
         `"abandon" cancels this task and its remaining work.`,
@@ -304,7 +304,7 @@ it("通常の task の failure question の history は Interview の帰結と�
   const question = listChildren(db, task.id)[0]!;
   answerQuestionViaWebui(db, question, ["retry"], new Date(0));
   expect(taskHistoryRows(db, task.id).map((row) => row.entry)).toEqual([
-    { child_outside_the_decomposition: expect.objectContaining({ purpose: getTask(db, question.id)!.purpose }) },
+    { id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({ purpose: getTask(db, question.id)!.purpose }) },
   ]);
 });
 
@@ -314,7 +314,7 @@ it("受験者の失敗理由に引用された Interview の帰結は逐語で�
   const question = listChildren(db, failed.id)[0]!;
   answerQuestionViaWebui(db, question, ["retry"], new Date(0));
   expect(taskHistoryRows(db, failed.id).map((row) => row.entry)).toEqual([
-    { child_outside_the_decomposition: expect.objectContaining({
+    { id: expect.any(Number), child_outside_the_decomposition: expect.objectContaining({
       purpose: `Quoted output: If no other target of this Interview is done or still unsettled, the Interview ends too.\n\n` +
         `"retry" picks this task up again at the queue head: a new worker session continues on its existing task branch, with the work in progress kept. ` +
         `"abandon" cancels this task and its remaining work.`,
@@ -467,7 +467,7 @@ it("報告の question への retry で root はその question を出自に can
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull]);
   expect(again.purpose).toBe(root.purpose);
   const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, reason: BROKEN.reason, comment: "rewrite the probe" };
-  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ retry_of: retry }]);
+  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ id: expect.any(Number), retry_of: retry }]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
 });
 
@@ -534,7 +534,7 @@ it("出題済みで未決着の root の retry は、未決着の受験者とそ
   expect(interviewTargets(db, again.id)).toEqual([opusHigh, haikuNull, sonnetHigh]);
   expect(again).toMatchObject({ title: root.title, purpose: root.purpose, completion_criteria: root.completion_criteria, workspace: "reef", review_tier: "frontier", assignee: "deckhand", status: "todo" });
   const retry = { previous_root_id: root.id, probe: POSE.probe, rubric: POSE.rubric, comment: "the probe names the answer" };
-  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ retry_of: retry }]);
+  expect(taskHistoryRows(db, again.id).map((row) => row.entry)).toEqual([{ id: expect.any(Number), retry_of: retry }]);
   expect(nextSlotTask(db)?.id).toBe(again.id);
 });
 
@@ -823,7 +823,7 @@ it("Interview の root の history で、受験者は採点のための id を�
   const { db, root } = registerInterview();
   const [child] = ranChildren(db, root) as [Task];
   const [entry] = taskHistoryRows(db, root.id).map((row) => row.entry).filter((entry) => "children" in entry);
-  expect(entry).toEqual({ decision: expect.stringContaining(POSE.rubric), children: [expect.objectContaining({ id: child.id, title: POSE.title, handoff_doc: child.handoff_doc })] });
+  expect(entry).toEqual({ id: expect.any(Number), decision: expect.stringContaining(POSE.rubric), children: [expect.objectContaining({ id: child.id, title: POSE.title, handoff_doc: child.handoff_doc })] });
   expect(Object.keys((entry as { children: object[] }).children[0]!).sort()).toEqual(["completion_criteria", "handoff_doc", "id", "purpose", "status", "title"]);
 });
 
@@ -894,6 +894,7 @@ it("前の出題の監査が未決着のあいだの出題は拒まれる。監�
   audited(db, first, "rejected", "the tier below solves it");
 
   expect(taskHistoryRows(db, root.id).map((row) => row.entry)).toContainEqual({
+    id: expect.any(Number),
     child_outside_the_decomposition: expect.objectContaining({ status: "done", audit: { verdict: "rejected", findings: "the tier below solves it" } }),
   });
   expect(nextSlotTask(db)?.id).toBe(root.id);

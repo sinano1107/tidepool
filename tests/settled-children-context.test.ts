@@ -52,7 +52,9 @@ it("get_current_task の history に、回答済み question 子タスクの ite
     const payload = JSON.parse(result.content[0].text);
     expect(payload.history).toEqual([
       {
+        id: expect.any(Number),
         child_outside_the_decomposition: {
+          id: question.id,
           title: escalation.questions[0]!.title,
           purpose: escalation.context,
           completion_criteria: "a human answer is recorded",
@@ -98,9 +100,11 @@ it("get_current_task の history に、完了済み work 子タスクの handoff
     const doneChild = (await api(t.baseUrl, "GET", `/api/tasks/${child.id}`)).json;
     expect(payload.history).toEqual([
       {
+        id: expect.any(Number),
         decision: "split into one child",
         children: [
           {
+            id: child.id,
             title: "lexer",
             purpose: "purpose",
             completion_criteria: "criteria",
@@ -162,6 +166,7 @@ it("get_current_task の history に、cancelled 子タスクの発端 question 
     const failingChild = payload.history[0].children.find((c: any) => c.title === "will fail");
     const siblingChild = payload.history[0].children.find((c: any) => c.title === "sibling");
     expect(failingChild).toEqual({
+      id: expect.any(String),
       title: "will fail",
       purpose: "purpose",
       completion_criteria: "criteria",
@@ -169,6 +174,7 @@ it("get_current_task の history に、cancelled 子タスクの発端 question 
       origin_question: { title: question.title, answer: ["abandon"], comment: null },
     });
     expect(siblingChild).toEqual({
+      id: expect.any(String),
       title: "sibling",
       purpose: "purpose",
       completion_criteria: "criteria",
@@ -223,8 +229,9 @@ it.each(["もう要らない", null])("reason %s で直接 cancel された子�
 
   expect(joinHistory(taskHistoryRows(db, parent.id))).toEqual([
     {
+      id: expect.any(Number),
       decision: "human split",
-      children: [{ title: "A", purpose: "purpose", completion_criteria: "criteria", status: "cancelled", origin_direct_cancel: { reason } }],
+      children: [{ id: child!.id, title: "A", purpose: "purpose", completion_criteria: "criteria", status: "cancelled", origin_direct_cancel: { reason } }],
     },
   ]);
   db.close();

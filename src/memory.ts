@@ -37,7 +37,7 @@ import { requiredTextSchema } from "./required-text-schema.js";
 import { type Packed, packItems, readPosition } from "./response-budget.js";
 import { type RegistryAgent, routingMaterial } from "./routing-review.js";
 import { approvalAnnotation, getTask, type HandoffDoc, humanStopReason, INTERVIEW_TREE_SQL, interviewTargets, isFixedChoiceQuestion, lineageSubjectOf, listChildren, type MemoryProposal, metaReviewSubjectOf, needsComment, type QuestionProposal, questionBlocking, questionCancelDiscards, registerTask, settleQuestionAsObserved, subtreeSql, type Task, type TierRef } from "./tasks.js";
-import { entryObjections, objectedEntryText, objectionsById } from "./triage.js";
+import { entryObjections, logRow, objectionsById } from "./triage.js";
 import { copiedOriginalLanguage } from "./webui-rules.js";
 
 /** 無効化の理由コード(spec #586 A)。自由記述は持たない。置換と path の付け替えは後継 id
@@ -2258,7 +2258,7 @@ function precedentRows(db: Db, window: MetaReviewWindow, readerSubject: MetaRevi
       agent: spawned?.actor_id ?? null,
       worker_spawned_event_id: spawned?.id ?? null,
       decision_event_id: id,
-      line: objectedEntryText(entry),
+      line: logRow(entry).line,
       displayed: displayed.has(id),
       objections: entryObjections(db, [id]).map((o) => o.comment),
       cause: judged.get(id)?.cause ?? null,
@@ -2301,7 +2301,7 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
     const decisions = session.events.filter(isDecisionLogEntry).filter((e) => e.kind === "decision_logged");
     return {
       rendered: {
-        decisions: decisions.map(objectedEntryText), handoff: session.handoff, result: session.result,
+        decisions: decisions.map((e) => logRow(e).line), handoff: session.handoff, result: session.result,
         ...humanStopLine(db, stopped?.payload),
       },
       lineIds: decisions.map((e) => e.id),
@@ -2319,7 +2319,7 @@ function renderCaseWithLineIds(db: Db, source: MemorySource): { rendered: Memory
   const stop = event?.payload.kind === "objection_attributed" ? sessionStop?.payload : undefined;
   return {
     rendered: {
-      decision: objectedEntryText(entry), steering: steering.map((s) => s.comment), handoff, result,
+      decision: logRow(entry).line, steering: steering.map((s) => s.comment), handoff, result,
       ...humanStopLine(db, stop),
     },
     lineIds: steering.map((s) => s.id),
