@@ -11,7 +11,7 @@ paging の鍵にだけ使う)、子の context は受験者以外 task id を持
 
 1. **盤面が散文で id を名指すなら、同じ応答のその対象の構造欄が同じ id を持つ。** ADR 0321 決定5(散文の「issue #N」でなく兄弟の
    構造欄)の線を history・RCA の envelope・判事の入力へ延長する。反対側の決定は無い: ADR 0047 退けた案1 が退けたのは生の
-   EventRow を出して **worker に join させる** 形で、行が自分を名乗ることではない。伏せた handoff(ADR 0111 決定6 / ADR 0253 決定4)が
+   EventRow を出して **worker に join させる** 形で、行が自分を名乗ることではない。伏せた handoff(ADR 0111 決定6)が
    伏せるのは **agent / model** で、id ではない(`src/tasks.ts` の「ADR 0199」の引用は誤り)。
 2. **history の行は `id`(その行の event id)を名乗り、子の context は全ての子が `id`(task id)を持つ。** 判断の行は `decision_logged`、
    完了は `task_completed`、停止は停止 event、retry は `interview_retried` の id で、`joinHistory` で畳んだ判断の行も判断の id を保つ。

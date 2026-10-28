@@ -1,14 +1,12 @@
 import { expect, it } from "vitest";
-import { openDb } from "../src/db.js";
+import { type Db, openDb } from "../src/db.js";
 import { appendEvent, taskDecisionLog } from "../src/events.js";
 import { completeTask, declarePremiseBreach, getTask, joinHistory, logDecision, registerTask, type Task, taskHistoryRows } from "../src/tasks.js";
-import { decomposeTaskViaWorker, HUMAN_WEBUI } from "./harness.js";
+import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI } from "./harness.js";
 
 // ADR 0322 決定2・3 / 追記: history の行は自分の event id を名乗り、子の context は全ての子が task id を持つ
 
 const at = new Date("2026-10-28T00:00:00.000Z");
-const HANDOFF = { outcome: "done", deliverables: "n/a", decision_refs: "n/a", dead_ends: "n/a", resume_context: "n/a", known_issues: "n/a" };
-type Db = ReturnType<typeof openDb>;
 
 function root(db: Db): Task {
   return registerTask(db, { type: "work", title: "T", purpose: "purpose of T", completion_criteria: "criteria of T" }, at, ...HUMAN_WEBUI);
@@ -51,13 +49,13 @@ it("判断ログの人間向けの4種はそれぞれ history の行になり、
   const written = appendEvent(db, { taskId: child!.id, actorId: "tako", origin: "worker", at, payload: { kind: "memory_written", line: "wrote knowledge #1 \"M\" at build (whole board)", created: [1], invalidated: [] } });
   declarePremiseBreach(db, getTask(db, child!.id)!, "module M is broken", "tako", at, "worker");
   const breached = taskDecisionLog(db, child!.id).find((e) => e.kind === "premise_breached")!.id;
-  completeTask(db, getTask(db, child!.id)!, HANDOFF, "tako", at, "worker");
+  completeTask(db, getTask(db, child!.id)!, FULL_HANDOFF, "tako", at, "worker");
   const completed = taskDecisionLog(db, child!.id).find((e) => e.kind === "task_completed")!.id;
 
   expect(taskHistoryRows(db, child!.id).map((row) => row.entry)).toEqual([
     { id: decided, decision: "read the module", children: [] },
     { id: written, memory_written: "wrote knowledge #1 \"M\" at build (whole board)" },
     { id: breached, premise_breached: "module M is broken" },
-    { id: completed, completion: "done" },
+    { id: completed, completion: FULL_HANDOFF.outcome },
   ]);
 });

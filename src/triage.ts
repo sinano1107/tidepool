@@ -171,8 +171,9 @@ export interface LogRow {
   line: string;
 }
 
-/** The one copy of a log entry for its readers (ADR 0322 追記) — the judges and the drafter, the repair / RCA
- *  purposes, precedents, memory cases and the halted refire rows: a decision's line, or the completion report. */
+/** The one copy of a log entry for its readers (ADR 0322 追記): a decision's line, or the completion report. The judges
+ *  and the drafter carry the row as is; the repair / RCA purposes, precedents, memory cases and the halted refire rows
+ *  take its `line` and pair it with the id under their own wire keys (`decision_event_id`, `entry.text`). */
 export function logRow(entry: DecisionLogEntry): LogRow {
   const line = entry.payload.kind === "task_completed" ? `completion report: ${entry.payload.result ?? "(no outcome recorded)"}` : entry.payload.line;
   return { id: entry.id, line };

@@ -819,7 +819,7 @@ it("着地しない受験者は、workspace の削除の扉が数える「着地
   expect(countUnsettledTasksReferencing(db, "workspace", "reef")).toBe(0);
 });
 
-it("Interview の root の history で、受験者は採点のための id を持ち、走った agent も model も持たない(伏せた handoff)", () => {
+it("Interview の root の history で、受験者は id を持ち、走った agent も model も持たない(伏せた handoff は agent / model を伏せ、id は伏せない —— ADR 0322 決定1)", () => {
   const { db, root } = registerInterview();
   const [child] = ranChildren(db, root) as [Task];
   const [entry] = taskHistoryRows(db, root.id).map((row) => row.entry).filter((entry) => "children" in entry);

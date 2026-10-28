@@ -243,12 +243,14 @@ it("管理 MCP の register_task に空の測る仕事を渡すと、root の ge
   expect(interview).not.toHaveProperty("measured_work");
 });
 
-it("根拠の history の読み口は根拠の task の判断・完了の handoff・配分評価を history の行で返し、根拠でない task は拒む(ADR 0273 決定9)", async () => {
+it("根拠の history の読み口は根拠の task の判断・記憶の書き込み・完了の handoff・配分評価を history の行で返し、根拠でない task は拒む(ADR 0273 決定9)", async () => {
   t = await boot();
   const evidence = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   const other = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
   await runNow(t, evidence.id);
   await callAsTask(t, evidence.id, "log_decision", { line: "chose a hand-written lexer" });
+  // setup のみ: 記憶の書き込みの行(書く経路は tests/memory-write-record.test.ts)
+  appendEvent(t.db, { taskId: evidence.id, actorId: "tako", origin: "worker", at: t.clock.now(), payload: { kind: "memory_written", line: "wrote knowledge #1 \"lexer\" at build (whole board)", created: [1], invalidated: [] } });
   commitWork(workspacePath, "lexer.txt", "lexer\n");
   await callAsTask(t, evidence.id, "complete_task", { handoff: FULL_HANDOFF });
   // 根拠の task には子(完了時レビュー)が立つ —— その行が返らないことを下で言う
@@ -256,7 +258,7 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   expect(review.type).toBe("review");
   const allocation = { kind: "allocation_reviewed", review_task_id: other.id, worker_spawned_event_id: 1, judge: { provider: "anthropic", model: "claude-opus-4-6", effort: "high" }, allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } as const;
   const reviewed = appendEvent(t.db, { taskId: evidence.id, actorId: "tidepool", origin: "board", at: t.clock.now(), payload: allocation as never });
-  const [decided, completed] = taskDecisionLog(t.db, evidence.id).map((e) => e.id);
+  const [decided, written, completed] = taskDecisionLog(t.db, evidence.id).map((e) => e.id);
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [evidence.id], interview_targets: [opus46] })).json;
   await runNow(t, root.id);
 
@@ -265,6 +267,7 @@ it("根拠の history の読み口は根拠の task の判断・完了の handof
   // 根拠の task 自身の行だけ —— 完了時レビュー(子)の行は返さない
   expect(JSON.parse(read.content[0].text).history).toEqual([
     { id: decided, decision: "chose a hand-written lexer" },
+    { id: written, memory_written: "wrote knowledge #1 \"lexer\" at build (whole board)" },
     { id: completed, completion: FULL_HANDOFF.outcome, handoff_doc: expect.stringContaining(FULL_HANDOFF.outcome) },
     { id: reviewed, allocation_review: { allocation: "overpowered", cause: "capability", evidence: "a cheaper row would do" } },
   ]);

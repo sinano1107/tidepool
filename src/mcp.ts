@@ -574,7 +574,7 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
           ...taskHistoryRows(deps.db, task.id).map((row) => ({ ...row, list: "history" })),
         ];
         const rowOf = new Map(rows.map((row) => [row.entry, row]));
-        // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0111 決定6 / ADR 0253 決定4)
+        // 対象の一覧は出題の前に読むためのもの。受験者が居れば採点の読み手から伏せる(伏せた handoff、ADR 0111 決定6)
         const targets = listExaminees(deps.db, task.id).length === 0 && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {

@@ -4453,7 +4453,7 @@ export function taskHistoryRows(db: Db, taskId: string, readingChildId?: string)
       completion_criteria: child.completion_criteria,
       status: presentTask(db, child).status,
       ...(child.id === readingChildId && { you: true as const }),
-      // 誰がどの model で走ったかは載せない(伏せた handoff は agent / model を伏せる、ADR 0111 決定6 / ADR 0253 決定4)。id は伏せない(ADR 0322 決定1)
+      // 誰がどの model で走ったかは載せない(伏せた handoff は agent / model を伏せる、ADR 0111 決定6)。id は伏せない(ADR 0322 決定1)
       id: child.id,
       ...(child.premise_breach_decision !== null && { premise_breach: premiseBreachReason(db, child.id) }),
       ...(child.status === "done" && child.type === "work"
