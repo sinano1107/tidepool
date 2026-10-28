@@ -1,5 +1,7 @@
 # spawn 時の prompt は transcript の3本目として持ち主つきの部分の列で記録し、ベンチマークは session ごとに prompt と verb の往復を全文で出す
 
+**Status 追記: 決定2 の記録の二分は ADR 0326 決定4 で改訂** —— 持ち主つきの部分・task 固有の文面・実際の配置を区別し、Codex の1つの user turn も逐語に戻せる。task 本文の読み手は task 固有の部分だけを読む(2026-10-29、issue #2692)。
+
 **Status 追記: 決定2 の `authority` 部分は出所の印 `source`(profile / reviewer / repair)を持つ(ADR 0314 決定5)、決定7 の派生は ADR 0314 で決着** —— 帰責 judge と self RCA は記録の部分を読み、再構成は消える(2026-10-26 の grilling、issue #2603)。
 
 2026-10-26 の triage → grilling(issue #2554、spec #2439 / ADR 0298 の派生)で決定。走行の記録の抽出(#2440)は session の盤面 verb を名前
