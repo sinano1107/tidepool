@@ -396,3 +396,10 @@ export function boardProse(input: {
     ...sections.filter(([, text]) => text !== "").map(([part, text]) => ({ part, text })),
   ];
 }
+
+/** user turn に残るのは、その task に固有の指示だけ(ADR 0124 決定1)。両 Harness が同じ文で組む —— 記録した prompt の
+ *  `user` が worker の受け取った task の文面の版の刻印になる(ADR 0320 決定2)。 */
+export function taskPrompt(task: Task): string {
+  return `First call get_current_task for task ${task.id}, then complete this task: ${task.title}\n\n` +
+    `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
+}

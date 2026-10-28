@@ -2109,6 +2109,20 @@ describe("ClaudeCodeWorker", () => {
     expect(recorded.user).toBe(args[args.indexOf("-p") + 1]);
   });
 
+  it("user turn は Codex と同じ文で title / purpose / 完了基準を持ち、記録した prompt の user も同じ文になる(ADR 0320 決定2 / ADR 0124 決定1)", async () => {
+    const { start, calls, logDir, db } = await makeWorker();
+    start("task-user-turn");
+    const spawnedId = listEvents(db, "task-user-turn").find((e) => e.kind === "worker_spawned")!.id;
+    const args = calls[0]!.args;
+
+    const expected =
+      "First call get_current_task for task task-user-turn, then complete this task: fix the leaky faucet\n\n" +
+      "Purpose: stop the drip\nCompletion criteria: no drip for 24h";
+    expect(args[args.indexOf("-p") + 1]).toBe(expected);
+    const recorded = JSON.parse(await readFile(join(logDir, `task-user-turn.${spawnedId}.prompt.json`), "utf8"));
+    expect(recorded.user).toBe(expected);
+  });
+
   it("同一タスクを2回 spawn すると、両方の worker session の transcript が別ファイルで残る(issue #379)", async () => {
     const { worker, start, setting, logDir } = await makeWorker();
     const task = start("task-retry");

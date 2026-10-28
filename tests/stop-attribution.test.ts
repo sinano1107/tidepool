@@ -65,6 +65,7 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       memory_read: [{ id: memory, kind: "behavior", title: "Keep fixtures", text: "Keep the fixtures." }],
       agent_definition: null,
       board_text: [],
+      task: null,
       actions: null,
     },
   ]);
@@ -84,6 +85,23 @@ it("a stop whose session's prompt was recorded gives the judge the recorded defi
   expect(b.stopInputs().map((i) => [i.agent_definition, i.board_text])).toEqual([
     [{ registry_commit: "c0ffee", builtin: false, body: "You are Deckhand.", authority: null, roster: null }, ["\n\n## Rules of the road\n\nLog every decision."]],
   ]);
+});
+
+it("the stop judge's task is the stopped session's recorded user turn verbatim, and null when the session has no record (ADR 0320 決定3)", async () => {
+  const recorded = fixture();
+  const recordDir = await tempDir("tidepool-records-");
+  const user = "First call get_current_task for task t, then complete this task: parser\n\nPurpose: parse\nCompletion criteria: works";
+  recordPrompt(recordDir, recorded.task.id, recorded.spawned, [definitionPart("You are Deckhand.")], user);
+  const unrecorded = fixture();
+  for (const b of [recorded, unrecorded]) {
+    recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+    b.exit();
+  }
+
+  await recorded.sweep(at, { ...recorded.deps, recordDir });
+  await unrecorded.sweep(at, { ...unrecorded.deps, recordDir });
+
+  expect([...recorded.stopInputs(), ...unrecorded.stopInputs()].map((i) => i.task)).toEqual([user, null]);
 });
 
 it("the judge reads only the stopped session's decisions, not an earlier session's of the same task", async () => {
@@ -495,7 +513,7 @@ it.each([
   await b.sweep(at, deps);
 
   expect(drafter.stopCalls.map((c) => c.input)).toEqual([
-    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], actions: null, index: null },
+    { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null },
   ]);
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({
@@ -562,7 +580,7 @@ it.each([
   await b.sweep(at, deps);
   await b.sweep(at, deps);
 
-  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], actions: null };
+  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: ["deleted the fixtures"], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null };
   const findings = [
     `no_act: stop ${stop} — ignored the workspace boundary`,
     "completion report: (no outcome recorded)",

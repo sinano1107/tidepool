@@ -56,6 +56,10 @@ function buildStopPrompt(input: StopAttributionInput): string {
 /** The judgment fields both questions share: the cause vocabulary, evidence and wrong_memory_entries. `w` names what is judged —
  *  the objected entry's decision, or the stopped session's conduct. */
 const responseFields = (w: { reading: string; before: string; sound: string; cites: string }) =>
+  // ADR 0320 決定3: cause を照らす「task が求めたこと」は入力の task(spawn で渡した user turn の逐語)
+  "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
+  "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
+  "task is null when the session's record could not be read: judge from the rest. " +
   "Respond with ONLY a single JSON object (no markdown fences, no " +
   'prose) with these fields: "cause" (one of ' +
   `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +

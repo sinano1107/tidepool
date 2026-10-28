@@ -13,11 +13,12 @@ const draftSchema = z.object({
   addressee: z.enum(["worker", "all"]),
 });
 
-/** What the worker was given at its spawn (ADR 0314 決定3・4) —— both drafts read the same two fields. */
+/** What the worker was given at its spawn (ADR 0314 決定3・4 / ADR 0320 決定3) —— both drafts read the same three fields. */
 const SPAWN_TEXT_FIELDS =
   "the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn; " +
   "null when not recorded), the board's own text it was given (board_text: the board's doctrine, protocol and, for an " +
-  "Interview root, Interview discipline)";
+  "Interview root, Interview discipline), the task text it was given (task: its user turn at its spawn — title, purpose " +
+  "and completion criteria; null when not recorded)";
 
 /** What the worker read before what is learned from (ADR 0166 決定2) —— `before` names the objected decision or the stop. */
 const memoryReadField = (before: string) => `the memory entries the worker read before ${before} (memory_read)`;

@@ -164,6 +164,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       memory_read: [{ id: read, kind: "knowledge", title: "Squash before merge", text: "Squash before merge." }],
       agent_definition: null,
       board_text: [],
+      task: null,
       written: [{ id: wrote.entry_id, kind: "knowledge", title: "Squash", text: "Always squash." }],
     },
     {
@@ -174,6 +175,7 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       memory_read: [],
       agent_definition: null,
       board_text: [],
+      task: null,
       written: [{ id: dropped, kind: "knowledge", title: "Rebase before merge", text: "Rebase before merge." }],
     },
   ]);

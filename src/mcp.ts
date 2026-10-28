@@ -397,16 +397,14 @@ function runReleasingVerb(
   });
 }
 
-/** A task's own briefing (issue #49, ADR 0016): the "spawn" moment content is
- *  live-resolved for — an issue-backed task's stored title/purpose/
- *  completion_criteria are only the "#N" placeholder (rowToTask), so
- *  contentSourceFor resolves the real thing here. The workspace thunk stays
- *  lazy: an ordinary task's briefing must not trigger workspace resolution
- *  (resolveOrQuarantine can quarantine a name as a side effect). An issue
- *  that dies *after* the scheduler's pickup gate passed (closed/deleted
- *  mid-slot) makes expand() reject and surfaces as a plain tool error — the
- *  worker can escalate itself, and the watchdog is the backstop; the
- *  retry/abandon failure question belongs to the pickup gate alone. */
+/** The parent's briefing in get_current_task (issue #49, ADR 0016): an issue-backed
+ *  task's stored title/purpose/completion_criteria are only the "#N" placeholder
+ *  (rowToTask), so contentSourceFor resolves the real thing here. The slot task's
+ *  own briefing is the spawn-time text the slot holds (ADR 0320 決定1); the
+ *  parent's is outside that decision (#2663). The workspace thunk stays lazy: an
+ *  ordinary task's briefing must not trigger workspace resolution
+ *  (resolveOrQuarantine can quarantine a name as a side effect). An issue that
+ *  dies mid-slot makes expand() reject and surfaces as a plain tool error. */
 async function taskContext(deps: McpDeps, task: Task) {
   const content = await contentSourceFor(task, deps.github, () => {
     const resolve = buildWorkspaceResolver(deps.resolveWorkspace, deps.workspace);
@@ -598,7 +596,9 @@ function buildMcpServer(deps: McpDeps, attributedTaskId: string | null): McpServ
         const targets = listExaminees(deps.db, task.id).length === 0 && interviewTargets(deps.db, task.id);
         const envelope =
           read.at === undefined && {
-            ...(await taskContext(deps, task)),
+            // ADR 0320 決定1: spawn で消費した文面。issue も行も読み直さない(門が後始末の占有を先に拒むので content は在る)
+            id: task.id,
+            ...deps.slot.content!,
             type: task.type,
             ...(targets && { interview_targets: targets }),
             ...(task.type === "interview" && { interview: interviewEnvelope(deps, task) }),

@@ -526,7 +526,8 @@ export function startScheduler(deps: {
     try {
       // 呼び手には pickupTask が書いた task_picked_up の id を渡す —— shadow 行はこの event に乗る(ADR 0319 決定1)
       onPicked(latestEventOfTask(db, picked.id, "task_picked_up")!.id);
-      slot.occupy(picked.id);
+      const started = { ...picked, ...content };
+      slot.occupy(picked.id, { title: started.title, purpose: started.purpose, completion_criteria: started.completion_criteria });
       // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
       // かった pickup でも、force / reclaimed の相手はもう存在している。
       containers.open(picked.id);
@@ -584,7 +585,6 @@ export function startScheduler(deps: {
         }
         if (!live()) return;
       }
-      const started = { ...picked, ...content };
       const query = await injectionQuery(started);
       if (!live()) return;
       worker.start(started, setting, query);

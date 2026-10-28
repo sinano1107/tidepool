@@ -4,7 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
@@ -1731,9 +1731,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let transcript: Transcript;
     let child: ContainedProcess;
     try {
-      const prompt =
-        `You are picking up tidepool task ${task.id}. ` +
-        "Call get_current_task first, then work it to completion through the tidepool MCP verbs.";
+      const prompt = taskPrompt(task);
       // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
       // issue #31): "Workflow" is always denied. Per-skill denies (ADR 0025 point
       // 3: per-skill deny is the only enforcement primitive) ride the same flag,
