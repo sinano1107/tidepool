@@ -1575,6 +1575,19 @@ it("起草の答えが schema に合わなくても behavior_draft の行は残�
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
 
+it.each(["capability", "environment", "uncertain"] as const)("初回: %s に空の wrong_memory_entries が付いても cause と evidence がそのまま載り、RCA は cause に従う", async (cause) => {
+  const b = objectedAfterReading();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause, evidence: "the judge's observations", wrong_memory_entries: [] });
+
+  commitTriage(b.db, at, [], await attributeObjections(b.db, { ...noRetrospectiveCalls, attributionClient: client }, b.sessionId, at));
+
+  expect(attributed(b.db, b.task.id)).toEqual([
+    expect.objectContaining({ cause, evidence: "the judge's observations", wrong_memory_entries: null, round: "initial" }),
+  ]);
+  expect(listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca (")).length).toBe(cause === "environment" ? 0 : 2);
+});
+
 it.each<[string, (ids: { read: number; unread: number }) => { cause: Cause; wrong_memory_entries?: number[] }, string]>([
   ["読んでいない entry を名指す memory", ({ read, unread }) => ({ cause: "memory", wrong_memory_entries: [read, unread] }), "was not read before the decision"],
   ["wrong_memory_entries が空の memory", () => ({ cause: "memory", wrong_memory_entries: [] }), "names no memory entry"],
@@ -1624,6 +1637,19 @@ it.each<[string, (ids: { read: number; unread: number }) => number[], Partial<Ga
   expect(attributed(b.db, b.task.id).map((p) => p.round)).toEqual(["initial", "after_rca"]);
   expect(attributed(b.db, b.task.id)[1]).toMatchObject({ wrong_memory_entries: entries(b), ...expected });
   expect(drafter.calls).toEqual([]);
+});
+
+it.each(["capability", "environment", "uncertain"] as const)("第2回: %s に空の wrong_memory_entries が付いても cause と evidence がそのまま載る", async (cause) => {
+  const b = awaitingSecondRound();
+  const client = new FakeAttributionClient();
+  client.scriptJudgment(b.decision, { cause, evidence: "the RCA's observations", wrong_memory_entries: [] });
+
+  refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client }, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  expect(attributed(b.db, b.task.id)).toEqual([
+    expect.objectContaining({ cause, evidence: "the RCA's observations", wrong_memory_entries: null, round: "after_rca" }),
+  ]);
 });
 
 /** 主題 memory の meta-review の判断の行(`onRepair` ならその下の memory_repair の判断の行)に preference の異議を帰責し、起草の Board call を

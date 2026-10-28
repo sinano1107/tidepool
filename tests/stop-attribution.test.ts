@@ -333,6 +333,15 @@ const rcas = (b: ReturnType<typeof fixture>) =>
     .filter((c) => c.type === "review")
     .map((r) => ({ task: r, material: latestEventOfTask(b.db, r.id, "task_registered")!.payload.opened_on_event_ids }));
 
+it.each(["capability", "environment", "uncertain"] as const)("an initial %s stop judgment with empty wrong_memory_entries preserves its cause and evidence, and registers RCAs according to its cause", async (cause) => {
+  const b = fixture();
+  b.client.scriptStopJudgment({ cause, evidence: "the judge's observations", wrong_memory_entries: [] });
+  const stop = await stoppedAndJudged(b);
+
+  expect(b.judged()).toEqual([{ kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the judge's observations", wrong_memory_entries: null, round: "initial" }]);
+  expect(rcas(b)).toHaveLength(cause === "environment" ? 0 : 2);
+});
+
 /** setup: 理由つきで止め、session を閉じ、sweep で判定させる。 */
 async function stoppedAndJudged(b: ReturnType<typeof fixture>) {
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
@@ -520,6 +529,21 @@ async function judgedUncertain(b: ReturnType<typeof fixture>) {
   const settle = (rca: Task, root_cause: string) => completeRca(b.db, rca, { findings: [{ material: [stop], root_cause, no_act: true }] }, "deckhand", at, "worker");
   return { stop, self: self!, auditor: auditor!, settle };
 }
+
+it.each(["capability", "environment", "uncertain"] as const)("a second-round %s stop judgment with empty wrong_memory_entries preserves its cause and evidence", async (cause) => {
+  const b = fixture();
+  const { stop, self, auditor, settle } = await judgedUncertain(b);
+  settle(self, "ignored the workspace boundary");
+  settle(auditor, "no guard on rm");
+  b.client.scriptStopJudgment({ cause, evidence: "the RCA's observations", wrong_memory_entries: [] });
+
+  await b.sweep();
+
+  expect(b.judged()).toEqual([
+    { kind: "stop_attributed", stop_event_id: stop, cause: "uncertain", evidence: "cannot tell from the log", wrong_memory_entries: null, round: "initial" },
+    { kind: "stop_attributed", stop_event_id: stop, cause, evidence: "the RCA's observations", wrong_memory_entries: null, round: "after_rca" },
+  ]);
+});
 
 it.each([
   { cause: "capability" as const, candidates: 1, drafts: "a Behavior candidate from the findings" },

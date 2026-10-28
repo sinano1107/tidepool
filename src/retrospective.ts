@@ -165,14 +165,14 @@ export interface RetrospectiveCallDeps {
 const uncertain = (evidence: string): GatedJudgment => ({ cause: "uncertain", evidence, wrong_memory_entries: null });
 
 /** 帰責の門(ADR 0166 決定3): `memory` は読んだ集合の内側の entry を1つ以上名指すときだけ、他の cause は wrong_memory_entries を
- *  持たないときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定2)。
+ *  持たないか空のときだけ通す。`agent_definition` は入力に当時版があったときだけ通す(ADR 0291 決定2)。
  *  通らない判定は `uncertain` + 理由の判断に倒す(投げない)。 */
 function gate({ wrong_memory_entries, ...judgment }: AttributionJudgment, input: Pick<AttributionInput, "memory_read" | "agent_definition">): GatedJudgment {
   if (judgment.cause === "agent_definition" && input.agent_definition === null) {
     return uncertain("agent_definition attribution rejected: the session's recorded definition could not be read");
   }
   if (judgment.cause !== "memory") {
-    return wrong_memory_entries === undefined ? { ...judgment, wrong_memory_entries: null } : uncertain(`${judgment.cause} attribution rejected: wrong_memory_entries are only for cause memory`);
+    return wrong_memory_entries?.length ? uncertain(`${judgment.cause} attribution rejected: wrong_memory_entries are only for cause memory`) : { ...judgment, wrong_memory_entries: null };
   }
   if (!wrong_memory_entries?.length) return uncertain("memory attribution rejected: it names no memory entry");
   const unread = wrong_memory_entries.filter((id) => !input.memory_read.some((r) => r.id === id));

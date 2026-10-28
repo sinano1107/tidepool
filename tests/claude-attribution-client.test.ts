@@ -15,6 +15,15 @@ const input: AttributionInput = {
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
 
+const stopInput: StopAttributionInput = {
+  human_stop: { reason: "plan A was agreed after the fact" },
+  decision_log: input.decision_log,
+  memory_read: [],
+  agent_definition: null,
+  board_text: [],
+  actions: null,
+};
+
 it("judge は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON 判定を返す", async () => {
   const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
   const client = new ClaudeAttributionClient({
@@ -101,12 +110,22 @@ it("prompt は evidence を英語で書かせる —— 記録に残る欄の言
   expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
 });
 
-it("memory 以外の判定が entries を null で返しても判定は失われず、entries の無い判定として届く", async () => {
+it.each(["judge", "judgeStop"] as const)("%s: memory 以外の判定が wrong_memory_entries を null で返しても判定は失われず、wrong_memory_entries の無い判定として届く", async (method) => {
   const client = new ClaudeAttributionClient({
-    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ...judgment, entries: null }) }),
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ...judgment, wrong_memory_entries: null }) }),
   });
 
-  await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
+  const answer = method === "judge" ? client.judge(input, { provider: "anthropic", model: "fable", effort: "high" }) : client.judgeStop(stopInput, { provider: "anthropic", model: "fable", effort: "high" });
+  await expect(answer).resolves.toHaveProperty("output", judgment);
+});
+
+it.each(["judge", "judgeStop"] as const)("%s: memory 以外の判定の空の wrong_memory_entries は schema をそのまま通る", async (method) => {
+  const client = new ClaudeAttributionClient({
+    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ...judgment, wrong_memory_entries: [] }) }),
+  });
+
+  const answer = method === "judge" ? client.judge(input, { provider: "anthropic", model: "fable", effort: "high" }) : client.judgeStop(stopInput, { provider: "anthropic", model: "fable", effort: "high" });
+  await expect(answer).resolves.toHaveProperty("output", { ...judgment, wrong_memory_entries: [] });
 });
 
 it("prompt は environment を worker の外側の事情として判断の妥当性で線を引き、escalate せず迂回・推測したなら capability と言う(ADR 0213 決定1・2)", async () => {
