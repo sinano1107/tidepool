@@ -200,7 +200,7 @@ function allocationRows(db: Db, window: MetaReviewWindow) {
   return { groups: [...groups.values()], keys: [...groups.keys()], counted };
 }
 
-/** 新しいセルと人間が変えた行: 観測(worker_exited)で初めて現れたのが watermark より後のセルと、watermark より後に
+/** 新しいセルと人間が変えた行: 本番の初観測(worker_exited)か種の event が watermark より後のセルと、watermark より後に
  *  settings タブ / 管理MCP から書かれた表の行(`execution_settings_changed` の `row`、編集なら置き換えた行の `key` も)。提案 question への approve の適用は
  *  read_routing_settings が読むので含まない(ADR 0151 決定2)。 */
 export function listRoutingCells(db: Db, readerTaskId: string, input: ReadWindow & { next?: string }) {
@@ -228,7 +228,7 @@ export function readRoutingSettings(db: Db, input: { next?: string }) {
 function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number | null }>();
   for (const e of loadEpisodes(db)) {
-    if (e.interview || e.worker_exited_event_id === null) continue;
+    if (e.interview || e.worker_exited_event_id === null || (window.upTo !== undefined && e.worker_exited_event_id > window.upTo)) continue;
     const key = cellJson(e.cell);
     const seen = firstSeen.get(key);
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id!) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });
