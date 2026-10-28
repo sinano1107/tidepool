@@ -20,9 +20,12 @@
 4. **材料の session が無い RCA 子(実行前の親の下の auditor RCA、ADR 0292)は決定3 の経路に落ちる。** 帰責が付くのは worker への
    観測だけ(ADR 0310 決定1)なので、揃えるべき判事がいない。ADR 0314 決定2 の「欄の空は記録の dir が後から失われた印」は当たらない
    —— 記録は失われたのでなく、最初から要らなかった。worker の session が無かったことを1行添える。
-5. **子の pickup で親の issue が死んでいても、子は止めない。** 一時的失敗は自分の issue と同じくその cycle の pickup を skip。確定的失敗
-   (closed / not found)は `parent` の文面を空にして理由を1行添え、子を spawn する。親の issue が閉じたことは子の失敗ではない ——
-   親の計画が死んだなら cancel の cascade が倒し(ADR 0271)、issue だけが閉じたなら PR を開く段で盤面が気づく(ADR 0320 帰結)。
+5. **子の pickup で親の issue が閉じていても文面は載せ、無くても子は止めない。** closed の issue は文面(title / body / comments)が
+   読めるので3欄を載せ、not_found だけ3欄が無い。issue の番号と状態(open / closed / not_found)は3欄と同じ `parent` object の兄弟欄
+   `issue` に構造で置く —— 散文の「issue #N is closed」では、`parent` に番号が無い以上、読み手が同じ対象かを推測することになる。
+   一時的失敗は自分の issue と同じくその cycle の pickup を skip。親の issue が閉じたことは子の失敗ではない —— 親の計画が死んだなら
+   cancel の cascade が倒し(ADR 0271)、issue だけが閉じたなら PR を開く段で盤面が気づく(ADR 0320 帰結)。自分の issue の pickup gate
+   (closed → failure question)は変えない —— そちらは「task が死んだ」の判定で、別の問い。
 
 ## 退けた形
 
@@ -30,6 +33,7 @@
   行動列で届くので、停止後の issue のコメントを RCA が読む必要は見つからなかった。
 - **RCA 以外の子も親の書き手の session の記録から読む** —— 「親の書き手が見た文」で揃うが、人間の分解の子は null になり、読み手がいない。
 - **親の issue が死んだ子に failure question** —— 宛先が親の生死に依らない RCA 子(ADR 0271)を親の issue の都合で止める。
+- **closed の親の文面を捨てる** —— 文面は手元にある。merge 後に人間が登録する review 子や、not planned で閉じた親の下で生き残る RCA 子が文面を失う。
 - **実行前の親の RCA 子は null + 申告** —— 人間の分解が task に合っているかを見る RCA が task の文を持たない。
 
 ## 帰結
