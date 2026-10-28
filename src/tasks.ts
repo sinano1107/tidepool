@@ -4347,17 +4347,14 @@ function logHistoryEntry({ id, payload }: DecisionLogEntry): LogHistoryEntry {
 }
 
 /** 行の `id` はその行の event id(ADR 0322 決定2): 判断は decision_logged、停止は停止 event、retry は interview_retried、分解外の子は登録 event。 */
-type TaskHistoryEntry = { id: number } & (
+type TaskHistoryEntry = Exclude<LogHistoryEntry, { decision: string }> | ({ id: number } & (
   | { decision: string; children: HistoryChildContext[] }
-  | { completion: string | null }
-  | { memory_written: string }
-  | { premise_breached: string }
   /** cause / evidence は停止の帰責があるときだけ(ADR 0310 決定5)。 */
   | { stopped_by_human: { reason: string; cause?: Cause; evidence?: string } }
   /** retry が登録した Interview の root だけ(ADR 0248 決定3): 測り直す前の root と、その壊れた probe・rubric・破綻の理由・人間のコメント。 */
   | { retry_of: Omit<Extract<EventPayload, { kind: "interview_retried" }>, "kind"> }
   | { child_outside_the_decomposition: HistoryChildContext }
-);
+));
 
 /** Resolve a stop's reason for history, retrospective calls and memory cases (ADR 0305 / 0308). */
 export function humanStopReason(db: Db, stop: Extract<EventPayload, { kind: "session_stopped_by_human" }>): string {
