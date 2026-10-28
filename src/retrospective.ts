@@ -88,6 +88,22 @@ export const OBJECTION_WRITTEN_RULE =
   "When the input carries written, the objected entry is a memory write the worker applied directly: written holds the memory " +
   "entries it wrote, or for an invalidation the memory entries it dropped, and memory_read is what it read before that write.";
 
+/** 帰責と起草の prompt が `{ id, line }` の行に添える文(ADR 0322 決定5・6): 行の id は散文が「entry 3」と名指す entry id。 */
+export const LOG_ROW_RULE =
+  "Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3.";
+
+/** 帰責と起草の prompt が第2回の `rca_findings` に添える文(ADR 0322 決定5 / 追記): `review` は当事者レビューか独立レビューか
+ *  (CONTEXT.md「Review」)、`actor` は self の当事者。どちらをどう重く読むかは書かない —— 決めた ADR が無い(#2675)。 */
+export const RCA_FINDINGS_RULE =
+  "rca_findings holds one object per root-cause review: review is self when the worker who made the decisions under review " +
+  "wrote it — its own account, and actor names that worker — or auditor when an independent reviewer who made none of them " +
+  "wrote it (actor is null); entries are the review's decision log and completion report.";
+
+/** 異議の帰責と起草の prompt が `actor` に添える文(ADR 0322 追記): 異議群に2人の actor の行があると self が2本並ぶ。 */
+export const OBJECTION_ACTOR_RULE =
+  "actor is the worker who wrote the objected entry: a self review whose actor is that worker is its own account of the " +
+  "entry, and a self review with another actor covers that other worker's entries.";
+
 /** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
  *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` / `board_text` / `task` は
  *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。

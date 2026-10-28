@@ -251,3 +251,26 @@ it("停止と異議の帰責の prompt は task を spawn で渡した文面と�
   expect(prompts[0]).toContain(JSON.stringify(task));
   expect(prompts[1]).toContain('"task": null');
 });
+
+it("停止と異議の帰責の prompt は { id, line } の行の id と rca_findings の review / actor を説明し、異議だけが裁く行の actor を説明する(ADR 0322 決定5 / 追記、#2675)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await client.judge(input, setting);
+  await client.judgeStop(stopInput, setting);
+
+  for (const prompt of prompts) {
+    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3.");
+    expect(prompt).toContain("review is self when the worker who made the decisions under review wrote it — its own account, and actor names that worker");
+    expect(prompt).toContain("or auditor when an independent reviewer who made none of them wrote it (actor is null)");
+  }
+  expect(prompts[0]).toContain("actor is the worker who wrote the objected entry: a self review whose actor is that worker is its own account of the entry");
+  expect(prompts[1]).not.toContain("actor is the worker who wrote the objected entry");
+  expect(prompts[1]).toContain("actions.decisions places each decision-log line (by its id) at its position");
+});

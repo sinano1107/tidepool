@@ -3,7 +3,17 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
 import { TIER_DEFINITION_RULE } from "./meta-review.js";
-import { type BehaviorDraft, type BehaviorDraftClient, type BehaviorDraftInput, OBJECTION_HUMAN_STOP_RULE, OBJECTION_WRITTEN_RULE, type StopBehaviorDraftInput } from "./retrospective.js";
+import {
+  type BehaviorDraft,
+  type BehaviorDraftClient,
+  type BehaviorDraftInput,
+  LOG_ROW_RULE,
+  OBJECTION_ACTOR_RULE,
+  OBJECTION_HUMAN_STOP_RULE,
+  OBJECTION_WRITTEN_RULE,
+  RCA_FINDINGS_RULE,
+  type StopBehaviorDraftInput,
+} from "./retrospective.js";
 
 // mirrors BehaviorDraft: the model's reply is untrusted input and lands in the memory store
 const draftSchema = z.object({
@@ -31,9 +41,10 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "decision log and left steering comments; the objection's cause says an agent should behave " +
     "differently from now on. Draft ONE behavior rule — a standing instruction a human will approve " +
     `later — from the objected entry, the steering, ${memoryReadField("the decision")}, ${SPAWN_TEXT_FIELDS}, and the ` +
-    `task's decision log as it stood at the time. ${OBJECTION_WRITTEN_RULE} When the input carries rca_findings, the ` +
+    `task's decision log as it stood at the time. ${OBJECTION_WRITTEN_RULE} ${LOG_ROW_RULE} When the input carries rca_findings, the ` +
     "task's root-cause reviews have settled: draft " +
-    `from what they found. ${responseFields("the worker who wrote the entry")} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
+    `from what they found. ${RCA_FINDINGS_RULE} ${OBJECTION_ACTOR_RULE} ${responseFields("the worker who wrote the entry")} ` +
+    `${OBJECTION_HUMAN_STOP_RULE}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
@@ -48,9 +59,9 @@ function buildStopPrompt(input: StopBehaviorDraftInput): string {
     `actually did: the session's whole decision log (decision_log), ${memoryReadField("the stop")}, ` +
     `${SPAWN_TEXT_FIELDS}, and its action sequence (actions). actions.calls lists the ` +
     "session's tool calls in order (index, tool, the extracted argument, and whether it failed); actions.decisions places each " +
-    "decision-log line at its position in that sequence; actions is null when the sequence could not be read. When the input " +
+    "decision-log line (by its id) at its position in that sequence; actions is null when the sequence could not be read. When the input " +
     "carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found. " +
-    `${responseFields("the worker who ran the session")}\n\n` +
+    `${LOG_ROW_RULE} ${RCA_FINDINGS_RULE} ${responseFields("the worker who ran the session")}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
