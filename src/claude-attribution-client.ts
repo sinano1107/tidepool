@@ -3,7 +3,17 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import { type AttributionClient, type AttributionInput, type AttributionJudgment, OBJECTION_HUMAN_STOP_RULE, OBJECTION_WRITTEN_RULE, type StopAttributionInput } from "./retrospective.js";
+import {
+  type AttributionClient,
+  type AttributionInput,
+  type AttributionJudgment,
+  LOG_ROW_RULE,
+  OBJECTION_ACTOR_RULE,
+  OBJECTION_HUMAN_STOP_RULE,
+  OBJECTION_WRITTEN_RULE,
+  RCA_FINDINGS_RULE,
+  type StopAttributionInput,
+} from "./retrospective.js";
 
 // mirrors AttributionJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the objected task as a judgment
@@ -24,10 +34,10 @@ function buildPrompt(input: AttributionInput): string {
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
-    `as it stood at the time. ${OBJECTION_FIELDS} ${OBJECTION_WRITTEN_RULE} When the input ` +
+    `as it stood at the time. ${OBJECTION_FIELDS} ${OBJECTION_WRITTEN_RULE} ${LOG_ROW_RULE} When the input ` +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
-    "have since settled: those are their decision logs and completion reports, read them as " +
-    `evidence. ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
+    "have since settled: read them as " +
+    `evidence. ${RCA_FINDINGS_RULE} ${OBJECTION_ACTOR_RULE} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
@@ -42,13 +52,13 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "Judge whose shortfall the stop points at from that testimony, the session's whole decision log (decision_log), the " +
     "memory entries the worker read before the stop (memory_read), its agent definition as it stood then (agent_definition), " +
     "the board's own text it was given (board_text), the task text it was given (task), and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
-    "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line at its " +
+    "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line (by its id) at its " +
     "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
     "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
     "evidence — a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
     "changed, is requirement_change. When the input carries rca_findings, an earlier judgment of this stop was uncertain and the " +
-    "root-cause reviews of the stop have since settled: those are their decision logs and completion reports, read them as evidence. " +
-    `${STOP_FIELDS}\n\n` +
+    "root-cause reviews of the stop have since settled: read them as evidence. " +
+    `${LOG_ROW_RULE} ${RCA_FINDINGS_RULE} ${STOP_FIELDS}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }

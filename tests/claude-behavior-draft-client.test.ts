@@ -16,6 +16,8 @@ const input: BehaviorDraftInput = {
   index: "- cli/ — how command-line flags are named",
 };
 
+const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
+
 const draft = { path: "cli/flags", title: "Spell out flags", text: "Name dry-run flags --dry-run.", addressee: "all" };
 
 it("draft は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON の起草を返す", async () => {
@@ -149,7 +151,6 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
     },
   });
   const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
-  const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
 
   await client.draft({ ...input, task: "Purpose: rename the flag" }, setting);
   await client.draftFromStop(stopInput, setting);
@@ -161,4 +162,27 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
   }
   expect(prompts[0]).toContain('"task": "Purpose: rename the flag"');
   expect(prompts[1]).toContain('"task": null');
+});
+
+it("停止と異議の起草の prompt は { id, line } の行の id と rca_findings の review / actor を説明し、異議だけが裁く行の actor を説明する(ADR 0322 決定5 / 追記、#2675)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await client.draft(input, setting);
+  await client.draftFromStop(stopInput, setting);
+
+  for (const prompt of prompts) {
+    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, while memory entry 3 names a memory entry, not a row.");
+    expect(prompt).toContain("review is self when the review was assigned to the worker who made the decisions under review — its own account of why it decided, and actor names that worker");
+    expect(prompt).toContain("or auditor when it was assigned not to that worker but to the board's reviewer role — an outside account (actor is null)");
+  }
+  expect(prompts[0]).toContain("The top-level actor is who wrote the objected entry (human when a human wrote it; such an entry has no self review).");
+  expect(prompts[1]).not.toContain("The top-level actor is who wrote the objected entry");
+  expect(prompts[1]).toContain("actions.decisions places each decision-log line (by its id) at its position");
 });
