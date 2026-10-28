@@ -95,12 +95,14 @@ export const LOG_ROW_RULE =
   "while memory entry 3 names a memory entry, not a row.";
 
 /** 帰責と起草の prompt が第2回の `rca_findings` に添える文(ADR 0322 決定5 / 追記): `review` は当事者レビューか独立レビューか
- *  (CONTEXT.md「Review」—— 独立は session 文脈を持たないことで、agent が違うことではない)、`actor` は self の当事者。
- *  どちらをどう重く読むかは書かない —— 決めた ADR が無い(#2675)。 */
+ *  (CONTEXT.md「Review」)、`actor` は self の当事者。読み手は盤面の語(Auditor・独立レビュー)を渡されないので、盤面が持つ事実
+ *  —— 誰に割り当てたか —— で書く(Auditor の解決先が executor 自身でも割り当ては役割のまま)。どちらをどう重く読むかは書かない
+ *  —— 決めた ADR が無い(#2675)。語の渡し方の見直しは #2681。 */
 export const RCA_FINDINGS_RULE =
-  "rca_findings holds one object per root-cause review: review is self when the worker who made the decisions under review " +
-  "wrote it — its own account of why it decided, and actor names that worker — or auditor when a reviewer outside the " +
-  "session that made them wrote it (actor is null); entries are the review's decision log and completion report.";
+  "rca_findings holds one object per root-cause review: review is self when the review was assigned to the worker who made " +
+  "the decisions under review — its own account of why it decided, and actor names that worker — or auditor when it was " +
+  "assigned not to that worker but to the board's reviewer role — an outside account (actor is null); entries are the " +
+  "review's decision log and completion report.";
 
 /** 異議の帰責と起草の prompt が一番上の `actor` に添える文(ADR 0322 追記): 人間の書いた行に self は立たない
  *  (`src/triage.ts` の RCA の登録)。異議群に self が2本並ぶかは #2676。 */

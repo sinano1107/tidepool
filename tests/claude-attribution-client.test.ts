@@ -267,8 +267,8 @@ it("停止と異議の帰責の prompt は { id, line } の行の id と rca_fin
 
   for (const prompt of prompts) {
     expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, while memory entry 3 names a memory entry, not a row.");
-    expect(prompt).toContain("review is self when the worker who made the decisions under review wrote it — its own account of why it decided, and actor names that worker");
-    expect(prompt).toContain("or auditor when a reviewer outside the session that made them wrote it (actor is null)");
+    expect(prompt).toContain("review is self when the review was assigned to the worker who made the decisions under review — its own account of why it decided, and actor names that worker");
+    expect(prompt).toContain("or auditor when it was assigned not to that worker but to the board's reviewer role — an outside account (actor is null)");
   }
   expect(prompts[0]).toContain("The top-level actor is who wrote the objected entry (human when a human wrote it; such an entry has no self review).");
   expect(prompts[1]).not.toContain("The top-level actor is who wrote the objected entry");
