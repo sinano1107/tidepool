@@ -77,6 +77,18 @@ export interface RcaFinding {
   entries: LogRow[];
 }
 
+/** RCA の所見の欄(ADR 0324 決定1・4)。`actor` の文は `review` の文の中に置く —— self と auditor で値の意味が分かれるので、
+ *  `RCA_FINDINGS_RULE` の文のまま切り出す。 */
+const RCA_ACTOR = "actor names that worker";
+const RCA_FINDING_FIELDS = {
+  review:
+    "review is self when the review was assigned to the worker who made the decisions under review — its own account of why it decided, " +
+    `and ${RCA_ACTOR} — or auditor when it was assigned not to that worker but to the board's reviewer role — an outside account (actor is null)`,
+  task_id: "task_id is the review's own task id",
+  actor: RCA_ACTOR,
+  entries: "entries are the review's decision log and completion report",
+} satisfies Record<keyof RcaFinding, string>;
+
 /** 異議の帰責と起草の prompt が `human_stop` に添える文(ADR 0308 決定1): 「要らなくなった」類の理由は異議の cause に使わない。
  *  理由 question の選択肢の文言ではなく類で書く —— 選択肢は消える(ADR 0310 決定7)。 */
 export const OBJECTION_HUMAN_STOP_RULE =
@@ -97,12 +109,8 @@ export const LOG_ROW_RULE =
 /** 帰責と起草の prompt が第2回の `rca_findings` に添える文(ADR 0322 決定5 / 追記): `review` は当事者レビューか独立レビューか
  *  (CONTEXT.md「Review」)、`actor` は self の当事者。読み手は盤面の語(Auditor・独立レビュー)を渡されないので、盤面が持つ事実
  *  —— 誰に割り当てたか —— で書く(Auditor の解決先が executor 自身でも割り当ては役割のまま)。どちらをどう重く読むかは書かない
- *  —— 決めた ADR が無い(#2675)。語の渡し方の見直しは #2681。 */
-export const RCA_FINDINGS_RULE =
-  "rca_findings holds one object per root-cause review: review is self when the review was assigned to the worker who made " +
-  "the decisions under review — its own account of why it decided, and actor names that worker — or auditor when it was " +
-  "assigned not to that worker but to the board's reviewer role — an outside account (actor is null); entries are the " +
-  "review's decision log and completion report.";
+ *  —— 決めた ADR が無い(#2675 / ADR 0324 決定4)。文は欄ごとに `RCA_FINDING_FIELDS` から組む。 */
+export const RCA_FINDINGS_RULE = `rca_findings holds one object per root-cause review: ${RCA_FINDING_FIELDS.review}; ${RCA_FINDING_FIELDS.entries}.`;
 
 /** 異議の帰責と起草の prompt が一番上の `actor` に添える文(ADR 0322 追記): 人間の書いた行に self は立たない
  *  (`src/triage.ts` の RCA の登録)。異議群に self が2本並ぶかは #2676。 */
@@ -126,6 +134,93 @@ export interface StopAttributionInput {
   } | null;
   rca_findings?: RcaFinding[];
 }
+
+/** 入れ子の record を「欄(説明)」の列に描く —— 親の欄の文が子の欄の文を挿す形。 */
+const fieldList = (fields: Record<string, string>, prefix = "") =>
+  Object.entries(fields)
+    .map(([key, sentence]) => `${prefix}${key} (${sentence})`)
+    .join(", ");
+
+/** Board call の読み手(帰責の判事・Behavior の起草)に渡す欄の説明は、入力の型の欄に鍵で結んでここに1か所(ADR 0324 決定1)。
+ *  読み手に届く盤面の語の定義もここの文にだけ置く(決定3)。null のときどうするかは読み手ごとに prompt が書く(決定2)。 */
+const AUTHORITY_FIELDS = {
+  source:
+    "where that text came from: profile when it is a registry authority profile, reviewer when it is the board's own Authority " +
+    "for review and interview tasks, repair when it is the board's own notice for a memory or routing repair task",
+  profile: "the registry authority profile's name, only when source is profile",
+  text: "the section as the worker was given it",
+} satisfies Record<keyof NonNullable<AgentDefinitionThen["authority"]>, string>;
+
+const AGENT_DEFINITION_FIELDS = {
+  registry_commit:
+    "the commit it was read at of the registry — the git repository, separate from the board, that holds agent definitions and authority profiles",
+  builtin: "true when the board built the definition in rather than reading it from the registry",
+  body: "the definition's own text",
+  authority:
+    "the Authority section: what the worker may decide and do on its own and what it must escalate instead; null when the worker was given none",
+  roster:
+    "the Roster section: the workers it could delegate to, one line each — a name and when that worker suits as a delegate; null when the worker was given none",
+} satisfies Record<keyof AgentDefinitionThen, string>;
+
+const MEMORY_ENTRY_FIELDS = {
+  id: "the memory entry's id: memory entry 3 names id 3",
+  kind: "the entry's kind",
+  title: "its title",
+  text: "its body",
+} satisfies Record<keyof AttributionInput["memory_read"][number], string>;
+
+type Actions = NonNullable<StopAttributionInput["actions"]>;
+const ACTION_CALL_FIELDS = {
+  index: "its place in that order",
+  tool: "the tool's name",
+  args: "the extracted argument such as a command or file path",
+  failed: "whether it failed",
+} satisfies Record<keyof Actions["calls"][number], string>;
+
+const ACTION_DECISION_FIELDS = {
+  id: "the line's entry id",
+  position: "the number of calls before it; null = not placed",
+  line: "the line's text",
+} satisfies Record<keyof Actions["decisions"][number], string>;
+
+const ACTIONS_FIELDS = {
+  calls: `the session's tool calls in order: ${fieldList(ACTION_CALL_FIELDS)}`,
+  decisions: `places each decision-log line (by its id) at its position in that sequence: ${fieldList(ACTION_DECISION_FIELDS)}`,
+} satisfies Record<keyof Actions, string>;
+
+/** 異議と停止の入力が同じ文で持つ欄。spread した欄は親の `satisfies` の余剰検査に掛からないので、ここで両方の型の欄に結ぶ。 */
+const SHARED_FIELDS = {
+  agent_definition:
+    "the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn — " +
+    `${fieldList(AGENT_DEFINITION_FIELDS)}, ${fieldList(AUTHORITY_FIELDS, "authority.")})`,
+  board_text:
+    "the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given " +
+    "(such as Interview discipline), as given at its spawn)",
+  task: "the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria)",
+  rca_findings: `${RCA_FINDINGS_RULE} In each, ${RCA_FINDING_FIELDS.task_id}.`,
+} satisfies Partial<Record<keyof AttributionInput & keyof StopAttributionInput, string>>;
+
+const memoryRead = (before: string) => `the memory entries the worker read before ${before} (memory_read), each with ${fieldList(MEMORY_ENTRY_FIELDS)}`;
+
+export const ATTRIBUTION_INPUT_FIELDS = {
+  ...SHARED_FIELDS,
+  entry_id: "entry_id is the objected entry's id, the same as entry.id.",
+  entry: "the objected entry (entry)",
+  actor: OBJECTION_ACTOR_RULE,
+  steering: "the steering comments the human left on it (steering)",
+  decision_log: `decision_log is the task's decision log as it stood at the time. ${LOG_ROW_RULE}`,
+  memory_read: memoryRead("the decision"),
+  human_stop: OBJECTION_HUMAN_STOP_RULE,
+  written: OBJECTION_WRITTEN_RULE,
+} satisfies Record<keyof AttributionInput, string>;
+
+export const STOP_ATTRIBUTION_INPUT_FIELDS = {
+  ...SHARED_FIELDS,
+  human_stop: "human_stop.reason is the human's testimony of why",
+  decision_log: `decision_log is the session's whole decision log. ${LOG_ROW_RULE}`,
+  memory_read: memoryRead("the stop"),
+  actions: `its action sequence (actions): actions.calls lists ${ACTIONS_FIELDS.calls}; actions.decisions ${ACTIONS_FIELDS.decisions}`,
+} satisfies Record<keyof StopAttributionInput, string>;
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
  *  evidence は散文。client の出力は門(`gate`)を通してから event に載る。 */
@@ -162,6 +257,11 @@ export interface BehaviorDraftInput extends AttributionInput {
 export interface StopBehaviorDraftInput extends StopAttributionInput {
   index: string | null;
 }
+
+/** 起草の入力は帰責の入力に INDEX を足すだけ —— record も親の record に `index` の1文を足す(ADR 0324 決定1)。 */
+const INDEX_FIELD = "The index is the workspace's memory branches with their definitions (null when the store is empty).";
+export const BEHAVIOR_DRAFT_INPUT_FIELDS = { ...ATTRIBUTION_INPUT_FIELDS, index: INDEX_FIELD } satisfies Record<keyof BehaviorDraftInput, string>;
+export const STOP_BEHAVIOR_DRAFT_INPUT_FIELDS = { ...STOP_ATTRIBUTION_INPUT_FIELDS, index: INDEX_FIELD } satisfies Record<keyof StopBehaviorDraftInput, string>;
 
 /** 起草の構造化出力。宛先 `worker` / `all` は `preference` のときだけ読まれる。 */
 export interface BehaviorDraft {

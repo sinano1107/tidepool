@@ -2,16 +2,13 @@ import { z } from "zod";
 import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
-import { TIER_DEFINITION_RULE } from "./meta-review.js";
+import { TIER_DEFINITION_RULE, TIER_QUALITY_FLOOR } from "./meta-review.js";
 import {
+  BEHAVIOR_DRAFT_INPUT_FIELDS,
   type BehaviorDraft,
   type BehaviorDraftClient,
   type BehaviorDraftInput,
-  LOG_ROW_RULE,
-  OBJECTION_ACTOR_RULE,
-  OBJECTION_HUMAN_STOP_RULE,
-  OBJECTION_WRITTEN_RULE,
-  RCA_FINDINGS_RULE,
+  STOP_BEHAVIOR_DRAFT_INPUT_FIELDS,
   type StopBehaviorDraftInput,
 } from "./retrospective.js";
 
@@ -24,27 +21,22 @@ const draftSchema = z.object({
 });
 
 /** What the worker was given at its spawn (ADR 0314 決定3・4 / ADR 0320 決定3) —— both drafts read the same three fields. */
-const SPAWN_TEXT_FIELDS =
-  "the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn; " +
-  "null when not recorded), the board's own text it was given (board_text: the board's doctrine, protocol and, for an " +
-  "Interview root, Interview discipline), the task text it was given (task: its user turn at its spawn — title, purpose " +
-  "and completion criteria; null when not recorded)";
-
-/** What the worker read before what is learned from (ADR 0166 決定2) —— `before` names the objected decision or the stop. */
-const memoryReadField = (before: string) => `the memory entries the worker read before ${before} (memory_read)`;
+const spawnTextFields = (f: Pick<typeof BEHAVIOR_DRAFT_INPUT_FIELDS, "agent_definition" | "board_text" | "task">) =>
+  `${f.agent_definition} (null when not recorded), ${f.board_text}, task (${f.task}; null when not recorded)`;
 
 /** The question the board asks once an objection's cause says an agent should
  *  learn from it (ADR 0120 決定1(b)(c)): word one standing rule a human can approve. */
 function buildPrompt(input: BehaviorDraftInput): string {
+  const f = BEHAVIOR_DRAFT_INPUT_FIELDS;
   return (
     "You draft agent memory for a work-tracking board. A human objected to one entry of a worker's " +
     "decision log and left steering comments; the objection's cause says an agent should behave " +
     "differently from now on. Draft ONE behavior rule — a standing instruction a human will approve " +
-    `later — from the objected entry, the steering, ${memoryReadField("the decision")}, ${SPAWN_TEXT_FIELDS}, and the ` +
-    `task's decision log as it stood at the time. ${OBJECTION_WRITTEN_RULE} ${LOG_ROW_RULE} When the input carries rca_findings, the ` +
+    `later — from ${f.entry}, ${f.steering}, ${f.memory_read}, ${spawnTextFields(f)}, and ` +
+    `decision_log. ${f.entry_id} ${f.written} ${f.decision_log} When the input carries rca_findings, the ` +
     "task's root-cause reviews have settled: draft " +
-    `from what they found. ${RCA_FINDINGS_RULE} ${OBJECTION_ACTOR_RULE} ${responseFields("the worker who wrote the entry")} ` +
-    `${OBJECTION_HUMAN_STOP_RULE}\n\n` +
+    `from what they found. ${f.rca_findings} ${f.actor} ${responseFields("the worker who wrote the entry")} ` +
+    `${f.human_stop}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
@@ -52,16 +44,15 @@ function buildPrompt(input: BehaviorDraftInput): string {
 /** The question the board asks once a human stop's attribution says an agent should learn from it (ADR 0310 決定4):
  *  the same one rule, drafted from the human's testimony weighed against what the session did. */
 function buildStopPrompt(input: StopBehaviorDraftInput): string {
+  const f = STOP_BEHAVIOR_DRAFT_INPUT_FIELDS;
   return (
-    "You draft agent memory for a work-tracking board. A human stopped a running worker session; human_stop.reason is the " +
-    "human's testimony of why, and the stop's attribution says an agent should behave differently from now on. Draft ONE " +
+    `You draft agent memory for a work-tracking board. A human stopped a running worker session; ${f.human_stop}, ` +
+    "and the stop's attribution says an agent should behave differently from now on. Draft ONE " +
     "behavior rule — a standing instruction a human will approve later — from that testimony weighed against what the worker " +
-    `actually did: the session's whole decision log (decision_log), ${memoryReadField("the stop")}, ` +
-    `${SPAWN_TEXT_FIELDS}, and its action sequence (actions). actions.calls lists the ` +
-    "session's tool calls in order (index, tool, the extracted argument, and whether it failed); actions.decisions places each " +
-    "decision-log line (by its id) at its position in that sequence; actions is null when the sequence could not be read. When the input " +
+    `actually did: decision_log, ${f.memory_read}, ${spawnTextFields(f)}, and ${f.actions}; ` +
+    "actions is null when the sequence could not be read. When the input " +
     "carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found. " +
-    `${LOG_ROW_RULE} ${RCA_FINDINGS_RULE} ${responseFields("the worker who ran the session")}\n\n` +
+    `${f.decision_log} ${f.rca_findings} ${responseFields("the worker who ran the session")}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
 }
@@ -74,8 +65,7 @@ const responseFields = (workerPhrase: string) =>
   '"title" (string — a short name for the rule, in English), "text" (string — the rule itself, in English, ' +
   `stated so it stays true wherever it applies), and "addressee" ("worker" when the rule is for ${workerPhrase}, ` +
   '"all" when every agent should follow it). ' +
-  `${TIER_DEFINITION_RULE} The index is the ` +
-  "workspace's memory branches with their definitions (null when the store is empty).";
+  `${TIER_QUALITY_FLOOR}. ${TIER_DEFINITION_RULE} ${BEHAVIOR_DRAFT_INPUT_FIELDS.index}`;
 
 /** The real BehaviorDraftClient (issue #617): a headless one-shot `claude -p`
  *  call through the same runner as the attribution client; model / effort come

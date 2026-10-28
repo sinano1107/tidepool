@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
-import type { BehaviorDraftInput, StopBehaviorDraftInput } from "../src/retrospective.js";
+import {
+  BEHAVIOR_DRAFT_INPUT_FIELDS,
+  type BehaviorDraftInput,
+  STOP_BEHAVIOR_DRAFT_INPUT_FIELDS,
+  type StopBehaviorDraftInput,
+} from "../src/retrospective.js";
 import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
@@ -45,7 +50,8 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   expect(args[1]).toContain("how command-line flags are named");
   // 起草も judge と同じ当時版と盤面の文を読む(ADR 0314 決定4)
   expect(args[1]).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
-  expect(args[1]).toContain("(board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline)");
+  expect(args[1]).toContain("(board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn)");
+  expect(args[1]).not.toContain("Interview root");
   // 起草も judge と同じく読んだ記憶と書き込みの本文の欄を説明する(#2621)
   expect(args[1]).toContain("the memory entries the worker read before the decision (memory_read)");
   expect(args[1]).toContain("When the input carries written, the objected entry is a memory write the worker applied directly");
@@ -157,7 +163,7 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
 
   for (const prompt of prompts) {
     expect(prompt).toContain(
-      "the task text it was given (task: its user turn at its spawn — title, purpose and completion criteria; null when not recorded)",
+      "task (the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); null when not recorded)",
     );
   }
   expect(prompts[0]).toContain('"task": "Purpose: rename the flag"');
@@ -185,4 +191,22 @@ it("停止と異議の起草の prompt は { id, line } の行の id と rca_fin
   expect(prompts[0]).toContain("The top-level actor is who wrote the objected entry (human when a human wrote it; such an entry has no self review).");
   expect(prompts[1]).not.toContain("The top-level actor is who wrote the objected entry");
   expect(prompts[1]).toContain("actions.decisions places each decision-log line (by its id) at its position");
+});
+
+it.each([
+  ["draft", BEHAVIOR_DRAFT_INPUT_FIELDS],
+  ["draftFromStop", STOP_BEHAVIOR_DRAFT_INPUT_FIELDS],
+] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await (method === "draft" ? client.draft(input, setting) : client.draftFromStop(stopInput, setting));
+
+  for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
 });

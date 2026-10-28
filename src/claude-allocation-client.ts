@@ -9,6 +9,7 @@ import type { BoardCallAnswer, BoardCallSetting } from "./board-call-usage.js";
 import { CAUSES } from "./cause.js";
 import { runClaudeBoardCallJson } from "./claude-board-call-runner.js";
 import type { ExecFn } from "./claude-worker.js";
+import { TIER_QUALITY_FLOOR } from "./meta-review.js";
 
 // mirrors AllocationJudgment: the model's reply is untrusted input, and only a
 // value inside the shared vocabulary may land on the episode as a judgment
@@ -31,7 +32,7 @@ function buildPrompt(input: AllocationReviewInput): string {
     "You are the allocation reviewer of a work-tracking board. A worker session ran a task under " +
     "a fixed execution setting (provider / model / effort / advisor), and a separate read-only " +
     "review has already judged the deliverable — its verdict and findings are final and not yours " +
-    "to re-litigate. The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor. " +
+    `to re-litigate. ${TIER_QUALITY_FLOOR}, and setting.source.tier identifies who set that floor. ` +
     "Judge only whether the execution setting was appropriate for this task's " +
     "outcome, and what caused any shortfall. A null usage (the session filed no consumption report), " +
     "actions (the action counts were not observed), or advisor.usage (the advisor's share of the " +

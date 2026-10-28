@@ -1,6 +1,11 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
-import type { AttributionInput, StopAttributionInput } from "../src/retrospective.js";
+import {
+  ATTRIBUTION_INPUT_FIELDS,
+  type AttributionInput,
+  STOP_ATTRIBUTION_INPUT_FIELDS,
+  type StopAttributionInput,
+} from "../src/retrospective.js";
 import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AttributionInput = {
@@ -168,16 +173,28 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
   await client.judge(input, { provider: "anthropic", model: "fable", effort: "high" });
 
   const prompt = prompts[0]!;
-  expect(prompt).toContain("agent_definition is when the worker's agent definition as it stood then (agent_definition: its body, authority and roster) was itself wrong");
+  // ADR 0324 決定3: roster / Authority は agent_definition の入れ子の文で定義し、authority.source は3値とも書く
+  expect(prompt).toContain(`agent_definition is when ${ATTRIBUTION_INPUT_FIELDS.agent_definition} was itself wrong`);
+  expect(prompt).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn — ");
   expect(prompt).toContain(
-    "when agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer or repair that Authority is board code, not a registry profile: that is environment",
+    "authority (the Authority section: what the worker may decide and do on its own and what it must escalate instead; null when the worker was given none)",
+  );
+  expect(prompt).toContain(
+    "roster (the Roster section: the workers it could delegate to, one line each — a name and when that worker suits as a delegate; null when the worker was given none)",
+  );
+  expect(prompt).toContain(
+    "authority.source (where that text came from: profile when it is a registry authority profile, reviewer when it is the board's own Authority for review and interview tasks, repair when it is the board's own notice for a memory or routing repair task)",
+  );
+  expect(prompt).toContain(
+    "when agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer or repair rather than profile, that Authority is board code: that is environment",
   );
   expect(prompt).toContain("never answer agent_definition when agent_definition is null");
   expect(prompt).toContain("workspace_document is when a skill or document placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong");
   expect(prompt).toContain("only when the decision log cites that document");
   expect(prompt).toContain(
-    "following the board's own protocol text injected into every session (board_text: the board's doctrine, protocol and, for an Interview root, Interview discipline, as the worker was given them at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
+    "following the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
   );
+  expect(prompt).not.toContain("Interview root");
 });
 
 it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
@@ -273,4 +290,22 @@ it("停止と異議の帰責の prompt は { id, line } の行の id と rca_fin
   expect(prompts[0]).toContain("The top-level actor is who wrote the objected entry (human when a human wrote it; such an entry has no self review).");
   expect(prompts[1]).not.toContain("The top-level actor is who wrote the objected entry");
   expect(prompts[1]).toContain("actions.decisions places each decision-log line (by its id) at its position");
+});
+
+it.each([
+  ["judge", ATTRIBUTION_INPUT_FIELDS],
+  ["judgeStop", STOP_ATTRIBUTION_INPUT_FIELDS],
+] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await (method === "judge" ? client.judge(input, setting) : client.judgeStop(stopInput, setting));
+
+  for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
 });
