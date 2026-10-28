@@ -1,5 +1,12 @@
 import type { TaskContent } from "./tasks.js";
 
+/** 子自身の pickup で凍結した親の文面(ADR 0321)。 */
+export type ParentBriefing = Partial<TaskContent> & {
+  issue?: { number: number; state: "open" | "closed" | "not_found" };
+  briefing_as_spawned?: Array<{ text: string | null; for: number[] }>;
+  briefing_note?: string;
+};
+
 /** The single execution slot (concurrency = 1, ADR 0001): one in-process fact.
  *
  *  枠を占めるのは **worker session であって task ではない**(ADR 0109 決定2 /
@@ -9,6 +16,7 @@ export class Slot {
   private taskId: string | null = null;
   private teardown = false;
   private taskContent: TaskContent | undefined;
+  private parentContent: ParentBriefing | undefined;
 
   get currentTaskId(): string | null {
     return this.taskId;
@@ -27,11 +35,16 @@ export class Slot {
     return this.taskContent;
   }
 
-  occupy(taskId: string, content?: TaskContent): void {
+  get parentBriefing(): ParentBriefing | undefined {
+    return this.parentContent;
+  }
+
+  occupy(taskId: string, content?: TaskContent, parentBriefing?: ParentBriefing): void {
     if (this.taskId !== null) throw new Error("slot already occupied");
     this.taskId = taskId;
     this.teardown = false;
     this.taskContent = content;
+    this.parentContent = parentBriefing;
   }
 
   /** 最終 verb(完了・分解・エスカレーション)が着地した。session はまだ枠を
@@ -44,5 +57,6 @@ export class Slot {
     this.taskId = null;
     this.teardown = false;
     this.taskContent = undefined;
+    this.parentContent = undefined;
   }
 }

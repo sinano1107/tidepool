@@ -154,6 +154,8 @@ export interface GitHubClient {
    *  opened twice. Throws when it cannot be read. */
   findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null>;
   getIssue(ref: IssueRef): Promise<Issue>;
+  /** 親の briefing は closed でも読む(ADR 0321 決定5)。not_found と一時失敗は getIssue と同じ。 */
+  getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }>;
   /** Lists the repository's open issues (issue #67) — the issue-number
    *  picker's data source. No paging/search-term filter/cache: `--limit 100`,
    *  gh's default (newest-first) order, one call per workspace selection. */
@@ -322,6 +324,12 @@ export class GhCliClient implements GitHubClient {
   }
 
   async getIssue(ref: IssueRef): Promise<Issue> {
+    const { state, ...issue } = await this.getIssueWithState(ref);
+    if (state === "closed") throw new IssueGoneError(ref, "closed");
+    return issue;
+  }
+
+  async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
     let output: string;
     try {
       output = execFileSync(
@@ -343,11 +351,11 @@ export class GhCliClient implements GitHubClient {
       comments: Array<{ body: string }>;
       state: string;
     };
-    if (parsed.state === "CLOSED") throw new IssueGoneError(ref, "closed");
     return {
       title: parsed.title,
       body: parsed.body,
       comments: parsed.comments.map((c) => c.body),
+      state: parsed.state === "CLOSED" ? "closed" : "open",
     };
   }
 

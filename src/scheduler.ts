@@ -10,7 +10,7 @@ import {
 import type { Db } from "./db.js";
 import { DEFAULT_AUDITOR_NAME, DEFAULT_INTERVIEWER_NAME } from "./defaults.js";
 import { getDisplayLanguage } from "./display-language.js";
-import { appendEvent, latestEventOfTask, type ResourceStop } from "./events.js";
+import { appendEvent, latestEventOfTask, type ResourceStop, rcaMaterialAnchors } from "./events.js";
 import {
   type ExecutionExclusions,
   type ExecutionSetting,
@@ -53,12 +53,13 @@ import {
 import { registryReachabilityPickupBlocked } from "./registry-reachability.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { type RetrospectiveCallDeps, refireRetrospectiveCalls } from "./retrospective.js";
-import type { Slot } from "./slot.js";
+import type { ParentBriefing, Slot } from "./slot.js";
 import { expireSpendDown } from "./spend-down.js";
 import {
   abandonConsequence,
   carriesHumanWords,
   contentSourceFor,
+  deriveTaskContentFromIssue,
   escalateTask,
   getTask,
   interviewRootIdOf,
@@ -81,7 +82,7 @@ import {
   type ProviderUsageObservation,
   reportProviderUsage,
 } from "./throttle.js";
-import { RecordContainerError } from "./transcript-store.js";
+import { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
@@ -504,6 +505,7 @@ export function startScheduler(deps: {
     task: Task,
     setting: ExecutionSetting,
     content: Partial<TaskContent>,
+    parentBriefing: ParentBriefing | undefined,
     onPicked: (pickupEventId: number) => void,
   ): Promise<(() => void) | void> {
     // resolveTaskAgent is the three-value read CONTEXT.md's Assignee
@@ -527,7 +529,7 @@ export function startScheduler(deps: {
       // 呼び手には pickupTask が書いた task_picked_up の id を渡す —— shadow 行はこの event に乗る(ADR 0319 決定1)
       onPicked(latestEventOfTask(db, picked.id, "task_picked_up")!.id);
       const started = { ...picked, ...content };
-      slot.occupy(picked.id, { title: started.title, purpose: started.purpose, completion_criteria: started.completion_criteria });
+      slot.occupy(picked.id, { title: started.title, purpose: started.purpose, completion_criteria: started.completion_criteria }, parentBriefing);
       // ADR 0099 決定2: 容器は盤面が**先に**作る。adapter が spawn に辿り着けな
       // かった pickup でも、force / reclaimed の相手はもう存在している。
       containers.open(picked.id);
@@ -683,6 +685,46 @@ export function startScheduler(deps: {
       }
       // 一時的失敗: fail-closed, no human — the next poll retries
       console.error(`[scheduler] issue expansion failed for ${head.id}, skipping this cycle:`, err);
+      return null;
+    }
+  }
+
+  /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。 */
+  async function parentBriefingAtPickup(head: Task): Promise<ParentBriefing | undefined | null> {
+    const parent = head.parent_id && getTask(db, head.parent_id);
+    if (!parent) return undefined;
+    // RCA は判事と同じ session の user を逐語で読む。記録が無ければ null、再構成しない(ADR 0321 決定1・2)。
+    const anchors = head.type === "review"
+      ? [...new Map(rcaMaterialAnchors(db, head.id).map((material) => [material.anchor.id, material])).values()].sort((a, b) => a.anchor.id - b.anchor.id)
+      : [];
+    const byText = new Map<string | null, { text: string | null; for: number[] }>();
+    const transcripts = retrospectiveCalls.recordDir === undefined ? undefined : new TranscriptStore(retrospectiveCalls.recordDir);
+    for (const { anchor, spawned } of anchors) {
+      if (!spawned) continue;
+      const text = transcripts?.readPrompt(parent.id, spawned.id)?.user ?? null;
+      const bundle = byText.get(text);
+      if (bundle) bundle.for.push(anchor.id);
+      else byText.set(text, { text, for: [anchor.id] });
+    }
+    const briefing: ParentBriefing = byText.size > 0 ? { briefing_as_spawned: [...byText.values()] } : {};
+    if (anchors.length > 0) {
+      if (anchors.every(({ spawned }) => spawned)) return briefing;
+      // ADR 0321 決定4: 実行前の親への判断には揃える worker session が無い。混在ならその材料にだけ今の3欄を添える。
+      briefing.briefing_note = "no worker session preceded the judged decision; this is the parent as it stood at your pickup";
+    }
+    const stored = { ...briefing, title: parent.title, purpose: parent.purpose, completion_criteria: parent.completion_criteria };
+    if (parent.github_issue_number === null || !github) return stored;
+    const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
+    const resolved = resolve && resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
+    if (resolve && !resolved) return null;
+    if (!resolved) return stored;
+    const number = parent.github_issue_number;
+    try {
+      const issue = await github.getIssueWithState({ path: resolved.path, number });
+      return { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number, state: issue.state } };
+    } catch (err) {
+      if (err instanceof IssueGoneError && err.reason === "not_found") return { ...briefing, issue: { number, state: "not_found" } };
+      console.error(`[scheduler] parent issue expansion failed for ${head.id}, skipping this cycle:`, err);
       return null;
     }
   }
@@ -954,6 +996,8 @@ export function startScheduler(deps: {
         return SUCCEEDED;
       const content = await issuePickupGate(head);
       if (!content) return SUCCEEDED;
+      const parentBriefing = await parentBriefingAtPickup(head);
+      if (parentBriefing === null) return SUCCEEDED;
       // 学習器の shadow 行(ADR 0110 決定4 と Status 追記): work 側の task の pickup ごとに、走る設定の反対側(昇格前は学習器の
       // 推薦、昇格後は表の先頭)を並べて1行残す。判定者(review / interview)は学習器を参照しない(ADR 0111 決定3 / ADR 0272 決定4 の追記)。
       // 昇格前の記録は選択に介入しない —— 学習器が倒れても pickup は進む
@@ -968,7 +1012,7 @@ export function startScheduler(deps: {
           console.error(`[scheduler] learner shadow row failed for ${head.id}:`, err);
         }
       };
-      afterPoll = await pickup(head, chosen, content, recordShadowRow);
+      afterPoll = await pickup(head, chosen, content, parentBriefing, recordShadowRow);
     } catch (err) {
       succeeded = false;
       pollFailed(err);
