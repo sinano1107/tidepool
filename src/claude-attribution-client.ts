@@ -36,7 +36,7 @@ function buildPrompt(input: AttributionInput): string {
     "shortfall it points at — from the objected entry, the steering, and the task's decision log " +
     `as it stood at the time. ${OBJECTION_FIELDS} ${OBJECTION_WRITTEN_RULE} ${LOG_ROW_RULE} When the input ` +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
-    "have since settled: those are their decision logs and completion reports, read them as " +
+    "have since settled: read them as " +
     `evidence. ${RCA_FINDINGS_RULE} ${OBJECTION_ACTOR_RULE} ${OBJECTION_HUMAN_STOP_RULE}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );
@@ -57,7 +57,7 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
     "evidence — a worker that breaks a rule seldom logs it. A reason saying the work is no longer needed, or that what was wanted " +
     "changed, is requirement_change. When the input carries rca_findings, an earlier judgment of this stop was uncertain and the " +
-    "root-cause reviews of the stop have since settled: those are their decision logs and completion reports, read them as evidence. " +
+    "root-cause reviews of the stop have since settled: read them as evidence. " +
     `${LOG_ROW_RULE} ${RCA_FINDINGS_RULE} ${STOP_FIELDS}\n\n` +
     `Input:\n${JSON.stringify(input, null, 2)}`
   );

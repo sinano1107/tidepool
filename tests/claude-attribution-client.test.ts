@@ -266,11 +266,11 @@ it("停止と異議の帰責の prompt は { id, line } の行の id と rca_fin
   await client.judgeStop(stopInput, setting);
 
   for (const prompt of prompts) {
-    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3.");
-    expect(prompt).toContain("review is self when the worker who made the decisions under review wrote it — its own account, and actor names that worker");
-    expect(prompt).toContain("or auditor when an independent reviewer who made none of them wrote it (actor is null)");
+    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, while memory entry 3 names a memory entry (the ids in memory_read).");
+    expect(prompt).toContain("review is self when the worker who made the decisions under review wrote it — its own account of why it decided, and actor names that worker");
+    expect(prompt).toContain("or auditor when a reviewer outside the session that made them wrote it (actor is null)");
   }
-  expect(prompts[0]).toContain("actor is the worker who wrote the objected entry: a self review whose actor is that worker is its own account of the entry");
-  expect(prompts[1]).not.toContain("actor is the worker who wrote the objected entry");
+  expect(prompts[0]).toContain("The top-level actor is who wrote the objected entry (human when a human wrote it; such an entry has no self review).");
+  expect(prompts[1]).not.toContain("The top-level actor is who wrote the objected entry");
   expect(prompts[1]).toContain("actions.decisions places each decision-log line (by its id) at its position");
 });
