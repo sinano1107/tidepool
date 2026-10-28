@@ -32,7 +32,7 @@ import {
 } from "../src/tasks.js";
 import { commitTriage, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
-import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
+import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
   decomposeTaskViaWorker,
   defaultingTo,
@@ -367,7 +367,7 @@ it("人間の登録 door は envelope の完全な LLM 診断をログに残し�
   const fullError = `Failed to authenticate: ${"x".repeat(220)}`;
   const draftClient = new ClaudeDraftClient({
     db,
-    exec: async () => JSON.stringify({ is_error: true, result: fullError }),
+    exec: async () => boardCallStream({ is_error: true, result: fullError }),
   });
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -436,7 +436,7 @@ it("人間の登録 door の issue 検査は、撃った行で issue_inspection 
   expect(await registerIssueThroughDoor(draftClient)).toMatchObject({ ok: true });
 
   expect(listBoardCalls(db)).toEqual([
-    { use: "issue_inspection", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
+    { use: "issue_inspection", ...draftClient.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
   ]);
 });
 
@@ -452,7 +452,7 @@ it("usage を報告して失敗した issue 検査も issue_inspection の行を
     failure: { kind: "inspection_unavailable", error: "answer did not match the schema See server logs for full details." },
   });
   expect(listBoardCalls(db)).toEqual([
-    { use: "issue_inspection", ...draftClient.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
+    { use: "issue_inspection", ...draftClient.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString() },
   ]);
 });
 

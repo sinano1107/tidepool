@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
+import { boardCallStream } from "./fakes.js";
 
 const ENVELOPE = (result: string) =>
-  JSON.stringify({
+  boardCallStream({
     result,
     total_cost_usd: 0.000586,
     usage: {
@@ -29,6 +30,8 @@ describe("ClaudeTranslationClient", () => {
 
     await expect(client.translate(["a", "b", "c"], "Japanese")).resolves.toEqual({
       texts: ["訳A", "訳B", "訳C"],
+      model_swaps: [],
+      refusals: [],
       usage: {
         input_tokens: 506,
         output_tokens: 16,

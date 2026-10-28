@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
 import type { BehaviorDraftInput, StopBehaviorDraftInput } from "../src/retrospective.js";
-import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: BehaviorDraftInput = {
   entry_id: 7,
@@ -23,7 +23,7 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -54,7 +54,7 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -69,7 +69,7 @@ it("prompt は path / title / text を英語で書かせる —— 索引の階�
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -86,7 +86,7 @@ it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する
     JSON.stringify({ ...draft, text: "" }),
     "spell it out, I guess",
   ]) {
-    const client = new ClaudeBehaviorDraftClient({ exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result }) });
+    const client = new ClaudeBehaviorDraftClient({ exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result }) });
     await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
   }
 });
@@ -96,7 +96,7 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
@@ -113,7 +113,7 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
   const stop: StopBehaviorDraftInput = {
@@ -145,7 +145,7 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
   const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;

@@ -1,4 +1,5 @@
 import type { Db } from "./db.js";
+import type { ModelSwap } from "./events.js";
 import type { ExecutionSettingRow } from "./execution-setting.js";
 
 /** The `board_calls` table's closed use vocabulary (ADR 0299 決定1) — the DDL's CHECK spells the same list. */
@@ -34,6 +35,8 @@ export type BoardCallSetting = Pick<ExecutionSettingRow, "provider" | "model" | 
  *  the Provider-neutral caller writes the row from these (ADR 0299 決定6). */
 export interface BoardCallAnswer<T> {
   output: T;
+  model_swaps: ModelSwap[];
+  refusals: (string | null)[];
   usage: BoardCallUsage;
   setting: BoardCallSetting;
 }
@@ -45,6 +48,8 @@ export class BoardCallUsageError extends Error {
     message: string,
     readonly setting: BoardCallSetting,
     readonly usage: BoardCallUsage,
+    readonly model_swaps: ModelSwap[] = [],
+    readonly refusals: (string | null)[] = [],
   ) {
     super(message);
   }
@@ -54,11 +59,12 @@ export class BoardCallUsageError extends Error {
  *  after its CLI reported usage (ADR 0299 決定3). A failure without usage (row refusal, 401) writes nothing and is rethrown as is. */
 export async function recordedAnswer<T>(db: Db, use: BoardCallUse, now: Date, call: Promise<BoardCallAnswer<T>>): Promise<T> {
   try {
-    const { output, usage, setting } = await call;
-    recordBoardCall(db, use, setting, usage, now);
+    const answer = await call;
+    const { output, usage, setting } = answer;
+    recordBoardCall(db, use, setting, usage, now, null, answer);
     return output;
   } catch (err) {
-    if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, now);
+    if (err instanceof BoardCallUsageError) recordBoardCall(db, use, err.setting, err.usage, now, null, err);
     throw err;
   }
 }
@@ -71,24 +77,27 @@ export function recordBoardCall(
   usage: BoardCallUsage,
   now: Date,
   fragments: number | null = null,
+  observations: Pick<BoardCallAnswer<unknown>, "model_swaps" | "refusals"> = { model_swaps: [], refusals: [] },
 ): void {
   db.prepare(
     `INSERT INTO board_calls
        (use, provider, model, effort, fragments, input_tokens, output_tokens,
-        cache_read_tokens, cache_creation_tokens, estimated_cost_usd, created_at)
+        cache_read_tokens, cache_creation_tokens, estimated_cost_usd, created_at, model_swaps, refusals)
      VALUES (@use, @provider, @model, @effort, @fragments, @input_tokens, @output_tokens,
-             @cache_read_tokens, @cache_creation_tokens, @estimated_cost_usd, @createdAt)`,
-  ).run({ use, ...setting, fragments, ...usage, createdAt: now.toISOString() });
+             @cache_read_tokens, @cache_creation_tokens, @estimated_cost_usd, @createdAt, @model_swaps, @refusals)`,
+  ).run({ use, ...setting, fragments, ...usage, createdAt: now.toISOString(), model_swaps: JSON.stringify(observations.model_swaps), refusals: JSON.stringify(observations.refusals) });
 }
 
 export interface BoardCallRecord extends BoardCallSetting {
+  model_swaps: ModelSwap[];
+  refusals: (string | null)[];
   use: BoardCallUse;
   fragments: number | null;
   usage: BoardCallUsage;
   createdAt: string;
 }
 
-type BoardCallRow = Omit<BoardCallRecord, "usage" | "createdAt"> & BoardCallUsage & { created_at: string };
+type BoardCallRow = Omit<BoardCallRecord, "usage" | "createdAt" | "model_swaps" | "refusals"> & BoardCallUsage & { created_at: string; model_swaps: string; refusals: string };
 
 /** Oldest `created_at` first; rows sharing one (one request's `now` covers each chunk of one
  *  translation target, issue #688) come back in insertion order. `created_at` is the request's
@@ -97,11 +106,11 @@ export function listBoardCalls(db: Db): BoardCallRecord[] {
   const rows = db
     .prepare(
       `SELECT use, provider, model, effort, fragments, input_tokens, output_tokens, cache_read_tokens,
-              cache_creation_tokens, estimated_cost_usd, created_at
+              cache_creation_tokens, estimated_cost_usd, created_at, model_swaps, refusals
          FROM board_calls ORDER BY created_at, rowid`,
     )
     .all() as BoardCallRow[];
-  return rows.map(({ use, provider, model, effort, fragments, created_at, ...usage }) => ({
+  return rows.map(({ use, provider, model, effort, fragments, created_at, model_swaps, refusals, ...usage }) => ({
     use,
     provider,
     model,
@@ -109,6 +118,8 @@ export function listBoardCalls(db: Db): BoardCallRecord[] {
     fragments,
     usage,
     createdAt: created_at,
+    model_swaps: JSON.parse(model_swaps),
+    refusals: JSON.parse(refusals),
   }));
 }
 

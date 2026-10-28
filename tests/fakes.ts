@@ -812,20 +812,20 @@ export class FakeDraftClient implements DraftClient {
     this.languages.push(language);
     this.contexts.push(context);
     if (this.failure) throw this.failure;
-    return { output: this.response, usage: BOARD_CALL_USAGE, setting: this.setting };
+    return { output: this.response, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
   async draftHandoff(dump: string, language: string): Promise<BoardCallAnswer<HandoffDraft>> {
     this.handoffDumps.push(dump);
     this.handoffLanguages.push(language);
     if (this.handoffFailure) throw this.handoffFailure;
-    return { output: this.handoffResponse, usage: BOARD_CALL_USAGE, setting: this.setting };
+    return { output: this.handoffResponse, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
   async inspectIssue(issue: Issue): Promise<BoardCallAnswer<IssueInspection>> {
     this.inspected.push(issue);
     if (this.inspectionFailure) throw this.inspectionFailure;
-    return { output: this.inspectionByTitle.get(issue.title) ?? this.inspection, usage: BOARD_CALL_USAGE, setting: this.setting };
+    return { output: this.inspectionByTitle.get(issue.title) ?? this.inspection, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting: this.setting };
   }
 
   scriptDraft(draft: TaskDraft): void {
@@ -887,6 +887,8 @@ export class FakeTranslationClient implements TranslationClient {
     return {
       texts: fragments.map((source) => (typeof respond === "function" ? respond(source) : respond)),
       usage: this.usage,
+      model_swaps: [],
+      refusals: [],
       setting: { provider: "anthropic", model: "haiku", effort: "low" },
     };
   }
@@ -922,7 +924,7 @@ export class FakeAllocationClient implements AllocationClient {
   async judge(input: AllocationReviewInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AllocationJudgment>> {
     this.calls.push({ input, setting });
     if (this.failure) throw this.failure;
-    return { output: this.response, usage: BOARD_CALL_USAGE, setting };
+    return { output: this.response, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptJudgment(judgment: AllocationJudgment): void {
@@ -950,7 +952,7 @@ export class FakeAttributionClient implements AttributionClient {
     this.calls.push({ input, setting });
     const answer = this.scripted.get(input.entry_id) ?? { cause: "uncertain", evidence: "scripted" };
     if (answer instanceof Error) throw answer;
-    return { output: await answer, usage: BOARD_CALL_USAGE, setting };
+    return { output: await answer, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptJudgment(entryId: number, judgment: AttributionJudgment | Error | Promise<AttributionJudgment>): void {
@@ -964,7 +966,7 @@ export class FakeAttributionClient implements AttributionClient {
   async judgeStop(input: StopAttributionInput, setting: BoardCallSetting): Promise<BoardCallAnswer<AttributionJudgment>> {
     this.stopCalls.push({ input, setting });
     if (this.stopAnswer instanceof Error) throw this.stopAnswer;
-    return { output: this.stopAnswer, usage: BOARD_CALL_USAGE, setting };
+    return { output: this.stopAnswer, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptStopJudgment(judgment: AttributionJudgment | Error): void {
@@ -986,7 +988,7 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
     this.calls.push({ input, setting });
     const answer = this.scripted.get(input.entry_id) ?? new Error("no draft scripted");
     if (answer instanceof Error) throw answer;
-    return { output: await answer, usage: BOARD_CALL_USAGE, setting };
+    return { output: await answer, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptDraft(entryId: number, draft: BehaviorDraft | Error | Promise<BehaviorDraft>): void {
@@ -1000,7 +1002,7 @@ export class FakeBehaviorDraftClient implements BehaviorDraftClient {
   async draftFromStop(input: StopBehaviorDraftInput, setting: BoardCallSetting): Promise<BoardCallAnswer<BehaviorDraft>> {
     this.stopCalls.push({ input, setting });
     if (this.stopDraft instanceof Error) throw this.stopDraft;
-    return { output: this.stopDraft, usage: BOARD_CALL_USAGE, setting };
+    return { output: this.stopDraft, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, setting };
   }
 
   scriptStopDraft(draft: BehaviorDraft | Error): void {
@@ -1312,6 +1314,10 @@ export const CLI_ENVELOPE_USAGE = {
   usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
 };
 
+/** Answer-fetching Board call stdout: init and the whole final result, one JSON object per line. */
+export const boardCallStream = (result: object) =>
+  [JSON.stringify({ type: "system", subtype: "init" }), JSON.stringify({ type: "result", ...result })].join("\n");
+
 /** model turn を立てる probe の5つの envelope(成功・予算の上限・401・行の拒否・envelope 無し)を `[exitCode, envelope]` で(ADR 0299 決定3・4) */
 export const PROBE_ENVELOPES: Array<[number, object | null]> = [
   [0, { ...CLI_ENVELOPE_USAGE, is_error: false, result: "OK" }],
@@ -1343,7 +1349,7 @@ export async function boardCallSystemPrompt(): Promise<string> {
     {
       exec: async (_command, a) => {
         args = a;
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "{}" });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: "{}" });
       },
       label: "system prompt probe",
       prompt: "p",

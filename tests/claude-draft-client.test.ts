@@ -4,7 +4,7 @@ import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { openDb } from "../src/db.js";
 import { applyExecutionSettingsChange } from "../src/execution-setting.js";
 import { reportProviderUsage } from "../src/throttle.js";
-import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const db = openDb(":memory:");
 const NOW = new Date("2026-10-02T00:00:00Z");
@@ -21,7 +21,7 @@ describe("ClaudeDraftClient", () => {
     });
     const client = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: draftJson }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: draftJson }),
     });
 
     await expect(
@@ -45,7 +45,7 @@ describe("ClaudeDraftClient", () => {
     const client = new ClaudeDraftClient({
       db,
       exec: async () =>
-        JSON.stringify({
+        boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: `Sure! Here's the draft:\n\n\`\`\`json\n${draftJson}\n\`\`\`\n\nLet me know if you'd like changes.`,
         }),
@@ -61,7 +61,7 @@ describe("ClaudeDraftClient", () => {
   it("CLI 出力が JSON でない場合、draftTask は reject する(#12 の 503 フォールバック契約を守る)", async () => {
     const client = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "sure, here's your task: not actually JSON" }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: "sure, here's your task: not actually JSON" }),
     });
 
     await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
@@ -70,7 +70,7 @@ describe("ClaudeDraftClient", () => {
   it("エンベロープに result フィールド(文字列)が無い場合、draftTask は reject する", async () => {
     const client = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: 123 }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: 123 }),
     });
 
     await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
@@ -80,7 +80,7 @@ describe("ClaudeDraftClient", () => {
     const client = new ClaudeDraftClient({
       db,
       exec: async () =>
-        JSON.stringify({
+        boardCallStream({
           is_error: true,
           terminal_reason: "api_error",
           result: "Failed to authenticate: OAuth session expired and could not be refreshed",
@@ -100,9 +100,9 @@ describe("ClaudeDraftClient", () => {
   } as const;
   const delivered = {
     "非ゼロ終了の stdout": (envelope: object) => async () => {
-      throw Object.assign(new Error("Command failed"), { stdout: `${JSON.stringify(envelope)}\n` });
+      throw Object.assign(new Error("Command failed"), { stdout: `${boardCallStream(envelope)}\n` });
     },
-    "ゼロ終了の is_error": (envelope: object) => async () => JSON.stringify(envelope),
+    "ゼロ終了の is_error": (envelope: object) => async () => boardCallStream(envelope),
   } as const;
   for (const [cause, envelope] of Object.entries(refusals)) {
     for (const [how, exec] of Object.entries(delivered)) {
@@ -119,11 +119,11 @@ describe("ClaudeDraftClient", () => {
     const unauthorized = new ClaudeDraftClient({
       db,
       exec: async () => {
-        throw Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired" }) });
+        throw Object.assign(new Error("Command failed"), { stdout: boardCallStream({ is_error: true, api_error_status: 401, result: "expired" }) });
       },
     });
     await expect(unauthorized.draftTask("dump", "English")).rejects.toBeInstanceOf(CliAuthError);
-    const failed = Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 500 }) });
+    const failed = Object.assign(new Error("Command failed"), { stdout: boardCallStream({ is_error: true, api_error_status: 500 }) });
     const broken = new ClaudeDraftClient({ db, exec: async () => { throw failed; } });
     await expect(broken.draftTask("dump", "English")).rejects.toBe(failed);
   });
@@ -132,7 +132,7 @@ describe("ClaudeDraftClient", () => {
     const client = new ClaudeDraftClient({
       db,
       exec: async () =>
-        JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "set up the greenhouse sensor" }) }),
+        boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "set up the greenhouse sensor" }) }),
     });
 
     await expect(client.draftTask("set up the greenhouse sensor", "English")).rejects.toThrow();
@@ -150,7 +150,7 @@ describe("ClaudeDraftClient", () => {
       },
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -173,7 +173,7 @@ describe("ClaudeDraftClient", () => {
       candidates: { assignees: ["deckhand", "fugu", "human"], builtIns: ["fugu"], workspaces: ["tidepool"], icons: {} },
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
       },
     });
 
@@ -191,7 +191,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, _args, env) => {
         envs.push(env);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -210,7 +210,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -233,7 +233,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -252,7 +252,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
@@ -276,7 +276,7 @@ describe("ClaudeDraftClient", () => {
       db: board,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
       },
     });
 
@@ -302,7 +302,7 @@ describe("ClaudeDraftClient", () => {
       db: board,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
       },
     });
 
@@ -316,7 +316,7 @@ describe("ClaudeDraftClient", () => {
     const calls: string[][] = [];
     const exec = async (_command: string, args: string[]) => {
       calls.push(args);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
     };
     const noRow = openDb(":memory:");
     applyExecutionSettingsChange(noRow, { setting: "delete_row", provider: "anthropic", model: "claude-sonnet-5-5", effort: "high" }, "webui", NOW);
@@ -365,7 +365,7 @@ describe("ClaudeDraftClient", () => {
       db: board,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) });
       },
     });
 
@@ -380,7 +380,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -403,7 +403,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -422,7 +422,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
@@ -442,7 +442,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c", ok: true }),
         });
@@ -466,7 +466,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -496,7 +496,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({
+        return boardCallStream({
           ...CLI_ENVELOPE_USAGE,
           result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }),
         });
@@ -520,7 +520,7 @@ describe("ClaudeDraftClient", () => {
       db,
       exec: async (_command, args) => {
         calls.push(args);
-        return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: verdict });
+        return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: verdict });
       },
     });
 
@@ -545,7 +545,7 @@ describe("ClaudeDraftClient", () => {
   it("inspectIssue: 合格応答は ok:true だけで通り、JSON でない応答は reject する", async () => {
     const pass = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: true }) }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: true }) }),
     });
     await expect(pass.inspectIssue({ title: "t", body: "b", comments: [] })).resolves.toHaveProperty("output", {
       ok: true,
@@ -553,7 +553,7 @@ describe("ClaudeDraftClient", () => {
 
     const garbage = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "not json at all" }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: "not json at all" }),
     });
     await expect(garbage.inspectIssue({ title: "t", body: "b", comments: [] })).rejects.toThrow();
   });
@@ -561,7 +561,7 @@ describe("ClaudeDraftClient", () => {
   it("inspectIssue: ok:false なのに missing / suggested_comment を欠く応答は reject する(不合格は必ずサジェストを運ぶ — issue #49 設計点4)", async () => {
     const missingFields = new ClaudeDraftClient({
       db,
-      exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: false }) }),
+      exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: false }) }),
     });
     await expect(
       missingFields.inspectIssue({ title: "t", body: "b", comments: [] }),
@@ -570,7 +570,7 @@ describe("ClaudeDraftClient", () => {
     const missingComment = new ClaudeDraftClient({
       db,
       exec: async () =>
-        JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: false, missing: "no criteria" }) }),
+        boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ ok: false, missing: "no criteria" }) }),
     });
     await expect(
       missingComment.inspectIssue({ title: "t", body: "b", comments: [] }),

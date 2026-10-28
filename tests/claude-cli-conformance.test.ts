@@ -14,7 +14,7 @@ import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { openDb } from "../src/db.js";
 import { LANGUAGE_AND_OUTPUT_STYLE_PINNED } from "../src/sandbox.js";
 import { composeTerminalScreen } from "../src/usage.js";
-import { CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { boardCallStream, CLI_ENVELOPE_USAGE } from "./fakes.js";
 import { PI_USAGE_CAPTURE_2_1_221 } from "./fixtures/usage-pi-2.1.221.js";
 
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8");
@@ -53,12 +53,12 @@ function passingObservations(): ConformanceObservations {
       new ClaudeDraftClient({
         db: openDb(":memory:"),
         exec: async () =>
-          JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) }),
+          boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ title: "t", purpose: "p", completion_criteria: "c" }) }),
       }).draftTask("water the greenhouse", "English"),
     translation: () =>
       new ClaudeTranslationClient({
         exec: async () =>
-          JSON.stringify({
+          boardCallStream({
             result: JSON.stringify({ items: [{ id: 0, text: "盤面" }] }),
             total_cost_usd: 0.000586,
             usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
@@ -151,6 +151,8 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
 
 it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
   const args = boardCallOneTurnArgs("q");
+  expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
+  expect(args).toContain("--verbose");
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
   expect(args[args.indexOf("-p") + 1]).toBe("q");
 });

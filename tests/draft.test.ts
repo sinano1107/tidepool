@@ -21,7 +21,7 @@ it.each(Object.keys(fire) as (keyof typeof fire)[])("%s の下書きは、撃っ
 
   await fire[use](db, client);
 
-  expect(listBoardCalls(db)).toEqual([{ use, ...client.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: now.toISOString() }]);
+  expect(listBoardCalls(db)).toEqual([{ use, ...client.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: now.toISOString() }]);
 });
 
 it.each(Object.keys(fire) as (keyof typeof fire)[])("usage を報告して失敗した %s の下書きも行を残し、失敗は呼び手へ投げる(ADR 0299 決定3)", async (use) => {

@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { AllocationReviewInput } from "../src/allocation-review.js";
 import { ClaudeAllocationClient } from "../src/claude-allocation-client.js";
-import { boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
+import { boardCallStream, boardCallSystemPrompt, CLI_ENVELOPE_USAGE } from "./fakes.js";
 
 const input: AllocationReviewInput = {
   verdict: "accepted",
@@ -28,7 +28,7 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   const client = new ClaudeAllocationClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
@@ -71,7 +71,7 @@ it("配分評価は、用途に依らない盤面の system prompt を --system-
   const client = new ClaudeAllocationClient({
     exec: async (_command, args, env) => {
       calls.push({ args, env });
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
@@ -86,7 +86,7 @@ it("配分評価の prompt の cause の候補に agent_definition / workspace_d
   const client = new ClaudeAllocationClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
 
@@ -101,7 +101,7 @@ it("配分評価の prompt は evidence を英語で書かせる(ADR 0303 決定
   const client = new ClaudeAllocationClient({
     exec: async (_command, args) => {
       prompts.push(args[1]!);
-      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
 
@@ -113,7 +113,7 @@ it("配分評価の prompt は evidence を英語で書かせる(ADR 0303 決定
 it("語彙の外の allocation / cause や JSON でない応答は reject する(未検証の model 出力を events に載せない)", async () => {
   const outOfVocabulary = new ClaudeAllocationClient({
     exec: async () =>
-      JSON.stringify({
+      boardCallStream({
         ...CLI_ENVELOPE_USAGE,
         result: JSON.stringify({ allocation: "great", cause: "capability", evidence: "e" }),
       }),
@@ -121,7 +121,7 @@ it("語彙の外の allocation / cause や JSON でない応答は reject する
   await expect(outOfVocabulary.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 
   const prose = new ClaudeAllocationClient({
-    exec: async () => JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: "looks appropriate to me" }),
+    exec: async () => boardCallStream({ ...CLI_ENVELOPE_USAGE, result: "looks appropriate to me" }),
   });
   await expect(prose.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow();
 });
@@ -129,7 +129,7 @@ it("語彙の外の allocation / cause や JSON でない応答は reject する
 it("CLI が is_error と共に返した result は診断として運ぶ(issue #306)", async () => {
   const client = new ClaudeAllocationClient({
     exec: async () =>
-      JSON.stringify({ is_error: true, result: "Failed to authenticate: OAuth session expired" }),
+      boardCallStream({ is_error: true, result: "Failed to authenticate: OAuth session expired" }),
   });
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).rejects.toThrow(
     "Failed to authenticate: OAuth session expired",
