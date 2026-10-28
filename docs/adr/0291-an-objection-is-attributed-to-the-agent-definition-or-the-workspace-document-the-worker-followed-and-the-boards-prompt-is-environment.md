@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の当時版の束(再構成)は ADR 0314 決定1・3 で spawn 時に記録した prompt の部分(definition / authority / roster)の text になり、決定4 の「protocol 文は judge の入力に足さない」は ADR 0314 決定4 で反転した** —— 記録が版の刻印になり、盤面の文(doctrine / protocol / Interview の規律)も judge の入力に入る。持ち主が盤面で `environment` であることは変わらない(2026-10-26 の grilling、issue #2603)。
 
+**Status 追記: skill は文書ではなく呼び出し時に注入される prompt で、scope(workspace / harness 同梱)は spawn の記録と worker の `init` 報告から、従った文面は transcript の投影から判事が読む(ADR 0325、issue #2682)** —— 決定3・4 の cause の割り当ては変わらない。退けた形「skill の使用を event に刻む」は盤面の event の話で、transcript の投影は別。
+
 2026-10-21 の grilling(issue #1601、出どころは #1045 の sweep と ADR 0166 の既知の穴)で決定。帰責の judge の入力は
 entry・steering・decision log・読んだ記憶だけで、worker が従った agent 定義・workspace の skill や文書・盤面の protocol 文は
 渡らない。誤った定義や文書に従って外れた判断は `capability` か `uncertain` に倒れ、worker 宛の RCA と candidate が立ち、
