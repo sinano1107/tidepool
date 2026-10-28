@@ -42,3 +42,14 @@ paging の鍵にだけ使う)、子の context は受験者以外 task id を持
   規則は当たるが本 grilling では決めず、派生 issue に置く。
 - `briefing_as_spawned[].for`(ADR 0321 決定2)は材料 id の列のままで、決定4 の `material` と同じ id を文面ごとに束ねて持つ。名前は変えない。
 - 既存テストで history 全体を `toEqual` で釘付けしている箇所は `id` が加わる分だけ fixture を更新し、釘は変えない。
+
+## 追記(2026-10-28、同じ grilling の再確認)
+
+- **読み手向けの写しは1箇所で、面ごとに書かない。** 判断ログの記録を読み手の形に写す箇所は6系統あった(worker の history、Interview の
+  根拠 history、判事と起草の `decision_log` / `rca_findings`、RCA の purpose・precedent・記憶の case の文、行動列の印、RCA 子の `parent`)。
+  決定2〜5 を面ごとに当て直す形は、決めるたびに漏れる(本 grilling で4度)。文の行は1つの写し `{ id, line }`、鍵付きの history の行は
+  1つの builder が `HUMAN_FACING_KINDS` の全種を行にする —— 種を1つ落とすと型で落ちる形。一覧は #2672 のコメントに置く。
+- 帰結の `premise_breached` はこれで決まる: history の行になる(決定3 と同形)。子の context の `premise_breach` 欄は残す。#2674 は #2672 の
+  spec に畳む。
+- `rca_findings` の要素は `actor` を持つ(self は RCA の assignee、auditor は null)。異議 RCA の self は actor ごとに立つので、2人の actor の行が
+  同じ異議群にあると self が2本並び、判事は `review` だけでは当事者を引けない。判事の入力にも裁く行の `actor` を添える。
