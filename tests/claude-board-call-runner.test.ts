@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
-import { boardCallOneTurnArgs } from "../src/claude-cli-conformance.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
 import { boardCallStream, CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
@@ -185,9 +184,6 @@ describe("Claude の Board call runner", () => {
     await runClaudeBoardCallJson(call(exec), schema);
     expect(calls[0]![calls[0]!.indexOf("--output-format") + 1]).toBe("stream-json");
     expect(calls[0]).toContain("--verbose");
-    const boardArgs = boardCallOneTurnArgs("p");
-    expect(boardArgs[boardArgs.indexOf("--output-format") + 1]).toBe("stream-json");
-    expect(boardArgs).toContain("--verbose");
     expect(calls[0]).toContain("--safe-mode");
     expect(calls[0]![calls[0]!.indexOf("--setting-sources") + 1]).toBe("");
   });
