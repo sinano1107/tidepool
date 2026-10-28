@@ -1,15 +1,8 @@
 import { expect, it } from "vitest";
 import { ClaudeAttributionClient } from "../src/claude-attribution-client.js";
 import {
-  ACTION_CALL_FIELDS,
-  ACTION_DECISION_FIELDS,
-  ACTIONS_FIELDS,
-  AGENT_DEFINITION_FIELDS,
   ATTRIBUTION_INPUT_FIELDS,
   type AttributionInput,
-  AUTHORITY_FIELDS,
-  MEMORY_ENTRY_FIELDS,
-  RCA_FINDING_FIELDS,
   STOP_ATTRIBUTION_INPUT_FIELDS,
   type StopAttributionInput,
 } from "../src/retrospective.js";
@@ -182,7 +175,7 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
   const prompt = prompts[0]!;
   // ADR 0324 決定3: roster / Authority は agent_definition の入れ子の文で定義し、authority.source は3値とも書く
   expect(prompt).toContain(`agent_definition is when ${ATTRIBUTION_INPUT_FIELDS.agent_definition} was itself wrong`);
-  expect(ATTRIBUTION_INPUT_FIELDS.agent_definition).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn — ");
+  expect(prompt).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster as given at its spawn — ");
   expect(prompt).toContain(
     "authority (the Authority section: what the worker may decide and do on its own and what it must escalate instead; null when the worker was given none)",
   );
@@ -190,7 +183,7 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
     "roster (the Roster section: the workers it could delegate to, one line each — a name and when that worker suits as a delegate; null when the worker was given none)",
   );
   expect(prompt).toContain(
-    "authority.source (where that text came from: profile when it is a registry authority profile, reviewer when it is the board's own Authority for review and interview tasks, repair when it is the board's own notice for a repair task)",
+    "authority.source (where that text came from: profile when it is a registry authority profile, reviewer when it is the board's own Authority for review and interview tasks, repair when it is the board's own notice for a memory or routing repair task)",
   );
   expect(prompt).toContain(
     "when agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer or repair rather than profile, that Authority is board code: that is environment",
@@ -300,9 +293,9 @@ it("停止と異議の帰責の prompt は { id, line } の行の id と rca_fin
 });
 
 it.each([
-  ["judge", [ATTRIBUTION_INPUT_FIELDS]],
-  ["judgeStop", [STOP_ATTRIBUTION_INPUT_FIELDS, ACTIONS_FIELDS, ACTION_CALL_FIELDS, ACTION_DECISION_FIELDS]],
-] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, records) => {
+  ["judge", ATTRIBUTION_INPUT_FIELDS],
+  ["judgeStop", STOP_ATTRIBUTION_INPUT_FIELDS],
+] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
     exec: async (_command, args) => {
@@ -314,7 +307,5 @@ it.each([
 
   await (method === "judge" ? client.judge(input, setting) : client.judgeStop(stopInput, setting));
 
-  for (const record of [...records, AGENT_DEFINITION_FIELDS, AUTHORITY_FIELDS, MEMORY_ENTRY_FIELDS, RCA_FINDING_FIELDS]) {
-    for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
-  }
+  for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
 });

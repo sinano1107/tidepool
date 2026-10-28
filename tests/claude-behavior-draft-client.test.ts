@@ -1,15 +1,8 @@
 import { expect, it } from "vitest";
 import { ClaudeBehaviorDraftClient } from "../src/claude-behavior-draft-client.js";
 import {
-  ACTION_CALL_FIELDS,
-  ACTION_DECISION_FIELDS,
-  ACTIONS_FIELDS,
-  AGENT_DEFINITION_FIELDS,
-  AUTHORITY_FIELDS,
   BEHAVIOR_DRAFT_INPUT_FIELDS,
   type BehaviorDraftInput,
-  MEMORY_ENTRY_FIELDS,
-  RCA_FINDING_FIELDS,
   STOP_BEHAVIOR_DRAFT_INPUT_FIELDS,
   type StopBehaviorDraftInput,
 } from "../src/retrospective.js";
@@ -201,9 +194,9 @@ it("停止と異議の起草の prompt は { id, line } の行の id と rca_fin
 });
 
 it.each([
-  ["draft", [BEHAVIOR_DRAFT_INPUT_FIELDS]],
-  ["draftFromStop", [STOP_BEHAVIOR_DRAFT_INPUT_FIELDS, ACTIONS_FIELDS, ACTION_CALL_FIELDS, ACTION_DECISION_FIELDS]],
-] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, records) => {
+  ["draft", BEHAVIOR_DRAFT_INPUT_FIELDS],
+  ["draftFromStop", STOP_BEHAVIOR_DRAFT_INPUT_FIELDS],
+] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
     exec: async (_command, args) => {
@@ -215,7 +208,5 @@ it.each([
 
   await (method === "draft" ? client.draft(input, setting) : client.draftFromStop(stopInput, setting));
 
-  for (const record of [...records, AGENT_DEFINITION_FIELDS, AUTHORITY_FIELDS, MEMORY_ENTRY_FIELDS, RCA_FINDING_FIELDS]) {
-    for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
-  }
+  for (const sentence of Object.values(record)) expect(prompts[0]).toContain(sentence);
 });

@@ -31,7 +31,7 @@ function buildPrompt(input: AttributionInput): string {
     "You are the attribution judge of a work-tracking board. A human reviewing a worker's " +
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
-    `shortfall it points at — from ${f.entry}, ${f.steering}, and the task's decision log. ${f.entry_id} ` +
+    `shortfall it points at — from ${f.entry}, ${f.steering}, and decision_log. ${f.entry_id} ` +
     `${OBJECTION_FIELDS} ${f.written} ${f.decision_log} When the input ` +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: read them as " +

@@ -32,8 +32,8 @@ function buildPrompt(input: BehaviorDraftInput): string {
     "You draft agent memory for a work-tracking board. A human objected to one entry of a worker's " +
     "decision log and left steering comments; the objection's cause says an agent should behave " +
     "differently from now on. Draft ONE behavior rule — a standing instruction a human will approve " +
-    `later — from ${f.entry}, ${f.steering}, ${f.memory_read}, ${spawnTextFields(f)}, and the ` +
-    `task's decision log. ${f.entry_id} ${f.written} ${f.decision_log} When the input carries rca_findings, the ` +
+    `later — from ${f.entry}, ${f.steering}, ${f.memory_read}, ${spawnTextFields(f)}, and ` +
+    `decision_log. ${f.entry_id} ${f.written} ${f.decision_log} When the input carries rca_findings, the ` +
     "task's root-cause reviews have settled: draft " +
     `from what they found. ${f.rca_findings} ${f.actor} ${responseFields("the worker who wrote the entry")} ` +
     `${f.human_stop}\n\n` +
@@ -49,7 +49,7 @@ function buildStopPrompt(input: StopBehaviorDraftInput): string {
     `You draft agent memory for a work-tracking board. A human stopped a running worker session; ${f.human_stop}, ` +
     "and the stop's attribution says an agent should behave differently from now on. Draft ONE " +
     "behavior rule — a standing instruction a human will approve later — from that testimony weighed against what the worker " +
-    `actually did: the session's decision log, ${f.memory_read}, ${spawnTextFields(f)}, and ${f.actions}; ` +
+    `actually did: decision_log, ${f.memory_read}, ${spawnTextFields(f)}, and ${f.actions}; ` +
     "actions is null when the sequence could not be read. When the input " +
     "carries rca_findings, the root-cause reviews of the stop have settled: draft from what they found. " +
     `${f.decision_log} ${f.rca_findings} ${responseFields("the worker who ran the session")}\n\n` +

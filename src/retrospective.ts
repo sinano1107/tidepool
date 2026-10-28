@@ -80,7 +80,7 @@ export interface RcaFinding {
 /** RCA の所見の欄(ADR 0324 決定1・4)。`actor` の文は `review` の文の中に置く —— self と auditor で値の意味が分かれるので、
  *  `RCA_FINDINGS_RULE` の文のまま切り出す。 */
 const RCA_ACTOR = "actor names that worker";
-export const RCA_FINDING_FIELDS = {
+const RCA_FINDING_FIELDS = {
   review:
     "review is self when the review was assigned to the worker who made the decisions under review — its own account of why it decided, " +
     `and ${RCA_ACTOR} — or auditor when it was assigned not to that worker but to the board's reviewer role — an outside account (actor is null)`,
@@ -143,16 +143,17 @@ const fieldList = (fields: Record<string, string>, prefix = "") =>
 
 /** Board call の読み手(帰責の判事・Behavior の起草)に渡す欄の説明は、入力の型の欄に鍵で結んでここに1か所(ADR 0324 決定1)。
  *  読み手に届く盤面の語の定義もここの文にだけ置く(決定3)。null のときどうするかは読み手ごとに prompt が書く(決定2)。 */
-export const AUTHORITY_FIELDS = {
+const AUTHORITY_FIELDS = {
   source:
     "where that text came from: profile when it is a registry authority profile, reviewer when it is the board's own Authority " +
-    "for review and interview tasks, repair when it is the board's own notice for a repair task",
+    "for review and interview tasks, repair when it is the board's own notice for a memory or routing repair task",
   profile: "the registry authority profile's name, only when source is profile",
   text: "the section as the worker was given it",
 } satisfies Record<keyof NonNullable<AgentDefinitionThen["authority"]>, string>;
 
-export const AGENT_DEFINITION_FIELDS = {
-  registry_commit: "the registry commit it was read at",
+const AGENT_DEFINITION_FIELDS = {
+  registry_commit:
+    "the commit it was read at of the registry — the git repository, separate from the board, that holds agent definitions and authority profiles",
   builtin: "true when the board built the definition in rather than reading it from the registry",
   body: "the definition's own text",
   authority:
@@ -161,28 +162,28 @@ export const AGENT_DEFINITION_FIELDS = {
     "the Roster section: the workers it could delegate to, one line each — a name and when that worker suits as a delegate; null when the worker was given none",
 } satisfies Record<keyof AgentDefinitionThen, string>;
 
-export const MEMORY_ENTRY_FIELDS = {
+const MEMORY_ENTRY_FIELDS = {
   id: "the memory entry's id: memory entry 3 names id 3",
-  kind: "behavior, knowledge, exemplar or definition",
+  kind: "the entry's kind",
   title: "its title",
   text: "its body",
 } satisfies Record<keyof AttributionInput["memory_read"][number], string>;
 
 type Actions = NonNullable<StopAttributionInput["actions"]>;
-export const ACTION_CALL_FIELDS = {
+const ACTION_CALL_FIELDS = {
   index: "its place in that order",
   tool: "the tool's name",
   args: "the extracted argument such as a command or file path",
   failed: "whether it failed",
 } satisfies Record<keyof Actions["calls"][number], string>;
 
-export const ACTION_DECISION_FIELDS = {
+const ACTION_DECISION_FIELDS = {
   id: "the line's entry id",
   position: "the number of calls before it; null = not placed",
   line: "the line's text",
 } satisfies Record<keyof Actions["decisions"][number], string>;
 
-export const ACTIONS_FIELDS = {
+const ACTIONS_FIELDS = {
   calls: `the session's tool calls in order: ${fieldList(ACTION_CALL_FIELDS)}`,
   decisions: `places each decision-log line (by its id) at its position in that sequence: ${fieldList(ACTION_DECISION_FIELDS)}`,
 } satisfies Record<keyof Actions, string>;
