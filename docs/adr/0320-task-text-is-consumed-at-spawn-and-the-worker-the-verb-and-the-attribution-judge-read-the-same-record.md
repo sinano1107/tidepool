@@ -1,5 +1,7 @@
 # task の文面は spawn で消費され、worker・`get_current_task`・帰責の判事は同じ記録を読む
 
+**Status 追記: 決定1 が外に置いた親の文脈(RCA 子が読む `parent`)は ADR 0321 で決着 —— RCA 子は材料の session の記録の `user` を、他の子は自分の pickup で凍結した文面を読む。帰結「verb での IssueGoneError の経路は消える」は slot の task に限らず子の `parent` でも成り立つ(2026-10-28 の grilling、issue #2663)**
+
 2026-10-28 の triage → grilling(issue #2662、#2658 の副産物)で決定。停止の帰責の判事(ADR 0310 決定2)と異議の判事(ADR 0115)は
 cause を「task が求めたこと」に照らして付ける(`capability` は task が求めた水準に判断が届かなかったこと、`task_ambiguity` /
 `missing_information` は文面の書き手の取りこぼし)のに、入力に task の文面(title / purpose / 完了基準)が無く、purpose が命じた

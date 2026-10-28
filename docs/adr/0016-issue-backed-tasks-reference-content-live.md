@@ -1,6 +1,6 @@
 # Issue-backed task は内容を live 参照で持つ — 登録時 snapshot ではなく
 
-**Status 追記: 使用の瞬間(spawn と UI 表示)は変わらないが、worker が session 中に `get_current_task` で読み直しても spawn で展開した文面が返る(ADR 0320 決定1)** —— verb が呼ぶたびに issue を再展開していたのは決定ではなく写しだった(2026-10-28 の grilling、issue #2662)。
+**Status 追記: 使用の瞬間(spawn と UI 表示)は変わらないが、worker が session 中に `get_current_task` で読み直しても spawn で展開した文面が返る(ADR 0320 決定1)** —— 子が読む親の文面も子自身の pickup で展開して凍結し、RCA 子だけは材料の session が spawn で受け取った文面を記録から読む(ADR 0321) —— verb が呼ぶたびに issue を再展開していたのは決定ではなく写しだった(2026-10-28 の grilling、issue #2662)。
 精緻に書かれた GitHub issue をタスクとして盤面に流すにあたり、登録時に issue の内容をタスクへコピーする案(snapshot)を退け、盤面には参照(workspace 名 + issue 番号)だけを保存し、内容(title / purpose / completion_criteria)は使用の瞬間 — spawn と UI 表示 — に issue から展開すると決めた(2026-07-13 の grilling)。「issue」はタイトル + 本文 + 全コメントのスレッド全体を指す。
 
 根拠: source of truth を GitHub 一本に保つため。登録後に issue を磨けば pickup の瞬間に最新の内容が worker へ届き、コメント1本で追加指示が渡る。snapshot 型は登録時のコピペを省くだけで、「issue を直したのに盤面が古い」という二重管理を生む。登録ゲートの不足サジェストも人間の承認を経て issue のコメントへ追記する(盤面側に補足を持たない)のは同じ理由。

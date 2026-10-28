@@ -571,7 +571,7 @@ _Avoid_: 実験(docs/experiments の名)、trial
 
 ## Issue-backed task(issue 参照タスク)
 
-内容を盤面に持たず、GitHub issue への参照(workspace 名 + issue 番号)だけを持つ work タスク。issue が source of truth であり、内容(title / purpose / completion_criteria)は使用の瞬間 — spawn と UI 表示 — に issue から展開される(live 参照。UI は便宜ビューで、正準の読み取りは spawn と登録ゲート)。「issue」とはタイトル + 本文 + 全コメントのスレッド全体を指す — 登録後に人間がコメントで追記した方針は spawn 時にそのまま worker へ届く。spawn の後に付いた追記・編集はその session には届かない —— 文面は spawn で消費され、worker が `get_current_task` で読み直しても spawn で展開した文面が返る(2026-10-28 の grilling、issue #2662 / ADR 0320)。
+内容を盤面に持たず、GitHub issue への参照(workspace 名 + issue 番号)だけを持つ work タスク。issue が source of truth であり、内容(title / purpose / completion_criteria)は使用の瞬間 — spawn と UI 表示 — に issue から展開される(live 参照。UI は便宜ビューで、正準の読み取りは spawn と登録ゲート)。「issue」とはタイトル + 本文 + 全コメントのスレッド全体を指す — 登録後に人間がコメントで追記した方針は spawn 時にそのまま worker へ届く。spawn の後に付いた追記・編集はその session には届かない —— 文面は spawn で消費され、worker が `get_current_task` で読み直しても spawn で展開した文面が返る(2026-10-28 の grilling、issue #2662 / ADR 0320)。子が `get_current_task` で読む親の文面(`parent`)も同じ —— 子自身の pickup で展開して session 中は変わらず、pickup で親の issue が閉じられていれば文面を空にして理由を添え、子は止めない。RCA 子だけは別で、材料の session の worker が spawn で受け取った文面を記録から読む —— 帰責の判事と同じ記録に照らすため(2026-10-28 の grilling、issue #2663 / ADR 0321)。
 
 通常タスクと逆に、workspace は参照ではなく確定値(登録時に必須・焼き込み)— issue 参照では workspace が実行場所ではなく**内容の同一性**を担うため(既定差し替えで別リポジトリの同番号 issue に化けてはならない)。登録の門は人間のみ・type は work のみ(エージェントが issue を参照したければ、読んで自分の言葉で decompose するのが既存の道 — 分解の約束が decision log に残る)。
 
