@@ -31,6 +31,11 @@ skill」)を定義せずに使い、worker に注入する文も定義してい�
 - **zod の schema の `.describe()` から描く** —— 型と文は結べるが prompt の並びを schema の並びに縛り、判事の `task` を cause の隣に置けない。
 - **worker 向け prose(doctrine / protocol)の定義を指す** —— 注入する文に語の定義は無く、指す先が無い。
 
+## 範囲
+
+- 決定1〜3 の対象は帰責の判事と Behavior の起草の4本の prompt(`AttributionInput` / `StopAttributionInput` とその継承)。配分評価・登録の
+  下書き・翻訳は読み手が1つで写しが無く、tier の半文(決定3)を読む以外は触らない。
+
 ## 帰結
 
 - 「harness 同梱の skill に従ったなら environment」の判定に要るのは語の定義でなく、どの skill が harness 同梱かという事実で、判事に届く
