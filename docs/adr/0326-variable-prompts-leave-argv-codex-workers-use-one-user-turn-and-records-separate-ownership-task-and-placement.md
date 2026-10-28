@@ -1,5 +1,7 @@
 # 伸びる prompt は argv の外へ出し、Codex worker は1つの user turn にまとめ、記録は持ち主・task・配置を区別する
 
+**Status 追記: 決定4 の記憶の出所の維持は、帰責の読み口を prompt 記録へ移す決定ではない** —— prompt 記録は注入した文面を逐語で持ち、帰責の `memory_read` は従来どおり注入・pull の event と不変の entry 本文から読む(ADR 0314 の退けた形、2026-10-29 の再確認、issue #2692)。
+
 2026-10-29 の triage → grilling(issue #2692、spec #2691 の派生)で決定。Board call と worker が長い文面を argv の1引数で渡し、
 Linux の引数長の制限で推論を始める前に落ちうる。固定版の受け口・profile の優先順位・設定の合成の実測は #2692 のコメントに置く。
 

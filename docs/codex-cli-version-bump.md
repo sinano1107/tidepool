@@ -186,7 +186,7 @@ nothing checks is left to the board's fail-closed handling.
 | The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |
 | The PreToolUse hook's stdin carries `agent_id` only for a subagent | ADR 0130 決定1 | Not checked: which call it selects cannot be observed without a model call (決定3) |
 | `mcp_servers.tidepool.default_tools_approval_mode="approve"` takes effect | ADR 0129 決定1 | Not checked |
-| `developer_instructions` is the board's layer above the task | ADR 0124 決定4 | The containment preflight's developer marker (step 5) |
+| Board-authored context reaches the intended prompt position, with task text separately identifiable; after #2692 this is the user-turn prefix | ADR 0326 決定3・4 (revises ADR 0124 決定4) | The containment prompt probe (step 5); #2692 replaces the current developer-marker contract |
 | The permission profile keys and `codex sandbox -P` | ADR 0256 決定3 | Conformance domain rows (step 7) and the containment preflight (step 5) |
 | An allowlisted domain is reached and an unlisted one is refused with 403 | ADR 0256 決定3 | Conformance rows `allowed domain reached` and `unlisted domain → 403 blocked-by-allowlist` (step 7) |
 | Codex takes a full-budget MCP response whole | ADR 0195 決定7 | Reader-cap canary (step 8) |
