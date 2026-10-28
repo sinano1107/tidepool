@@ -92,7 +92,7 @@ export const OBJECTION_WRITTEN_RULE =
  *  「memory entry 33」は記憶の id の空間。 */
 export const LOG_ROW_RULE =
   "Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, " +
-  "while memory entry 3 names a memory entry (the ids in memory_read).";
+  "while memory entry 3 names a memory entry, not a row.";
 
 /** 帰責と起草の prompt が第2回の `rca_findings` に添える文(ADR 0322 決定5 / 追記): `review` は当事者レビューか独立レビューか
  *  (CONTEXT.md「Review」—— 独立は session 文脈を持たないことで、agent が違うことではない)、`actor` は self の当事者。

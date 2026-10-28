@@ -16,6 +16,8 @@ const input: BehaviorDraftInput = {
   index: "- cli/ — how command-line flags are named",
 };
 
+const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
+
 const draft = { path: "cli/flags", title: "Spell out flags", text: "Name dry-run flags --dry-run.", addressee: "all" };
 
 it("draft は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON の起草を返す", async () => {
@@ -149,7 +151,6 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
     },
   });
   const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
-  const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
 
   await client.draft({ ...input, task: "Purpose: rename the flag" }, setting);
   await client.draftFromStop(stopInput, setting);
@@ -172,22 +173,12 @@ it("停止と異議の起草の prompt は { id, line } の行の id と rca_fin
     },
   });
   const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
-  const stop: StopBehaviorDraftInput = {
-    human_stop: { reason: "deleting files outside the workspace" },
-    decision_log: [{ id: 7, line: "chose plan B" }],
-    memory_read: [],
-    agent_definition: null,
-    board_text: [],
-    task: null,
-    actions: null,
-    index: null,
-  };
 
   await client.draft(input, setting);
-  await client.draftFromStop(stop, setting);
+  await client.draftFromStop(stopInput, setting);
 
   for (const prompt of prompts) {
-    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, while memory entry 3 names a memory entry (the ids in memory_read).");
+    expect(prompt).toContain("Decision-log lines come as { id, line } rows whose id is the board's entry id: a line naming entry 3 means the row whose id is 3, while memory entry 3 names a memory entry, not a row.");
     expect(prompt).toContain("review is self when the worker who made the decisions under review wrote it — its own account of why it decided, and actor names that worker");
     expect(prompt).toContain("or auditor when a reviewer outside the session that made them wrote it (actor is null)");
   }
