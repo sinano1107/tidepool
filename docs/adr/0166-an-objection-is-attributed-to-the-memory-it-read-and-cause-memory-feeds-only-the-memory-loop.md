@@ -2,7 +2,7 @@
 
 **Status 追記: 決定3 の判定の欄 `entries` は `wrong_memory_entries` に改名(issue #2577)** —— 帰責 event(`objection_attributed` / `stop_attributed`)、帰責 Board call の出力、`read_decision_log` / `GET /api/log` の行、`list_precedents` の Precedent も同じ名前。
 
-**Status 追記: 決定2 の「transcript の結合に依らない」は、停止の帰責(ADR 0310 決定2)と異議の帰責(ADR 0325 決定5)の両方で「Episode の投影を null 許容で読む」に曲がった** —— transcript の無い session でも判定は撃つ。
+**Status 追記: 決定2 の「transcript の結合に依らない」は、停止の帰責(ADR 0310 決定2 —— 保存済みの Episode を読む)と異議の帰責(ADR 0325 決定5 —— 帰責のたびに transcript をその時点まで投影する)で曲がった** —— transcript の無い session でも判定は撃つ。
 
 **Status 追記: Precedent の `entries_read` / `entries_seen` は `memory_entries_read` / `memory_entries_seen` に改名(issue #2578 / ADR 0311 決定5)** —— 本文の旧い名前はこの名前に読み替える。
 
