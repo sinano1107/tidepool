@@ -11,6 +11,7 @@ const input: AttributionInput = {
   memory_read: [],
   agent_definition: null,
   board_text: [],
+  task: null,
 };
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
@@ -21,6 +22,7 @@ const stopInput: StopAttributionInput = {
   memory_read: [],
   agent_definition: null,
   board_text: [],
+  task: null,
   actions: null,
 };
 
@@ -208,6 +210,7 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
     memory_read: [],
     agent_definition: null,
     board_text: [],
+    task: null,
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
   };
 
@@ -221,4 +224,29 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
   expect(prompts[0]).toContain('"evidence" (string — the concrete observations your judgment rests on, in English)');
   expect(prompts[0]).toContain("deleting files outside the workspace");
   expect(prompts[0]).toContain('"args": "rm -rf ../other"');
+});
+
+it("停止と異議の帰責の prompt は task を spawn で渡した文面と説明し、capability などをそれに照らし、頼まれたとおりの行動を落ち度と読まず、null の読み方を告げる(ADR 0320 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+  const task = "First call get_current_task for task t, then complete this task: wait for the signal\n\nPurpose: wait\nCompletion criteria: the signal file exists";
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await client.judge({ ...input, task }, setting);
+  await client.judgeStop(stopInput, setting);
+
+  for (const prompt of prompts) {
+    expect(prompt).toContain(
+      "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
+        "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
+        "task is null when the session's record could not be read: judge from the rest; environment is",
+    );
+  }
+  expect(prompts[0]).toContain(JSON.stringify(task));
+  expect(prompts[1]).toContain('"task": null');
 });

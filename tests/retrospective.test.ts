@@ -315,6 +315,7 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         memory_read: [],
         agent_definition: null,
         board_text: [],
+        task: null,
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
       setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -469,6 +470,7 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     memory_read: [],
     agent_definition: null,
     board_text: [],
+    task: null,
     rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required"],
   });
 });
@@ -560,6 +562,7 @@ it.each([
           memory_read: [],
           agent_definition: null,
           board_text: [],
+          task: null,
           index: expect.stringContaining("testing/ — how tests are run"),
         },
         setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -1158,6 +1161,7 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     memory_read: [],
     agent_definition: null,
     board_text: [],
+    task: null,
     rca_findings: [noAct(s.entry.id), RCA_OUTCOME, noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required"],
   });
   expect(await behaviors(t)).toEqual([
@@ -1991,6 +1995,20 @@ it("帰責の入力の当時版は異議された entry の session の spawn �
   expect(client.calls.map((c) => [c.input.agent_definition, c.input.board_text])).toEqual([
     [DECKHAND_THEN, ["\n\n## Board doctrine\n\nStay on the board.", "\n\n## Rules of the road\n\nLog every decision."]],
   ]);
+});
+
+it("異議の帰責の入力の task は異議された entry の session の記録した user turn の逐語で、記録が無ければ null(ADR 0320 決定3)", async () => {
+  const b = await definitionBoard();
+  const user = "First call get_current_task for task t, then complete this task: v2 API\n\nPurpose: ship\nCompletion criteria: done";
+  recordPrompt(b.recordDir, b.task.id, b.spawned, DECKHAND_RECORD, user);
+  const lost = await definitionBoard();
+  rmSync(join(lost.recordDir, `${lost.task.id}.${lost.spawned}.prompt.json`));
+  const client = new FakeAttributionClient();
+
+  await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
+  await attributeObjections(lost.db, { ...lost.deps, attributionClient: client }, lost.sessionId, at);
+
+  expect(client.calls.map((c) => c.input.task)).toEqual([user, null]);
 });
 
 it("記録が読めない session(記録の器を持たない呼び手・記録が後から失われた)では帰責の入力の当時版の欄は null で、盤面の文は空(ADR 0314 決定2)", async () => {

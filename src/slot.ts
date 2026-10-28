@@ -1,3 +1,5 @@
+import type { TaskContent } from "./tasks.js";
+
 /** The single execution slot (concurrency = 1, ADR 0001): one in-process fact.
  *
  *  枠を占めるのは **worker session であって task ではない**(ADR 0109 決定2 /
@@ -6,6 +8,7 @@
 export class Slot {
   private taskId: string | null = null;
   private teardown = false;
+  private taskContent: TaskContent | undefined;
 
   get currentTaskId(): string | null {
     return this.taskId;
@@ -18,10 +21,17 @@ export class Slot {
     return this.teardown;
   }
 
-  occupy(taskId: string): void {
+  /** pickup が spawn に渡した title / purpose / 完了基準(ADR 0320 決定1)。session のあいだ変わらず、`get_current_task` が返す。
+   *  後始末の再開・受理の占有は持たない —— 直後に後始末へ入り、verb は門で拒まれる(ADR 0109 決定6)。 */
+  get content(): TaskContent | undefined {
+    return this.taskContent;
+  }
+
+  occupy(taskId: string, content?: TaskContent): void {
     if (this.taskId !== null) throw new Error("slot already occupied");
     this.taskId = taskId;
     this.teardown = false;
+    this.taskContent = content;
   }
 
   /** 最終 verb(完了・分解・エスカレーション)が着地した。session はまだ枠を
@@ -33,5 +43,6 @@ export class Slot {
   release(): void {
     this.taskId = null;
     this.teardown = false;
+    this.taskContent = undefined;
   }
 }

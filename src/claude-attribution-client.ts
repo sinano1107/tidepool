@@ -41,7 +41,7 @@ function buildStopPrompt(input: StopAttributionInput): string {
     "is the human's testimony of why. It is an observation, not a verdict: weigh it against what the worker actually did. " +
     "Judge whose shortfall the stop points at from that testimony, the session's whole decision log (decision_log), the " +
     "memory entries the worker read before the stop (memory_read), its agent definition as it stood then (agent_definition), " +
-    "the board's own text it was given (board_text), and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
+    "the board's own text it was given (board_text), the task text it was given (task), and its action sequence (actions). actions.calls lists the session's tool calls in order (index, tool, the extracted " +
     "argument such as a command or file path, and whether it failed); actions.decisions places each decision-log line at its " +
     "position in that sequence (the number of calls before it; null = not placed). actions is null when the session's action " +
     "sequence could not be read: judge from the rest. What the worker did that appears in actions but not in decision_log is " +
@@ -60,7 +60,11 @@ const responseFields = (w: { reading: string; before: string; sound: string; cit
   'prose) with these fields: "cause" (one of ' +
   `${CAUSES.join(" / ")} — capability is the worker's own judgment falling short of what the ` +
   "task asked; task_ambiguity and missing_information are the task's framing leaving room " +
-  `for ${w.reading} or omitting a fact the worker needed; environment is the worker's ` +
+  `for ${w.reading} or omitting a fact the worker needed; ` +
+  // ADR 0320 決定3: cause を照らす「task が求めたこと」は入力の task(spawn で渡した user turn の逐語)
+  "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
+  "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
+  "task is null when the session's record could not be read: judge from the rest; environment is the worker's " +
   "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
   "worker's judgment was sound given what it had (working around or guessing past such trouble " +
   "instead of escalating is capability; following the board's own protocol text injected into every session " +

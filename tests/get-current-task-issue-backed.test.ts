@@ -5,7 +5,7 @@ import { bootTidepool, HOUR, HUMAN_WEBUI, makeWorkspace, mcpClient, readFollowin
 let t: Tidepool;
 afterEach(() => t?.stop());
 
-it("get_current_task はissue参照タスクの場合、GitHubのissueから解決した内容を返す(issue #49, ADR 0016: spawn時のlive展開)", async () => {
+it("get_current_task はissue参照タスクの場合、spawn で展開した文面を返し、session 中に issue が変わっても読み直さない(ADR 0320 決定1)", async () => {
   // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば先頭へ戻る、ADR 0274)
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
@@ -23,6 +23,7 @@ it("get_current_task はissue参照タスクの場合、GitHubのissueから解�
   });
 
   await t.clock.advance(HOUR);
+  t.github.scriptIssue(49, { title: "書き換えた題", body: "書き換えた本文", comments: [] });
 
   const client = await mcpClient(t.mcpBaseUrl, task.id);
   try {

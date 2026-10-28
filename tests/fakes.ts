@@ -99,8 +99,8 @@ export const unusedLanding: Landing = {
 };
 
 /** 過去の spawn が記録した prompt(ADR 0313 決定1)を記録の器 `dir` に書く —— 当時版の読み手(ADR 0314 決定1)の setup。 */
-export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[]): void {
-  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, { harness: "claude-code", system, user: "" });
+export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[], user = ""): void {
+  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, { harness: "claude-code", system, user });
   stream.destroy();
   stderr.destroy();
 }

@@ -50,7 +50,8 @@ import { entryObjections, listObjectedEntries, objectedEntryText, objectionsById
  *  `human_stop` は同じ session の人間の停止と生で解いた理由。decision log の切れ目では切らない(ADR 0308)。
  *  `written` は記憶の書き込みの行だけが持つ: 書いたエントリの本文、無効化なら落とした本文(ADR 0252 決定4)。
  *  `agent_definition` は異議された entry の session の spawn で記録した当時版の部分で、記録が読めなければ null(ADR 0291 決定2 /
- *  ADR 0314 決定1・3)。`board_text` は同じ記録の盤面の文(doctrine / protocol / Interview の規律)の text の列で、記録が無ければ空(ADR 0314 決定4)。 */
+ *  ADR 0314 決定1・3)。`board_text` は同じ記録の盤面の文(doctrine / protocol / Interview の規律)の text の列で、記録が無ければ空(ADR 0314 決定4)。
+ *  `task` は同じ記録の `user`(spawn で渡した task の文面)の逐語で、記録が読めなければ null(ADR 0320 決定3)。 */
 export interface AttributionInput {
   entry_id: number;
   entry: string;
@@ -59,6 +60,7 @@ export interface AttributionInput {
   memory_read: Array<{ id: number; kind: string; title: string; text: string }>;
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
+  task: string | null;
   human_stop?: { reason: string };
   written?: AttributionInput["memory_read"];
   rca_findings?: string[];
@@ -76,7 +78,7 @@ export const OBJECTION_WRITTEN_RULE =
   "entries it wrote, or for an invalidation the memory entries it dropped, and memory_read is what it read before that write.";
 
 /** 停止の帰責の Board call に渡す入力(ADR 0310 決定2): 異議の入力の兄弟で、entry と steering を持たない。`human_stop` は人間の証言
- *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` / `board_text` は
+ *  (history と同じ読み口)、`decision_log` は止められた session の窓の判断ログ全体(切れ目無し)、`memory_read` / `agent_definition` / `board_text` / `task` は
  *  異議と同じ数え方(停止より前の pull)。`actions` は Episode の行動列と判断の行の位置の印で、Episode が無い・読めない session は null。
  *  `rca_findings` は第2回だけが足す: その停止を材料にした RCA 子(self / auditor)の decision log と完了 result(ADR 0310 決定4)。 */
 export interface StopAttributionInput {
@@ -85,6 +87,7 @@ export interface StopAttributionInput {
   memory_read: AttributionInput["memory_read"];
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
+  task: string | null;
   actions: {
     calls: Array<{ index: number; tool: string; args: string | null; failed: boolean }>;
     decisions: Array<{ position: number | null; line: string | null }>;
@@ -633,10 +636,10 @@ function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInpu
 }
 
 /** 異議された entry を含む worker session が読んだもの(`readsIn`)。entry が session の窓の外なら何も読んでいない。 */
-function sessionReads(db: Db, recordDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text"> {
+function sessionReads(db: Db, recordDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text" | "task"> {
   const events = listEvents(db, entry.task_id);
   const session = sessionOf(events, entry);
-  if (!session) return { memory_read: [], agent_definition: null, board_text: [] };
+  if (!session) return { memory_read: [], agent_definition: null, board_text: [], task: null };
   return readsIn(db, recordDir, entry, { events, ...session });
 }
 
@@ -650,10 +653,11 @@ export interface AgentDefinitionThen {
   roster: string | null;
 }
 
-/** `spawned` の session の記録した prompt から、当時版と盤面の文を読む。記録が読めなければ当時版は null・盤面の文は空(ADR 0314 決定2)。 */
-function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<AttributionInput, "agent_definition" | "board_text"> {
+/** `spawned` の session の記録した prompt から、当時版と盤面の文と task の文面(`user`)を読む。記録が読めなければ当時版と task は null・
+ *  盤面の文は空(ADR 0314 決定2 / ADR 0320 決定3)。 */
+function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<AttributionInput, "agent_definition" | "board_text" | "task"> {
   const prompt = recordDir === undefined ? null : new TranscriptStore(recordDir).readPrompt(spawned.task_id!, spawned.id);
-  if (!prompt) return { agent_definition: null, board_text: [] };
+  if (!prompt) return { agent_definition: null, board_text: [], task: null };
   const { definition, authority, roster } = recordedDefinition(prompt);
   return {
     agent_definition: {
@@ -664,13 +668,14 @@ function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<At
       roster: roster?.text ?? null,
     },
     board_text: prompt.system.flatMap((part) => (BOARD_TEXT_PARTS.includes(part.part) ? [part.text] : [])),
+    task: prompt.user,
   };
 }
 
 /** `anchor`(異議された entry か人間の停止)の session が読んだもの —— spawn の当時版と盤面の文(ADR 0314 決定3・4)と読んだ記憶。読んだ記憶は、anchor より前の
  *  pull が read に数える記憶(ADR 0166 決定2、数え方は readPulls)と、その spawn で注入された Definition(ADR 0291 決定6)。
  *  event 順で組み、transcript には依らない —— Precedent の memory_entries_read より広くてよい(issue #1045)。 */
-function readsIn(db: Db, recordDir: string | undefined, anchor: Pick<EventRow, "id">, { events, spawned, inSession }: Session): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text"> {
+function readsIn(db: Db, recordDir: string | undefined, anchor: Pick<EventRow, "id">, { events, spawned, inSession }: Session): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text" | "task"> {
   const pulls = events.flatMap((e) => (e.payload.kind === "memory_pulled" && e.id < anchor.id && inSession(e) ? [e.payload] : []));
   const pulled = readPulls(events, spawned.id, pulls);
   const injected = events.flatMap(({ payload: p }) => (p.kind === "memory_injected" && p.worker_spawned_event_id === spawned.id ? p.entries.map((e) => e.id) : []));

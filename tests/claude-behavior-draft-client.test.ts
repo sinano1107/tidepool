@@ -11,6 +11,7 @@ const input: BehaviorDraftInput = {
   memory_read: [],
   agent_definition: null,
   board_text: [],
+  task: null,
   index: "- cli/ — how command-line flags are named",
 };
 
@@ -120,6 +121,7 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
     memory_read: [],
     agent_definition: null,
     board_text: [],
+    task: null,
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ position: 1, line: "chose plan B" }] },
     rca_findings: ["stop 9 → no guard on rm"],
     index: "- workspace/ — where agents may write",
@@ -135,4 +137,27 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
   expect(prompts[0]).not.toContain("objected");
   expect(prompts[0]).toContain('"args": "rm -rf ../other"');
   expect(prompts[0]).toContain("where agents may write");
+});
+
+it("停止と異議の起草の prompt は task を spawn で渡した文面と説明し、null の読み方を告げる(ADR 0320 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeBehaviorDraftClient({
+    exec: async (_command, args) => {
+      prompts.push(args[1]!);
+      return JSON.stringify({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+  const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
+
+  await client.draft({ ...input, task: "Purpose: rename the flag" }, setting);
+  await client.draftFromStop(stopInput, setting);
+
+  for (const prompt of prompts) {
+    expect(prompt).toContain(
+      "the task text it was given (task: its user turn at its spawn — title, purpose and completion criteria; null when not recorded)",
+    );
+  }
+  expect(prompts[0]).toContain('"task": "Purpose: rename the flag"');
+  expect(prompts[1]).toContain('"task": null');
 });

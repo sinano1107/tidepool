@@ -13,7 +13,7 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse, joinPrompt } from "./board-prose.js";
+import { boardDoctrine, boardProse, joinPrompt, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
@@ -546,12 +546,6 @@ function tomlInline(value: Record<string, unknown>): string {
 function codexDoctrine(verbs: TaskVerbSwap): string {
   return `${boardDoctrine({ delegate: "a subagent", workflow: false }, verbs)} ` +
     "Spawn subagents with fork_turns: \"none\"; this session keeps no rollout, so forking the parent thread's history always fails.";
-}
-
-/** user turn に残るのは、その task に固有の指示だけ(ADR 0124 決定1)。 */
-function taskPrompt(task: Task): string {
-  return `First call get_current_task for task ${task.id}, then complete this task: ${task.title}\n\n` +
-    `Purpose: ${task.purpose}\nCompletion criteria: ${task.completion_criteria}`;
 }
 
 export function permissionConfig(
