@@ -333,7 +333,7 @@ async function makeWorker(
       extraOptions.agent,
       extraOptions.auditorName,
     );
-  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, ...recorder };
+  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -353,6 +353,10 @@ function recordingEnumerator(result: string[] | null) {
  *  Comma, not space, is the separator the production code joins with (issue
  *  #59): a `Bash(git push*)` token carries an internal space, so a
  *  space-separated join would misdivide that one entry into two. */
+function systemText(args: string[]): string {
+  return readFileSync(args[args.indexOf("--append-system-prompt-file") + 1]!, "utf8");
+}
+
 function disallowedTools(args: string[]): string[] {
   return args[args.indexOf("--disallowedTools") + 1]!.split(",");
 }
@@ -540,7 +544,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-navigator", null, "navigator");
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Navigator");
     expect(systemPrompt).not.toContain("You are Deckhand");
   });
@@ -550,7 +554,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-default-agent", null, null);
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Deckhand");
   });
 
@@ -566,7 +570,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("## Roster");
     expect(systemPrompt).toContain("navigator — Navigation specialist");
     expect(systemPrompt).toContain("deckhand — General work agent for the tidepool board");
@@ -579,7 +583,7 @@ describe("ClaudeCodeWorker", () => {
     });
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("navigator — Navigation specialist");
     expect(systemPrompt).toContain(
       "human — delegate to a human — runs outside the slot in their own task list; " +
@@ -597,7 +601,7 @@ describe("ClaudeCodeWorker", () => {
       });
       start();
       const args = calls[0]!.args;
-      const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+      const systemPrompt = systemText(args);
       expect(systemPrompt).toContain("navigator — Navigation specialist");
       expect(systemPrompt).not.toContain("fugu —");
     }
@@ -609,7 +613,7 @@ describe("ClaudeCodeWorker", () => {
     });
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("fugu — Shadowing work agent");
   });
 
@@ -619,7 +623,7 @@ describe("ClaudeCodeWorker", () => {
     });
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Roster");
   });
 
@@ -633,7 +637,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-review", null, null, "review");
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Keeper");
     expect(systemPrompt).not.toContain("You are Deckhand");
   });
@@ -648,7 +652,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-review-authority", null, "keeper", "review");
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain(
       "You are reviewing read-only. Never fix directly — findings become repair tasks.\n" +
         "Assign a repair to the worker in your roster: they executed the task you are reviewing.",
@@ -678,7 +682,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(review, setting(review));
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     const roster = systemPrompt.split("## Roster\n\n")[1]?.split("\n\n## Board doctrine")[0];
     expect(roster).toBe("deckhand — General work agent for the tidepool board");
   });
@@ -688,7 +692,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-root-review", null, "keeper", "review");
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Roster");
   });
 
@@ -711,7 +715,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(review, setting(review));
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Roster");
   });
 
@@ -726,7 +730,7 @@ describe("ClaudeCodeWorker", () => {
     const task = start("task-memory", null, "deckhand", type);
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     const { section } = buildMemoryInjection(db, task, "tidepool", "deckhand");
     expect(systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
     const events = listEvents(db, task.id);
@@ -749,7 +753,7 @@ describe("ClaudeCodeWorker", () => {
     const task = start("task-no-memory");
 
     const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).not.toContain("## Memory");
+    expect(systemText(args)).not.toContain("## Memory");
     const events = listEvents(db, task.id);
     const spawned = events.findIndex((e) => e.kind === "worker_spawned");
     expect(events[spawned + 1]?.payload).toMatchObject({ kind: "memory_injected", worker_spawned_event_id: events[spawned]!.id, entries: [] });
@@ -769,7 +773,7 @@ describe("ClaudeCodeWorker", () => {
       slot.occupy(task.id);
       worker.start(task, setting(task));
       const args = calls.at(-1)!.args;
-      return { task, systemPrompt: args[args.indexOf("--append-system-prompt") + 1]! };
+      return { task, systemPrompt: systemText(args) };
     };
 
     for (const subject of ["memory", "routing"] as const) {
@@ -804,7 +808,7 @@ describe("ClaudeCodeWorker", () => {
     const args = calls.at(-1)!.args;
     const guidance = buildMemoryInjection(db, task, "work", "deckhand");
     const { section } = buildMetaReviewMaterial(db, task.id)!;
-    expect(args[args.indexOf("--append-system-prompt") + 1]!.endsWith(`\n\n${guidance.section}\n\n${section}`)).toBe(true);
+    expect(systemText(args).endsWith(`\n\n${guidance.section}\n\n${section}`)).toBe(true);
     expect(listEvents(db, task.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
       entries: [{ id: entry_id, version: entry_id }],
       tokens: guidance.tokens,
@@ -833,7 +837,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Deckhand");
     expect(systemPrompt).toContain("Prefer reversible actions");
   });
@@ -845,7 +849,7 @@ describe("ClaudeCodeWorker", () => {
     });
     start();
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Authority");
     expect(systemPrompt).toContain("You are Deckhand");
     const rosterIndex = systemPrompt.indexOf("## Roster");
@@ -858,7 +862,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("Agent tool");
     expect(systemPrompt).toContain("decompose");
     // ADR 0010 追補の受け入れ基準: 教義自体にオーケストレーション禁止の1行が含まれる
@@ -876,7 +880,7 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
   });
 
@@ -889,7 +893,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(root, setting(root));
     const args = calls[0]!.args;
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
+    expect(systemText(args)).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
   });
 
   it("出題済みの Interview の root の system prompt には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
@@ -901,7 +905,7 @@ describe("ClaudeCodeWorker", () => {
     slot.occupy(root.id);
     worker.start(root, setting(root));
     const args = calls[0]!.args;
-    expect(args[args.indexOf("--append-system-prompt") + 1]).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
+    expect(systemText(args)).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
   });
 
   // ADR 0017: agent 定義ファイルは専門性のみを運び、ワーカープロトコル(rules
@@ -915,7 +919,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/tako.md": TAKO_MD });
     start("task-tako", null, "tako");
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     // cwd = the task's workspace
     expect(systemPrompt).toContain("current working directory");
     // no side channels — everything flows through the MCP verbs
@@ -936,7 +940,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
     start("task-canonical-text");
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain(
       "Write everything you put on the board — decision log lines, child task fields, handoff docs, results — in English, even when the task's payload is in another language. Human-authored text you quote stays in its original language.",
     );
@@ -955,7 +959,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-network-protocol");
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain(
       "Network egress is deny-by-default. This session may reach only: registry.npmjs.org. " +
         "Do not retry downloads from any other domain.",
@@ -968,7 +972,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-closed-network-protocol");
 
     const args = calls[0]!.args;
-    const systemPrompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const systemPrompt = systemText(args);
     expect(systemPrompt).toContain(
       "Network egress is deny-by-default. This session cannot fetch from any external domain. " +
         "Do not retry external downloads.",
@@ -1505,30 +1509,68 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, emitExitAt } = await makeWorker();
     const exits = [[0, null], [2, null], [null, "SIGKILL"]] as const;
     exits.forEach((_, i) => start(`task-temp-exit-${i}`));
+    const files = calls.map((call) => call.args[call.args.indexOf("--append-system-prompt-file") + 1]!);
+    expect(files.every((file) => existsSync(file))).toBe(true);
     const taskTemps = calls.map((call) => call.env.TMPDIR!);
     expect(taskTemps.every((dir) => existsSync(dir))).toBe(true);
 
     exits.forEach(([code, signal], i) => emitExitAt(i, code, signal));
     expect(taskTemps.filter((dir) => existsSync(dir))).toEqual([]);
+    expect(files.some((file) => existsSync(file))).toBe(false);
+  });
+
+  it("stdinの早期切断はexit0でも既存の報告なき終了の失敗と回収を通し、CLIの逐語を保つ", async () => {
+    const onExit = vi.fn();
+    const { start, calls, processes, emitExit, db, watchdog, containers, killed } = await makeWorker({}, { onWorkerExited: onExit });
+    onExit.mockImplementation(watchdog.onWorkerExited);
+    const value = start("stdin-error");
+    const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
+    expect(existsSync(file)).toBe(true);
+    expect(() => processes[0]!.stdin.emit("error", new Error("broken pipe"))).not.toThrow();
+    expect(killed).toContain("SIGKILL");
+    emitExit(0, null);
+    expect(listEvents(db, value.id).find((e) => e.kind === "worker_exited")!.payload).toMatchObject({ exit_code: 0, reported_error: null });
+    expect(listBoard(db).find((task) => task.type === "question")?.title).toBe(`worker exited without reporting: ${value.title}`);
+    expect(getTask(db, value.id)?.status).not.toBe("done");
+    await containers.reclaimed(value.id);
+    expect(existsSync(file)).toBe(false);
+  });
+
+  it("停止はsystem fileをCLIの終了まで保ち、終了の後始末で消す", async () => {
+    const { worker, start, calls, emitExit, killed } = await makeWorker();
+    const value = start("prompt-stop");
+    const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
+    worker.gracefulStop(value.id);
+    expect(killed).toContain("SIGTERM");
+    expect(existsSync(file)).toBe(true);
+    emitExit(null, "SIGTERM");
+    expect(existsSync(file)).toBe(false);
   });
 
   it("spawn の失敗(exit が来ないことがある)の後も、task temp は残らない(ADR 0257)", async () => {
     const { start, calls, emitError } = await makeWorker();
     start("task-temp-spawn-error");
     const taskTemp = calls[0]!.env.TMPDIR!;
+    const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
+    expect(existsSync(file)).toBe(true);
 
     emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
     expect(existsSync(taskTemp)).toBe(false);
+    expect(existsSync(file)).toBe(false);
   });
 
   it("spawn までの間に例外が出たら start はそれを投げ直し、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
+    let file = "";
     const { start } = await makeWorker({}, {
-      containers: passthroughContainers(() => {
+      containers: passthroughContainers((_command, args) => {
+        file = args[args.indexOf("--append-system-prompt-file") + 1]!;
+        expect(existsSync(file)).toBe(true);
         throw new Error("spawn blew up");
       }),
     });
 
     expect(() => start("task-temp-sync-throw")).toThrow("spawn blew up");
+    expect(existsSync(file)).toBe(false);
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
   });
 
@@ -2092,25 +2134,40 @@ describe("ClaudeCodeWorker", () => {
     });
   });
 
-  it("spawn 時に渡した prompt 一式を <taskId>.<event id>.prompt.json として stream / stderr の隣に残す —— system の連結が --append-system-prompt、user が -p の値(ADR 0313 決定1・2)", async () => {
-    const { start, calls, logDir, db } = await makeWorker();
-    start("task-prompt");
-    const spawned = listEvents(db, "task-prompt").find((e) => e.kind === "worker_spawned")!;
-    const spawnedId = spawned.id;
+  it("200KiB以上のstdinとsession専用system fileが持ち主・task・配置の記録と逐語で一致する", async () => {
+    const large = `開始\n${"魚🐟\n".repeat(40000)}末尾\n\n`;
+    const recorder = recordingSpawn();
+    const { calls, processes } = recorder;
+    let systemAtSpawn = "";
+    const { worker, setting, logDir, db } = await makeWorker({ "agents/deckhand.md": `---\nname: deckhand\ndescription: d\nversion: 1\nauthority: standard\nskills: []\n---\n${large}` }, { containers: passthroughContainers((command, args, options) => {
+      systemAtSpawn = readFileSync(args[args.indexOf("--append-system-prompt-file") + 1]!, "utf8");
+      return recorder.spawn(command, args, options);
+    }) });
+    onTestFinished(() => recorder.emitExit(0, null));
+    const value = makeTask("task-prompt");
+    value.purpose = large;
+    insertTask(db, value);
+    worker.start(value, setting(value));
+    const spawned = listEvents(db, value.id).find((e) => e.kind === "worker_spawned")!;
+    const recorded = new TranscriptStore(logDir).readPrompt(value.id, spawned.id)!;
     const args = calls[0]!.args;
-
-    const recorded = JSON.parse(await readFile(join(logDir, `task-prompt.${spawnedId}.prompt.json`), "utf8"));
-
-    expect(recorded.harness).toBe("claude-code");
-    expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(args[args.indexOf("--append-system-prompt") + 1]);
-    // 定義の部分の版は worker_spawned と同じ値
+    const file = args[args.indexOf("--append-system-prompt-file") + 1]!;
+    expect(calls[0]!.stdin).toBe("pipe");
+    expect(args).not.toContain(large);
+    expect(args).not.toContain("--append-system-prompt");
+    expect(recorded.placement).toEqual({ board: "system" });
+    expect(recorded.board[0]!.text).toBe(large.trimEnd());
+    expect(readFileSync(file, "utf8")).toBe(recorded.board.map((p) => p.text).join(""));
+    expect(systemAtSpawn).toBe(recorded.board.map((p) => p.text).join(""));
+    expect(processes[0]!.stdin.read()?.toString()).toBe(recorded.task);
+    expect(recorded.task).toBe(`First call get_current_task for task ${value.id}, then complete this task: ${value.title}\n\nPurpose: ${large}\nCompletion criteria: ${value.completion_criteria}`);
+    expect(processes[0]!.stdin.writableEnded).toBe(true);
     const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
-    expect(recorded.system[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
-    expect(recorded.user).toBe(args[args.indexOf("-p") + 1]);
+    expect(recorded.board[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
   });
 
   it("user turn は Codex と同じ文で title / purpose / 完了基準を持ち、記録した prompt の user も同じ文になる(ADR 0320 決定2 / ADR 0124 決定1)", async () => {
-    const { start, calls, logDir, db } = await makeWorker();
+    const { start, calls, processes, logDir, db } = await makeWorker();
     start("task-user-turn");
     const spawnedId = listEvents(db, "task-user-turn").find((e) => e.kind === "worker_spawned")!.id;
     const args = calls[0]!.args;
@@ -2118,9 +2175,10 @@ describe("ClaudeCodeWorker", () => {
     const expected =
       "First call get_current_task for task task-user-turn, then complete this task: fix the leaky faucet\n\n" +
       "Purpose: stop the drip\nCompletion criteria: no drip for 24h";
-    expect(args[args.indexOf("-p") + 1]).toBe(expected);
+    expect(args).not.toContain(expected);
+    expect(processes[0]!.stdin.read()?.toString()).toBe(expected);
     const recorded = JSON.parse(await readFile(join(logDir, `task-user-turn.${spawnedId}.prompt.json`), "utf8"));
-    expect(recorded.user).toBe(expected);
+    expect(recorded.task).toBe(expected);
   });
 
   it("同一タスクを2回 spawn すると、両方の worker session の transcript が別ファイルで残る(issue #379)", async () => {
@@ -3175,7 +3233,7 @@ describe("ClaudeCodeWorker", () => {
     const args = recorder.calls[0]!.args;
     expect({
       provenance: spawned!.payload,
-      systemPrompt: args[args.indexOf("--append-system-prompt") + 1]!.includes(
+      systemPrompt: systemText(args).includes(
         "MERGED on the remote",
       ),
     }).toMatchObject({
@@ -3216,7 +3274,7 @@ describe("ClaudeCodeWorker", () => {
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     // executes as the current definition (ADR 0019: repair is not a re-enactment)
     expect(prompt).toContain("REFINED after the objected call");
     // and the 当時版 body is injected, fenced, as evidence for the "why did I decide" read
@@ -3240,7 +3298,7 @@ describe("ClaudeCodeWorker", () => {
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     // the injected 当時版 evidence is the objected session's, not the later re-spawn's
     // — `.at(-1)` would have wrongly picked it
     expect(prompt).toContain(fenced(DECKHAND_BODY));
@@ -3262,7 +3320,7 @@ describe("ClaudeCodeWorker", () => {
 
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     // both 当時版 bodies are injected — neither session's record is folded away
     expect(prompt).toContain("## Definitions under review (each as recorded at your spawn)");
     expect(prompt).toContain(`### Live for your objected entry ${decision1}\n\n---\n\n${fenced(DECKHAND_BODY)}`);
@@ -3290,7 +3348,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(audit, setting(audit));
     expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     expect(prompt).toContain("You are the Auditor");
     // no deckhand definition body injected — the auditor's value is distance
     expect(prompt).not.toContain("general work agent");
@@ -3311,7 +3369,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
 
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     expect(prompt).toContain(
       `## Definition under review (as recorded at your spawn)\n\n` +
         "This is your agent definition as recorded at your spawn for the objected task",
@@ -3337,7 +3395,7 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
 
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     expect(prompt).toContain(
       "The Authority below is the board's fixed reviewer authority — the same text as your own Authority above. " +
         "It is board code, not a registry profile, so it is not a target for a registry diff.\n\n" +
@@ -3366,7 +3424,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     expect(prompt).toContain(
       `---\n\nYou ran then as the board's built-in ${DEFAULT_AUDITOR_NAME}, whose definition lives in board code, ` +
         "not the registry; its body was empty at that version.\n\nThe Authority below is the board's fixed reviewer authority",
@@ -3390,7 +3448,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
-    const prompt = args[args.indexOf("--append-system-prompt") + 1]!;
+    const prompt = systemText(args);
     expect(prompt).toContain(`repair is not a re-enactment).\n\n---\n\n${fenced(body)}`);
     expect(prompt).not.toContain("its body was empty");
   });

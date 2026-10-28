@@ -4,9 +4,9 @@ import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse, joinPrompt, taskPrompt } from "./board-prose.js";
+import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
+import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "./claude-stream-reader.js";
 import { quarantineCliAuthForProvider } from "./cli-auth.js";
@@ -44,7 +44,7 @@ import {
 } from "./tasks.js";
 import { liveSession } from "./teardown.js";
 import { tierNames } from "./tier.js";
-import { RecordContainerError, type Transcript, type TranscriptStore } from "./transcript-store.js";
+import { promptInput, RecordContainerError, type Transcript, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { composeTerminalScreen } from "./usage.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
@@ -903,7 +903,7 @@ export interface ClaudeWorkerOptions {
  *  moment its author forgot to pass one — silently. Required, the compiler asks
  *  them instead. Same reason `Skill allowlist` made omission invalid rather
  *  than meaning "unrestricted". */
-export type ExecFn = (command: string, args: string[], env: NodeJS.ProcessEnv) => Promise<string>;
+export type ExecFn = (command: string, args: string[], env: NodeJS.ProcessEnv, input?: string) => Promise<string>;
 
 /** The skill-enumeration boundary (issue #56 / ADR 0025 point 4): resolve the
  *  full skill set the CLI would give the session at `cwd`, or null if the probe
@@ -1236,9 +1236,9 @@ const ANSWER_CALL_LIMIT_MS = 300_000;
  *  `cwd` は盤面自身の cwd が既定で、渡すのは適合試験が用意した neutral cwd で撃つときだけ(ADR 0303 決定4)。 */
 export const execThrough =
   (call: BoardCall, kind: string, cwd?: string): ExecFn =>
-  async (command, args, env) => {
+  async (command, args, env, input) => {
     const output = await call(
-      { kind, harness: "claude-code", command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS },
+      { kind, harness: "claude-code", command, args, cwd: cwd ?? process.cwd(), env, limitMs: ANSWER_CALL_LIMIT_MS, input },
       readOutput,
     );
     if (!output) throw new Error(`the ${kind} Board call produced no answer (limit, spawn failure, or no container)`);
@@ -1731,6 +1731,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     let spawnedEventId: number;
     let transcript: Transcript;
     let child: ContainedProcess;
+    let input = "";
     try {
       const prompt = taskPrompt(task);
       // dynamic orchestration is a category ban for workers (ADR 0010 addendum /
@@ -1827,7 +1828,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       });
       // ADR 0149 決定2: 記録の口は spawn より先に開く。開けなければ `RecordContainerError` が呼び手へ返り、
       // process は1つも起きない(ADR 0266 決定4)
-      transcript = this.options.transcripts.open(task.id, spawnedEventId, { harness: "claude-code", system, user: prompt });
+      const record = workerPromptRecord("claude-code", system, prompt);
+      transcript = this.options.transcripts.open(task.id, spawnedEventId, record);
+      const submitted = promptInput(record);
+      input = submitted.user;
+      const systemPromptFile = join(taskTemp, "system-prompt.txt");
+      writeFileSync(systemPromptFile, submitted.system, { mode: 0o600 });
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
       markProjectionPending(this.options.db, spawnedEventId);
       // spawn の入力(MCP 設定・sandbox 設定)も同じ dir に置かれるので、transcript の open が器への最初の書き込みになるよう
@@ -1872,7 +1878,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         "claude",
         [
           "-p",
-          prompt,
           "--output-format",
           "stream-json",
           "--verbose",
@@ -1959,8 +1964,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           // the capability check are for.
           "--settings",
           sandboxSettingsPath,
-          "--append-system-prompt",
-          joinPrompt(system),
+          "--append-system-prompt-file",
+          systemPromptFile,
         ],
         // the agent's own commits are stamped with the agent's identity (issue
         // #53), merged over the inherited env — never a token (ADR 0024). The
@@ -1969,6 +1974,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // than left to the host's environment file (ADR 0005).
         {
           cwd: workspacePath,
+          stdin: "pipe",
           // workerSpawnEnv builds over process.env and may *delete* the advisor
           // kill var (ADR 0044 決定4), so it is the base here rather than an
           // overlay — a spread on top of it could not have removed a key. The git
@@ -2089,6 +2095,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // (ADR 0201 決定1)。これは**送達であって回収の完了ではなく**、ADR 0099 決定1 の
     // 語彙は不変である: 門は回収済み観測ただ1つで、後始末はその後ろでしか走らない。
     settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+    sendInput(child, input, (error) => {
+      console.error(`[worker] could not send prompt for task ${task.id}:`, error);
+      this.containers.forceReclaim(task.id);
+    });
   }
 
   /** ADR 0039 決定3 の**深層防御側**: 走っているセッション自身の init 行の `tools`

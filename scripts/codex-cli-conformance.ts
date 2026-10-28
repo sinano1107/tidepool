@@ -45,6 +45,7 @@ import {
   WORKER_EXEC_FLAGS,
 } from "../src/codex-worker.js";
 import { ProcessContainers } from "../src/process-container.js";
+import { promptInput, workerPromptRecord } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 
 const { executable, onPath } = resolveCodexExecutable();
@@ -150,7 +151,7 @@ async function skillClosure(): Promise<SkillClosureObservation> {
       skill(join(workspace, ".agents/skills/nofm"), "no frontmatter\n");
 
       const freshEnv = probeEnv(home);
-      const loaded = [...closedSurfaceConfig(), FORCED_LOGIN_METHOD];
+      const loaded = [...closedSurfaceConfig(), 'developer_instructions=""', FORCED_LOGIN_METHOD];
       const checked = await codexWorkspaceContainment({ call, executable, env: freshEnv, workspace, config: (skills) => [...loaded, skills] });
       const provider = "tidepool_conformance";
       const { port } = endpoint.address() as AddressInfo;
@@ -170,8 +171,8 @@ async function skillClosure(): Promise<SkillClosureObservation> {
               `model_providers.${provider}.base_url="http://127.0.0.1:${port}/v1"`,
               `model_providers.${provider}.wire_api="responses"`,
             ]),
-            prompt,
           ],
+          input: promptInput(workerPromptRecord("codex", [], prompt)).user,
           cwd: workspace,
           env: freshEnv,
           limitMs: 60_000,
@@ -237,9 +238,9 @@ const seedRows = await judgeSeedRows(async ({ model, effort }) => {
       "exec", "--json", "--ephemeral", "--ignore-user-config", "--skip-git-repo-check", "--sandbox", "read-only",
       "-m", model,
       ...(effort === null ? [] : ["-c", `model_reasoning_effort=${JSON.stringify(effort)}`]),
-      "Reply with the single word OK.",
+      "-c", 'developer_instructions=""',
     ],
-    { env },
+    { env, input: promptInput(workerPromptRecord("codex", [], "Reply with the single word OK.")).user },
   );
   if (!result.stdout.trim()) throw new Error(result.stderr.trim() || `codex exited ${result.exitCode}`);
   return result.stdout;

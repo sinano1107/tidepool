@@ -139,3 +139,12 @@ accepts a value the model no longer runs as written, or refuses one it now does.
 
 After the PR merges, run the [benchmark](experiments/benchmark/README.md) at the new pin and compare its record
 with the last run on the old one.
+
+### Prompt transport (ADR 0326)
+
+On a CLI upgrade, verify a Unicode prompt above 200 KiB at the actual Linux CLI input:
+answer-fetching Board calls and worker task text use stdin followed by EOF; the worker's
+board text uses a session-specific `--append-system-prompt-file`. Compare captured text
+verbatim, including newlines, with the original Board call purpose prompt or worker
+prompt record. The conformance calls use these same transports. A received request proves
+transport, not successful inference or unchanged instruction adherence.

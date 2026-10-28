@@ -96,3 +96,24 @@ export function settleOnOutputClose(
     child.on("close", () => finish(true));
   });
 }
+
+/** Send one complete prompt and EOF. A broken pipe belongs to the call's failure path. */
+export function sendInput(proc: ContainedProcess, text: string, failed: (error: Error) => void): void {
+  const input = proc.stdin;
+  if (!input) {
+    failed(new Error("CLI stdin is unavailable"));
+    return;
+  }
+  let reported = false;
+  const fail = (error: Error) => {
+    if (reported) return;
+    reported = true;
+    failed(error);
+  };
+  input.on("error", fail);
+  try {
+    input.end(text);
+  } catch (error) {
+    fail(error instanceof Error ? error : new Error(String(error)));
+  }
+}

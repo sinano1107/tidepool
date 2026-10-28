@@ -186,7 +186,7 @@ for (const [harness, boot] of HARNESSES) {
 it("prompt の記録を書けない器では open が prompt のファイルの絶対 path を名指す RecordContainerError で落ちる —— stream と同じ記録の器の停止の入口(ADR 0313 決定1 / ADR 0266 決定3)", async () => {
   const dir = await tempDir("transcript-store-");
   await mkdir(join(dir, "task-p.7.prompt.json"));
-  const open = () => new TranscriptStore(dir).open("task-p", 7, { harness: "claude-code", system: [], user: "u" });
+  const open = () => new TranscriptStore(dir).open("task-p", 7, { harness: "claude-code", board: [], task: "u", placement: { board: "system" } });
 
   expect(open).toThrow(RecordContainerError);
   expect(open).toThrow(expect.objectContaining({ path: join(dir, "task-p.7.prompt.json") }));

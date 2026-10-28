@@ -28,6 +28,7 @@ import { boardCallEnv, checkUsageThrough, execThrough, toolSurfaceProbeSpec } fr
 import { SystemClock } from "../src/clock.js";
 import { openDb } from "../src/db.js";
 import { ProcessContainers } from "../src/process-container.js";
+import { promptInput, workerPromptRecord } from "../src/transcript-store.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 
 const containers = new ProcessContainers(containerRuntimeFor(platform));
@@ -67,14 +68,16 @@ const probeStdout = (cwd: string) =>
 // result 行は、モデルの1ターンを実際に走らせた stream-json から読む —— `/usage` ping は
 // ターンを起こさない(cost 0)ので、worker が読む usage の形を試せない
 const oneTurnStdout = () =>
-  execThrough(call, "conformance result line")("claude", boardCallOneTurnArgs("Reply with the single word OK."), boardCallEnv());
+  execThrough(call, "conformance result line")("claude", boardCallOneTurnArgs(), boardCallEnv(), "Reply with the single word OK.");
 
-const languageShot = (shape: "worker" | "board call") =>
-  execThrough(call, `conformance language (${shape})`, languageCwd)(
-    "claude",
-    (shape === "worker" ? workerOneTurnArgs : boardCallOneTurnArgs)(LANGUAGE_QUESTION),
-    boardCallEnv(),
+const languageShot = (shape: "worker" | "board call") => {
+  const input = promptInput(workerPromptRecord("claude-code", [], LANGUAGE_QUESTION));
+  const file = join(scratch, "language-system.txt");
+  writeFileSync(file, input.system);
+  return execThrough(call, `conformance language (${shape})`, languageCwd)(
+    "claude", shape === "worker" ? workerOneTurnArgs(file) : boardCallOneTurnArgs(), boardCallEnv(), input.user,
   );
+};
 
 const { rows } = await judgeConformance(
   {

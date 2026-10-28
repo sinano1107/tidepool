@@ -2012,13 +2012,13 @@ const DECKHAND_THEN = {
 
 /** 当時版を読める盤面: spawn の prompt を記録の器に書いた session で decision を書き、異議を打つ。`system` は記録する部分、
  *  `sessionTask` は session の task を組む(既定は memoryBoard の work task)。 */
-async function definitionBoard({ system = DECKHAND_RECORD, sessionTask }: { system?: PromptPart[]; sessionTask?: (db: ReturnType<typeof openDb>) => Task } = {}) {
+async function definitionBoard({ system = DECKHAND_RECORD, harness = "claude-code", sessionTask }: { harness?: "claude-code" | "codex"; system?: PromptPart[]; sessionTask?: (db: ReturnType<typeof openDb>) => Task } = {}) {
   const recordDir = await tempDir("tidepool-records-");
   const b = memoryBoard();
   const task = sessionTask?.(b.db) ?? b.task;
   const spawn = (parts: PromptPart[]) => {
     const spawned = appendEvent(b.db, { taskId: task.id, actorId: "deckhand", origin: "board", at, payload: WORKER_SPAWNED });
-    recordPrompt(recordDir, task.id, spawned, parts);
+    recordPrompt(recordDir, task.id, spawned, parts, "", harness);
     return spawned;
   };
   const spawned = spawn(system);
@@ -2039,8 +2039,8 @@ const injectMemory = (b: ReturnType<typeof memoryBoard>, spawned: number, ids: n
 const defineBranch = (b: ReturnType<typeof memoryBoard>, path: string, text: string) =>
   defineMemoryBranch(b.db, { scope: null, path, text, author: { activity: "worker_verb", name: "deckhand" } }, "worker", at).entry_id;
 
-it("帰責の入力の当時版は異議された entry の session の spawn で記録した部分の text で、盤面の文(doctrine / protocol)は board_text に入り、記憶の節は入らない(ADR 0314 決定3・4)", async () => {
-  const b = await definitionBoard();
+it.each(["claude-code", "codex"] as const)("%s: 帰責の当時版とboard_textは持ち主付き部分から読み、記憶の節は混ぜない(ADR 0314 / 0326)", async (harness) => {
+  const b = await definitionBoard({ harness });
   const client = new FakeAttributionClient();
 
   await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.sessionId, at);
@@ -2050,10 +2050,10 @@ it("帰責の入力の当時版は異議された entry の session の spawn �
   ]);
 });
 
-it("異議の帰責の入力の task は異議された entry の session の記録した user turn の逐語で、記録が無ければ null(ADR 0320 決定3)", async () => {
+it.each(["claude-code", "codex"] as const)("%s: 異議の帰責のtaskは記録したtask固有部分だけ、記録が無ければnull(ADR 0326)", async (harness) => {
   const b = await definitionBoard();
   const user = "First call get_current_task for task t, then complete this task: v2 API\n\nPurpose: ship\nCompletion criteria: done";
-  recordPrompt(b.recordDir, b.task.id, b.spawned, DECKHAND_RECORD, user);
+  recordPrompt(b.recordDir, b.task.id, b.spawned, DECKHAND_RECORD, user, harness);
   const lost = await definitionBoard();
   rmSync(join(lost.recordDir, `${lost.task.id}.${lost.spawned}.prompt.json`));
   const client = new FakeAttributionClient();

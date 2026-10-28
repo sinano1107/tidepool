@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
 import { boardDoctrine, fenced } from "../src/board-prose.js";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
-import { CODEX_DEVELOPER_MARKER, CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
+import { CODEX_FEATURE_SNAPSHOT, CodexWorker, type CodexWorkerOptions, listedSkillPaths, resolveCodexExecutable } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
 import { appendEvent, type EventPayload, listEvents } from "../src/events.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -190,8 +190,10 @@ function honestSkillsList(args: readonly string[], cwds: readonly string[]) {
   return listed;
 }
 
-/** 盤面が書いた文面は `-c developer_instructions=` に載る(ADR 0124 決定2)。 */
+/** The short empty override closes ambient developer instructions (ADR 0326). */
 const developerInstructions = (args: string[]) => configValue<string>(args, "developer_instructions=");
+const boardByArgs = new WeakMap<string[], string>();
+const boardText = (args: string[]) => boardByArgs.get(args)!;
 
 /** spawn が `-c mcp_servers.tidepool.enabled_tools=` で Codex に宣言した verb 列。 */
 const enabledTools = (args: string[]) => configValue<string[]>(args, "mcp_servers.tidepool.enabled_tools=");
@@ -249,6 +251,7 @@ You are the Codex worker.`,
   const logDir = await tempDir("tidepool-codex-logs-");
   const appServerCall = fakeAppServerCall(appServer);
   const clock = new FakeClock();
+  const workerContainers = containers ?? passthroughContainers(spawn ?? process.spawn);
   const worker = new CodexWorker({
     db,
     clock,
@@ -261,7 +264,7 @@ You are the Codex worker.`,
     codexHome,
     cliVersion: CLI_VERSION,
     executable: "/opt/tidepool/bin/codex",
-    containers: containers ?? passthroughContainers(spawn ?? process.spawn),
+    containers: workerContainers,
     boardCall: appServerCall.call,
     onSpawnFailed,
     onWorkerExited,
@@ -272,8 +275,18 @@ You are the Codex worker.`,
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
   const agent = loadRegistry(registry, "purely-local").agents["codex-agent"]!;
-  const start = (value: Task, query?: InjectionQuery) => worker.start(value, executionSettingsFor(db, agent, value)[0]!, query);
-  return { db, worker, start, process, clock, codexHome, workspace, registeredWorkspace, logDir, registry, appServer: appServerCall.calls };
+  const start = (value: Task, query?: InjectionQuery) => {
+    const started = worker.start(value, executionSettingsFor(db, agent, value)[0]!, query);
+    return started?.then(() => {
+      const spawned = listEvents(db, value.id).filter((e) => e.kind === "worker_spawned").at(-1);
+      const call = process.calls.at(-1);
+      if (spawned && call) {
+        const record = new TranscriptStore(logDir).readPrompt(value.id, spawned.id);
+        if (record) boardByArgs.set(call.args, record.board.map((part) => part.text).join(""));
+      }
+    });
+  };
+  return { db, worker, start, process, clock, codexHome, workspace, registeredWorkspace, logDir, registry, containers: workerContainers, appServer: appServerCall.calls };
 }
 
 describe("CodexWorker (ADR 0098)", () => {
@@ -300,8 +313,8 @@ describe("CodexWorker (ADR 0098)", () => {
     ]));
     const config = call.args.filter((_, index) => call.args[index - 1] === "-c").join("\n");
     // 前提の破綻と自タスク外の発見の2文(ADR 0121 / issue #631)
-    expect(developerInstructions(call.args)).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
-    expect(developerInstructions(call.args)).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
+    expect(boardText(call.args)).toContain("When the premise of the decomposition decision your task rests on turns out to be false, declare a premise breach rather than working around it or escalating it.");
+    expect(boardText(call.args)).toContain("A finding outside your task's scope is not your task: record the decision not to act on it with `log_decision`, and never decompose it into a child.");
     expect(config).toContain('model_reasoning_effort="high"');
     expect(config).toContain('default_permissions="tidepool-work"');
     expect(config).toContain('\":root\"=\"deny\"');
@@ -533,13 +546,12 @@ describe("CodexWorker (ADR 0098)", () => {
       `skills.config=[${listedSkillPaths(codexSkillsListAt([f.workspace]), [f.workspace]).map((path) => `{path=${JSON.stringify(path)},enabled=false}`).join(",")}]`,
     );
     const configPairs = spawned.flatMap((arg, i) => (spawned[i - 1] === "-c" ? ["-c", arg] : []));
-    // 観測は spawn の設定のうち本文だけを marker に差し替えて当てる(ADR 0259 追記 / ADR 0295 決定4)
-    const marked = `developer_instructions=${JSON.stringify(CODEX_DEVELOPER_MARKER)}`;
-    expect(configPairs).not.toContain(marked);
+    // Skill observation uses exactly the worker config, including the empty developer override (ADR 0326).
+    expect(configPairs).toContain('developer_instructions=""');
     expect(observation!.spec.args).toEqual([
       "app-server",
       "--strict-config",
-      ...configPairs.map((arg) => (arg.startsWith("developer_instructions=") ? marked : arg)),
+      ...configPairs,
     ]);
     expect(observation!.requests).toEqual(enumeration!.requests);
   });
@@ -562,7 +574,7 @@ describe("CodexWorker (ADR 0098)", () => {
     const pickedUp = listEvents(f.db, parent.id).find((event) => event.kind === "task_picked_up")!;
     const spawned = listEvents(f.db, review.id).find((event) => event.kind === "worker_spawned")!;
     expect(pickedUp.id).toBeLessThan(spawned.id);
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain("## Roster\n\ncodex-agent — Codex agent");
+    expect(boardText(f.process.calls[0]!.args)).toContain("## Roster\n\ncodex-agent — Codex agent");
   });
 
   it("閉じた設定の下で有効と報告される skill が残れば、その名前と path を理由に (codex, workspace) の組を quarantine し、spawn も spawn_failed もしない(ADR 0259 決定1・3)", async () => {
@@ -659,7 +671,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ]);
   });
 
-  it("盤面の文面は developer_instructions に、task 固有の指示は prompt 引数に置く —— work / review とも同じ配置(ADR 0124 決定1・2)", async () => {
+  it("盤面の文面は user turn の先頭に、task 固有の指示は区切りの後に置く —— work / review とも同じ配置(ADR 0124 決定1・2)", async () => {
     const f = await fixture();
     const work = task(f.db, "codex-layer-work");
     const review = registerTask(
@@ -672,7 +684,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     for (const [i, value] of [work, review].entries()) {
       const args = f.process.calls[i]!.args;
-      const developer = developerInstructions(args);
+      const developer = boardText(args);
       expect(developer).toContain("You are the Codex worker.");
       expect(developer).toContain("## Authority");
       expect(developer).toContain("Board verbs (the tidepool MCP tools) are main-thread only");
@@ -681,33 +693,40 @@ describe("CodexWorker (ADR 0098)", () => {
       expect(developer).not.toContain(value.title);
       expect(developer).not.toContain(value.purpose);
       expect(developer).not.toContain(value.completion_criteria);
-      // 次の part と区切り無しに連結するので末尾の空行が文面の一部(ADR 0124 Consequences)
-      expect(developer.endsWith("\n\n")).toBe(true);
+      // Board context is user text; the developer override carries no variable prompt.
+      expect(developerInstructions(args)).toBe("");
 
-      const prompt = args.at(-1)!;
+      const prompt = f.process.processes[i]!.stdin.read()!.toString();
       expect(prompt).toContain(`First call get_current_task for task ${value.id}, then complete this task: ${value.title}`);
       expect(prompt).toContain(`Purpose: ${value.purpose}`);
       expect(prompt).toContain(`Completion criteria: ${value.completion_criteria}`);
-      expect(prompt).not.toContain("You are the Codex worker.");
-      expect(prompt).not.toContain("## Authority");
+      expect(prompt.startsWith(developer + "\n\n--- Task ---\n\n")).toBe(true);
+      expect(prompt).toContain("## Authority");
     }
   });
 
-  it("spawn 時に渡した prompt 一式を stream / stderr の隣の prompt.json に残す —— system の連結が末尾の空行ごと developer_instructions、user が user turn(ADR 0313 決定1・2 / ADR 0124 Consequences)", async () => {
-    const f = await fixture();
+  it("200KiB以上の盤面の文とtaskは記録した順序と区切りで1つのstdinに送り、developer指示は空にする", async () => {
+    const large = `開始\n${"魚🐟\n".repeat(40000)}末尾\n\n`;
+    const f = await fixture(undefined, undefined, undefined, undefined, { registryFiles: { "agents/codex-agent.md": `---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: []\n---\n${large}` } });
     const value = task(f.db, "codex-prompt-record");
+    value.purpose = large;
     await f.start(value);
     const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
-    const args = f.process.calls[0]!.args;
-
-    const recorded = JSON.parse(readFileSync(join(f.logDir, `${value.id}.${spawned.id}.prompt.json`), "utf8"));
-
+    const call = f.process.calls[0]!;
+    const recorded = new TranscriptStore(f.logDir).readPrompt(value.id, spawned.id)!;
+    expect(call.stdin).toBe("pipe");
     expect(recorded.harness).toBe("codex");
-    expect(recorded.system.map((part: { text: string }) => part.text).join("")).toBe(developerInstructions(args));
-    // 定義の部分の版は worker_spawned と同じ値
+    expect(recorded.placement).toEqual({ board: "user", separator: "\n\n--- Task ---\n\n" });
+    expect(recorded.board[0]!.text).toBe(large.trimEnd());
+    const board = recorded.board.map((part) => part.text).join("");
+    expect(f.process.processes[0]!.stdin.read()?.toString()).toBe(`${board}\n\n--- Task ---\n\n${recorded.task}`);
+    expect(f.process.processes[0]!.stdin.writableEnded).toBe(true);
+    expect(recorded.task).toBe(`First call get_current_task for task ${value.id}, then complete this task: ${value.title}\n\nPurpose: ${large}\nCompletion criteria: ${value.completion_criteria}`);
+    expect(developerInstructions(call.args)).toBe("");
+    expect(call.args).not.toContain(recorded.task);
+    expect(call.args).not.toContain(board);
     const { registry_commit, definition_version } = spawned.payload as Extract<EventPayload, { kind: "worker_spawned" }>;
-    expect(recorded.system[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
-    expect(recorded.user).toBe(args.at(-1));
+    expect(recorded.board[0]).toMatchObject({ part: "definition", registry_commit, definition_version });
   });
 
   it.each([
@@ -743,11 +762,11 @@ describe("CodexWorker (ADR 0098)", () => {
     }
   });
 
-  it("見える approved の記憶があれば work / review task とも注入節を developer_instructions の末尾に置き(Claude と同じ位置 —— ADR 0157 決定1)、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
+  it("見える approved の記憶があれば work / review task とも注入節を user turn の盤面部分の末尾に置き(Claude と同じ位置 —— ADR 0157 決定1)、worker_spawned の直後に memory_injected を書く。無ければ節を置かず entries 空で残す(spec #586 C / issue #592)", async () => {
     const f = await fixture();
     const bare = task(f.db, "codex-no-memory");
     await f.start(bare);
-    expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Memory");
+    expect(boardText(f.process.calls[0]!.args)).not.toContain("## Memory");
 
     recordKnowledge(
       f.db,
@@ -765,7 +784,7 @@ describe("CodexWorker (ADR 0098)", () => {
     for (const [i, value] of [work, review].entries()) {
       await f.start(value);
       const { section } = buildMemoryInjection(f.db, value, "work", "codex-agent");
-      expect(developerInstructions(f.process.calls[i + 1]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
+      expect(boardText(f.process.calls[i + 1]!.args).endsWith(`\n\n${section}`)).toBe(true);
     }
 
     for (const value of [bare, work, review]) {
@@ -776,7 +795,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(listEvents(f.db, bare.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({ entries: [] });
   });
 
-  it("meta-review の spawn は主題の材料の節を記憶の節の枠(developer_instructions の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(Claude と同じ —— ADR 0180 決定2・追記 #1239)", async () => {
+  it("meta-review の spawn は主題の材料の節を記憶の節の枠(user turn の盤面部分の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(Claude と同じ —— ADR 0180 決定2・追記 #1239)", async () => {
     const f = await fixture();
     // setup のみ: 窓の上限は登録 event が運ぶので盤面名義で登録し、codex-agent に割り当てる
     for (const subject of ["memory", "routing"] as const) registerMetaReview(f.db, subject, new Date("2026-08-24T00:00:00.000Z"));
@@ -787,7 +806,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     for (const [i, review] of reviews.entries()) {
       const { section } = buildMetaReviewMaterial(f.db, review.id)!;
-      expect(developerInstructions(f.process.calls[i]!.args).endsWith(`\n\n${section}\n\n`)).toBe(true);
+      expect(boardText(f.process.calls[i]!.args).endsWith(`\n\n${section}`)).toBe(true);
       const events = listEvents(f.db, review.id);
       const spawned = events.findIndex((e) => e.kind === "worker_spawned");
       expect(events.slice(spawned + 1, spawned + 3).map((e) => e.payload)).toMatchObject([
@@ -795,8 +814,8 @@ describe("CodexWorker (ADR 0098)", () => {
         { kind: "meta_review_material_injected", subject: review.meta_review_subject, worker_spawned_event_id: events[spawned]!.id },
       ]);
     }
-    expect(developerInstructions(f.process.calls[0]!.args)).not.toContain("## Routing meta-review material");
-    expect(developerInstructions(f.process.calls[2]!.args)).not.toContain("meta-review material");
+    expect(boardText(f.process.calls[0]!.args)).not.toContain("## Routing meta-review material");
+    expect(boardText(f.process.calls[2]!.args)).not.toContain("meta-review material");
     expect(listEvents(f.db, work.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
   });
 
@@ -812,7 +831,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
     const guidance = buildMemoryInjection(f.db, review, "work", "codex-agent");
     const { section } = buildMetaReviewMaterial(f.db, review.id)!;
-    expect(developerInstructions(f.process.calls[0]!.args).endsWith(`\n\n${guidance.section}\n\n${section}\n\n`)).toBe(true);
+    expect(boardText(f.process.calls[0]!.args).endsWith(`\n\n${guidance.section}\n\n${section}`)).toBe(true);
     expect(listEvents(f.db, review.id).find((e) => e.kind === "memory_injected")?.payload).toMatchObject({
       entries: [{ id: entry_id, version: entry_id }],
       tokens: guidance.tokens,
@@ -834,7 +853,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("Board doctrine は Claude と同じ正本から、委譲先を subagent と訳して届き、Workflow 段落を持たず fork_turns の1文で終わる(ADR 0157 決定2・3)", async () => {
     const f = await fixture();
     await f.start(task(f.db, "codex-doctrine"));
-    const developer = developerInstructions(f.process.calls[0]!.args);
+    const developer = boardText(f.process.calls[0]!.args);
     const doctrine = developer.slice(developer.indexOf("## Board doctrine"), developer.indexOf("## Rules of the road"));
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは Codex の語の配線と末尾の1文だけ
     expect(doctrine).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: [], added: [] }));
@@ -845,7 +864,7 @@ describe("CodexWorker (ADR 0098)", () => {
   it("Interview の pin の子の developer_instructions には、Claude と同じ分けない doctrine が載る(ADR 0245 決定2)", async () => {
     const f = await fixture();
     await f.start(pinnedChild(f.db));
-    const developer = developerInstructions(f.process.calls[0]!.args);
+    const developer = boardText(f.process.calls[0]!.args);
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
     expect(developer).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
   });
@@ -853,26 +872,26 @@ describe("CodexWorker (ADR 0098)", () => {
   it("出題前の Interview の root の developer_instructions には、pose_probe を足した verb の差し替えの doctrine が載る(ADR 0253 決定5)", async () => {
     const f = await fixture();
     await f.start(interviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
+    expect(boardText(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
   });
 
   it("出題済みの Interview の root の developer_instructions には、分けない doctrine が載り decompose を指す文は載らない(ADR 0247 決定3)", async () => {
     const f = await fixture();
     await f.start(posedInterviewRoot(f.db));
-    expect(developerInstructions(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
+    expect(boardText(f.process.calls[0]!.args)).toContain(boardDoctrine({ delegate: "a subagent", workflow: false }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
   });
 
   it("Rules of the road と network egress の行が届き、行は workspace の allowed_domains に従う(ADR 0157 決定1 / ADR 0072 決定4)", async () => {
     const open = await fixture();
     await open.start(task(open.db, "codex-network-open"));
-    const opened = developerInstructions(open.process.calls[0]!.args);
+    const opened = boardText(open.process.calls[0]!.args);
     expect(opened).toContain("## Rules of the road");
     expect(opened).toContain("Commit your work before completing");
     expect(opened).toContain("This session may reach only: api.github.com. Do not retry downloads from any other domain.");
 
     const closed = await fixture(undefined, "");
     await closed.start(task(closed.db, "codex-network-closed"));
-    expect(developerInstructions(closed.process.calls[0]!.args)).toContain(
+    expect(boardText(closed.process.calls[0]!.args)).toContain(
       "This session cannot fetch from any external domain. Do not retry external downloads.",
     );
   });
@@ -884,11 +903,11 @@ describe("CodexWorker (ADR 0098)", () => {
       },
     });
     await empty.start(task(empty.db, "codex-empty-guidance"));
-    expect(developerInstructions(empty.process.calls[0]!.args)).not.toContain("## Authority");
+    expect(boardText(empty.process.calls[0]!.args)).not.toContain("## Authority");
 
     const filled = await fixture();
     await filled.start(task(filled.db, "codex-guidance"));
-    expect(developerInstructions(filled.process.calls[0]!.args)).toContain("## Authority\n\nPrefer reversible actions.");
+    expect(boardText(filled.process.calls[0]!.args)).toContain("## Authority\n\nPrefer reversible actions.");
   });
 
   it("work task の Roster は profile の assignable_to から、review task は reviewer の authority と被レビュー task の executor 1名の Roster になる(ADR 0056 / ADR 0157 決定1)", async () => {
@@ -909,12 +928,12 @@ describe("CodexWorker (ADR 0098)", () => {
       ...HUMAN_WEBUI,
     ));
 
-    const work = developerInstructions(f.process.calls[0]!.args);
+    const work = boardText(f.process.calls[0]!.args);
     expect(work).toContain("## Roster\n\n");
     expect(work).toContain("codex-agent — Codex agent");
     expect(work).toContain("deckhand — General work agent for the tidepool board");
 
-    const review = developerInstructions(f.process.calls[1]!.args);
+    const review = boardText(f.process.calls[1]!.args);
     expect(review).toContain(
       `## Authority\n\n${REVIEWER_AUTHORITY_PROFILE.guidance}\n\n## Roster\n\ndeckhand — General work agent for the tidepool board\n\n## Board doctrine`,
     );
@@ -972,7 +991,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     await f.start(rca);
 
-    const developer = developerInstructions(f.process.calls[0]!.args);
+    const developer = boardText(f.process.calls[0]!.args);
     const { section } = buildMemoryInjection(f.db, rca, "work", "codex-agent");
     const order = [
       "You are the Codex worker, REFINED after the objected call.",
@@ -986,7 +1005,7 @@ describe("CodexWorker (ADR 0098)", () => {
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(developer).toContain(`---\n\n${fenced("You are the Codex worker.")}\n\n`);
-    expect(developer.endsWith(`\n\n${section}\n\n`)).toBe(true);
+    expect(developer.endsWith(`\n\n${section}`)).toBe(true);
   });
 
   it("当事者レビューの当時版には記録した Authority と Roster が入る —— 文面は Claude と共有の boardProse(issue #1741 / ADR 0157 / ADR 0314 決定1)", async () => {
@@ -1029,7 +1048,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ));
 
     // 文面そのものは claude-worker.test.ts が釘付けする(ADR 0107 決定3)。ここは developer instructions に届くことだけ
-    const developer = developerInstructions(f.process.calls[0]!.args);
+    const developer = boardText(f.process.calls[0]!.args);
     expect(developer).toContain("The Authority below came from the registry's authority profile standard.");
     expect(developer).toContain(fenced("## Roster\n\ncodex-agent — Codex agent"));
   });
@@ -1372,6 +1391,25 @@ describe("CodexWorker (ADR 0098)", () => {
       signal: "SIGINT",
       usage: null,
     });
+  });
+
+  it("stdinの早期切断はexit0でも既存の報告なき終了の失敗と回収を通し、CLIの逐語を保つ", async () => {
+    const onExit = vi.fn();
+    const f = await fixture(undefined, undefined, onExit);
+    const value = pickupTask(f.db, task(f.db), "codex-agent", f.clock.now())!;
+    const slot = new Slot();
+    slot.occupy(value.id);
+    const watchdog = startWatchdog({ db: f.db, clock: f.clock, slot, worker: f.worker, containers: f.containers, pollNow: () => {}, config: { timeLimits: {}, grace: 0 } });
+    onTestFinished(watchdog.stop);
+    onExit.mockImplementation(watchdog.onWorkerExited);
+    await f.start(value);
+    expect(() => f.process.processes[0]!.stdin.emit("error", new Error("broken pipe"))).not.toThrow();
+    expect(f.process.killed).toContain("SIGKILL");
+    f.process.emitExit(0, null);
+    expect(listEvents(f.db, value.id).find((e) => e.kind === "worker_exited")!.payload).toMatchObject({ exit_code: 0, reported_error: null });
+    expect(listBoard(f.db).find((task) => task.type === "question")?.title).toBe(`worker exited without reporting: ${value.title}`);
+    expect(getTask(f.db, value.id)?.status).not.toBe("done");
+    expect(existsSync(f.process.calls[0]!.env.TMPDIR!)).toBe(false);
   });
 
   it("worker の exit(0 / 非0 / signal)の後、TMPDIR が指した task の一時ディレクトリは残らない(issue #705)", async () => {

@@ -256,14 +256,15 @@ function sessionFile(
 ): string {
   const parts = prompt
     ? [
-        "## User prompt",
-        fenced(prompt.user),
-        ...prompt.system.flatMap((p) => [
+        ...prompt.board.flatMap((p) => [
           // authority は文の出所(ADR 0314 決定5)を見出しに添える
-          `## System: ${p.part}${p.part === "authority" ? ` (source: ${p.source}${p.profile ? ` ${p.profile}` : ""})` : ""}`,
+          `## ${prompt.placement.board === "system" ? "System" : "User prefix"}: ${p.part}${p.part === "authority" ? ` (source: ${p.source}${p.profile ? ` ${p.profile}` : ""})` : ""}`,
           ...(p.part === "definition" ? [`builtin: ${p.builtin}, registry_commit: ${p.registry_commit}, definition_version: ${p.definition_version}`] : []),
           fenced(p.text),
         ]),
+        ...(prompt.placement.board === "user" ? ["## User turn separator (between board text and task)", fenced(prompt.placement.separator)] : []),
+        "## Task text (user turn)",
+        fenced(prompt.task),
       ]
     : ["prompt not recorded"];
   const verbs = calls

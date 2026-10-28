@@ -150,18 +150,19 @@ it("観測が投げても(spawn の失敗)、その面を不合格にして残�
 });
 
 it("Board call の形の1ターンは runner と同じフラグの定数から組む —— runner に足したフラグが試験の argv にも現れる(ADR 0303 決定4)", () => {
-  const args = boardCallOneTurnArgs("q");
+  const args = boardCallOneTurnArgs();
   expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
   expect(args).toContain("--verbose");
   expect(args.slice(-BOARD_CALL_ONE_TURN_FLAGS.length)).toEqual([...BOARD_CALL_ONE_TURN_FLAGS]);
-  expect(args[args.indexOf("-p") + 1]).toBe("q");
+  expect(args).not.toContain("q");
 });
 
 it("worker の形の1ターンは project tier を読み、盤面の定数で language / outputStyle を固定する", () => {
-  const args = workerOneTurnArgs("q");
+  const args = workerOneTurnArgs("/session/system.txt");
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
   expect(JSON.parse(args[args.indexOf("--settings") + 1]!)).toEqual(LANGUAGE_AND_OUTPUT_STYLE_PINNED);
-  expect(args[args.indexOf("-p") + 1]).toBe("q");
+  expect(args).toContain("--append-system-prompt-file");
+  expect(args).toContain("/session/system.txt");
 });
 
 it("output style の面は init 行の output_style が既定でなければ、または読めなければ不合格になる", async () => {

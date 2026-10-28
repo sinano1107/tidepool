@@ -144,7 +144,6 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
       "claude",
       [
         "-p",
-        prompt,
         "--system-prompt",
         systemPrompt,
         ...pinnedModelFlags(setting.model, setting.effort),
@@ -156,6 +155,7 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
       // opus, unrecorded anywhere — a haiku main model is no protection either
       // (measured 2026-08-04). Translation also closes reasoning (ADR 0062 決定2).
       reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
+      prompt,
     );
   } catch (err) {
     const { envelope, model_swaps, refusals } = readBoardCallStream(

@@ -16,9 +16,8 @@ import { readInitAutoMemoryPath, readInitField, readInitOutputStyle } from "./st
 import { claudeUsageObservation, parseUsage } from "./usage.js";
 
 /** 適合試験のモデルの1ターン: worker が読む usage の形(stream-json)で、安い行を撃つ。 */
-const oneTurnArgs = (prompt: string) => [
+const oneTurnArgs = () => [
   "-p",
-  prompt,
   "--output-format",
   "stream-json",
   "--verbose",
@@ -26,14 +25,15 @@ const oneTurnArgs = (prompt: string) => [
 ];
 
 /** Board call の形の1ターン —— runner と同じ姿勢のフラグの定数から組む(ADR 0303 決定4)。 */
-export const boardCallOneTurnArgs = (prompt: string) => [
-  "-p", prompt, ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS,
+export const boardCallOneTurnArgs = () => [
+  "-p", ...pinnedModelFlags("haiku", "low"), ...BOARD_CALL_ONE_TURN_FLAGS,
 ];
 
 /** worker の形の1ターン —— worker と同じく project tier を読み、盤面が per-task settings で固定する
  *  言語・出力様式の2キーを flag tier に置く(ADR 0303 決定2)。 */
-export const workerOneTurnArgs = (prompt: string) => [
-  ...oneTurnArgs(prompt),
+export const workerOneTurnArgs = (systemPromptFile: string) => [
+  ...oneTurnArgs(),
+  "--append-system-prompt-file", systemPromptFile,
   "--max-turns",
   "1",
   "--setting-sources",

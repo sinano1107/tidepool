@@ -9,9 +9,7 @@ export interface ContainedProcess {
    *  errors, forced terminations print here, not to stream-json) — captured so
    *  a failure always leaves evidence, alongside the stdout transcript. */
   stderr: NodeJS.ReadableStream;
-  /** `stdin: "pipe"` で起こしたときだけある。既定は閉じている(worker session は
-   *  stdin を読まない)。開けたまま書く必要があるのは、EOF で打ち切る App Server
-   *  だけである(#706)。 */
+  /** `stdin: "pipe"` opens input for a complete prompt + EOF, or an App Server exchange (#706 / ADR 0326). */
   stdin?: NodeJS.WritableStream | null;
   /** 畳み込み停止の合図の送達先。合図の選択は adapter の実装詳細であり
    *  (ADR 0099 決定1)、容器はどの signal かを知らない。 */

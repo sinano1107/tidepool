@@ -21,8 +21,8 @@ describe("ClaudeTranslationClient", () => {
   it("断片の配列を id 付きの JSON で1回の CLI 呼び出しに載せ、同じ順の訳文と呼び出し1回の使用量と走った設定を返す", async () => {
     const prompts: string[] = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args) => {
-        prompts.push(args[1]!);
+      exec: async (_command, _args, _env, input) => {
+        prompts.push(input!);
         // 順を入れ替えて答えても id で元の順に戻る
         return ENVELOPE(JSON.stringify({ items: [{ id: 1, text: "訳B" }, { id: 0, text: "訳A" }, { id: 2, text: "訳C" }] }));
       },
@@ -72,17 +72,17 @@ describe("ClaudeTranslationClient", () => {
   });
 
   it("--model haiku を固定指定する(issue #47: draft の sonnet より軽い一発翻訳)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["s"], "Japanese");
 
-    expect(calls[0]!.join(" ")).toContain("--model haiku");
+    expect(calls[0]!.args.join(" ")).toContain("--model haiku");
   });
 
   // ADR 0044: 翻訳は Board call であり advisor を持たない。`--safe-mode` も
@@ -106,11 +106,11 @@ describe("ClaudeTranslationClient", () => {
   // ADR 0062 決定1/2: 空のツール面と推論の不在を、呼び出しごとに明示的に宣言する。
   // 実測(本番 Pi / 2026-08-10)ではこの2つで $0.0163 → $0.0021、14.0s → 7.4s。
   it("--tools \"\" と推論を閉じる env を渡す(ADR 0062 決定1/2)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const envs: NodeJS.ProcessEnv[] = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args, env) => {
-        calls.push(args);
+      exec: async (_command, args, env, input) => {
+        calls.push({ args, input });
         envs.push(env);
         return RESULT_ENVELOPE(["t"]);
       },
@@ -118,7 +118,7 @@ describe("ClaudeTranslationClient", () => {
 
     await client.translate(["s"], "Japanese");
 
-    const args = calls[0]!;
+    const args = calls[0]!.args;
     const at = args.indexOf("--tools");
     expect(args[at + 1]).toBe("");
     // `--tools <tools...>` は可変長 —— 値を空にした分だけ次の引数を食う余地がある
@@ -127,20 +127,20 @@ describe("ClaudeTranslationClient", () => {
   });
 
   it("--max-turns 1 と --safe-mode / --setting-sources \"\" を指定する(MCPツールを持たない単発呼び出し、ADR 0303 決定1)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["s"], "Japanese");
 
-    const argLine = calls[0]!.join(" ");
+    const argLine = calls[0]!.args.join(" ");
     expect(argLine).toContain("--max-turns 1");
     expect(argLine).toContain("--safe-mode");
-    expect(calls[0]![calls[0]!.indexOf("--setting-sources") + 1]).toBe("");
+    expect(calls[0]!.args[calls[0]!.args.indexOf("--setting-sources") + 1]).toBe("");
   });
 
   // ADR 0062 決定3: 翻訳の要求は自前のシステムプロンプトが持ち、user prompt は
@@ -149,19 +149,19 @@ describe("ClaudeTranslationClient", () => {
   // 指示を積んでいた(実測: 訳文の質も書き下し版のほうが上)。答えの形(id 付きの JSON)も
   // 要求の1行としてシステムプロンプト側に綴られる(ADR 0296 決定4)。
   it("翻訳の要求と答えの形はシステムプロンプトに載り、user prompt は対象言語と id 付きの断片だけになる(ADR 0062 決定3)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["the board retires a settled tree"], "French");
 
-    const args = calls[0]!;
+    const args = calls[0]!.args;
     const systemPrompt = args[args.indexOf("--system-prompt") + 1]!;
-    const userPrompt = args[1]!;
+    const userPrompt = calls[0]!.input!;
     // markdown 構造の保持は要求のひとつ —— それが綴られる場所がシステムプロンプト側
     expect(systemPrompt).toMatch(/markdown/i);
     expect(systemPrompt).toContain('{"items": [{"id"');
@@ -172,51 +172,51 @@ describe("ClaudeTranslationClient", () => {
   });
 
   it("日本語への翻訳時、渡された用語集がプロンプトに埋め込まれる(issue #47)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
       glossary: [{ term: "Settled", ja: "決着" }, { term: "Held", ja: "保留" }],
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["s"], "Japanese");
 
-    const prompt = calls[0]![1]!;
+    const prompt = calls[0]!.input!;
     expect(prompt).toContain("Settled = 決着");
     expect(prompt).toContain("Held = 保留");
   });
 
   it("正規値 'Japanese' との完全一致でのみ用語集を埋め込む(表記ゆれは入口の displayLanguageSchema で 400 になり、ここには届かない — issue #115)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
       glossary: [{ term: "Settled", ja: "決着" }],
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["s"], "japanese");
 
-    const prompt = calls[0]![1]!;
+    const prompt = calls[0]!.input!;
     expect(prompt).not.toContain("決着");
   });
 
   it("日本語以外への翻訳では用語集を埋め込まない(対訳が日本語専用のため)", async () => {
-    const calls: string[][] = [];
+    const calls: Array<{ args: string[]; input?: string }> = [];
     const client = new ClaudeTranslationClient({
       glossary: [{ term: "Settled", ja: "決着" }],
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, args, _env, input) => {
+        calls.push({ args, input });
         return RESULT_ENVELOPE(["t"]);
       },
     });
 
     await client.translate(["s"], "French");
 
-    const prompt = calls[0]![1]!;
+    const prompt = calls[0]!.input!;
     expect(prompt).not.toContain("決着");
   });
 

@@ -24,17 +24,17 @@ const input: AllocationReviewInput = {
 const judgment = { allocation: "appropriate", cause: "uncertain", evidence: "clean handoff" };
 
 it("judge は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON 判定を返す", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeAllocationClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
-  const { args, env } = calls[0]!;
+  const { args, env, input: prompt } = calls[0]!;
   const argLine = args.join(" ");
   expect(argLine).toContain("--model fable");
   expect(argLine).toContain("--effort high");
@@ -45,32 +45,32 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   // the input rides in the prompt — the verdict and the setting under judgment
-  expect(args[1]).toContain("accepted");
-  expect(args[1]).toContain('"model": "sonnet"');
-  expect(args[1]).toContain('"tier": "economy"');
-  expect(args[1]).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
+  expect(prompt).toContain("accepted");
+  expect(prompt).toContain('"model": "sonnet"');
+  expect(prompt).toContain('"tier": "economy"');
+  expect(prompt).toContain("The tier is the quality floor this session ran at, and setting.source.tier identifies who set that floor.");
   // usage / actions / advisor.usage の null は観測なしであって 0 でも「何もしなかった」でもない(ADR 0083 追記10)
-  expect(args[1]).toContain(
+  expect(prompt).toContain(
     'A null usage (the session filed no consumption report), actions (the action counts were not observed), or advisor.usage (the advisor\'s share of the consumption could not be measured) means that value was not observed — never zero, never "did nothing", never zero cost; do not read it as evidence either way.',
   );
   // 上位の token 欄は親スレッドの通常の推論だけで compaction も入らず、Claude の models / cost は subagent・advisor・compaction を含み、
   // Codex の subagent と compaction の消費は観測されない(ADR 0297 決定1・2)
-  expect(args[1]).toContain(
+  expect(prompt).toContain(
     "The token counts in usage cover the worker's main thread only, and leave out context compaction. For Claude, usage.models and usage.estimated_cost_usd include subagents, the advisor and compaction; for Codex, neither subagent nor compaction consumption is observed anywhere, so its counts can be lower than what the session actually used — do not read a small Codex count as evidence the session was cheap.",
   );
   // cause の memory は配分評価の入力に読んだ記憶が無いので載せない(ADR 0166 決定1)
-  expect(args[1]).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
+  expect(prompt).toContain('"cause" (one of capability / task_ambiguity / missing_information / environment / preference / requirement_change / uncertain —');
   // environment は worker の外側の事情で、線は判断の妥当性(ADR 0213 決定1)
-  expect(args[1]).toContain(
+  expect(prompt).toContain(
     "environment is the worker's surroundings — board tooling, network or sandbox trouble, or an upstream change — when the worker's judgment was sound given what it had",
   );
 });
 
 it("配分評価は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeAllocationClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
@@ -84,8 +84,8 @@ it("配分評価は、用途に依らない盤面の system prompt を --system-
 it("配分評価の prompt の cause の候補に agent_definition / workspace_document は載らない(ADR 0291 決定5)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAllocationClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -99,8 +99,8 @@ it("配分評価の prompt の cause の候補に agent_definition / workspace_d
 it("配分評価の prompt は evidence を英語で書かせる(ADR 0303 決定3)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAllocationClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });

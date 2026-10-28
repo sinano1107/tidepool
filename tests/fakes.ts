@@ -59,7 +59,7 @@ import {
   type PtyFn,
 } from "../src/process-container.js";
 import type { PushClient, PushPayload, PushSubscription } from "../src/push.js";
-import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
+import { type Harness, InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
 import type {
   AttributionClient,
   AttributionInput,
@@ -73,7 +73,7 @@ import type {
 } from "../src/retrospective.js";
 import type { Task } from "../src/tasks.js";
 import { SEED_TIERS } from "../src/tier.js";
-import { TranscriptStore } from "../src/transcript-store.js";
+import { TranscriptStore, workerPromptRecord } from "../src/transcript-store.js";
 import type { TranslationClient, TranslationResult } from "../src/translate.js";
 import { RECLAIM_TIMEOUT } from "../src/watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "../src/worker.js";
@@ -100,8 +100,8 @@ export const unusedLanding: Landing = {
 };
 
 /** 過去の spawn が記録した prompt(ADR 0313 決定1)を記録の器 `dir` に書く —— 当時版の読み手(ADR 0314 決定1)の setup。 */
-export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[], user = ""): void {
-  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, { harness: "claude-code", system, user });
+export function recordPrompt(dir: string, taskId: string, spawnedEventId: number, system: PromptPart[], user = "", harness: Harness = "claude-code"): void {
+  const { stream, stderr } = new TranscriptStore(dir).open(taskId, spawnedEventId, workerPromptRecord(harness, system, user));
   stream.destroy();
   stderr.destroy();
 }

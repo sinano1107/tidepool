@@ -196,7 +196,7 @@ const SHARED_FIELDS = {
   board_text:
     "the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given " +
     "(such as Interview discipline), as given at its spawn)",
-  task: "the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria)",
+  task: "the task text the worker was given at its spawn (title, purpose and completion criteria; excluding board-authored context)",
   rca_findings: `${RCA_FINDINGS_RULE} In each, ${RCA_FINDING_FIELDS.task_id}.`,
 } satisfies Partial<Record<keyof AttributionInput & keyof StopAttributionInput, string>>;
 
@@ -801,7 +801,7 @@ export interface AgentDefinitionThen {
   roster: string | null;
 }
 
-/** `spawned` の session の記録した prompt から、当時版と盤面の文と task の文面(`user`)を読む。記録が読めなければ当時版と task は null・
+/** `spawned` の session の記録した prompt から、当時版と盤面の文と task 固有の文面(`task`)を読む。記録が読めなければ当時版と task は null・
  *  盤面の文は空(ADR 0314 決定2 / ADR 0320 決定3)。 */
 function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<AttributionInput, "agent_definition" | "board_text" | "task"> {
   const prompt = recordDir === undefined ? null : new TranscriptStore(recordDir).readPrompt(spawned.task_id!, spawned.id);
@@ -815,8 +815,8 @@ function recordedThen(recordDir: string | undefined, spawned: EventRow): Pick<At
       authority: authority ? { source: authority.source, profile: authority.profile, text: authority.text } : null,
       roster: roster?.text ?? null,
     },
-    board_text: prompt.system.flatMap((part) => (BOARD_TEXT_PARTS.includes(part.part) ? [part.text] : [])),
-    task: prompt.user,
+    board_text: prompt.board.flatMap((part) => (BOARD_TEXT_PARTS.includes(part.part) ? [part.text] : [])),
+    task: prompt.task,
   };
 }
 

@@ -199,8 +199,8 @@ export interface RecordedDefinition {
   roster: PartOf<"roster"> | undefined;
 }
 
-export function recordedDefinition({ system }: PromptRecord): RecordedDefinition {
-  const part = <P extends PromptPart["part"]>(name: P) => system.find((p): p is PartOf<P> => p.part === name);
+export function recordedDefinition({ board }: PromptRecord): RecordedDefinition {
+  const part = <P extends PromptPart["part"]>(name: P) => board.find((p): p is PartOf<P> => p.part === name);
   return { definition: part("definition")!, authority: part("authority"), roster: part("roster") };
 }
 
