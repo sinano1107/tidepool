@@ -51,3 +51,4 @@ Board call で差し替えが起きるかは host env が決めていた。適�
 - **`json --verbose` の配列を読む runner 専用の読み手** —— 決定2。
 - **差し替えの兄弟表** —— 読み手が無いのに結合を足す。
 - **usage null の行で usage の無い呼び出しの差し替えを残す** —— 決定4。
+- **result 行の `modelUsage`(model 別の内訳)を行に残す** —— ADR 0094 決定2 の理由は advisor の分離の観測で Board call には無く、`model_swaps` が替わった model を逐語で言う。読み手が出たら追加列で足せる。
