@@ -153,7 +153,7 @@ export class ClaudeTranslationClient implements TranslationClient {
   }
 
   private async runTranslation(fragments: string[], language: string): Promise<TranslationResult> {
-    const { output, usage } = await runClaudeBoardCallJson(
+    const { output, usage, model_swaps, refusals } = await runClaudeBoardCallJson(
       {
         exec: this.exec,
         label: "translation",
@@ -168,8 +168,8 @@ export class ClaudeTranslationClient implements TranslationClient {
     // so a wrong pairing never reaches the cache (ADR 0296 決定4) — the turn still ran, so the usage rides along (ADR 0299 決定3)
     const byId = new Map(output.items.map(({ id, text }) => [id, text]));
     if (output.items.length !== fragments.length || fragments.some((_, id) => !byId.has(id))) {
-      throw new BoardCallUsageError("translation answer ids do not match the fragments sent", TRANSLATION_SETTING, usage);
+      throw new BoardCallUsageError("translation answer ids do not match the fragments sent", TRANSLATION_SETTING, usage, model_swaps, refusals);
     }
-    return { texts: fragments.map((_, id) => byId.get(id)!), usage, setting: TRANSLATION_SETTING };
+    return { texts: fragments.map((_, id) => byId.get(id)!), usage, setting: TRANSLATION_SETTING, model_swaps, refusals };
   }
 }

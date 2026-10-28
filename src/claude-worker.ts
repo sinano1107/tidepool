@@ -480,7 +480,7 @@ const MAX_THINKING_TOKENS_ENV = "MAX_THINKING_TOKENS";
 const AUTOUPDATER_DISABLE_ENV = "DISABLE_AUTOUPDATER";
 
 /** refusal での同じ model の再試行と差し替えを止める env(ADR 0215 決定1)。盤面は「許す」を固定するので、
- *  host が立てていても worker の spawn env から消す(ADR 0005)。 */
+ *  host が立てていても worker と Board call の env から消す(ADR 0005 / ADR 0323)。 */
 const SWAP_DISABLE_ENVS = [
   "CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK",
   "CLAUDE_CODE_NO_MODEL_FALLBACK",
@@ -629,6 +629,7 @@ export function boardCallEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, [ADVISOR_DISABLE_ENV]: "1", [AUTOUPDATER_DISABLE_ENV]: "1" };
   for (const name of MOONSHOT_ROUTING_ENV) delete env[name];
   for (const name of PIN_OVERRIDE_ENVS) delete env[name];
+  for (const name of SWAP_DISABLE_ENVS) delete env[name];
   return env;
 }
 

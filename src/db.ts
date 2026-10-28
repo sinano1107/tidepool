@@ -443,6 +443,8 @@ export function openDb(path: string): Db {
       cache_read_tokens     INTEGER NOT NULL,
       cache_creation_tokens INTEGER NOT NULL,
       estimated_cost_usd    REAL,
+      model_swaps           TEXT NOT NULL,
+      refusals              TEXT NOT NULL,
       created_at            TEXT NOT NULL
     );
 

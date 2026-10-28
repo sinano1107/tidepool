@@ -39,6 +39,7 @@ it("AI draft が api_error_status: 401 を返したら、その場で provider �
       exec: async () => {
         throw Object.assign(new Error("claude exited with status 1"), {
           stdout: JSON.stringify({
+            type: "result",
             is_error: true,
             api_error_status: 401,
             result: "Failed to authenticate. API Error: 401 Invalid bearer token",
@@ -66,6 +67,7 @@ it("表示時翻訳が api_error_status: 401 を返したら、その場で prov
       exec: async () => {
         throw Object.assign(new Error("claude exited with status 1"), {
           stdout: JSON.stringify({
+            type: "result",
             is_error: true,
             api_error_status: 401,
             result: "Failed to authenticate. API Error: 401 Invalid bearer token",

@@ -88,6 +88,20 @@ describe("Board call の env", () => {
     }
   });
 
+  it("host が止めていても refusal の再試行と model の差し替えを許す(ADR 0323)", () => {
+    const names = ["CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK", "CLAUDE_CODE_NO_MODEL_FALLBACK", "CLAUDE_CODE_DISABLE_REFUSAL_RETRY"];
+    for (const name of names) vi.stubEnv(name, "1");
+    try {
+      for (const name of names) {
+        expect(boardCallEnv()[name]).toBeUndefined();
+        expect(boardCallEnvWithoutThinking()[name]).toBeUndefined();
+        expect(process.env[name]).toBe("1");
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   // ADR 0062 決定2: 「推論しない」は全 Board call について真ではないので
   // `boardCallEnv()` には畳み込まず、上に重ねる形で綴る。重ねる側が advisor の
   // 宣言を落とせば ADR 0044 が黙って失効するので、そこをここで見張る。

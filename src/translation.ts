@@ -51,15 +51,16 @@ async function translateFragments(
   for (let at = 0; at < misses.length; at += TRANSLATION_FRAGMENTS_PER_CALL) {
     if (isAnthropicBoardCallBlocked(db)) return { status: "throttled" };
     const chunk = misses.slice(at, at + TRANSLATION_FRAGMENTS_PER_CALL);
-    const { texts, usage, setting } = await client.translate(chunk, language).catch((err: unknown) => {
-      if (err instanceof BoardCallUsageError) recordBoardCall(db, "translation", err.setting, err.usage, now, chunk.length);
+    const answer = await client.translate(chunk, language).catch((err: unknown) => {
+      if (err instanceof BoardCallUsageError) recordBoardCall(db, "translation", err.setting, err.usage, now, chunk.length, err);
       throw err;
     });
+    const { texts, usage, setting } = answer;
     chunk.forEach((source, i) => {
       saveTranslation(db, hashSource(source), language, texts[i]!, now);
       translated.set(source, texts[i]!);
     });
-    recordBoardCall(db, "translation", setting, usage, now, chunk.length);
+    recordBoardCall(db, "translation", setting, usage, now, chunk.length, answer);
   }
   return { status: "translated", texts: sources.map((source) => translated.get(source)!), cached: misses.length === 0 };
 }

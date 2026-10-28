@@ -4,24 +4,64 @@ import { BoardCallUsageError } from "../src/board-call-usage.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
 import type { ExecFn } from "../src/claude-worker.js";
 import { CliAuthError, RowRefusalError } from "../src/cli-auth.js";
-import { CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
+import { boardCallStream, CLI_ENVELOPE_USAGE, BOARD_CALL_USAGE as USAGE } from "./fakes.js";
 
 const ROW = { provider: "anthropic", model: "claude-sonnet-5-5", effort: "low" } as const;
 const call = (exec: ExecFn) => ({ exec, label: "test", prompt: "p", setting: ROW, reasoning: true });
 const schema = z.object({ ok: z.boolean() });
 /** usage を報告した封筒 */
-const answered = (envelope: object): ExecFn => async () => JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
+const answered = (envelope: object): ExecFn => async () => boardCallStream({ ...envelope, ...CLI_ENVELOPE_USAGE });
+
+// Synthetic pinned-CLI stream shapes; natural Board call refusal is unobserved (#1615).
+const swap = { type: "system", subtype: "model_refusal_fallback", original_model: "claude-sonnet-5-5", fallback_model: "claude-opus-4-8", api_refusal_category: "category one" };
+const refusal = (id: string, category: string | null) => ({ type: "assistant", parent_tool_use_id: null, message: { id, stop_reason: "refusal", stop_details: { category } } });
+const stream = (...lines: object[]) => lines.map((line) => JSON.stringify(line)).join("\n");
+
+it("stream の差し替えと root 拒否を逐語・出た順で返し、同じ message.id の拒否は1つ、最後の result の usage を採る", async () => {
+  const stdout = stream(
+    { type: "system", subtype: "init" },
+    { type: "result", result: '{"ok":false}', ...CLI_ENVELOPE_USAGE, total_cost_usd: 99 },
+    swap,
+    refusal("first", "verbatim category"),
+    refusal("first", "duplicate block"),
+    { ...refusal("subagent", "ignored"), parent_tool_use_id: "tool" },
+    { ...swap, original_model: "claude-opus-4-8", fallback_model: "verbatim model", scope: "local", api_refusal_category: null },
+    refusal("second", null),
+    { type: "result", result: '{"ok":true}', ...CLI_ENVELOPE_USAGE },
+    { type: "system", subtype: "unrelated" },
+  );
+  await expect(runClaudeBoardCallJson(call(async () => stdout), schema)).resolves.toEqual({
+    output: { ok: true }, usage: USAGE, setting: ROW,
+    model_swaps: [
+      { from: "claude-sonnet-5-5", to: "claude-opus-4-8", scope: null, category: "category one" },
+      { from: "claude-opus-4-8", to: "verbatim model", scope: "local", category: null },
+    ],
+    refusals: ["verbatim category", null],
+  });
+});
+
+it("usage を運ぶ失敗は schema 不一致・is_error・非ゼロ終了とも stream の観測を保つ", async () => {
+  for (const result of ['{"ok":1}', "not json", "CLI failed"]) {
+    const stdout = stream({ type: "result", ...CLI_ENVELOPE_USAGE, total_cost_usd: 99, result: '{"ok":true}' }, swap, refusal("refused", "raw category"), { type: "result", ...CLI_ENVELOPE_USAGE, result, is_error: result === "CLI failed" });
+    const exited = Object.assign(new Error("exited"), { stdout: Buffer.from(stdout) });
+    for (const exec of [async () => stdout, async () => { throw exited; }]) {
+      const err = await runClaudeBoardCallJson(call(exec), schema).catch((error: unknown) => error);
+      expect(err).toBeInstanceOf(BoardCallUsageError);
+      expect(err).toMatchObject({ setting: ROW, usage: USAGE, model_swaps: [{ from: "claude-sonnet-5-5", to: "claude-opus-4-8", scope: null, category: "category one" }], refusals: ["raw category"] });
+    }
+  }
+});
 
 describe("Claude の Board call runner", () => {
   it("JSON の答えは result から JSON を取り出して schema で検証し、封筒の usage と撃った行と一緒に返す", async () => {
     await expect(
       runClaudeBoardCallJson(call(answered({ result: "```json\n{\"ok\":true}\n```" })), schema),
-    ).resolves.toEqual({ output: { ok: true }, usage: USAGE, setting: ROW });
+    ).resolves.toEqual({ output: { ok: true }, usage: USAGE, setting: ROW, model_swaps: [], refusals: [] });
   });
 
   it("答えを取りに行く呼び出しの封筒に usage が無ければ、呼び出しの失敗にする(ADR 0299 決定4)", async () => {
     await expect(
-      runClaudeBoardCallJson(call(async () => JSON.stringify({ result: '{"ok":true}' })), schema),
+      runClaudeBoardCallJson(call(async () => boardCallStream({ result: '{"ok":true}' })), schema),
     ).rejects.toThrow("test CLI response missing usage");
   });
 
@@ -34,7 +74,7 @@ describe("Claude の Board call runner", () => {
   });
 
   it("usage つきの is_error は、非ゼロ終了で届いても撃った行と usage を運ぶ error を投げる(ADR 0299 決定3、#652)", async () => {
-    const envelope = JSON.stringify({ is_error: true, result: "You've hit your session limit", ...CLI_ENVELOPE_USAGE });
+    const envelope = boardCallStream({ is_error: true, result: "You've hit your session limit", ...CLI_ENVELOPE_USAGE });
     const exited: ExecFn = async () => {
       throw Object.assign(new Error("Command failed: claude exited 1"), { stdout: envelope });
     };
@@ -57,16 +97,16 @@ describe("Claude の Board call runner", () => {
 
   it("封筒が JSON でない・result が文字列でない・schema に合わない答えは reject する", async () => {
     await expect(runClaudeBoardCallJson(call(async () => "not json"), schema)).rejects.toThrow();
-    await expect(runClaudeBoardCallJson(call(async () => JSON.stringify({ result: 1 })), schema)).rejects.toThrow(
+    await expect(runClaudeBoardCallJson(call(async () => boardCallStream({ result: 1 })), schema)).rejects.toThrow(
       "test CLI response missing a string result field",
     );
     await expect(
-      runClaudeBoardCallJson(call(async () => JSON.stringify({ result: "{\"ok\":1}" })), schema),
+      runClaudeBoardCallJson(call(async () => boardCallStream({ result: "{\"ok\":1}" })), schema),
     ).rejects.toThrow();
   });
 
   it("is_error: true の封筒は result の本文を持つ error で reject する(issue #306 / #652)", async () => {
-    const exec = async () => JSON.stringify({ is_error: true, result: "You've hit your session limit" });
+    const exec = async () => boardCallStream({ is_error: true, result: "You've hit your session limit" });
     await expect(runClaudeBoardCallJson(call(exec), schema)).rejects.toThrow("You've hit your session limit");
   });
 
@@ -76,9 +116,9 @@ describe("Claude の Board call runner", () => {
   } as const;
   const delivered = {
     "非ゼロ終了の stdout": (envelope: object): ExecFn => async () => {
-      throw Object.assign(new Error("Command failed"), { stdout: JSON.stringify(envelope) });
+      throw Object.assign(new Error("Command failed"), { stdout: boardCallStream(envelope) });
     },
-    "ゼロ終了の is_error": (envelope: object): ExecFn => async () => JSON.stringify(envelope),
+    "ゼロ終了の is_error": (envelope: object): ExecFn => async () => boardCallStream(envelope),
   } as const;
   for (const [cause, envelope] of Object.entries(refusals)) {
     for (const [how, exec] of Object.entries(delivered)) {
@@ -128,10 +168,10 @@ describe("Claude の Board call runner", () => {
 
   it("非ゼロ終了の 401 は CliAuthError、それ以外の非ゼロ終了は同じ error のまま reject する", async () => {
     const unauthorized: ExecFn = async () => {
-      throw Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 401, result: "expired" }) });
+      throw Object.assign(new Error("Command failed"), { stdout: boardCallStream({ is_error: true, api_error_status: 401, result: "expired" }) });
     };
     await expect(runClaudeBoardCallJson(call(unauthorized), schema)).rejects.toBeInstanceOf(CliAuthError);
-    const failed = Object.assign(new Error("Command failed"), { stdout: JSON.stringify({ is_error: true, api_error_status: 500 }) });
+    const failed = Object.assign(new Error("Command failed"), { stdout: boardCallStream({ is_error: true, api_error_status: 500 }) });
     await expect(runClaudeBoardCallJson(call(async () => { throw failed; }), schema)).rejects.toBe(failed);
   });
 
@@ -139,16 +179,18 @@ describe("Claude の Board call runner", () => {
     const calls: string[][] = [];
     const exec: ExecFn = async (_command, args) => {
       calls.push(args);
-      return JSON.stringify({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
+      return boardCallStream({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
     };
     await runClaudeBoardCallJson(call(exec), schema);
+    expect(calls[0]![calls[0]!.indexOf("--output-format") + 1]).toBe("stream-json");
+    expect(calls[0]).toContain("--verbose");
     expect(calls[0]).toContain("--safe-mode");
     expect(calls[0]![calls[0]!.indexOf("--setting-sources") + 1]).toBe("");
   });
 
   it("封筒の usage と total_cost_usd を盤面の usage の形で返す", async () => {
     const exec = async () =>
-      JSON.stringify({
+      boardCallStream({
         result: '{"ok":true}',
         total_cost_usd: 0.000586,
         usage: { input_tokens: 506, output_tokens: 16, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 },

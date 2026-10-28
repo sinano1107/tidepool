@@ -158,7 +158,7 @@ async function reviewAllocationOnBoard(allocationClient: FakeAllocationClient) {
 }
 
 /** 判定の段の Board call が撃つ行(種の表の judgement tier)で残る、配分評価1回の行。 */
-const allocationRow = (at: Date) => ({ use: "allocation_review", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, usage: BOARD_CALL_USAGE, createdAt: at.toISOString() });
+const allocationRow = (at: Date) => ({ use: "allocation_review", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: at.toISOString() });
 
 it("配分評価は、撃った行の Provider / model / effort で allocation_review の行を1つ残す(ADR 0299 決定1)", async () => {
   const { db, at } = await reviewAllocationOnBoard(new FakeAllocationClient());

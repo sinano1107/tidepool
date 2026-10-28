@@ -1498,7 +1498,7 @@ function objectedAfterReading() {
 }
 
 /** 判定の段の Board call が撃つ行(種の表の judgement tier)で残る、帰責1回の行。 */
-const ATTRIBUTION_ROW = { use: "attribution", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, usage: BOARD_CALL_USAGE, createdAt: at.toISOString() };
+const ATTRIBUTION_ROW = { use: "attribution", provider: "anthropic", model: "claude-fable-5-1", effort: "high", fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: at.toISOString() };
 
 it("初回の帰責は、撃った行の Provider / model / effort で attribution の行を1つ残す(ADR 0299 決定1)", async () => {
   const b = objectedAfterReading();

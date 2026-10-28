@@ -1,12 +1,12 @@
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
-import { listTranslationUsage } from "../src/board-call-usage.js";
+import { listBoardCalls, listTranslationUsage } from "../src/board-call-usage.js";
 import { ClaudeTranslationClient } from "../src/claude-translation-client.js";
 import { type Db, openDb } from "../src/db.js";
 import { reportProviderUsage } from "../src/throttle.js";
 import { translateSource } from "../src/translation.js";
 import { getCachedTranslation, hashSource } from "../src/translation-cache.js";
-import { BOARD_CALL_USAGE, CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
+import { BOARD_CALL_USAGE, boardCallStream, CLI_ENVELOPE_USAGE, FakeTranslationClient } from "./fakes.js";
 import { tempDir } from "./temp-dir.js";
 
 let db: Db | undefined;
@@ -119,7 +119,7 @@ it.each([
   ["id の食い違い", { result: JSON.stringify({ items: [{ id: 7, text: "訳" }] }) }, 0],
 ])("usage を報告して失敗した呼び出し(%s)も1行を残し、キャッシュには何も書かない(ADR 0299 決定3)", async (_, envelope, exitCode) => {
   const db = await freshDb();
-  const stdout = JSON.stringify({ ...envelope, ...CLI_ENVELOPE_USAGE });
+  const stdout = boardCallStream({ ...envelope, ...CLI_ENVELOPE_USAGE });
   const client = new ClaudeTranslationClient({
     exec: async () => {
       if (exitCode !== 0) throw Object.assign(new Error(`Command failed: claude exited ${exitCode}`), { stdout });
@@ -138,4 +138,23 @@ it.each([
       createdAt: NOW.toISOString(),
     },
   ]);
+});
+
+it.each([0, 7])("翻訳の答えと id 不一致の失敗も stream の観測を board_calls に残す(id=%s)", async (id) => {
+  const db = await freshDb();
+  const stdout = [
+    JSON.stringify({ type: "system", subtype: "model_refusal_fallback", original_model: "haiku", fallback_model: "raw target", api_refusal_category: "raw category" }),
+    JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { id: "refused", stop_reason: "refusal", stop_details: { category: "raw category" } } }),
+    boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ items: [{ id, text: "訳文" }] }) }),
+  ].join("\n");
+  const client = new ClaudeTranslationClient({ exec: async () => stdout });
+  const translated = translateSource(db, client, "source", "Japanese", NOW);
+  if (id === 0) await expect(translated).resolves.toMatchObject({ text: "訳文" });
+  else await expect(translated).rejects.toThrow("ids do not match");
+  expect(listBoardCalls(db)).toEqual([{
+    use: "translation", provider: "anthropic", model: "haiku", effort: "low", fragments: 1,
+    usage: BOARD_CALL_USAGE, createdAt: NOW.toISOString(),
+    model_swaps: [{ from: "haiku", to: "raw target", scope: null, category: "raw category" }],
+    refusals: ["raw category"],
+  }]);
 });

@@ -98,6 +98,6 @@ it("使用量を読めない poll が撃った認証 probe は、usage を返せ
   scheduler.stop();
 
   expect(listBoardCalls(db)).toEqual([
-    { use: "cli_auth_probe", ...boardCall.setting, fragments: null, usage: BOARD_CALL_USAGE, createdAt: clock.now().toISOString() },
+    { use: "cli_auth_probe", ...boardCall.setting, fragments: null, model_swaps: [], refusals: [], usage: BOARD_CALL_USAGE, createdAt: clock.now().toISOString() },
   ]);
 });

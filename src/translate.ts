@@ -1,4 +1,5 @@
 import type { BoardCallUsage } from "./board-call-usage.js";
+import type { ModelSwap } from "./events.js";
 import type { Provider } from "./provider.js";
 
 /** What one translation call ran on, in the pin's spelling (`haiku` / `low`) — not the concrete id that answered. */
@@ -10,6 +11,8 @@ export interface TranslationSetting {
 }
 
 export interface TranslationResult {
+  model_swaps: ModelSwap[];
+  refusals: (string | null)[];
   /** one per fragment, in the fragments' order */
   texts: string[];
   /** the whole call's usage — a batched call carries no per-fragment usage (ADR 0296 決定5) */

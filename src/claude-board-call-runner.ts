@@ -9,12 +9,13 @@ import {
 } from "./claude-worker.js";
 import {
   CliAuthError,
-  execFailureEnvelope,
   isCapInterruptionEnvelope,
   isCliAuthFailureEnvelope,
   RowRefusalError,
   rowRefusalCause,
 } from "./cli-auth.js";
+import type { ModelSwap } from "./events.js";
+import { parseStreamLine, readModelSwap, readRootRefusal } from "./stream-json.js";
 
 /** 答えを取りに行く Board call の system prompt(ADR 0296 決定6)。用途に依らない1つの文面で、用途ごとの指示は
  *  user prompt が持つ。翻訳は ADR 0062 決定3 の自前の文面を `systemPrompt` で渡す。Codex の runner(#2417)も
@@ -28,6 +29,9 @@ const BOARD_CALL_SYSTEM_PROMPT = [
 /** 答えを取りに行く Board call の1ターンの姿勢。適合試験(ADR 0186 決定7)の Board call の形の1ターンも
  *  これから組む —— 手で写すと、ここに足したフラグを試験が測らない(ADR 0303 決定4)。 */
 export const BOARD_CALL_ONE_TURN_FLAGS = [
+  "--output-format",
+  "stream-json",
+  "--verbose",
   // with no tools at all a second turn is structurally impossible; the
   // flag stays as the explicit statement that a single answer is what
   // this call is for, so a CLI that ever raises another turn fails loud
@@ -61,7 +65,7 @@ export interface ClaudeBoardCall {
   reasoning: boolean;
 }
 
-// the CLI's `-p --output-format json` usage (vendor-specific, kept to the Claude adapter side — ADR 0005; the
+// the CLI's `result` usage (vendor-specific, kept to the Claude adapter side — ADR 0005; the
 // probes in claude-cli-auth.ts read it too): the same total_cost_usd/usage shape claude-worker.ts's stream-json result event carries
 export const envelopeUsageSchema = z
   .object({
@@ -114,6 +118,23 @@ function throwIfTurnDidNotRun(envelope: unknown, { provider, model }: BoardCallS
   }
 }
 
+/** Board calls keep the last result whole, including is_error (ADR 0323 決定2). */
+function readBoardCallStream(stdout: unknown) {
+  const text = typeof stdout === "string" ? stdout : Buffer.isBuffer(stdout) ? stdout.toString() : "";
+  let envelope: Record<string, unknown> = {};
+  const model_swaps: ModelSwap[] = [];
+  const refusals = new Map<unknown, string | null>();
+  for (const line of text.split("\n")) {
+    const parsed = parseStreamLine(line);
+    if (parsed?.type === "result") envelope = parsed;
+    const swap = readModelSwap(parsed);
+    if (swap) model_swaps.push(swap);
+    const refusal = readRootRefusal(parsed);
+    if (refusal && !refusals.has(refusal.id)) refusals.set(refusal.id, refusal.category);
+  }
+  return { envelope, model_swaps, refusals: [...refusals.values()] };
+}
+
 /** The answer as the model wrote it. */
 async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallAnswer<string>> {
   const { exec, label, systemPrompt = BOARD_CALL_SYSTEM_PROMPT, prompt, setting, reasoning } = call;
@@ -124,8 +145,6 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
       [
         "-p",
         prompt,
-        "--output-format",
-        "json",
         "--system-prompt",
         systemPrompt,
         ...pinnedModelFlags(setting.model, setting.effort),
@@ -139,32 +158,34 @@ async function runClaudeBoardCallText(call: ClaudeBoardCall): Promise<BoardCallA
       reasoning ? boardCallEnv() : boardCallEnvWithoutThinking(),
     );
   } catch (err) {
-    const failed = execFailureEnvelope(err);
-    throwIfTurnDidNotRun(failed, setting);
+    const { envelope, model_swaps, refusals } = readBoardCallStream(
+      typeof err === "object" && err !== null && "stdout" in err ? err.stdout : undefined,
+    );
+    throwIfTurnDidNotRun(envelope, setting);
     // the CLI exits non-zero on an `is_error` result (#652): one that reported usage still ran a turn and carries it
-    const usage = envelopeUsageSchema.safeParse(failed).data;
-    if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage);
+    const usage = envelopeUsageSchema.safeParse(envelope).data;
+    if (usage) throw new BoardCallUsageError((err as Error).message, setting, usage, model_swaps, refusals);
     throw err;
   }
-  const envelope: unknown = JSON.parse(stdout);
+  const { envelope, model_swaps, refusals } = readBoardCallStream(stdout);
   throwIfTurnDidNotRun(envelope, setting);
   const { is_error, result } = envelope as { is_error?: unknown; result?: unknown };
   const usage = envelopeUsageSchema.safeParse(envelope).data;
   // a failure the CLI reported usage for still ran a turn: the error carries it (ADR 0299 決定3)
-  const fail = (message: string) => (usage ? new BoardCallUsageError(message, setting, usage) : new Error(message));
+  const fail = (message: string) => (usage ? new BoardCallUsageError(message, setting, usage, model_swaps, refusals) : new Error(message));
   if (is_error === true) throw fail(typeof result === "string" ? result : `${label} CLI reported an error`);
   if (typeof result !== "string") throw fail(`${label} CLI response missing a string result field`);
   // an answer without usage is a broken answer, not a degraded record (ADR 0299 決定4)
   if (!usage) throw new Error(`${label} CLI response missing usage`);
-  return { output: result, usage, setting };
+  return { output: result, usage, setting, model_swaps, refusals };
 }
 
 /** The answer as the JSON object `extractJson` finds in it, validated by `schema` — the model's reply is untrusted input. */
 export async function runClaudeBoardCallJson<T>(call: ClaudeBoardCall, schema: z.ZodType<T>): Promise<BoardCallAnswer<T>> {
-  const { output, usage, setting } = await runClaudeBoardCallText(call);
+  const { output, ...answer } = await runClaudeBoardCallText(call);
   try {
-    return { output: schema.parse(extractJson(output)), usage, setting };
+    return { output: schema.parse(extractJson(output)), ...answer };
   } catch (err) {
-    throw new BoardCallUsageError((err as Error).message, call.setting, usage);
+    throw new BoardCallUsageError((err as Error).message, call.setting, answer.usage, answer.model_swaps, answer.refusals);
   }
 }
