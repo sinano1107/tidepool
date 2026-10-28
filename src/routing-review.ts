@@ -228,7 +228,7 @@ export function readRoutingSettings(db: Db, input: { next?: string }) {
 function cellRows(db: Db, window: MetaReviewWindow) {
   const firstSeen = new Map<string, { cell: Cell; first_observed_event_id: number | null }>();
   for (const e of loadEpisodes(db)) {
-    if (e.interview || e.worker_exited_event_id === null) continue;
+    if (e.interview || e.worker_exited_event_id === null || (window.upTo !== undefined && e.worker_exited_event_id > window.upTo)) continue;
     const key = cellJson(e.cell);
     const seen = firstSeen.get(key);
     if (!seen || e.worker_exited_event_id < seen.first_observed_event_id!) firstSeen.set(key, { cell: e.cell, first_observed_event_id: e.worker_exited_event_id });

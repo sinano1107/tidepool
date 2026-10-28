@@ -2928,8 +2928,8 @@ export function recordMetaReviewMaterial(
             shadow_rows: material.parts.shadow_rows,
             shadow_rows_multi_candidate: material.parts.shadow_rows_multi_candidate,
             allocation_review_event_ids: material.parts.allocations.counted,
-            // 本番の session の無い種のセルは種の event で名指す
-            cell_event_ids: material.parts.cells.flatMap((c) => (c.first_observed_event_id !== null ? [c.first_observed_event_id] : c.seeds.map((s) => s.event_id))),
+            // 部分に載せた初観測と種の event を、最初に現れた順に名指す
+            cell_event_ids: [...new Set(material.parts.cells.flatMap((c) => [...(c.first_observed_event_id !== null ? [c.first_observed_event_id] : []), ...c.seeds.map((s) => s.event_id)]))],
             closed_sessions: material.parts.closed_sessions,
             row_change_event_ids: material.parts.rows.map((r) => r.event_id),
             precedents: material.parts.precedents.map((p) => p.decision_event_id),

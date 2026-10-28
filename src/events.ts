@@ -719,7 +719,7 @@ export type EventPayload =
   // list_memory_proposals が返すエントリの id も持つ(precedent_memory_entry_ids / proposal_memory_entry_ids —— Precedent の seen に
   // 数える、issue #1230)。memory の items は注入した Items to judge(verb の鍵の列 —— 完了の verb が項目の全体として読む、
   // ADR 0278 追記4。エントリの項目の id も seen に数える、issue #2307)。routing は乖離した shadow 行(learner_shadow の id)と窓の中の
-  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed(allocation_review_event_ids)、新しいセルの初観測(cell_event_ids —— worker_exited、本番の session の無い種のセルは種の event)と窓で閉じた本番 session の数(closed_sessions、ADR 0319 決定3)、人間が変えた行(row_change_event_ids —— execution_settings_changed)、
+  // 全 shadow 行の数とそのうち候補が2行以上あった行の数(ADR 0181 決定5)、数えた allocation_reviewed(allocation_review_event_ids)、部分のセルが載せた初観測と種の event(cell_event_ids)と窓で閉じた本番 session の数(closed_sessions、ADR 0319 決定3)、人間が変えた行(row_change_event_ids —— execution_settings_changed)、
   // 異議つき判断(memory と同じ2つの欄、ADR 0279 決定6)、停止の帰責(stop_attributed_event_ids —— memory と同じ、ADR 0312 決定3)、提案の question、注入した Items to judge(memory の items と同じ役)。表と設定は id を持たない。
   // 鍵の規則(ADR 0311 決定4): 配列の鍵は持っている id の物を名指す。部分の名前がそれを名指していれば、そのまま
   | (MetaReviewMaterialCommon & { subject: "memory"; changed_memory_entry_ids: number[]; candidates: number[]; precedents: number[]; precedent_memory_entry_ids: number[]; stop_attributed_event_ids: number[]; proposals: string[]; proposal_memory_entry_ids: number[]; branch_definition_ids: number[]; items: MemoryJudgmentItem[] })

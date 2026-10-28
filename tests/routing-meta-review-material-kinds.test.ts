@@ -1,9 +1,9 @@
 import { expect, it } from "vitest";
 import { type Db, openDb } from "../src/db.js";
-import { appendEvent, type EventPayload, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, type EventPayload, getEvent, listEventsOfKinds } from "../src/events.js";
 import { applyExecutionSettingsChange, type ExecutionSetting } from "../src/execution-setting.js";
 import { recordShadow } from "../src/learner.js";
-import { buildMetaReviewMaterial } from "../src/memory.js";
+import { buildMetaReviewMaterial, recordMetaReviewMaterial } from "../src/memory.js";
 import { META_REVIEW_SUBJECTS, readMetaReviewStatus, registerDueMetaReviews, registerMetaReview } from "../src/meta-review.js";
 import { completeRoutingReview, listRoutingCells, listRoutingShadow } from "../src/routing-review.js";
 import { completeInterview, completeTask, getTask, registerTask } from "../src/tasks.js";
@@ -36,8 +36,8 @@ const none = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, re
 const shadow = (recommended: ExecutionSetting, actual: ExecutionSetting) => ({ recommended, actual, basis: "prior" as const, recommended_record: none, actual_record: none, candidates: 2 });
 
 const work = (db: Db) => registerTask(db, { type: "work", title: "t", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI).id;
-const spawn = (db: Db, taskId: string) =>
-  appendEvent(db, { taskId, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, advisor: null, provider: opus.provider, model: opus.model, effort: opus.effort, tier_id: opus.tier_id, source: opus.source } });
+const spawn = (db: Db, taskId: string, advisor: string | null = null) =>
+  appendEvent(db, { taskId, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, advisor, provider: opus.provider, model: opus.model, effort: opus.effort, tier_id: opus.tier_id, source: opus.source } });
 const exit = (db: Db, taskId: string, spawned: number) =>
   appendEvent(db, { taskId, actorId: "board", origin: "board", at, payload: { kind: "worker_exited", ...QUIET_EXIT, worker_spawned_event_id: spawned, output_closed: true, advisor: null, model_swaps: [], refusals: [], usage: null } });
 /** setup のみ: work task を pickup して(列は動かさない)、その pickup に乗る shadow 行を書く。返り値は行の id。 */
@@ -264,4 +264,87 @@ it("窓の中の採点 S1 の後、登録より後に同じ (セル, 段) の採
 
   expect(routingMaterialOf(db, review).parts.cells).toMatchObject([{ seeds: [{ tier: "standard", event_id: s1 }] }]);
   expect(listRoutingCells(db, review, {}).cells).toMatchObject([{ seeds: [{ tier: "standard", event_id: s2 }] }]);
+});
+
+it.each(["previous", "current"])("セルの初観測が %s の窓でも、記録は初観測と今の窓の受理の採点を順に載せる", (window) => {
+  const db = openDb(":memory:");
+  const { score } = posedInterview(db, { provider: "anthropic", model: opus.model, effort: "high" });
+  const task = work(db);
+  if (window === "current") register(db, true);
+  const seen = exit(db, task, spawn(db, task));
+  if (window === "previous") register(db, true);
+  const seed = score("accepted");
+  const review = register(db);
+  const material = routingMaterialOf(db, review);
+
+  expect(material.parts.cells).toMatchObject([{ first_observed_event_id: seen, seeds: [{ event_id: seed }] }]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload).toMatchObject({ cell_event_ids: [seen, seed] });
+});
+
+it("登録より後の本番の exit は次の窓の初観測になり、今の窓は種だけを載せる —— 上限のない読みは exit を返す", () => {
+  const db = openDb(":memory:");
+  const { score } = posedInterview(db, { provider: "anthropic", model: opus.model, effort: "high" });
+  const task = work(db);
+  const spawned = spawn(db, task);
+  register(db, true);
+  const seed = score("accepted");
+  const review = register(db);
+  const seen = exit(db, task, spawned);
+  const material = routingMaterialOf(db, review);
+
+  expect(material.parts.cells).toEqual([{ cell: { provider: opus.provider, model: opus.model, effort: opus.effort, advisor: null }, first_observed_event_id: null, seeds: [{ tier: "standard", kind: "interview", event_id: seed }] }]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload).toMatchObject({ cell_event_ids: [seed] });
+  expect(listRoutingCells(db, review, {}).cells).toMatchObject([{ first_observed_event_id: seen, seeds: [{ event_id: seed }] }]);
+  db.prepare("UPDATE tasks SET status = 'done' WHERE id = ?").run(review);
+  const next = register(db);
+  const nextMaterial = routingMaterialOf(db, next);
+  expect(nextMaterial.parts.cells).toMatchObject([{ first_observed_event_id: seen, seeds: [{ event_id: seed }] }]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, next, "auditor", 43, nextMaterial, at))!.payload).toMatchObject({ cell_event_ids: [seen, seed] });
+});
+
+it("本番の無い種のセルは、別の段の古い種も今の種も記録に残す", () => {
+  const db = openDb(":memory:");
+  const first = posedInterview(db, opusLow);
+  const second = posedInterview(db, opusLow, "frontier");
+  const oldSeed = first.score("accepted");
+  register(db, true);
+  const currentSeed = second.score("accepted");
+  const review = register(db);
+  const material = routingMaterialOf(db, review);
+
+  expect(material.parts.cells).toMatchObject([{ first_observed_event_id: null, seeds: [{ event_id: oldSeed }, { event_id: currentSeed }] }]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload).toMatchObject({ cell_event_ids: [oldSeed, currentSeed] });
+});
+
+it("advisor の違う2セルの共通の種は記録の最初の位置に1回だけ載る", () => {
+  const db = openDb(":memory:");
+  const { score } = posedInterview(db, { provider: "anthropic", model: opus.model, effort: "high" });
+  const firstTask = work(db);
+  const first = exit(db, firstTask, spawn(db, firstTask));
+  const secondTask = work(db);
+  const second = exit(db, secondTask, spawn(db, secondTask, "advisor-model"));
+  register(db, true);
+  const seed = score("accepted");
+  const review = register(db);
+  const material = routingMaterialOf(db, review);
+
+  expect(material.parts.cells).toMatchObject([
+    { cell: { advisor: null }, first_observed_event_id: first, seeds: [{ event_id: seed }] },
+    { cell: { advisor: "advisor-model" }, first_observed_event_id: second, seeds: [{ event_id: seed }] },
+  ]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload).toMatchObject({ cell_event_ids: [first, seed, second] });
+});
+
+it("人間の種を持つセルの記録も本番の初観測と種の両方を載せる", () => {
+  const db = openDb(":memory:");
+  const task = work(db);
+  const seen = exit(db, task, spawn(db, task));
+  register(db, true);
+  applyExecutionSettingsChange(db, { setting: "delete_row", provider: opus.provider, model: opus.model, effort: opus.effort }, "webui", at);
+  const seed = applyExecutionSettingsChange(db, { setting: "row", row: { provider: opus.provider, model: opus.model, effort: opus.effort, tier: "standard", price_in: 5, price_out: 25 }, seed: { comment: "measured" } }, "webui", at)!;
+  const review = register(db);
+  const material = routingMaterialOf(db, review);
+
+  expect(material.parts.cells).toMatchObject([{ first_observed_event_id: seen, seeds: [{ kind: "human", event_id: seed }] }]);
+  expect(getEvent(db, recordMetaReviewMaterial(db, review, "auditor", 42, material, at))!.payload).toMatchObject({ cell_event_ids: [seen, seed] });
 });
