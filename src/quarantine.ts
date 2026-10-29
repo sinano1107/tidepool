@@ -237,6 +237,22 @@ export const QUARANTINES = [
     }),
   },
   {
+    // 続く issue 展開の一時的失敗(ADR 0328 決定3): 機構だけを借り、何も止めない —— 除外が機構で、question は信号。
+    // 断言するのは いつから・何回・最初と最新の例外の本文・最後に止めた task だけで(呼び出し側が reason に畳む)
+    kind: "issueExpansion",
+    scope: "none",
+    prose: (_value: string | null, reason: string): QuarantineProse => ({
+      title: "the board keeps failing to read GitHub issues at pickup",
+      purpose:
+        `${reason}\n\n` +
+        "Each poll in which an issue read fails leaves out the tasks that read GitHub at pickup (issue-backed tasks and " +
+        "the children of an issue-backed parent); other tasks are still picked up. Answering re-reads the last issue " +
+        "that failed: if it still fails the answer is refused, this question stays open, and the refusal carries that " +
+        "exception body. An issue read that succeeds settles this question without an answer.",
+      completion_criteria: "the board reads GitHub issues at pickup again",
+    }),
+  },
+  {
     kind: "workspace",
     scope: "workspace",
     // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
@@ -433,7 +449,8 @@ export const QUARANTINES = [
   /** 止まる範囲: 盤面全体 / その workspace のタスク / 値が指す assignee 群のタスク /
    *  表の行(selector が表から外す。タスクも entry も止めないので `ResourceStops` に入らない)/
    *  (Harness, workspace) の組(その workspace の task の候補から、その Harness の行だけを外す)/
-   *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)/ 何も止めない(続く poll の失敗、ADR 0294 決定2)。 */
+   *  行でない Interview の対象(鍵に当たる pin の子の候補を外す。資源ではない)/ 何も止めない(続く poll の失敗、ADR 0294 決定2 ・
+   *  続く issue 展開の一時的失敗、ADR 0328 決定3)。 */
   scope: "board" | "workspace" | "assignees" | "row" | "pair" | "target" | "none";
   /** assignee 群単位の行が値を agent 名へ写す写像のうち、行そのものが知っているもの。
    *  無い行は合成 root の `QuarantineResolvers` から受ける(registry は読まない、ADR 0041)。 */

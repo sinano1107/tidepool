@@ -6,7 +6,7 @@ import { appendEvent } from "../src/events.js";
 import { IssueGoneError } from "../src/github.js";
 import { logDecision, pickupTask, registerTask, type Task } from "../src/tasks.js";
 import { definitionPart, FakeAttributionClient, recordPrompt } from "./fakes.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, mcpClient, QUIET_EXIT, type Tidepool, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HOUR, HUMAN_WEBUI, humanDecomposeTaskViaWebui, makeWorkspace, mcpClient, nextPoll, QUIET_EXIT, type Tidepool, WORKER_SPAWNED } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 let t: Tidepool;
@@ -90,12 +90,15 @@ it.each(["closed", "not_found"] as const)("pickup 時の親の issue が %s で�
   expect(board.filter((task: any) => task.type === "question")).toEqual([]);
 });
 
-it("親の issue の一時失敗は子の pickup を cycle skip し、failure question 無しで次の poll に再試行する(ADR 0321)", async () => {
+it("親の issue の一時失敗は子の pickup を cycle skip し、10分未満なら question 無しで次の poll に再試行する(ADR 0321 / ADR 0328)", async () => {
   const workspace = await makeWorkspace("tidepool");
   t = await bootTidepool({ workspace });
   const { child } = issueParentChild(workspace.path);
   t.github.scriptIssueFailure(new Error("GitHub is down"));
   await t.clock.advance(HOUR);
+  // 最初の失敗から10分未満の2回目の失敗も question を立てない(ADR 0328 決定3)
+  await t.clock.advance(9 * 60 * 1000);
+  await nextPoll(t);
   expect(t.worker.started).toEqual([]);
   const skipped = (await api(t.baseUrl, "GET", "/api/tasks")).json;
   expect(skipped.find((task: any) => task.id === child.id).status).toBe("todo");
@@ -103,7 +106,7 @@ it("親の issue の一時失敗は子の pickup を cycle skip し、failure qu
 
   t.github.scriptIssueFailure(null);
   t.github.scriptIssue(49, { title: "restored parent", body: "restored plan", comments: [] });
-  await t.clock.advance(HOUR);
+  await nextPoll(t);
   expect((await context(child.id)).parent).toMatchObject({ title: "restored parent", purpose: "restored plan", issue: { number: 49, state: "open" } });
 });
 

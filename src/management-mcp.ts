@@ -154,8 +154,8 @@ export interface ManagementMcpDeps {
   landing: Landing;
   draftClient?: DraftClient;
   pollNow: () => void;
-  /** 最後の poll の失敗の欄(ADR 0294 決定1)。`GET /api/queue` と同じ1つ。 */
-  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure">;
+  /** 最後の poll の失敗と issue 展開の失敗の欄(ADR 0294 決定1 / ADR 0328 決定7)。`GET /api/queue` と同じ1つ。 */
+  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure" | "lastIssueExpansionFailure">;
   defaultAgentName?: string;
   auditorName?: string;
   interviewerName?: string;
@@ -380,8 +380,9 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
     {
       description:
         "List the execution queue and pickup state: `halts` (plus `teardown` while a session is being torn down, and " +
-        "`lastPollFailure` while the last poll that got past the gates threw) say why pickup is waiting, `tasks` lists the queue " +
-        `in board order. ${nextDescription("list_queue", "tasks", "`halts`, `teardown` and `lastPollFailure` come")}`,
+        "`lastPollFailure` while the last poll that got past the gates threw, and `lastIssueExpansionFailure` while reading " +
+        "GitHub issues at pickup keeps failing — tasks that read GitHub then show as skipped) say why pickup is waiting, `tasks` " +
+        `lists the queue in board order. ${nextDescription("list_queue", "tasks", "`halts`, `teardown`, `lastPollFailure` and `lastIssueExpansionFailure` come")}`,
       inputSchema: { next: z.string().optional() },
     },
     async (input) =>
@@ -391,6 +392,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
         // 承知の上である
         const teardown = sessionInTeardown(deps.db);
+        const failures = deps.pollFailureJson();
         const tasks = listQueue(
           deps.db,
           deps.workspace?.name,
@@ -400,11 +402,12 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
           skippedByEntries(deps),
           closedRoot,
           deps.interviewerName,
+          failures.lastIssueExpansionFailure !== undefined,
         );
         return packItems(read, "tasks", tasks, {
           halts: boardHalts(deps.db),
           ...(teardown ? { teardown } : {}),
-          ...deps.pollFailureJson(),
+          ...failures,
         });
       }),
   );

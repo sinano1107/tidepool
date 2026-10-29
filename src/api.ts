@@ -574,8 +574,8 @@ export interface ApiRouterDeps {
   db: Db;
   clock: Clock;
   pollNow: () => void;
-  /** 最後の poll の失敗の欄(ADR 0294 決定1)。`list_queue` と同じ1つを server が配る。 */
-  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure">;
+  /** 最後の poll の失敗と issue 展開の失敗の欄(ADR 0294 決定1 / ADR 0328 決定7)。`list_queue` と同じ1つを server が配る。 */
+  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure" | "lastIssueExpansionFailure">;
   /** The board's workspace path — where `gh` runs for the merge dial's live
    *  CI check (issue #11). Absent → a merge-decision "merge" answer can't
    *  check CI and is rejected. */
@@ -749,6 +749,9 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   const entriesAllExcluded = () => entryExclusionPredicate(db, taskExecutionCandidates, workspace?.name);
   // 閉じた根に塞がれた子(ADR 0265 決定6): Pickable head とキューの skipped が scheduler と同じ1本を通る
   const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
+  // issue 展開の一時的失敗が続く間(ADR 0328 決定7): GitHub を読む task を Pickable head とキューの skipped から外す —— poll の除外は
+  // poll 内の memory なので近似(次の poll は1度は試す)だが、scheduler と同じ引数を通る
+  const gitHubUnreadable = () => deps.pollFailureJson().lastIssueExpansionFailure !== undefined;
 
   router.post("/tasks", async (req, res) => {
     const parsed = registerTaskSchema.safeParse(req.body);
@@ -1323,6 +1326,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   function pickableHead() {
     const excluded = entriesAllExcluded();
     const skipped: string[] = [];
+    const unreadable = gitHubUnreadable();
     for (;;) {
       const head = nextSlotTask(
         db,
@@ -1333,6 +1337,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         skipped,
         closedRoot,
         interviewerName,
+        unreadable,
       );
       if (!head || !excluded(head)) return head;
       skipped.push(head.id);
@@ -2202,6 +2207,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           entriesAllExcluded(),
           closedRoot,
           interviewerName,
+          gitHubUnreadable(),
         ),
       ),
     } satisfies WireContract["GET /api/queue"]);

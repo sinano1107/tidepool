@@ -22,7 +22,7 @@ import {
   selectable,
   windowMatchesSetting,
 } from "./execution-setting.js";
-import { type GitHubClient, IssueGoneError } from "./github.js";
+import { type GitHubClient, IssueGoneError, type IssueRef } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { type HarnessContainmentCheck, harnessContainmentPickupBlocked } from "./harness-containment.js";
 import { closedRootOf } from "./landing.js";
@@ -86,7 +86,7 @@ import { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
 import { translateSource } from "./translation.js";
 import { claudeUsageObservation, parseUsage, type UsageSnapshot } from "./usage.js";
-import type { PollFailure } from "./wire-contract.js";
+import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
@@ -104,8 +104,8 @@ import {
 } from "./workspace.js";
 
 export const HOURLY = 60 * 60 * 1000;
-/** 成功を挟まず続く poll の失敗が question になるまで(ADR 0294 決定2): 一過性は秒〜1分で消える。 */
-const POLL_FAILURE_QUESTION_AFTER = 10 * 60 * 1000;
+/** 成功を挟まず続く poll の失敗・issue 展開の一時的失敗が question になるまで(ADR 0294 決定2 / ADR 0328 決定3): 一過性は秒〜1分で消える。 */
+const FAILURE_QUESTION_AFTER = 10 * 60 * 1000;
 
 /** candidates を引くのに要る task の断面。queue の行(`BoardTask`)からも引けるので、
  *  pickup のゲートと skipped 表示が同じ関数を共有できる。 */
@@ -277,7 +277,17 @@ export interface Scheduler {
   lastPollFailure: () => PollFailure | undefined;
   /** 続く poll の失敗の question の受理の検査(ADR 0294 決定2): 収束を突き、走っている poll の終わりを待ってから poll を1回撃つ。 */
   rerunPoll: () => Promise<PollOutcome>;
+  /** 最後の issue 展開の一時的失敗(ADR 0328 決定7): 展開が1つ通る(Gone を含む)まで残る。memory だけ。 */
+  lastIssueExpansionFailure: () => IssueExpansionFailure | undefined;
+  /** issue 展開の question の受理の検査(ADR 0328 決定3): 最後に失敗した参照を読み直す。通るか Gone なら返り、それ以外は投げる。 */
+  recheckIssueExpansion: () => Promise<void>;
 }
+
+/** task の性質の門の答え(ADR 0328 決定6): 通す / この head を外す / GitHub が読めなかった —— 外す・計測・log は heads ループが行う。
+ *  head を外す門は理由を自分で記録済み(drift の quarantine、Gone の failure question)。 */
+type GateVerdict<T> = { pass: T } | { skip: "head" } | { skip: "gitHub"; ref: IssueRef; error: unknown };
+/** 門を通った head が spawn へ運ぶもの。 */
+type TaskGated = { content: Partial<TaskContent>; parentBriefing: ParentBriefing | undefined };
 
 /** poll 1回の結末: 本体に入って投げずに終わった / 投げた / 門で返った(その理由)。 */
 export type PollOutcome = { outcome: "succeeded" } | { outcome: "threw"; message: string } | { outcome: "blocked"; reason: string };
@@ -408,7 +418,7 @@ export function startScheduler(deps: {
     streak = { first: streak?.first ?? lastPollFailure, count: (streak?.count ?? 0) + 1 };
     const { first, count } = streak;
     // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
-    if (now.getTime() - Date.parse(first.at) < POLL_FAILURE_QUESTION_AFTER) return;
+    if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER) return;
     // 失敗そのものが DB の故障なら question も書けない —— ここで投げれば poll が投げ、`idle` を待つ収束まで倒れる(ADR 0294 決定1)
     try {
       if (openQuarantineQuestion(db, "pollFailure", null)) return;
@@ -435,6 +445,45 @@ export function startScheduler(deps: {
       console.error("[scheduler] could not settle the poll failure question:", settleErr);
     }
   };
+  /** 成功を挟まず続く issue 展開の一時的失敗(ADR 0328 決定3)。poll の計測(`streak`)とは別の1本 —— 1本にすると片方の回復が
+   *  もう片方を消す(決定4)。`ref` は受理の検査が読み直す、最後に失敗した参照。 */
+  let issueStreak: { first: IssueExpansionFailure; latest: IssueExpansionFailure; count: number; ref: IssueRef } | undefined;
+  /** GitHub が読めなかった(呼び手が GitHub を読む task をこの poll から外す)。最初の失敗から10分以上なら question を1枚。 */
+  const issueExpansionFailed = (taskId: string, ref: IssueRef, err: unknown) => {
+    console.error(`[scheduler] issue expansion failed for ${taskId}; tasks that read GitHub sit out this poll:`, err);
+    const now = clock.now();
+    const latest = { at: now.toISOString(), message: err instanceof Error ? err.message : String(err), taskId };
+    const first = issueStreak?.first ?? latest;
+    const count = (issueStreak?.count ?? 0) + 1;
+    issueStreak = { first, latest, count, ref };
+    // 開いていれば立てない —— registerQuarantine は開いた鍵に quarantine_refired を積むので、poll ごとの event になる
+    if (now.getTime() - Date.parse(first.at) < FAILURE_QUESTION_AFTER || openQuarantineQuestion(db, "issueExpansion", null)) return;
+    registerQuarantine(
+      db,
+      "issueExpansion",
+      null,
+      `issue expansion has failed ${count} times since ${first.at} with no successful expansion in between. ` +
+        `The last task it stopped is ${taskId}.\n\nFirst exception: ${first.message}\n\nLatest exception: ${latest.message}`,
+      now,
+    );
+  };
+  /** GitHub が答えた(通った、または `IssueGoneError` —— API が答えた証拠): 計測を戻し、開いた question を観測で決着させる。 */
+  const issueExpansionAnswered = () => {
+    issueStreak = undefined;
+    const open = openQuarantineQuestion(db, "issueExpansion", null);
+    if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "issueExpansion", value: null }, clock.now());
+  };
+  /** pickup の GitHub の読み1つ: 答えたかの会計だけを足し、結果も例外もそのまま返す。 */
+  async function readGitHub<T>(read: Promise<T>): Promise<T> {
+    try {
+      const value = await read;
+      issueExpansionAnswered();
+      return value;
+    } catch (err) {
+      if (err instanceof IssueGoneError) issueExpansionAnswered();
+      throw err;
+    }
+  }
   const resumeTimer = createResumeTimers(clock, pollNow);
 
   /** 門: pickup を止めているものの理由、通れば undefined。 */
@@ -634,72 +683,78 @@ export function startScheduler(deps: {
   /** The issue-backed pickup gate (issue #49 §5 / ADR 0016): an issue-backed
    *  head's content is expanded *before* pickupTask, so a dead or unreachable
    *  reference never wedges an in_progress task. A 一時的失敗 (network,
-   *  GitHub outage) skips this pickup cycle — the same fail-closed
-   *  environmental posture as the throttle, no human is called, the next
-   *  poll retries. Ordinary tasks pass straight through. Returns the expanded
-   *  content the spawn carries (spawn is a use-moment of contentSourceFor —
-   *  the "#N" placeholder never reaches the worker or its memory injection),
-   *  `{}` for an ordinary task, or null when the pickup may not proceed — a
-   *  null from the gone-branch has already registered the failure question as
-   *  its side effect, unless a human door changed the head meanwhile. */
-  async function issuePickupGate(head: Task): Promise<Partial<TaskContent> | null> {
-    if (head.github_issue_number == null || !github) return {};
+   *  GitHub outage) comes back as the `gitHub` verdict — environmental, no
+   *  human is called; the heads loop takes every task that reads GitHub out
+   *  of this poll (ADR 0328 決定2). Ordinary tasks pass straight through with
+   *  `{}`. Passes the expanded content the spawn carries (spawn is a
+   *  use-moment of contentSourceFor — the "#N" placeholder never reaches the
+   *  worker or its memory injection). The gone-branch skips the head after
+   *  registering the failure question, unless a human door changed the head
+   *  meanwhile. */
+  async function issuePickupGate(head: Task): Promise<GateVerdict<Partial<TaskContent>>> {
+    if (head.github_issue_number == null || !github) return { pass: {} };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     // board-driven async workspace use: registry drift quarantines the name
-    // (ADR 0009) and its own pickup gate skips this task from the next poll
+    // (ADR 0009) and the loop re-reads the stops before the next head
     const resolved = resolve && resolveOrQuarantine(db, resolve, head.workspace, clock.now());
-    if (resolve && !resolved) return null;
+    if (resolve && !resolved) return { skip: "head" };
+    const path = resolved?.path;
     try {
-      return await contentSourceFor(head, github, () => resolved?.path).expand();
+      return { pass: await readGitHub(contentSourceFor(head, github, () => path).expand()) };
     } catch (err) {
-      if (err instanceof IssueGoneError) {
-        // 確定的失敗 (ADR 0016): the reference is dead for good, not this
-        // cycle's weather — the same watchdog-shaped retry/abandon question
-        // as registerFailureQuestion, minus the teardown (nothing was acquired
-        // yet). The unanswered question holds the task out of nextSlotTask,
-        // so the gate never re-fires for it until a human answers.
-        // 取得の await の間に人間の扉が head を書き換えた(cancel・付け替え)なら何も記録せず、次の poll に
-        // 任せる —— 確かめと記録は同じ transaction で(issue #973)
-        db.transaction(() => {
-          const row = getTask(db, head.id);
-          if (row?.status !== "todo" || row.assignee !== head.assignee) return;
-          escalateTask(
-            db,
-            head,
-            {
-              context:
-                `the GitHub issue this task references is gone ` +
-                `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
-                `its content cannot be expanded for spawn.\n\n` +
-                `"retry" re-reads the issue and restarts this task from the queue head — ` +
-                `pick it after reopening or restoring the issue. ` +
-                abandonConsequence(db, head),
-              questions: [
-                {
-                  title: `issue reference is gone: ${head.title}`,
-                  options: ["retry", "abandon"],
-                  recommendation: "retry",
-                },
-              ],
-              question_kind: { kind: "failure", cancel_option: "abandon" },
-            },
-            BOARD_ACTOR_ID,
-            clock.now(),
-            "board",
-          );
-        })();
-        return null;
-      }
-      // 一時的失敗: fail-closed, no human — the next poll retries
-      console.error(`[scheduler] issue expansion failed for ${head.id}, skipping this cycle:`, err);
-      return null;
+      // 投げるのは GitHub の読みだけで、読みは path があるときだけ撃たれる
+      if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref: { path: path!, number: head.github_issue_number }, error: err };
+      // 確定的失敗 (ADR 0016): the reference is dead for good, not this
+      // cycle's weather — the same watchdog-shaped retry/abandon question
+      // as registerFailureQuestion, minus the teardown (nothing was acquired
+      // yet). The unanswered question holds the task out of nextSlotTask,
+      // so the gate never re-fires for it until a human answers.
+      // 取得の await の間に人間の扉が head を書き換えた(cancel・付け替え)なら何も記録せず、次の poll に
+      // 任せる —— 確かめと記録は同じ transaction で(issue #973)
+      db.transaction(() => {
+        const row = getTask(db, head.id);
+        if (row?.status !== "todo" || row.assignee !== head.assignee) return;
+        escalateTask(
+          db,
+          head,
+          {
+            context:
+              `the GitHub issue this task references is gone ` +
+              `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
+              `its content cannot be expanded for spawn.\n\n` +
+              `"retry" re-reads the issue and restarts this task from the queue head — ` +
+              `pick it after reopening or restoring the issue. ` +
+              abandonConsequence(db, head),
+            questions: [
+              {
+                title: `issue reference is gone: ${head.title}`,
+                options: ["retry", "abandon"],
+                recommendation: "retry",
+              },
+            ],
+            question_kind: { kind: "failure", cancel_option: "abandon" },
+          },
+          BOARD_ACTOR_ID,
+          clock.now(),
+          "board",
+        );
+      })();
+      return { skip: "head" };
     }
   }
 
+  /** task の性質の門を順に通す: issue の展開 → 親の文面。 */
+  async function taskGates(head: Task): Promise<GateVerdict<TaskGated>> {
+    const content = await issuePickupGate(head);
+    if (!("pass" in content)) return content;
+    const parentBriefing = await parentBriefingAtPickup(head);
+    return "pass" in parentBriefing ? { pass: { content: content.pass, parentBriefing: parentBriefing.pass } } : parentBriefing;
+  }
+
   /** 親の issue の死は子の失敗ではない。文面を読める closed は保持し、not_found だけ空にする(ADR 0321 決定3・5)。 */
-  async function parentBriefingAtPickup(head: Task): Promise<ParentBriefing | undefined | null> {
+  async function parentBriefingAtPickup(head: Task): Promise<GateVerdict<ParentBriefing | undefined>> {
     const parent = head.parent_id && getTask(db, head.parent_id);
-    if (!parent) return undefined;
+    if (!parent) return { pass: undefined };
     // RCA は判事と同じ session の task 固有の文面を逐語で読む。記録が無ければ null、再構成しない(ADR 0321 決定1・2)。
     const anchors = head.type === "review"
       ? [...new Map(rcaMaterialAnchors(db, head.id).map((material) => [material.anchor.id, material])).values()].sort((a, b) => a.anchor.id - b.anchor.id)
@@ -715,24 +770,23 @@ export function startScheduler(deps: {
     }
     const briefing: ParentBriefing = byText.size > 0 ? { briefing_as_spawned: [...byText.values()] } : {};
     if (anchors.length > 0) {
-      if (anchors.every(({ spawned }) => spawned)) return briefing;
+      if (anchors.every(({ spawned }) => spawned)) return { pass: briefing };
       // ADR 0321 決定4: 実行前の親への判断には揃える worker session が無い。混在ならその材料にだけ今の3欄を添える。
       briefing.briefing_note = "no worker session preceded the judged decision; this is the parent as it stood at your pickup";
     }
     const stored = { ...briefing, title: parent.title, purpose: parent.purpose, completion_criteria: parent.completion_criteria };
-    if (parent.github_issue_number === null || !github) return stored;
+    if (parent.github_issue_number === null || !github) return { pass: stored };
     const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
     const resolved = resolve && resolveOrQuarantine(db, resolve, parent.workspace, clock.now());
-    if (resolve && !resolved) return null;
-    if (!resolved) return stored;
-    const number = parent.github_issue_number;
+    if (resolve && !resolved) return { skip: "head" };
+    if (!resolved) return { pass: stored };
+    const ref = { path: resolved.path, number: parent.github_issue_number };
     try {
-      const issue = await github.getIssueWithState({ path: resolved.path, number });
-      return { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number, state: issue.state } };
+      const issue = await readGitHub(github.getIssueWithState(ref));
+      return { pass: { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number: ref.number, state: issue.state } } };
     } catch (err) {
-      if (err instanceof IssueGoneError && err.reason === "not_found") return { ...briefing, issue: { number, state: "not_found" } };
-      console.error(`[scheduler] parent issue expansion failed for ${head.id}, skipping this cycle:`, err);
-      return null;
+      if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
+      return { skip: "gitHub", ref, error: err };
     }
   }
 
@@ -860,20 +914,25 @@ export function startScheduler(deps: {
       if (!nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName)) return SUCCEEDED;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
       // (ADR 0110 決定3 / issue #544)。
-      const stopped = quarantineStops(db);
+      let stopped = quarantineStops(db);
       // ADR 0110 決定3: 除外が当たるのは**その task の entry**であって agent では
       // ない —— 要求ティアが task ごとに違う以上、agent を丸ごと外すと別のモデルで
       // 走るはずの兄弟まで止まり、別の Provider を持つ entry まで道連れになる。
       const excludedTasks: string[] = [];
+      // GitHub が読めなかった poll は、GitHub を読む task をこの poll の残りから外す —— 失敗は task でなく API の性質(ADR 0328 決定2)
+      let gitHubUnreadable = false;
       let entryExcluded = pickupExclusions(db, false);
       const pairFiltered = withoutStopped(db, taskExecutionCandidates, workspace?.name);
       // 閉じた根に塞がれた子は、走っても閉じた根のブランチへ帰るだけなので飛ばす(ADR 0265 決定6)
       const closedRoot = closedRootOf(db, buildWorkspaceResolver(resolveWorkspace, workspace));
-      let head = nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName);
-      const observedProviders = new Map<Provider, ProviderUsageObservation>();
-      /** この poll で head を進める1手。SQL の述語へ渡す引数は上の2つだけである。 */
+      /** この poll で head を進める1手。SQL の述語へ渡す引数は上の3つだけである。 */
       const nextHead = () =>
-        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName);
+        nextSlotTask(db, workspace?.name, worker.id, auditorName, stopped, excludedTasks, closedRoot, interviewerName, gitHubUnreadable);
+      let head = nextHead();
+      const observedProviders = new Map<Provider, ProviderUsageObservation>();
+      // Registry reachability は盤面全体の資源なので poll で1回だけ検査する(ADR 0328 決定5)
+      let registryChecked = false;
+      let gated: TaskGated | undefined;
       let chosen: ExecutionSetting | undefined;
       let candidates: ExecutionSetting[] = [];
       // 学習器の分岐(ADR 0110 決定4 / ADR 0150 決定3): 除外を当てた候補から、走る設定と shadow 行の組を決める。
@@ -992,19 +1051,28 @@ export function startScheduler(deps: {
           head = nextHead();
           continue;
         }
-        chosen = setting;
-        break;
+        // 盤面全体の資源の門だけが poll 全体で返り、task の性質の門はこの head だけを外す(ADR 0328 決定5)。
+        // 順序は Throttle の観測 → registry → issue のまま(CONTEXT.md「Registry reachability」)
+        if (!registryChecked) {
+          registryChecked = true;
+          if (registryReachability && (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))) return SUCCEEDED;
+        }
+        const verdict = await taskGates(head);
+        if ("pass" in verdict) {
+          gated = verdict.pass;
+          chosen = setting;
+          break;
+        }
+        // 外す・計測・log はここだけ(ADR 0328 決定6)。drift は workspace を quarantine したので止まった資源を引き直す
+        excludedTasks.push(head.id);
+        if (verdict.skip === "gitHub") {
+          gitHubUnreadable = true;
+          issueExpansionFailed(head.id, verdict.ref, verdict.error);
+        } else stopped = quarantineStops(db);
+        head = nextHead();
       }
-      if (!head || !chosen) return SUCCEEDED;
-      if (
-        registryReachability &&
-        (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))
-      )
-        return SUCCEEDED;
-      const content = await issuePickupGate(head);
-      if (!content) return SUCCEEDED;
-      const parentBriefing = await parentBriefingAtPickup(head);
-      if (parentBriefing === null) return SUCCEEDED;
+      if (!head || !chosen || !gated) return SUCCEEDED;
+      const { content, parentBriefing } = gated;
       // 学習器の shadow 行(ADR 0110 決定4 と Status 追記): work 側の task の pickup ごとに、走る設定の反対側(昇格前は学習器の
       // 推薦、昇格後は表の先頭)を並べて1行残す。判定者(review / interview)は学習器を参照しない(ADR 0111 決定3 / ADR 0272 決定4 の追記)。
       // 昇格前の記録は選択に介入しない —— 学習器が倒れても pickup は進む
@@ -1069,6 +1137,17 @@ export function startScheduler(deps: {
       const rerun = poll();
       polling = rerun;
       return rerun;
+    },
+    lastIssueExpansionFailure: () => issueStreak?.latest,
+    async recheckIssueExpansion() {
+      const ref = issueStreak?.ref;
+      // 計測は memory なので再起動で消える —— 読み直す参照が無ければ検証できない。question は展開が1つ通れば観測で決着する
+      if (!ref || !github) throw new Error("no failed issue read is known since the board last started — this question settles once an issue expansion succeeds");
+      try {
+        await readGitHub(github.getIssueWithState(ref));
+      } catch (err) {
+        if (!(err instanceof IssueGoneError)) throw err;
+      }
     },
   };
 }
