@@ -175,6 +175,96 @@ it("収束は、保護ブランチへ帰る done の work を根に導いて PR 
   expect(github.requests).toMatchObject([{ branch: `task/${work.id}` }]);
 });
 
+const PUSH_PATHS = ["new PR", "found open PR", "recorded open PR"] as const;
+
+async function landingBeforePush(path: (typeof PUSH_PATHS)[number], resolveAuthority?: () => AuthorityProfile) {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-push-recheck");
+  const { db, clock } = await openBoard();
+  const github = new FakeGitHubClient();
+  const work = landingWork(db, clock);
+  git(workspace.path, "checkout", "-b", `task/${work.id}`);
+  commitWork(workspace.path, "feature.txt", "ready\n");
+  finish(db, clock, work);
+  if (path !== "new PR") {
+    const number = github.scriptPullRequestOnBranch(`task/${work.id}`);
+    if (path === "recorded open PR") {
+      recordPrOpened(db, work, number, git(workspace.path, "rev-parse", "HEAD"), "worker", clock.now(), undefined, undefined, "worker");
+      commitWork(workspace.path, "repair.txt", "fixed\n");
+    }
+  }
+  const window = awaitWindow();
+  const prepare = github.preparePush.bind(github);
+  github.preparePush = async (input) => {
+    const push = await prepare(input);
+    await window.hold();
+    return push;
+  };
+  const landing = createLanding({ defaultAgentName: "tako", db, clock, workspace, github, resolveAuthority });
+  const converging = convergeOn(landing, work.id);
+  await window.entered;
+  return { workspace, db, clock, github, work, converging, open: window.open };
+}
+
+it.each(PUSH_PATHS)("%s の push の準備の await 中に異議が出たら、push と PR の作成をせず deferred を刻む", async (path) => {
+  const { db, clock, github, work, converging, open } = await landingBeforePush(path);
+  raiseUnbundledObjection(db, clock, work.id);
+  open();
+
+  await expect(converging).resolves.toEqual({ kind: "deferred", reason: "objections", count: 1 });
+  expect(github.pushes).toEqual([]);
+  expect(github.requests).toEqual([]);
+  expect(listEvents(db, work.id).filter((event) => event.kind === "landing_deferred").map((event) => event.payload)).toEqual([
+    { kind: "landing_deferred", reason: "objections", count: 1 },
+  ]);
+});
+
+it.each(PUSH_PATHS)("%s の push の準備の await 中に workspace が quarantine されたら、push と PR の作成をせず quarantined を返す", async (path) => {
+  const { workspace, db, clock, github, work, converging, open } = await landingBeforePush(path);
+  quarantineWorkspace(db, workspace.name, new Error("repair the checkout"), clock.now());
+  open();
+
+  await expect(converging).resolves.toEqual({
+    kind: "quarantined",
+    error: `workspace "${workspace.name}" is quarantined and needs human attention before landing; answer its quarantine question`,
+  });
+  expect(github.pushes).toEqual([]);
+  expect(github.requests).toEqual([]);
+  expect(listEvents(db, work.id).filter((event) => event.kind === "landing_deferred")).toEqual([]);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it.each(PUSH_PATHS)("%s の push の準備の await 中に profile が読めなくなったら、面を開く経路だけ agent quarantine で止まる", async (path) => {
+  let unreadable = false;
+  const { db, github, work, converging, open } = await landingBeforePush(path, () => {
+    if (unreadable) throw new UnknownAgentError("tako");
+    return profile("escalate");
+  });
+  unreadable = true;
+  open();
+
+  if (path === "recorded open PR") {
+    await expect(converging).resolves.toMatchObject({ kind: "landed", form: "open_pull_request_updated" });
+    expect(github.pushes).toHaveLength(1);
+    expect(quarantineQuestion(db, "agent", "tako")).toBeUndefined();
+  } else {
+    await expect(converging).resolves.toMatchObject({ kind: "quarantined" });
+    expect(github.pushes).toEqual([]);
+    expect(quarantineQuestion(db, "agent", "tako")).toBeDefined();
+  }
+  expect(github.requests).toEqual([]);
+  expect(promotionFailures(db, work.id)).toEqual([]);
+});
+
+it.each(["new PR", "found open PR"] as const)("%s の面は push の準備の await 中に変わった profile のダイヤルで開く", async (path) => {
+  let dial: MergeDial = "escalate";
+  const { db, converging, open } = await landingBeforePush(path, () => profile(dial));
+  dial = "external";
+  open();
+
+  await expect(converging).resolves.toMatchObject({ kind: "landed", form: "pull_request_opened" });
+  expect(mergeQuestions(db)).toEqual([]);
+});
+
 it("work でないタスクは着地対象ではない", async () => {
   const workspace = await makeWorkspace("landing-verdict");
   const { db, clock } = await openBoard();

@@ -41,7 +41,7 @@ import {
   claudeWorkspaceContainment,
   type HarnessContainmentCheck,
 } from "./harness-containment.js";
-import { closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
+import { actIfGateOpen, closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
@@ -839,6 +839,7 @@ function humanCancelDefaults(deps: CancelThroughHumanDoorDeps): CancelDefaults {
  *  question が立つ瞬間の盤面しか見ていないので、立った後に付いた付帯子や、この triage で
  *  出た未束ねの異議はここでしか捕まらない。異議は Commit で修理子へ束ねられ(ADR 0046)、
  *  以後は (a) 側で捕まるので、2つの検査は同じ待ちを別の時刻から見た姿である。
+ *  PR 回答の始めの読みは早期退出、印の後の読みが merge を縛る(ADR 0330 決定1)。
  *  `hold` は検証しない — 着地しない決定はいつでもできる。 */
 function assertLandingAllowed(db: Db, landingTaskId: string): void {
   const block = landingBlock(db, landingTaskId);
@@ -1155,7 +1156,7 @@ export async function submitAnswer(
     assertMemoryReferencesKnown(deps, { addressee: amended && "addressee" in amended ? amended.addressee : named.addressee, workspace: named.scope });
   }
 
-  let release: (() => void) | null = null;
+  const mark: { release: (() => void) | null } = { release: null };
   // 着地の回答が根に刻む事実 —— 回答と同じトランザクションで刻む(PR の merge は ADR 0265 決定1、ローカル着地の merge と hold は ADR 0289 決定1・3)
   // hold の head は断った内容という事実なので盤面名義(ADR 0225 決定1 の形)、執行の記録は回答した人間の名義
   let rootRecord: { root: string; payload: TaskScopedPayload; byBoard?: true } | undefined;
@@ -1267,19 +1268,22 @@ export async function submitAnswer(
           }
           // ADR 0236 決定2・3: 印は merge の直前に同期で取り、取れなければ拒む(question は開いたまま)。印はこの関数が
           // 返るまで持つ —— merge の回答では、決着(回答と pr_merged)を書いた後に await は無い
-          release = deps.landing.takeInFlightMark(task.workspace, mergePr);
-          if (!release) throw new DomainError(beingMerged);
-          // ADR 0288 決定2(印の前): 上の await の間に閉じていれば merge を呼ばない —— 印を取るのと同じ同期の区間で読み直す。印は finally が放す
-          if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
-          // External merge precedes the persisted answer. If it fails, the question
-          // stays open and the human can retry instead of being stranded as done.
-          // CI を読んだ head に固定する(ADR 0231 決定1)
-          // 失敗は文面で分けずすべて DomainError に包む —— ローカル着地(ADR 0103 決定4)と同じ形で、WebUI は 409 で理由を見られる
-          try {
-            await deps.github.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
-          } catch (err) {
-            throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
-          }
+          await actIfGateOpen(() => {
+            mark.release = deps.landing.takeInFlightMark(task.workspace, mergePr);
+            if (!mark.release) throw new DomainError(beingMerged);
+            // ADR 0288 決定2: 上の await の間に閉じた question と門を、印と同じ同期の区間で読み直す。印は finally が放す
+            if (getTask(deps.db, task.id)!.status !== "todo") throw new QuestionClosedError();
+            assertLandingAllowed(deps.db, landingTaskId);
+            return null;
+          }, async () => {
+            // External merge precedes the persisted answer. Failure leaves the question open.
+            // CI を読んだ head に固定する(ADR 0231 決定1)。失敗は文面で分けず DomainError に包む
+            try {
+              await deps.github!.mergePullRequest({ path: mergeWorkspace.path, number: mergePr }, pr.head);
+            } catch (err) {
+              throw new DomainError(`merging PR #${mergePr} failed: ${err instanceof Error ? err.message : String(err)}`);
+            }
+          });
           rootRecord = { root: landingTaskId, payload: { kind: "pr_merged", pr_number: mergePr } };
         }
         break;
@@ -1411,6 +1415,6 @@ export async function submitAnswer(
     if (err instanceof QuestionClosedError && settledByObservation(deps.db, task)) return presentAnswered(deps, task);
     throw err;
   } finally {
-    release?.();
+    mark.release?.();
   }
 }
