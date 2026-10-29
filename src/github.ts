@@ -1,5 +1,8 @@
-import { execFileSync } from "node:child_process";
-import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
+
+const execFileAsync = promisify(execFile);
 
 /** どの checkout のどのブランチを `origin` へ push するか。 */
 export interface PushBranchInput {
@@ -223,28 +226,43 @@ function ciStatusOf(checks: RollupEntry[]): CiStatus {
  *  fresh via GitHubAuth, never the host's ambient `gh auth`. `gh` prints the
  *  new PR's URL on stdout; the number is the last path segment. */
 export class GhCliClient implements GitHubClient {
-  constructor(private readonly auth: GitHubAuth) {}
+  private readonly timeoutMs: number;
 
-  /** One call's env, for a `gh`/`git` invocation that runs inside a workspace
-   *  checkout: the installation token is per-repository (ADR 0093 決定2), so
-   *  the repo is read off that checkout's `origin` and the broker round trip
-   *  happens here, before the synchronous `execFileSync`. */
-  private async envFor(cwd: string): Promise<NodeJS.ProcessEnv> {
+  /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(#2726 の完了基準、釘は ADR 0107 の domain 層)。 */
+  constructor(
+    private readonly auth: GitHubAuth,
+    { timeoutMs = GIT_NETWORK_TIMEOUT_MS }: { timeoutMs?: number } = {},
+  ) {
+    this.timeoutMs = timeoutMs;
+  }
+
+  /** 盤面の `gh` はすべてここを通る(ADR 0330 決定4)。installation token は repo 単位(ADR 0093 決定2)なので checkout の
+   *  `origin` から repo を読んで仲介へ往復し、`gh` を非同期の子として撃つ —— 待つ間も盤面の実行の糸は止まらない(決定1)。
+   *  上限超過は untyped の一時的失敗で、どの呼び出しが何 ms で切れたかを人間が読める文で持つ(決定2)。それ以外の失敗は
+   *  `stderr` を持ったまま投げ直す(not-found の判定が読む)。 */
+  private async gh(cwd: string, args: string[]): Promise<string> {
     const repo = originRepo(cwd);
     await this.auth.ensureToken(repo);
-    return this.auth.env(repo);
+    try {
+      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
+    } catch (err) {
+      // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
+      if ((err as { killed?: boolean }).killed) {
+        throw new Error(`\`gh ${args[0]} ${args[1]}\` timed out after ${this.timeoutMs} ms (in ${cwd})`, { cause: err });
+      }
+      throw err;
+    }
   }
 
   async preparePush(input: PushBranchInput): Promise<() => void> {
     const repo = originRepo(input.path);
     await this.auth.ensureToken(repo);
-    return () => authedGit(this.auth, input.path, repo, "push", "-u", "origin", input.branch);
+    return () => authedGitBounded(this.auth, input.path, repo, this.timeoutMs, "push", "-u", "origin", input.branch);
   }
 
   async createPullRequest(input: CreatePrInput): Promise<PrResult> {
-    const url = execFileSync(
-      "gh",
-      [
+    const url = (
+      await this.gh(input.path, [
         "pr",
         "create",
         "--head",
@@ -255,11 +273,8 @@ export class GhCliClient implements GitHubClient {
         input.title,
         "--body",
         input.body,
-      ],
-      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
-    )
-      .toString()
-      .trim();
+      ])
+    ).trim();
     const match = url.match(PR_URL_RE);
     if (!match) throw new Error(`unexpected gh pr create output: ${url}`);
     return { url, number: Number(match[1]) };
@@ -273,12 +288,9 @@ export class GhCliClient implements GitHubClient {
     // 同じ try に入れて、どちらの失敗も pending / unreadable に倒す。
     let parsed: { state: PrState; statusCheckRollup?: RollupEntry[]; headRefOid: string; mergedBy: { login: string } | null };
     try {
-      const output = execFileSync(
-        "gh",
-        ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"],
-        { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
-      ).toString();
-      parsed = JSON.parse(output);
+      parsed = JSON.parse(
+        await this.gh(ref.path, ["pr", "view", String(ref.number), "--json", "state,statusCheckRollup,headRefOid,mergedBy"]),
+      );
     } catch {
       return { ci: "pending", state: "unreadable" };
     }
@@ -291,29 +303,28 @@ export class GhCliClient implements GitHubClient {
   }
 
   async mergePullRequest(ref: PrRef, head: string): Promise<void> {
-    execFileSync("gh", ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head], {
-      cwd: ref.path,
-      env: await this.envFor(ref.path),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    await this.gh(ref.path, ["pr", "merge", String(ref.number), "--merge", "--match-head-commit", head]);
   }
 
   async getPullRequestState(ref: PrRef): Promise<PrStateRead> {
-    const output = execFileSync("gh", ["pr", "view", String(ref.number), "--json", "state,mergedBy"], {
-      cwd: ref.path,
-      env: await this.envFor(ref.path),
-      stdio: ["ignore", "pipe", "pipe"],
-    }).toString();
+    const output = await this.gh(ref.path, ["pr", "view", String(ref.number), "--json", "state,mergedBy"]);
     const { state, mergedBy } = JSON.parse(output) as { state: PrState; mergedBy: { login: string } | null };
     return { state, mergedBy: mergedBy?.login ?? null };
   }
 
   async findPullRequestByHead(input: PushBranchInput): Promise<FoundPr | null> {
-    const output = execFileSync(
-      "gh",
-      ["pr", "list", "--head", input.branch, "--state", "all", "--limit", "10", "--json", "number,state,headRefOid,isCrossRepository"],
-      { cwd: input.path, env: await this.envFor(input.path), stdio: ["ignore", "pipe", "pipe"] },
-    ).toString();
+    const output = await this.gh(input.path, [
+      "pr",
+      "list",
+      "--head",
+      input.branch,
+      "--state",
+      "all",
+      "--limit",
+      "10",
+      "--json",
+      "number,state,headRefOid,isCrossRepository",
+    ]);
     // --head matches the branch name alone: a fork's PR from a same-named branch is not the board's
     const prs = (
       JSON.parse(output) as Array<{ number: number; state: PrState; headRefOid: string; isCrossRepository: boolean }>
@@ -332,11 +343,7 @@ export class GhCliClient implements GitHubClient {
   async getIssueWithState(ref: IssueRef): Promise<Issue & { state: "open" | "closed" }> {
     let output: string;
     try {
-      output = execFileSync(
-        "gh",
-        ["issue", "view", String(ref.number), "--json", "title,body,comments,state"],
-        { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
-      ).toString();
+      output = await this.gh(ref.path, ["issue", "view", String(ref.number), "--json", "title,body,comments,state"]);
     } catch (err) {
       // gh's not-found failure ("GraphQL: Could not resolve to an issue or
       // pull request …") is the only permanent one at this surface — every
@@ -360,29 +367,21 @@ export class GhCliClient implements GitHubClient {
   }
 
   async listIssues(ref: RepoRef): Promise<OpenIssue[]> {
-    const output = execFileSync(
-      "gh",
-      [
-        "issue",
-        "list",
-        "--state",
-        "open",
-        "--limit",
-        String(OPEN_ISSUES_LIMIT),
-        "--json",
-        "number,title",
-      ],
-      { cwd: ref.path, env: await this.envFor(ref.path), stdio: ["ignore", "pipe", "pipe"] },
-    ).toString();
+    const output = await this.gh(ref.path, [
+      "issue",
+      "list",
+      "--state",
+      "open",
+      "--limit",
+      String(OPEN_ISSUES_LIMIT),
+      "--json",
+      "number,title",
+    ]);
     return JSON.parse(output) as OpenIssue[];
   }
 
   async addIssueComment(ref: IssueRef, body: string): Promise<void> {
-    execFileSync("gh", ["issue", "comment", String(ref.number), "--body", body], {
-      cwd: ref.path,
-      env: await this.envFor(ref.path),
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    await this.gh(ref.path, ["issue", "comment", String(ref.number), "--body", body]);
   }
 
   async tokenRefusal(ref: RepoSlug): Promise<string | null> {

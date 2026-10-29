@@ -475,3 +475,62 @@ it("preparePush が返す push はタスクブランチを origin へ push す�
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
 });
+
+/** 返らない `gh` の代役(ADR 0330): `exec` で sleep そのものを子にする —— sh の下に sleep を残すと、殺した後も
+ *  孫が stdout を握り、非同期 execFile の close が sleep の終わりまで来ない。 */
+async function withSleepingGh(): Promise<void> {
+  const dir = await tempDir("tidepool-fakebin-");
+  writeFileSync(join(dir, "gh"), "#!/bin/sh\nexec sleep 5\n");
+  chmodSync(join(dir, "gh"), 0o755);
+  originalPath = process.env.PATH;
+  process.env.PATH = `${dir}:${originalPath}`;
+}
+
+const unansweredCalls: Array<[string, (client: GhCliClient) => Promise<unknown>]> = [
+  ["createPullRequest", (c) => c.createPullRequest({ path: "/tmp", branch: "task/abc", base: "main", title: "t", body: "b" })],
+  ["mergePullRequest", (c) => c.mergePullRequest({ path: "/tmp", number: 7 }, "abc123")],
+  ["getPullRequestState", (c) => c.getPullRequestState({ path: "/tmp", number: 7 })],
+  ["findPullRequestByHead", (c) => c.findPullRequestByHead({ path: "/tmp", branch: "task/abc" })],
+  ["getIssueWithState", (c) => c.getIssueWithState({ path: "/tmp", number: 49 })],
+  ["listIssues", (c) => c.listIssues({ path: "/tmp" })],
+  ["addIssueComment", (c) => c.addIssueComment({ path: "/tmp", number: 49 }, "body")],
+];
+
+// ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗(untyped)。not_found に誤判定しない
+it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼び出しが何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async (_, call) => {
+  await withSleepingGh();
+  const client = new GhCliClient(await makeAuth(), { timeoutMs: 200 });
+
+  const started = Date.now();
+  const err = await call(client).then(() => null, (e: unknown) => e);
+
+  expect(Date.now() - started).toBeLessThan(2_000);
+  expect(err).toBeInstanceOf(Error);
+  expect(err).not.toBeInstanceOf(IssueGoneError);
+  expect((err as Error).message).toMatch(/^`gh \w+ \w+` timed out after 200 ms/);
+});
+
+// ADR 0330 決定1: 同期の gh は待つ間、盤面の唯一の実行の糸(人間面・poll・着地)ごと止める
+it("gh が返らない間も、同じ process の別の Promise は進む(ADR 0330)", async () => {
+  await withSleepingGh();
+  const client = new GhCliClient(await makeAuth(), { timeoutMs: 1_000 });
+  const order: string[] = [];
+
+  await Promise.all([
+    client.listIssues({ path: "/tmp" }).catch(() => order.push("gh")),
+    new Promise((resolve) => setTimeout(resolve, 50)).then(() => order.push("timer")),
+  ]);
+
+  expect(order).toEqual(["timer", "gh"]);
+});
+
+it("readPullRequest は gh が返らなくても上限で CI を pending、状態を unreadable と読む(ADR 0330)", async () => {
+  await withSleepingGh();
+  const client = new GhCliClient(await makeAuth(), { timeoutMs: 200 });
+
+  const started = Date.now();
+  const pr = await client.readPullRequest({ path: "/tmp", number: 1 });
+
+  expect(Date.now() - started).toBeLessThan(2_000);
+  expect(pr).toEqual({ ci: "pending", state: "unreadable" });
+});

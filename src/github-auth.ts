@@ -194,24 +194,23 @@ export function authedGit(
   return runAuthedGit(auth, cwd, repo, args);
 }
 
-/** ネットワークへ出る git 呼び出しの上限(ADR 0052)。`execFileSync` は同期なので、
- *  black-hole した接続を無制限に待つと event loop ごと止まり、ADR 0036 が復旧経路と
- *  定めた人間面まで応答しなくなる —— fail-closed より悪い状態(containment.ts)。
- *  timeout は「到達不能」= fail-closed 側に読む。仲介への往復も同じ上限を分け合う
- *  (ADR 0093 決定7: 仲介の不達は GitHub の不達と同じものとして扱う)。
+/** 盤面が GitHub へ出る往復の上限(ADR 0052 / ADR 0330 決定2): git・`gh`・仲介への往復が分け合う。black-hole した
+ *  接続を無界に待ってはならない —— 同期の呼び出し(git)なら実行の糸ごと止まり、ADR 0036 が復旧経路と定めた人間面まで
+ *  応答しなくなる(fail-closed より悪い状態、containment.ts)。非同期の呼び出し(`gh`、仲介)なら poll が返らず止まる。
+ *  timeout は「到達不能」= fail-closed 側に読む(ADR 0093 決定7: 仲介の不達は GitHub の不達と同じものとして扱う)。
  *
  *  他の probe(`CAPABILITY_PROBE_TIMEOUT_MS` = 5秒)より桁が大きいのは、あれが
  *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
  *  共有すると正常な fetch を落とす。
  *
- *  registry の refresh と workspace の refresh が**同じ1つの上限**を共有するのは、
- *  根拠がどちらも「同期の実ネットワーク往復が poll を止めてはならない」1つだから
+ *  registry と workspace の refresh、着地の push、`gh` が**同じ1つの上限**を共有するのは、
+ *  根拠がどれも「実ネットワーク往復を無界に待ってはならない」1つだから
  *  である —— 資源ごとに数を分けると、片方だけを動かしたときに理由のほうが割れる。 */
 export const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
 /** `authedGit` の上限つきの面。ネットワークへ出る refresh(registry: ADR 0052 決定2、
- *  workspace: issue #211)が使う —— どちらも pickup ゲートの手前に立つ probe なので、
- *  詰まったら poll ごと止めてはならない(`GIT_NETWORK_TIMEOUT_MS`)。
+ *  workspace: issue #211)と着地の push(ADR 0330 決定3)が使う —— どれも詰まったら盤面の
+ *  実行の糸ごと止めてはならない(`GIT_NETWORK_TIMEOUT_MS`)。
  *
  *  別関数にしてでも `runAuthedGit` を共有するのは、この module の約束
  *  ——「credentials take effect in exactly one place」—— を守るためである。
@@ -224,7 +223,15 @@ export function authedGitBounded(
   timeoutMs: number,
   ...args: string[]
 ): string {
-  return runAuthedGit(auth, cwd, repo, args, timeoutMs);
+  try {
+    return runAuthedGit(auth, cwd, repo, args, timeoutMs);
+  } catch (err) {
+    // 上限超過は Node の「spawnSync git ETIMEDOUT」のままでは人間の question で何が切れたか読めない(ADR 0330 決定2)
+    if ((err as { code?: string }).code === "ETIMEDOUT") {
+      throw new Error(`\`git ${args[0]}\` timed out after ${timeoutMs} ms (in ${cwd})`, { cause: err });
+    }
+    throw err;
+  }
 }
 
 function runAuthedGit(
