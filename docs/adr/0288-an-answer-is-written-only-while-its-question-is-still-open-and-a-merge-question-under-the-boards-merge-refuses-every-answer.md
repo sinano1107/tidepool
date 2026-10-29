@@ -1,5 +1,7 @@
 # 回答は書き込みの時点で question が開いているときだけ書く —— 盤面が merge 中の merge question はどの回答も拒む
 
+**Status 追記: 決定2「印の前」の同期の区間で読み直すのは question の status だけでなく着地の門(`landingBlock`、ADR 0092 決定5)も —— gh が非同期になって窓が毎回開き(ADR 0330 決定1)、await 中に出た異議を越えて merge した(#2734)**
+
 2026-10-20 の grilling(issue #1821、#1759 の派生)で決定。人間の回答は、書き込みの前に await をはさむ種類が4つある ——
 PR 昇格の retry(収束)、merge question(PR の読み取りと merge)、quarantine(検査)、registry の提案の approve(registry への
 commit)。その間に別の経路が同じ question を観測で閉じうる。閉じる経路は7か所あり(遅い走査、回答受理直前のバックストップ、
