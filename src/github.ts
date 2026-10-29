@@ -243,11 +243,8 @@ export class GhCliClient implements GitHubClient {
   private async gh(cwd: string, args: string[]): Promise<string> {
     const repo = originRepo(cwd);
     await this.auth.ensureToken(repo);
-    const run = execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs });
-    // execFile は stdio を選ばせず stdin を開いた pipe にする —— 同期版の "ignore" と同じく、読めば即 EOF にする
-    run.child.stdin?.end();
     try {
-      return (await run).stdout;
+      return (await execFileAsync("gh", args, { cwd, env: this.auth.env(repo), timeout: this.timeoutMs })).stdout;
     } catch (err) {
       // `killed` は Node 自身が上限で殺したときだけ立つ —— 非ゼロ終了・maxBuffer 超過・外からの signal では立たない
       if ((err as { killed?: boolean }).killed) {
