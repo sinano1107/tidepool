@@ -35,7 +35,8 @@ workspace quarantine に落ちるが、回答の検査は在り処を引けず�
 落ちてディレクトリだけが残った)のための線で、次の pickup が init する前提だった。`*_opened` event が残る面接室のディレクトリそのものが
 無い —— 盤面に消す扉は無いので外部で消された —— 場合は別で、その面接室は記録(監査・異議・retry の新しい root が読む環境)であり、
 盤面に作り直す材料が無い。今までは読む面接室の在り処を誰も確かめず(remote 追従の loop は面接室を対象外、実体の綴りへの解決は失敗を
-握りつぶす)、無い path が sandbox の読みに入り、両 Harness は無い path を黙って skip するので、root は根拠を読めないまま採点していた。
+握りつぶす)、無い path が sandbox の読みに入り、Harness は無い path を黙って skip する(上流の sandbox-runtime / codex の source と Claude の固定版 binary の文字列で読んだ範囲。
+Codex の固定版は未確認)ので、root は根拠を読めないまま採点していた。
 
 1. **読む面接室は pickup で repo の有無を確かめ、無ければその面接室の名前(root id)の quarantine に落ちる。** 対象は task が読みだけ
    開く面接室(root の根拠の面接室と retry 前の面接室、root 配下の review が読む root の面接室と根拠の面接室)。述語は在り処に `.git` が
