@@ -159,7 +159,7 @@ async function bootWithAdapter(
 async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
   const registryDir = await makeRegistry({
     "agents/deckhand.md":
-      "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+      "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
       "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
     ...(workspace && { "workspaces.yaml": `${workspace.name}:\n  path: ${workspace.path}\n` }),
   });
@@ -193,7 +193,7 @@ async function bootCodexHeldAt(holdAt: 1 | 2) {
   git(workspace, "init", "-b", "main");
   const registryDir = await makeRegistry({
     "agents/codex-agent.md":
-      "---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
+      "---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
       "provider: openai\nskills: []\n---\nYou are the Codex worker.",
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });

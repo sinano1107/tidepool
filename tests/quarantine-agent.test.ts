@@ -44,7 +44,7 @@ describe("resolveAgentOrQuarantine", () => {
         authority: "standard",
         description: "d",
         provider: [{ name: "anthropic", advisor: false }],
-        retiredFields: [],
+        retiredFields: [], unknownFields: [],
         skills: ["*"],
         systemPrompt: "x",
       },

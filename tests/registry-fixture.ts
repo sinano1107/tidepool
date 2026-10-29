@@ -13,7 +13,6 @@ import { tempDir } from "./temp-dir.js";
 export const writeUnannounced: RefWriter = (_ref, _newSha, write) => write();
 
 const AGENT_MD = `---
-name: deckhand
 description: General work agent for the tidepool board
 version: 0.3.1
 authority: standard

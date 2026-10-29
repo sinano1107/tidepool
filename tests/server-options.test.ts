@@ -84,7 +84,6 @@ it("registryDir を設定した盤面は remote-backed を宣言する。clone �
 it("usage resource は model 省略時にも Codex worker の実効既定 model を使う", async () => {
   const registryDir = await makeRegistry({
     "agents/codex-agent.md": `---
-name: codex-agent
 description: Codex default model
 version: 1.0.0
 authority: standard
@@ -193,7 +192,7 @@ it("remote-backed の registry resolver は origin/main の内容を返す(ADR 0
   const { registryDir, publish } = await makeRemoteBackedRegistry();
   publish(
     "agents/deckhand.md",
-    `---\nname: deckhand\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
+    `---\ndescription: Definition from remote main\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nRemote definition.\n`,
     "remote registry definition",
   );
 
@@ -383,8 +382,8 @@ it("worker ログの置き場は、盤面が守っているパスと同じ1つ�
  *  黙って飛ばす。`agentMd()` は provider 行だけ違う agent の md を作る。
  *  組み込みの auditor は provider を省略した展開(anthropic / moonshot、@workspace
  *  skill が openai を外す)なので、claude-code / anthropic 側にだけ入る(実測: 名前は fugu)。 */
-const agentMd = (name: string, provider: string) =>
-  `---\nname: ${name}\ndescription: d\nversion: "1"\nauthority: standard\nprovider: ${provider}\nskills: []\n---\nbody\n`;
+const agentMd = (provider: string) =>
+  `---\ndescription: d\nversion: "1"\nauthority: standard\nprovider: ${provider}\nskills: []\n---\nbody\n`;
 const BOTH_PROVIDERS = "\n  - name: anthropic\n  - name: openai";
 
 async function quarantineResolversFor(files: Record<string, string>) {
@@ -395,8 +394,8 @@ async function quarantineResolversFor(files: Record<string, string>) {
 
 it("harnessContainment は entry の Provider を正準 Harness に通し、どれか1つ該当すれば返す(#1013)", async () => {
   const { harnessContainment } = await quarantineResolversFor({
-    "agents/gpt.md": agentMd("gpt", "openai"),
-    "agents/both.md": agentMd("both", BOTH_PROVIDERS),
+    "agents/gpt.md": agentMd("openai"),
+    "agents/both.md": agentMd(BOTH_PROVIDERS),
   });
   // entry の名前を canonicalHarness に通さず比べる変異: "openai" !== "codex" で codex が空になり赤
   expect(harnessContainment?.(["codex"])).toEqual(["both", "gpt"]);
@@ -412,7 +411,7 @@ it("harnessContainment は anthropic だけの registry では codex を空で�
 
 it("harnessContainment は不正な定義の agent を throw せず除く(#1013)", async () => {
   const { harnessContainment } = await quarantineResolversFor({
-    "agents/bogus.md": agentMd("bogus", "bogus"),
+    "agents/bogus.md": agentMd("bogus"),
   });
   // assertValidAgentDefinition の門を外すと canonicalHarness が未知の Provider で落ち、
   // throw して赤。registry の読み込みは倒れない(ADR 0097 決定3)
@@ -421,8 +420,8 @@ it("harnessContainment は不正な定義の agent を throw せず除く(#1013)
 
 it("providerAuth は entry の Provider 名を文字列のまま突き合わせ、どれか1つ該当すれば返す(#1013)", async () => {
   const { providerAuth } = await quarantineResolversFor({
-    "agents/gpt.md": agentMd("gpt", "openai"),
-    "agents/both.md": agentMd("both", BOTH_PROVIDERS),
+    "agents/gpt.md": agentMd("openai"),
+    "agents/both.md": agentMd(BOTH_PROVIDERS),
   });
   // some → every の変異: both が落ちて赤。全 agent を返す変異は下の anthropic 側で赤
   expect(providerAuth?.(["openai"])).toEqual(["both", "gpt"]);
@@ -543,7 +542,7 @@ it("registry があるとき、各口には対応する解決子が刺さって�
 });
 
 it("組み込みを shadow している盤面では、その名前は roster にも候補にも普通の agent として現れる(ADR 0235 決定1 / ADR 0228 決定2)", async () => {
-  const registryDir = await makeRegistry({ "agents/fugu.md": agentMd("fugu", "anthropic") });
+  const registryDir = await makeRegistry({ "agents/fugu.md": agentMd("anthropic") });
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
 
   expect(options.listAgents?.().map((agent) => agent.name)).toEqual(["deckhand", "fugu"]);
@@ -554,10 +553,10 @@ it("組み込みを shadow している盤面では、その名前は roster に
  *  `agentRegistered` と同じ `(name) => …` の口が並ぶので、実 registry で別々の答えを要求する。 */
 it("agentDefinitionFailure は pickup と同じ解決で定義の不成立を理由つきで返し、registry の commit を読み直す(#1745)", async () => {
   const brokenTier = (tier: string) =>
-    `---\nname: broken\ndescription: d\nversion: "1"\nauthority: standard\nprovider: anthropic\n${tier}skills: []\n---\nbody\n`;
+    `---\ndescription: d\nversion: "1"\nauthority: standard\nprovider: anthropic\n${tier}skills: []\n---\nbody\n`;
   const registryDir = await makeRegistry({
     "agents/broken.md": brokenTier("tier: nonexistent\n"),
-    "agents/orphan.md": agentMd("orphan", "anthropic").replace("authority: standard", "authority: missing"),
+    "agents/orphan.md": agentMd("anthropic").replace("authority: standard", "authority: missing"),
   });
   const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
   const failure = options.agentDefinitionFailure!;
@@ -575,6 +574,22 @@ it("agentDefinitionFailure は pickup と同じ解決で定義の不成立を理
     cwd: registryDir,
   });
   expect(failure("broken")).toBeUndefined();
+});
+
+// issue #2694: schema に無いキーは門で止まるので、解除検査もそれが残る間は「戻った」に数えない。
+it("agentDefinitionFailure は schema に無いキーが残る定義を戻ったに数えず、キーを消した commit で戻す(#2694)", async () => {
+  const withExtra = (extra: string) => agentMd("anthropic").replace("skills: []\n", `skills: []\n${extra}`);
+  const registryDir = await makeRegistry({ "agents/typo.md": withExtra("mcp_servers:\n") });
+  const options = await buildOptions({ ...composition(), registryDir, workspaceName: "tidepool", defaultAgentName: "deckhand" });
+  const failure = options.agentDefinitionFailure!;
+
+  expect(failure("typo")).toMatch(/^agent\.md has keys it does not accept: mcp_servers\./);
+
+  writeFileSync(join(registryDir, "agents/typo.md"), withExtra(""));
+  execFileSync("git", ["-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qam", "fix typo"], {
+    cwd: registryDir,
+  });
+  expect(failure("typo")).toBeUndefined();
 });
 
 // ADR 0099 決定2/5 / issue #463: このホストの worker をどの容器機構で封じるかは

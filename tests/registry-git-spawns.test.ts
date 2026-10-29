@@ -19,7 +19,7 @@ function gitSpawnsOfOneLoad(dir: string): number {
 describe("loadRegistry の git 起動回数", () => {
   it("agent・profile の本数に依らず一定(ファイルごとに git を起動しない — issue #983)", async () => {
     const agent = (name: string) =>
-      `---\nname: ${name}\ndescription: extra\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are ${name}.\n`;
+      `---\ndescription: extra\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are ${name}.\n`;
     const profile = `guidance: extra\nassignable_to: []\nallowed_workspaces: []\nmerge: external\n`;
     const small = await makeRegistry();
     const large = await makeRegistry({

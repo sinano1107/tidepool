@@ -23,7 +23,7 @@ const agent = (name: string, provider: string, tier: string | undefined, extra: 
   advisor: false,
   tier,
   skills: ["*"],
-  retiredFields: [],
+  retiredFields: [], unknownFields: [],
   systemPrompt: "p",
   ...extra,
 });

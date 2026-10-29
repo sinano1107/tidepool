@@ -229,7 +229,6 @@ async function fixture(
   if (linkWorkspace) await symlink(workspace, registeredWorkspace);
   const registry = await makeRegistry({
     "agents/codex-agent.md": `---
-name: codex-agent
 description: Codex agent
 version: 1.2.3
 authority: standard
@@ -709,7 +708,7 @@ describe("CodexWorker (ADR 0098)", () => {
 
   it("200KiB以上の盤面の文とtaskは記録した順序と区切りで1つのstdinに送り、developer指示は空にする", async () => {
     const large = `開始\n${"魚🐟\n".repeat(40000)}末尾\n\n`;
-    const f = await fixture(undefined, undefined, undefined, undefined, { registryFiles: { "agents/codex-agent.md": `---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: []\n---\n${large}` } });
+    const f = await fixture(undefined, undefined, undefined, undefined, { registryFiles: { "agents/codex-agent.md": `---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\nprovider: openai\nskills: []\n---\n${large}` } });
     const value = task(f.db, "codex-prompt-record");
     value.purpose = large;
     await f.start(value);
@@ -950,7 +949,7 @@ describe("CodexWorker (ADR 0098)", () => {
     // objected の後に定義が改訂される —— review は現行版で走り、当時版は証拠として読む(ADR 0019)
     await writeFile(
       join(f.registry, "agents", "codex-agent.md"),
-      "---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.4\nauthority: standard\nprovider: openai\nskills: []\n---\nYou are the Codex worker, REFINED after the objected call.",
+      "---\ndescription: Codex agent\nversion: 1.2.4\nauthority: standard\nprovider: openai\nskills: []\n---\nYou are the Codex worker, REFINED after the objected call.",
     );
     git("commit", "-am", "refine codex-agent");
 

@@ -38,7 +38,6 @@ it("assignee 未指定の review を pickup すると、pickup と spawn の両�
   const workspace = await makeWorkspace("review-pickup-attribution");
   const registryDir = await makeRegistry({
     "agents/tako.md": `---
-name: tako
 description: Default agent
 version: 1.0.0
 authority: standard
@@ -49,7 +48,6 @@ skills:
 You are Tako.
 `,
     "agents/fugu.md": `---
-name: fugu
 description: Independent auditor
 version: 1.0.0
 authority: standard

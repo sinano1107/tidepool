@@ -17,6 +17,7 @@ function makeRegistry(
     tier?: string;
     skills?: string[];
     retiredFields?: string[];
+    unknownFields?: string[];
   }>,
 ): Registry {
   return {
@@ -32,6 +33,7 @@ function makeRegistry(
           provider: normalizeProviderEntries(a.entries ?? a.providers ?? a.provider ?? "anthropic", a.skills ?? ["*"]),
           tier: a.tier,
           retiredFields: a.retiredFields ?? [],
+          unknownFields: a.unknownFields ?? [],
           skills: a.skills ?? ["*"],
           systemPrompt: `You are ${name}.`,
         },
@@ -197,6 +199,15 @@ describe("resolveExecutionAgent(ADR 0012 / issue #36: spawn 時の assignee 解�
     expect(() => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work")).toThrow(
       InvalidAgentDefinitionError,
     );
+  });
+
+  it("schema に無いキーが残る定義も pickup 解決で拒否され、その agent 名の quarantine に落ちる(issue #2694)", () => {
+    const registry = makeRegistry({
+      deckhand: { authority: "standard", unknownFields: ["providers"] },
+    });
+    const resolve = () => resolveExecutionAgent(registry, "deckhand", null, seedTierNames, "work");
+    expect(resolve).toThrow(InvalidAgentDefinitionError);
+    expect(resolve).toThrow("agent deckhand: agent.md has keys it does not accept: providers.");
   });
 
   it("列挙にないティアも同じ門で拒否される(ADR 0110 決定1 — 読み込みは倒さない)", () => {

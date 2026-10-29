@@ -396,7 +396,7 @@ it.each([
   async ({ reviewTier, agentTier, model, source }) => {
     const workspace = await makeWorkspace("integration-review-tier");
     const registryDir = await makeRegistry({
-      "agents/tako.md": `---\nname: tako\ndescription: Reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\n${agentTier ? `tier: ${agentTier}\n` : ""}skills: ["*"]\n---\nReview carefully.\n`,
+      "agents/tako.md": `---\ndescription: Reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\n${agentTier ? `tier: ${agentTier}\n` : ""}skills: ["*"]\n---\nReview carefully.\n`,
       "workspaces.yaml": `tidepool:\n  path: ${workspace.path}\n`,
     });
     const logDir = await tempDir("review-tier-logs-");

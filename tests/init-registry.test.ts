@@ -94,7 +94,7 @@ describe("npm run init-registry", () => {
       description: "General work agent for the Tidepool board.",
       provider: [{ name: "anthropic", advisor: false }],
       tier: undefined,
-      retiredFields: [],
+      retiredFields: [], unknownFields: [],
       icon: "🐙",
       // ADR 0025 決定7: 既定 agent は @workspace
       skills: ["@workspace"],

@@ -183,7 +183,7 @@ it("既に別の session が slot に入っているときに遅れて届いた 
 it("skill 列挙の容器が空にならず回収 timeout で null に落ちると、failure question と Containment quarantine が1枚ずつ立ち、時間制限を待たずに枠は空くが次は拾われない", async () => {
   const registryDir = await makeRegistry({
     "agents/deckhand.md":
-      "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+      "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
       "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
   });
   const logDir = await tempDir("skill-enum-fail-logs-");

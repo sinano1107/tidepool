@@ -57,6 +57,10 @@ export interface AgentDefinition {
    *  registry 全体を煉瓦にしないよう、拒否するのは登録と pickup の門である
    *  (`provider` の列挙違反と同じ扱い、ADR 0097 決定3)。 */
   retiredFields: readonly string[];
+  /** frontmatter に書かれているが schema に無いキー(issue #2694)。トップレベルと、object の
+   *  provider entry 内(`provider.<key>` の形で)を拾う。退役フィールドと同じく**読み込みでは
+   *  倒さず**、門が名前を挙げて拒む —— 綴り違いの欄が「省略」と読まれて黙って消えないように。 */
+  unknownFields: readonly string[];
   /** Visual identity emoji for this agent (issue #52), shown by the board
    *  UI's AgentChip. Absent → the UI falls back to hashed initials. Loader
    *  checks only structural validity — a single Twemoji-covered grapheme
@@ -263,6 +267,7 @@ const BUILT_IN_AUDITOR: AgentDefinition = {
   description: "Reviews work independently against its completion criteria.",
   provider: normalizeProviderEntries(undefined, BUILT_IN_AUDITOR_SKILLS),
   retiredFields: [],
+  unknownFields: [],
   icon: "🐡",
   skills: BUILT_IN_AUDITOR_SKILLS,
   builtin: true,
@@ -328,6 +333,7 @@ export interface AgentDefinitionCheck {
   tier?: string;
   skills?: readonly string[];
   retiredFields?: readonly string[];
+  unknownFields?: readonly string[];
 }
 
 /** 定義が成立しているかの検査(ADR 0097 決定1/3 / ADR 0110 決定1)—— 登録の verb
@@ -340,7 +346,7 @@ export function assertValidAgentDefinition(
   /** 盤面の段の名前(ADR 0200 決定2): agent.md の `tier` はこの一覧に対して検査する。 */
   tiers: readonly Tier[],
 ): void {
-  const { provider: entries, tier, skills = [], retiredFields = [] } = definition;
+  const { provider: entries, tier, skills = [], retiredFields = [], unknownFields = [] } = definition;
   // 拒否文は盤面のコードが発する文なので、ADR の引用は文でなくここに置く(ADR 0207)
   if (retiredFields.length > 0) {
     // ADR 0110 決定1(実行設定は表へ)/ ADR 0116 決定2(advisor は entry の性質)
@@ -351,6 +357,15 @@ export function assertValidAgentDefinition(
         "property of a provider entry whose model is derived from that same table — " +
         `declare a tier (${tiers.join(" / ")}) and/or write the advisor on its entry, e.g. ` +
         "`provider: [{ name: anthropic, advisor: true }]`, instead",
+    );
+  }
+  // issue #2694
+  if (unknownFields.length > 0) {
+    throw new InvalidAgentDefinitionError(
+      agentName,
+      `agent.md has keys it does not accept: ${unknownFields.join(" / ")}. ` +
+        `Accepted keys: ${Object.keys(agentFrontmatterSchema.shape).join(" / ")} ` +
+        `(and ${Object.keys(providerEntrySchema.shape).join(" / ")} inside a provider entry)`,
     );
   }
   // ADR 0116 決定1
@@ -640,6 +655,8 @@ export function assertValidAllowedDomains(domains: string[]): void {
   }
 }
 
+const providerEntrySchema = z.looseObject({ name: z.string(), advisor: z.boolean().optional() });
+
 const agentFrontmatterSchema = z.looseObject({
   version: z.coerce.string(),
   authority: z.string(),
@@ -650,9 +667,7 @@ const agentFrontmatterSchema = z.looseObject({
   provider: z
     .union([
       z.string(),
-      z.array(
-        z.union([z.string(), z.looseObject({ name: z.string(), advisor: z.boolean().optional() })]),
-      ),
+      z.array(z.union([z.string(), providerEntrySchema])),
     ])
     .nullish(),
   // 自由文字列のまま(`provider` と同じ理由 — 列挙の検査は門であって読み込みでは
@@ -858,7 +873,24 @@ function isWritten(value: unknown): boolean {
  *  挙げて拒否する。スキーマは looseObject なので、値の形を問わず読み込みは倒れない。 */
 function retiredExecutionFields(raw: unknown): string[] {
   const meta = (raw ?? {}) as Record<string, unknown>;
-  return ["model", "effort", "advisor"].filter((name) => isWritten(meta[name]));
+  return RETIRED_FIELDS.filter((name) => isWritten(meta[name]));
+}
+
+const RETIRED_FIELDS = ["model", "effort", "advisor"];
+
+/** schema に無いキー(issue #2694)。値ではなく**キーの存在**で数える。退役フィールドは名前で
+ *  除く —— 値が空なら退役にも数えない(`isWritten`)が、未知キーにもしない。 */
+function unknownFrontmatterFields(raw: unknown): string[] {
+  const meta = (raw ?? {}) as Record<string, unknown>;
+  const topLevel = Object.keys(meta).filter(
+    (key) => !Object.hasOwn(agentFrontmatterSchema.shape, key) && !RETIRED_FIELDS.includes(key),
+  );
+  const entries = Array.isArray(meta.provider) ? meta.provider : [];
+  const inEntries = entries
+    .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
+    .flatMap((entry) => Object.keys(entry).filter((key) => !Object.hasOwn(providerEntrySchema.shape, key)))
+    .map((key) => `provider.${key}`);
+  return [...topLevel, ...inEntries];
 }
 
 function parseAgentFile(name: string, raw: string): AgentDefinition {
@@ -881,6 +913,7 @@ function parseAgentFile(name: string, raw: string): AgentDefinition {
     provider: normalizeProviderEntries(meta.provider, meta.skills),
     tier: isWritten(meta.tier) ? (meta.tier as string) : undefined,
     retiredFields: retiredExecutionFields(parsed),
+    unknownFields: unknownFrontmatterFields(parsed),
     icon: meta.icon,
     skills: meta.skills,
     systemPrompt: body.trim(),

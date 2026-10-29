@@ -119,7 +119,11 @@ export async function createAgent(input: CreateAgentInput, deps: AgentAdminDeps 
   assertValidSkillAllowlist(input.skills);
   const definition = normalizedDefinition(input);
   assertValidAgentDefinition(input.name, definition, deps.tiers());
-  commitAgentFile(deps, { ...definition, retiredFields: [], version: "1" }, `create agent ${input.name} via WebUI`);
+  commitAgentFile(
+    deps,
+    { ...definition, retiredFields: [], unknownFields: [], version: "1" },
+    `create agent ${input.name} via WebUI`,
+  );
 }
 
 /** The edit half (issue #70): the same fields as creation — the form
@@ -141,7 +145,8 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps 
   assertValidSkillAllowlist(input.skills);
   // no-change 編集はコミットなしの成功(workspace-create.ts の porcelain
   // チェックと同じ狙い)— version はここで見ない: 刻印だけが動く「編集」は
-  // 存在せず、実効フィールドが同じ再送で刻印だけ進めない
+  // 存在せず、実効フィールドが同じ再送で刻印だけ進めない。ただし保存側に退役
+  // フィールドや schema に無いキーが残るなら、同じ再送も書き直しである(issue #2694)
   // 検査するのは**提出された定義**だけで、保存されている側の退役フィールドは
   // 通行止めにしない(ADR 0110 決定1 が拒むのは「登録される値」であって、既に
   // git にある行ではない)。手で commit された旧い agent.md はこの門を通した
@@ -154,7 +159,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps 
   if (!sameEffectiveFields(existing, definition)) {
     commitAgentFile(
       deps,
-      { ...definition, retiredFields: [], version: bumpVersion(existing.version) },
+      { ...definition, retiredFields: [], unknownFields: [], version: bumpVersion(existing.version) },
       `update agent ${input.name} via WebUI`,
     );
   }
@@ -166,7 +171,7 @@ export async function updateAgent(input: UpdateAgentInput, deps: AgentAdminDeps 
  *  書かれた entry にだけ畳む —— 省略の展開は常に advisor なし(ADR 0116 決定1/2)。 */
 function normalizedDefinition(
   input: CreateAgentInput,
-): Omit<AgentDefinition, "version" | "retiredFields"> {
+): Omit<AgentDefinition, "version" | "retiredFields" | "unknownFields"> {
   return {
     ...input,
     provider: normalizeProviderEntries(
@@ -177,12 +182,15 @@ function normalizedDefinition(
 }
 
 /** version 以外の全フィールド(編集フォームが送るもの)の一致。systemPrompt
- *  は保存される正規形(trim 済み — serializeAgentFile 参照)で比較する。 */
+ *  は保存される正規形(trim 済み — serializeAgentFile 参照)で比較する。保存側に
+ *  書き直しで消える行(退役フィールド / schema に無いキー)があれば一致としない。 */
 function sameEffectiveFields(
   existing: AgentDefinition,
-  input: Omit<AgentDefinition, "version" | "retiredFields">,
+  input: Omit<AgentDefinition, "version" | "retiredFields" | "unknownFields">,
 ): boolean {
   return (
+    existing.retiredFields.length === 0 &&
+    existing.unknownFields.length === 0 &&
     existing.authority === input.authority &&
     existing.description === input.description &&
     sameProviderEntries(existing.provider, input.provider) &&
