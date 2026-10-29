@@ -88,6 +88,15 @@ export type LandingVerdict =
 
 export type LandingBlock = { kind: "attached_children" | "objections"; count: number };
 
+/** ADR 0330: 縛りの読みと行為を同じ同期の区間に置く。gate は Promise を返せない。 */
+export async function actIfGateOpen<T, Refusal>(
+  gate: () => (Refusal & { then?: never }) | null,
+  act: () => Promise<T>,
+): Promise<T | Refusal> {
+  const refusal = gate();
+  return refusal === null ? act() : refusal;
+}
+
 function countUnbundledObjections(db: Db, taskId: string): number {
   const open = activeTriageSession(db);
   if (!open) return 0;
@@ -1161,9 +1170,26 @@ export function createLanding(deps: LandingDeps): Landing {
       };
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
-      const push = async (sha: string) => {
+      let authority: AuthorityProfile | undefined;
+      const push = async (sha: string, openingSurface = false) => {
         const pushBranch = await github.preparePush({ path: workspace.path, branch: taskBranch(task.id) });
-        boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
+        return actIfGateOpen<null, LandingVerdict>(() => {
+          const block = landingBlock(deps.db, task.id);
+          if (block) {
+            recordLandingDeferred(deps.db, task.id, block, deps.clock.now());
+            return { kind: "deferred", reason: block.kind, count: block.count };
+          }
+          if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
+          if (openingSurface) {
+            const resolved = readAuthority(task, deps.clock.now());
+            if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
+            authority = resolved.profile;
+          }
+          return null;
+        }, async () => {
+          boardRefWriter(deps.db, workspace)(remoteTrackingRef(taskBranch(task.id)), sha, pushBranch);
+          return null;
+        });
       };
       if (task.pr_number !== null) {
         const { state, mergedBy } = await deps.github.getPullRequestState({ path: workspace.path, number: task.pr_number });
@@ -1185,7 +1211,8 @@ export function createLanding(deps: LandingDeps): Landing {
         }
         catchUp();
         const sha = taskBranchTip(workspace, task.id);
-        await push(sha);
+        const refusal = await push(sha);
+        if (refusal) return refusal;
         // push の直後に刻む —— 後段が throw しても、GitHub に載った head の猶予の起点は失わない(ADR 0227 決定2)
         recordBoardFact(task.id, { kind: "pr_branch_pushed", pr_number: task.pr_number, sha });
         return await afterPush({ kind: "landed", form: "open_pull_request_updated", prNumber: task.pr_number }, sha);
@@ -1210,16 +1237,19 @@ export function createLanding(deps: LandingDeps): Landing {
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
       if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
+      authority = resolved.profile;
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
       if (found) {
         // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
-        await push(sha);
+        const refusal = await push(sha, true);
+        if (refusal) return refusal;
         prNumber = found.number;
       } else {
         const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         // PR の作成は push 済みのブランチに `gh pr create` だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
-        await push(sha);
+        const refusal = await push(sha, true);
+        if (refusal) return refusal;
         const created = await deps.github.createPullRequest({
           path: workspace.path,
           branch: taskBranch(task.id),
@@ -1236,7 +1266,7 @@ export function createLanding(deps: LandingDeps): Landing {
         sha,
         resolveTaskAgent(task, deps.defaultAgentName, deps.auditorName ?? DEFAULT_AUDITOR_NAME, deps.interviewerName ?? DEFAULT_INTERVIEWER_NAME),
         deps.clock.now(),
-        resolved.profile,
+        authority,
         deps.isProtectedWorkspace?.(workspace.name),
         "worker",
       );
@@ -1438,49 +1468,50 @@ export function createLanding(deps: LandingDeps): Landing {
           // 面が question 側へ変わっていれば、CI 赤 / 猶予を過ぎた未報告なら CI 赤の question、外の push が落とした内容は
           // その question、それ以外は推奨 merge の面変化の question(ADR 0217 決定2・ADR 0227 決定3)。CI が pending でも
           // 同じ tick で外す(ADR 0238 決定2)。ここから行為までに await は無いので、この読みが行為の直前の読みを兼ねる
-          if (stop(askCiRed ?? askDropped)) continue;
-          let askHuman: () => void;
-          if (askCiRed) {
-            askHuman = askCiRed;
-          } else if (ci !== "success") {
-            continue;
-          } else if (askDropped) {
-            askHuman = askDropped;
-          } else {
-            if (left === null || left.length > 0) continue;
-            // merge は CI を読んだ head に固定する(ADR 0231 決定1)
-            const failure = await github.mergePullRequest(ref, head).then(
-              () => null,
-              (error: unknown) => (error instanceof Error ? error.message : String(error)),
-            );
-            if (failure === null) {
-              retire(task_id, { kind: "pr_merged", pr_number }, now);
-              continue;
+          await actIfGateOpen(() => stop(askCiRed ?? askDropped) ? true : null, async () => {
+            let askHuman: () => void;
+            if (askCiRed) {
+              askHuman = askCiRed;
+            } else if (ci !== "success") {
+              return;
+            } else if (askDropped) {
+              askHuman = askDropped;
+            } else {
+              if (left === null || left.length > 0) return;
+              // merge は CI を読んだ head に固定する(ADR 0231 決定1)
+              const failure = await github.mergePullRequest(ref, head).then(
+                () => null,
+                (error: unknown) => (error instanceof Error ? error.message : String(error)),
+              );
+              if (failure === null) {
+                retire(task_id, { kind: "pr_merged", pr_number }, now);
+                return;
+              }
+              // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
+              const after = await github.readPullRequest(ref);
+              if (after.state === "unreadable") {
+                throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
+              }
+              if (after.state !== "OPEN") {
+                retire(task_id, { kind: prOutcomeKind(after.state, after.mergedBy), pr_number }, now);
+                return;
+              }
+              observePrHead(deps.db, task_id, pr_number, after.head, now);
+              // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
+              if (after.head !== head) return;
+              askHuman = hold(
+                `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
+                  "Merge once it is fixed, or hold?",
+              );
+              // merge を待つ間に変わりうるので、question の前に読み直す
+              if (stop(askHuman)) return;
             }
-            // merge の失敗の後に状態と head を読み直す。読めなければ分類できない失敗(ADR 0229 決定3)
-            const after = await github.readPullRequest(ref);
-            if (after.state === "unreadable") {
-              throw new Error(`merge failed (${failure}) and PR #${pr_number} could not be re-read`);
-            }
-            if (after.state !== "OPEN") {
-              retire(task_id, { kind: prOutcomeKind(after.state, after.mergedBy), pr_number }, now);
-              continue;
-            }
-            observePrHead(deps.db, task_id, pr_number, after.head, now);
-            // head が動いただけなら、次の tick で新しい head の CI を読む(ADR 0231 決定1)。gh の文面では見分けない
-            if (after.head !== head) continue;
-            askHuman = hold(
-              `"${task.title}"'s auto_if_ci_green auto-merge could not merge PR #${pr_number}: ${failure}. ` +
-                "Merge once it is fixed, or hold?",
-            );
-            // merge を待つ間に変わりうるので、question の前に読み直す
-            if (stop(askHuman)) continue;
-          }
-          // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
-          deps.db.transaction(() => {
-            clearPendingAutoMerge(deps.db, task_id);
-            askHuman();
-          })();
+            // 外すことと問うことを1つにする — 片方だけで無言で消える経路を残さない(ADR 0105 決定3)
+            deps.db.transaction(() => {
+              clearPendingAutoMerge(deps.db, task_id);
+              askHuman();
+            })();
+          });
         } catch (error) {
           console.error(`[landing] auto-merge of PR #${pr_number} (task ${task_id}) failed; it stays queued:`, error);
         } finally {

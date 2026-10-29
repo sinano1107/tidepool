@@ -8,7 +8,7 @@ import { ClaudeDraftClient } from "../src/claude-draft-client.js";
 import { quarantineContainment } from "../src/containment.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
-import { listEvents, listEventsOfKinds } from "../src/events.js";
+import { appendEvent, listEvents, listEventsOfKinds } from "../src/events.js";
 import {
   cancelThroughHumanDoor,
   completeThroughHumanDoor,
@@ -30,7 +30,7 @@ import {
   settleQuestionAsObserved,
   type Task,
 } from "../src/tasks.js";
-import { commitTriage, startTriage } from "../src/triage.js";
+import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { quarantineWorkspace, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, BOARD_CALL_USAGE, boardCallStream, FakeClock, FakeDraftClient, FakeGitHubClient, fakeHead, holdAfterMerge, unusedLanding } from "./fakes.js";
 import {
@@ -1256,6 +1256,30 @@ async function mergeAnswerBeforeMark() {
   await gate.entered;
   return { work, question, github, landing, answer, first, open: gate.open };
 }
+
+it.each([
+  ["異議", "1 objection(s) raised in this triage await commit"],
+  ["付帯子", "1 attached child task(s) unsettled"],
+])("merge 回答の PR の読み取りの await 中に%sが出たら、merge せず question は開いたままで印を放す", async (block, reason) => {
+  const { work, question, github, answer, first, open } = await mergeAnswerBeforeMark();
+  if (block === "異議") {
+    const entry = appendEvent(db, {
+      taskId: work.id, actorId: "worker", origin: "worker",
+      payload: { kind: "decision_logged", line: "ship this implementation" }, at: NOW,
+    });
+    raiseObjection(db, entry, "repair the edge case first", NOW);
+  } else {
+    registerTask(db, { type: "work", parent_id: work.id, title: "repair", purpose: "repair the edge case", completion_criteria: "repaired" }, NOW, ...HUMAN_WEBUI);
+  }
+  open();
+
+  const refusal = new DomainError(`cannot merge yet: ${reason}`);
+  await expect(first).rejects.toThrow(refusal);
+  expect(github.merged).toEqual([]);
+  expect(getTask(db, question.id)?.status).toBe("todo");
+  expect(listEvents(db, work.id).map((event) => event.kind)).not.toContain("pr_merged");
+  await expect(answer("hold")).resolves.toMatchObject({ status: "done" });
+});
 
 it("merge 回答の PR の読み取りの await の間に「hold」が通った merge question への merge 回答は、merge せずに拒まれる", async () => {
   const { work, question, github, landing, answer, first, open } = await mergeAnswerBeforeMark();
