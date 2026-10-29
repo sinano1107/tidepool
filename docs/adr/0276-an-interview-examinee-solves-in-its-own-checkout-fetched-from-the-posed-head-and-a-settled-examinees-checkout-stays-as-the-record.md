@@ -45,3 +45,9 @@ root のブランチの tree rule の WIP commit の件名が root の title(Int
 - `workspace_state` の鍵が変わる(既存の表の鍵)ので priority:high のまま。実装は `/to-spec` → `/to-tickets`。
 - 面接室の作業ツリーは root の解放後 `main`(空)に戻り、監査・retry の root・人間が path を覗くと空に見える。監査の purpose は
   「出題の head で読め」と言っていて git 経由が前提だが、この grilling では触らず別 issue に置く。
+
+## 追記(2026-10-30 の grilling、issue #2724 / ADR 0329)
+
+決定1 の「面接室と同じ順」(在り処を event に残してから init・fetch・checkout)は、面接室と**1つの開く手順**になり、開いた event は
+`main` の checkout の後に書く(ADR 0329 決定1・2)。再開は「event があり、タスクブランチがある」で判定し、event があって repo が無い
+checkout は作り直さず面接室の名前で止まる(ADR 0329 決定3)。

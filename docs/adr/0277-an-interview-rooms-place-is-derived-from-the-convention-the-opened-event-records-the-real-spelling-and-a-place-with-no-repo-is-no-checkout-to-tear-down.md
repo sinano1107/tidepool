@@ -57,3 +57,9 @@ Codex の固定版は未確認)ので、root は根拠を読めないまま採�
 - **回答時に盤面が空の repo を作り直す** —— 同じく既定で記録の欠落を埋めて走らせる形。
 - **`safeRealpath` に投げさせる** —— 呼び手の残り(registry clone の比較、MCP の `real_environment`)は生 path の fallback が正しく、
   後始末も `taskRunPlace` を通るので投げる場所にできない(決定3)。
+
+## 追記(2026-10-30 の grilling、issue #2724 / ADR 0329)
+
+決定1 の「次の pickup が event を書く」と、上の追記 決定2 の3分岐(消えた・ディレクトリだけ・repo あり)は ADR 0329 で置き換わる —— 開いた
+event は repo ができた後に書くので、分岐は「event あり → repo がある / event 無し → 番地を作れる」の2つになり、人間が `git init` を
+要る場面を本文が言わない綻び(#2724)は消える。決定2・3 はそのまま。
