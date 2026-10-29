@@ -14,7 +14,8 @@ return なので ADR 0294 の連続失敗の計測を**戻し**、開いた `pol
 2. **skip の単位は poll ではなく「pickup で GitHub を読む task」の集合である。** issue-backed task と、issue-backed の親を持ち pickup で
    親の文面を live で読む子。最初の失敗がどちらの経路でも、この poll の残りからその集合を外し、通常 task だけを候補に次の head へ進む。
    同じ poll で2つ目の `gh` を撃たない —— 失敗は task の性質でなく API の性質である。registry drift で門が止めた head は、その head だけ
-   外して `stopped` を引き直し、次の head へ進む。
+   外して `stopped` を引き直し、次の head へ進む。集合は親の参照の有無で引き、材料の session を持つ RCA 子(記録を読み GitHub を読まない、
+   ADR 0321 決定1)も外す —— streak 中の過剰除外を受け入れ、述語に材料の有無を持ち込まない。
 3. **展開の成功を挟まず失敗が10分以上続けば、Tidepool 名義の確認 question を1枚立てる。** Quarantine 族を借りる(ADR 0112 の借り方): kind は
    `issueExpansion`、門の役は持たせない(除外が機構、question は信号)。受理の検査は最後に失敗した参照(workspace, issue 番号)の再展開で、
    `IssueGoneError` 以外で投げれば本文つきで拒む。本体の展開が1つ通れば回答なしで決着する(ADR 0184 決定5 の形)。`IssueGoneError` は
