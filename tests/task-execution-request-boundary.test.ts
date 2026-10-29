@@ -195,7 +195,6 @@ it("要求のある task はその要求のモデルで spawn され、worker_sp
   const workspace = await makeWorkspace("task-execution-request");
   const registryDir = await makeRegistry({
     "agents/tako.md": `---
-name: tako
 description: Default agent
 version: 1.0.0
 authority: standard

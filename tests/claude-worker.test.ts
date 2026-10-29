@@ -537,7 +537,7 @@ describe("ClaudeCodeWorker", () => {
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }]]);
   });
 
-  const NAVIGATOR_MD = `---\nname: navigator\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
+  const NAVIGATOR_MD = `---\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Navigation specialist\n---\nYou are Navigator, the specialist.\n`;
 
   it("task.assignee が指定されていれば、コンストラクタの agent より優先してそのエージェントとして spawn する(ADR 0012 / issue #36)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
@@ -609,7 +609,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("組み込み agent を shadow している間、その名前は普通の agent として roster に現れる(ADR 0235 決定1 / ADR 0228 決定2)", async () => {
     const { start, calls } = await makeWorker({
-      "agents/fugu.md": `---\nname: fugu\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Shadowing work agent\n---\nYou are Fugu.\n`,
+      "agents/fugu.md": `---\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Shadowing work agent\n---\nYou are Fugu.\n`,
     });
     start();
     const args = calls[0]!.args;
@@ -627,7 +627,7 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).not.toContain("## Roster");
   });
 
-  const KEEPER_MD = `---\nname: keeper\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
+  const KEEPER_MD = `---\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Independent reviewer\n---\nYou are Keeper, the auditor.\n`;
 
   it("review タイプかつ assignee が未指定なら、コンストラクタの既定 agent ではなく auditorName で spawn する(issue #42)", async () => {
     const { start, calls } = await makeWorker(
@@ -913,7 +913,7 @@ describe("ClaudeCodeWorker", () => {
   // (tako)でも、cwd=workspace・side channel 禁止・escalate をためらわない posture が
   // system prompt に現れることを固定する。verb の意味論は MCP description 側にあり、
   // ここには重複させない(issue #51)。
-  const TAKO_MD = `---\nname: tako\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`;
+  const TAKO_MD = `---\ndescription: General work agent for the tidepool board\nversion: 0.1.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\nicon: \u{1F419}\n---\n`;
 
   it("本文が空の既定エージェントでも、ワーカープロトコル(rules of the road)を system prompt に注入する(ADR 0017 / issue #51)", async () => {
     const { start, calls } = await makeWorker({ "agents/tako.md": TAKO_MD });
@@ -1174,7 +1174,7 @@ describe("ClaudeCodeWorker", () => {
   // issue #56 / ADR 0025: skill access is the agent's frontmatter allowlist,
   // enforced at spawn as the complement deny of the CLI-enumerated full set.
   const skilledMd = (skillsYaml: string) =>
-    `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`;
+    `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`;
 
   it("skills が ['*'] の agent は列挙 ping を呼ばず、skill deny も付けない(Workflow のみ・ADR 0025 point 5)", async () => {
     const rec = recordingEnumerator(["code-review", "tdd"]);
@@ -2160,7 +2160,7 @@ describe("ClaudeCodeWorker", () => {
     const recorder = recordingSpawn();
     const { calls, processes } = recorder;
     let systemAtSpawn = "";
-    const { worker, setting, logDir, db } = await makeWorker({ "agents/deckhand.md": `---\nname: deckhand\ndescription: d\nversion: 1\nauthority: standard\nskills: []\n---\n${large}` }, { containers: passthroughContainers((command, args, options) => {
+    const { worker, setting, logDir, db } = await makeWorker({ "agents/deckhand.md": `---\ndescription: d\nversion: 1\nauthority: standard\nskills: []\n---\n${large}` }, { containers: passthroughContainers((command, args, options) => {
       systemAtSpawn = readFileSync(args[args.indexOf("--append-system-prompt-file") + 1]!, "utf8");
       return recorder.spawn(command, args, options);
     }) });
@@ -2316,7 +2316,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("agent が tier を書けばその行の model を使う", async () => {
     const { start, calls } = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
     });
     start();
     expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
@@ -2351,7 +2351,7 @@ describe("ClaudeCodeWorker", () => {
     });
 
     const agent = await makeWorker({
-      "agents/deckhand.md": `---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: frontier\n---\nYou are Deckhand.\n`,
+      "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: frontier\n---\nYou are Deckhand.\n`,
     });
     agent.start("task-setting-agent");
     expect(
@@ -3226,7 +3226,7 @@ describe("ClaudeCodeWorker", () => {
     // spawn の手前で起きること —— ローカル main はどちらでも動かない
     const mergedOnRemote = publish(
       "agents/deckhand.md",
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
+      `---\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, MERGED on the remote.\n`,
       "merged registry change",
     );
     expect(await refreshRegistry(registryDir, undefined, writeUnannounced)).toEqual({ available: true });
@@ -3278,7 +3278,7 @@ describe("ClaudeCodeWorker", () => {
     // as evidence — so current body and 当時版 body must be distinguishable.
     await writeFile(
       join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED after the objected call.\n`,
+      `---\ndescription: General work agent for the tidepool board\nversion: 0.4.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand, REFINED after the objected call.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "refine deckhand");
@@ -3356,7 +3356,7 @@ describe("ClaudeCodeWorker", () => {
     // an auditor agent so the unset-assignee review resolves and spawns
     const { worker, setting, calls, db, logDir } = await makeWorker(
       {
-        "agents/auditor.md": `---\nname: auditor\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the Auditor.\n`,
+        "agents/auditor.md": `---\ndescription: Independent reviewer\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are the Auditor.\n`,
       },
       { auditorName: "auditor" },
     );
@@ -3485,7 +3485,7 @@ describe("ClaudeCodeWorker", () => {
     git("checkout", "-b", "task/bump");
     await writeFile(
       join(registryDir, "agents", "deckhand.md"),
-      `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 9.9.9\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
+      `---\ndescription: General work agent for the tidepool board\nversion: 9.9.9\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\n---\nYou are Deckhand.\n`,
     );
     git("add", "-A");
     git("commit", "-m", "unmerged bump");
@@ -3504,7 +3504,7 @@ describe("ClaudeCodeWorker", () => {
  *  worker_exited に残るか。実 CLI は使わず、既存の ContainerSpawn seam に fake stream を
  *  流す(ADR 0027 / ADR 0041 §4)。 */
 describe("advisor capability (issue #33)", () => {
-  const ADVISOR_MD = `---\nname: deckhand\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
+  const ADVISOR_MD = `---\ndescription: General work agent for the tidepool board\nversion: 0.3.1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisor: true\nskills:\n  - "*"\n---\nYou are Deckhand.\n`;
   const withAdvisor = { "agents/deckhand.md": ADVISOR_MD };
 
   /** advisor の付く盤面の worker: 種の既定の上限は off なので、上限 sonnet にする —— economy の Sonnet 5.5 の
@@ -4319,7 +4319,6 @@ describe("provider 別の spawn env(issue #445 / ADR 0096・0097)", () => {
   /** `provider: moonshot` の agent 定義(fixture)。ベンダー知識(URL・モデル)は
    *  書かせない — registry が宣言するのは provider 名だけ(ADR 0005 / 0097)。 */
   const MOONSHOT_AGENT_MD = `---
-name: kipper
 description: Kimi-speaking work agent for the tidepool board
 version: "1"
 authority: standard

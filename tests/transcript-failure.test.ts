@@ -95,7 +95,7 @@ async function bootCodex() {
   git(workspace, "init", "-b", "main");
   const registryDir = await makeRegistry({
     "agents/codex-agent.md":
-      "---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
+      "---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
       "provider: openai\nskills: []\n---\nYou are the Codex worker.",
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });
@@ -128,7 +128,7 @@ async function bootCodex() {
 /** 列挙が要る skill の許可リストを持つ agent —— spawn は skill 列挙の `.then` の中から起きる。 */
 const SKILLED_DECKHAND = {
   "agents/deckhand.md":
-    "---\nname: deckhand\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+    "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
     "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
 };
 const bootClaudeAfterSkillEnumeration = () => bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"] });

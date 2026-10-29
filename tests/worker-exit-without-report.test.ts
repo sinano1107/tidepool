@@ -454,7 +454,7 @@ async function bootCodex() {
   git(workspace, "init", "-b", "main");
   const registryDir = await makeRegistry({
     "agents/codex-agent.md":
-      "---\nname: codex-agent\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
+      "---\ndescription: Codex agent\nversion: 1.2.3\nauthority: standard\n" +
       "provider: openai\nskills: []\n---\nYou are the Codex worker.",
     "workspaces.yaml": `work:\n  path: ${workspace}\n`,
   });

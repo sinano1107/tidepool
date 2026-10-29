@@ -45,7 +45,7 @@ describe("updateAgent: version 自動インクリメント(issue #70 — 機械�
       description: "Rewritten description",
       icon: "🦀",
       tier: undefined,
-      retiredFields: [],
+      retiredFields: [], unknownFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Deckhand, rewritten.",
     });
@@ -179,6 +179,27 @@ describe("updateAgent: no-change 編集(issue #70 — workspace-create の porce
     expect(written).toContain("description: d2");
   });
 
+  // issue #2694: 保存側に壊れた行が残る定義の同じ再送は no-change ではなく書き直し —— 何も変えずに
+  // 提出し直した編集が修復経路になる(「何か1欄変える」に依らない)。
+  it.each([
+    ["schema に無いキー", "mcp_servers:\n  - github\n", "mcp_servers"],
+    ["退役フィールド", "model: opus\n", "model:"],
+  ])("%s が残る定義は実効フィールドが同じ再送でも書き直して commit し、version を進める", async (_kind, line, key) => {
+    const registryDir = await makeMainRegistry({
+      "agents/crab.md": `---\nversion: 3\nauthority: standard\nprovider: anthropic\nskills:\n  - '*'\ndescription: d\n${line}---\np\n`,
+    });
+    const before = git(registryDir, "rev-parse", "main");
+
+    await updateAgent(
+      { name: "crab", authority: "standard", provider: "anthropic", description: "d", skills: ["*"], systemPrompt: "p" },
+      { registry: { dir: registryDir, mode: "purely-local", writeRef: writeUnannounced }, tiers: () => seedTierNames },
+    );
+
+    expect(git(registryDir, "rev-parse", "main")).not.toBe(before);
+    expect(git(registryDir, "show", "main:agents/crab.md")).not.toContain(key);
+    expect(loadRegistry(registryDir, "purely-local").agents.crab).toMatchObject({ version: "4", unknownFields: [], retiredFields: [] });
+  });
+
   it("実効フィールドが不変な再送はコミットなしの成功で、version も上がらない", async () => {
     const registryDir = await makeMainRegistry();
     // fixture の deckhand と同一内容(version は入力に存在しない)
@@ -306,7 +327,6 @@ describe("updateAgent: 存在しないエージェント(issue #70 — 編集は
 
 describe("changeAgentTier: tier の提案の承認が registry へ書く口(issue #920)", () => {
   const TIERED = `---
-name: crab
 # hand-written comment stays
 description: Crab
 version: 0.3.1

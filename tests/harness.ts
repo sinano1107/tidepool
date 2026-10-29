@@ -1224,7 +1224,7 @@ export function auditorRcaOn(db: Db, task: Task, at: Date, worker = "auditor"): 
 /** routing の材料の setup で走る行(段 standard)。 */
 export const OPUS_ROW = { provider: "anthropic" as const, model: "claude-opus-5-5", effort: "high" };
 /** registry の agent deckhand(組み込みでなく段 standard —— agent_tier で1段下げられる)。 */
-export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], systemPrompt: "p" };
+export const DECKHAND_AGENT: AgentView = { name: "deckhand", version: "1", authority: "standard", description: "agent", provider: "anthropic", advisor: false, tier: "standard", skills: ["*"], retiredFields: [], unknownFields: [], systemPrompt: "p" };
 
 export const NO_RECORD: TrackRecord = { board: { accepted: 0, rejected: 0 }, workspace: { accepted: 0, rejected: 0 }, seed: null };
 

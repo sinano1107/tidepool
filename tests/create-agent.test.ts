@@ -61,7 +61,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       description: "General work agent for the tidepool board",
       icon: "🐙",
       tier: "frontier",
-      retiredFields: [],
+      retiredFields: [], unknownFields: [],
       skills: ["@workspace"],
       systemPrompt: "You are Tako, the tidepool board's general work agent.\nBe kind.",
     });
@@ -124,7 +124,7 @@ describe("createAgent: 正常系(issue #70)", () => {
       description: "Minimal agent",
       icon: undefined,
       tier: undefined,
-      retiredFields: [],
+      retiredFields: [], unknownFields: [],
       skills: ["*"],
       systemPrompt: "You are Hermit.",
     });
@@ -485,7 +485,7 @@ describe("listAgentViews: 編集フォーム用の一覧(issue #70)", () => {
       icon: "🐙",
       tier: undefined,
       advisor: false,
-      retiredFields: [],
+      retiredFields: [], unknownFields: [],
       skills: ["*"],
       systemPrompt: "You are Tako.",
     });
