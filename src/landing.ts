@@ -1171,7 +1171,7 @@ export function createLanding(deps: LandingDeps): Landing {
       // 盤面の push は写しを動かすので、口を通す(ADR 0243)
       const { github } = deps;
       let authority: AuthorityProfile | undefined;
-      const push = async (sha: string, openingSurface = false) => {
+      const push = async (sha: string) => {
         const pushBranch = await github.preparePush({ path: workspace.path, branch: taskBranch(task.id) });
         return actIfGateOpen<null, LandingVerdict>(() => {
           const block = landingBlock(deps.db, task.id);
@@ -1180,7 +1180,7 @@ export function createLanding(deps: LandingDeps): Landing {
             return { kind: "deferred", reason: block.kind, count: block.count };
           }
           if (workspaceNeedsHuman(deps.db, workspace.name)) return quarantined("workspace", workspace.name);
-          if (openingSurface) {
+          if (task.pr_number === null) {
             const resolved = readAuthority(task, deps.clock.now());
             if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
             authority = resolved.profile;
@@ -1237,18 +1237,17 @@ export function createLanding(deps: LandingDeps): Landing {
       // profile を読むのは面を開く時点だけ —— 開いている PR への push は読まない(ADR 0217 決定3)
       const resolved = readAuthority(task, deps.clock.now());
       if (!("profile" in resolved)) return quarantined("agent", resolved.quarantinedAgent);
-      authority = resolved.profile;
       const sha = taskBranchTip(workspace, task.id);
       let prNumber: number;
       if (found) {
         // 見つけた開いている PR にも、作るときと同じく今のタスクブランチを押してから記録する —— 落ちた後に帰った修理も載る
-        const refusal = await push(sha, true);
+        const refusal = await push(sha);
         if (refusal) return refusal;
         prNumber = found.number;
       } else {
         const { title } = await contentSourceFor(task, deps.github, () => workspace?.path).expand();
         // PR の作成は push 済みのブランチに `gh pr create` だけを撃つ —— その失敗や所要時間は予告の範囲に入らない
-        const refusal = await push(sha, true);
+        const refusal = await push(sha);
         if (refusal) return refusal;
         const created = await deps.github.createPullRequest({
           path: workspace.path,
