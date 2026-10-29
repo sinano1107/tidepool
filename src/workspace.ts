@@ -12,6 +12,7 @@ import {
   originRepo,
 } from "./github-auth.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
+import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
 import {
   fetchBranchCopy,
   fetchCommit,
@@ -197,45 +198,51 @@ export function resolveExecutionWorkspace(
   };
 }
 
-/** ADR 0273 決定1: 面接室を root の pickup で開く —— 盤面の規約の基点の下に root の id の名前で作り、在り処を root の event に残してから
- *  `git init` と盤面名義の空コミットを置く。在り処が git の手順より先に残るので、git の途中で落ちた面接室も
- *  次の pickup は残った repo の続きから作る。registry には載せない。消さない(消す扉も無い)。 */
+/** ADR 0329: repo を作ってから開いた event を残す。記録済みの面接室は作り直さず、未生の HEAD だけ空コミットで補う。 */
 export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string, now: Date): void {
-  const path = interviewRoomPath(db, root.id) ?? recordOpened(db, root.id, "interview_room_opened", workspacesBaseDir, now);
-  // 既存の repo への init は何も変えない(HEAD も残る)
-  git(path, "init", "--quiet", "--initial-branch=main");
-  // 受験者の git の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  if (readRef({ name: root.id, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  const path = openRecordedPlace(db, root.id, "interview_room_opened", workspacesBaseDir, now, (path) => {
+    git(path, "init", "--quiet", "--initial-branch=main");
+    initialRoomCommit(path, root.id);
+  });
+  initialRoomCommit(path, root.id);
 }
 
-/** ADR 0276 決定1: 受験者の checkout を pickup で開く —— 面接室の外(規約の基点の下の受験者の id)に作り、在り処を受験者の event に
- *  残してから(面接室と同じ順: git の途中で落ちても次の pickup がこの在り処で引ける)、出題の head を面接室で引き、`git init` して
- *  面接室からその head だけを fetch し `main` にする(`clone` は root のブランチごと運ぶ)。タスクブランチは準備が `main` から切る。
- *  再開(タスクブランチがある)は何もしない —— 自分の WIP も ignored の生成物も残る。消さない(面接室と同じ、ADR 0276 決定4)。 */
+function initialRoomCommit(path: string, rootId: string): void {
+  // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
+  if (readRef({ name: rootId, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+}
+
+/** 受験者は出題の head だけを fetch した自分の checkout で解く。記録済みなら何も作り直さず WIP を残す(ADR 0276 / ADR 0329)。 */
 export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: string, now: Date): void {
   const rootId = interviewRootIdOf(db, examinee);
   if (rootId === undefined) throw new Error(`${examinee.id} is not an examinee of an Interview`);
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new Error(`the interview room of ${rootId} is not open`);
-  const opened = examineeCheckoutPath(db, examinee.id);
-  // repo の無い在り処(前の pickup が init の前に落ちた)で rev-parse を撃つと「無い」ではなく失敗になる
-  if (opened !== undefined && existsSync(join(opened, ".git")) && taskBranchExists({ ...room, path: opened }, examinee.id)) return;
-  const path = opened ?? recordOpened(db, examinee.id, "examinee_checkout_opened", workspacesBaseDir, now);
-  const head = resolvablePosedHead(db, room, examinee);
-  git(path, "init", "--quiet", "--initial-branch=main");
-  // FETCH_HEAD は fetch 元(面接室の在り処 = root の id)を書くので書かせない —— 受験者の `.git` に面接室を残さない(ADR 0276 決定1)
-  git(path, "fetch", "--quiet", "--no-write-fetch-head", room.path, head);
-  // 未生の `main` に ref だけ書くと index が空のまま残る —— checkout で作業ツリーごと置く
-  git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
+  openRecordedPlace(db, examinee.id, "examinee_checkout_opened", workspacesBaseDir, now, (path) => {
+    const head = resolvablePosedHead(db, room, examinee);
+    git(path, "init", "--quiet", "--initial-branch=main");
+    // FETCH_HEAD に面接室の在り処を残さない(ADR 0276 決定1)
+    git(path, "fetch", "--quiet", "--no-write-fetch-head", room.path, head);
+    git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
+  });
 }
 
-/** 面接室・受験者の checkout の在り処を規約の基点の下の task の id に作り、実体の綴りで task の event に残す —— cwd・sandbox の読み・
- *  root に渡す在り処が同じ綴りになる(issue #1954)。git の手順より先に残すので、git の途中で落ちても次の pickup がこの在り処で引ける。
- *  mkdir で落ちれば event は無い —— quarantine の回答の検査は event でなく基点と task の id から番地を導く。 */
-function recordOpened(db: Db, taskId: string, kind: "interview_room_opened" | "examinee_checkout_opened", workspacesBaseDir: string, now: Date): string {
+/** 開く手順と読む門が同じ理由で記録の欠落を止める。 */
+export function gonePlaceReason(taskId: string, path: string, kind: RecordedPlaceKind): string {
+  const place = kind === "interview_room_opened" ? "interview room" : "examinee checkout";
+  return `the ${place} ${taskId} recorded at ${path} has no git repository — the ${place}'s repository is gone`;
+}
+
+function openRecordedPlace(db: Db, taskId: string, kind: RecordedPlaceKind, workspacesBaseDir: string, now: Date, build: (path: string) => void): string {
+  const recorded = recordedPlace(db, taskId, kind);
+  if (recorded) {
+    if (!recorded.hasRepository) throw new Error(gonePlaceReason(taskId, recorded.path, kind));
+    return recorded.path;
+  }
   const at = conventionCheckoutPath(taskId, workspacesBaseDir);
   mkdirSync(at, { recursive: true });
   const path = realpathSync(at);
+  build(path);
   appendEvent(db, { taskId, actorId: BOARD_ACTOR_ID, origin: "board", payload: { kind, path }, at: now });
   return path;
 }
@@ -249,7 +256,7 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
 /** 読む場所のうち、在り処に repo の無い記録された面接室(ADR 0277 追記 決定1)。名前が開いた event を持つ root の id なら面接室で、
  *  述語は起動時の sparse snapshot の掃除と同じ `.git` の有無。盤面は面接室を消さないので、外で消されたものである。 */
 export function readOnlyRoomWithoutRepo(db: Db, reads: readonly WorkspaceConfig[]): WorkspaceConfig | undefined {
-  return reads.find((read) => interviewRoomPath(db, read.name) !== undefined && !existsSync(join(read.path, ".git")));
+  return reads.find((read) => recordedPlace(db, read.name, "interview_room_opened")?.hasRepository === false);
 }
 
 /** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
@@ -478,7 +485,7 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
 }
 
 /** 引けない head から黙って今の head へ逃げない —— 投げて受験者の checkout を開く失敗(面接室の quarantine)に落とす。 */
-function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
+export function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
   // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)。出題し直した root は最後の出題(ADR 0273 決定3)
   const head = db
     .prepare(
@@ -635,7 +642,7 @@ export function restoreWorkspaceProjectSettingsAtBoot(
       continue;
     }
     // 写しは checkout が開いた後にしか書かれない —— 無ければ人間が記録の checkout を消した形で、戻すものが無い(ADR 0276 決定4)
-    if (!existsSync(join(place.path, ".git"))) {
+    if (!placeHasRepository(place.path)) {
       dropSparseSnapshot(db, key);
       console.error(`[workspace] ${key}: the checkout at ${place.path} is gone; dropping its sparse snapshot`);
       continue;

@@ -14,8 +14,8 @@ import {
   tableRowEffortValue,
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
-import { cancelTaskDirectly, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { HUMAN_WEBUI, openTestInterviewRoom } from "./harness.js";
+import { cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -246,12 +246,12 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("git status --porcelain");
   });
 
-  it("repo がまだ無い面接室(Interview の root の id)は、盤面がその番地を作れることだけを予告し、workspace の検査を出さない(ADR 0277 決定1)", () => {
+  it("開いた event が無い面接室は mkdir と、repo が既にある場合の git 検査を条件つきで予告する(ADR 0329 決定4・5)", () => {
     const db = openDb(":memory:");
     const purpose = purposeFor(db, interviewRoot(db).id);
     expect(purpose).toContain("the board can create this interview room");
     expect(purpose).not.toContain("is still configured");
-    expect(purpose).not.toContain("git status --porcelain");
+    expect(purpose).toContain("if a repository is already present");
   });
 
   it("repo のある面接室は、registry の名前の解決を除いた git の検査を予告する(ADR 0277 決定1)", () => {
@@ -262,7 +262,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("is still configured");
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).toContain("git status --porcelain");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("開いた event が残るのに在り処のディレクトリが無い面接室は、盤面が作り直さないことと出口を予告し、mkdir と git の検査を出さない(ADR 0277 追記 決定2)", () => {
     const db = openDb(":memory:");
@@ -271,19 +271,50 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const room = interviewRoomPath(db, root.id)!;
     rmSync(room, { recursive: true });
     const purpose = purposeFor(db, root.id);
-    expect(purpose).toContain(`the recorded interview room at ${room}`);
+    expect(purpose).toContain(`a git repository exists at the recorded room ${room}`);
     expect(purpose).toContain("the board does not recreate it");
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).not.toContain("git status --porcelain");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
-  it("開いた event が残り在り処のディレクトリはあるが repo が無い面接室は、盤面がその番地を作れることを予告する(ADR 0277 決定1・追記 決定2)", () => {
+  it("開いた event が残り repo が無い面接室は、復元か開く task の cancel か手で git init する出口を予告する(ADR 0329 決定5)", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
     openTestInterviewRoom(db, root);
     rmSync(join(interviewRoomPath(db, root.id)!, ".git"), { recursive: true });
     const purpose = purposeFor(db, root.id);
-    expect(purpose).toContain("the board can create this interview room");
-    expect(purpose).not.toContain("the board does not recreate it");
-  });
+    expect(purpose).not.toContain("the board can create this interview room");
+    expect(purpose).toContain("the board does not recreate it");
+    expect(purpose).toContain("cancel the task that opens it");
+    expect(purpose).toContain("git init");
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+  it("出題済みで未決着の受験者がいる名前は checkout と出題 head の検査を予告し、空 repo の出口は出さない —— 決着後は両検査を外す(ADR 0329 決定4・5)", () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const head = git(interviewRoomPath(db, root.id)!, "rev-parse", "HEAD");
+    const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", head);
+
+    const purpose = purposeFor(db, root.id);
+    expect(purpose).toContain(examinee!.id);
+    expect(purpose).toContain("the board can create the examinee checkout directory");
+    expect(purpose).toContain(head);
+    expect(purpose).toContain("resolves in the interview room");
+    expect(purpose).not.toContain("git init");
+    expect(purpose).not.toContain("empty room");
+
+    const checkout = openTestExamineeCheckout(db, examinee!);
+    rmSync(join(checkout, ".git"), { recursive: true });
+    const recorded = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
+    expect(recorded).toContain(`recorded examinee checkout ${examinee!.id} at ${checkout}`);
+    expect(recorded).toContain("the board does not recreate it");
+    expect(recorded).not.toContain("git init");
+
+    completeTask(db, examinee!, FULL_HANDOFF, "tako", NOW, "worker");
+    const settled = QUARANTINES.find((row) => row.kind === "workspace")!.prose(root.id, "the place broke", undefined, db).purpose;
+    expect(settled).not.toContain(examinee!.id);
+    expect(settled).not.toContain("resolves in the interview room");
+    expect(settled).toContain("git init");
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
 });

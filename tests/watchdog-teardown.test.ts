@@ -554,7 +554,7 @@ it("issue #2257 の対照: 止めた workspace の question を回答する前�
 
 /** Interview の root の pickup が面接室を開けず(ADR 0277)、面接室(root id)の quarantine に落ちて後始末に入り、容器で止まったまま
  *  (issue #2271)。`mkdir` は規約の基点がファイルで落ちる(開いた event 無し)、`git` は番地に `.git` という名のファイルがあって
- *  `git init` が落ちる(event あり・repo 無し)。 */
+ *  `git init` が落ちる(開いた event 無し)。 */
 async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
   const db = openDb(":memory:");
   const clock = new FakeClock();
@@ -577,7 +577,7 @@ async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
   }
   const failure = await Promise.resolve().then(() => openInterviewRoom(db, task, base, clock.now())).then(() => undefined, (err: unknown) => err);
   expect(failure).toBeInstanceOf(Error);
-  expect(listEvents(db, task.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(roomBroken === "git" ? 1 : 0);
+  expect(listEvents(db, task.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(0);
   const stop = quarantineWorkspace(db, task.id, failure, clock.now());
   runtime.hold(task.id);
   queueReturnHandler(deps, containers)(task.id, { kind: "pickup_stopped", ...stop });
@@ -589,8 +589,8 @@ async function rootHeldMidTeardown(roomBroken: "mkdir" | "git") {
 it.each([
   ["mkdir で落ちた面接室(開いた event 無し)を回収済み観測で", "mkdir", false],
   ["mkdir で落ちた面接室(開いた event 無し)を再起動を跨いで", "mkdir", true],
-  ["git init で落ちた面接室(event あり・repo 無し)を回収済み観測で", "git", false],
-  ["git init で落ちた面接室(event あり・repo 無し)を再起動を跨いで", "git", true],
+  ["git init で落ちた面接室(開いた event 無し)を回収済み観測で", "git", false],
+  ["git init で落ちた面接室(開いた event 無し)を再起動を跨いで", "git", true],
 ] as const)("面接室が開けず止まった Interview の root が後始末の途中で直接 cancel されても、後始末は落ちず面接室の Quarantine に偽の理由を積まずに枠を空ける —— %s(ADR 0274 決定3 / ADR 0277 決定3 / issue #2271)", async (_, broken, restart) => {
   const f = await rootHeldMidTeardown(broken);
   const room = openQuarantineQuestion(f.db, "workspace", f.task.id)!;

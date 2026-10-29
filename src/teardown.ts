@@ -255,8 +255,8 @@ function runPlaceToRelease(
     place = taskRunPlace(db, task, resolve(task.workspace));
   } catch (err) {
     if (err instanceof UnknownWorkspaceError) return undefined;
-    // 開いた event は在り処の mkdir の直後、git の手順より前に書く —— event が無ければ盤面はこの task の場所を作れておらず、
-    // 触る checkout が無い。記録はあって repo がまだ無い場所は下の `onTaskBranch` が外す
+    // 開いた event は repo 完成後に書く(ADR 0329)。event 前に途中まで作られた場所にも process・準備・task ブランチは無く、
+    // 触る checkout が無い。記録はあって repo が消えた場所は下の `onTaskBranch` が外す
     if (step.neverRan && err instanceof PlaceNotOpenError) return undefined;
     throw err;
   }

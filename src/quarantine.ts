@@ -5,21 +5,22 @@
  *  鍵は全種類 `(kind, value)` で、1鍵につき開いた確認型 question は最大1枚。盤面全体で
  *  資源の名を持たない種類の value は NULL である。依存の向きはこの module → タスクの
  *  module であり、逆は張らない。 */
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
+import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, latestPosedProbe, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task, unsettledExaminees } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
 /** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。回答の拒否と quarantine の予告が同じ文で言う。 */
-export const GONE_ROOM_EXITS = "restore it there, cancel the root, or create it by hand (`git init` there) to run with an empty room";
+export const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or create it by hand (`git init` there) to run with an empty room";
+
+export const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";
 
 interface QuarantineProse {
   title: string;
@@ -255,28 +256,30 @@ export const QUARANTINES = [
   {
     kind: "workspace",
     scope: "workspace",
-    // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
-    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである ——
-    // ただし event が残るのにディレクトリが無い面接室は回答を拒む(ADR 0277 追記 決定2)
+    // 開いた event の有無で分け、止めた門を推定せず全述語を予告する(ADR 0329 決定4・5)
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
-      // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
-      const roomPath = interviewRoomPath(db, name!);
-      // ADR 0277 追記 決定2: event が残るのにディレクトリが無い面接室は記録の欠落で、盤面は作り直さない
-      const checks =
-        roomPath !== undefined && !existsSync(roomPath)
-          ? [
-              `the recorded interview room at ${roomPath}, now gone, exists again — the board does not recreate it: ${GONE_ROOM_EXITS}.`,
-            ]
-          : room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
-          ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
-          : [
-              ...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]),
-              "its `.git` is a directory — not a linked worktree or submodule.",
-              "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
-              "the workspace path does not overlap the board's own state paths.",
-              "if the workspace declares a GitHub repo, the board can still access it.",
-            ];
+      const recorded = room ? recordedPlace(db, name!, "interview_room_opened") : undefined;
+      const examinees = room ? unsettledExaminees(db, name!) : [];
+      const posed = examinees.length > 0 && latestPosedProbe(db, name!);
+      const checks = room
+        ? [recorded
+          ? `a git repository exists at the recorded room ${recorded.path} — the board does not recreate it: ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`
+          : "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
+        : [`a workspace named "${name}" is still configured (the board can resolve it).`];
+      if (!room || recorded?.hasRepository !== false) checks.push(...[
+        "its `.git` is a directory — not a linked worktree or submodule.",
+        "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
+        "the workspace path does not overlap the board's own state paths.",
+        "if the workspace declares a GitHub repo, the board can still access it.",
+      ].map((check) => room && !recorded ? `if a repository is already present, ${check}` : check));
+      for (const examinee of examinees) {
+        const checkout = recordedPlace(db, examinee.id, "examinee_checkout_opened");
+        checks.push(checkout
+          ? `a git repository exists at the recorded examinee checkout ${examinee.id} at ${checkout.path} — the board does not recreate it: ${GONE_POSED_PLACE_EXITS}.`
+          : `the board can create the examinee checkout directory for ${examinee.id} under its workspaces base directory (\`mkdir -p\` succeeds).`);
+      }
+      if (posed) checks.push(`the posed head ${posed.head} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`);
       return {
         title: `workspace ${name} needs human attention`,
         purpose:

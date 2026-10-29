@@ -1,5 +1,4 @@
-import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
@@ -47,6 +46,7 @@ import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryA
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
+  GONE_POSED_PLACE_EXITS,
   GONE_ROOM_EXITS,
   openQuarantineQuestion,
   parseTableRowEffortValue,
@@ -59,6 +59,7 @@ import {
   tableRowEffortTrigger,
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
+import { placeHasRepository, recordedPlace } from "./recorded-place.js";
 import type { Harness, RegistryReachabilityCheck } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
@@ -85,8 +86,8 @@ import {
   type HandoffDoc,
   humanDecomposeTask,
   type InterviewProposal,
-  interviewRoomPath,
   latestChild,
+  latestPosedProbe,
   logDecision,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -100,6 +101,7 @@ import {
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
+  unsettledExaminees,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
@@ -114,6 +116,7 @@ import {
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
   redoMergeBacks,
+  resolvablePosedHead,
   resolveWorkspacesBaseDir,
   taskBranch,
   UnknownWorkspaceError,
@@ -614,32 +617,43 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
-      // ADR 0277 追記 決定2: 開いた event が残るのに在り処のディレクトリが無い面接室は記録の欠落 —— 盤面は作り直さず、回答を拒む
-      const recorded = interviewRoomPath(deps.db, value!);
-      if (recorded !== undefined && !existsSync(recorded)) {
-        throw new DomainError(`the recorded interview room ${value} at ${recorded} is gone and the board does not recreate it — ${GONE_ROOM_EXITS}`);
-      }
-      // repo がまだ無い面接室には検査する git が無い —— 確かめるのは次の pickup が作れること。event は次の pickup が書く
-      if (getTask(deps.db, value!)?.type === "interview" && !existsSync(join(target.path, ".git"))) {
+      const room = getTask(deps.db, value!)?.type === "interview";
+      const examinees = room ? unsettledExaminees(deps.db, value!) : [];
+      const posed = examinees.length > 0 && latestPosedProbe(deps.db, value!);
+      const recorded = room ? recordedPlace(deps.db, value!, "interview_room_opened") : undefined;
+      if (recorded) {
+        target.path = recorded.path;
+        if (!recorded.hasRepository) throw new DomainError(`the recorded interview room ${value} at ${recorded.path} has no git repository and the board does not recreate it — ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}`);
+      } else if (room) {
         await refuseOnError(() => void mkdirSync(target.path, { recursive: true }));
-        return;
       }
-      await refuseOnError(() => verifyWorkspaceClean(target));
-      if (deps.boardState) {
-        const overlap = boardStateOverlap(target.path, deps.boardState);
-        if (overlap) throw new DomainError(overlap.reason);
+      if (!room || placeHasRepository(target.path)) {
+        await refuseOnError(() => verifyWorkspaceClean(target));
+        if (deps.boardState) {
+          const overlap = boardStateOverlap(target.path, deps.boardState);
+          if (overlap) throw new DomainError(overlap.reason);
+        }
+        // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
+        // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
+        // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
+        // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
+        // purely-local な workspace では1つもネットワークに出ない。
+        const ref = parseGitHubRepo(target.repo);
+        if (deps.github && ref) {
+          const { guidance } = await repairRepoAccess(deps.github, ref);
+          if (guidance) throw new DomainError(guidance);
+        }
+        await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
       }
-      // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
-      // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
-      // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
-      // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
-      // purely-local な workspace では1つもネットワークに出ない。
-      const ref = parseGitHubRepo(target.repo);
-      if (deps.github && ref) {
-        const { guidance } = await repairRepoAccess(deps.github, ref);
-        if (guidance) throw new DomainError(guidance);
+      for (const examinee of examinees) {
+        const checkout = recordedPlace(deps.db, examinee.id, "examinee_checkout_opened");
+        if (checkout) {
+          if (!checkout.hasRepository) throw new DomainError(`the recorded examinee checkout ${examinee.id} at ${checkout.path} has no git repository and the board does not recreate it — ${GONE_POSED_PLACE_EXITS}`);
+        } else {
+          await refuseOnError(() => void mkdirSync(conventionCheckoutPath(examinee.id, resolveWorkspacesBaseDir(deps.workspacesDir)), { recursive: true }));
+        }
       }
-      await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
+      if (posed) await refuseOnError(() => { resolvablePosedHead(deps.db, target, examinees[0]!); });
     },
     agent: async (value) => {
       const quarantineAgentName = value!;

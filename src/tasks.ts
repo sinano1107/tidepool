@@ -4574,6 +4574,11 @@ export function listExaminees(db: Db, rootId: string): Task[] {
   return rows.map(rowToTask);
 }
 
+/** 修理の予告と回答が検査する、まだ checkout を開きうる受験者(ADR 0329 決定4)。 */
+export function unsettledExaminees(db: Db, rootId: string): Task[] {
+  return listExaminees(db, rootId).filter((task) => !isSettled(task.status));
+}
+
 /** The queue head the slot may take: lowest-sort_key todo that is
  *  agent-executable. Blocked is derived from parent/child alone — a task with
  *  an unfinished child it waits for never enters the slot — and questions never enter it
