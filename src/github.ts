@@ -228,7 +228,7 @@ function ciStatusOf(checks: RollupEntry[]): CiStatus {
 export class GhCliClient implements GitHubClient {
   private readonly timeoutMs: number;
 
-  /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(ADR 0330 決定5)。 */
+  /** `timeoutMs` はテストが上限を短くするためだけにある —— 本番の呼び手は既定のまま(#2726 の完了基準、釘は ADR 0107 の domain 層)。 */
   constructor(
     private readonly auth: GitHubAuth,
     { timeoutMs = GIT_NETWORK_TIMEOUT_MS }: { timeoutMs?: number } = {},

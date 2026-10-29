@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -6,6 +6,8 @@ import { resolveExecutionAgent } from "../src/agent.js";
 import { type Db, openDb } from "../src/db.js";
 import { DomainError } from "../src/domain-error.js";
 import { appendEvent, latestEventOfTask, listEvents } from "../src/events.js";
+import { GhCliClient } from "../src/github.js";
+import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks, submitAnswer } from "../src/human-verbs.js";
 import {
   contentLeftBehind,
@@ -36,6 +38,7 @@ import {
 import { markTeardown } from "../src/teardown.js";
 import { raiseObjection } from "../src/triage.js";
 import {
+  boardRefWriter,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   prepareWorkspaceAtPickup,
@@ -776,6 +779,33 @@ it("push の後・畳みの前に worker が写しを偽造すれば、偽造は
   const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose;
   expect(purpose).toContain(`now: ${git(workspace.path, "rev-parse", remoteTaskRef)} ${remoteTaskRef}`);
   // 予告の前の値(写しが無い)に畳まれている —— 2値のまま残っていれば `was: |<押した値>` が載る
+  expect(purpose).not.toContain("was:");
+});
+
+// ADR 0330 決定3: 着地の push は同期のまま(ADR 0243)上限で投げ、口は実 ref を読んで基準を畳む
+it("origin が返らない push は上限で何の呼び出しが何 ms で切れたかを書いて投げ、基準は予告の前の値に畳まれる", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("landing-push-hangs");
+  const { db, clock } = await openBoard();
+  const ref = "refs/remotes/origin/task/pushed";
+  git(workspace.path, "branch", "task/pushed");
+  const pushed = git(workspace.path, "rev-parse", "task/pushed");
+  const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
+  // 返らない origin: hook は自分の pid を残して眠る —— 投げた後に殺し、test の後始末まで生き残らせない
+  const hookPid = join(workspace.repo!, "hook.pid");
+  writeFileSync(join(workspace.repo!, "hooks", "pre-receive"), `#!/bin/sh\necho $$ > "${hookPid}"\nexec sleep 5\n`);
+  chmodSync(join(workspace.repo!, "hooks", "pre-receive"), 0o755);
+  const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 500 });
+
+  await straddle(db, clock, workspace, async () => {
+    const push = await client.preparePush({ path: workspace.path, branch: "task/pushed" });
+    expect(() => boardRefWriter(db, workspace)(ref, pushed, push)).toThrow(/^`git push` timed out after 500 ms/);
+    process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
+    // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る
+    git(workspace.path, "update-ref", ref, elsewhere);
+  });
+
+  const purpose = quarantineQuestion(db, "workspace", workspace.name)?.purpose;
+  expect(purpose).toContain(`now: ${elsewhere} ${ref}`);
   expect(purpose).not.toContain("was:");
 });
 

@@ -223,7 +223,15 @@ export function authedGitBounded(
   timeoutMs: number,
   ...args: string[]
 ): string {
-  return runAuthedGit(auth, cwd, repo, args, timeoutMs);
+  try {
+    return runAuthedGit(auth, cwd, repo, args, timeoutMs);
+  } catch (err) {
+    // 上限超過は Node の「spawnSync git ETIMEDOUT」のままでは人間の question で何が切れたか読めない(ADR 0330 決定2)
+    if ((err as { code?: string }).code === "ETIMEDOUT") {
+      throw new Error(`\`git ${args[0]}\` timed out after ${timeoutMs} ms (in ${cwd})`, { cause: err });
+    }
+    throw err;
+  }
 }
 
 function runAuthedGit(
