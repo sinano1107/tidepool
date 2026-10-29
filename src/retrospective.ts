@@ -32,7 +32,7 @@ import {
 } from "./events.js";
 import { type ExecutionSettingRow, readExecutionSettings } from "./execution-setting.js";
 import { createBehaviorCandidate, listMemoryEntries, memoryIndex, memoryScope, recordKnowledge, requireDecision } from "./memory.js";
-import { listEpisodes, projectionPending, readPulls } from "./precedent.js";
+import { type Episode, type FollowedSkill, listEpisodes, projectionPending, projectSession, readPulls, skillsFollowed } from "./precedent.js";
 import type { ProcessContainers } from "./process-container.js";
 import { normalizeText, whyBlank } from "./required-text.js";
 import { isSettled } from "./task-status.js";
@@ -63,9 +63,17 @@ export interface AttributionInput {
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
   task: string | null;
+  skills: SkillScopes | null;
+  skills_followed: FollowedSkill[] | null;
   human_stop?: { reason: string };
   written?: AttributionInput["memory_read"];
   rca_findings?: RcaFinding[];
+}
+
+/** その session の worker が見て許された skill を持ち主で分けた集合(ADR 0325 決定2)。 */
+interface SkillScopes {
+  workspace: string[];
+  host: string[];
 }
 
 /** RCA 子1つの所見(ADR 0322 決定5 / 追記): 判事は `review` と `actor` で出所と当事者を引く。self の actor は登録時の assignee
@@ -128,6 +136,8 @@ export interface StopAttributionInput {
   agent_definition: AgentDefinitionThen | null;
   board_text: string[];
   task: string | null;
+  skills: SkillScopes | null;
+  skills_followed: FollowedSkill[] | null;
   actions: {
     calls: Array<{ index: number; tool: string; args: string | null; failed: boolean }>;
     decisions: Array<{ id: number | null; position: number | null; line: string | null }>;
@@ -188,6 +198,23 @@ const ACTIONS_FIELDS = {
   decisions: `places each decision-log line (by its id) at its position in that sequence: ${fieldList(ACTION_DECISION_FIELDS)}`,
 } satisfies Record<keyof Actions, string>;
 
+/** skill の欄の文(ADR 0325 決定2・3)。harness / transcript の語は読み手に定義が無いので、worker が走った CLI と session の記録で言う
+ *  (ADR 0324 決定3)。`position` は異議と停止で読み方が違うので、読み手ごとの record が文を渡す。 */
+const SKILL_SCOPE_FIELDS = {
+  workspace: "those the task's workspace checkout carries",
+  host: "those that came with the CLI the worker ran in, not with the checkout",
+} satisfies Record<keyof SkillScopes, string>;
+
+const followedSkill = (position: string) =>
+  `each with ${fieldList({
+    name: "the skill's name",
+    position,
+    // 2.1.286 の実測: subagent の呼び出しの本文は親の session の stream に出ない
+    text:
+      "the skill's text as the CLI the worker ran in gave it to the worker when it invoked the skill; null when the session's record could not " +
+      "be read, or when a subagent invoked the skill — that text never reaches the session's record",
+  } satisfies Record<keyof FollowedSkill, string>)}`;
+
 /** 異議と停止の入力が同じ文で持つ欄。spread した欄は親の `satisfies` の余剰検査に掛からないので、ここで両方の型の欄に結ぶ。 */
 const SHARED_FIELDS = {
   agent_definition:
@@ -197,6 +224,7 @@ const SHARED_FIELDS = {
     "the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given " +
     "(such as Interview discipline), as given at its spawn)",
   task: "the task text the worker was given at its spawn (title, purpose and completion criteria; excluding board-authored context)",
+  skills: `the skills the worker could see and was permitted to invoke, by who owns them (skills: ${fieldList(SKILL_SCOPE_FIELDS, "skills.")})`,
   rca_findings: `${RCA_FINDINGS_RULE} In each, ${RCA_FINDING_FIELDS.task_id}.`,
 } satisfies Partial<Record<keyof AttributionInput & keyof StopAttributionInput, string>>;
 
@@ -212,6 +240,12 @@ export const ATTRIBUTION_INPUT_FIELDS = {
   memory_read: memoryRead("the decision"),
   human_stop: OBJECTION_HUMAN_STOP_RULE,
   written: OBJECTION_WRITTEN_RULE,
+  skills_followed:
+    "the skills the worker invoked before the objected entry, or in the whole session when the entry is its completion report (skills_followed), " +
+    followedSkill(
+      "its index among the session's tool calls; null when the objected entry could not be placed among them, and the list then holds " +
+        "every skill the session invoked",
+    ),
 } satisfies Record<keyof AttributionInput, string>;
 
 export const STOP_ATTRIBUTION_INPUT_FIELDS = {
@@ -220,6 +254,7 @@ export const STOP_ATTRIBUTION_INPUT_FIELDS = {
   decision_log: `decision_log is the session's whole decision log. ${LOG_ROW_RULE}`,
   memory_read: memoryRead("the stop"),
   actions: `its action sequence (actions): actions.calls lists ${ACTIONS_FIELDS.calls}; actions.decisions ${ACTIONS_FIELDS.decisions}`,
+  skills_followed: `the skills the worker invoked in the session (skills_followed), ${followedSkill("its index in actions.calls")}`,
 } satisfies Record<keyof StopAttributionInput, string>;
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
@@ -417,18 +452,19 @@ export async function attributeObjections(
   if ("unavailable" in call) return judgments;
   await Promise.all(
     objected.map(async (o) => {
-      const input: AttributionInput = {
-        entry_id: o.entry.id,
-        entry: logRow(o.entry),
-        actor: o.entry.actor_id,
-        steering: o.comments,
-        decision_log: decisionLogRows(db, o.entry.task_id),
-        ...sessionReads(db, deps.recordDir, o.entry),
-        ...writtenBodies(db, o.entry),
-        ...sessionHumanStop(db, o.entry),
-      };
-      const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
       try {
+        // 入力の組み立て(記録の読み出しを含む)も守りの内側 —— 落ちても commit を止めない
+        const input: AttributionInput = {
+          entry_id: o.entry.id,
+          entry: logRow(o.entry),
+          actor: o.entry.actor_id,
+          steering: o.comments,
+          decision_log: decisionLogRows(db, o.entry.task_id),
+          ...sessionReads(db, deps.recordDir, o.entry),
+          ...writtenBodies(db, o.entry),
+          ...sessionHumanStop(db, o.entry),
+        };
+        const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
         const judgment = await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting));
         judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through });
       } catch (err) {
@@ -611,6 +647,7 @@ function stopInput(db: Db, recordDir: string | undefined, { task_id, stop, sessi
     human_stop: { reason: humanStopReason(db, stop.payload) },
     decision_log: session.events.filter(isDecisionLogEntry).filter(session.inSession).map(logRow),
     ...readsIn(db, recordDir, stop, session),
+    ...stopSkills(db, recordDir, session.spawned, stop),
     actions: sessionActions(db, session.spawned.id),
     ...(round === "after_rca" && { rca_findings: rcaChildren(db, task_id, stop.id).map((r) => rcaFinding(db, r)) }),
   };
@@ -624,6 +661,30 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
   return {
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
     decisions: episode.markers.flatMap(({ kind, eventId, position, line }) => (kind === "decision" ? [{ id: eventId, position, line }] : [])),
+  };
+}
+
+/** 停止の判事の skill の欄(ADR 0325 決定3): 投影の決着を待った保存済みの Episode から、本文は transcript から読む。 */
+function stopSkills(db: Db, recordDir: string | undefined, spawned: EventRowOf<"worker_spawned">, stop: EventRow): Pick<StopAttributionInput, "skills" | "skills_followed"> {
+  const [episode] = listEpisodes(db, { workerSpawnedEventId: spawned.id });
+  const lines = recordDir === undefined ? null : new TranscriptStore(recordDir).readStream(spawned.task_id!, spawned.id);
+  return skillFields(spawned, episode ?? null, lines, stop);
+}
+
+/** 判事の skill の欄(ADR 0325 決定2・3): 見た集合 ∩ 許可した集合を spawn 記録の checkout の集合で分け、`anchor` より前に従った skill を
+ *  並べる。Episode が無い・読めない session は両方 null。 */
+function skillFields(
+  spawned: EventRowOf<"worker_spawned">,
+  episode: Pick<Episode, "skillsSeen" | "skillCalls" | "markers" | "unrecognizedFormat"> | null,
+  lines: string[] | null,
+  anchor: EventRow,
+): Pick<AttributionInput, "skills" | "skills_followed"> {
+  if (!episode || episode.unrecognizedFormat) return { skills: null, skills_followed: null };
+  const { workspace, permitted } = spawned.payload.skills;
+  const visible = episode.skillsSeen.filter((name) => permitted === "all" || permitted.includes(name));
+  return {
+    skills: { workspace: visible.filter((name) => workspace.includes(name)), host: visible.filter((name) => !workspace.includes(name)) },
+    skills_followed: skillsFollowed(episode, lines, anchor),
   };
 }
 
@@ -784,11 +845,13 @@ function sessionHumanStop(db: Db, entry: DecisionLogEntry): Pick<AttributionInpu
 }
 
 /** 異議された entry を含む worker session が読んだもの(`readsIn`)。entry が session の窓の外なら何も読んでいない。 */
-function sessionReads(db: Db, recordDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text" | "task"> {
+function sessionReads(db: Db, recordDir: string | undefined, entry: DecisionLogEntry): Pick<AttributionInput, "memory_read" | "agent_definition" | "board_text" | "task" | "skills" | "skills_followed"> {
   const events = listEvents(db, entry.task_id);
   const session = sessionOf(events, entry);
-  if (!session) return { memory_read: [], agent_definition: null, board_text: [], task: null };
-  return readsIn(db, recordDir, entry, { events, ...session });
+  if (!session) return { memory_read: [], agent_definition: null, board_text: [], task: null, skills: null, skills_followed: null };
+  // 走行中の session もその時点の transcript から投影する(ADR 0325 決定5)
+  const projected = projectSession(recordDir, events, session.spawned);
+  return { ...readsIn(db, recordDir, entry, { events, ...session }), ...skillFields(session.spawned, projected?.episode ?? null, projected?.lines ?? null, entry) };
 }
 
 /** 帰責の judge に渡す当時版(ADR 0291 決定2 / ADR 0314 決定3): spawn で記録した prompt の部分の text。`builtin` /

@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -43,7 +43,10 @@ import {
   runNow,
   settleRcaByWorker,
   settleReview,
+  skillCall,
+  skillsInit,
   type Tidepool,
+  toolCall,
   WORKER_SPAWNED,
 } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
@@ -321,6 +324,8 @@ it("Board call は異議されたエントリ本文・steering 列・当時の d
         agent_definition: null,
         board_text: [],
         task: null,
+        skills: null,
+        skills_followed: null,
       },
       // the board's own frontier row (seed) pins the judge, never the worker's model
       setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -477,6 +482,8 @@ it("uncertain の entry は RCA 子がすべて決着した後に1度だけ第2�
     agent_definition: null,
     board_text: [],
     task: null,
+    skills: null,
+    skills_followed: null,
     rca_findings: [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id, "the criteria named the fixtures explicitly"), "completion report: fixtures were required")],
   });
 });
@@ -570,6 +577,8 @@ it.each([
           agent_definition: null,
           board_text: [],
           task: null,
+          skills: null,
+          skills_followed: null,
           index: expect.stringContaining("testing/ — how tests are run"),
         },
         setting: expect.objectContaining({ model: "claude-fable-5-1", effort: "high" }),
@@ -1170,6 +1179,8 @@ it("初回の帰責が失敗した未帰責の entry は、RCA 子がすべて�
     agent_definition: null,
     board_text: [],
     task: null,
+    skills: null,
+    skills_followed: null,
     rca_findings: [finding("auditor", noAct(s.entry.id), RCA_OUTCOME), finding("self", noAct(s.entry.id, "the criteria named the fixtures"), "completion report: fixtures were required")],
   });
   expect(await behaviors(t)).toEqual([
@@ -2207,5 +2218,111 @@ it.each(["agent_definition", "workspace_document"] as const)("第2回: 初回 un
   expect(attributed(b.db, b.task.id).map((p) => [p.round, p.cause])).toEqual([
     ["initial", "uncertain"],
     ["after_rca", cause],
+  ]);
+});
+
+// 従った skill の文面と scope(ADR 0325 / #2691)—— ドメイン層。異議の判事は帰責のたびに transcript をその時点まで読んで投影する
+
+/** skill を呼ぶ session の盤面: `skills` の spawn 記録で spawn し、`entry` の行を書く。`transcript` は記録の器にその session の stream を書く。 */
+async function skillBoard({ skills = WORKER_SPAWNED.skills, entry }: { skills?: typeof WORKER_SPAWNED.skills; entry?: (b: ReturnType<typeof memoryBoard>) => number } = {}) {
+  const recordDir = await tempDir("tidepool-records-");
+  const b = memoryBoard();
+  const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, skills } });
+  const decision = entry?.(b) ?? b.decide("ran make deploy");
+  const transcript = (lines: string[]) => writeFileSync(join(recordDir, `${b.task.id}.${spawned}.stream.jsonl`), lines.join("\n"));
+  const deps = { ...noRetrospectiveCalls, recordDir };
+  const judged = async () => {
+    const client = new FakeAttributionClient();
+    await attributeObjections(b.db, { ...deps, attributionClient: client }, b.objectTo(decision), at);
+    return client.calls.map((c) => c.input);
+  };
+  return { ...b, recordDir, spawned, decision, transcript, deps, judged };
+}
+
+it("走行中の session の判断への異議でも、判断より前に従った skill が名前・位置・本文つきで届き、判断より後の呼び出しと書きかけの末尾の行は届かない(ADR 0325 決定3・5)", async () => {
+  const b = await skillBoard();
+  b.transcript([
+    skillsInit(["deploy", "lint"]),
+    ...skillCall(1, "deploy", "Run make deploy."),
+    ...toolCall(2, "mcp__tidepool__log_decision", b.decision),
+    ...skillCall(3, "lint", "Run make lint."),
+    '{"type":"assistant","uuid":"a4","message":{"content":[{"type":"tool_u',
+  ]);
+
+  expect((await b.judged()).map((i) => i.skills_followed)).toEqual([[{ name: "deploy", position: 0, text: "Run make deploy." }]]);
+});
+
+it("判断の位置が置けない session では、session の skill の呼び出しが全部 position null(位置不明)で届く(ADR 0325 決定3)", async () => {
+  const b = await skillBoard();
+  b.transcript([skillsInit(["deploy", "lint"]), ...skillCall(1, "deploy", "Run make deploy."), ...skillCall(2, "lint", "Run make lint.")]);
+
+  expect((await b.judged()).map((i) => i.skills_followed)).toEqual([
+    [
+      { name: "deploy", position: null, text: "Run make deploy." },
+      { name: "lint", position: null, text: "Run make lint." },
+    ],
+  ]);
+});
+
+it("完了の行への異議には session の呼び出しが全部、記憶の書き込みの行への異議にはその書き込みより前の呼び出しが届く(ADR 0325 決定3)", async () => {
+  const completion = await skillBoard({ entry: (b) => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "worker", at, payload: { kind: "task_completed", handoff_present: true, result: "shipped" } }) });
+  const write = await skillBoard({ entry: (b) => appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "worker", at, payload: { kind: "memory_written", line: "wrote nothing", created: [], invalidated: [] } }) });
+  for (const b of [completion, write]) {
+    b.transcript([skillsInit(["deploy", "lint"]), ...skillCall(1, "deploy", "Run make deploy."), ...toolCall(2, "mcp__tidepool__record_knowledge", b.decision), ...skillCall(3, "lint", "Run make lint.")]);
+  }
+
+  expect((await completion.judged()).map((i) => i.skills_followed?.map((s) => [s.name, s.position]))).toEqual([[["deploy", 0], ["lint", 2]]]);
+  expect((await write.judged()).map((i) => i.skills_followed?.map((s) => [s.name, s.position]))).toEqual([[["deploy", 0]]]);
+});
+
+it.each<[string, string[] | "all", object]>([
+  ["有限の許可", ["deploy", "dataviz"], { workspace: ["deploy"], host: ["dataviz"] }],
+  ["*", "all", { workspace: ["deploy"], host: ["dataviz", "debug"] }],
+])("skills は worker が見た集合と許可した集合(%s)の共通部分を、spawn 記録の checkout の集合で workspace / host に分ける(ADR 0325 決定2)", async (_shape, permitted, skills) => {
+  const b = await skillBoard({ skills: { workspace: ["deploy", "lint"], permitted } });
+  b.transcript([skillsInit(["deploy", "dataviz", "debug"])]);
+
+  expect((await b.judged()).map((i) => i.skills)).toEqual([skills]);
+});
+
+it("transcript の読み出しが ENOENT 以外で落ちても commit の帰責は投げず、round initial の失敗 event を残す(ADR 0168 決定1)", async () => {
+  const b = await skillBoard();
+  mkdirSync(join(b.recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`)); // 読むと EISDIR
+  const client = new FakeAttributionClient();
+
+  await expect(attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at)).resolves.toEqual(new Map());
+
+  expect(client.calls).toEqual([]);
+  expect(listEvents(b.db, b.task.id).flatMap((e) => (e.payload.kind === "objection_attribution_failed" ? [[e.payload.round, e.payload.reason]] : []))).toEqual([
+    ["initial", expect.stringContaining("EISDIR")],
+  ]);
+});
+
+it("transcript の無い session への異議は skills と skills_followed が null のまま撃たれる(ADR 0325 決定2・5 / ADR 0166 決定2)", async () => {
+  const b = await skillBoard();
+
+  expect((await b.judged()).map((i) => [i.skills, i.skills_followed])).toEqual([[null, null]]);
+});
+
+it("第2回の帰責と Behavior candidate の起草の入力も、初回と同じ skill の欄を持つ(ADR 0325 決定3)", async () => {
+  const b = await skillBoard();
+  b.transcript([skillsInit(["deploy"]), ...skillCall(1, "deploy", "Run make deploy."), ...toolCall(2, "mcp__tidepool__log_decision", b.decision)]);
+  const client = new FakeAttributionClient();
+  const drafter = new FakeBehaviorDraftClient();
+  const deps = { ...b.deps, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } };
+  commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), at));
+  client.scriptJudgment(b.decision, { cause: "capability", evidence: "misread the deploy skill" });
+  for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
+
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+  refireRetrospectiveCalls(b.db, deps, at);
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const fields = { skills: { workspace: [], host: ["deploy"] }, skills_followed: [{ name: "deploy", position: 0, text: "Run make deploy." }] };
+  expect([...client.calls, ...drafter.calls].map((c) => [c.input.rca_findings !== undefined, { skills: c.input.skills, skills_followed: c.input.skills_followed }])).toEqual([
+    [false, fields],
+    [true, fields],
+    [true, fields],
   ]);
 });
