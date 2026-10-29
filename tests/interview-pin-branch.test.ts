@@ -78,7 +78,7 @@ it("写しは session の最中のサンドボックスの shadow 残骸(ADR 006
   db.close();
 });
 
-it("面接室は規約の基点の下の root の id に、盤面名義の空コミット 'Initial commit' だけを持つ repo として開き、在り処を実体の綴りで残す —— 空コミットが落ちても在り処は先に残り、次に開くと残った repo の続きから作る(ADR 0273 決定1)", async () => {
+it("面接室は規約の基点の下の root の id に、盤面名義の空コミット 'Initial commit' だけを持つ repo として開き、在り処を実体の綴りで残す —— 空コミットが落ちれば event は残らず、次に開くと残った repo の続きから作る(ADR 0329 決定1・2)", async () => {
   const db = openDb(":memory:");
   const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "the targets write the parser", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
   const base = await tempDir("tidepool-room-open-");
@@ -86,13 +86,48 @@ it("面接室は規約の基点の下の root の id に、盤面名義の空コ
   expect(() => openInterviewRoom(db, root, base, NOW)).toThrow("/nonexistent-gpg");
   vi.unstubAllEnvs();
   const room = realpathSync(join(base, root.id));
+  expect(interviewRoomPath(db, root.id)).toBeUndefined();
+
+  openInterviewRoom(db, root, base, NOW);
+  openInterviewRoom(db, root, base, NOW);
+
   expect(interviewRoomPath(db, root.id)).toBe(room);
-
-  openInterviewRoom(db, root, base, NOW);
-  openInterviewRoom(db, root, base, NOW);
-
   expect(git(room, "log", "--format=%an %s", "main")).toBe("tidepool Initial commit");
   expect(listEvents(db, root.id).filter((event) => event.payload.kind === "interview_room_opened")).toHaveLength(1);
+  db.close();
+});
+
+it("git init が落ちた面接室はディレクトリを残し、開いた event は残さない(ADR 0329 決定1)", async () => {
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-room-init-failure-");
+  const path = join(base, root.id);
+  mkdirSync(path);
+  writeFileSync(join(path, ".git"), "not a gitfile\n");
+
+  expect(() => openInterviewRoom(db, root, base, NOW)).toThrow();
+  expect(interviewRoomPath(db, root.id)).toBeUndefined();
+  expect(existsSync(path)).toBe(true);
+  db.close();
+});
+
+it("repo 完成後・event 前に落ちた面接室は、既存の HEAD と作業ツリーを保って event を1度だけ書く(ADR 0329 決定2)", async () => {
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-room-crash-");
+  const path = join(base, root.id);
+  mkdirSync(path);
+  git(path, "init", "--quiet", "--initial-branch=main");
+  git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  commitWork(path, "kept.txt", "keep the completed repository\n");
+  writeFileSync(join(path, "untracked.txt"), "keep the working tree\n");
+  const before = sessionState({ name: root.id, path });
+
+  openInterviewRoom(db, root, base, NOW);
+  openInterviewRoom(db, root, base, NOW);
+
+  expect(sessionState({ name: root.id, path })).toEqual(before);
+  expect(listEvents(db, root.id).filter((e) => e.kind === "interview_room_opened")).toHaveLength(1);
   db.close();
 });
 
@@ -210,8 +245,32 @@ it("出題が記録した head を面接室で引けなければ、checkout を�
   expect(() => openExamineeCheckout(db, examinee, dirname(room), NOW)).toThrow(
     `the protected branch head the probe recorded for ${examinee.id} (${unknown}) cannot be resolved in this checkout`,
   );
+  expect(examineeCheckoutPath(db, examinee.id)).toBeUndefined();
   expect(existsSync(join(dirname(room), examinee.id, ".git"))).toBe(false);
   expect(git(room, "branch", "--list", `task/${examinee.id}`)).toBe("");
+  db.close();
+});
+
+it("main の checkout が落ちた受験者は event を残さず、repo 完成後・event 前の再試行も同じ head で event を1度だけ書く(ADR 0329 決定1・2)", async () => {
+  const db = openDb(":memory:");
+  const { room, head, examinees, base } = await posedInRoom(db);
+  const examinee = examinees[0]!;
+  const path = join(base, examinee.id);
+  mkdirSync(path);
+  writeFileSync(join(path, "probe.txt"), "an obstruction\n");
+  expect(() => openExamineeCheckout(db, examinee, base, NOW)).toThrow(/checkout/);
+  expect(examineeCheckoutPath(db, examinee.id)).toBeUndefined();
+  // build は init と fetch を終えた。checkout だけ人間が完了した姿で、event 前の crash を再現する
+  git(path, "checkout", "--force", "-B", "main", head);
+  const before = sessionState({ name: examinee.id, path });
+
+  openExamineeCheckout(db, examinee, base, NOW);
+  openExamineeCheckout(db, examinee, base, NOW);
+
+  expect(sessionState({ name: examinee.id, path })).toEqual(before);
+  expect(git(path, "rev-parse", "main")).toBe(head);
+  expect(listEvents(db, examinee.id).filter((e) => e.kind === "examinee_checkout_opened")).toHaveLength(1);
+  expect(git(room.path, "branch", "--list", `task/${examinee.id}`)).toBe("");
   db.close();
 });
 

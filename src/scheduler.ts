@@ -91,6 +91,7 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   freshenPlaceAtPickup,
+  gonePlaceReason,
   isRemoteBacked,
   openExamineeCheckout,
   openInterviewRoom,
@@ -576,7 +577,7 @@ export function startScheduler(deps: {
         // ADR 0277 追記 決定1: 読みだけ開く面接室の repo が無ければその面接室の名前で止める —— 無い path は Harness が黙って読みから外す
         const gone = readOnlyRoomWithoutRepo(db, place.reads);
         if (gone) {
-          const reason = `the interview room ${gone.name} recorded at ${gone.path} has no git repository — the room's repository is gone`;
+          const reason = gonePlaceReason(gone.name, gone.path, "interview_room_opened");
           return stopped(quarantineWorkspace(db, gone.name, reason, clock.now()));
         }
         for (const read of place.reads.filter(isRemoteBacked)) {
