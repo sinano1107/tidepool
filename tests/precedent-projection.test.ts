@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
-import { entriesReadBefore, entriesSeenBefore, projectEpisode } from "../src/precedent.js";
+import { entriesReadBefore, entriesSeenBefore, projectEpisode, skillsFollowed } from "../src/precedent.js";
 import { QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
@@ -490,6 +490,18 @@ it("skill の呼び出しは Skill の行動行ごとに名前・位置・本文
     { position: 3, name: "wsbar", transcriptUuid: null, subagent: true },
     { position: 4, name: "wsbar", transcriptUuid: "84eb1696-45a2-4d45-aee9-cb3925baaf61", subagent: false },
     { position: 5, name: "dataviz", transcriptUuid: "69f8a696-0eac-43ee-b75d-7c8cddf3cb15", subagent: false },
+  ]);
+});
+
+it("従った skill の本文は Base directory の見出しを除いた合成行の文で、読み込み済みの skill の呼び直しは harness の注記のまま、本文の行の無い subagent の呼び出しは null(ADR 0325 決定3)", () => {
+  const followed = skillsFollowed(projectSkills(), skillSession(), { id: 0, kind: "task_completed" });
+
+  expect(followed.map((s) => [s.name, s.position, s.text?.split("\n", 1)[0] ?? null])).toEqual([
+    ["wsbar", 0, "When this skill is invoked, reply with the single word BARBAR and nothing else."],
+    ["dataviz", 1, "# Data Visualization"],
+    ["wsbar", 3, null],
+    ["wsbar", 4, "Skill /wsbar is already loaded above; instructions unchanged."],
+    ["dataviz", 5, "Skill /dataviz is already loaded above; instructions unchanged."],
   ]);
 });
 

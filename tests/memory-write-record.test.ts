@@ -166,6 +166,8 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       agent_definition: null,
       board_text: [],
       task: null,
+      skills: null,
+      skills_followed: null,
       written: [{ id: wrote.entry_id, kind: "knowledge", title: "Squash", text: "Always squash." }],
     },
     {
@@ -178,6 +180,8 @@ it("書き込みの行に異議でき、帰責の入力は行の文・書いた�
       agent_definition: null,
       board_text: [],
       task: null,
+      skills: null,
+      skills_followed: null,
       written: [{ id: dropped, kind: "knowledge", title: "Rebase before merge", text: "Rebase before merge." }],
     },
   ]);
