@@ -473,18 +473,17 @@ export function startScheduler(deps: {
     const open = openQuarantineQuestion(db, "issueExpansion", null);
     if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "issueExpansion", value: null }, clock.now());
   };
-  /** pickup の GitHub の読み1つ: 答えたかの会計だけを足し、結果も例外もそのまま返す。会計の DB 書き込みは読みの try の外 ——
-   *  その失敗を GitHub の失敗に数えない(ADR 0328 決定6)。 */
-  async function readGitHub<T>(read: Promise<T>): Promise<T> {
-    let value: T;
+  /** pickup の GitHub の読み1つ: 結果を投げずに返し、答えたかの会計を足す。会計の DB 書き込みはどの try の中にも置かない ——
+   *  その失敗は poll の throw であって GitHub の失敗に数えない(ADR 0328 決定6)。 */
+  async function readGitHub<T>(read: Promise<T>): Promise<{ value: T } | { error: unknown }> {
+    let result: { value: T } | { error: unknown };
     try {
-      value = await read;
-    } catch (err) {
-      if (err instanceof IssueGoneError) issueExpansionAnswered();
-      throw err;
+      result = { value: await read };
+    } catch (error) {
+      result = { error };
     }
-    issueExpansionAnswered();
-    return value;
+    if ("value" in result || result.error instanceof IssueGoneError) issueExpansionAnswered();
+    return result;
   }
   const resumeTimer = createResumeTimers(clock, pollNow);
 
@@ -703,47 +702,46 @@ export function startScheduler(deps: {
     // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
     if (!resolved) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
     const ref = { path: resolved.path, number: head.github_issue_number };
-    try {
-      return { pass: await readGitHub(contentSourceFor(head, github, () => ref.path).expand()) };
-    } catch (err) {
-      if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
-      // 確定的失敗 (ADR 0016): the reference is dead for good, not this
-      // cycle's weather — the same watchdog-shaped retry/abandon question
-      // as registerFailureQuestion, minus the teardown (nothing was acquired
-      // yet). The unanswered question holds the task out of nextSlotTask,
-      // so the gate never re-fires for it until a human answers.
-      // 取得の await の間に人間の扉が head を書き換えた(cancel・付け替え)なら何も記録せず、次の poll に
-      // 任せる —— 確かめと記録は同じ transaction で(issue #973)
-      db.transaction(() => {
-        const row = getTask(db, head.id);
-        if (row?.status !== "todo" || row.assignee !== head.assignee) return;
-        escalateTask(
-          db,
-          head,
-          {
-            context:
-              `the GitHub issue this task references is gone ` +
-              `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
-              `its content cannot be expanded for spawn.\n\n` +
-              `"retry" re-reads the issue and restarts this task from the queue head — ` +
-              `pick it after reopening or restoring the issue. ` +
-              abandonConsequence(db, head),
-            questions: [
-              {
-                title: `issue reference is gone: ${head.title}`,
-                options: ["retry", "abandon"],
-                recommendation: "retry",
-              },
-            ],
-            question_kind: { kind: "failure", cancel_option: "abandon" },
-          },
-          BOARD_ACTOR_ID,
-          clock.now(),
-          "board",
-        );
-      })();
-      return { skip: "head" };
-    }
+    const read = await readGitHub(contentSourceFor(head, github, () => ref.path).expand());
+    if ("value" in read) return { pass: read.value };
+    const err = read.error;
+    if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
+    // 確定的失敗 (ADR 0016): the reference is dead for good, not this
+    // cycle's weather — the same watchdog-shaped retry/abandon question
+    // as registerFailureQuestion, minus the teardown (nothing was acquired
+    // yet). The unanswered question holds the task out of nextSlotTask,
+    // so the gate never re-fires for it until a human answers.
+    // 取得の await の間に人間の扉が head を書き換えた(cancel・付け替え)なら何も記録せず、次の poll に
+    // 任せる —— 確かめと記録は同じ transaction で(issue #973)
+    db.transaction(() => {
+      const row = getTask(db, head.id);
+      if (row?.status !== "todo" || row.assignee !== head.assignee) return;
+      escalateTask(
+        db,
+        head,
+        {
+          context:
+            `the GitHub issue this task references is gone ` +
+            `(${err.reason === "closed" ? "already closed" : "not found"}) — ` +
+            `its content cannot be expanded for spawn.\n\n` +
+            `"retry" re-reads the issue and restarts this task from the queue head — ` +
+            `pick it after reopening or restoring the issue. ` +
+            abandonConsequence(db, head),
+          questions: [
+            {
+              title: `issue reference is gone: ${head.title}`,
+              options: ["retry", "abandon"],
+              recommendation: "retry",
+            },
+          ],
+          question_kind: { kind: "failure", cancel_option: "abandon" },
+        },
+        BOARD_ACTOR_ID,
+        clock.now(),
+        "board",
+      );
+    })();
+    return { skip: "head" };
   }
 
   /** task の性質の門を順に通す: issue の展開 → 親の文面。 */
@@ -784,14 +782,14 @@ export function startScheduler(deps: {
     if (resolve && !resolved) return { skip: "head" };
     if (!resolved) return { pass: stored };
     const ref = { path: resolved.path, number: parent.github_issue_number };
-    let issue: Awaited<ReturnType<GitHubClient["getIssueWithState"]>>;
-    try {
-      issue = await readGitHub(github.getIssueWithState(ref));
-    } catch (err) {
+    const read = await readGitHub(github.getIssueWithState(ref));
+    if ("error" in read) {
+      const err = read.error;
       if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
       return { skip: "gitHub", ref, error: err };
     }
-    // 文面の導出は読みの try の外 —— その失敗を GitHub の失敗に数えない(ADR 0328 決定6)
+    const issue = read.value;
+    // 文面の導出は読みの分類の外 —— その失敗を GitHub の失敗に数えない(ADR 0328 決定6)
     return { pass: { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number: ref.number, state: issue.state } } };
   }
 
@@ -1148,11 +1146,8 @@ export function startScheduler(deps: {
       const ref = issueStreak?.ref;
       // 計測は memory なので再起動で消える —— 読み直す参照が無ければ検証できない。question は展開が1つ通れば観測で決着する
       if (!ref || !github) throw new Error("no failed issue read is known since the board last started — this question settles once an issue expansion succeeds");
-      try {
-        await readGitHub(github.getIssueWithState(ref));
-      } catch (err) {
-        if (!(err instanceof IssueGoneError)) throw err;
-      }
+      const read = await readGitHub(github.getIssueWithState(ref));
+      if ("error" in read && !(read.error instanceof IssueGoneError)) throw read.error;
     },
   };
 }
