@@ -96,7 +96,7 @@ import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
-  readRoomWithoutRepo,
+  readOnlyRoomWithoutRepo,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -570,12 +570,15 @@ export function startScheduler(deps: {
           }
         }
         // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
-        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
-        // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
+        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない。
+        // 実環境は root の `workspace` 列で、読む面接室は root の id で、この task の pickup の門(`openedPlaceNamesSql`)に掛かる
         const place = taskRunPlace(db, picked, resolved);
         // ADR 0277 追記 決定1: 読みだけ開く面接室の repo が無ければその面接室の名前で止める —— 無い path は Harness が黙って読みから外す
-        const gone = readRoomWithoutRepo(db, place.reads);
-        if (gone) return stopped(quarantineWorkspace(db, gone.name, `the interview room ${gone.name} recorded at ${gone.path} has no git repository — the room's repository is gone`, clock.now()));
+        const gone = readOnlyRoomWithoutRepo(db, place.reads);
+        if (gone) {
+          const reason = `the interview room ${gone.name} recorded at ${gone.path} has no git repository — the room's repository is gone`;
+          return stopped(quarantineWorkspace(db, gone.name, reason, clock.now()));
+        }
         for (const read of place.reads.filter(isRemoteBacked)) {
           try {
             await freshenPlaceAtPickup(read, { githubAuth, registry, live });

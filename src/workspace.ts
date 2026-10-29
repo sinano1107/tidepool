@@ -248,7 +248,7 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
 
 /** 読む場所のうち、在り処に repo の無い記録された面接室(ADR 0277 追記 決定1)。名前が開いた event を持つ root の id なら面接室で、
  *  述語は起動時の sparse snapshot の掃除と同じ `.git` の有無。盤面は面接室を消さないので、外で消されたものである。 */
-export function readRoomWithoutRepo(db: Db, reads: readonly WorkspaceConfig[]): WorkspaceConfig | undefined {
+export function readOnlyRoomWithoutRepo(db: Db, reads: readonly WorkspaceConfig[]): WorkspaceConfig | undefined {
   return reads.find((read) => interviewRoomPath(db, read.name) !== undefined && !existsSync(join(read.path, ".git")));
 }
 

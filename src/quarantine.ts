@@ -18,6 +18,8 @@ import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
+/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。回答の拒否と quarantine の予告が同じ文で言う。 */
+export const GONE_ROOM_EXITS = "restore it there, cancel the root, or create it by hand (`git init` there) to run with an empty room";
 
 interface QuarantineProse {
   title: string;
@@ -248,8 +250,7 @@ export const QUARANTINES = [
       const checks =
         roomPath !== undefined && !existsSync(roomPath)
           ? [
-              `the recorded interview room at ${roomPath} exists again — the board does not recreate it: restore it there, cancel the root, ` +
-                "or create it by hand (`git init` there) to run with an empty room.",
+              `the recorded interview room at ${roomPath}, now gone, exists again — the board does not recreate it: ${GONE_ROOM_EXITS}.`,
             ]
           : room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
           ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
