@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { boardDoctrine, boardProse, fenced, joinPrompt } from "../src/board-prose.js";
+import { boardDoctrine, boardProse, fenced } from "../src/board-prose.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -14,7 +14,7 @@ import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 文面の全体 —— 持ち主つきの部分を順に空文字で連結した値が harness へ渡る値(ADR 0313 決定2)。 */
-const joined = (input: Parameters<typeof boardProse>[0]) => joinPrompt(boardProse(input));
+const joined = (input: Parameters<typeof boardProse>[0]) => boardProse(input).map((part) => part.text).join("");
 /** 記憶の店に見える approved が無い spawn の注入(節は null)。 */
 const NO_MEMORY = { section: null };
 
