@@ -238,7 +238,8 @@ export const QUARANTINES = [
     kind: "workspace",
     scope: "workspace",
     // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
-    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである
+    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである ——
+    // ただし event が残るのにディレクトリが無い面接室は回答を拒む(ADR 0277 追記 決定2)
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
       // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
