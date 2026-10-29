@@ -867,6 +867,8 @@ function isWritten(value: unknown): boolean {
   return value !== undefined && value !== null && String(value).trim() !== "";
 }
 
+const RETIRED_FIELDS = ["model", "effort", "advisor"];
+
 /** agent.md に残っている退役フィールド。`model` / `effort` は実行設定へ移り
  *  (ADR 0110 決定1)、トップレベルの `advisor` は entry の性質になった(ADR 0116
  *  決定2)—— どれも黙って無視すると「書いたのに効かない値」になるので、門が名前を
@@ -875,8 +877,6 @@ function retiredExecutionFields(raw: unknown): string[] {
   const meta = (raw ?? {}) as Record<string, unknown>;
   return RETIRED_FIELDS.filter((name) => isWritten(meta[name]));
 }
-
-const RETIRED_FIELDS = ["model", "effort", "advisor"];
 
 /** schema に無いキー(issue #2694)。値ではなく**キーの存在**で数える。退役フィールドは名前で
  *  除く —— 値が空なら退役にも数えない(`isWritten`)が、未知キーにもしない。 */
@@ -889,7 +889,8 @@ function unknownFrontmatterFields(raw: unknown): string[] {
     .flatMap((entry) => (typeof entry === "object" && entry !== null ? Object.keys(entry) : []))
     .filter((key) => !Object.hasOwn(providerEntrySchema.shape, key))
     .map((key) => `provider.${key}`);
-  return [...topLevel, ...inEntries];
+  // 同じ綴り違いが複数の entry にあっても拒否文では1度だけ名指す
+  return [...topLevel, ...new Set(inEntries)];
 }
 
 function parseAgentFile(name: string, raw: string): AgentDefinition {

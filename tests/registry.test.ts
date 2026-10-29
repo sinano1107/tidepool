@@ -236,7 +236,7 @@ describe("loadRegistry", () => {
   it("schema に無いキーは読み込みを倒さず unknownFields に残り、provider の綴り違いは省略として展開されたまま", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nproviders: claude\nskills:\n  - "*"\ndescription: d\nmcp_servers:\nmodel: opus\n---\nYou are Deckhand.\n`,
-      "agents/crab.md": `---\nversion: 1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisors: true\nskills:\n  - "*"\ndescription: d\n---\np\n`,
+      "agents/crab.md": `---\nversion: 1\nauthority: standard\nprovider:\n  - name: anthropic\n    advisors: true\n  - name: moonshot\n    advisors: true\nskills:\n  - "*"\ndescription: d\n---\np\n`,
     });
     const registry = loadRegistry(dir, "purely-local");
     const agent = registry.agents.deckhand!;
