@@ -213,7 +213,7 @@ agent 定義が宣言する、その agent が worker session 中に使ってよ
 
 Codex の feature の軸も同じ向きである — 盤面が挙げるのは開ける名前で、能力や面を足す feature は挙げない。必須機能の実装を切り替えるだけの feature はベンダー既定のまま開ける(閉じても封じ込めは増えず、走らせる経路が変わるだけ — ADR 0135)。
 
-**この許可リストは MCP 軸に届かない。** 覆うのはハーネス組み込みツールだけで、MCP サーバの verb は許可リストを生き残る別軸である(ADR 0039 測定5)。その軸で盤面が宣言しているのは**盤面が書いた `--mcp-config` と `--strict-mcp-config` の2つ**だが、ハーネスにはその宣言を迂回して MCP サーバを session へ注入する経路があり(Claude Code は Computer Use をそう配る)、実際に止めているのは headless であること自体である(2026-09-09 の grilling、issue #529 / ADR 0108)。したがって MCP 軸に対して盤面が持つのは床ではなく**観測**であり、宣言していないサーバが面に現れたら封じ込め能力が不成立に倒れる。
+**この許可リストは MCP 軸に届かない。** 覆うのはハーネス組み込みツールだけで、MCP サーバの verb は許可リストを生き残る別軸である(ADR 0039 測定5)。その軸で盤面が宣言しているのは**盤面が書いた `--mcp-config` と `--strict-mcp-config` の2つ**だが、ハーネスにはその宣言を迂回して MCP サーバを session へ注入する経路があり(Claude Code は Computer Use をそう配る)、実際に止めているのは headless であること自体である(2026-09-09 の grilling、issue #529 / ADR 0108)。したがって MCP 軸に対して盤面が持つのは床ではなく**観測**であり、宣言していないサーバが面に現れたら封じ込め能力が不成立に倒れる。盤面が宣言するのは Worker MCP と、その spawn に付与された代理 MCP(Proxied server 参照)である(2026-10-29 の grilling、issue #2695 / ADR 0327)。
 
 ## Review command allowlist(レビューコマンド許可リスト)
 
@@ -225,9 +225,23 @@ workspace が宣言する、**review セッションが書き込み床を越え�
 
 ## Domain allowlist(ドメイン許可リスト)
 
-workspace が宣言する、**worker session のサンドボックスから外部へ到達してよいドメイン**の集合。許可リスト4本目で、データが床(egress の既定全閉)に触れる2つ目のフィールド(2026-08-13 の grilling、issue #309 / ADR 0072)。既定は全閉 — フィールド不在の workspace の worker は外部へ一切出られず、依存はホスト側の事前配置で賄う。
+workspace が宣言する、**worker session のサンドボックスから外部へ到達してよいドメイン**の集合。許可リスト4本目で、データが床(egress の既定全閉)に触れる2つ目のフィールド(2026-08-13 の grilling、issue #309 / ADR 0072)。既定は全閉 — フィールド不在の workspace の worker は外部へ一切出られず、依存はホスト側の事前配置か、代理 MCP の tool(Proxied server 参照)で賄う。代理は盤面が繋ぐのでこのリストを通らず、運営者が第三者のサーバだけが同じ受容を workspace 側に要する(ADR 0327)。
 
 ドメインを開けることは、その workspace の内容と注入される盤面文脈を**そのドメインの運営者へ持ち出せる経路を開けること**でもある。この取引の受容の単位は workspace、判断の瞬間は registry 編集時 — private / 機微な workspace は閉じたままが既定側である。統治は Review command allowlist と同型: 門は人間面の credential + 危険な値の明示確認、文法ガードが綴りを人間の読んだ範囲に閉じる。床は既定全閉の側にあり、このリストに常勝する deny の定数は無い — tailnet 名もふつうの値で、同じ取引に乗る(2026-09-21 の grilling、issue #793 / ADR 0139。それ以前は tailnet 遮断の定数が常勝していた)。文法がドメイン**名**だけを通し IP リテラルを拒むのは装飾ではない — 受容するのは「その運営者へ持ち出す」ことであり、IP は運営者を名指さないので、綴りが人間の受容した相手を固定しない。裸の全開放(`*`)は確認でも買えない — 姿勢の放棄はデータ値ではなくコード変更で表明する。
+
+## 代理 MCP(Proxied server)
+
+盤面が自分の名前・資格情報・接続で盤面の外の MCP サーバ(GitHub、母屋の道具、第三者の API)に繋ぎ、**agent 定義が tool 名で付与した tool だけ**を worker session の面に出し、呼び出しを task と spawn に帰属して記録するもの(2026-10-29 の grilling、issue #2695 / ADR 0327)。worker が盤面の外のサーバと母屋の道具に届く**唯一の形** — worker は上流にも母屋にも直接繋がず、資格情報は盤面にしか無い(GitHub 身元 参照)。Worker MCP と並んで spawn 時に宣言され、封じ込め能力の MCP 軸の期待集合に入る(Tool allowlist 参照)。
+
+付与は Skill allowlist と同じく agent の宣言で、単位は server × tool 名、`*` は無い — 上流が tool を増やしても面に出ない(Tool allowlist の「閉じたまま入ってくる」と同じ向き)。サーバ定義(名前・運営者・tool とその分類・単一 tenant か)は registry、名前 → URL と資格情報は盤面設定。tool の分類は人間が書く3値 `read` / `external_write` / `workspace_or_host_write` で、既定は最も強い値 — review 系の面に出るのは前2つだけ(Review の書き込み床を母屋の保存 tool で迂回させない)。任意コード実行型の tool は危険な値で、付与に明示の確認が要る(Review command allowlist と同じ門)。サーバは既定で**単一 tenant**(同時に1 task にしか渡さない)。GitHub の代理だけは wrapper を持ち、書き込みの本文に帰属の段落(agent と task)を足し、着地と repo 内容の書き込みの tool はコードの定数で拒む — 着地の所有は盤面のまま(Merge ダイヤル参照)。届かない上流は資源の故障で、未設定は pickup の除外(question 無し)、失効は確認型 question(資格情報 参照、ADR 0116 の線)。
+
+_Avoid_: バイパス、ブリッジ(worker が直接届く形を連想させる)、外部 MCP(上流を指す語で、盤面が面に出す代理と区別する)
+
+## Host relay(母屋の中継)
+
+本人の Mac(母屋)に置く tidepool 同梱の常駐で、Mac にしか無い stdio の MCP サーバ(Blender、自作スクリプト)を起こし、HTTP の MCP として VM 内の盤面にだけ見せるもの(ADR 0327)。盤面が代理 MCP の上流として繋ぐ相手の1つであって、worker からは届かない。母屋で動くのは人間が登録したサーバの tool だけで、任意コマンドの橋ではない。
+
+_Avoid_: host agent(agent は worker 定義の語)
 
 ## Merge ダイヤル(Merge dial)
 
@@ -324,7 +338,7 @@ Board call は2種類に分かれる(2026-08-10 の grilling、issue #224)。**�
 
 WebUI と同格の**もう一つの人間向け UI** で、人間が対話中のエージェントセッション(Claude Code・Codex・ChatGPT / Claude のアプリ等、つなぐ先を問わない)が**人間の手として**盤面を操作する入口(2026-07-27 の grilling、issue #131)。呼び出しの主体がエージェントであっても、**操作の帰属は常に人間** — question 回答・cancel・Edit・登録(work / review・issue-backed 含む)・人間 decompose・人間タスクの完了・issue コメント追記・registry 管理(agent / profile / workspace の作成・編集)は、すべて人間名義で行われる(義手モデル)。ドメインの「人間」の線はすべて無傷 — 「question 回答 = 人間の判断」「registry の人間発変更 = 盤面が main へ直接コミット」「保護 workspace への変更は人間承認」はそのまま成立する。
 
-Worker MCP(slot 帰属の worker session が使う、authority profile が縛る道具)とは**別物**であり、worker session からは届かない — worker には Worker MCP の URL しか渡らず、管理MCP は人間向けリスナーに mount される(新しい credential は作らない。ADR 0032)。v1 が開くのは読取(Board・キュー・タスク詳細・Decision log)とタスクの生涯 + registry 管理 + 実行設定(表・ティアの段の一覧・Provider 順位・優先順位の既定(work 用・review 用)・advisor の上限 —— 「今週は Claude を残して Codex 優先」を対話中の session が人間名義で写す入口、ADR 0110 決定5)+ Memory の注入上限(spec #586 F)までで、triage セッション・Objection・Scratchpad・それ以外の settings・Pause / Spend-down・push・翻訳・AI ドラフト、そして**危険な値の確認と registry リソースの削除**は WebUI 専用のまま(前者は痛みが観測されたら広げる。後2つは 2026-08-18 の grilling、issue #267 / ADR 0088 — worker の handoff や objection は人間の目を経由しないまま対話エージェントが読む素材であり、そこに仕込まれた指示がエージェント自身の確認として人間名義の registry 変更に着地しうる。管理MCP は非危険な registry 編集だけを持ち、危険な値を含むペイロードはドメインの門がそのまま拒んで WebUI へ案内する)。
+Worker MCP(slot 帰属の worker session が使う、authority profile が縛る道具)とは**別物**であり、worker session からは届かない — worker には Worker MCP と代理 MCP(Proxied server 参照)の URL しか渡らず、管理MCP は人間向けリスナーに mount される(新しい credential は作らない。ADR 0032)。v1 が開くのは読取(Board・キュー・タスク詳細・Decision log)とタスクの生涯 + registry 管理 + 実行設定(表・ティアの段の一覧・Provider 順位・優先順位の既定(work 用・review 用)・advisor の上限 —— 「今週は Claude を残して Codex 優先」を対話中の session が人間名義で写す入口、ADR 0110 決定5)+ Memory の注入上限(spec #586 F)までで、triage セッション・Objection・Scratchpad・それ以外の settings・Pause / Spend-down・push・翻訳・AI ドラフト、そして**危険な値の確認と registry リソースの削除**は WebUI 専用のまま(前者は痛みが観測されたら広げる。後2つは 2026-08-18 の grilling、issue #267 / ADR 0088 — worker の handoff や objection は人間の目を経由しないまま対話エージェントが読む素材であり、そこに仕込まれた指示がエージェント自身の確認として人間名義の registry 変更に着地しうる。管理MCP は非危険な registry 編集だけを持ち、危険な値を含むペイロードはドメインの門がそのまま拒んで WebUI へ案内する)。
 
 操作イベントには**経路(webui / mcp)が機械記録される** — 帰属は人間でも「どの手から入ったか」は残り、エージェントが人間に確認せず question に回答するような事故を事後に追跡できる(自己申告に依らない機械観測。Advisor の相談記録と同型)。ただしログ読取は**純読取** — Decision log の未読カーソルも Displayed も一切動かさない。「ログが人間の視界に入った」は盤面が直接観測できる WebUI だけが記録でき、エージェントが人間に伝えたかは自己申告になるため観測として扱わない(異議率の分母は無傷)。
 
@@ -585,7 +599,7 @@ UI の live 展開には鮮度があり、**issue_live_state**(live / stale / un
 
 ## GitHub identity(GitHub 身元)
 
-盤面が GitHub に触れるときの単一の名義。単一の GitHub App `tidepool-board`(名義は `tidepool-board[bot]`)であり、盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義で行われる(ADR 0024 の「身元は盤面の設定から注入される」seam はそのまま、注入物が machine user の PAT から App の installation token に変わった — 2026-08-21 の grilling、issue #392 / ADR 0093)。App は1つで、秘密鍵は起案者の仲介サービスにだけある。各盤面は人間が device flow でログインした user token を持ち、仲介に repo を名指しして**その repo だけに効く** installation token を受け取る — 仲介が出すのは、その人間自身が push を持つ repo の token に限られる(到達範囲は「その人が書ける範囲」を超えない)。**GitHub 上の名義は執行者を表し、盤面が決裁を持つ merge については判断の帰属は盤面の記録が正典**(2026-08-14 の grilling、issue #235 / ADR 0079 で狭めた — 旧文は無条件だったが、merge ダイヤル `external` の PR では判断も記録も GitHub の面に住み、それは漏れではなく宣言どおりの姿である。Merge ダイヤル参照)— 誰が merge を承認したかは question 回答と decision log が運び、GitHub のスレッドは「盤面が執行した」という事実を映す。人間の名義は、人間が GitHub 上で直接行った行為にのみ現れる。worker はいかなる GitHub credential も持たない — PR 昇格・issue 展開・merge はすべて盤面の執行であり、worker に GitHub への道は開かれない。
+盤面が GitHub に触れるときの単一の名義。単一の GitHub App `tidepool-board`(名義は `tidepool-board[bot]`)であり、盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義で行われる(ADR 0024 の「身元は盤面の設定から注入される」seam はそのまま、注入物が machine user の PAT から App の installation token に変わった — 2026-08-21 の grilling、issue #392 / ADR 0093)。App は1つで、秘密鍵は起案者の仲介サービスにだけある。各盤面は人間が device flow でログインした user token を持ち、仲介に repo を名指しして**その repo だけに効く** installation token を受け取る — 仲介が出すのは、その人間自身が push を持つ repo の token に限られる(到達範囲は「その人が書ける範囲」を超えない)。**GitHub 上の名義は執行者を表し、盤面が決裁を持つ merge については判断の帰属は盤面の記録が正典**(2026-08-14 の grilling、issue #235 / ADR 0079 で狭めた — 旧文は無条件だったが、merge ダイヤル `external` の PR では判断も記録も GitHub の面に住み、それは漏れではなく宣言どおりの姿である。Merge ダイヤル参照)— 誰が merge を承認したかは question 回答と decision log が運び、GitHub のスレッドは「盤面が執行した」という事実を映す。人間の名義は、人間が GitHub 上で直接行った行為にのみ現れる。worker はいかなる GitHub credential も持たない — PR 昇格・issue 展開・merge はすべて盤面の執行であり、worker が GitHub に届くのは代理 MCP(Proxied server 参照)の GitHub wrapper 越しだけで、着地と repo 内容の書き込みの tool はコードの定数で拒まれる(ADR 0327)。
 
 **この名義への到達権限を付与するのは常に人間であり、盤面は自分で付与しない**(2026-08-12 の grilling、issue #213 / ADR 0067)。付与の形は **App を repo に install すること**で、install できるのは repo の admin だけである(ADR 0093 — 旧・collaborator 招待の受諾は撤回。盤面が自分でアクセスを付与できる設計は、到達範囲を「人間のリポジトリを再構成できる範囲」へ広げ、身元を境界にしたこの節の線と衝突する)。問われるのは「見えるか」ではなく**「書けるか」**である — この線は仲介の門に移り、install 済みの repo でも、ログインした人間自身が push を持たなければ盤面は token を得ない。盤面が修復として人間に示すのは install のリンク1本で、盤面自身が受諾・承認する操作は無い。**盤面は GitHub 上にリポジトリを作らない**(2026-08-12 の grilling、issue #212 / ADR 0066)— 名義が執行者を表すことと、その名義が**所有者**にもなることは別である。盤面が作った repo は盤面の GitHub 身元の持ち物になり、資格情報を失った瞬間に失われるのはユーザー自身の成果物になる。リポジトリを用意するのは常に人間であり、盤面が触れるのは既にあるリポジトリだけである(Workspace の `publish` 参照)。アカウントが表すのは盤面そのものであって既定エージェントではない(Default agent 参照 — ポインタを差し替えても GitHub 名義は変わらない)。
 
