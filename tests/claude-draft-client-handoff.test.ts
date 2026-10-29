@@ -36,18 +36,18 @@ describe("ClaudeDraftClient.draftHandoff(issue #13)", () => {
   });
 
   it("プロンプトにフラグメント保存 + 指定言語での散文指示が注入される(issue #46)", async () => {
-    const calls: string[][] = [];
+    const calls: (string | undefined)[] = [];
     const client = new ClaudeDraftClient({
       db,
-      exec: async (_command, args) => {
-        calls.push(args);
+      exec: async (_command, _args, _env, input) => {
+        calls.push(input);
         return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify({ outcome: "done" }) });
       },
     });
 
     await client.draftHandoff("mounted the sensor", "Japanese");
 
-    const prompt = calls[0]!.join(" ");
+    const prompt = calls[0];
     expect(prompt).toContain(
       "Preserve the language of the dump: keep each fragment in the language it was written in — " +
         "English technical terms, quoted error messages, and criteria stay exactly as given. Any " +
