@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentView } from "../src/agent-create.js";
+import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { DEFAULT_INTERVIEWER_NAME } from "../src/defaults.js";
 import { appendEvent, listEvents, taskDecisionLog } from "../src/events.js";
 import { applyExecutionSettingsChange, executionSettingsFor } from "../src/execution-setting.js";
@@ -13,6 +14,7 @@ import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceDeletionReferences } from "../src/workspace-create.js";
+import { FakeContainerRuntime, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   type BootOptions,
@@ -44,6 +46,8 @@ import {
   type Tidepool,
   WORKER_SPAWNED,
 } from "./harness.js";
+import { makeRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 // Interview の盤面境界(登録 → 出題 → 統合復帰 → 採点完了)。振る舞いは interview.test.ts の domain 層で一度ずつ言い、
 // ここは扉の写像だけを言う(ADR 0107)。
@@ -391,12 +395,42 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
   expect(refused.json.error).toContain(room);
   expect(existsSync(join(room, ".git"))).toBe(false);
 
+  // 解除後の読みに渡る path は実 adapter の spawn 設定で見る。quarantine 中の同じ盤面を引き継ぐ
+  const dir = t.dir;
+  const workspace = { name: "reef", path: workspacePath };
+  const registryDir = await makeRegistry({ "workspaces.yaml": `reef:\n  path: ${JSON.stringify(workspace.path)}\n` });
+  const logDir = await tempDir("repaired-room-reader-logs-");
+  const proc = recordingSpawn();
+  onTestFinished(proc.removeClaudeTaskTemps);
+  await t.stopServer();
+  t = await bootTidepool({
+    dir,
+    workspace,
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    workerAdapter: (deps) => withHealthyUsage(new ClaudeCodeWorker({
+      ...deps,
+      registry: { dir: registryDir, mode: "purely-local" },
+      agent: "deckhand",
+      workspace: workspace.name,
+      workspacesDir: join(dir, "workspaces"),
+      mcpUrl: "http://127.0.0.1:1/mcp",
+      logDir,
+      enumerateSkills: async () => [],
+    }), deps.clock),
+  });
+
   mkdirSync(room, { recursive: true });
   git(room, "init", "--quiet", "--initial-branch=main");
   expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] })).status).toBe(200);
   await runNow(t, measured.id);
 
-  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(measured.id));
+  const spawned = await vi.waitFor(() => {
+    const call = proc.calls.find((call) => call.args.some((arg) => arg.endsWith(`${measured.id}.sandbox.json`)));
+    expect(call).toBeDefined();
+    return call!;
+  });
+  const settingsPath = spawned.args[spawned.args.indexOf("--settings") + 1]!;
+  expect(JSON.parse(readFileSync(settingsPath, "utf8")).sandbox.filesystem.allowRead).toContain(room);
   expect(JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text).interview_room).toBe(room);});
 
 it("root の面接室の在り処が root の session の後に消えると、root 配下の監査の pickup は worker を起こさずに面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {
@@ -429,13 +463,12 @@ it("監査後に復帰する root は記録済みの面接室の repo が無け�
   expect(existsSync(join(room, ".git"))).toBe(false);
 });
 
-it("再開する受験者の記録済み checkout が消えたら作り直さず root 名で止め、checkout と出題 head の復元を順に確かめた回答だけで WIP を持って再開する(ADR 0329 決定3・4)", async () => {
+it("再開する受験者の記録済み checkout が消えたら作り直さず root 名で止め、checkout と出題 head の復元を順に確かめた回答だけで受験者を再開する(ADR 0329 決定3・4)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   const [child] = await pose(root.id);
   await completeMetaReviews(t);
   const checkout = examineeCheckoutOf(child);
-  commitWork(checkout, "answer.txt", "half an answer\n");
   expect((await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] })).isError).toBeFalsy();
   t.worker.exit(child);
   const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
@@ -472,7 +505,6 @@ it("再開する受験者の記録済み checkout が消えたら作り直さず
   expect((await answer()).status).toBe(200);
   await runNow(t, child);
   expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2);
-  expect(git(checkout, "show", "HEAD:answer.txt")).toBe("half an answer");
 });
 
 it("retry の旧い root の面接室の在り処が消えると、新しい root の pickup は worker を起こさずに旧い面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {

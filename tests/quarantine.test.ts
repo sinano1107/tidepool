@@ -15,7 +15,7 @@ import {
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { FULL_HANDOFF, git, HUMAN_WEBUI, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -261,7 +261,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("is still configured");
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).toContain("git status --porcelain");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("開いた event が残るのに在り処のディレクトリが無い面接室は、盤面が作り直さないことと出口を予告し、mkdir と git の検査を出さない(ADR 0277 追記 決定2)", () => {
     const db = openDb(":memory:");
@@ -274,7 +274,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("the board does not recreate it");
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).not.toContain("git status --porcelain");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("開いた event が残り repo が無い面接室は、復元か開く task の cancel か手で git init する出口を予告する(ADR 0329 決定5)", () => {
     const db = openDb(":memory:");
@@ -286,7 +286,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("the board does not recreate it");
     expect(purpose).toContain("cancel the task that opens it");
     expect(purpose).toContain("git init");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
   it("出題済みで未決着の受験者がいる名前は checkout と出題 head の検査を予告し、空 repo の出口は出さない —— 決着後は両検査を外す(ADR 0329 決定4・5)", () => {
     const db = openDb(":memory:");
     const root = interviewRoot(db);
@@ -314,6 +314,6 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(settled).not.toContain(examinee!.id);
     expect(settled).not.toContain("resolves in the interview room");
     expect(settled).toContain("git init");
-  });
+  }, GIT_FIXTURE_TEST_TIMEOUT);
 
 });
