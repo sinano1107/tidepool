@@ -23,14 +23,15 @@
    type で変えないが、**review 系の面に出るのは人間が `read` / `external_write` と分類した tool だけ**で、分類の既定は最も強い
    `workspace_or_host_write`(fail-closed)。review の書き込み床(ADR 0035)を Mac 側の保存 tool で迂回させないため。運営者が第三者の
    サーバは、workspace 側の受容(Domain allowlist と同型、ADR 0072 決定3「持ち出しの受容単位は workspace」)も要る。付与と分類の門は
-   ADR 0061 のとおり人間面の credential と危険な値への `confirm` で、registry の commit ではない。
+   ADR 0061 のとおり人間面の credential と危険な値への `confirm` で、registry の commit ではない。ADR 0013 の「床はデータの状態に
+   依存しない」は既定の側の話で、付与が MCP 面を広げるのは `allowed_domains` が egress を開けるのと同じ人間の扉のデータである(ADR 0072)。
 4. **サーバ定義(名前・運営者・tool と分類・単一 tenant か)は registry、名前 → URL と資格情報は盤面設定。** registry はホスト非依存
    (ADR 0018)で secret を持たない。**既定は単一 tenant**(同時に1 task にしか渡さない。Blender は1つの scene を持つ1 process で、
    2 task の呼び出しが混ざれば記録からどちらの状態か言えない)。無状態と人間が確かめたサーバだけ `shared` を書く。`tidepool` は予約名。
 5. **記録は盤面の DB に1呼び出し1行**(task・spawn・server・tool・引数・応答の逐語)。spawn 時に読んだ上流の `tools/list` も spawn の
    記録に残す(ADR 0325 が skill の scope を残すのと同型)。応答は代理が全文を手元に持つので、ADR 0195 決定4 のとおり予算で切って `next`
    で続きを読ませる。**GitHub だけは wrapper を持つ**: 書き込みの本文末尾に帰属の段落(agent の icon と名前・task id)を決定論で足し、
-   盤面自身の PR 本文も同じ段落に揃える。着地と repo 内容の書き込み(merge・push・ファイル作成更新削除・branch 作成)の tool は wrapper の
+   盤面自身の PR 本文も同じ段落に揃える。着地と repo 内容の書き込み(merge・PR の close・push・ファイル作成更新削除・branch 作成)の tool は wrapper の
    コード定数で拒み、付与にも `confirm` にも買えない —— 着地の所有は盤面(ADR 0024 決定2、Merge ダイヤル)。
 6. **Mac 側の tool が触る workspace は、Mac 側の専用ディレクトリに置いて VM へ書き込み可で mount し、代理が path 引数の接頭辞を写す。**
    Mac の home は mount しない(ADR 0257 決定1 が閉じた理由)。workspace の `.git/` 配下に解決する path は代理が拒む(ADR 0037 の
