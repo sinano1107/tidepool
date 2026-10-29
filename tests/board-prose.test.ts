@@ -1,4 +1,4 @@
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
@@ -9,7 +9,7 @@ import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from 
 import { cancelTaskDirectly, completeAudit, completeTask, getTask, listExaminees, logDecision, MEMORY_REPAIR_NOTICE, pickupTask, poseProbe, ROUTING_REPAIR_NOTICE, registerTask, type Task, taskVerbSwap, whyNoReturnDestination } from "../src/tasks.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { definitionPart, recordPrompt } from "./fakes.js";
-import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, WORKER_SPAWNED } from "./harness.js";
+import { decomposeTaskViaWorker, FULL_HANDOFF, HUMAN_WEBUI, poseAccepted, skillCall, skillsInit, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -418,6 +418,43 @@ it("異議された entry が別の actor の行だけなら、この worker の
   const parts = boardProse(reviewInput(db, dirs, rca, spawn(db, rca, at)));
 
   expect(parts.map((part) => part.part)).not.toContain("historical_definition");
+});
+
+/** self RCA の材料: deckhand の session で、transcript `lines(entry)` の判断の行に異議を打つ。session は閉じない(走行中)。 */
+async function skillRca(lines: (entryId: number) => string[]) {
+  const db = openDb(":memory:");
+  const at = new Date("2026-10-29T00:00:00.000Z");
+  const dirs = await boardDirs();
+  const objected = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
+  const spawned = recordedSpawn(db, dirs, objected, at);
+  const entryId = logDecision(db, objected, "ran make deploy", "deckhand", at, "worker");
+  const stream = join(dirs.recordDir, `${objected.id}.${spawned}.stream.jsonl`);
+  writeFileSync(stream, lines(entryId).join("\n"));
+  const objection = appendEvent(db, { taskId: objected.id, actorId: HUMAN_WEBUI[0], origin: "webui", at, payload: { kind: "objection_raised", entry_id: entryId, comment: "why?", session_id: 0 } });
+  const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: objected.id, assignee: "deckhand", opened_on_event_ids: [objection] }, at, ...HUMAN_WEBUI);
+  const history = () => historical(reviewInput(db, dirs, rca, spawn(db, rca, at)));
+  return { entryId, stream, history };
+}
+
+it("self RCA の当時版は、材料の session が走行中でも、異議された行より前に従った skill の名前と本文を持ち、後の呼び出しは持たない(ADR 0325 決定3)", async () => {
+  const b = await skillRca((entryId) => [
+    skillsInit(["deploy", "lint"]),
+    ...skillCall(1, "deploy", "Run make deploy."),
+    ...toolCall(2, "mcp__tidepool__log_decision", entryId),
+    ...skillCall(3, "lint", "Run make lint."),
+  ]);
+
+  const history = b.history();
+
+  expect(history).toContain(`#### deploy\n\n${fenced("Run make deploy.")}`);
+  expect(history).not.toContain("lint");
+});
+
+it("self RCA の材料の session の transcript が読めなければ、従った skill の欠落を申告する(ADR 0325 決定3 / ADR 0314 決定2)", async () => {
+  const b = await skillRca(() => []);
+  rmSync(b.stream);
+
+  expect(b.history()).toContain(`No session transcript could be read for your objected entry ${b.entryId} — the skills you followed before it are not available as evidence.`);
 });
 
 /** suzumedai が pickup した Interview の root。 */

@@ -18,6 +18,8 @@ const input: AttributionInput = {
   agent_definition: null,
   board_text: [],
   task: null,
+  skills: null,
+  skills_followed: null,
 };
 
 const judgment = { cause: "requirement_change", evidence: "plan A was agreed after the fact" };
@@ -29,6 +31,8 @@ const stopInput: StopAttributionInput = {
   agent_definition: null,
   board_text: [],
   task: null,
+  skills: null,
+  skills_followed: null,
   actions: null,
 };
 
@@ -161,7 +165,7 @@ it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", { cause, evidence: "e" });
 });
 
-it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・reviewer / repair の Authority・盤面の文に従った結果・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4 / ADR 0314 決定4・5)", async () => {
+it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・reviewer / repair の Authority・盤面の文に従った結果は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4 / ADR 0314 決定4・5)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
     exec: async (_command, _args, _env, input) => {
@@ -189,10 +193,10 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
     "when agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer or repair rather than profile, that Authority is board code: that is environment",
   );
   expect(prompt).toContain("never answer agent_definition when agent_definition is null");
-  expect(prompt).toContain("workspace_document is when a skill or document placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong");
+  expect(prompt).toContain("workspace_document is when a document placed in the task's workspace (AGENTS.md, a README) was itself wrong");
   expect(prompt).toContain("only when the decision log cites that document");
   expect(prompt).toContain(
-    "following the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn) as written, or a skill bundled with the harness, is environment, while misreading that text is capability",
+    "following the board's own text the worker was given (board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn) as written is environment, while misreading that text is capability",
   );
   expect(prompt).not.toContain("Interview root");
 });
@@ -229,6 +233,8 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
     agent_definition: null,
     board_text: [],
     task: null,
+    skills: null,
+    skills_followed: null,
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ id: 7, position: 1, line: "chose plan B" }] },
   };
 
@@ -267,6 +273,27 @@ it("停止と異議の帰責の prompt は task を spawn で渡した文面と�
   }
   expect(prompts[0]).toContain(JSON.stringify(task));
   expect(prompts[1]).toContain('"task": null');
+});
+
+it("停止と異議の帰責の prompt は、skills_followed の skill に文面どおり従った外れを skills.host なら environment・skills.workspace なら workspace_document と読み、読み違えを capability と読み、欄が null なら残りから判定させる(ADR 0325 決定3)", async () => {
+  const prompts: string[] = [];
+  const client = new ClaudeAttributionClient({
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
+      return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
+    },
+  });
+  const setting = { provider: "anthropic", model: "fable", effort: "high" } as const;
+
+  await client.judge(input, setting);
+  await client.judgeStop(stopInput, setting);
+
+  for (const prompt of prompts) {
+    expect(prompt).toContain(
+      "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in skills.workspace, " +
+        "while misreading the skill's text is capability; skills and skills_followed are null when the session's transcript could not be read: judge from the rest",
+    );
+  }
 });
 
 it("停止と異議の帰責の prompt は { id, line } の行の id と rca_findings の review / actor を説明し、異議だけが裁く行の actor を説明する(ADR 0322 決定5 / 追記、#2675)", async () => {

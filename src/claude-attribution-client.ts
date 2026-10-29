@@ -62,7 +62,7 @@ function buildStopPrompt(input: StopAttributionInput): string {
  *  the objected entry's decision, or the stopped session's conduct; `f` is the input's own field descriptions (ADR 0324 決定1). */
 const responseFields = (
   w: { reading: string; before: string; sound: string; cites: string },
-  f: Pick<typeof ATTRIBUTION_INPUT_FIELDS, "memory_read" | "agent_definition" | "board_text" | "task">,
+  f: Pick<typeof ATTRIBUTION_INPUT_FIELDS, "memory_read" | "agent_definition" | "board_text" | "task" | "skills" | "skills_followed">,
 ) =>
   "Respond with ONLY a single JSON object (no markdown fences, no " +
   'prose) with these fields: "cause" (one of ' +
@@ -75,17 +75,22 @@ const responseFields = (
   "task is null when the session's record could not be read: judge from the rest; environment is the worker's " +
   "surroundings — board tooling, network or sandbox trouble, or an upstream change — when the " +
   "worker's judgment was sound given what it had (working around or guessing past such trouble " +
-  `instead of escalating is capability; following ${f.board_text} as written, ` +
-  "or a skill bundled with the harness, is environment, while misreading that text is capability); preference is the human's taste where the " +
+  `instead of escalating is capability; following ${f.board_text} as written ` +
+  "is environment, while misreading that text is capability); preference is the human's taste where the " +
   "worker's choice was equally valid; requirement_change is a requirement the human changed " +
   `or introduced after the fact; memory is when a memory entry the worker read before ${w.before}, and followed, ` +
   "was itself wrong — the shortfall is the memory entry's, not the worker's; agent_definition is when " +
   `${f.agent_definition} was itself wrong and ${w.sound} was sound against it; but when ` +
   "agent_definition.builtin is true the body is board code, and when agent_definition.authority.source is reviewer " +
   "or repair rather than profile, that Authority is board code: that is environment; " +
-  "never answer agent_definition when agent_definition is null; workspace_document is when a skill or document " +
-  "placed in the task's workspace (AGENTS.md, a README, a workspace skill) was itself wrong and the worker followed " +
-  `it — name it only when ${w.cites} that document; use uncertain when the evidence does ` +
+  "never answer agent_definition when agent_definition is null; workspace_document is when a document " +
+  "placed in the task's workspace (AGENTS.md, a README) was itself wrong and the worker followed " +
+  `it — name it only when ${w.cites} that document; ` +
+  // ADR 0325 決定3: skill は呼び出しで注入される文面で、持ち主は scope の欄で引く —— board_text と同じ型。名指しの門は置かない
+  `a skill is text the harness gave the worker when it invoked the skill — ${f.skills_followed}, and ${f.skills}: ` +
+  "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in " +
+  "skills.workspace, while misreading the skill's text is capability; skills and skills_followed are null when the session's transcript " +
+  "could not be read: judge from the rest; use uncertain when the evidence does " +
   'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "wrong_memory_entries" ' +
   `(only with cause memory: the ids of the wrong memory entries, named from ${f.memory_read}; never answer memory when memory_read is empty).`;
 const OBJECTION_FIELDS = responseFields(

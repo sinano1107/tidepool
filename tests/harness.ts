@@ -1464,12 +1464,23 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   tier_id: 1, source: { tier: "task", provider: "only" },
   harness: "claude-code",
   cli_version: "1",
+  skills: { workspace: [], permitted: "all" },
 };
 
 /** transcript の tool 呼び出し1回 = tool_use と、event_id を返した tool_result の2行(投影器のテストの setup)。 */
 export const toolCall = (n: number, name: string, eventId: number | null) => [
   `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"${name}","input":{}}]}}`,
   `{"type":"user","uuid":"r${n}","message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":[{"type":"text","text":"{\\"event_id\\":${eventId}}"}]}]}}`,
+];
+
+/** worker が見た skill の集合を報告する init 行(固定版 2.1.286 の形、ADR 0325 決定2)。 */
+export const skillsInit = (skills: string[]) => JSON.stringify({ type: "system", subtype: "init", skills });
+
+/** transcript の skill の呼び出し1回 = `Skill` の tool_use・commandName つきの結果・本文の合成 user 行の3行(固定版 2.1.286 の形、#2682)。 */
+export const skillCall = (n: number, name: string, body: string) => [
+  `{"type":"assistant","uuid":"a${n}","message":{"content":[{"type":"tool_use","id":"t${n}","name":"Skill","input":{"skill":"${name}"}}]}}`,
+  `{"type":"user","uuid":"r${n}","tool_use_result":{"success":true,"commandName":"${name}"},"message":{"content":[{"type":"tool_result","tool_use_id":"t${n}","content":"Launching skill: ${name}"}]}}`,
+  JSON.stringify({ type: "user", uuid: `s${n}`, isSynthetic: true, message: { content: [{ type: "text", text: `Base directory for this skill: /w/.claude/skills/${name}\n\n${body}` }] } }),
 ];
 
 /** 何も観測しなかった exit(exit 0・signal なし・表示用の欄はすべて null)。各テストは上書きする欄だけを書く(issue #1333)。 */

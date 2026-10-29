@@ -135,6 +135,16 @@ export class TranscriptStore {
     }
   }
 
+  /** `open` が開いた stream の行(ADR 0325 決定5)—— 走行中なら書かれたところまで。無い記録は null、他の fs の例外は投げる。 */
+  readStream(taskId: string, workerSpawnedEventId: number): string[] | null {
+    try {
+      return readFileSync(`${this.base(taskId, workerSpawnedEventId)}.stream.jsonl`, "utf8").split("\n");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw err;
+    }
+  }
+
   /** 1 session の transcript の3本が共有する path の頭(issue #379 / ADR 0083 追記2)。 */
   private base(taskId: string, workerSpawnedEventId: number): string {
     return join(this.dir, `${taskId}.${workerSpawnedEventId}`);

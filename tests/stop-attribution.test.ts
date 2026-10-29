@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -15,7 +15,7 @@ import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, l
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import { definitionPart, FakeAttributionClient, FakeBehaviorDraftClient, noRetrospectiveCalls, recordPrompt } from "./fakes.js";
-import { api, bootTidepool, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { api, bootTidepool, HUMAN_WEBUI, interviewExaminee, judgmentRows, QUIET_EXIT, registerWork, skillCall, skillsInit, type Tidepool, toolCall, WORKER_SPAWNED } from "./harness.js";
 import { tempDir } from "./temp-dir.js";
 
 const at = new Date("2026-10-25T00:00:00Z");
@@ -66,6 +66,8 @@ it("a stop with a reason is judged once by the sweep after its session closes, f
       agent_definition: null,
       board_text: [],
       task: null,
+      skills: null,
+      skills_followed: null,
       actions: null,
     },
   ]);
@@ -289,14 +291,37 @@ it("the stop judge's decision_log rows and actions.decisions name the decision b
   expect(input!.actions!.decisions).toEqual([{ id: b.entry, position: 1, line: "deleted the fixtures" }, { id: unbound, position: null, line: "kept the parser" }]);
 });
 
-/** setup: 理由つきで止め、session を閉じ、その transcript を投影する。 */
-async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: string[]) {
+/** setup: 理由つきで止め、session を閉じ、その transcript を(`recordDir` を渡せば記録の器に)書いて投影する。 */
+async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: string[], recordDir?: string) {
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
   b.exit();
-  const transcriptPath = join(await tempDir("tidepool-stop-"), `${b.task.id}.${b.spawned}.stream.jsonl`);
+  const transcriptPath = join(recordDir ?? (await tempDir("tidepool-stop-")), `${b.task.id}.${b.spawned}.stream.jsonl`);
   writeFileSync(transcriptPath, lines.join("\n"));
   projectAndPersist(b.db, { workerSpawnedEventId: b.spawned, transcriptPath });
+  return transcriptPath;
 }
+
+it("the stop judge reads every skill the session followed from its projected Episode, split by scope, with the text the harness gave (ADR 0325 決定2・3)", async () => {
+  const b = fixture({ spawn: { skills: { workspace: ["deploy"], permitted: "all" } } });
+  const recordDir = await tempDir("tidepool-records-");
+  await stoppedWithTranscript(b, [skillsInit(["deploy", "dataviz"]), ...skillCall(1, "deploy", "Run make deploy."), ...toolCall(2, "mcp__tidepool__log_decision", b.entry), ...skillCall(3, "dataviz", "Chart it.")], recordDir);
+
+  await b.sweep(at, { ...b.deps, recordDir });
+
+  expect(b.stopInputs().map((i) => [i.skills, i.skills_followed, i.actions?.calls.map((c) => c.args)])).toEqual([
+    [{ workspace: ["deploy"], host: ["dataviz"] }, [{ name: "deploy", position: 0, text: "Run make deploy." }, { name: "dataviz", position: 2, text: "Chart it." }], ["deploy", null, "dataviz"]],
+  ]);
+});
+
+it("a stop whose session's transcript is gone after projection still gets the followed skills' names and positions, with null text (ADR 0325 決定3)", async () => {
+  const b = fixture();
+  const recordDir = await tempDir("tidepool-records-");
+  rmSync(await stoppedWithTranscript(b, [skillsInit(["deploy"]), ...skillCall(1, "deploy", "Run make deploy.")], recordDir));
+
+  await b.sweep(at, { ...b.deps, recordDir });
+
+  expect(b.stopInputs().map((i) => [i.skills, i.skills_followed])).toEqual([[{ workspace: [], host: ["deploy"] }, [{ name: "deploy", position: 0, text: null }]]]);
+});
 
 it.each([
   { judgment: { cause: "memory" as const, evidence: "followed a note", wrong_memory_entries: [999] }, rejected: "memory attribution rejected: memory entry 999 was not read before the decision" },
@@ -526,7 +551,7 @@ it.each([
   await b.sweep(at, deps);
 
   expect(drafter.stopCalls.map((c) => c.input)).toEqual([
-    { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null },
+    { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, skills: null, skills_followed: null, actions: null, index: null },
   ]);
   expect(listMemoryEntries(b.db, {})).toEqual([
     expect.objectContaining({
@@ -593,7 +618,7 @@ it.each([
   await b.sweep(at, deps);
   await b.sweep(at, deps);
 
-  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null };
+  const initialInput = { human_stop: { reason: "deleting unrelated files" }, decision_log: [{ id: b.entry, line: "deleted the fixtures" }], memory_read: [], agent_definition: null, board_text: [], task: null, skills: null, skills_followed: null, actions: null };
   const entries = (rootCause: string) => [
     { id: expect.any(Number), line: `no_act: stop ${stop} — ${rootCause}` },
     { id: expect.any(Number), line: "completion report: (no outcome recorded)" },

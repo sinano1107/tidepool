@@ -18,10 +18,12 @@ const input: BehaviorDraftInput = {
   agent_definition: null,
   board_text: [],
   task: null,
+  skills: null,
+  skills_followed: null,
   index: "- cli/ — how command-line flags are named",
 };
 
-const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, actions: null, index: null };
+const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decision_log: [], memory_read: [], agent_definition: null, board_text: [], task: null, skills: null, skills_followed: null, actions: null, index: null };
 
 const draft = { path: "cli/flags", title: "Spell out flags", text: "Name dry-run flags --dry-run.", addressee: "all" };
 
@@ -131,6 +133,8 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
     agent_definition: null,
     board_text: [],
     task: null,
+    skills: null,
+    skills_followed: null,
     actions: { calls: [{ index: 0, tool: "Bash", args: "rm -rf ../other", failed: false }], decisions: [{ id: 7, position: 1, line: "chose plan B" }] },
     rca_findings: [{ review: "auditor", task_id: "r", actor: null, entries: [{ id: 10, line: "stop 9 → no guard on rm" }] }],
     index: "- workspace/ — where agents may write",

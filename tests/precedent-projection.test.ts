@@ -462,3 +462,57 @@ it("stdout で未観測の Codex の行(item.updated、reasoning の item)は未
     unknownKinds: { "item.updated/todo_list": 1, "item.completed/reasoning": 1 },
   });
 });
+
+// skill の呼び出し(ADR 0325 決定2・3 / #2691)。固定版 2.1.286 の stream(Lima VM で採取): workspace skill wsbar と同梱 skill dataviz を
+// 1回ずつ呼び、subagent に wsbar を呼ばせ、最後に1つの message で wsbar と dataviz を並べて呼び直した session。
+const skillSession = () => readFileSync(join(import.meta.dirname, "fixtures", "skill-session-2.1.286.stream.jsonl"), "utf8").split("\n");
+const skillEvents = (): EventRow[] => [
+  { id: 1, task_id: "t2691", actor_id: "tako", origin: "board", kind: "worker_spawned", payload: WORKER_SPAWNED, created_at: "2026-10-29T00:00:00.000Z" },
+];
+const projectSkills = (transcriptLines = skillSession()) =>
+  projectEpisode({ transcriptLines, events: skillEvents(), workerSpawnedEventId: 1, extractorVersion: "test" });
+
+it("skill の呼び出しは Skill の行動行ごとに名前・位置・本文の合成行の参照・subagent の印の1行になり、Skill の args は skill の名前(ADR 0325 決定3)", () => {
+  const episode = projectSkills();
+
+  expect(episode.actions.map((a) => [a.tool, a.args, a.subagent])).toEqual([
+    ["Skill", "wsbar", false],
+    ["Skill", "dataviz", false],
+    ["Agent", "Invoke wsbar skill", false],
+    ["Skill", "wsbar", true],
+    ["Skill", "wsbar", false],
+    ["Skill", "dataviz", false],
+  ]);
+  // subagent の呼び出しの結果は commandName を持たず、本文の合成行も親の stream に出ない(固定版の実測)
+  expect(episode.skillCalls).toEqual([
+    { position: 0, name: "wsbar", transcriptUuid: "4445234f-1964-4b14-9132-bde0a466ac7f", subagent: false },
+    { position: 1, name: "dataviz", transcriptUuid: "56fae6c4-4974-43ce-9fb3-33d95f251269", subagent: false },
+    { position: 3, name: "wsbar", transcriptUuid: null, subagent: true },
+    { position: 4, name: "wsbar", transcriptUuid: "84eb1696-45a2-4d45-aee9-cb3925baaf61", subagent: false },
+    { position: 5, name: "dataviz", transcriptUuid: "69f8a696-0eac-43ee-b75d-7c8cddf3cb15", subagent: false },
+  ]);
+});
+
+it("worker が見た skill の集合は init 行の skills で、Codex の Episode は空(ADR 0325 決定2・6)", () => {
+  expect(projectSkills().skillsSeen).toEqual([
+    "wsbar", "deep-research", "design", "design-sync", "dataviz", "update-config", "verify", "debug", "code-review", "simplify",
+    "batch", "fewer-permission-prompts", "doctor", "loop", "schedule", "claude-api", "workflow-authoring", "run", "run-skill-generator", "plugin-authoring",
+  ]);
+  expect(projectCodex()).toMatchObject({ skillsSeen: [], skillCalls: [] });
+});
+
+it("Skill の結果と組まない合成行(compaction の後の要約)と失敗した Skill は呼び出しに数えない(ADR 0325 決定3)", () => {
+  // 固定版で compaction を起こした実測の形: compact_boundary の後に isSynthetic の要約行が1つ来て、skill の本文は入れ直されない
+  const episode = projectSkills([
+    '{"type":"system","subtype":"init","skills":["wsbar"],"claude_code_version":"2.1.286"}',
+    '{"type":"assistant","uuid":"a1","message":{"content":[{"type":"tool_use","id":"t1","name":"Skill","input":{"skill":"wsbar"}}]}}',
+    '{"type":"user","uuid":"r1","tool_use_result":{"success":true,"commandName":"wsbar"},"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"Launching skill: wsbar"}]}}',
+    '{"type":"user","uuid":"s1","isSynthetic":true,"message":{"content":[{"type":"text","text":"Base directory for this skill: /w/.claude/skills/wsbar\\n\\nSay BARBAR."}]}}',
+    '{"type":"system","subtype":"compact_boundary","uuid":"c1"}',
+    '{"type":"user","uuid":"s2","isSynthetic":true,"message":{"content":[{"type":"text","text":"This session is being continued from a previous conversation."}]}}',
+    '{"type":"assistant","uuid":"a2","message":{"content":[{"type":"tool_use","id":"t2","name":"Skill","input":{"skill":"nope"}}]}}',
+    '{"type":"user","uuid":"r2","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Unknown skill: nope"}]}}',
+  ]);
+
+  expect(episode.skillCalls).toEqual([{ position: 0, name: "wsbar", transcriptUuid: "s1", subagent: false }]);
+});

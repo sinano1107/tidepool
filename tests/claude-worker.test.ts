@@ -1242,6 +1242,27 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).not.toContain("Skill(code-review)");
   });
 
+  // ADR 0325 決定2: 帰責の判事が scope を引けるよう、spawn の記録は allowlist の形に関わらず checkout の skill と許可した集合を持つ
+  it.each([
+    ["*", '  - "*"\n', "all"],
+    ["[]", "  []\n", []],
+    ["有限", "  - code-review\n", ["code-review"]],
+    ["scope 語", '  - "@workspace"\n', ["tdd", "code-review"]],
+  ] as const)("allowlist が %s でも worker_spawned は checkout の skill の集合と許可した集合を記録する(ADR 0325 決定2)", async (_shape, skillsYaml, permitted) => {
+    const wsDir = await tempDir("tidepool-ws-");
+    await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
+    await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
+    const rec = recordingEnumerator(["tdd", "code-review", "plug:deploy"]);
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd(skillsYaml) },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-skills-record");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const spawned = listEvents(db, "task-skills-record").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["code-review", "tdd"], permitted } });
+  });
+
   // ADR 0136 決定5 / issue #767: skill 列挙は Board call の口を1回通る。ここは
   // whole-probe の fake(`EnumerateSkillsFn`)を**外して**、実物の列挙を fake の
   // 容器機構の上で走らせる唯一の場所である —— 門が立っていることは probe の中身

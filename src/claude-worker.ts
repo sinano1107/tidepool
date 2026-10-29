@@ -1217,7 +1217,8 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
   try {
     return readdirSync(join(workspacePath, ".claude", "skills"), { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
+      .map((entry) => entry.name)
+      .sort();
   } catch {
     return [];
   }
@@ -1599,6 +1600,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // fails the spawn closed — never run without the deny list (no fail-open,
     // ADR 0025 point 6).
     const skills = agent.definition.skills;
+    // the checkout's own skills: the @workspace/@host split and the spawn record (ADR 0325 決定2) both read this one scan
+    const workspaceSkills = scanWorkspaceSkills(place.path);
     if (skills.length === 1 && skills[0] === SKILL_WILDCARD) {
       this.launch(task, workspace, place, agent, registry, {
         deny: [],
@@ -1606,6 +1609,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // nothing is denied, so ADR 0033's sandbox may open the skill roots
         // wholesale — there is no allowlist for a `cat` to route around
         permittedSkills: "all",
+        workspaceSkills,
       }, routing, query);
       return;
     }
@@ -1614,6 +1618,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         deny: [],
         disableSlashCommands: true,
         permittedSkills: [],
+        workspaceSkills,
       }, routing, query);
       return;
     }
@@ -1640,10 +1645,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         });
         return;
       }
-      // the @workspace/@host split is a difference against the checkout's own
-      // skills — scanned only when a scope word is actually present.
-      const needsScan = skills.some((s) => s === "@workspace" || s === "@host");
-      const workspaceSkills = needsScan ? scanWorkspaceSkills(place.path) : [];
       const deny = computeSkillDenials(skills, enumerated, workspaceSkills);
       // ADR 0033: the sandbox's skill re-allow is the *permitted* set — the
       // same complement, the other way round — so a denied skill's directory
@@ -1658,6 +1659,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           deny,
           disableSlashCommands: false,
           permittedSkills,
+          workspaceSkills,
         }, routing, query);
       } catch (err) {
         if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
@@ -1709,6 +1711,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       deny: string[];
       disableSlashCommands: boolean;
       permittedSkills: string[] | "all";
+      workspaceSkills: string[];
     },
     routing: ProviderRouting,
     query: InjectionQuery | undefined,
@@ -1800,6 +1803,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           source: routing.source,
           harness: "claude-code",
           cli_version: cliVersion,
+          skills: { workspace: enforcement.workspaceSkills, permitted: enforcement.permittedSkills },
         },
         at: this.options.clock.now(),
       });

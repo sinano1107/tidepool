@@ -5,7 +5,8 @@ import type { Db } from "./db.js";
 import { currentAttributions, type EventPayload, type EventRow, getEvent, listEvents, sessionOf, sessionWindow } from "./events.js";
 import { rootPrOutcome } from "./landing.js";
 import { MEMORY_META_REVIEW_VERBS, MEMORY_REPAIR_VERBS, WORKER_MEMORY_VERBS } from "./meta-review.js";
-import { parseStreamLine, readAdvisorOutcome, readInitVersion } from "./stream-json.js";
+import { parseStreamLine, readAdvisorOutcome, readInitField, readInitVersion } from "./stream-json.js";
+import { TranscriptStore } from "./transcript-store.js";
 import { entryObjections } from "./triage.js";
 
 /** Precedent(前例)の投影 — 盤面の記録(events + worker transcript)から
@@ -26,6 +27,7 @@ const TOOL_ARGS: Record<string, (input: Record<string, unknown>) => unknown> = {
   Bash: inputField("command"),
   Task: inputField("description"),
   Agent: inputField("description"),
+  Skill: inputField("skill"),
   command_execution: inputField("command"),
   file_change: (item) =>
     Array.isArray(item.changes) ? item.changes.map((c) => (c as { path?: unknown }).path).filter((p) => typeof p === "string").join("\n") : null,
@@ -104,6 +106,16 @@ export interface SubagentUsage {
   duration_ms: number;
 }
 
+/** skill の呼び出し1回(ADR 0325 決定3)。本文は写さず、harness が本文を渡した合成 user 行の参照だけを持つ —— その行が無い呼び出し
+ *  (subagent の呼び出しは親の stream に本文の行を出さない、固定版 2.1.286 の実測)は null。 */
+export interface SkillCall {
+  /** `Skill` の行動行の位置(`EpisodeAction.index`)。 */
+  position: number;
+  name: string;
+  transcriptUuid: string | null;
+  subagent: boolean;
+}
+
 /** 構造マーカーは3つだけ(ADR 0083 追記 2 決定5)。subagent の lifecycle は
  *  行動行の `subagent` フラグで既に表現されるので重ねない。advisor 相談は
  *  マーカーだけ — 結果は暗号化されていて抽出するものが無く、行動行にも載せると
@@ -171,6 +183,9 @@ export interface Episode {
    *  Episode にもトークンは写さない(ADR 0083 追記 2)。 */
   workerExitedEventId: number | null;
   lines: EpisodeLineStats;
+  /** worker が見た skill の集合 —— Claude は init 行の `skills`、Codex は空(ADR 0325 決定2・6)。 */
+  skillsSeen: string[];
+  skillCalls: SkillCall[];
   /** tool 呼び出し 0 件かつ未知行あり = この transcript は読めていない。
    *  session 単位で「無かったこと」にしないための fail-closed の印。 */
   unrecognizedFormat: boolean;
@@ -211,6 +226,8 @@ interface LineReading {
   wroteAt: Map<number, { position: number; transcriptUuid: string }>;
   lines: EpisodeLineStats;
   cliVersion: string | null;
+  skillsSeen: string[];
+  skillCalls: SkillCall[];
 }
 
 const emptyReading = (): LineReading => ({
@@ -221,6 +238,8 @@ const emptyReading = (): LineReading => ({
   wroteAt: new Map(),
   lines: { total: 0, interpreted: 0, ignored: 0, unknown: 0, unknownKinds: {} },
   cliVersion: null,
+  skillsSeen: [],
+  skillCalls: [],
 });
 
 /** 行動の応答に写った盤面発行の event id を、その行動の位置に結ぶ。tool 名で絞るのは、他の verb の応答に
@@ -242,6 +261,9 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
   const reading = emptyReading();
   const { actions, markers, lines } = reading;
   const byToolUseId = new Map<string, EpisodeAction>();
+  // skill の本文の組(ADR 0325 決定3): commandName を持つ `Skill` の結果の後の最初の合成 user 行。並べて呼んでも結果と本文は順に来る
+  const awaitingBody: string[] = [];
+  const bodies = new Map<string, string>();
 
   for (const line of transcriptLines) {
     // 行の切れ目そのもの(末尾改行が生む空文字を含む)は行ではない
@@ -274,6 +296,8 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
 
     const uuid = typeof parsed.uuid === "string" ? parsed.uuid : "";
     reading.cliVersion = readInitVersion(parsed) ?? reading.cliVersion;
+    reading.skillsSeen = readInitField(parsed, "skills") ?? reading.skillsSeen;
+    if (parsed.isSynthetic === true && awaitingBody.length > 0) bodies.set(awaitingBody.shift()!, uuid);
     const structural = subtype === null ? undefined : STRUCTURAL_MARKER_SUBTYPE[subtype];
     if (type === "system" && structural) {
       markers.push({
@@ -333,10 +357,14 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
         const action = byToolUseId.get(tool_use_id);
         if (!action) continue;
         action.failed = is_error === true;
+        if (typeof (parsed.tool_use_result as { commandName?: unknown } | undefined)?.commandName === "string") awaitingBody.push(tool_use_id);
         bindEventId(reading, action, (block as Record<string, unknown>).content, uuid);
       }
     }
   }
+  reading.skillCalls = actions.flatMap(({ tool, args, failed, index, toolUseId, subagent }) =>
+    tool === "Skill" && !failed && args !== null ? [{ position: index, name: args, transcriptUuid: bodies.get(toolUseId) ?? null, subagent }] : [],
+  );
   return reading;
 }
 
@@ -397,7 +425,7 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
   if (!spawned || spawned.payload.kind !== "worker_spawned" || spawned.task_id === null) {
     throw new Error(`no worker_spawned event ${input.workerSpawnedEventId}`);
   }
-  const { actions, markers, loggedAt, pulledAt, wroteAt, lines, cliVersion } =
+  const { actions, markers, loggedAt, pulledAt, wroteAt, lines, cliVersion, skillsSeen, skillCalls } =
     spawned.payload.harness === "codex"
       ? readCodexLines(input.transcriptLines, spawned.payload.cli_version)
       : readClaudeLines(input.transcriptLines);
@@ -429,6 +457,8 @@ export function projectEpisode(input: ProjectEpisodeInput): Episode {
     signal: exitPayload?.signal ?? null,
     workerExitedEventId: exited?.id ?? null,
     lines,
+    skillsSeen,
+    skillCalls,
     unrecognizedFormat: actions.length === 0 && lines.unknown > 0,
   };
 }
@@ -501,7 +531,7 @@ const WRITE_TOOL = new RegExp(
 
 /** 投影器の版(ADR 0083 追記 2 決定7)。読み方を変えたらここを上げる — 派生表は
  *  記録から何度でも作り直せるので、古い版の Episode を消す必要はない。 */
-export const EXTRACTOR_VERSION = "7";
+export const EXTRACTOR_VERSION = "8";
 
 /** 投影待ちの session(issue #2570): transcript を開いた時点から、その投影が決着する(行を書いた・書かなかった・throw した)まで立つ印。
  *  停止の帰責の門はこの間開かない。開いた書き込みストリームはこのプロセスにしか無いので in-memory —— 再起動で消えてよい。
@@ -566,14 +596,14 @@ export function projectAndPersist(
       | undefined
   )?.workspace;
   // episode 行だけが入って行動行が入らない状態になると、冪等キーだけ埋まって
-  // 投影のやり直しが永久に塞がれる — 3表は1つのトランザクションで書く
+  // 投影のやり直しが永久に塞がれる — 表は1つのトランザクションで書く
   return db.transaction(() => {
     const { changes, lastInsertRowid } = db
       .prepare(
         `INSERT INTO episodes (worker_spawned_event_id, extractor_version, task_id, workspace, agent,
            registry_commit, definition_version, cli_version, completed_handoff, completed_result,
-           exit_code, signal, worker_exited_event_id, lines, unrecognized_format)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           exit_code, signal, worker_exited_event_id, lines, unrecognized_format, skills_seen)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (worker_spawned_event_id, extractor_version) DO NOTHING`,
       )
       .run(
@@ -592,6 +622,7 @@ export function projectAndPersist(
         episode.workerExitedEventId,
         JSON.stringify(episode.lines),
         Number(episode.unrecognizedFormat),
+        JSON.stringify(episode.skillsSeen),
       );
     if (changes === 0) return null;
     const episodeId = Number(lastInsertRowid);
@@ -619,6 +650,12 @@ export function projectAndPersist(
     episode.markers.forEach((m, seq) => {
       insertMarker.run(episodeId, seq, m.kind, m.position, m.eventId, m.missingReason, m.transcriptUuid);
     });
+    const insertSkillCall = db.prepare(
+      "INSERT INTO episode_skill_calls (episode_id, seq, position, name, transcript_uuid, subagent) VALUES (?, ?, ?, ?, ?, ?)",
+    );
+    episode.skillCalls.forEach((c, seq) => {
+      insertSkillCall.run(episodeId, seq, c.position, c.name, c.transcriptUuid, Number(c.subagent));
+    });
     return episodeId;
   })();
 }
@@ -639,6 +676,38 @@ function pullsBefore(
       .map((m) => m.eventId),
   );
   return events.flatMap((e) => (e.payload.kind === "memory_pulled" && pulls.has(e.id) ? [e.payload] : []));
+}
+
+/** 判事と self RCA に渡す、従った skill 1つ(ADR 0325 決定3)。`position` が null = 異議された行を行動列に置けず、呼び出しを全部渡した印。
+ *  `text` は harness が渡した本文(`Base directory` の見出しを除く —— path はベンダーの綴り)で、transcript に無ければ null。 */
+export interface FollowedSkill {
+  name: string;
+  position: number | null;
+  text: string | null;
+}
+
+/** `spawned` の session を transcript の書かれたところまで読んでその場で投影する(ADR 0325 決定5)。記録が読めなければ null。 */
+export function projectSession(recordDir: string | undefined, events: EventRow[], spawned: EventRow): { episode: Episode; lines: string[] } | null {
+  const lines = recordDir === undefined ? null : new TranscriptStore(recordDir).readStream(spawned.task_id!, spawned.id);
+  if (!lines) return null;
+  return { episode: projectEpisode({ transcriptLines: lines, events, workerSpawnedEventId: spawned.id, extractorVersion: EXTRACTOR_VERSION }), lines };
+}
+
+/** `anchor` の行より前に従った skill(ADR 0325 決定3、`memory_read` と同じ線): 判断の行は decision、記憶の書き込みの行は memory_write の
+ *  マーカーで切り、完了の行と停止は session の全部。マーカーの位置が置けない行は全部を position null で返す。本文は `lines` から読む。 */
+export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">, lines: string[] | null, anchor: Pick<EventRow, "id" | "kind">): FollowedSkill[] {
+  const marker = ({ decision_logged: "decision", memory_written: "memory_write" } as Partial<Record<string, MarkerKind>>)[anchor.kind];
+  const all = anchor.kind === "task_completed" || anchor.kind === "session_stopped_by_human";
+  const cut = all ? Number.POSITIVE_INFINITY : episode.markers.find((m) => m.kind === marker && m.eventId === anchor.id)?.position ?? null;
+  const texts = new Map<string, string>();
+  for (const line of lines ?? []) {
+    const parsed = parseStreamLine(line);
+    const text = (parsed?.message as { content?: Array<{ text?: unknown }> } | undefined)?.content?.[0]?.text;
+    if (parsed?.isSynthetic === true && typeof parsed.uuid === "string" && typeof text === "string") texts.set(parsed.uuid, text.replace(/^Base directory for this skill: [^\n]*\n\n/, ""));
+  }
+  return episode.skillCalls
+    .filter((c) => cut === null || c.position < cut)
+    .map((c) => ({ name: c.name, position: cut === null ? null : c.position, text: (c.transcriptUuid && texts.get(c.transcriptUuid)) ?? null }));
 }
 
 const sortedIds = (ids: number[]) => [...new Set(ids)].sort((a, b) => a - b);
@@ -779,6 +848,11 @@ export function listEpisodes(
       `SELECT * FROM episode_markers WHERE episode_id IN (${rows.map(() => "?").join(", ")}) ORDER BY episode_id, seq`,
     )
     .all(...rows.map((r) => r.id)) as MarkerRow[];
+  const skillCallRows = db
+    .prepare(
+      `SELECT * FROM episode_skill_calls WHERE episode_id IN (${rows.map(() => "?").join(", ")}) ORDER BY episode_id, seq`,
+    )
+    .all(...rows.map((r) => r.id)) as Array<{ episode_id: number; position: number; name: string; transcript_uuid: string | null; subagent: number }>;
   const decisions = decisionOutcomes(db, markerRows);
 
   return rows.map((row) => ({
@@ -799,6 +873,10 @@ export function listEpisodes(
     workerExitedEventId: row.worker_exited_event_id,
     lines: JSON.parse(row.lines) as EpisodeLineStats,
     unrecognizedFormat: row.unrecognized_format === 1,
+    skillsSeen: JSON.parse(row.skills_seen) as string[],
+    skillCalls: skillCallRows
+      .filter((c) => c.episode_id === row.id)
+      .map((c) => ({ position: c.position, name: c.name, transcriptUuid: c.transcript_uuid, subagent: c.subagent === 1 })),
     prMerged: mergedPr(db, row.task_id),
     actions: actionRows
       .filter((a) => a.episode_id === row.id)
@@ -921,6 +999,7 @@ interface EpisodeRow {
   worker_exited_event_id: number | null;
   lines: string;
   unrecognized_format: number;
+  skills_seen: string;
 }
 
 interface ActionRow {

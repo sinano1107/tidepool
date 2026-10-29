@@ -1350,6 +1350,8 @@ export class CodexWorker implements WorkerAdapter {
           source: setting.source,
           harness: "codex",
           cli_version: this.options.cliVersion,
+          // ADR 0325 決定6: Codex は skill を全部閉じる(allowlist の翻訳は #2689)
+          skills: { workspace: [], permitted: [] },
         },
         at: this.options.clock.now(),
       });

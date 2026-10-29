@@ -20,9 +20,11 @@ const draftSchema = z.object({
   addressee: z.enum(["worker", "all"]),
 });
 
-/** What the worker was given at its spawn (ADR 0314 決定3・4 / ADR 0320 決定3) —— both drafts read the same three fields. */
-const spawnTextFields = (f: Pick<typeof BEHAVIOR_DRAFT_INPUT_FIELDS, "agent_definition" | "board_text" | "task">) =>
-  `${f.agent_definition} (null when not recorded), ${f.board_text}, task (${f.task}; null when not recorded)`;
+/** What the worker was given at its spawn and by the skills it invoked (ADR 0314 決定3・4 / ADR 0320 決定3 / ADR 0325 決定3) —— both
+ *  drafts read the same fields. */
+const spawnTextFields = (f: Pick<typeof BEHAVIOR_DRAFT_INPUT_FIELDS, "agent_definition" | "board_text" | "task" | "skills" | "skills_followed">) =>
+  `${f.agent_definition} (null when not recorded), ${f.board_text}, task (${f.task}; null when not recorded), ` +
+  `${f.skills_followed} and ${f.skills} (both null when not recorded)`;
 
 /** The question the board asks once an objection's cause says an agent should
  *  learn from it (ADR 0120 決定1(b)(c)): word one standing rule a human can approve. */
