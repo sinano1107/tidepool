@@ -1,5 +1,7 @@
 # 子の `parent` の文面は子自身の pickup で凍結し、RCA 子は材料の session が spawn で受け取った文面を記録から読む
 
+**Status 追記: 決定5 の「一時的失敗はその cycle の pickup を skip」は poll 全体ではなく、pickup で GitHub を読む task の集合の除外として読む(ADR 0328 決定2、2026-10-30、issue #2704)。**
+
 **Status 追記: 決定1・2 の記録の `user` は ADR 0326 決定4 の task 固有の部分として読む** —— Codex の user turn 全体に含まれる盤面の文を親の文面に混ぜず、材料の session が受け取った task 本文を逐語で読む線を保つ(2026-10-29、issue #2692)。
 
 2026-10-28 の triage → grilling(issue #2663、ADR 0320 決定1 が決定の外に置いた「親の文脈」)で決定。`get_current_task` の envelope の

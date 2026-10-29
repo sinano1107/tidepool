@@ -1,5 +1,7 @@
 # Issue-backed task は内容を live 参照で持つ — 登録時 snapshot ではなく
 
+**Status 追記: 「一時的失敗は Throttle と同じ fail-closed」は ADR 0110 以降の entry 除外の形で読む** —— その cycle の poll 全体ではなく、pickup で GitHub を読む task の集合をその poll から外して次の head へ進み、成功を挟まず10分続けば確認 question が立つ(ADR 0328、2026-10-30、issue #2704)。
+
 **Status 追記: 使用の瞬間(spawn と UI 表示)は変わらないが、worker が session 中に `get_current_task` で読み直しても spawn で展開した文面が返る(ADR 0320 決定1)** —— 子が読む親の文面も子自身の pickup で展開して凍結し、RCA 子だけは材料の session が spawn で受け取った文面を記録から読む(ADR 0321) —— verb が呼ぶたびに issue を再展開していたのは決定ではなく写しだった(2026-10-28 の grilling、issue #2662)。
 精緻に書かれた GitHub issue をタスクとして盤面に流すにあたり、登録時に issue の内容をタスクへコピーする案(snapshot)を退け、盤面には参照(workspace 名 + issue 番号)だけを保存し、内容(title / purpose / completion_criteria)は使用の瞬間 — spawn と UI 表示 — に issue から展開すると決めた(2026-07-13 の grilling)。「issue」はタイトル + 本文 + 全コメントのスレッド全体を指す。
 

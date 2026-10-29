@@ -1,5 +1,7 @@
 # poll の想定外の例外は盤面を落とさない —— 何も握っていなければ行で報せて次の poll に任せ、続けば撃ち直しで確かめる question を立て、slot を握っていれば worker が走らなかった pickup として後始末へ入る
 
+**Status 追記: 決定1 の「成功」の定義はそのままに、issue 展開の一時的失敗の連続に兄弟の計測と question(kind `issueExpansion`)が1本立つ —— 展開の失敗で終えた poll は投げていないので成功に数え、2つの計測は混ぜない(ADR 0328 決定3・4、2026-10-30、issue #2704)。**
+
 **Status 追記: 前提行の「Mac の盤面は `systemd-run --scope` で起こす者が居ない」は、起動の形が transient service に変わった後も「落ちた盤面を立て直すのは人間」として成り立つ(ADR 0318 決定2・3)** —— 決定は変わらない。
 
 2026-10-21 の grilling(issue #945)で決定。scheduler の `poll()` は想定外の例外を受けておらず、`pollNow` の void された鎖が reject を
