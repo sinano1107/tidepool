@@ -73,7 +73,7 @@ export interface AttributionInput {
 /** RCA 子1つの所見(ADR 0322 決定5 / 追記): 判事は `review` と `actor` で出所と当事者を引く。self の actor は登録時の assignee
  *  (材料 session の worker)、auditor は null。 */
 /** その session の worker が見て許された skill を持ち主で分けた集合(ADR 0325 決定2)。 */
-export interface SkillScopes {
+interface SkillScopes {
   workspace: string[];
   host: string[];
 }

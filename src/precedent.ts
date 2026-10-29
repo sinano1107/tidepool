@@ -696,9 +696,9 @@ export function projectSession(recordDir: string | undefined, events: EventRow[]
 /** `anchor` の行より前に従った skill(ADR 0325 決定3、`memory_read` と同じ線): 判断の行は decision、記憶の書き込みの行は memory_write の
  *  マーカーで切り、完了の行と停止は session の全部。マーカーの位置が置けない行は全部を position null で返す。本文は `lines` から読む。 */
 export function skillsFollowed(episode: Pick<Episode, "skillCalls" | "markers">, lines: string[] | null, anchor: Pick<EventRow, "id" | "kind">): FollowedSkill[] {
-  const marker = ({ decision_logged: "decision", memory_written: "memory_write" } as Partial<Record<string, MarkerKind>>)[anchor.kind];
   const all = anchor.kind === "task_completed" || anchor.kind === "session_stopped_by_human";
-  const cut = all ? Number.POSITIVE_INFINITY : episode.markers.find((m) => m.kind === marker && m.eventId === anchor.id)?.position ?? null;
+  // 判断の行の decision / 記憶の書き込みの行の memory_write マーカーは、その行の event id で引ける(他の種別の行はマーカーを持たない)
+  const cut = all ? Number.POSITIVE_INFINITY : episode.markers.find((m) => m.eventId === anchor.id)?.position ?? null;
   const texts = new Map<string, string>();
   for (const line of lines ?? []) {
     const parsed = parseStreamLine(line);
