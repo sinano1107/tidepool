@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { IssueGoneError } from "../src/github.js";
 import { registerTask } from "../src/tasks.js";
-import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, type Tidepool } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, HOUR, HUMAN_WEBUI, makeWorkspace, nextPoll, type Tidepool } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -10,7 +10,7 @@ afterEach(async () => {
   await t?.stop();
 });
 
-it("issue参照タスクの展開が一時的に失敗したら、そのサイクルの pickup を skip し、復旧後の poll で拾う(issue #49 設計点5)", async () => {
+it("issue参照タスクの展開が一時的に失敗したら、そのサイクルの pickup を skip し、10分未満なら question を立てず、復旧後の poll で拾う(issue #49 設計点5 / ADR 0328)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
   const task = registerTask(
@@ -22,6 +22,9 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
 
   t.github.scriptIssueFailure(new Error("GitHub is down"));
   await t.clock.advance(HOUR);
+  // 最初の失敗から10分未満の2回目の失敗も question を立てない(ADR 0328 決定3)
+  await t.clock.advance(9 * 60 * 1000);
+  await nextPoll(t);
 
   // 環境事象は人間を呼ばない: pickup されず、failure question も生まれない
   expect(t.worker.started).toEqual([]);
@@ -32,7 +35,7 @@ it("issue参照タスクの展開が一時的に失敗したら、そのサイ�
   // 障害が直れば次の poll で普通に拾われる
   t.github.scriptIssueFailure(null);
   t.github.scriptIssue(49, { title: "ログイン画面のバグ", body: "b", comments: [] });
-  await t.clock.advance(HOUR);
+  await nextPoll(t);
   expect(t.worker.started.map((x: any) => x.id)).toEqual([task.id]);
   // spawn は展開の使用時点: worker(と記憶の注入の関連度)には "#49" ではなく issue の中身が渡る
   expect(t.worker.started[0]).toMatchObject({ title: "ログイン画面のバグ", purpose: "b" });

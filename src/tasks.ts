@@ -3866,6 +3866,14 @@ function stoppedSql(taskRef: string, fallback: string): string {
              WHERE value = COALESCE(${taskRef}.assignee, ${fallback})))`;
 }
 
+/** pickup で GitHub を読む task(ADR 0328 決定2): issue-backed task と、issue-backed の親を持つ子。親の参照の有無で引くので、
+ *  GitHub を読まない材料つきの RCA 子も入る —— streak 中の過剰除外として受け入れ、述語に材料の有無を持ち込まない。
+ *  `@excludeGitHubReading` が立つ間だけ効く。pickup(`nextSlotTask`)と skipped 表示(`listQueue`)はこの1本を通る。 */
+function gitHubReadingSql(taskRef: string): string {
+  return `(@excludeGitHubReading AND (${taskRef}.github_issue_number IS NOT NULL
+             OR EXISTS (SELECT 1 FROM tasks p WHERE p.id = ${taskRef}.parent_id AND p.github_issue_number IS NOT NULL)))`;
+}
+
 /** task が開く場所すべての名前(ADR 0273 決定8・追記、issue #2265)の唯一の SQL —— 資源の停止と封じ込めの組はこの集合と比べる。
  *  受験者は面接室(対象の root id)だけ。それ以外は `workspace` 列(無ければ `@defaultWorkspaceName`)に加えて、interview の root と
  *  review の親を review の鎖で辿って着く root(`taskRunPlace` と同じ辿り方)には、その root の面接室と他に読める面接室
@@ -4214,13 +4222,16 @@ export function listQueue(
   /** 閉じた根に塞がれた子は skipped で、理由に閉じた根と PR を持つ(ADR 0265 決定6)。`nextSlotTask` と同じ1本を渡す。 */
   closedRootOf?: ClosedRootOf,
   interviewerName?: string,
+  /** issue 展開の一時的失敗が続く間(ADR 0328 決定7): GitHub を読む task を skipped に見せる。`nextSlotTask` と同じ引数。 */
+  excludeGitHubReading = false,
 ): BoardTask[] {
   const fallback = typeAwareDefaultAgentSql("tasks");
   const rows = boardRows(
     db,
-    `WHEN status = 'todo' AND type <> 'question' AND ${stoppedSql("tasks", fallback)} THEN 'skipped'`,
+    `WHEN status = 'todo' AND type <> 'question' AND (${stoppedSql("tasks", fallback)} OR ${gitHubReadingSql("tasks")}) THEN 'skipped'`,
     [
       {
+        excludeGitHubReading: excludeGitHubReading ? 1 : 0,
         defaultWorkspaceName: defaultWorkspaceName ?? null,
         defaultAgentName: defaultAgentName ?? null,
         auditorName: auditorName ?? null,
@@ -4604,6 +4615,8 @@ export function nextSlotTask(
   /** 閉じた根に塞がれた子を飛ばす(ADR 0265 決定6)。Absent → 飛ばさない。 */
   closedRootOf?: ClosedRootOf,
   interviewerName?: string,
+  /** この poll で issue 展開が一時的に失敗した(ADR 0328 決定2): pickup で GitHub を読む task を外す。 */
+  excludeGitHubReading = false,
 ): Task | undefined {
   const fallback = typeAwareDefaultAgentSql("t");
   const statement = db
@@ -4616,6 +4629,7 @@ export function nextSlotTask(
          AND (NOT ${unfinishedChildSql("t.id")} OR ${earlyIntegrationReturnSql("t.id")})
          AND NOT ${heldSql("t.id")}
          AND NOT ${stoppedSql("t", fallback)}
+         AND NOT ${gitHubReadingSql("t")}
          AND (@excludedTaskIds IS NULL
            OR t.id NOT IN (SELECT value FROM json_each(@excludedTaskIds)))
        ORDER BY t.sort_key LIMIT 1`,
@@ -4631,6 +4645,7 @@ export function nextSlotTask(
       stoppedWorkspaces: JSON.stringify(stopped?.workspaces ?? []),
       stoppedAssignees: JSON.stringify(stopped?.assignees ?? []),
       excludedTaskIds: excluded.length ? JSON.stringify(excluded) : null,
+      excludeGitHubReading: excludeGitHubReading ? 1 : 0,
     }) as TaskRow | undefined;
     const task = row && rowToTask(row);
     if (!task || !closedRootOf?.(task)) return task;

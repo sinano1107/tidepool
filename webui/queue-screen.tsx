@@ -167,6 +167,8 @@ interface QueueScreenProps {
     slot: AppSlot;
     /** 最後の poll の失敗の meta(本文 · いつ)。行の文言は固定。 */
     pollFailureMeta?: string;
+    /** 最後の issue 展開の一時的失敗の meta(本文 · task · いつ)。行の文言は固定。 */
+    issueExpansionFailureMeta?: string;
     queue: QueueScreenTask[];
     humanTasks: Array<{ id: string; title: string; blocking: string | null }>;
     providerUsage?: import('../src/wire-contract').ProviderUsage[];
@@ -180,6 +182,17 @@ interface QueueScreenProps {
   onFront: (id: string) => void;
   onDoneHuman: (id: string) => void;
   onReorder: (next: QueueScreenTask[], id: string, position: number) => void;
+}
+
+/** 停止ではないが pickup を待たせている失敗の1行(後始末の行と同じ「行 + いつ」の形)。 */
+function FailureRow({ label, line, meta }: { label: string; line: string; meta: string }) {
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>{label}</span>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>{line}</span>
+      <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{meta}</span>
+    </div>
+  );
 }
 
 // biome-ignore lint/correctness/noUnusedVariables: rendered by webui/app.tsx — one concatenated bundle
@@ -252,12 +265,9 @@ function QueueScreen({ data, paused, onTogglePause, spendDown, onSpendDown, onFr
           ? 'repeating-linear-gradient(90deg, var(--rock-3) 0 8px, transparent 8px 14px)'
           : slot.color,
       }}></div>
-      {data.pollFailureMeta && (
-        <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--coral-4)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>poll</span>
-          <span style={{ flex: 1, minWidth: 0, fontSize: 'var(--text-sm)', color: 'var(--text-body)' }}>last poll failed · the next poll retries</span>
-          <span style={{ flexBasis: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--text-2xs)', color: 'var(--text-muted)' }}>{data.pollFailureMeta}</span>
-        </div>
+      {data.pollFailureMeta && <FailureRow label="poll" line="last poll failed · the next poll retries" meta={data.pollFailureMeta} />}
+      {data.issueExpansionFailureMeta && (
+        <FailureRow label="issues" line="last issue read failed · tasks that read GitHub sit out until one succeeds" meta={data.issueExpansionFailureMeta} />
       )}
 
       {shownProviders.length > 0 && (

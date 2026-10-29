@@ -442,6 +442,11 @@ function mapData(
   // (決定5)の回に走っている行に隠れるので、欄があれば別の1行で、後始末の行と同じ「行 + いつ」の形で報せる
   const failure = queueEnvelope.lastPollFailure;
   const pollFailureMeta = failure && `${failure.message} · at ${fmtTime(failure.at)}`;
+  // ADR 0328 決定7: その兄弟 —— issue 展開の一時的失敗。展開が1つ通るまで GitHub を読む task は skipped に見える
+  const expansion = queueEnvelope.lastIssueExpansionFailure;
+  const expansionTask = expansion && board.find((t) => t.id === expansion.taskId);
+  const issueExpansionFailureMeta = expansion &&
+    `${expansion.message} · ${expansionTask ? liveTitle(expansionTask) : expansion.taskId} · at ${fmtTime(expansion.at)}`;
   return {
     questions, log: logEntries, queue, board: cols, icons,
     scratchpad: triage.scratchpad.map((line): TpScratchLine => ({ id: line.id, text: line.line })),
@@ -449,7 +454,7 @@ function mapData(
     // 同じく行集合の出所はサーバ1箇所で、blocking(この行が塞いでいる親)も
     // ADR 0049 の述語をサーバが当てた答えをそのまま運ぶ
     humanTasks: yourTasks.map((t) => ({ id: t.id, title: liveTitle(t), blocking: t.blocking })),
-    slot, pollFailureMeta, pickupHalt, running: !!running, paused: !!paused,
+    slot, pollFailureMeta, issueExpansionFailureMeta, pickupHalt, running: !!running, paused: !!paused,
     triageActive: halts.some((h) => h.kind === 'triage'),
     // Spend-down (ADR 0143 / 0260) — Provider × 窓ごとの盤面状態応答から素通し
     spendDown: pause.spendDown,

@@ -562,6 +562,8 @@ export interface QuarantineCheckDeps {
   teardownQuarantine?: FailedTeardownCheck;
   /** ADR 0294 決定2: 続く poll の失敗の受理の検査は poll の撃ち直しそのもの。Absent → その確認への回答は拒まれる。 */
   rerunPoll?: () => Promise<PollOutcome>;
+  /** ADR 0328 決定3: 続く issue 展開の失敗の受理の検査は、最後に失敗した参照の読み直し。Absent → その確認への回答は拒まれる。 */
+  recheckIssueExpansion?: () => Promise<void>;
   /** ADR 0097 決定2 / issue #446: provider ごとの probe。その provider の口が無ければ拒む。 */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
   /** ADR 0184 決定5: 行の Quarantine の probe。その Provider の口が無い行への回答は拒む。
@@ -582,7 +584,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, rerunPoll, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
+  const { containment, registryReachability, teardownQuarantine, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -706,6 +708,16 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         const result = await rerunPoll();
         if (result.outcome === "threw") throw new DomainError(`the board's poll still throws: ${result.message}`);
         if (result.outcome === "blocked") throw new DomainError(`the board cannot re-run the poll now: ${result.reason}`);
+      },
+    }),
+    // 通った読み直しは開いた question を観測で決着させる(上と同じ枝)
+    ...(recheckIssueExpansion && {
+      issueExpansion: async () => {
+        try {
+          await recheckIssueExpansion();
+        } catch (err) {
+          throw new DomainError(`the board cannot confirm it reads GitHub issues again: ${err instanceof Error ? err.message : String(err)}`);
+        }
       },
     }),
     // ADR 0266 決定3: 解放の門は同じ器への書き込みそのもの

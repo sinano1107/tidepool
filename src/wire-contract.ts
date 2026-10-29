@@ -29,6 +29,11 @@ export interface PollFailure {
   message: string;
 }
 
+/** 最後の issue 展開の一時的失敗(ADR 0328 決定7): `PollFailure` の兄弟。展開が1つ通るまで残る。 */
+export interface IssueExpansionFailure extends PollFailure {
+  taskId: string;
+}
+
 /** サーバ側の正本は src/throttle.ts の DisplayProviderUsage(値集合の移送は issue #352)。 */
 export interface ProviderUsage {
   provider: string;
@@ -199,6 +204,7 @@ export interface WireContract {
     halts: BoardHalt[];
     teardown?: Teardown;
     lastPollFailure?: PollFailure;
+    lastIssueExpansionFailure?: IssueExpansionFailure;
     providerUsage?: ProviderUsage[];
     tasks: QueueTask[];
   };
