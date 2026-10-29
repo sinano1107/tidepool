@@ -344,7 +344,7 @@ Worker MCP(slot 帰属の worker session が使う、authority profile が縛る
 
 ## 人間面(Human surface)
 
-WebUI・/api・そこに mount される管理MCP からなる、**操作の帰属が常に人間**である盤面の入口の総称。対は Worker MCP 面(slot 帰属の worker session が使い、authority profile が権限を縛る道具)で、両者は信頼域が異なり、**別のリスナーに立つ**。worker session から人間面へは、ツール・経路を問わず**読取も操作も到達できない**ことが不変条件で、これを執行するのは人間面が要求する credential である(2026-07-29 の再グリリング、issue #140 / ADR 0036)。credential を持つのは人間だけで、経路(loopback・tailnet・WebFetch)を問わず一律に効く — したがって tailnet は信頼境界ではない。人間面の GET が無変異であることは、この線の前提から**多層の一枚**に格下げされた(2026-07-28 時点の ADR 0034 では読取残余を受容していたため前提だった)。
+WebUI・/api・そこに mount される管理MCP からなる、**操作の帰属が常に人間**である盤面の入口の総称。対は Worker MCP 面(slot 帰属の worker session が使い、authority profile が権限を縛る道具)で、両者は信頼域が異なり、**別のリスナーに立つ**。worker session から人間面へは、ツール・経路を問わず**読取も操作も到達できない**ことが不変条件で、これを執行するのは人間面が要求する credential である(2026-07-29 の再グリリング、issue #140 / ADR 0036)。credential を持つのは人間だけで、経路(loopback・tailnet・WebFetch)を問わず一律に効く — したがって tailnet は信頼境界ではない。人間面の GET が無変異であることは、この線の前提から**多層の一枚**に格下げされた(2026-07-28 時点の ADR 0034 では読取残余を受容していたため前提だった)。 人間面が応答し続けることが復旧経路の前提なので、盤面が GitHub API 面(`gh`)と往復している間も盤面の実行は止まらず、往復の待ちは git の往復と同じ上限で有界である。git の ref 書き込みだけは、盤面が死んでも完走する形(ADR 0243)のまま待ちを有界にする(2026-10-30 の grilling、issue #2726 / ADR 0330)。
 
 ## 応答予算(Response budget)
 
