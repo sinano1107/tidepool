@@ -18,6 +18,8 @@ import { DROP_TARGET_OPTION, getTask, interviewRoomPath, interviewRootIdOf, type
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
+/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。回答の拒否と quarantine の予告が同じ文で言う。 */
+export const GONE_ROOM_EXITS = "restore it there, cancel the root, or create it by hand (`git init` there) to run with an empty room";
 
 interface QuarantineProse {
   title: string;
@@ -238,13 +240,19 @@ export const QUARANTINES = [
     kind: "workspace",
     scope: "workspace",
     // 再検査の各項: `.git` の形は ADR 0146、重なりは ADR 0040、GitHub は ADR 0067。面接室(Interview の root の id の名前)は registry に
-    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである
+    // 無いので「まだ設定されている」を予告しない。repo がまだ無い面接室の受理の検査は、次の pickup がその番地を作れることだけである ——
+    // ただし event が残るのにディレクトリが無い面接室は回答を拒む(ADR 0277 追記 決定2)
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
       // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
       const roomPath = interviewRoomPath(db, name!);
+      // ADR 0277 追記 決定2: event が残るのにディレクトリが無い面接室は記録の欠落で、盤面は作り直さない
       const checks =
-        room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
+        roomPath !== undefined && !existsSync(roomPath)
+          ? [
+              `the recorded interview room at ${roomPath}, now gone, exists again — the board does not recreate it: ${GONE_ROOM_EXITS}.`,
+            ]
+          : room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
           ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
           : [
               ...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]),

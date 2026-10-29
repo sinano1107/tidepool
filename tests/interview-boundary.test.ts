@@ -322,7 +322,7 @@ it("root の pickup は読む実環境を remote へ追従させる —— origi
   expect(git(workspace.path, "branch", "--list", `task/${root.id}`)).toBe("");
 });
 
-it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室の在り処を retry_of で、根拠が Interview の root ならその面接室の在り処を根拠の読み口で受ける —— 面接室は root の決着後も残る(ADR 0273 決定1・9)", async () => {
+it("root の envelope は実環境の在り処を持ち、retry の新しい root は旧い面接室の在り処を retry_of で、根拠が Interview の root ならその面接室の在り処を根拠の読み口で受ける —— 面接室は root の決着後も残り、読む面接室が残っていれば pickup は止まらない(ADR 0273 決定1・9 / ADR 0277 追記 決定1)", async () => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
   await pose(first.id);
@@ -345,6 +345,88 @@ it("root の envelope は実環境の在り処を持ち、retry の新しい roo
   expect(current.history).toContainEqual({ id: expect.any(Number), retry_of: expect.objectContaining({ previous_root_id: first.id, interview_room: roomOf(first.id) }) });
   expect((await api(t.baseUrl, "GET", `/api/tasks/${first.id}`)).json.status).toBe("cancelled");
   expect(existsSync(join(roomOf(first.id), ".git"))).toBe(true);
+  // 読む面接室がどれも残っていれば、pickup は止まらない(ADR 0277 追記 決定1)
+  for (const id of [measured.id, retried.id]) expect(await pickupStops(id)).toEqual([]);
+  expect((await questions(t)).filter((q) => q.status !== "done" && q.question_quarantine_kind === "workspace")).toEqual([]);
+});
+
+/** その task の pickup_stopped の payload を順に。 */
+const pickupStops = async (taskId: string) =>
+  (await api(t.baseUrl, "GET", `/api/tasks/${taskId}/events`)).json.filter((e: any) => e.kind === "pickup_stopped").map((e: any) => e.payload);
+/** 面接室の在り処が消えた(repo が無い)ときの pickup の停止。名前は面接室の root id、理由は在り処と repo が無いことを名指す。 */
+const goneRoomStop = (roomRootId: string, room: string) => ({
+  kind: "pickup_stopped",
+  quarantine: "workspace",
+  value: roomRootId,
+  reason: expect.stringMatching(new RegExp(`${room}.*repository is gone`)),
+});
+/** 消えた面接室で止まった task: 停止は1度だけ、worker は起きず todo の先頭に戻り、quarantine が開いている間キューで外れる。 */
+async function expectStoppedOnGoneRoom(taskId: string, roomRootId: string, room: string) {
+  await vi.waitFor(async () => expect(await pickupStops(taskId)).toHaveLength(1));
+  expect(await pickupStops(taskId)).toEqual([goneRoomStop(roomRootId, room)]);
+  expect(t.worker.started.map((s) => s.id)).not.toContain(taskId);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${taskId}`)).json.status).toBe("todo");
+  expect(await queueStatus(taskId)).toBe("skipped");
+  const quarantine = await servedQuarantineQuestion(t, "workspace", roomRootId);
+  expect(quarantine).toBeDefined();
+  return quarantine;
+}
+
+it("根拠の root の面接室の在り処が消えると、それを読む root の pickup は worker を起こさずにその面接室の quarantine に落ちて todo の先頭へ戻り、直さない回答は在り処を名指して拒まれ、人間が在り処に repo を置いた回答の後は root が走る(ADR 0277 追記 決定1・2)", async () => {
+  t = await boot();
+  const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await pose(first.id);
+  const measured = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46] })).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${measured.id}/move`, { after: null });
+  const room = roomOf(first.id);
+  rmSync(room, { recursive: true });
+  await runNow(t, measured.id);
+
+  const quarantine = await expectStoppedOnGoneRoom(measured.id, first.id, room);
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(room);
+  expect(existsSync(room)).toBe(false);
+
+  mkdirSync(room);
+  git(room, "init", "--quiet", "--initial-branch=main");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] })).status).toBe(200);
+  await runNow(t, measured.id);
+
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(measured.id));
+  expect(JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text).interview_room).toBe(room);});
+
+it("root の面接室の在り処が root の session の後に消えると、root 配下の監査の pickup は worker を起こさずに面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  // 初回の routing meta-review を root の後ろに並べ、出題で空いた slot を取らせる
+  await routingMaterialViaWebui(t);
+  await startFirstMetaReviewViaWebui(t, "routing");
+  const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
+  t.worker.exit(root.id);
+  const room = roomOf(root.id);
+  rmSync(room, { recursive: true });
+  await completeMetaReviews(t);
+
+  await expectStoppedOnGoneRoom(audit_id, root.id, room);
+});
+
+it("retry の旧い root の面接室の在り処が消えると、新しい root の pickup は worker を起こさずに旧い面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {
+  t = await boot();
+  const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [child] = await pose(first.id);
+  // 受験者は question を待って枠を空け、枠は work が持つ —— retry の新しい root は旧い root の cancel の後始末(面接室がまだある)の後に拾わせる
+  const escalation = { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
+  expect((await callAsTask(t, child, "escalate", escalation)).isError).toBeFalsy();
+  t.worker.exit(child);
+  const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  await vi.waitFor(() => expect(t.worker.started.at(-1)?.id).toBe(filler.id));
+  const retried = (await api(t.baseUrl, "POST", `/api/tasks/${first.id}/retry`, {})).json;
+  const room = roomOf(first.id);
+  rmSync(room, { recursive: true });
+  await runNow(t, retried.id);
+
+  await expectStoppedOnGoneRoom(retried.id, first.id, room);
 });
 
 /** キューの読み口でのその task の status(skipped = 資源の停止で外れている)。 */

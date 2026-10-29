@@ -47,6 +47,7 @@ import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryA
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
+  GONE_ROOM_EXITS,
   openQuarantineQuestion,
   parseTableRowEffortValue,
   parseTableRowValue,
@@ -84,6 +85,7 @@ import {
   type HandoffDoc,
   humanDecomposeTask,
   type InterviewProposal,
+  interviewRoomPath,
   latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
@@ -610,6 +612,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
+      // ADR 0277 追記 決定2: 開いた event が残るのに在り処のディレクトリが無い面接室は記録の欠落 —— 盤面は作り直さず、回答を拒む
+      const recorded = interviewRoomPath(deps.db, value!);
+      if (recorded !== undefined && !existsSync(recorded)) {
+        throw new DomainError(`the recorded interview room ${value} at ${recorded} is gone and the board does not recreate it — ${GONE_ROOM_EXITS}`);
+      }
       // repo がまだ無い面接室には検査する git が無い —— 確かめるのは次の pickup が作れること。event は次の pickup が書く
       if (getTask(deps.db, value!)?.type === "interview" && !existsSync(join(target.path, ".git"))) {
         await refuseOnError(() => void mkdirSync(target.path, { recursive: true }));
