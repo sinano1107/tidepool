@@ -885,10 +885,9 @@ function unknownFrontmatterFields(raw: unknown): string[] {
   const topLevel = Object.keys(meta).filter(
     (key) => !Object.hasOwn(agentFrontmatterSchema.shape, key) && !RETIRED_FIELDS.includes(key),
   );
-  const entries = Array.isArray(meta.provider) ? meta.provider : [];
-  const inEntries = entries
-    .filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null)
-    .flatMap((entry) => Object.keys(entry).filter((key) => !Object.hasOwn(providerEntrySchema.shape, key)))
+  const inEntries = (Array.isArray(meta.provider) ? meta.provider : [])
+    .flatMap((entry) => (typeof entry === "object" && entry !== null ? Object.keys(entry) : []))
+    .filter((key) => !Object.hasOwn(providerEntrySchema.shape, key))
     .map((key) => `provider.${key}`);
   return [...topLevel, ...inEntries];
 }
