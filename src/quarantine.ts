@@ -243,8 +243,14 @@ export const QUARANTINES = [
       const room = getTask(db, name!)?.type === "interview";
       // 開いた event は在り処の mkdir の直後に書く —— event が無ければ repo も無い
       const roomPath = interviewRoomPath(db, name!);
+      // ADR 0277 追記 決定2: event が残るのにディレクトリが無い面接室は記録の欠落で、盤面は作り直さない
       const checks =
-        room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
+        roomPath !== undefined && !existsSync(roomPath)
+          ? [
+              `the recorded interview room at ${roomPath} exists again — the board does not recreate it: restore it there, cancel the root, ` +
+                "or create it by hand (`git init` there) to run with an empty room.",
+            ]
+          : room && (roomPath === undefined || !existsSync(join(roomPath, ".git")))
           ? ["the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
           : [
               ...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]),

@@ -246,6 +246,12 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
   return path === undefined ? undefined : { name: rootId, path };
 }
 
+/** 読む場所のうち、在り処に repo の無い記録された面接室(ADR 0277 追記 決定1)。名前が開いた event を持つ root の id なら面接室で、
+ *  述語は起動時の sparse snapshot の掃除と同じ `.git` の有無。盤面は面接室を消さないので、外で消されたものである。 */
+export function readRoomWithoutRepo(db: Db, reads: readonly WorkspaceConfig[]): WorkspaceConfig | undefined {
+  return reads.find((read) => interviewRoomPath(db, read.name) !== undefined && !existsSync(join(read.path, ".git")));
+}
+
 /** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
  *  root id、ref の基準の鍵だけ受験者の id)、他は task の workspace。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)

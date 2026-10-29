@@ -1,3 +1,5 @@
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
@@ -12,7 +14,7 @@ import {
   tableRowEffortValue,
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
-import { cancelTaskDirectly, getTask, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
+import { cancelTaskDirectly, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
 import { HUMAN_WEBUI, openTestInterviewRoom } from "./harness.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
@@ -259,5 +261,28 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).not.toContain("is still configured");
     expect(purpose).not.toContain("the board can create this interview room");
     expect(purpose).toContain("git status --porcelain");
+  });
+
+  it("開いた event が残るのに在り処のディレクトリが無い面接室は、盤面が作り直さないことと出口を予告し、mkdir と git の検査を出さない(ADR 0277 追記 決定2)", () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const room = interviewRoomPath(db, root.id)!;
+    rmSync(room, { recursive: true });
+    const purpose = purposeFor(db, root.id);
+    expect(purpose).toContain(`the recorded interview room at ${room}`);
+    expect(purpose).toContain("the board does not recreate it");
+    expect(purpose).not.toContain("the board can create this interview room");
+    expect(purpose).not.toContain("git status --porcelain");
+  });
+
+  it("開いた event が残り在り処のディレクトリはあるが repo が無い面接室は、盤面がその番地を作れることを予告する(ADR 0277 決定1・追記 決定2)", () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    rmSync(join(interviewRoomPath(db, root.id)!, ".git"), { recursive: true });
+    const purpose = purposeFor(db, root.id);
+    expect(purpose).toContain("the board can create this interview room");
+    expect(purpose).not.toContain("the board does not recreate it");
   });
 });

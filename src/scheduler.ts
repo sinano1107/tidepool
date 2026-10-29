@@ -96,6 +96,7 @@ import {
   openInterviewRoom,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  readRoomWithoutRepo,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -572,6 +573,9 @@ export function startScheduler(deps: {
         // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない —— 名前が
         // この task の pickup の門に掛からず、落ちると同じ task を毎回拾い直す。実環境は root の `workspace` 列で門に掛かる
         const place = taskRunPlace(db, picked, resolved);
+        // ADR 0277 追記 決定1: 読みだけ開く面接室の repo が無ければその面接室の名前で止める —— 無い path は Harness が黙って読みから外す
+        const gone = readRoomWithoutRepo(db, place.reads);
+        if (gone) return stopped(quarantineWorkspace(db, gone.name, `the interview room ${gone.name} recorded at ${gone.path} has no git repository — the room's repository is gone`, clock.now()));
         for (const read of place.reads.filter(isRemoteBacked)) {
           try {
             await freshenPlaceAtPickup(read, { githubAuth, registry, live });
