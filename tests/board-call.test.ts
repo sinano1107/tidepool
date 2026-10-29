@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { type BoardCallSpec, createBoardCalls, type PtyBoardCallSpec, readOutput } from "../src/board-call.js";
+import { execThrough } from "../src/claude-worker.js";
 import type { ContainmentCapability } from "../src/containment.js";
 import type { ContainedProcess, PtyFn, PtyProcess } from "../src/process-container.js";
 import { ProcessContainers } from "../src/process-container.js";
@@ -435,4 +436,29 @@ it("root が exit しても、出力の読み切りが時間上限までに来�
   await t.clock.advance(LIMIT);
 
   expect(await call).toBeNull();
+});
+
+
+it("用途の本文は200KiBを超えるUnicodeもstdinで逐語に送りEOFにする", async () => {
+  const t = setup();
+  const input = `開始\n${"魚🐟\n".repeat(40000)}末尾\n\n`;
+  const call = execThrough(t.calls.call, "large answer")(spec.command, ["-p"], spec.env, input);
+  await t.spawned(1);
+  expect(t.spawns[0]!.stdin).toBe("pipe");
+  expect(t.processes[0]!.stdin.read()?.toString()).toBe(input);
+  expect(t.processes[0]!.stdin.writableEnded).toBe(true);
+  await t.say("answer");
+  t.emitExit(0, null);
+  expect(await call).toBe("answer");
+});
+
+
+it("本文送信中のEPIPEは成功した出力があっても失敗となり容器を回収する", async () => {
+  const t = setup();
+  const result = t.calls.call({ ...spec, input: "prompt" }, readAll);
+  await t.spawned(1);
+  await t.say("answer");
+  t.processes[0]!.stdin.emit("error", Object.assign(new Error("broken pipe"), { code: "EPIPE" }));
+  expect(await result).toBeNull();
+  expect(t.runtime.forceReclaims).toHaveLength(1);
 });

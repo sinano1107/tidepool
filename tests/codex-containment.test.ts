@@ -5,17 +5,17 @@ import { dirname } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   CODEX_CLI_VERSION,
-  CODEX_DEVELOPER_MARKER,
   CODEX_FEATURE_SNAPSHOT,
+  CODEX_PROMPT_MARKER,
   type CodexCapabilityObservation,
   checkCodexCapability,
   createCodexCapabilityCheck,
   enabledSkills,
   listedSkillPaths,
   observedAgentsMdLayer,
-  observedDeveloperMarkers,
   observedHooks,
   observedSkills,
+  observedWorkerPrompts,
   resolveCodexExecutable,
 } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -56,7 +56,7 @@ const VALID: CodexCapabilityObservation = {
   skills: [],
   hooks: [BOARD_HOOK_REGISTRATION],
   features: CODEX_FEATURE_SNAPSHOT,
-  developerMarkers: [CODEX_DEVELOPER_MARKER],
+  workerPrompts: [CODEX_PROMPT_MARKER],
   agentsMdLayer: [],
   hookDiagnostics: [],
 };
@@ -256,11 +256,11 @@ it.each([
   ["hook (enabled=false)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, enabled: false }] }],
   ["hook (別 source)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, source: "userConfig" }] }],
   ["hook (別の command)", { hooks: [{ ...BOARD_HOOK_REGISTRATION, command: "/tmp/someone-elses-hook.mjs" }] }],
-  // 盤面の文面が developer 層に届かなかった3つの形(ADR 0124 決定4): 鍵が無視された、
+  // 盤面の文面が user 層に届かなかった3つの形(ADR 0124 決定4): 鍵が無視された、
   // 別の層に載った、item の構造が変わった
-  ["developer instructions (空)", { developerMarkers: [] }],
-  ["developer instructions (別値)", { developerMarkers: ["some other text"] }],
-  ["developer instructions (重複)", { developerMarkers: [CODEX_DEVELOPER_MARKER, CODEX_DEVELOPER_MARKER] }],
+  ["worker user prompt (空)", { workerPrompts: [] }],
+  ["worker user prompt (別値)", { workerPrompts: ["some other text"] }],
+  ["worker user prompt (重複)", { workerPrompts: [CODEX_PROMPT_MARKER, CODEX_PROMPT_MARKER] }],
   // 盤面の書いていない指示が task と同じ user 層に載った(ADR 0148 決定2)
   ["agents.md", { agentsMdLayer: ["# AGENTS.md instructions"] }],
 ] as const)("Codex %s surface drift fails its Harness preflight closed", async (_, changed) => {
@@ -307,10 +307,10 @@ it.each([
 });
 
 it("届かなかった理由は期待値と観測値の両方を名指す(ADR 0124 決定4)", async () => {
-  const capability = await checkCodexCapability(async () => ({ ...VALID, developerMarkers: [] }), BOARD_HOOK_PATH);
+  const capability = await checkCodexCapability(async () => ({ ...VALID, workerPrompts: [] }), BOARD_HOOK_PATH);
   expect(capability.available).toBe(false);
   if (!capability.available) {
-    expect(capability.reason).toContain(CODEX_DEVELOPER_MARKER);
+    expect(capability.reason).toContain(JSON.stringify(CODEX_PROMPT_MARKER));
     expect(capability.reason).toContain("observed []");
   }
 });
@@ -323,14 +323,15 @@ it("届かなかった理由は期待値と観測値の両方を名指す(ADR 01
 const promptInput = (name: string) =>
   readFileSync(new URL(`fixtures/codex-prompt-input-${name}.json`, import.meta.url), "utf8");
 
-it("prompt-input の developer item に載った marker だけを拾う(ADR 0124 決定4)", () => {
-  expect(observedDeveloperMarkers(promptInput("developer-marker"))).toEqual([CODEX_DEVELOPER_MARKER]);
-  expect(observedDeveloperMarkers(promptInput("no-marker"))).toEqual([]);
+// user-prefix is a codex-cli 0.163.0 capture with an empty developer override and the shared short probe on argv.
+it("prompt-input の user item に盤面とtaskの区切り付き全文が載る(ADR 0326)", () => {
+  expect(observedWorkerPrompts(promptInput("user-prefix"))).toEqual([CODEX_PROMPT_MARKER]);
+  expect(observedWorkerPrompts(promptInput("no-marker"))).toEqual([]);
 
-  // 同じ文字列が user item に載っているだけの形(別の層に載った)は観測に数えない
+  // 同じ文字列が developer item に載っているだけの形(別の層に載った)は観測に数えない
   const items = JSON.parse(promptInput("no-marker")) as Array<{ content: Array<{ type: string; text: string }> }>;
-  items.at(-1)!.content.push({ type: "input_text", text: CODEX_DEVELOPER_MARKER });
-  expect(observedDeveloperMarkers(JSON.stringify(items))).toEqual([]);
+  items[0]!.content.push({ type: "input_text", text: CODEX_PROMPT_MARKER });
+  expect(observedWorkerPrompts(JSON.stringify(items))).toEqual([]);
 });
 
 // global-agents-md は no-marker に、実物の codex-cli 0.147.0 を新しい CODEX_HOME
@@ -369,7 +370,7 @@ it("prompt-input の skills_instructions から、有効な skill 名だけを�
     "skill-creator",
     "skill-installer",
   ]);
-  expect(observedSkills(promptInput("developer-marker"))).toEqual([]);
+  expect(observedSkills(promptInput("user-prefix"))).toEqual(["imagegen", "openai-docs", "skill-creator", "skill-installer"]);
   expect(observedSkills(promptInput("no-marker"))).toEqual([]);
 });
 
@@ -498,7 +499,7 @@ it("診断が空なら hook 不一致の reason は変更前と同じ文字列(#
 
 it("hook 以外の行の不一致には vendor 診断を添えない(#734)", async () => {
   const capability = await checkCodexCapability(
-    async () => ({ ...VALID, developerMarkers: [], hookDiagnostics: ["warning: hook skipped"] }),
+    async () => ({ ...VALID, workerPrompts: [], hookDiagnostics: ["warning: hook skipped"] }),
     BOARD_HOOK_PATH,
   );
   expect(capability.available).toBe(false);

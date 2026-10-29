@@ -87,11 +87,11 @@ it("a stop whose session's prompt was recorded gives the judge the recorded defi
   ]);
 });
 
-it("the stop judge's task is the stopped session's recorded user turn verbatim, and null when the session has no record (ADR 0320 決定3)", async () => {
+it.each(["claude-code", "codex"] as const)("%s: the stop judge reads only recorded task text, or null when missing (ADR 0326)", async (harness) => {
   const recorded = fixture();
   const recordDir = await tempDir("tidepool-records-");
   const user = "First call get_current_task for task t, then complete this task: parser\n\nPurpose: parse\nCompletion criteria: works";
-  recordPrompt(recordDir, recorded.task.id, recorded.spawned, [definitionPart("You are Deckhand.")], user);
+  recordPrompt(recordDir, recorded.task.id, recorded.spawned, [definitionPart("You are Deckhand.")], user, harness);
   const unrecorded = fixture();
   for (const b of [recorded, unrecorded]) {
     recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");

@@ -199,8 +199,8 @@ export interface RecordedDefinition {
   roster: PartOf<"roster"> | undefined;
 }
 
-export function recordedDefinition({ system }: PromptRecord): RecordedDefinition {
-  const part = <P extends PromptPart["part"]>(name: P) => system.find((p): p is PartOf<P> => p.part === name);
+export function recordedDefinition({ board }: PromptRecord): RecordedDefinition {
+  const part = <P extends PromptPart["part"]>(name: P) => board.find((p): p is PartOf<P> => p.part === name);
   return { definition: part("definition")!, authority: part("authority"), roster: part("roster") };
 }
 
@@ -339,11 +339,6 @@ export type PromptPart =
 
 /** 盤面の文の部分(ADR 0314 決定4)—— 持ち主は盤面で、従った結果は `environment`。帰責の入力の `board_text` はこの部分の text。 */
 export const BOARD_TEXT_PARTS: ReadonlyArray<PromptPart["part"]> = ["doctrine", "interview_discipline", "protocol"];
-
-/** 部分の列を harness へ渡す1つの値に戻す(ADR 0313 決定2)。 */
-export function joinPrompt(parts: readonly PromptPart[]): string {
-  return parts.map((part) => part.text).join("");
-}
 
 /** 盤面が書いた文面の全体(ADR 0157 決定1)を持ち主つきの部分の列で返す(ADR 0313 決定2)。節の順序は Harness を問わず
  *  定義本文 → authority → roster → doctrine → (Interview の root なら)Interview の規律 → protocol → 当時版 → 記憶の注入 →

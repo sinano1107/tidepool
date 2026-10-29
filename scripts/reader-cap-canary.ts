@@ -24,6 +24,7 @@ import {
   readClaudeReceived,
   readCodexReceived,
 } from "../src/reader-cap-canary.js";
+import { promptInput, workerPromptRecord } from "../src/transcript-store.js";
 
 if (process.argv[2] === "serve") {
   // 子の MCP: stdout は stdio の transport なので何も書かない。目印は呼び出しごとに親が渡したファイルへ足す
@@ -45,9 +46,9 @@ if (process.argv[2] === "serve") {
   // Claude Code は tool の結果がそのまま文脈に入る。Codex の code mode は exec のコードを逐語で指定して形を固定する
   const CLAUDE_PROMPT = `Call the ${CANARY_TOOL} tool exactly once, then reply with the single word DONE.`;
   const CODEX_PROMPT = `Run exactly this code with the exec tool, once, without changing it: \`${GIVEN_CODE}\` Then reply with the single word DONE.`;
-  const run = (bin: string, args: string[], env: NodeJS.ProcessEnv) => {
+  const run = (bin: string, args: string[], env: NodeJS.ProcessEnv, input: string) => {
     try {
-      return { stdout: execFileSync(bin, args, { cwd: scratch, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }) };
+      return { stdout: execFileSync(bin, args, { cwd: scratch, env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, input, stdio: ["pipe", "pipe", "pipe"] }) };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`${bin} failed: ${message}`);
@@ -65,7 +66,6 @@ if (process.argv[2] === "serve") {
     "claude",
     [
       "-p",
-      CLAUDE_PROMPT,
       ...pinnedModelFlags("haiku", "low"),
       "--mcp-config",
       mcpConfig,
@@ -80,6 +80,7 @@ if (process.argv[2] === "serve") {
       "--no-session-persistence",
     ],
     boardCallEnv(),
+    promptInput(workerPromptRecord("claude-code", [], CLAUDE_PROMPT)).user,
   );
   writeFileSync(join(scratch, "claude.stream.jsonl"), claude.stdout);
 
@@ -106,9 +107,10 @@ if (process.argv[2] === "serve") {
         `mcp_servers.${CANARY_SERVER}.args=${JSON.stringify(server.args)}`,
         "-c",
         `mcp_servers.${CANARY_SERVER}.tools.${CANARY_TOOL}.approval_mode="approve"`,
-        CODEX_PROMPT,
+        "-c", 'developer_instructions=""',
       ],
       { ...process.env, CODEX_HOME: codexHome },
+      promptInput(workerPromptRecord("codex", [], CODEX_PROMPT)).user,
     );
     const rollout = globSync(join(codexHome, "sessions/**/rollout-*.jsonl")).find((path) => !before.has(path));
     return {

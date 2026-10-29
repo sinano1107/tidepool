@@ -26,17 +26,17 @@ const stopInput: StopBehaviorDraftInput = { human_stop: { reason: "r" }, decisio
 const draft = { path: "cli/flags", title: "Spell out flags", text: "Name dry-run flags --dry-run.", addressee: "all" };
 
 it("draft は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON の起草を返す", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
 
   await expect(client.draft(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", draft);
 
-  const { args, env } = calls[0]!;
+  const { args, env, input: prompt } = calls[0]!;
   const argLine = args.join(" ");
   expect(argLine).toContain("--model fable");
   expect(argLine).toContain("--effort high");
@@ -46,22 +46,22 @@ it("draft は表の行の model / effort をピン留めし、空のツール面
   expect(args).toContain("--safe-mode");
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
-  expect(args[1]).toContain("always spell it --dry-run");
-  expect(args[1]).toContain("how command-line flags are named");
+  expect(prompt).toContain("always spell it --dry-run");
+  expect(prompt).toContain("how command-line flags are named");
   // 起草も judge と同じ当時版と盤面の文を読む(ADR 0314 決定4)
-  expect(args[1]).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
-  expect(args[1]).toContain("(board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn)");
-  expect(args[1]).not.toContain("Interview root");
+  expect(prompt).toContain("the worker's agent definition as it stood then (agent_definition: its body, authority and roster");
+  expect(prompt).toContain("(board_text: the board's doctrine, protocol and any further section it was given (such as Interview discipline), as given at its spawn)");
+  expect(prompt).not.toContain("Interview root");
   // 起草も judge と同じく読んだ記憶と書き込みの本文の欄を説明する(#2621)
-  expect(args[1]).toContain("the memory entries the worker read before the decision (memory_read)");
-  expect(args[1]).toContain("When the input carries written, the objected entry is a memory write the worker applied directly");
+  expect(prompt).toContain("the memory entries the worker read before the decision (memory_read)");
+  expect(prompt).toContain("When the input carries written, the objected entry is a memory write the worker applied directly");
 });
 
 it("Behavior candidate の起草は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -75,8 +75,8 @@ it("Behavior candidate の起草は、用途に依らない盤面の system prom
 it("prompt は path / title / text を英語で書かせる —— 索引の階層に英語以外を混ぜない(ADR 0303 決定3)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -102,8 +102,8 @@ it("語彙の外の宛先・欠けた欄・JSON でない応答は reject する
 it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -119,8 +119,8 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
 it("停止からの起草の prompt は理由を人間の証言として描き、判断ログ・行動列・RCA の所見から1つの規則を書かせ、停止用の入力を描く(ADR 0310 決定4)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -151,8 +151,8 @@ it("停止からの起草の prompt は理由を人間の証言として描き�
 it("停止と異議の起草の prompt は task を spawn で渡した文面と説明し、null の読み方を告げる(ADR 0320 決定3)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -163,7 +163,7 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
 
   for (const prompt of prompts) {
     expect(prompt).toContain(
-      "task (the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); null when not recorded)",
+      "task (the task text the worker was given at its spawn (title, purpose and completion criteria; excluding board-authored context); null when not recorded)",
     );
   }
   expect(prompts[0]).toContain('"task": "Purpose: rename the flag"');
@@ -173,8 +173,8 @@ it("停止と異議の起草の prompt は task を spawn で渡した文面と�
 it("停止と異議の起草の prompt は { id, line } の行の id と rca_findings の review / actor を説明し、異議だけが裁く行の actor を説明する(ADR 0322 決定5 / 追記、#2675)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });
@@ -199,8 +199,8 @@ it.each([
 ] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
   const prompts: string[] = [];
   const client = new ClaudeBehaviorDraftClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(draft) });
     },
   });

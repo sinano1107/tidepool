@@ -156,24 +156,23 @@ export const codexCommandThrough =
   async (executable, args, options) =>
     // 呼び出しごとの空の cwd(ADR 0206): 盤面を起動した checkout の `.codex` を project 層として読ませない
     (await atNeutralCwd("tidepool-codex-app-server-", (cwd) =>
-      call({ kind, harness: "codex", command: executable, args, cwd, env: options.env, limitMs, stdin: "pipe" }, (proc) => {
+      call({ kind, harness: "codex", command: executable, args, cwd, env: options.env, limitMs, ...(options.until ? { stdin: "pipe" as const } : { input: options.input ?? "" }) }, (proc) => {
         const read = readOutput(proc);
+        if (!options.until) return read;
         const stdin = proc.stdin!;
         // 読まずに exit した process への書き込み(EPIPE)で盤面を落とさない —— 失敗は exit code が言う
         stdin.on("error", () => {});
         const until = options.until;
-        if (until) {
-          let open = true;
-          let seen = "";
-          proc.stdout.on("data", (chunk: string) => {
-            seen += chunk;
-            if (open && until(seen)) {
-              open = false;
-              stdin.end();
-            }
-          });
-          stdin.write(options.input ?? "");
-        } else stdin.end(options.input ?? "");
+        let open = true;
+        let seen = "";
+        proc.stdout.on("data", (chunk: string) => {
+          seen += chunk;
+          if (open && until(seen)) {
+            open = false;
+            stdin.end();
+          }
+        });
+        stdin.write(options.input ?? "");
         return read;
       }),
     )) ?? { exitCode: null, stdout: "", stderr: `the ${kind} Board call did not complete (limit, spawn failure, or no container)` };

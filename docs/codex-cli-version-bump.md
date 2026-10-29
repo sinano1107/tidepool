@@ -81,7 +81,7 @@ caffeinate -i -s limactl shell tidepool -- bash -lc '~/tidepool/scripts/vm-board
 The board runs the Codex containment preflight at boot and on every pickup. It holds if no
 "codex Harness containment is not established" question appears on the board. If that question
 appears, its text names the surface the new CLI changed: the version, a skill, the hook, the
-developer instructions, the AGENTS.md layer, or a feature. No later step needs the board.
+worker user prompt placement, the AGENTS.md layer, or a feature. No later step needs the board.
 
 If the board fails at boot on a database error, start this run on a fresh database as in
 [the Claude handbook's step 3](claude-cli-version-bump.md#3-start-the-board-and-see-the-containment-probe-hold).
@@ -186,7 +186,8 @@ nothing checks is left to the board's fail-closed handling.
 | The hook gate's registration and the `hooks/list` shape | ADR 0130 決定3 (#734) | The containment preflight (step 5) |
 | The PreToolUse hook's stdin carries `agent_id` only for a subagent | ADR 0130 決定1 | Not checked: which call it selects cannot be observed without a model call (決定3) |
 | `mcp_servers.tidepool.default_tools_approval_mode="approve"` takes effect | ADR 0129 決定1 | Not checked |
-| Board-authored context reaches the intended prompt position, with task text separately identifiable; after #2692 this is the user-turn prefix | ADR 0326 決定3・4 (revises ADR 0124 決定4) | The containment prompt probe (step 5); #2692 replaces the current developer-marker contract |
+| Board-authored context reaches the intended prompt position, in the user-turn prefix, with task text separately identifiable | ADR 0326 決定3・4 (revises ADR 0124 決定4) | The containment prompt probe (step 5): one user item equals the shared worker input, including the board/task separator; short `developer_instructions=""` override. `debug prompt-input` does not read stdin, so its short constant probe uses argv |
+| Variable worker prompt uses stdin + EOF and agrees verbatim with its owned prompt record | ADR 0326 決定1・3・4 | Local domain capture tests; fixed-version Linux receipt check on CLI upgrades (no inference claim) |
 | The permission profile keys and `codex sandbox -P` | ADR 0256 決定3 | Conformance domain rows (step 7) and the containment preflight (step 5) |
 | An allowlisted domain is reached and an unlisted one is refused with 403 | ADR 0256 決定3 | Conformance rows `allowed domain reached` and `unlisted domain → 403 blocked-by-allowlist` (step 7) |
 | Codex takes a full-budget MCP response whole | ADR 0195 決定7 | Reader-cap canary (step 8) |

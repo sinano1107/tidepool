@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { type PromptRecord, TranscriptStore } from "../src/transcript-store.js";
 import { tempDir } from "./temp-dir.js";
 
-const PROMPT: PromptRecord = { harness: "claude-code", system: [{ part: "authority", text: "\n\n## Authority\n\nBe careful.", source: "reviewer" }], user: "go" };
+const PROMPT: PromptRecord = { harness: "claude-code", board: [{ part: "authority", text: "\n\n## Authority\n\nBe careful.", source: "reviewer" }], task: "go", placement: { board: "system" } };
 
 it("readPrompt は open が書いた prompt をそのまま返し、無い・parse できない記録は null(ADR 0314 決定2)", async () => {
   const store = new TranscriptStore(await tempDir("tidepool-transcripts-"));

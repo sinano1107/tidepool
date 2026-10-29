@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { sendInput } from "./child-stream.js";
 import type { Clock } from "./clock.js";
 import type { ContainmentCapability } from "./containment.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
@@ -38,6 +39,8 @@ export interface BoardCallSpec {
   /** stdin を開けたまま渡すか。既定は閉じる。応答が揃うまで EOF を送れない
    *  呼び出し(App Server、#706)だけが opt-in する。 */
   stdin?: "pipe";
+  /** One complete prompt, followed by EOF (ADR 0326). */
+  input?: string;
 }
 
 /** pty で起こす呼び出し(usage TUI、ADR 0136 決定8)。pty を起こすのは `launch` で、
@@ -237,12 +240,13 @@ export function createBoardCalls(deps: {
       }
       let proc: ContainedProcess;
       try {
-        proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.stdin });
+        proc = container.spawn(spec.command, spec.args, { cwd: spec.cwd, env: spec.env, stdin: spec.input === undefined ? spec.stdin : "pipe" });
       } catch {
         settle(() => null);
         return;
       }
       observed = read(proc as ContainedProcess & PtyProcess, done);
+      if (spec.input !== undefined) sendInput(proc, spec.input, () => settle(() => null));
       // ADR 0109 決定4 の形: root の exit は容器が空になった証拠ではないが、
       // 残っているものが孤児である証拠ではある。行儀のよい exit は待たない。
       // 結果は exit でなく root の出力の読み切り(close)で決着させる —— exit の時点では

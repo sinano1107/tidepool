@@ -289,7 +289,6 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
     .split("\n")
     .flatMap((line) => (line.includes('"tool_use_id":"toolu_01JDPubsAp5MZDERRsjJ7wNc"') ? [JSON.parse(line).message.content[0].content[0].text as string] : []))[0]!;
   expectInOrder(claude, [
-    "Work on your current task. Start by calling get_current_task.",
     "definition",
     "builtin: false",
     "def456",
@@ -303,6 +302,7 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
     '\n\n## Board doctrine\n\nLog each decision with `log_decision`:\n\n```\nlog_decision({ line: \"...\" })\n```',
     "protocol",
     "\n\n## Protocol\n\nCall `get_current_task` first and `complete_task` last.",
+    "Work on your current task. Start by calling get_current_task.",
     "get_current_task",
     JSON.stringify(firstResult),
     "log_decision",
@@ -317,20 +317,24 @@ it("session ごとのファイルに、受けた prompt(user と部分ごとの�
   ]);
 
   const codex = sessionFiles.get(`sessions/${codexTask}.${codexSpawned}.md`)!;
-  // 組み込みの定義は本文が空でも節があり、builtin 旗と版が出る。最後の部分は末尾の空行ごと
+  expect(codex).toContain("## User prefix: doctrine");
+  expect(codex).not.toContain("## System:");
+  expect(codex).toContain("--- Task ---");
+  // 組み込みの定義は本文が空でも節があり、builtin 旗と版が出る。
   expectInOrder(codex, [
     codexTask,
     `worker_spawned ${codexSpawned}`,
     "codex-agent",
     "codex",
-    "Task: exp1231 canary\nPurpose: measure\nCompletion criteria: follow the user prompt",
     "definition",
     "builtin: true",
     "auditor@builtin-7",
     "doctrine",
     "\n\n## Board doctrine\n\nRead the memory before you decide.",
     "protocol",
-    "\n\n## Protocol\n\nCall get_current_task first and complete_task last.\n\n",
+    "\n\n## Protocol\n\nCall get_current_task first and complete_task last.",
+    "--- Task ---",
+    "Task: exp1231 canary\nPurpose: measure\nCompletion criteria: follow the user prompt",
     "get_current_task",
     '\\"id\\":\\"t1231\\"',
     "read_memory",

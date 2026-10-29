@@ -693,7 +693,7 @@ export function startScheduler(deps: {
   async function parentBriefingAtPickup(head: Task): Promise<ParentBriefing | undefined | null> {
     const parent = head.parent_id && getTask(db, head.parent_id);
     if (!parent) return undefined;
-    // RCA は判事と同じ session の user を逐語で読む。記録が無ければ null、再構成しない(ADR 0321 決定1・2)。
+    // RCA は判事と同じ session の task 固有の文面を逐語で読む。記録が無ければ null、再構成しない(ADR 0321 決定1・2)。
     const anchors = head.type === "review"
       ? [...new Map(rcaMaterialAnchors(db, head.id).map((material) => [material.anchor.id, material])).values()].sort((a, b) => a.anchor.id - b.anchor.id)
       : [];
@@ -701,7 +701,7 @@ export function startScheduler(deps: {
     const transcripts = retrospectiveCalls.recordDir === undefined ? undefined : new TranscriptStore(retrospectiveCalls.recordDir);
     for (const { anchor, spawned } of anchors) {
       if (!spawned) continue;
-      const text = transcripts?.readPrompt(parent.id, spawned.id)?.user ?? null;
+      const text = transcripts?.readPrompt(parent.id, spawned.id)?.task ?? null;
       const bundle = byText.get(text);
       if (bundle) bundle.for.push(anchor.id);
       else byText.set(text, { text, for: [anchor.id] });

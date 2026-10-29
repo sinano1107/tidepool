@@ -45,12 +45,25 @@ export interface TranscriptFailure {
   path: string;
 }
 
-/** spawn 時に harness へ渡した prompt 一式(ADR 0313 決定1・2)。`system` を順に空文字で連結した値が Claude の
- *  `--append-system-prompt` / Codex の `developer_instructions`、`user` が Claude の `-p` / Codex の user turn。 */
+/** Owned board text, task-only text, and their actual prompt placement (ADR 0326). */
 export interface PromptRecord {
   harness: Harness;
-  system: PromptPart[];
-  user: string;
+  board: PromptPart[];
+  task: string;
+  placement: { board: "system" } | { board: "user"; separator: string };
+}
+
+/** Workers and the CLI conformance probes construct the same input. */
+export function workerPromptRecord(harness: Harness, board: PromptPart[], task: string): PromptRecord {
+  return { harness, board, task, placement: harness === "codex" ? { board: "user", separator: "\n\n--- Task ---\n\n" } : { board: "system" } };
+}
+
+/** Reconstruct exactly what the CLI receives, including the recorded separator. */
+export function promptInput(prompt: PromptRecord): { system: string; user: string } {
+  const board = prompt.board.map((part) => part.text).join("");
+  return prompt.placement.board === "system"
+    ? { system: board, user: prompt.task }
+    : { system: "", user: board + prompt.placement.separator + prompt.task };
 }
 
 /** 開いた session の transcript。`stream` の path は fd から作った stream が持たないので別に運ぶ。 */

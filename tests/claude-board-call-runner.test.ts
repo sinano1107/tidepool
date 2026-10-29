@@ -204,3 +204,17 @@ describe("Claude の Board call runner", () => {
     });
   });
 });
+
+
+it("用途promptは200KiB以上でもargvではなくExecFnのstdin入力へ渡す", async () => {
+  const prompt = `開始\n${"魚🐟\n".repeat(40000)}末尾\n\n`;
+  let captured: unknown;
+  const exec: ExecFn = async (_command, args, _env, input) => {
+    expect(args).not.toContain(prompt);
+    expect(args[args.indexOf("-p") + 1]).toBe("--system-prompt");
+    captured = input;
+    return boardCallStream({ result: '{"ok":true}', ...CLI_ENVELOPE_USAGE });
+  };
+  await runClaudeBoardCallJson({ ...call(exec), prompt }, schema);
+  expect(captured).toBe(prompt);
+});

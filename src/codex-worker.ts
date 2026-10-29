@@ -13,9 +13,9 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { type BoardCall, readOutput } from "./board-call.js";
-import { boardDoctrine, boardProse, joinPrompt, taskPrompt } from "./board-prose.js";
+import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
 import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
-import { readLines, readStderrTail, settleOnOutputClose } from "./child-stream.js";
+import { readLines, readStderrTail, sendInput, settleOnOutputClose } from "./child-stream.js";
 import { agentGitIdentityEnv } from "./claude-worker.js";
 import type { Clock } from "./clock.js";
 import {
@@ -55,7 +55,7 @@ import { liveSession } from "./teardown.js";
 
 
 import { tierNames } from "./tier.js";
-import { RecordContainerError, type TranscriptStore } from "./transcript-store.js";
+import { promptInput, RecordContainerError, type TranscriptStore, workerPromptRecord } from "./transcript-store.js";
 import { RECLAIM_TIMEOUT } from "./watchdog.js";
 import { HOST_CREDENTIAL_ENVS, type WorkerAdapter, type WorkerExit, type WorkerExitClassification } from "./worker.js";
 import {
@@ -86,9 +86,10 @@ const BOARD_VERBS = [
 export const CODEX_CLI_VERSION = CODEX_APP_SERVER_VERSION;
 /** 盤面 verb を選ぶ matcher。spawn の設定と preflight の期待値は同じここから来る。 */
 const BOARD_HOOK_MATCHER = "mcp__tidepool__.*";
-/** ADR 0124 決定4: probe 専用の1行。`codex debug prompt-input` は推論リクエストを
- *  送らないので、この marker がモデルに届くことはない。 */
-export const CODEX_DEVELOPER_MARKER = "tidepool-containment-probe: developer layer canary";
+/** Short placement-only probe: debug prompt-input does not read stdin. Exec workers do (ADR 0326). */
+export const CODEX_PROMPT_MARKER = promptInput(workerPromptRecord("codex", [
+  { part: "protocol", text: "tidepool-containment-probe: board context" },
+], "tidepool-containment-probe: task")).user;
 /** 盤面が開ける feature —— 既定拒否の例外(ADR 0135 決定1)。ここに名前の無い feature は
  *  closedSurfaceConfig() が `=false` で閉じる。vendor が版の途中で足した名前は snapshot に無いので
  *  `=false` も渡らないが、その版へ pin を上げる前に featureDrift() が preflight を倒す。
@@ -465,8 +466,8 @@ export interface CodexCapabilityObservation {
   skills: readonly string[];
   hooks: readonly CodexHookRegistration[];
   features: Readonly<Record<string, string>>;
-  /** 盤面が `developer_instructions` で渡した marker のうち、developer item に載ったもの。 */
-  developerMarkers: readonly string[];
+  /** Worker input assembled with the recorded user-prefix placement. */
+  workerPrompts: readonly string[];
   /** user item に載った AGENTS.md の層。盤面は何も置かないので空が期待値(ADR 0148)。 */
   agentsMdLayer: readonly string[];
   /** `hooks/list` の vendor 診断。照合には使わず、hook 不一致の理由文に写すだけ(#734)。 */
@@ -508,7 +509,7 @@ export async function checkCodexCapability(
         [{ event: "preToolUse", matcher: BOARD_HOOK_MATCHER, enabled: true, source: "sessionFlags", command: hookPath }],
         observed.hooks,
       ],
-      ["developer instructions", [CODEX_DEVELOPER_MARKER], observed.developerMarkers],
+      ["worker user prompt", [CODEX_PROMPT_MARKER], observed.workerPrompts],
       ["agents.md", [], observed.agentsMdLayer],
     ] as const
   ).find(([, expected, actual]) => JSON.stringify(expected) !== JSON.stringify(actual));
@@ -668,7 +669,6 @@ function closedSkillsConfig(paths: readonly string[]): string {
 function spawnConfig(input: {
   taskType: Task["type"];
   effort: string;
-  developerInstructions: string;
   mcpUrl: string;
   enabledTools: readonly string[];
   workspace: string;
@@ -683,7 +683,7 @@ function spawnConfig(input: {
 }): string[] {
   return [
     `model_reasoning_effort=${toml(input.effort)}`,
-    `developer_instructions=${toml(input.developerInstructions)}`,
+    'developer_instructions=""',
     ...permissionConfig(input.taskType, input.workspace, input.taskTemp, input.executable, input.allowedDomains, input.readPaths),
     ...closedSurfaceConfig(),
     FORCED_LOGIN_METHOD,
@@ -836,19 +836,17 @@ export function observedSkills(promptInput: string): string[] {
   return available ? [...available.matchAll(/^- ([^:\n]+):/gm)].map((match) => match[1]!) : [];
 }
 
-/** ADR 0124 決定4: `codex debug prompt-input` の出力から、**developer role の item に
- *  属する part のうち marker と完全一致するもの**を集める。組み込み prompt 自体が
- *  developer item なので、role の存在ではなく逐語の一致だけが層への到達を言う。 */
-export function observedDeveloperMarkers(promptInput: string): string[] {
+/** Only the exact worker probe input in a user item proves the intended placement. */
+export function observedWorkerPrompts(promptInput: string): string[] {
   const messages = JSON.parse(promptInput) as Array<{
     role?: string;
     content?: Array<{ text?: string }>;
   }>;
   return messages
-    .filter((message) => message.role === "developer")
+    .filter((message) => message.role === "user")
     .flatMap((message) => message.content ?? [])
     .map((part) => part.text ?? "")
-    .filter((text) => text === CODEX_DEVELOPER_MARKER);
+    .filter((text) => text === CODEX_PROMPT_MARKER);
 }
 
 /** ADR 0148 決定2: `codex debug prompt-input` の出力から、**user role の item に属する
@@ -1002,7 +1000,6 @@ function placeholderSpawnConfig(
   return spawnConfig({
     taskType,
     effort: "high",
-    developerInstructions: CODEX_DEVELOPER_MARKER,
     mcpUrl: "http://127.0.0.1/mcp",
     enabledTools: BOARD_VERBS,
     ...input,
@@ -1039,12 +1036,12 @@ async function actualCodexCapability(options: {
       env,
       emptyCwd,
     );
-    const config = [...closedSurfaceConfig(), skills];
+    const config = [...closedSurfaceConfig(), 'developer_instructions=""', skills];
     const promptInput = await runFile(
       call,
       options.executable,
-      // marker は prompt-input にだけ渡す —— 実測したのはこの面だけ(ADR 0124 の測定)
-      ["debug", "prompt-input", ...configArgs([...config, `developer_instructions=${toml(CODEX_DEVELOPER_MARKER)}`]), "containment canary"],
+      // debug は stdin を読まないので、この短い定数だけは argv に置く。worker は stdin(ADR 0326)。
+      ["debug", "prompt-input", ...configArgs(config), CODEX_PROMPT_MARKER],
       { cwd: emptyCwd, env },
     );
     const features = await runFile(
@@ -1066,7 +1063,7 @@ async function actualCodexCapability(options: {
     return {
       cliVersion,
       skills: observedSkills(promptInput),
-      developerMarkers: observedDeveloperMarkers(promptInput),
+      workerPrompts: observedWorkerPrompts(promptInput),
       agentsMdLayer: observedAgentsMdLayer(promptInput),
       ...await probeHookRegistration(call, options.executable, env, (taskType) =>
         placeholderSpawnConfig(taskType, {
@@ -1251,9 +1248,6 @@ export class CodexWorker implements WorkerAdapter {
       taskType: task.type,
       // openai の行は「無い」を取らない —— 書く入口が拒む(ADR 0218 決定5)
       effort: setting.effort!,
-      // 封じ込めの観測は本文だけを marker に差し替えた spawn の設定を当てる。本文は `worker_spawned` の id を
-      // Executor の区切りに持つので、event の後で描いて差し替える(ADR 0259 追記 / ADR 0295 決定4)
-      developerInstructions: CODEX_DEVELOPER_MARKER,
       mcpUrl: taskMcpUrl.toString(),
       // ADR 0122 決定2 / ADR 0245 決定1・3 / ADR 0253 決定4・5 / ADR 0268 決定2 / ADR 0271 決定2 / ADR 0272 決定3 / ADR 0279 決定4 / ADR 0281 / ADR 0283 決定3・追記1: MCP の登録と同じ差を写す(主題の修理子と行の主題を持つ RCA の pull verb の伏せは taskVerbSwap、read_memory_entries は memoryRepairVerbs / routingRepairVerbs / isSubjectReaderRca から来る)。宣言と盤面の面が集合として一致することは
       // tests/codex-worker.test.ts が固定する(ADR 0125 決定2)
@@ -1362,8 +1356,6 @@ export class CodexWorker implements WorkerAdapter {
       recordMemoryInjection(this.options.db, task.id, agent.name, spawned, memory, this.options.clock.now());
       if (material) recordMetaReviewMaterial(this.options.db, task.id, agent.name, spawned, material, this.options.clock.now());
       // ADR 0124 決定1・2 / ADR 0157 決定1: 盤面が書いた文面は Claude と同じ正本から、この spawn の id で組む(ADR 0295 決定4)。
-      // Codex は developer item の中で次の content part(`<skills_instructions>`)との間に区切りを入れないので、終端の空行は
-      // 文面の一部である(ADR 0124 Consequences)—— 記録が渡した値の逐語であるよう、その空行は列の最後の部分に載せる(ADR 0313 決定2)
       const parts = boardProse({
         db: this.options.db,
         recordDir: this.options.transcripts.dir,
@@ -1378,11 +1370,9 @@ export class CodexWorker implements WorkerAdapter {
         memory,
         material,
       });
-      const last = parts.pop()!;
-      const system = [...parts, { ...last, text: `${last.text}\n\n` }];
-      const developerInstructions = joinPrompt(system);
-      const user = taskPrompt(task);
-      const transcript = this.options.transcripts.open(task.id, spawned, { harness: "codex", system, user });
+      const prompt = workerPromptRecord("codex", parts, taskPrompt(task));
+      const transcript = this.options.transcripts.open(task.id, spawned, prompt);
+      const submitted = promptInput(prompt);
       // issue #2570: 停止の帰責の門はこの session の Episode の投影が決着するまで開かない
       markProjectionPending(this.options.db, spawned);
       const child = this.containers.open(task.id).spawn(
@@ -1392,10 +1382,9 @@ export class CodexWorker implements WorkerAdapter {
           "exec", "--json", ...WORKER_EXEC_FLAGS, "--dangerously-bypass-hook-trust",
           "-C", workspacePath,
           "-m", setting.model,
-          ...configArgs(spawnConfig({ ...input, developerInstructions, taskTemp, skills: checked.skills })),
-          user,
+          ...configArgs(spawnConfig({ ...input, taskTemp, skills: checked.skills })),
         ],
-        { cwd: workspacePath, env },
+        { cwd: workspacePath, env, stdin: "pipe" },
       );
       child.stdout.pipe(transcript.stream);
       child.stderr.pipe(transcript.stderr);
@@ -1458,6 +1447,10 @@ export class CodexWorker implements WorkerAdapter {
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。
       settleOnOutputClose(child, this.options.clock, this.options.reclaimTimeout ?? RECLAIM_TIMEOUT, () => this.containers.forceReclaim(task.id), settle);
+      sendInput(child, submitted.user, (error) => {
+        console.error(`[codex-worker] could not send prompt for task ${task.id}:`, error);
+        this.containers.forceReclaim(task.id);
+      });
     })().catch((error) => {
       // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
       // 稀な経路)。積み上がりが観測されたらここで destroy する。

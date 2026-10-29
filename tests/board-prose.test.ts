@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it } from "vitest";
 import { BOARD_ACTOR_ID } from "../src/actor-id.js";
-import { boardDoctrine, boardProse, fenced, joinPrompt } from "../src/board-prose.js";
+import { boardDoctrine, boardProse, fenced } from "../src/board-prose.js";
 import { type Db, openDb } from "../src/db.js";
 import { appendEvent, listEvents } from "../src/events.js";
 import { type AuthorityProfile, loadRegistry, REVIEWER_AUTHORITY_PROFILE } from "../src/registry.js";
@@ -14,7 +14,7 @@ import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 文面の全体 —— 持ち主つきの部分を順に空文字で連結した値が harness へ渡る値(ADR 0313 決定2)。 */
-const joined = (input: Parameters<typeof boardProse>[0]) => joinPrompt(boardProse(input));
+const joined = (input: Parameters<typeof boardProse>[0]) => boardProse(input).map((part) => part.text).join("");
 /** 記憶の店に見える approved が無い spawn の注入(節は null)。 */
 const NO_MEMORY = { section: null };
 
@@ -142,7 +142,7 @@ const boardDirs = async (): Promise<BoardDirs> => ({ registryDir: await makeRegi
 
 /** adapter と同じく、`task` の `actorId` の spawn を刻んでその文面を組み、記録の器に prompt を書く(ADR 0313 決定1)。定義と profile は
  *  registry のもの(組み込みは reviewer 定数)。 */
-function recordedSpawn(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, at: Date, actorId = "deckhand"): number {
+function recordedSpawn(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, at: Date, actorId = "deckhand", harness: "claude-code" | "codex" = "claude-code"): number {
   const spawnedEventId = spawn(db, task, at, actorId);
   const registry = loadRegistry(registryDir, "purely-local");
   const definition = registry.agents[actorId]!;
@@ -161,7 +161,7 @@ function recordedSpawn(db: Db, { registryDir, recordDir }: BoardDirs, task: Task
     memory: NO_MEMORY,
     material: null,
   });
-  recordPrompt(recordDir, task.id, spawnedEventId, system);
+  recordPrompt(recordDir, task.id, spawnedEventId, system, "", harness);
   return spawnedEventId;
 }
 
@@ -201,12 +201,12 @@ function reviewInput(db: Db, { registryDir, recordDir }: BoardDirs, task: Task, 
   };
 }
 
-it("停止の self RCA は止められた session の定義・Authority・Roster を stop id 付きで読む(ADR 0310 決定2)", async () => {
+it.each(["claude-code", "codex"] as const)("%s: 停止のself RCAは記録の定義・Authority・Rosterをstop id付きで読む(ADR 0326)", async (harness) => {
   const db = openDb(":memory:");
   const at = new Date("2026-10-27T00:00:00.000Z");
   const dirs = await boardDirs();
   const task = pickupTask(db, registerTask(db, { type: "work", title: "w", purpose: "p", completion_criteria: "c" }, at, ...HUMAN_WEBUI), "deckhand", at, { assignee: "deckhand" })!;
-  recordedSpawn(db, dirs, task, at);
+  recordedSpawn(db, dirs, task, at, "deckhand", harness);
   recordHumanStop(db, task.id, "wrong approach", at, "webui");
   const stop = listEvents(db, task.id).find((event) => event.kind === "session_stopped_by_human")!;
   const rca = registerTask(db, { type: "review", title: "rca", purpose: "p", completion_criteria: "c", parent_id: task.id, assignee: "deckhand", opened_on_event_ids: [stop.id] }, at, ...HUMAN_WEBUI);

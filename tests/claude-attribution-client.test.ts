@@ -33,17 +33,17 @@ const stopInput: StopAttributionInput = {
 };
 
 it("judge は表の行の model / effort をピン留めし、空のツール面・1ターン・advisor 無しの Board call で JSON 判定を返す", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
 
   await expect(client.judge(input, { provider: "anthropic", model: "fable", effort: "high" })).resolves.toHaveProperty("output", judgment);
 
-  const { args, env } = calls[0]!;
+  const { args, env, input: prompt } = calls[0]!;
   const argLine = args.join(" ");
   expect(argLine).toContain("--model fable");
   expect(argLine).toContain("--effort high");
@@ -54,15 +54,15 @@ it("judge は表の行の model / effort をピン留めし、空のツール面
   expect(args[args.indexOf("--setting-sources") + 1]).toBe("");
   expect(env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
   // the input rides in the prompt — the objected entry, its steering, the log
-  expect(args[1]).toContain("chose plan B");
-  expect(args[1]).toContain("plan A was the agreed plan");
+  expect(prompt).toContain("chose plan B");
+  expect(prompt).toContain("plan A was the agreed plan");
 });
 
 it("帰責の判定は、用途に依らない盤面の system prompt を --system-prompt で渡す(ADR 0296 決定6)", async () => {
-  const calls: { args: string[]; env: NodeJS.ProcessEnv }[] = [];
+  const calls: { args: string[]; env: NodeJS.ProcessEnv; input?: string }[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args, env) => {
-      calls.push({ args, env });
+    exec: async (_command, args, env, input) => {
+      calls.push({ args, env, input });
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: `\`\`\`json\n${JSON.stringify(judgment)}\n\`\`\`` });
     },
   });
@@ -89,8 +89,8 @@ it("prompt は cause の memory と、wrong_memory_entries を読んだ記憶か
   const prompts: string[] = [];
   const memory = { cause: "memory", evidence: "followed the squash note", wrong_memory_entries: [3] };
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(memory) });
     },
   });
@@ -107,8 +107,8 @@ it("prompt は cause の memory と、wrong_memory_entries を読んだ記憶か
 it("prompt は evidence を英語で書かせる —— 記録に残る欄の言語を入力や設定に動かさせない(ADR 0303 決定3)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -139,8 +139,8 @@ it.each(["judge", "judgeStop"] as const)("%s: memory 以外の判定の空の wr
 it("prompt は environment を worker の外側の事情として判断の妥当性で線を引き、escalate せず迂回・推測したなら capability と言う(ADR 0213 決定1・2)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -164,8 +164,8 @@ it.each(["agent_definition", "workspace_document"])("cause %s の判定は語彙
 it("prompt は agent_definition と workspace_document を説明し、組み込みの本文・reviewer / repair の Authority・盤面の文に従った結果・ハーネス同梱の skill は environment、文書は decision log が引いたときだけ、当時版が無ければ agent_definition と答えないと言う(ADR 0291 決定1〜4 / ADR 0314 決定4・5)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -200,8 +200,8 @@ it("prompt は agent_definition と workspace_document を説明し、組み込�
 it("prompt treats human_stop as the human's account, preserves unanswered reasons and excludes no-longer-needed as a cause", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -217,8 +217,8 @@ it("prompt treats human_stop as the human's account, preserves unanswered reason
 it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要らなくなった理由は requirement_change、行動列だけにある挙動は証拠と言い、停止用の入力を描く(ADR 0310 決定2)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -247,8 +247,8 @@ it("停止の帰責の prompt は理由を人間の証言と名乗らせ、要�
 it("停止と異議の帰責の prompt は task を spawn で渡した文面と説明し、capability などをそれに照らし、頼まれたとおりの行動を落ち度と読まず、null の読み方を告げる(ADR 0320 決定3)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -260,7 +260,7 @@ it("停止と異議の帰責の prompt は task を spawn で渡した文面と�
 
   for (const prompt of prompts) {
     expect(prompt).toContain(
-      "task is the task text the worker was given at its spawn (its user turn: title, purpose and completion criteria); judge " +
+      "task is the task text the worker was given at its spawn (title, purpose and completion criteria; excluding board-authored context); judge " +
         "capability, task_ambiguity and missing_information against it, and conduct the task asked for is not a shortfall; " +
         "task is null when the session's record could not be read: judge from the rest; environment is",
     );
@@ -272,8 +272,8 @@ it("停止と異議の帰責の prompt は task を spawn で渡した文面と�
 it("停止と異議の帰責の prompt は { id, line } の行の id と rca_findings の review / actor を説明し、異議だけが裁く行の actor を説明する(ADR 0322 決定5 / 追記、#2675)", async () => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
@@ -298,8 +298,8 @@ it.each([
 ] as const)("%s: prompt は入力の型の欄ごとに record の文を含む(ADR 0324 決定1)", async (method, record) => {
   const prompts: string[] = [];
   const client = new ClaudeAttributionClient({
-    exec: async (_command, args) => {
-      prompts.push(args[1]!);
+    exec: async (_command, _args, _env, input) => {
+      prompts.push(input!);
       return boardCallStream({ ...CLI_ENVELOPE_USAGE, result: JSON.stringify(judgment) });
     },
   });
