@@ -716,7 +716,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         try {
           await recheckIssueExpansion();
         } catch (err) {
-          throw new DomainError(`the board still cannot read the GitHub issue: ${err instanceof Error ? err.message : String(err)}`);
+          throw new DomainError(`the board cannot confirm it reads GitHub issues again: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     }),

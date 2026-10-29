@@ -151,7 +151,7 @@ it("回答は最後に失敗した参照の読み直しで確かめる —— �
 
   const refused = await answer();
   expect(refused.status).toBe(409);
-  expect(refused.json.error).toBe("the board still cannot read the GitHub issue: down 3");
+  expect(refused.json.error).toBe("the board cannot confirm it reads GitHub issues again: down 3");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
 
   t.github.scriptIssueFailure(null);
