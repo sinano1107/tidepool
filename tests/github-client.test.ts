@@ -2,8 +2,10 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, expect, it } from "vitest";
+import { openDb } from "../src/db.js";
 import { GhCliClient, IssueGoneError } from "../src/github.js";
 import { GitHubAuth } from "../src/github-auth.js";
+import { writeBoardRefs } from "../src/workspace.js";
 import {
   type BrokerAnswer,
   type FakeBroker,
@@ -474,4 +476,85 @@ it("preparePush が返す push はタスクブランチを origin へ push す�
   (await new GhCliClient(await makeAuth()).preparePush({ path: repoPath, branch: "task/abc" }))();
 
   expect(git(remotePath, "rev-parse", "task/abc")).toBe(git(repoPath, "rev-parse", "task/abc"));
+});
+
+/** 返らない `gh` の代役(ADR 0330): `exec` で sleep そのものを子にする —— sh の下に sleep を残すと、殺した後も
+ *  孫が stdout を握り、非同期 execFile の close が sleep の終わりまで来ない。 */
+async function sleepingGh(): Promise<string> {
+  const dir = await tempDir("tidepool-fakebin-");
+  writeFileSync(join(dir, "gh"), "#!/bin/sh\nexec sleep 5\n");
+  chmodSync(join(dir, "gh"), 0o755);
+  return dir;
+}
+
+const unansweredCalls: Array<[string, (client: GhCliClient) => Promise<unknown>]> = [
+  ["createPullRequest", (c) => c.createPullRequest({ path: "/tmp", branch: "task/abc", base: "main", title: "t", body: "b" })],
+  ["mergePullRequest", (c) => c.mergePullRequest({ path: "/tmp", number: 7 }, "abc123")],
+  ["getPullRequestState", (c) => c.getPullRequestState({ path: "/tmp", number: 7 })],
+  ["findPullRequestByHead", (c) => c.findPullRequestByHead({ path: "/tmp", branch: "task/abc" })],
+  ["getIssueWithState", (c) => c.getIssueWithState({ path: "/tmp", number: 49 })],
+  ["listIssues", (c) => c.listIssues({ path: "/tmp" })],
+  ["addIssueComment", (c) => c.addIssueComment({ path: "/tmp", number: 49 }, "body")],
+];
+
+// ADR 0330 決定2: 上限超過は到達不能 = 一時的失敗(untyped)。not_found に誤判定しない
+it.each(unansweredCalls)("%s は gh が返らなくても上限で、どの呼び出しが何 ms で切れたかを書いた一時的失敗として返る(ADR 0330)", async (_, call) => {
+  originalPath = process.env.PATH;
+  process.env.PATH = `${await sleepingGh()}:${originalPath}`;
+
+  const started = Date.now();
+  const err = await call(new GhCliClient(await makeAuth(), { timeoutMs: 200 })).then(() => null, (e: unknown) => e);
+
+  expect(Date.now() - started).toBeLessThan(2_000);
+  expect(err).toBeInstanceOf(Error);
+  expect(err).not.toBeInstanceOf(IssueGoneError);
+  expect((err as Error).message).toMatch(/^`gh \w+ \w+` timed out after 200 ms/);
+});
+
+// ADR 0330 決定3: push は同期のまま(ADR 0243)同じ上限で投げ、口は実 ref を読んで基準を畳む
+it("preparePush の push は origin が返らなくても上限で投げ、盤面の ref の口は予告した基準を畳む(ADR 0330)", async () => {
+  repoPath = await tempDir("tidepool-repo-");
+  remotePath = await tempDir("tidepool-remote-");
+  repoOnTaskBranch(repoPath, remotePath, "notes.txt", "WIP: task abc");
+  writeFileSync(join(remotePath, "hooks", "pre-receive"), "#!/bin/sh\nexec sleep 5\n");
+  chmodSync(join(remotePath, "hooks", "pre-receive"), 0o755);
+  const db = openDb(join(await tempDir("tidepool-board-"), "board.sqlite"));
+  const workspace = { name: "ws", path: repoPath };
+  const baseline = git(repoPath, "for-each-ref", "--format=%(objectname) %(refname)");
+  db.prepare("INSERT INTO workspace_state (name, ref_snapshot) VALUES (?, ?)").run(workspace.name, baseline);
+  const pushed: [string, string] = ["refs/remotes/origin/task/abc", git(repoPath, "rev-parse", "task/abc")];
+
+  const push = await new GhCliClient(await makeAuth(), { timeoutMs: 500 }).preparePush({ path: repoPath, branch: "task/abc" });
+  const started = Date.now();
+  expect(() => writeBoardRefs(db, workspace, [pushed], push)).toThrow();
+
+  expect(Date.now() - started).toBeLessThan(3_000);
+  // 2値の予告行が残らず、push 前の値(行無し)へ畳まれる
+  expect(db.prepare("SELECT ref_snapshot FROM workspace_state WHERE name = ?").get(workspace.name)).toEqual({ ref_snapshot: baseline });
+  db.close();
+});
+
+// ADR 0330 決定1: 同期の gh は待つ間、盤面の唯一の実行の糸(人間面・poll・着地)ごと止める
+it("gh が返らない間も、同じ process の別の Promise は進む(ADR 0330)", async () => {
+  originalPath = process.env.PATH;
+  process.env.PATH = `${await sleepingGh()}:${originalPath}`;
+  const order: string[] = [];
+
+  await Promise.all([
+    new GhCliClient(await makeAuth(), { timeoutMs: 1_000 }).listIssues({ path: "/tmp" }).catch(() => order.push("gh")),
+    new Promise((resolve) => setTimeout(resolve, 50)).then(() => order.push("timer")),
+  ]);
+
+  expect(order).toEqual(["timer", "gh"]);
+});
+
+it("readPullRequest は gh が返らなくても上限で CI を pending、状態を unreadable と読む(ADR 0330)", async () => {
+  originalPath = process.env.PATH;
+  process.env.PATH = `${await sleepingGh()}:${originalPath}`;
+
+  const started = Date.now();
+  const pr = await new GhCliClient(await makeAuth(), { timeoutMs: 200 }).readPullRequest({ path: "/tmp", number: 1 });
+
+  expect(Date.now() - started).toBeLessThan(2_000);
+  expect(pr).toEqual({ ci: "pending", state: "unreadable" });
 });
