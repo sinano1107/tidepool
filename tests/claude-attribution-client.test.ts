@@ -291,8 +291,19 @@ it("停止と異議の帰責の prompt は、skills_followed の skill に文面
   for (const prompt of prompts) {
     expect(prompt).toContain(
       "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in skills.workspace, " +
-        "while misreading the skill's text is capability; skills and skills_followed are null when the session's transcript could not be read: judge from the rest",
+        "while misreading the skill's text is capability; skills and skills_followed are null when the session's record could not be read: judge from the rest",
     );
+    // 本文が null になる2つ目の理由(固定版 2.1.286 の実測: subagent の呼び出しの本文は親の session の記録に届かない)
+    expect(prompt).toContain("or when a subagent invoked the skill — that text never reaches the session's record");
+  }
+  // 位置不明の読み方は異議の判事の prompt が持ち、欄の文は null の意味だけを言う(ADR 0324 決定2)
+  expect(prompts[0]).toContain("When skills_followed positions are null, the objected entry could not be placed among the session's tool calls: read the skills' order against the decision log yourself.");
+  expect(ATTRIBUTION_INPUT_FIELDS.skills_followed).not.toContain("yourself");
+});
+
+it("skill の欄の文は盤面の語(harness・transcript)を定義なしに使わない(ADR 0324 決定3)", () => {
+  for (const sentence of [ATTRIBUTION_INPUT_FIELDS.skills, ATTRIBUTION_INPUT_FIELDS.skills_followed, STOP_ATTRIBUTION_INPUT_FIELDS.skills_followed]) {
+    expect(sentence).not.toMatch(/harness|transcript/);
   }
 });
 

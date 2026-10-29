@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, it } from "vitest";
 import type { EventRow } from "../src/events.js";
 import { entriesReadBefore, entriesSeenBefore, projectEpisode, skillsFollowed } from "../src/precedent.js";
-import { QUIET_EXIT, toolCall, WORKER_SPAWNED } from "./harness.js";
+import { QUIET_EXIT, skillCall, toolCall, WORKER_SPAWNED } from "./harness.js";
 
 /** #386 が取った実物の worker session — 2.1.237 の CLI が書いた transcript と、
  *  その session を挟む盤面のイベント。Precedent の投影は決定論的なので、期待値は
@@ -527,4 +527,14 @@ it("Skill の結果と組まない合成行(compaction の後の要約)と失敗
   ]);
 
   expect(episode.skillCalls).toEqual([{ position: 0, name: "wsbar", transcriptUuid: "s1", subagent: false }]);
+});
+
+it("本文の合成行は結果の行の直後に来たときだけその呼び出しに結ぶ —— 本文の行が来なかった呼び出しは null で、後の呼び出しの本文を取らない(ADR 0325 決定3)", () => {
+  const [a1, r1] = skillCall(1, "wsbar", "unused");
+  const episode = projectSkills([a1!, r1!, ...skillCall(2, "dataviz", "Chart it.")]);
+
+  expect(episode.skillCalls.map((c) => [c.name, c.transcriptUuid])).toEqual([
+    ["wsbar", null],
+    ["dataviz", "s2"],
+  ]);
 });

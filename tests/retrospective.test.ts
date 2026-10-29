@@ -1,4 +1,4 @@
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -2283,6 +2283,19 @@ it.each<[string, string[] | "all", object]>([
   b.transcript([skillsInit(["deploy", "dataviz", "debug"])]);
 
   expect((await b.judged()).map((i) => i.skills)).toEqual([skills]);
+});
+
+it("transcript の読み出しが ENOENT 以外で落ちても commit の帰責は投げず、round initial の失敗 event を残す(ADR 0168 決定1)", async () => {
+  const b = await skillBoard();
+  mkdirSync(join(b.recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`)); // 読むと EISDIR
+  const client = new FakeAttributionClient();
+
+  await expect(attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at)).resolves.toEqual(new Map());
+
+  expect(client.calls).toEqual([]);
+  expect(listEvents(b.db, b.task.id).flatMap((e) => (e.payload.kind === "objection_attribution_failed" ? [[e.payload.round, e.payload.reason]] : []))).toEqual([
+    ["initial", expect.stringContaining("EISDIR")],
+  ]);
 });
 
 it("transcript の無い session への異議は skills と skills_followed が null のまま撃たれる(ADR 0325 決定2・5 / ADR 0166 決定2)", async () => {

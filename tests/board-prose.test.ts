@@ -450,11 +450,14 @@ it("self RCA の当時版は、材料の session が走行中でも、異議さ�
   expect(history).not.toContain("lint");
 });
 
-it("self RCA の材料の session の transcript が読めなければ、従った skill の欠落を申告する(ADR 0325 決定3 / ADR 0314 決定2)", async () => {
+it.each([
+  ["無い", (stream: string) => rmSync(stream)],
+  ["形式を読めない", (stream: string) => writeFileSync(stream, '{"type":"mystery"}')],
+])("self RCA の材料の session の transcript が%s記録なら、従った skill の欠落を申告する(ADR 0325 決定3 / ADR 0314 決定2)", async (_case, spoil) => {
   const b = await skillRca(() => []);
-  rmSync(b.stream);
+  spoil(b.stream);
 
-  expect(b.history()).toContain(`No session transcript could be read for your objected entry ${b.entryId} — the skills you followed before it are not available as evidence.`);
+  expect(b.history()).toContain(`No session record could be read for your objected entry ${b.entryId} — the skills you followed before it are not available as evidence.`);
 });
 
 /** suzumedai が pickup した Interview の root。 */

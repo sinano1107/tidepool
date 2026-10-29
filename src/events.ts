@@ -1055,9 +1055,10 @@ export function sessionWindow(
 /** `anchor` を含む session を開いた `worker_spawned`: anchor 自身が spawn ならそれ、そうでなければ anchor より前で最後に
  *  開いた同じ task の session で、その窓に anchor が入るもの —— 窓の外(session 無しに書かれた entry)なら undefined。
  *  `events` は同じ task の、payload を解いた event(spawn・exit・never-ran の決着があれば足りる)。`sessionOf` と決定ログの一覧が共有する。 */
-export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRow | undefined {
-  if (anchor.kind === "worker_spawned") return anchor;
-  const spawned = events.filter((e) => e.kind === "worker_spawned" && e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
+export function sessionSpawnOf(events: readonly EventRow[], anchor: EventRow): EventRowOf<"worker_spawned"> | undefined {
+  const isSpawn = (e: EventRow): e is EventRowOf<"worker_spawned"> => e.payload.kind === "worker_spawned";
+  if (isSpawn(anchor)) return anchor;
+  const spawned = events.filter(isSpawn).filter((e) => e.task_id === anchor.task_id && e.id < anchor.id).at(-1);
   return spawned && sessionWindow(events, spawned).inSession(anchor) ? spawned : undefined;
 }
 
@@ -1080,7 +1081,7 @@ export function sessionOf(
   anchor: EventRow,
 ):
   | {
-      spawned: EventRow;
+      spawned: EventRowOf<"worker_spawned">;
       exited: EventRow | undefined;
       inSession: (e: Pick<EventRow, "id" | "task_id">) => boolean;
       completed: EventRowOf<"task_completed"> | undefined;

@@ -32,7 +32,8 @@ function buildPrompt(input: AttributionInput): string {
     "decision log objected to one entry and left steering comments on it. The objection itself " +
     "is final and not yours to re-litigate. Judge only what caused the objection — whose " +
     `shortfall it points at — from ${f.entry}, ${f.steering}, and decision_log. ${f.entry_id} ` +
-    `${OBJECTION_FIELDS} ${f.written} ${f.decision_log} When the input ` +
+    `${OBJECTION_FIELDS} ${f.written} ${f.decision_log} When skills_followed positions are null, the objected entry could not be ` +
+    "placed among the session's tool calls: read the skills' order against the decision log yourself. When the input " +
     "carries rca_findings, an earlier judgment was uncertain and the task's root-cause reviews " +
     "have since settled: read them as " +
     `evidence. ${f.rca_findings} ${f.actor} ${f.human_stop}\n\n` +
@@ -87,9 +88,9 @@ const responseFields = (
   "placed in the task's workspace (AGENTS.md, a README) was itself wrong and the worker followed " +
   `it — name it only when ${w.cites} that document; ` +
   // ADR 0325 決定3: skill は呼び出しで注入される文面で、持ち主は scope の欄で引く —— board_text と同じ型。名指しの門は置かない
-  `a skill is text the harness gave the worker when it invoked the skill — ${f.skills_followed}, and ${f.skills}: ` +
+  `a skill is text the CLI the worker ran in gave it when it invoked the skill — ${f.skills_followed}, and ${f.skills}: ` +
   "following a skill in skills_followed as written is environment when its name is in skills.host and workspace_document when it is in " +
-  "skills.workspace, while misreading the skill's text is capability; skills and skills_followed are null when the session's transcript " +
+  "skills.workspace, while misreading the skill's text is capability; skills and skills_followed are null when the session's record " +
   "could not be read: judge from the rest; use uncertain when the evidence does " +
   'not decide it), "evidence" (string — the concrete observations your judgment rests on, in English), and "wrong_memory_entries" ' +
   `(only with cause memory: the ids of the wrong memory entries, named from ${f.memory_read}; never answer memory when memory_read is empty).`;

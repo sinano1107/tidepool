@@ -261,14 +261,17 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
   const reading = emptyReading();
   const { actions, markers, lines } = reading;
   const byToolUseId = new Map<string, EpisodeAction>();
-  // skill の本文の組(ADR 0325 決定3): commandName を持つ `Skill` の結果の後の最初の合成 user 行。並べて呼んでも結果と本文は順に来る
-  const awaitingBody: string[] = [];
+  // skill の本文の組(ADR 0325 決定3): commandName を持つ `Skill` の結果の行の直後の合成 user 行だけ —— 並べて呼んでも結果と本文は
+  // 交互に来る(固定版 2.1.286 の実測)。直後に来なければその呼び出しの本文は無い
+  let awaitingBody: string | null = null;
   const bodies = new Map<string, string>();
 
   for (const line of transcriptLines) {
     // 行の切れ目そのもの(末尾改行が生む空文字を含む)は行ではない
     if (!line.trim()) continue;
     lines.total += 1;
+    const resultBefore = awaitingBody;
+    awaitingBody = null;
     const parsed = parseStreamLine(line);
     if (parsed === null) {
       countUnknown(lines, "unparseable");
@@ -297,7 +300,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
     const uuid = typeof parsed.uuid === "string" ? parsed.uuid : "";
     reading.cliVersion = readInitVersion(parsed) ?? reading.cliVersion;
     reading.skillsSeen = readInitField(parsed, "skills") ?? reading.skillsSeen;
-    if (parsed.isSynthetic === true && awaitingBody.length > 0) bodies.set(awaitingBody.shift()!, uuid);
+    if (parsed.isSynthetic === true && resultBefore !== null) bodies.set(resultBefore, uuid);
     const structural = subtype === null ? undefined : STRUCTURAL_MARKER_SUBTYPE[subtype];
     if (type === "system" && structural) {
       markers.push({
@@ -357,7 +360,7 @@ function readClaudeLines(transcriptLines: string[]): LineReading {
         const action = byToolUseId.get(tool_use_id);
         if (!action) continue;
         action.failed = is_error === true;
-        if (typeof (parsed.tool_use_result as { commandName?: unknown } | undefined)?.commandName === "string") awaitingBody.push(tool_use_id);
+        if (typeof (parsed.tool_use_result as { commandName?: unknown } | undefined)?.commandName === "string") awaitingBody = tool_use_id;
         bindEventId(reading, action, (block as Record<string, unknown>).content, uuid);
       }
     }
@@ -854,7 +857,7 @@ export function listEpisodes(
     .prepare(
       `SELECT * FROM episode_skill_calls WHERE episode_id IN (${rows.map(() => "?").join(", ")}) ORDER BY episode_id, seq`,
     )
-    .all(...rows.map((r) => r.id)) as Array<{ episode_id: number; position: number; name: string; transcript_uuid: string | null; subagent: number }>;
+    .all(...rows.map((r) => r.id)) as SkillCallRow[];
   const decisions = decisionOutcomes(db, markerRows);
 
   return rows.map((row) => ({
@@ -1014,6 +1017,14 @@ interface ActionRow {
   tool_use_id: string;
   subagent: number;
   subagent_usage: string | null;
+}
+
+interface SkillCallRow {
+  episode_id: number;
+  position: number;
+  name: string;
+  transcript_uuid: string | null;
+  subagent: number;
 }
 
 interface MarkerRow {
