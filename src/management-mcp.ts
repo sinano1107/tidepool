@@ -155,7 +155,7 @@ export interface ManagementMcpDeps {
   draftClient?: DraftClient;
   pollNow: () => void;
   /** 最後の poll の失敗と issue 展開の失敗の欄(ADR 0294 決定1 / ADR 0328 決定7)。`GET /api/queue` と同じ1つ。 */
-  pollFailureJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure" | "lastIssueExpansionFailure">;
+  queueFailuresJson: () => Pick<WireContract["GET /api/queue"], "lastPollFailure" | "lastIssueExpansionFailure">;
   defaultAgentName?: string;
   auditorName?: string;
   interviewerName?: string;
@@ -392,7 +392,7 @@ function buildManagementMcpServer(deps: ManagementMcpDeps): McpServer {
         // のは「いつ後始末に入ったか」、列挙が言うのは「止まっている」で、同時に出る重複は
         // 承知の上である
         const teardown = sessionInTeardown(deps.db);
-        const failures = deps.pollFailureJson();
+        const failures = deps.queueFailuresJson();
         const tasks = listQueue(
           deps.db,
           deps.workspace?.name,

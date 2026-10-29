@@ -473,16 +473,18 @@ export function startScheduler(deps: {
     const open = openQuarantineQuestion(db, "issueExpansion", null);
     if (open) settleQuestionAsObserved(db, open.id, { kind: "quarantine_released", quarantine: "issueExpansion", value: null }, clock.now());
   };
-  /** pickup の GitHub の読み1つ: 答えたかの会計だけを足し、結果も例外もそのまま返す。 */
+  /** pickup の GitHub の読み1つ: 答えたかの会計だけを足し、結果も例外もそのまま返す。会計の DB 書き込みは読みの try の外 ——
+   *  その失敗を GitHub の失敗に数えない(ADR 0328 決定6)。 */
   async function readGitHub<T>(read: Promise<T>): Promise<T> {
+    let value: T;
     try {
-      const value = await read;
-      issueExpansionAnswered();
-      return value;
+      value = await read;
     } catch (err) {
       if (err instanceof IssueGoneError) issueExpansionAnswered();
       throw err;
     }
+    issueExpansionAnswered();
+    return value;
   }
   const resumeTimer = createResumeTimers(clock, pollNow);
 
@@ -698,12 +700,13 @@ export function startScheduler(deps: {
     // (ADR 0009) and the loop re-reads the stops before the next head
     const resolved = resolve && resolveOrQuarantine(db, resolve, head.workspace, clock.now());
     if (resolve && !resolved) return { skip: "head" };
-    const path = resolved?.path;
+    // resolver が無ければ GitHub は読まれず保存済みの文面が返る —— 答えた会計に数えない
+    if (!resolved) return { pass: await contentSourceFor(head, github, () => undefined).expand() };
+    const ref = { path: resolved.path, number: head.github_issue_number };
     try {
-      return { pass: await readGitHub(contentSourceFor(head, github, () => path).expand()) };
+      return { pass: await readGitHub(contentSourceFor(head, github, () => ref.path).expand()) };
     } catch (err) {
-      // 投げるのは GitHub の読みだけで、読みは path があるときだけ撃たれる
-      if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref: { path: path!, number: head.github_issue_number }, error: err };
+      if (!(err instanceof IssueGoneError)) return { skip: "gitHub", ref, error: err };
       // 確定的失敗 (ADR 0016): the reference is dead for good, not this
       // cycle's weather — the same watchdog-shaped retry/abandon question
       // as registerFailureQuestion, minus the teardown (nothing was acquired
@@ -781,13 +784,15 @@ export function startScheduler(deps: {
     if (resolve && !resolved) return { skip: "head" };
     if (!resolved) return { pass: stored };
     const ref = { path: resolved.path, number: parent.github_issue_number };
+    let issue: Awaited<ReturnType<GitHubClient["getIssueWithState"]>>;
     try {
-      const issue = await readGitHub(github.getIssueWithState(ref));
-      return { pass: { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number: ref.number, state: issue.state } } };
+      issue = await readGitHub(github.getIssueWithState(ref));
     } catch (err) {
       if (err instanceof IssueGoneError && err.reason === "not_found") return { pass: { ...briefing, issue: { number: ref.number, state: "not_found" } } };
       return { skip: "gitHub", ref, error: err };
     }
+    // 文面の導出は読みの try の外 —— その失敗を GitHub の失敗に数えない(ADR 0328 決定6)
+    return { pass: { ...briefing, ...deriveTaskContentFromIssue(issue), issue: { number: ref.number, state: issue.state } } };
   }
 
   async function observeProviderUsage(provider: Provider): Promise<ProviderUsageObservation> {

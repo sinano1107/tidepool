@@ -19,7 +19,7 @@ function listRoutes(db: Db): { method: string; path: string }[] {
     db,
     clock: new FakeClock(),
     pollNow: () => {},
-    pollFailureJson: () => ({}),
+    queueFailuresJson: () => ({}),
     landing: unusedLanding,
     taskExecutionCandidates: () => [],
   });

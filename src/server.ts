@@ -719,7 +719,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   }, 60 * 1000);
   // ADR 0294 決定1: 最後の poll の失敗は queue の2つの読み口(`GET /api/queue`・`list_queue`)へ同じ1つを配る。
   // 兄弟の issue 展開の失敗(ADR 0328 決定7)も同じ口で —— 載っている間は GitHub を読む task が skipped に見える
-  const pollFailureJson = () => {
+  const queueFailuresJson = () => {
     const lastPollFailure = scheduler.lastPollFailure();
     const lastIssueExpansionFailure = scheduler.lastIssueExpansionFailure();
     return { ...(lastPollFailure && { lastPollFailure }), ...(lastIssueExpansionFailure && { lastIssueExpansionFailure }) };
@@ -730,7 +730,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       clock: options.clock,
       pollNow,
-      pollFailureJson,
+      queueFailuresJson,
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
@@ -766,7 +766,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       db,
       clock: options.clock,
       pollNow,
-      pollFailureJson,
+      queueFailuresJson,
       workspace: options.workspace,
       resolveWorkspace: options.resolveWorkspace,
       github: options.github,
