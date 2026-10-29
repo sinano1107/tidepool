@@ -1326,7 +1326,6 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
   function pickableHead() {
     const excluded = entriesAllExcluded();
     const skipped: string[] = [];
-    const unreadable = gitHubUnreadable();
     for (;;) {
       const head = nextSlotTask(
         db,
@@ -1337,7 +1336,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
         skipped,
         closedRoot,
         interviewerName,
-        unreadable,
+        gitHubUnreadable(),
       );
       if (!head || !excluded(head)) return head;
       skipped.push(head.id);
