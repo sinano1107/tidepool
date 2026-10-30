@@ -171,11 +171,12 @@ const CODEX_STREAM = [
 ];
 
 /** live の adapter と同じ形で、読み手に1行ずつ食わせる。 */
-function liveClaude(lines: string[]) {
+function observeClaude(lines: readonly string[]) {
   const observed = claudeStreamObservation();
   for (const line of lines) observeClaudeLine(observed, parseStreamLine(line));
-  return claudeExitFields(observed);
+  return observed;
 }
+const liveClaude = (lines: string[]) => claudeExitFields(observeClaude(lines));
 function liveCodex(lines: string[]) {
   const observed = codexStreamObservation();
   for (const line of lines) observeCodexLine(observed, parseJsonl(line));
@@ -216,12 +217,6 @@ it("Claude の読み手は行の列から usage 一式・CLI の報告した失�
   });
 });
 
-/** 0ターン(ADR 0331 決定2): root のモデルの応答を1つでも観測したか。 */
-function claudeTurnRan(lines: string[]) {
-  const observed = claudeStreamObservation();
-  for (const line of lines) observeClaudeLine(observed, parseStreamLine(line));
-  return observed.turnRan;
-}
 const fixture = (name: string) => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8").split("\n");
 
 it.each([
@@ -235,7 +230,7 @@ it.each([
   ["root の tool_use", [JSON.stringify({ type: "assistant", message: { model: "claude-sonnet-5", content: [{ type: "tool_use", id: "u1", name: "Bash", input: {} }] } })], true],
   ["実 session の実測", fixture("worker-session-2.1.237.stream.jsonl"), true],
 ] as const)("Claude の読み手は root のモデルの応答を観測したときだけターンが走ったと読む —— %s(ADR 0331 決定2)", (_, lines, ran) => {
-  expect(claudeTurnRan([...lines])).toBe(ran);
+  expect(observeClaude(lines).turnRan).toBe(ran);
 });
 
 it("Codex の読み手は行の列から正規化した usage・`turn.failed` の文・最後の発話を作る", () => {
