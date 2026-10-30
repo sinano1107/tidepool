@@ -29,7 +29,7 @@ import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
-import { examineePickupPredicates, gonePlaceReason, isRemoteBacked, roomPickupPredicates } from "./pickup-predicates.js";
+import { isRemoteBacked } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -94,9 +94,10 @@ import {
   freshenPlaceAtPickup,
   openExamineeCheckout,
   openInterviewRoom,
+  PickupGateError,
+  pickupGate,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
-  readOnlyRoomWithoutRepo,
   resolveOrQuarantine,
   resolveWorkspacesBaseDir,
   taskRunPlace,
@@ -510,7 +511,7 @@ export function startScheduler(deps: {
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
-   *  pickup の準備(`freshenPlaceAtPickup` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
+   *  pickup の門と準備(`pickupGate` / `freshenPlaceAtPickup` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
    *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
    *
    *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
@@ -608,15 +609,21 @@ export function startScheduler(deps: {
         // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
         // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
         // 通れば quarantine すら立たず、直せなければ案内込みで quarantine に落ちる
+        // ADR 0329 追記 決定7・8: 走る場所を開く前に、task が開く場所すべての一覧を撃つ。落ちた場所の名前で止まり、remote 正本を
+        // 持つ場所なら修復案内込み(ADR 0067 決定2)—— 持たない場所(面接室・purely-local の実環境)は案内が無く、そのまま quarantine
+        const base = resolveWorkspacesBaseDir(workspacesDir);
+        try {
+          await pickupGate(db, resolved, picked, base, registry);
+        } catch (err) {
+          if (!(err instanceof PickupGateError)) throw err;
+          return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
+        }
+        if (!live()) return;
         // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
         // どちらも作れなければ面接室(root id)の quarantine に落ちる
         const rootId = interviewRootIdOf(db, picked);
         if (rootId !== undefined) {
           try {
-            // 開く前に、この場所の pickup の述語の一覧を撃つ —— 解除の門と予告が読むのと同じ一覧(ADR 0329 追記 決定6)
-            const base = resolveWorkspacesBaseDir(workspacesDir);
-            const predicates = picked.type === "interview" ? roomPickupPredicates(db, picked.id, base, registry) : examineePickupPredicates(db, picked, rootId, base, registry);
-            for (const { check } of predicates) check();
             if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
             else openExamineeCheckout(db, picked, base, clock.now());
           } catch (err) {
@@ -624,25 +631,18 @@ export function startScheduler(deps: {
           }
         }
         // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
-        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない。
-        // 実環境は root の `workspace` 列で、読む面接室は root の id で、この task の pickup の門(`openedPlaceNamesSql`)に掛かる
+        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない(ADR 0329 追記 決定9)
         const place = taskRunPlace(db, picked, resolved);
-        // ADR 0277 追記 決定1: 読みだけ開く面接室の repo が無ければその面接室の名前で止める —— 無い path は Harness が黙って読みから外す
-        const gone = readOnlyRoomWithoutRepo(db, place.reads);
-        if (gone) {
-          const reason = gonePlaceReason(gone.name, gone.path, "interview_room_opened");
-          return stopped(quarantineWorkspace(db, gone.name, reason, clock.now()));
-        }
         for (const read of place.reads.filter(isRemoteBacked)) {
           try {
-            await freshenPlaceAtPickup(read, { githubAuth, registry, live });
+            await freshenPlaceAtPickup(read, { githubAuth, live });
           } catch (err) {
             return stopped(await quarantineWithRepoAccessGuidance(read, err, live));
           }
           if (!live()) return;
         }
         try {
-          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, registry, live });
+          await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });
         } catch (err) {
           return stopped(await quarantineWithRepoAccessGuidance(place, err, live));
         }

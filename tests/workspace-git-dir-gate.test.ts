@@ -1,9 +1,9 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
-import { prepareWorkspaceAtPickup, verifyWorkspaceClean } from "../src/workspace.js";
+import { pickupGate, verifyWorkspaceClean } from "../src/workspace.js";
 import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
@@ -17,7 +17,7 @@ async function gitFileCheckout(name: string) {
   return workspace;
 }
 
-it("`.git` がファイルの checkout は pickup の準備で拒否され、理由に linked worktree / submodule を挙げる", async () => {
+it("`.git` がファイルの checkout は pickup の門で拒否され、理由に linked worktree / submodule を挙げる", async () => {
   const workspace = await gitFileCheckout("git-file-pickup");
   const db = openDb(":memory:");
   const task = registerTask(
@@ -27,7 +27,7 @@ it("`.git` がファイルの checkout は pickup の準備で拒否され、理
     ...HUMAN_WEBUI,
   );
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
+  await expect(pickupGate(db, workspace, task, dirname(workspace.path))).rejects.toThrow(
     ".git is not a directory — linked worktrees and submodules cannot be workspaces",
   );
   db.close();
@@ -43,7 +43,7 @@ async function subdirectoryOfRepository(name: string) {
   return { parent, workspace: { name, path: join(parent.path, "sub") } };
 }
 
-it("親 repo の部分ディレクトリは pickup の準備で拒否され、親 repo の HEAD もブランチも動かない", async () => {
+it("親 repo の部分ディレクトリは pickup の門で拒否され、親 repo の HEAD もブランチも動かない", async () => {
   const { parent, workspace } = await subdirectoryOfRepository("subdir-pickup");
   const headBefore = git(parent.path, "symbolic-ref", "HEAD");
   const branchesBefore = git(parent.path, "branch", "--list");
@@ -55,7 +55,7 @@ it("親 repo の部分ディレクトリは pickup の準備で拒否され、�
     ...HUMAN_WEBUI,
   );
 
-  await expect(prepareWorkspaceAtPickup(db, workspace, task)).rejects.toThrow(
+  await expect(pickupGate(db, workspace, task, dirname(workspace.path))).rejects.toThrow(
     "has no .git of its own",
   );
   expect(git(parent.path, "symbolic-ref", "HEAD")).toBe(headBefore);

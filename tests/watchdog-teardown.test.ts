@@ -372,8 +372,8 @@ it("worker を起動する前に資源の Quarantine が止めた pickup は、f
   expect(f.triggered).toEqual(["pollNow"]);
 });
 
-/** 準備が task ブランチへの checkout より前に落ちた pickup(ADR 0274 決定3)。git は動く —— remote 正本の宣言が clone とずれていて、
- *  準備は checkout の前に投げる。`prior` は同じ workspace で別の task が先に拾われ、後始末まで終えていたか。 */
+/** 準備が task ブランチへの checkout より前に落ちた pickup(ADR 0274 決定3)。git は動く —— remote 正本の宣言に origin が無く、
+ *  準備は checkout の前に fetch で投げる(宣言と clone の照合は手前の pickup の門、ADR 0329 追記 決定7)。`prior` は同じ workspace で別の task が先に拾われ、後始末まで終えていたか。 */
 async function stoppedBeforeCheckout(prior: boolean) {
   const db = openDb(":memory:");
   const clock = new FakeClock();

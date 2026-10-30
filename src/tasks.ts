@@ -582,7 +582,7 @@ export function examineeCheckoutPath(db: Db, examineeId: string): string | undef
 }
 
 /** root が自分の面接室の他に読める面接室(ADR 0273 決定9): 根拠の task のうち Interview の root のもの、retry なら旧い root のもの。
- *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。門の側の対は `openedPlaceNamesSql`。 */
+ *  名前はその面接室の root の id —— 面接室の quarantine が立つ名前(ADR 0273 決定8)。開く前に一覧を撃つ門は workspace.ts の `pickupGate`。 */
 export function readableInterviewRooms(db: Db, rootId: string): { name: string; path: string }[] {
   const rooms = (interviewFields(db, rootId)?.evidence_task_ids ?? []).map((id) => ({ name: id, path: interviewRoomPath(db, id) }));
   const retried = latestEventOfTask(db, rootId, "interview_retried")?.payload;
@@ -3876,8 +3876,9 @@ function gitHubReadingSql(taskRef: string): string {
 
 /** task が開く場所すべての名前(ADR 0273 決定8・追記、issue #2265)の唯一の SQL —— 資源の停止と封じ込めの組はこの集合と比べる。
  *  受験者は面接室(対象の root id)だけ。それ以外は `workspace` 列(無ければ `@defaultWorkspaceName`)に加えて、interview の root と
- *  review の親を review の鎖で辿って着く root(`taskRunPlace` と同じ辿り方)には、その root の面接室と他に読める面接室
- *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。 */
+ *  review の親を review の鎖で辿って着く root には、その root の面接室と他に読める面接室
+ *  (`readableInterviewRooms` と同じ意味: 根拠のうち Interview の root、retry の旧い root)の名前。門は名前を比べるので、在り処の有無は見ない。
+ *  門の側の対(同じ集合を種類付きの場所として開く前に列挙し、一覧を撃つ)は workspace.ts の `pickupGate`(ADR 0329 追記 決定7)。 */
 function openedPlaceNamesSql(taskRef: string): string {
   return `WITH RECURSIVE chain(id, type, parent_id) AS (
               SELECT ${taskRef}.id, ${taskRef}.type, ${taskRef}.parent_id
