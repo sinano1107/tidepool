@@ -23,4 +23,3 @@ it("a readable Moonshot key passes the gate without returning its contents", asy
   writeFileSync(keyFile, " sk-private-key-for-gate-test\n");
   expect(moonshotKeyAbsence(keyFile)).toBeUndefined();
 });
-
