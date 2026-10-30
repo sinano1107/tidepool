@@ -1998,8 +1998,8 @@ describe("ClaudeCodeWorker", () => {
     // skill 列挙の失敗に対して取ったのと同じ「このセッションは走らせない」である。
     // 面が広い側にずれていればそれは worker が持つべきでない能力を持ったまま走る
     // ことであり、狭い側にずれていれば能力を1つ失ったまま詰まるだけである。どちらも
-    // 走らせる理由がない。slot は回収後の root の exit が報告なき exit として
-    // 後始末へ入れる(ADR 0145)。
+    // 走らせる理由がない。slot は回収後の root の exit が0ターンの資源の停止として
+    // 先頭へ戻して後始末へ入れる(ADR 0331 決定4)。
     const { start, processes, killed } = await makeWorker();
     start("task-init-kill", null, "deckhand", "work");
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));

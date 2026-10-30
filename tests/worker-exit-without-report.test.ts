@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
@@ -8,6 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
+import type { WorkspaceConfig } from "../src/workspace.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -16,6 +17,7 @@ import {
   git,
   HOUR,
   HUMAN_WEBUI,
+  makeWorkspace,
   mcpClient,
   QUIET_EXIT,
   questions,
@@ -418,11 +420,13 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider = "anthropic",
+  workspace?: WorkspaceConfig,
 ) {
   const proc = recordingSpawn();
   onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   t = await bootTidepool({
     watchdog: WATCHDOG,
+    ...(workspace && { workspace }),
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
@@ -433,7 +437,8 @@ async function bootWithAdapter(
   return proc;
 }
 
-async function bootClaude() {
+/** `workspace` は後始末の退避と休止位置を見るテストだけが渡す。 */
+async function bootClaude(workspace?: WorkspaceConfig) {
   const registryDir = await makeRegistry();
   const logDir = await tempDir("exit-without-report-logs-");
   return bootWithAdapter(
@@ -446,6 +451,8 @@ async function bootClaude() {
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
       }),
+    "anthropic",
+    workspace,
   );
 }
 
@@ -519,10 +526,11 @@ it("Claude adapter: 上限到達による中断で exit した session には、
   expect(proc.calls).toHaveLength(2);
 });
 
-it("Claude adapter: tool surface drift で回収された session は、Containment quarantine の確認 question とこの failure question の2枚を立てる", async () => {
+it("Claude adapter: tool surface drift で回収された0ターンの session は、Containment quarantine の確認 question 1枚で todo の先頭へ戻り、この failure question は立たない(ADR 0331 決定4)", async () => {
   const proc = await bootClaude();
-  queueWork(t, "drifted");
+  const drifted = queueWork(t, "drifted");
   await t.clock.advance(HOUR);
+  await moveToHead(queueWork(t, "queued after"));
 
   proc.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", tools: ["Bash", "Read", "CronCreate"], mcp_servers: [] })}\n`);
   proc.emitExit(null, "SIGKILL");
@@ -530,6 +538,76 @@ it("Claude adapter: tool surface drift で回収された session は、Containm
 
   expect((await questions(t)).map((q: any) => q.title).sort()).toEqual([
     "worker containment is not established — pickup is stopped",
-    "worker exited without reporting: drifted",
   ]);
+  expect(await queueHead()).toBe(drifted.id);
+  expect((await stoppedByResource(drifted.id))?.payload).toMatchObject({ quarantine: "containment", value: null, reason: expect.stringContaining("CronCreate") });
+});
+
+// ── 0ターンの資源の署名(ADR 0331 決定2〜4)──────────────────────────────────
+
+const AUTH_TITLE = "anthropic authentication is unavailable — pickup of anthropic-speaking agents is stopped";
+/** CLI が API の失敗に合成する `<synthetic>` の assistant 行(ターンではない)と 401 の result 行。 */
+const AUTH_401 =
+  `${JSON.stringify({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "Invalid API key" }] } })}\n` +
+  `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 401, result: "Invalid API key" })}\n`;
+const ROOT_TURN = `${JSON.stringify({ type: "assistant", message: { model: "claude-opus-5-5", content: [{ type: "text", text: "reading the repo" }] } })}\n`;
+
+const timeline = async (id: string) => (await api(t.baseUrl, "GET", `/api/tasks/${id}/events`)).json as any[];
+const stoppedByResource = async (id: string) => (await timeline(id)).find((e) => e.kind === "session_stopped_by_resource");
+const moveToHead = (task: { id: string }) => api(t.baseUrl, "POST", `/api/tasks/${task.id}/move`, { after: null });
+/** queue の work 側の先頭。 */
+const queueHead = async () => ((await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((task) => task.type === "work")?.id;
+
+it("Claude adapter: 401 で終わった0ターンの session は、Provider 認証の確認 question 1枚で todo の先頭へ戻り、退避と休止位置を通って枠を空ける —— failure question は立たない(ADR 0331 決定2・4・9)", async () => {
+  const ws = await makeWorkspace("tidepool");
+  const proc = await bootClaude(ws);
+  const task = queueWork(t, "unauthorized");
+  await t.clock.advance(HOUR);
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
+  await moveToHead(queueWork(t, "queued after"));
+  writeFileSync(join(ws.path, "wip.txt"), "left before the first turn\n");
+
+  proc.processes[0]!.stdout.write(AUTH_401);
+  proc.emitExit(1, null);
+  await settle();
+
+  expect((await questions(t)).map((q: any) => q.title)).toEqual([AUTH_TITLE]);
+  expect(await status(task.id)).toBe("todo");
+  expect(await queueHead()).toBe(task.id);
+  const spawned = (await timeline(task.id)).find((e) => e.kind === "worker_spawned");
+  expect(await stoppedByResource(task.id)).toMatchObject({
+    actor_id: "tidepool",
+    origin: "board",
+    payload: { quarantine: "providerAuth", value: "anthropic", reason: expect.any(String), worker_spawned_event_id: spawned.id },
+  });
+  expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("left before the first turn");
+  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
+});
+
+it("Claude adapter: ターンが走った後の 401 は、Provider 認証の確認 question とこの failure question の2枚のまま(ADR 0331 決定2 / ADR 0145 決定5)", async () => {
+  const proc = await bootClaude();
+  const task = queueWork(t, "expired mid-session");
+  await t.clock.advance(HOUR);
+
+  proc.processes[0]!.stdout.write(ROOT_TURN + AUTH_401);
+  proc.emitExit(1, null);
+  await settle();
+
+  expect((await questions(t)).map((q: any) => q.title).sort()).toEqual([AUTH_TITLE, "worker exited without reporting: expired mid-session"]);
+  expect(await status(task.id)).toBe("blocked");
+  expect(await stoppedByResource(task.id)).toBeUndefined();
+});
+
+it("Claude adapter: 資源の署名を持たない0ターンの exit(exit 1、stderr だけ)は、この failure question のまま(ADR 0331 決定3)", async () => {
+  const proc = await bootClaude();
+  const task = queueWork(t, "died silently");
+  await t.clock.advance(HOUR);
+
+  proc.processes[0]!.stderr.write("config rejected\n");
+  proc.emitExit(1, null);
+  await settle();
+
+  expect((await questions(t)).map((q: any) => q.title)).toEqual(["worker exited without reporting: died silently"]);
+  expect(await stoppedByResource(task.id)).toBeUndefined();
 });

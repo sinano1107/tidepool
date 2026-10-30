@@ -1507,10 +1507,13 @@ export function moveTask(
 }
 
 /** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
-export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "target_refused" | "record_container_unwritable" | "pickup_stopped" }>;
+export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "target_refused" | "record_container_unwritable" | "pickup_stopped" | "session_stopped_by_resource" }>;
 
 /** 資源の Quarantine が worker の起動前に pickup を止めた先頭復帰(ADR 0274)。 */
 export type PickupStopped = Extract<QueueReturnPayload, { kind: "pickup_stopped" }>;
+
+/** 0ターンで終わった session の、資源の署名による先頭復帰(ADR 0331 決定2・9)。 */
+export type SessionStoppedByResource = Extract<QueueReturnPayload, { kind: "session_stopped_by_resource" }>;
 
 /** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので

@@ -679,6 +679,20 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
 });
 
+it("資源の署名で先頭へ戻った0ターンの session は、そのタスクが次の session で受理されても excluded —— 行の拒否と同じ(ADR 0331 帰結、loadEpisodes)", () => {
+  const b = bareBoard();
+  const { task, spawnedId: stoppedId } = spawnedWork(b, "a");
+  const at = b.clock.now();
+  appendEvent(b.db, { taskId: task.id, actorId: WORKER, origin: "board", at, payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: stoppedId, output_closed: true, usage: null } });
+  appendEvent(b.db, { taskId: task.id, actorId: "tidepool", origin: "board", at, payload: { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: stoppedId } });
+  const rerunId = recordSpawn(b, task.id);
+  accept(b, task.id);
+
+  const episodes = loadEpisodes(b.db);
+  const outcomeOf = (spawnedId: number) => episodes.find((e) => e.worker_spawned_event_id === spawnedId)?.outcome;
+  expect({ stopped: outcomeOf(stoppedId), rerun: outcomeOf(rerunId) }).toEqual({ stopped: "excluded", rerun: "accepted" });
+});
+
 it("process を持たなかった session は、そのタスクが次の session で受理されても excluded —— 受理されたのは次の session(ADR 0118 決定1 / ADR 0316 決定4、loadEpisodes)", () => {
   const b = bareBoard();
   const { task, spawnedId: neverRanId } = spawnedWork(b, "a");

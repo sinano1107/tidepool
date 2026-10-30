@@ -1,7 +1,7 @@
 import { BOARD_ACTOR_ID } from "./actor-id.js";
 import { type BoardCallSetting, type BoardCallUsage, type QuarantinableBoardCallUse, recordBoardCall } from "./board-call-usage.js";
 import type { Db } from "./db.js";
-import type { RowRefusal, RowRefusalCause } from "./events.js";
+import type { ResourceStop, RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
 import { registerQuarantine, tableRowValue } from "./quarantine.js";
@@ -160,14 +160,15 @@ export function quarantineCliAuthFailure(db: Db, err: unknown, now: Date): void 
 
 /** ADR 0098: the machine classification of a 401 routes by the spawn/call-time
  * Provider fact, never by parsing prose from an error. Every Provider is a
- * resource-scoped quarantine; unrelated Provider workers continue. */
+ * resource-scoped quarantine; unrelated Provider workers continue. 返すのは止めた資源(ADR 0331 決定4)。 */
 export function quarantineCliAuthForProvider(
   db: Db,
   provider: Provider,
   now: Date,
   reason = `A worker session or Board call returned an authentication failure while speaking the ${provider} provider`,
-): void {
+): ResourceStop {
   registerQuarantine(db, "providerAuth", provider, reason, now);
+  return { quarantine: "providerAuth", value: provider, reason };
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {

@@ -132,12 +132,18 @@ function readErrorResult(parsed: Record<string, unknown> | null): Record<string,
   return parsed?.type === "result" && parsed.is_error === true ? parsed : null;
 }
 
+/** root のモデルの応答の行 —— CLI が API の失敗に合成する `<synthetic>` の行と subagent の行は数えない。
+ *  1行でもあればターンが走った(ADR 0331 決定2 の0ターンの否定)。 */
+function isRootTurn(parsed: Record<string, unknown> | null): parsed is Record<string, unknown> {
+  return isRootAssistant(parsed) && (parsed.message as { model?: unknown } | undefined)?.model !== "<synthetic>";
+}
+
 /** ADR 0189: root のモデルが書いた最後の空でない text。CLI が合成した `<synthetic>` の行(ADR 0188 の主語)と
  *  subagent の行は読まない。text の無い行は null —— 前の行の文を残す。 */
 function readRootText(parsed: Record<string, unknown> | null): string | null {
-  if (!isRootAssistant(parsed)) return null;
-  const message = parsed.message as { model?: unknown; content?: unknown } | undefined;
-  if (message?.model === "<synthetic>" || !Array.isArray(message?.content)) return null;
+  if (!isRootTurn(parsed)) return null;
+  const message = parsed.message as { content?: unknown } | undefined;
+  if (!Array.isArray(message?.content)) return null;
   const texts = message.content.filter(
     (block): block is { text: string } => block?.type === "text" && typeof block.text === "string" && block.text !== "",
   );
@@ -186,6 +192,8 @@ interface StreamObservation {
   cliAuthFailed: boolean;
   capInterrupted: boolean;
   refusalCause: RowRefusalCause | null;
+  /** ADR 0331 決定2: root のモデルの応答を1つでも観測したか —— false のまま閉じた session が0ターン。 */
+  turnRan: boolean;
   /** ADR 0188 / ADR 0189: display-only transcriptions. */
   lastErrorResult: Record<string, unknown> | null;
   lastMessage: string | null;
@@ -314,6 +322,7 @@ export const claudeStreamObservation = (): StreamObservation => ({
   cliAuthFailed: false,
   capInterrupted: false,
   refusalCause: null,
+  turnRan: false,
   lastErrorResult: null,
   lastMessage: null,
   consultations: 0,
@@ -330,6 +339,7 @@ export function observeClaudeLine(observed: StreamObservation, parsed: Record<st
   observed.cliAuthFailed ||= isCliAuthFailure(parsed);
   observed.capInterrupted ||= isCapInterruption(parsed);
   observed.refusalCause ??= rowRefusalOf(parsed);
+  observed.turnRan ||= isRootTurn(parsed);
   observed.lastErrorResult = readErrorResult(parsed) ?? observed.lastErrorResult;
   observed.lastMessage = readRootText(parsed) ?? observed.lastMessage;
   for (const outcome of readAdvisorOutcomes(parsed)) {

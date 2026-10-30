@@ -39,6 +39,7 @@ import {
   carriesReadOnly,
   type PickupStopped,
   resolveTaskAgent,
+  type SessionStoppedByResource,
   type Task,
   taskVerbSwap,
 } from "./tasks.js";
@@ -882,6 +883,9 @@ export interface ClaudeWorkerOptions {
   /** 資源の Quarantine が spawn の前に pickup を止めた(ADR 0274)盤面側の一撃 —— `queueReturnHandler` 製。
    *  `onWorkerExited` と同じ機能フィールド。不在 → 止めた pickup が in_progress のまま枠を握る。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
+  /** 0ターンで終わった session が資源の署名(401 / drift)を持った(ADR 0331 決定2・4)盤面側の一撃 —— `onPickupStopped` と同じ
+   *  `queueReturnHandler` 製。不在 → その session は報告なき exit の failure question に落ちる。 */
+  onSessionStoppedByResource?: (taskId: string, payload: SessionStoppedByResource) => void;
   /** root process の exit を受ける盤面側の一撃(ADR 0145)—— watchdog の `onWorkerExited`。
    *  分類も同じ通知で渡す(ADR 0309)。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
@@ -2011,15 +2015,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // teed alongside the file write (issue #32): the one reader (ADR 0316 決定1) collects what
     // worker_exited needs at exit without re-reading the file back off disk
     const streamObserved = claudeStreamObservation();
-    // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)
-    let toolSurfaceObserved = false;
+    // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
+    let driftStop: ResourceStop | null | undefined;
     // 行は1度だけ decode し、読み手と live だけの tool surface の検査が同じ `parsed` を読む(issue #1301)。
     // stream のループと exit の flush が同じこれを通す
     const flushStdout = readLines(child.stdout, (line) => {
       const parsed = parseStreamLine(line);
       observeClaudeLine(streamObserved, parsed);
-      if (!toolSurfaceObserved) {
-        toolSurfaceObserved = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
+      if (driftStop === undefined) {
+        driftStop = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
       }
     });
     this.running.set(task.id, child);
@@ -2063,11 +2067,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // session was spawned to speak (a spawn-time fact), never inferred from
       // the envelope — every provider, the board's own included (ADR 0098 決定6),
       // quarantines only its own agents' pickup.
-      if (streamObserved.cliAuthFailed) {
-        quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now());
-      }
+      const authStop = streamObserved.cliAuthFailed
+        ? quarantineCliAuthForProvider(this.options.db, routing.provider, this.options.clock.now())
+        : undefined;
       // issue #356: この session の Precedent は worker_exited を書いたあとに投影する(閉じる1本、ADR 0315 決定1)。
-      // 下の2つの一撃より先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
+      // 下の一撃たちより先に登録する。transcript が既に閉じていれば投影も先に走るが、Episode の窓は exit で閉じる
       // (`sessionWindow`)ので、一撃が後から書く event は元から Episode に入らない
       closeSession(
         this.options.db,
@@ -2094,6 +2098,12 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           { provider: routing.provider, model: routing.model, worker_spawned_event_id: spawnedEventId, cause: streamObserved.refusalCause },
           this.containers.reclaimed(task.id),
         );
+      }
+      // ADR 0331 決定2・4: 資源の署名を持つ0ターンの session は、止めた資源を上で登録済みのまま同じ位置で先頭へ戻す。
+      // ターンが走った session は下の exit の一撃(failure question)へ —— 資源の question と2枚になる
+      const resourceStop = authStop ?? driftStop;
+      if (resourceStop && !streamObserved.turnRan) {
+        this.options.onSessionStoppedByResource?.(task.id, { kind: "session_stopped_by_resource", ...resourceStop, worker_spawned_event_id: spawnedEventId });
       }
       // ADR 0309: Claude の分類は解決済み。cap の後始末も exit を受けた盤面が決める。
       this.options.onWorkerExited?.(task.id, fields.model_swaps.length ? { ...exit, model_swaps: fields.model_swaps } : exit, streamObserved.capInterrupted);
@@ -2126,15 +2136,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  「このセッションは走らせない(fail-open しない)」である。ずれが広い側なら
    *  worker は持つべきでない能力を持ったまま走ることになり、狭い側なら能力を1つ
    *  失って詰まるだけなので、どちらの向きも走らせる理由がない。回収で root が exit
-   *  すると、読み切りで撃たれる盤面側の一撃が報告なき exit として失敗 question(リトライ)を
-   *  立てて slot を後始末へ入れる(ADR 0145 決定5)—— 封じ込めの確認 question と2枚になる。
+   *  すると、0ターンの session は failure question を立てずに todo の先頭へ戻る(ADR 0331 決定4)——
+   *  封じ込めの確認 question 1枚だけが立つ。
    *  畳み込み停止ではなく**強制回収**なのは、猶予の目的が「エージェントに畳ませる」
    *  ことであり、ここで止めたい相手がまさにその「これ以上動くこと」だから。回収は
    *  watchdog と同じ盤面側 supervisor を通る(ADR 0099 決定2)— session を終わらせる
    *  経路が2つある以上、回収の書き方が2つあってはならない。
    *
-   *  戻り値は「init の `tools` を観測したか」— 呼び出し側はそれ以降の行をこの検査に
-   *  通さない(1セッションに init 行は1本だけ、実測)。
+   *  戻り値は init の `tools` を観測していなければ undefined、観測して成立なら null、不成立なら登録した資源の停止 ——
+   *  呼び出し側は undefined でなくなった後の行をこの検査に通さない(1セッションに init 行は1本だけ、実測)。
    *
    *  init 行が無いセッション(壊れた行・`tools` を持たない init)は判定しない —
    *  観測が無いことを不成立に化けさせるのは正本(ping)の仕事である。サブエージェント
@@ -2159,9 +2169,9 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     task: Task,
     slashCommandsDisabled: boolean,
     parsed: Record<string, unknown> | null,
-  ): boolean {
+  ): ResourceStop | null | undefined {
     const tools = readInitField(parsed, "tools");
-    if (!tools) return false;
+    if (!tools) return undefined;
     const mcpServers = readInitMcpServers(parsed);
     // 読めない mcp_servers は ADR 0108、unknown is not safe は ADR 0039
     const toolSurface: ContainmentCapability = mcpServers
@@ -2181,11 +2191,10 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const surface = toolSurface.available
       ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
       : toolSurface;
-    if (surface.available) return true;
+    if (surface.available) return null;
     console.error(`[worker] containment drift on task ${task.id}: ${surface.reason}`);
     this.containers.forceReclaim(task.id);
-    quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
-    return true;
+    return quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
   }
 
   /** 畳み込み停止の送達だけが adapter の仕事(ADR 0099 決定1)。Claude の合図は
