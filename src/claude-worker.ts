@@ -553,10 +553,10 @@ export function resolveMoonshotApiKeyFile(configured: string | undefined): strin
 }
 
 /** A moonshot worker was about to spawn without its credential — the key
- *  file is absent, unreadable, or empty. Surfaced as a failed start (the
- *  scheduler logs it and the task keeps its slot for the watchdog's failure
- *  question), with the path and the fix in the message; the provider-scoped
- *  quarantine ADR 0097 決定2 describes is #446's slice. Exported so the
+ *  file is absent, unreadable, or empty. The pickup gate excludes this state;
+ *  if it reaches spawn, the scheduler records a failed start and immediately
+ *  enters failure handling and teardown (ADR 0118), with the path and the fix
+ *  in the message. Exported so the
  *  moonshot auth probe (claude-cli-auth.ts, issue #446) classifies a missing
  *  key as "unauthorized" without firing a probe that can only 401. */
 export class MoonshotApiKeyMissingError extends Error {
