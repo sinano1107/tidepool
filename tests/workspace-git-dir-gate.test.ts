@@ -17,7 +17,7 @@ async function gitFileCheckout(name: string) {
   return workspace;
 }
 
-it("`.git` がファイルの checkout は pickup の準備で拒否され、理由に linked worktree / submodule を挙げる", async () => {
+it("`.git` がファイルの checkout は pickup の門で拒否され、理由に linked worktree / submodule を挙げる", async () => {
   const workspace = await gitFileCheckout("git-file-pickup");
   const db = openDb(":memory:");
   const task = registerTask(
@@ -43,7 +43,7 @@ async function subdirectoryOfRepository(name: string) {
   return { parent, workspace: { name, path: join(parent.path, "sub") } };
 }
 
-it("親 repo の部分ディレクトリは pickup の準備で拒否され、親 repo の HEAD もブランチも動かない", async () => {
+it("親 repo の部分ディレクトリは pickup の門で拒否され、親 repo の HEAD もブランチも動かない", async () => {
   const { parent, workspace } = await subdirectoryOfRepository("subdir-pickup");
   const headBefore = git(parent.path, "symbolic-ref", "HEAD");
   const branchesBefore = git(parent.path, "branch", "--list");

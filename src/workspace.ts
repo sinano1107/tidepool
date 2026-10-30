@@ -221,47 +221,49 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
 }
 
 /** pickup の門で落ちた場所。message は落ちた述語の理由そのまま —— 呼び手はこの場所の名前で止める。 */
-export class PickupGateStop extends Error {
+export class PickupGateError extends Error {
   constructor(readonly place: WorkspaceConfig, cause: unknown) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
   }
 }
 
 /** pickup の門(ADR 0329 追記 決定7・8): task が開く場所すべてを、走る場所を開く**前**に種類付きで列挙し、種類ごとの一覧を撃つ。
- *  集合は停止の門(tasks.ts の `openedPlaceNamesSql`)が数える名前と同じ —— 受験者は自分の checkout(名前は root id)、root は自分の
- *  面接室と `workspace` 列の実環境と読む面接室、root 配下の review は実環境と読む面接室、他は実環境。番地は記録があれば event の綴り、
- *  無ければ規約の番地。読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。最初に落ちた場所で `PickupGateStop` を投げる。 */
+ *  集合は停止の門(tasks.ts の `openedPlaceNamesSql`)が数える名前と同じ —— 受験者は自分の checkout(名前は root id)、root は
+ *  `workspace` 列の実環境と読む面接室と自分の面接室、root 配下の review は実環境と読む面接室、他は実環境。番地は記録があれば event の綴り、
+ *  無ければ規約の番地。読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
+ *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
+ *  最初に落ちた場所で `PickupGateError` を投げる。 */
 export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource): Promise<void> {
   const room = (rootId: string) => ({
     name: rootId,
     path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir),
-    predicates: roomPickupPredicates(db, rootId, workspacesBaseDir, registry),
+    predicates: () => roomPickupPredicates(db, rootId, workspacesBaseDir, registry),
   });
-  const real = { ...workspace, predicates: checkoutPickupPredicates(workspace, registry) };
-  const reads = readRooms(db, task).map((read) => room(read.name));
+  const real = { ...workspace, predicates: () => checkoutPickupPredicates(workspace, registry) };
+  const reads = roomsReadBy(db, task).map((read) => room(read.name));
   const rootId = interviewRootIdOf(db, task);
   const places =
     rootId === undefined
       ? [real, ...reads]
       : task.type === "interview"
-        ? [room(rootId), real, ...reads]
+        ? [real, ...reads, room(rootId)]
         : [{
             name: rootId,
             path: examineeCheckoutPath(db, task.id) ?? conventionCheckoutPath(task.id, workspacesBaseDir),
-            predicates: examineePickupPredicates(db, task, rootId, workspacesBaseDir, registry),
+            predicates: () => examineePickupPredicates(db, task, rootId, workspacesBaseDir, registry),
           }];
   for (const { predicates, ...place } of places) {
     try {
-      for (const { check } of predicates) check();
+      for (const { check } of predicates()) check();
     } catch (err) {
-      throw new PickupGateStop(place, err);
+      throw new PickupGateError(place, err);
     }
   }
 }
 
 /** task が読みだけ開く面接室(ADR 0273 決定4・9): root は開ける面接室、review の親を review の鎖で辿って Interview の root に着く
  *  review(監査、root や監査の行への異議の RCA、人間登録の review 子)は root の面接室と開ける面接室。どれも記録された在り処。 */
-function readRooms(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">): WorkspaceConfig[] {
+function roomsReadBy(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">): WorkspaceConfig[] {
   const rootId = interviewRootIdOf(db, task);
   if (rootId !== undefined) return task.type === "interview" ? readableInterviewRooms(db, rootId) : [];
   let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
@@ -274,11 +276,11 @@ function readRooms(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id
 /** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
  *  root id、ref の基準の鍵だけ受験者の id)、他は task の workspace。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
- *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`readRooms`)。開く前の対(開く場所の列挙)は
+ *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`roomsReadBy`)。開く前の対(開く場所の列挙)は
  *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
-  if (rootId === undefined) return { ...workspace, reads: readRooms(db, task).map(inRealSpelling) };
+  if (rootId === undefined) return { ...workspace, reads: roomsReadBy(db, task).map(inRealSpelling) };
   if (task.type !== "interview") {
     const place = examineeRunPlace(db, task.id, rootId);
     if (!place) throw new PlaceNotOpenError(`the checkout of ${task.id} is not open`);
@@ -286,7 +288,7 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
-  return { ...room, reads: [workspace, ...readRooms(db, task)].map(inRealSpelling) };
+  return { ...room, reads: [workspace, ...roomsReadBy(db, task)].map(inRealSpelling) };
 }
 
 /** 受験者の走る場所(ADR 0276 決定1・3): 自分の checkout、名前は面接室の root id、ref の基準の鍵だけ受験者の id。開いていなければ undefined。 */

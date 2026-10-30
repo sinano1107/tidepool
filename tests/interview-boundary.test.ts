@@ -461,6 +461,7 @@ it("根拠の root の面接室の `.git` が gitfile なら、それを読む r
   await vi.waitFor(async () => expect(await pickupStops(measured.id)).toEqual([gitFileRoomStop(first.id)]));
   expect(t.worker.started.map((s) => s.id)).not.toContain(measured.id);
   expect(await roomOpenedEvents(measured.id)).toEqual([]);
+  expect(existsSync(join(t.dir, "workspaces", measured.id))).toBe(false);
   const quarantine = await servedQuarantineQuestion(t, "workspace", first.id);
   const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
   expect((await answer()).status).toBe(409);

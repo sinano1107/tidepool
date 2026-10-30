@@ -94,7 +94,7 @@ import {
   freshenPlaceAtPickup,
   openExamineeCheckout,
   openInterviewRoom,
-  PickupGateStop,
+  PickupGateError,
   pickupGate,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
@@ -615,7 +615,7 @@ export function startScheduler(deps: {
         try {
           await pickupGate(db, resolved, picked, base, registry);
         } catch (err) {
-          if (!(err instanceof PickupGateStop)) throw err;
+          if (!(err instanceof PickupGateError)) throw err;
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
         }
         if (!live()) return;
