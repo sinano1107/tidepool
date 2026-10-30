@@ -6,6 +6,7 @@ import type { Db } from "./db.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
 import { authedGit, type GitHubAuth, repoKey } from "./github-auth.js";
+import { assertOwnGitDirectory, conventionCheckoutPath, originUrl } from "./pickup-predicates.js";
 import {
   assertValidAllowedDomains,
   assertValidReviewAllowedCommands,
@@ -26,10 +27,7 @@ import {
 import { parseGitHubRepo, RepoAccessMissingError, repairRepoAccess } from "./repo-access.js";
 import { workspaceSettingsDisposition } from "./sandbox.js";
 import {
-  assertOwnGitDirectory,
-  conventionCheckoutPath,
   entryCheckoutPath,
-  originUrl,
   refValues,
   resolvesToRegistryClone,
   UnknownWorkspaceError,

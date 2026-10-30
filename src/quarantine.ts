@@ -10,18 +10,14 @@ import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
+import { IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
-import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, latestPosedProbe, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task, unsettledExaminees } from "./tasks.js";
+import { DROP_TARGET_OPTION, getTask, interviewRootIdOf, type QuestionItem, type ResourceStops, registerTask, type TargetKey, type Task } from "./tasks.js";
 
 export const FAILED_TEARDOWN_QUESTION_TITLE = "the board's own teardown failed — pickup is stopped";
 export const POLL_FAILURE_QUESTION_TITLE = "the board's poll keeps throwing";
-/** 在り処のディレクトリが消えた記録された面接室の出口(ADR 0277 追記 決定2)。回答の拒否と quarantine の予告が同じ文で言う。 */
-export const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or create it by hand (`git init` there) to run with an empty room";
-
-export const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";
-
 interface QuarantineProse {
   title: string;
   purpose: string;
@@ -256,30 +252,19 @@ export const QUARANTINES = [
   {
     kind: "workspace",
     scope: "workspace",
-    // 開いた event の有無で分け、止めた門を推定せず全述語を予告する(ADR 0329 決定4・5)
+    // 解除の門が撃つ pickup の述語の一覧をそのまま予告し、解除だけの上乗せを名前の場所に添える(ADR 0329 決定4・5・追記 決定6)
     prose: (name: string | null, reason: string, _cause: RowRefusalCause | undefined, db: Db): QuarantineProse => {
       const room = getTask(db, name!)?.type === "interview";
       const recorded = room ? recordedPlace(db, name!, "interview_room_opened") : undefined;
-      const examinees = room ? unsettledExaminees(db, name!) : [];
-      const posed = examinees.length > 0 && latestPosedProbe(db, name!);
-      const checks = room
-        ? [recorded
-          ? `a git repository exists at the recorded room ${recorded.path} — the board does not recreate it: ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}.`
-          : "the board can create this interview room's directory under its workspaces base directory (`mkdir -p` succeeds and leaves a directory there)."]
-        : [`a workspace named "${name}" is still configured (the board can resolve it).`];
+      // 予告は説明だけを読む —— 検査は撃たないので、実環境の在り処と規約の基点は要らない
+      const { own, examinees } = namePickupPredicates(db, name!, { name: name!, path: "" }, "");
+      const checks = [...(room ? [] : [`a workspace named "${name}" is still configured (the board can resolve it).`]), ...own.map((p) => p.describe)];
       if (!room || recorded?.hasRepository !== false) checks.push(...[
-        "its `.git` is a directory — not a linked worktree or submodule.",
         "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
         "the workspace path does not overlap the board's own state paths.",
-        "if the workspace declares a GitHub repo, the board can still access it.",
-      ].map((check) => room && !recorded ? `if a repository is already present, ${check}` : check));
-      for (const examinee of examinees) {
-        const checkout = recordedPlace(db, examinee.id, "examinee_checkout_opened");
-        checks.push(checkout
-          ? `a git repository exists at the recorded examinee checkout ${examinee.id} at ${checkout.path} — the board does not recreate it: ${GONE_POSED_PLACE_EXITS}.`
-          : `the board can create the examinee checkout directory for ${examinee.id} under its workspaces base directory (\`mkdir -p\` succeeds).`);
-      }
-      if (posed) checks.push(`the posed head ${posed.head} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`);
+        "the board can still access the GitHub repo the workspace declares, when it declares one.",
+      ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
+      checks.push(...examinees.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,
         purpose:

@@ -1,4 +1,4 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { BOARD_ACTOR_ID } from "./actor-id.js";
@@ -11,6 +11,16 @@ import {
   type GitHubAuth,
   originRepo,
 } from "./github-auth.js";
+import {
+  assertOwnGitDirectory,
+  checkoutPickupPredicates,
+  conventionCheckoutPath,
+  gonePlaceReason,
+  isRemoteBacked,
+  pathIsRegistryClone,
+  resolvablePosedHead,
+  safeRealpath,
+} from "./pickup-predicates.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
 import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
 import {
@@ -106,12 +116,6 @@ export function protectedBranch(workspace: WorkspaceConfig): string {
   return workspace.branch ?? MAIN_BRANCH;
 }
 
-/** ADR 0052 決定3: この workspace が remote の正本を持つと**宣言している**か。
- *  clone を覗く関数ではない —— `repo` の有無だけを読む。 */
-export function isRemoteBacked(workspace: WorkspaceConfig): boolean {
-  return workspace.repo !== undefined;
-}
-
 /** 盤面が保護ブランチを**参照として**読むときの1つの ref —— remote 正本を宣言した
  *  workspace ではリモート側の remote-tracking ref、そうでなければローカルの同名
  *  ブランチ(`registryRef(mode)` の workspace 側の対、綴りは `remoteTrackingRef` を
@@ -136,39 +140,6 @@ export class UnknownWorkspaceError extends Error {
 
 /** An Interview task's place (its room, or an examinee's own checkout) has no opened event: the board never got as far as making it. */
 export class PlaceNotOpenError extends Error {}
-
-export class GitDirNotADirectoryError extends Error {
-  constructor(path: string) {
-    super(`${join(path, ".git")} is not a directory — linked worktrees and submodules cannot be workspaces`);
-    this.name = "GitDirNotADirectoryError";
-  }
-}
-
-export class NoOwnGitDirError extends Error {
-  constructor(path: string, toplevel: string) {
-    super(`${path} has no .git of its own — it is a subdirectory of the repository at ${toplevel} and cannot be a workspace`);
-    this.name = "NoOwnGitDirError";
-  }
-}
-
-/** ADR 0146: workspace の checkout は `.git` をディレクトリに持つ。`.git` が存在して
- *  ディレクトリでない checkout(linked worktree・submodule)は stat の形だけで拒む。
- *  `.git` が無いパスは、git が外側の repo の作業ツリーとして解決するとき(部分ディレクトリ、
- *  ADR 0146 追記 / issue #1964)だけ拒む —— 放せば git 操作が親 repo 全体に効く。
- *  どの repo にも属さないパスは何もせず、今日どおり各門の git 側の失敗で落ちる。作業ツリーを
- *  持たない bare repo も素通りし、今日の扱いのまま。pickup・修理確認・登録の3つの門がこの1つを共有する。 */
-export function assertOwnGitDirectory(path: string): void {
-  const stat = statSync(join(path, ".git"), { throwIfNoEntry: false });
-  if (stat && !stat.isDirectory()) throw new GitDirNotADirectoryError(path);
-  if (stat) return;
-  let toplevel: string;
-  try {
-    toplevel = git(path, "rev-parse", "--show-toplevel");
-  } catch {
-    return;
-  }
-  throw new NoOwnGitDirError(path, toplevel);
-}
 
 /** ADR 0009: `task.workspace` is a reference to a registry name, resolved
  *  fresh against the registry every time it's used, never pinned to a path.
@@ -225,12 +196,6 @@ export function openExamineeCheckout(db: Db, examinee: Task, workspacesBaseDir: 
     git(path, "fetch", "--quiet", "--no-write-fetch-head", room.path, head);
     git(path, "checkout", "--quiet", "-B", MAIN_BRANCH, head);
   });
-}
-
-/** 開く手順と読む門が同じ理由で記録の欠落を止める。 */
-export function gonePlaceReason(taskId: string, path: string, kind: RecordedPlaceKind): string {
-  const place = kind === "interview_room_opened" ? "interview room" : "examinee checkout";
-  return `the ${place} ${taskId} recorded at ${path} has no git repository — the ${place}'s repository is gone`;
 }
 
 function openRecordedPlace(db: Db, taskId: string, kind: RecordedPlaceKind, workspacesBaseDir: string, now: Date, build: (path: string) => void): string {
@@ -296,7 +261,7 @@ const inRealSpelling = (place: WorkspaceConfig): WorkspaceConfig => ({ ...place,
  *  convention-derived location under the base dir. Every consumer that has to
  *  know where a workspace's checkout lives goes through this, so the rule never
  *  gets a second spelling (the board-state overlap gate judges a *prospective*
- *  entry with `conventionCheckoutPath` below, which is the same rule with no
+ *  entry with `conventionCheckoutPath` in pickup-predicates.ts, which is the same rule with no
  *  entry to consult yet). */
 export function entryCheckoutPath(
   entry: WorkspaceEntry,
@@ -304,10 +269,6 @@ export function entryCheckoutPath(
   workspacesBaseDir: string,
 ): string {
   return entry.path ?? conventionCheckoutPath(name, workspacesBaseDir);
-}
-
-export function conventionCheckoutPath(name: string, workspacesBaseDir: string): string {
-  return join(workspacesBaseDir, name);
 }
 
 /** Every registered workspace resolved to its checkout (ADR 0040's boot sweep).
@@ -484,29 +445,6 @@ export function ensureTaskBranch(db: Db, workspace: WorkspaceConfig, task: Task)
   git(workspace.path, "checkout", branch);
 }
 
-/** 引けない head から黙って今の head へ逃げない —— 投げて受験者の checkout を開く失敗(面接室の quarantine)に落とす。 */
-export function resolvablePosedHead(db: Db, workspace: WorkspaceConfig, task: Task): string {
-  // 出題の event は受験者 → 対象 → root から引く(ADR 0267 決定5)。出題し直した root は最後の出題(ADR 0273 決定3)
-  const head = db
-    .prepare(
-      `SELECT json_extract(e.payload, '$.head') FROM events e JOIN interview_targets it ON it.task_id = e.task_id
-       WHERE it.id = ? AND e.kind = 'decision_logged' AND json_extract(e.payload, '$.interview_probe') IS NOT NULL
-       ORDER BY e.id DESC LIMIT 1`,
-    )
-    .pluck()
-    .get(task.interview_target_id) as string;
-  try {
-    return git(workspace.path, "rev-parse", "--verify", "--quiet", `${head}^{commit}`);
-  } catch (err) {
-    // 「引けない」は exit 1 だけ —— 他の失敗はそのまま投げる(ADR 0242 決定3、taskBranchExists と同じ)
-    if ((err as { status?: number } | null)?.status !== 1) throw err;
-  }
-  throw new Error(
-    `workspace ${workspace.name}: the protected branch head the probe recorded for ${task.id} (${head}) ` +
-      "cannot be resolved in this checkout, so its branch is not forked",
-  );
-}
-
 /** sparse snapshot: 盤面が settings.json を隠す前の人間の sparse-checkout(ADR 0293 決定1)。pattern ファイルの無い
  *  有効な sparse は git にとって全実体化と同じなので「無効」に畳む。 */
 type SparseSnapshot = { mode: "disabled"; pattern: string | null } | { mode: "cone" | "no-cone"; pattern: string };
@@ -666,44 +604,6 @@ function recordedPlaceOf(db: Db, key: string): WorkspaceConfig | undefined {
   return (rootId === undefined ? undefined : examineeRunPlace(db, key, rootId)) ?? recordedInterviewRoom(db, key);
 }
 
-/** この checkout が実際に持っている `origin` の URL、無ければ undefined。**実態**を
- *  訊く1つの問いで、`repo` の宣言と突き合わせる側(下の
- *  `assertRemoteDeclarationMatchesClone`)と、既存 checkout の登録時に宣言を焼く側
- *  (`workspace-create.ts` の `registerExistingCheckout`)が同じ関数で訊く ——
- *  2箇所が別々に訊くと、登録が自分で作った宣言を pickup が「ずれている」と読む余地が
- *  残る(/code-review Standards 軸の指摘)。git repository でないパスも「remote 無し」
- *  として同じ undefined に落ちる。 */
-export function originUrl(checkoutPath: string): string | undefined {
-  try {
-    return git(checkoutPath, "remote", "get-url", "origin");
-  } catch {
-    return undefined;
-  }
-}
-
-/** ADR 0052 決定3 の対偶(issue #211 やること5): 宣言は clone を覗いた推測ではないので、
- *  宣言と実態がずれていたら**どこかが赤くならなければならない**。
- *
- *  ずれは両向きに害がある。宣言があって remote が無い側は fetch も fork も撃てない。
- *  宣言が無くて remote がある側のほうが危険で、黙って通れば fork 元はローカルの保護
- *  ブランチのままなので、merge 済みの成果が見えない地点からタスクが始まり続け、症状は
- *  「PR が毎回コンフリクトする」という遠い場所に出る。
- *
- *  突き合わせるのは `origin` の**有無だけ**である。URL の綴り(ssh / https / ホスト名の
- *  別名)を照合しても同じリモートを別物と読む誤検出しか増えず、`repo` は人間向けの
- *  provenance でもあるため厳密な一致を要求できない。 */
-function assertRemoteDeclarationMatchesClone(workspace: WorkspaceConfig): void {
-  const hasOrigin = originUrl(workspace.path) !== undefined;
-  if (isRemoteBacked(workspace) === hasOrigin) return;
-  throw new Error(
-    isRemoteBacked(workspace)
-      ? `workspace ${workspace.name} declares a remote source of truth (repo: ${workspace.repo}) ` +
-        "but its checkout has no 'origin' remote"
-      : `workspace ${workspace.name} declares no remote source of truth (no repo) ` +
-        "but its checkout has an 'origin' remote",
-  );
-}
-
 /** ADR 0093: workspace を fetch する前に、その checkout の `origin` 宛ての
  *  installation token を用意する。取得(ネットワーク)と注入(同期)を分けるのは
  *  ADR 0066 決定5 と同じ理由で、fetch そのものを同期に保つためである —— 宣言
@@ -770,28 +670,6 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
   fetchCommit(workspace.path, auth, sha);
 }
 
-/** issue #211 やること6: registry clone は「registry の正本」(合成 root が1回解決する
- *  `RegistryMode`)と「workspace」(`workspaces.yaml` の `repo`)の**両方**の役を持つので
- *  宣言を2つ持つ。1本化はできない —— workspace エントリを読むには先に registry を読む
- *  必要があり循環する —— ので、pickup の瞬間に突き合わせる。
- *
- *  上の `assertRemoteDeclarationMatchesClone` では捕まらない食い違いがある: 双方の
- *  宣言が clone の実態とは一致していて、互いにだけ食い違っている場合(remote を持たない
- *  clone を registry として remote-backed と宣言した、など)である。 */
-function assertRegistryRoleAgrees(
-  workspace: WorkspaceConfig,
-  registry: RegistrySource | undefined,
-): void {
-  if (!registry || !pathIsRegistryClone(workspace.path, registry.dir)) return;
-  const asRegistry = registry.mode === "remote-backed";
-  if (asRegistry === isRemoteBacked(workspace)) return;
-  throw new Error(
-    `workspace ${workspace.name} is the board's own registry clone and its two declarations ` +
-      `disagree: as the registry it declares '${registry.mode}', as a workspace it declares ` +
-      (isRemoteBacked(workspace) ? `a remote source of truth (repo: ${workspace.repo})` : "none"),
-  );
-}
-
 /** pickup の鮮度の段(issue #211 / issue #2223): 宣言どうし・宣言と実態を突き合わせ、remote 正本を宣言していれば refresh し、
  *  休止位置(ADR 0052 決定7)へ追従させる。走る場所と、読む場所(`RunPlace.reads`)のうち remote 正本を持つものに当てる:
  *  盤面が読む正本は pickup 直前の remote の保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。
@@ -800,9 +678,7 @@ function assertRegistryRoleAgrees(
  *  try/catch 1つが全部受ける)。順序は意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
  *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
 export async function freshenPlaceAtPickup(place: WorkspaceConfig, board: PickupPrep): Promise<void> {
-  assertOwnGitDirectory(place.path);
-  assertRegistryRoleAgrees(place, board.registry);
-  assertRemoteDeclarationMatchesClone(place);
+  for (const { check } of checkoutPickupPredicates(place, board.registry)) check();
   await ensureWorkspaceToken(place, board.githubAuth);
   if (board.live?.() === false) return;
   refreshWorkspace(place, board.githubAuth);
@@ -1228,14 +1104,6 @@ export function quarantineWorkspace(
   return { quarantine: "workspace", value: workspaceName, reason };
 }
 
-export function safeRealpath(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return path;
-  }
-}
-
 /** Whether a workspace entry's checkout is the board's own registry clone,
  *  compared by realpath so a symlinked temp dir or mount point can't split the
  *  two spellings of the same directory. A path-omitting entry compares by its
@@ -1248,14 +1116,6 @@ export function resolvesToRegistryClone(
   workspacesBaseDir: string,
 ): boolean {
   return pathIsRegistryClone(entryCheckoutPath(entry, name, workspacesBaseDir), registryDir);
-}
-
-/** The same comparison for a checkout path that is **already resolved** — what a
- *  `WorkspaceConfig` carries (issue #211's pickup-time crosscheck). The entry-shaped
- *  face above stands in front of it for the callers that still hold an entry and a
- *  base dir (ADR 0018's derivation). */
-export function pathIsRegistryClone(checkoutPath: string, registryDir: string): boolean {
-  return safeRealpath(checkoutPath) === safeRealpath(registryDir);
 }
 
 /** The registry clone is itself a tracked workspace (a protected entry whose

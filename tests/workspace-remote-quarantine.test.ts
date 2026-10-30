@@ -74,6 +74,21 @@ it("repo を宣言しているのに clone に remote が無い workspace は qu
   expect(await quarantineReason(t, "sandbox")).toContain("declares a remote source of truth");
 });
 
+it("remote 宣言と clone のずれが残るうちは workspace quarantine への回答が拒まれ、予告にその項が並ぶ(ADR 0329 追記 決定6)", async () => {
+  const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  git(workspace.path, "remote", "remove", "origin");
+
+  t = await bootTidepool({ workspace });
+  await registerWork(t, "declared remote is gone");
+  await t.clock.advance(HOUR);
+
+  const quarantine = await servedQuarantineQuestion(t, "workspace", "sandbox");
+  expect(quarantine.purpose).toContain("it has an `origin` remote exactly when it declares a remote source of truth");
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["repaired by hand"] });
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("declares a remote source of truth");
+});
+
 // 逆向きのずれ。こちらは黙って通ってしまうほうが危ない —— fork 元がローカルの
 // 保護ブランチのままなので、merge 済みの成果が見えない地点からタスクが始まり続け、
 // 症状は「PR が毎回コンフリクトする」という遠い場所に出る。

@@ -8,6 +8,7 @@ import { git } from "./git.js";
 import type { GitHubClient, PrStateRead } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
 import { GITHUB_APP_SLUG } from "./github-login.js";
+import { isRemoteBacked } from "./pickup-predicates.js";
 import { type QuarantineKind, quarantineAgent } from "./quarantine.js";
 import { type QuestionColumns, questionKindOf } from "./question-kind.js";
 import { type AuthorityProfile, isUnresolvableAgentError, remoteTrackingRef } from "./registry.js";
@@ -43,7 +44,6 @@ import {
   buildWorkspaceResolver,
   catchUpTaskBranch,
   fetchCommitIfMissing,
-  isRemoteBacked,
   lineageTaskBranch,
   protectedBranch,
   protectedBranchRef,

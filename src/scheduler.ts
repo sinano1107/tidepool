@@ -29,6 +29,7 @@ import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
+import { examineePickupPredicates, gonePlaceReason, isRemoteBacked, roomPickupPredicates } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -91,8 +92,6 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   freshenPlaceAtPickup,
-  gonePlaceReason,
-  isRemoteBacked,
   openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,
@@ -614,8 +613,12 @@ export function startScheduler(deps: {
         const rootId = interviewRootIdOf(db, picked);
         if (rootId !== undefined) {
           try {
-            if (picked.type === "interview") openInterviewRoom(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
-            else openExamineeCheckout(db, picked, resolveWorkspacesBaseDir(workspacesDir), clock.now());
+            // 開く前に、この場所の pickup の述語の一覧を撃つ —— 解除の門と予告が読むのと同じ一覧(ADR 0329 追記 決定6)
+            const base = resolveWorkspacesBaseDir(workspacesDir);
+            const predicates = picked.type === "interview" ? roomPickupPredicates(db, picked.id, base, registry) : examineePickupPredicates(db, picked, rootId, base, registry);
+            for (const { check } of predicates) check();
+            if (picked.type === "interview") openInterviewRoom(db, picked, base, clock.now());
+            else openExamineeCheckout(db, picked, base, clock.now());
           } catch (err) {
             return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
           }

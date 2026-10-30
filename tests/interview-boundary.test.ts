@@ -507,6 +507,38 @@ it("再開する受験者の記録済み checkout が消えたら作り直さず
   expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2);
 });
 
+it("再開する受験者の記録済み checkout の `.git` が gitfile なら root 名で止まり、解除は `.git` がディレクトリであることを予告して撃ち直し、戻した回答の後に受験者が走る(ADR 0146 / ADR 0329 追記 決定6)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [child] = await pose(root.id);
+  await completeMetaReviews(t);
+  const checkout = examineeCheckoutOf(child);
+  expect((await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] })).isError).toBeFalsy();
+  t.worker.exit(child);
+  const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  await runNow(t, filler.id);
+  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
+  renameSync(join(checkout, ".git"), join(checkout, ".git.real"));
+  writeFileSync(join(checkout, ".git"), "gitdir: /nowhere\n");
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
+  await runNow(t, child);
+
+  await vi.waitFor(async () => expect(await pickupStops(child)).toEqual([{ kind: "pickup_stopped", quarantine: "workspace", value: root.id, reason: expect.stringContaining(".git is not a directory") }]));
+  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(1);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  expect(quarantine.purpose).toContain(`for the examinee checkout of ${child}, its \`.git\` is a directory`);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  for (const text of [child, checkout, ".git is not a directory"]) expect(refused.json.error).toContain(text);
+
+  rmSync(join(checkout, ".git"));
+  renameSync(join(checkout, ".git.real"), join(checkout, ".git"));
+  expect((await answer()).status).toBe(200);
+  await runNow(t, child);
+  expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2);
+});
+
 it("retry の旧い root の面接室の在り処が消えると、新しい root の pickup は worker を起こさずに旧い面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {
   t = await boot();
   const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
