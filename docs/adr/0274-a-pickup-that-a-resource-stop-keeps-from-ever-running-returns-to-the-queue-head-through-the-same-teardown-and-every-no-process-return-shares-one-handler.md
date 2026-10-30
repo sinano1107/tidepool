@@ -2,6 +2,8 @@
 
 **Status 追記: 決定2 の kind の並びに `target_refused` を加える(issue #2580)** —— 表の行でない Interview の対象の拒否は `row_refused` から分ける。戻した後の扱いが行の Quarantine でなく対象の question だからで、表の行の拒否は `row_refused` のままである。
 
+**Status 追記: 決定1 の線は ADR 0331 で spawn の後まで延びた(2026-10-30、issue #2700)** —— process は起きたが0ターンで終わった資源の故障も、資源の停止を先に登録して先頭へ戻る。刻む kind は `pickup_stopped` の流用ではなく新しい1つ(決定3 の「process を持たなかった」の導出を守る、ADR 0331 決定9)。
+
 2026-10-18 の grilling(issue #2002)で決定。pickup のあと worker を起動する前に Quarantine を登録して返る枝が、adapter と
 scheduler に散っていた —— (Harness, workspace) の組の不成立(Codex の非同期の観測、Claude の同期の検査)、盤面の状態パスとの
 重なり、registry drift、pickup 時の workspace の準備の失敗、agent 名の未解決、Git 共有された settings の除外・復元の失敗。どれも拾った task を `in_progress` のまま slot に

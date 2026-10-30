@@ -6,6 +6,8 @@
 
 **Status 追記: 決定1 の「exit を観測した時点で」は ADR 0309 で「exit の事実と上限到達の分類が揃った時点」に** —— Codex の使用量の読み直し中は exit を記録して待ち、決めない(issue #2547)。
 
+**Status 追記: 決定5 の「drift と 401 は quarantine の確認 question とこの failure question の2枚」と、退けた案で保留した「401 を question なしで先頭へ」は ADR 0331 決定2・4 で決着(2026-10-30、issue #2700)** —— 0ターンで終わった session は資源の停止を先に登録して todo の先頭へ戻り、failure question は立たない。ターンが走った session は本 ADR のまま2枚。
+
 2026-09-22 の grilling(issue #805)で決定。worker の root process が最終 verb を着地させずに exit すると、adapter は `worker_exited` を書いて強制回収を撃つだけで、task は `in_progress` のまま slot を握り、種別の時間制限いっぱい待った末に watchdog の梯子の底で「時間制限に達し容器を回収した」という偽の failure question が立っていた。実測は issue #724(1ターンを完走して exit 0、verb は全部 cancel)。現状調査と `file:line` は issue #805 のコメントに置く。
 
 ## 決定

@@ -1,5 +1,7 @@
 # provider 省略は宣言を満たす経路の全 Provider に展開され、資格情報の不在は quarantine ではなく pickup の除外である
 
+**Status 追記: 決定4 の moonshot の「不在 = 鍵ファイル無し」は ADR 0331 決定5 で「読めて空でない鍵が無い」に改定(2026-10-30、issue #2702)** —— gate は spawn と同じ読みを使う。openai の「中身は読まない」(ADR 0098 決定5)は不変。
+
 2026-09-12 の grilling(issue #557)で決定。ADR 0110 決定1 は `provider` 省略を「盤面が資格情報を持つ全 Provider を床の構成で」と
 定めたが、#544 の実装は「盤面が知る全 Provider」に展開している —— 盤面は「資格情報を持つ」を宣言として持たず、あるのは probe と
 失敗後に効く認証 quarantine(ADR 0097 決定2)だけだったため。結果、鍵の無い moonshot が候補に入って spawn で落ち、`skills: ["*"]`

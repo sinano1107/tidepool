@@ -1,5 +1,7 @@
 # worker のツール面は既定拒否の allowlist: 残余の既定が届かない層には、向きを反転させた別の機構が要る
 
+**Status 追記: 決定3 が照合から外した MCP 軸の欠落側(「別の障害であり別の扱いを受けるべき」)の扱いは ADR 0331 決定6・7 で決まった(2026-10-30、issue #2701)** —— 同じ init 行の `mcp_servers[].status` で観測し、最初のターンの前に強制回収する。帰属先は封じ込め能力ではなく Harness ごとの Worker MCP 到達性。
+
 issue #145 のグリリング(2026-08-03)で決定。ADR 0038 の**延長**である — 「床とは残余の既定である」はハーネス内 in-process のツール**全部**を覆っているように読めるが、実測はそうではない。ファイル操作でないツールは permission の subject ですらなく、モードの残余に落ちる対象に入っていない。
 
 **この文書が塞ぐ穴**: `--permission-mode acceptEdits` + 本番フラグ一式の下で、worker は `CronCreate` を承認要求なしに実行できた。同じ面には `RemoteTrigger`(claude.ai の API に**人間のアカウント名義の OAuth token をプロセス内で自動付与**して routine を作成・実行する)、`PushNotification`(Quiet hours と Digest を素通りして人間の端末へ直接プッシュ)、`EnterWorktree`(セッションの cwd を `.claude/worktrees/` へ切り替える — branch discipline の外)が並んでいた。WORKER_PROTOCOL の「Invent no side channels」は**散文でしか**これらを塞いでいない。
