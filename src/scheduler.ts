@@ -618,6 +618,7 @@ export function startScheduler(deps: {
           if (!(err instanceof PickupGateStop)) throw err;
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
         }
+        if (!live()) return;
         // ADR 0273 決定1・8 / ADR 0276 決定1・3: interview の root は面接室、受験者は面接室から fetch した自分の checkout で走る。
         // どちらも作れなければ面接室(root id)の quarantine に落ちる
         const rootId = interviewRootIdOf(db, picked);
