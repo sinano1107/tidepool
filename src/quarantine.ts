@@ -10,7 +10,7 @@ import { CLAUDE_CLI_VERSION } from "./claude-cli-version.js";
 import type { Db } from "./db.js";
 import { appendEvent, type ListedRefusal, type ResourceStop, type RowRefusalCause } from "./events.js";
 import type { HaltKind } from "./halt-kind.js";
-import { namePickupPredicates } from "./pickup-predicates.js";
+import { IF_REPOSITORY_PRESENT, namePickupPredicates } from "./pickup-predicates.js";
 import { PROVIDER_VALUES, type Provider } from "./provider.js";
 import { recordedPlace } from "./recorded-place.js";
 import { canonicalHarness, type Harness } from "./registry.js";
@@ -262,8 +262,8 @@ export const QUARANTINES = [
       if (!room || recorded?.hasRepository !== false) checks.push(...[
         "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
         "the workspace path does not overlap the board's own state paths.",
-        "if the workspace declares a GitHub repo, the board can still access it.",
-      ].map((check) => room && !recorded ? `if a repository is already present, ${check}` : check));
+        "the board can still access the GitHub repo the workspace declares, when it declares one.",
+      ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
       checks.push(...examinees.map((p) => p.describe));
       return {
         title: `workspace ${name} needs human attention`,

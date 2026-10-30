@@ -88,6 +88,7 @@ import {
   readMetaReviewStatus,
   startFirstMetaReview,
 } from "./meta-review.js";
+import { GitDirNotADirectoryError, NoOwnGitDirError } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { type QuarantineChecks, type QuarantineResolvers, quarantineStops } from "./quarantine.js";
@@ -129,7 +130,7 @@ import { sessionInTeardown } from "./teardown.js";
 import { listLog } from "./triage.js";
 import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
-import { buildWorkspaceResolver, GitDirNotADirectoryError, NoOwnGitDirError, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
+import { buildWorkspaceResolver, UnknownWorkspaceError, type WorkspaceConfig } from "./workspace.js";
 import {
   BoardStateOverlapError,
   CheckoutHasOriginError,

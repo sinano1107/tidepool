@@ -29,7 +29,7 @@ import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
-import { examineePickupPredicates, roomPickupPredicates } from "./pickup-predicates.js";
+import { examineePickupPredicates, gonePlaceReason, isRemoteBacked, roomPickupPredicates } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -92,8 +92,6 @@ import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
   freshenPlaceAtPickup,
-  gonePlaceReason,
-  isRemoteBacked,
   openExamineeCheckout,
   openInterviewRoom,
   prepareWorkspaceAtPickup,

@@ -58,6 +58,7 @@ import type { RowRefusal } from "./events.js";
 import { executionSettingsFor } from "./execution-setting.js";
 import { GhCliClient } from "./github.js";
 import type { GitHubAuth } from "./github-auth.js";
+import { pathIsRegistryClone } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import {
   createProfile,
@@ -97,7 +98,6 @@ import { CanonicalWorkerRouter, type WorkerAdapter, type WorkerExit, type Worker
 import {
   boardRefWriter,
   listRegisteredWorkspaces,
-  pathIsRegistryClone,
   resolveExecutionWorkspace,
   type WorkspaceConfig,
   type WorkspacesBaseDirSource,

@@ -16,6 +16,9 @@ const GONE_ROOM_EXITS = "restore it there, cancel the task that opens it, or cre
 
 const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens it";
 
+/** 開いた event の無い場所で、repo が既にあるときだけ当たる項の頭。予告の解除だけの上乗せも同じ句で条件を言う。 */
+export const IF_REPOSITORY_PRESENT = "if a repository is already present, ";
+
 /** 一覧の1項: 人間向けの説明と、落ちれば今日の pickup と同じ理由で投げる検査。 */
 export type PickupPredicate = { describe: string; check: () => void };
 
@@ -24,7 +27,7 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
   return [
     { describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
     {
-      describe: `${scope}if it is the board's own registry clone, its declarations as the registry and as a workspace agree.`,
+      describe: `${scope}its declarations as the registry and as a workspace agree, when it is the board's own registry clone.`,
       check: () => assertRegistryRoleAgrees(place, registry),
     },
     {
@@ -56,7 +59,11 @@ export function examineePickupPredicates(db: Db, examinee: Task, rootId: string,
     }),
     {
       describe: `${scope}the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
-      check: () => void resolvablePosedHead(db, room, examinee),
+      check: () => {
+        // 面接室の repo が無ければ git の生のエラー(や外側の repo での解決)ではなく、面接室が消えた理由で止まる
+        if (!placeHasRepository(room.path)) throw new Error(gonePlaceReason(rootId, room.path, "interview_room_opened"));
+        resolvablePosedHead(db, room, examinee);
+      },
     },
   ];
 }
@@ -103,7 +110,7 @@ function recordedPlacePredicates(
   }
   return [
     { describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
-    ...checkoutPickupPredicates(place, registry, `${text.scope}if a repository is already present, `).map(({ describe, check }) => ({
+    ...checkoutPickupPredicates(place, registry, `${text.scope}${IF_REPOSITORY_PRESENT}`).map(({ describe, check }) => ({
       describe,
       check: () => {
         if (placeHasRepository(place.path)) check();

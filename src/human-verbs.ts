@@ -42,7 +42,7 @@ import {
 } from "./harness-containment.js";
 import { actIfGateOpen, closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
-import { namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
+import { conventionCheckoutPath, namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
@@ -108,7 +108,6 @@ import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchd
 import type { SettledMark } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
-  conventionCheckoutPath,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
   quarantineWorkspace,

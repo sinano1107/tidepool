@@ -44,6 +44,7 @@ import {
   searchMemoryEntries,
 } from "./memory.js";
 import { type MetaReviewSubject, PROMOTION_RULE, TIER_DEFINITION_RULE } from "./meta-review.js";
+import { safeRealpath } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import { quarantineAgent } from "./quarantine.js";
 import {
@@ -107,7 +108,6 @@ import {
   commitRoomCopy,
   completionTreeGateApplies,
   resolveOrQuarantine,
-  safeRealpath,
   taskRunPlace,
   treeIsDirty,
   UnknownWorkspaceError,

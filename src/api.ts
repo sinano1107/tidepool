@@ -84,6 +84,7 @@ import {
   setProviderPaceOffset,
 } from "./pace-offsets.js";
 import { isPaused, setPaused } from "./pause.js";
+import { GitDirNotADirectoryError, NoOwnGitDirError } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import { type ProfileAdmin, ProfileConfirmationRequiredError } from "./profile-create.js";
 import { PROVIDER_VALUES } from "./provider.js";
@@ -174,8 +175,6 @@ import type { PendingReclaim, StopSession } from "./watchdog.js";
 import type { WireContract } from "./wire-contract.js";
 import {
   buildWorkspaceResolver,
-  GitDirNotADirectoryError,
-  NoOwnGitDirError,
   UnknownWorkspaceError,
   type WorkspaceConfig,
 } from "./workspace.js";

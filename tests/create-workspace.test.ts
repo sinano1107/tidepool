@@ -3,10 +3,10 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
-import { NoOwnGitDirError } from "../src/workspace.js";
 import {
   BoardStateOverlapError,
   createWorkspace,

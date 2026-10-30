@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
 import { quarantineChecks } from "../src/human-verbs.js";
-import { namePickupPredicates } from "../src/pickup-predicates.js";
+import { examineePickupPredicates, gonePlaceReason, namePickupPredicates } from "../src/pickup-predicates.js";
 import {
   openQuarantineQuestion,
   parseTableRowEffortValue,
@@ -344,6 +344,30 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     });
     expect(failed).toHaveLength(1);
     await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(failed[0]!.describe);
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("受験者の出題 head の項は、面接室の repo が無ければ git の生のエラーでなく面接室が消えた理由で止まる", () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const room = interviewRoomPath(db, root.id)!;
+    const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(room, "rev-parse", "HEAD"));
+    openTestExamineeCheckout(db, examinee!);
+    rmSync(join(room, ".git"), { recursive: true });
+
+    const posedHead = examineePickupPredicates(db, examinee!, root.id, "/never-created").find((p) => p.describe.includes("posed head"))!;
+    expect(() => posedHead.check()).toThrow(gonePlaceReason(root.id, room, "interview_room_opened"));
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("解除の門は未決着の受験者の記録済み checkout に clean tree を当てず、WIP が残っていても回答を受理する(ADR 0329 追記 決定6)", async () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(interviewRoomPath(db, root.id)!, "rev-parse", "HEAD"));
+    const checkout = openTestExamineeCheckout(db, examinee!);
+    writeFileSync(join(checkout, "wip.txt"), "uncommitted answer\n");
+
+    await expect(quarantineChecks({ db }).workspace!(root.id)).resolves.toBeUndefined();
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
 });

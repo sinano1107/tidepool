@@ -85,20 +85,6 @@ export interface WorkspaceConfig {
  *  (ADR 0276 決定3). */
 export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_key?: string };
 
-// pickup の述語は quarantine の予告も読むので pickup-predicates.ts に住む(ADR 0329 追記 決定6)。呼び手の import はここのまま
-export {
-  assertOwnGitDirectory,
-  conventionCheckoutPath,
-  GitDirNotADirectoryError,
-  gonePlaceReason,
-  isRemoteBacked,
-  NoOwnGitDirError,
-  originUrl,
-  pathIsRegistryClone,
-  resolvablePosedHead,
-  safeRealpath,
-} from "./pickup-predicates.js";
-
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
 
