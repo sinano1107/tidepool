@@ -47,14 +47,15 @@ export function roomPickupPredicates(db: Db, rootId: string, workspacesBaseDir: 
 /** 受験者の checkout の述語(ADR 0329 決定4): 面接室と同じ2分岐と、出題の head が面接室で引けること。 */
 export function examineePickupPredicates(db: Db, examinee: Task, rootId: string, workspacesBaseDir: string, registry?: RegistrySource): PickupPredicate[] {
   const room = { name: rootId, path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir) };
+  const scope = `for the examinee checkout of ${examinee.id}, `;
   return [
     ...recordedPlacePredicates(db, examinee.id, "examinee_checkout_opened", rootId, workspacesBaseDir, registry, {
       recorded: (path) => `a git repository exists at the recorded examinee checkout ${examinee.id} at ${path} — the board does not recreate it: ${GONE_POSED_PLACE_EXITS}.`,
       create: `the board can create the examinee checkout directory for ${examinee.id} under its workspaces base directory (\`mkdir -p\` succeeds).`,
-      scope: `for the examinee checkout of ${examinee.id}, `,
+      scope,
     }),
     {
-      describe: `the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
+      describe: `${scope}the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
       check: () => void resolvablePosedHead(db, room, examinee),
     },
   ];
