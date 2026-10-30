@@ -571,14 +571,19 @@ export class MoonshotApiKeyMissingError extends Error {
   }
 }
 
-/** moonshot の資格情報の不在(ADR 0116 決定4): 鍵ファイルが置かれていなければ path を
- *  名指す理由を返す。存否だけを読み、中身は見ない —— 空や不正な鍵は失効(401)の領分。 */
+/** moonshot の資格情報の不在(ADR 0116 決定4 / ADR 0331 決定5): spawn と同じ読みで
+ *  読めて空でない鍵が無ければ path を名指す理由だけを返し、鍵の内容は返さない。 */
 export function moonshotKeyAbsence(keyFile: string | undefined): string | undefined {
   const path = resolveMoonshotApiKeyFile(keyFile);
-  return existsSync(path) ? undefined : `no Moonshot API key file at ${path}`;
+  try {
+    readMoonshotApiKey(path);
+    return undefined;
+  } catch {
+    return `no readable, non-empty Moonshot API key at ${path}`;
+  }
 }
 
-/** Read the Moonshot key at spawn time — never cached on the worker, so a
+/** Read the Moonshot key for the pickup gate and spawn — never cached, so a
  *  key rotation takes effect on the next pickup without a board restart.
  *  Unreadable and empty are the same "no credential here" to a spawn. */
 function readMoonshotApiKey(keyFile: string): string {

@@ -801,7 +801,7 @@ export function startScheduler(deps: {
     const now = clock.now();
     // 不在は question を立てず、observed 以外の除外にそのまま畳まれる(ADR 0116 決定4)。
     // openai では probe より手前 —— 未ログインの盤面で App Server を起動しない。
-    // moonshot は存否のほかに観測するものが無い。どちらも保存する —— queue の skipped
+    // moonshot は読めて空でない鍵の有無のほかに観測するものが無い。どちらも保存する —— queue の skipped
     // 表示は保存された観測を読むので、鍵が置かれたら absent を上書きしなければならない
     const absence = credentialAbsence?.[provider]?.();
     if (absence !== undefined || provider === "moonshot") {
