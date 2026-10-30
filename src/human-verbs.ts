@@ -1,4 +1,3 @@
-import { mkdirSync } from "node:fs";
 import { z } from "zod";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "./actor-id.js";
 import { verifyAgentRepaired } from "./agent.js";
@@ -43,11 +42,10 @@ import {
 } from "./harness-containment.js";
 import { actIfGateOpen, closedRootOf, contentLeftBehind, contentLeftBehindLocally, type Landing, type LandingVerdict, landingBlock, observePrHead, openPrPromotionQuestionIds, outsidePushDropNotice, recordPrPromotionAbandoned, settledByObservation, taskBranchHeadOrNull, UNREPORTED_CI_GRACE_ORIGIN_TEXT, UNREPORTED_CI_GRACE_TEXT, unreportedCiGraceElapsed } from "./landing.js";
 import { approveMemoryProposal, humanEntryInput, listMemoryEntries, type MemoryAmendment, movedTail, parseMemoryAmendment, rejectMemoryProposal } from "./memory.js";
+import { namePickupPredicates, type PickupPredicate } from "./pickup-predicates.js";
 import { whyNotPositiveInteger } from "./positive-integer.js";
 import type { Provider } from "./provider.js";
 import {
-  GONE_POSED_PLACE_EXITS,
-  GONE_ROOM_EXITS,
   openQuarantineQuestion,
   parseTableRowEffortValue,
   parseTableRowValue,
@@ -59,8 +57,8 @@ import {
   tableRowEffortTrigger,
 } from "./quarantine.js";
 import { questionKindOf } from "./question-kind.js";
-import { placeHasRepository, recordedPlace } from "./recorded-place.js";
-import type { Harness, RegistryReachabilityCheck } from "./registry.js";
+import { placeHasRepository } from "./recorded-place.js";
+import type { Harness, RegistryReachabilityCheck, RegistrySource } from "./registry.js";
 import { RegistryFetchFailedError, RegistryPushFailedError } from "./registry-write.js";
 import { parseGitHubRepo, repairRepoAccess } from "./repo-access.js";
 import { normalizeText, whyBlank } from "./required-text.js";
@@ -86,8 +84,8 @@ import {
   type HandoffDoc,
   humanDecomposeTask,
   type InterviewProposal,
+  interviewRoomPath,
   latestChild,
-  latestPosedProbe,
   logDecision,
   MERGE_QUESTION_OPTIONS,
   PR_PROMOTION_FAILURE_OPTIONS,
@@ -101,7 +99,6 @@ import {
   settleQuestionAsObserved,
   type Task,
   taskIdForPr,
-  unsettledExaminees,
 } from "./tasks.js";
 import type { FailedTeardownCheck } from "./teardown.js";
 import { liveTierRows, proposalTierNames, type Tier, tierNameOf, tierNames } from "./tier.js";
@@ -116,7 +113,6 @@ import {
   OutOfBandProtectedBranchError,
   quarantineWorkspace,
   redoMergeBacks,
-  resolvablePosedHead,
   resolveWorkspacesBaseDir,
   taskBranch,
   UnknownWorkspaceError,
@@ -582,6 +578,8 @@ export interface QuarantineCheckDeps {
   recordDir?: string;
   /** 面接室の在り処を導く規約の基点(ADR 0018)。Absent → `resolveWorkspacesBaseDir` 自身の既定(scheduler と同じ)。 */
   workspacesDir?: string;
+  /** registry clone の2つの宣言の照合(pickup の述語)が読む盤面の registry。Absent → registry の無い盤面で、照合する相手が無い。 */
+  registry?: RegistrySource;
 }
 
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
@@ -617,16 +615,21 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
+      // 名前に掛かる場所すべてに pickup と同じ述語の一覧を撃ち直し、落ちた項を名指す(ADR 0329 決定4・追記 決定6)
+      const fire = (predicates: PickupPredicate[]) => {
+        for (const { describe, check } of predicates) {
+          try {
+            check();
+          } catch (err) {
+            throw new DomainError(`${err instanceof Error ? err.message : String(err)}\n\nThe check that failed: ${describe}`);
+          }
+        }
+      };
+      const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+      fire(own);
       const room = getTask(deps.db, value!)?.type === "interview";
-      const examinees = room ? unsettledExaminees(deps.db, value!) : [];
-      const posed = examinees.length > 0 && latestPosedProbe(deps.db, value!);
-      const recorded = room ? recordedPlace(deps.db, value!, "interview_room_opened") : undefined;
-      if (recorded) {
-        target.path = recorded.path;
-        if (!recorded.hasRepository) throw new DomainError(`the recorded interview room ${value} at ${recorded.path} has no git repository and the board does not recreate it — ${posed ? GONE_POSED_PLACE_EXITS : GONE_ROOM_EXITS}`);
-      } else if (room) {
-        await refuseOnError(() => void mkdirSync(target.path, { recursive: true }));
-      }
+      if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
+      // 解除だけの上乗せは名前の場所(実環境か面接室)にだけ当て、受験者の checkout には当てない(WIP を残す)
       if (!room || placeHasRepository(target.path)) {
         await refuseOnError(() => verifyWorkspaceClean(target));
         if (deps.boardState) {
@@ -645,15 +648,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
         }
         await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
       }
-      for (const examinee of examinees) {
-        const checkout = recordedPlace(deps.db, examinee.id, "examinee_checkout_opened");
-        if (checkout) {
-          if (!checkout.hasRepository) throw new DomainError(`the recorded examinee checkout ${examinee.id} at ${checkout.path} has no git repository and the board does not recreate it — ${GONE_POSED_PLACE_EXITS}`);
-        } else {
-          await refuseOnError(() => void mkdirSync(conventionCheckoutPath(examinee.id, resolveWorkspacesBaseDir(deps.workspacesDir)), { recursive: true }));
-        }
-      }
-      if (posed) await refuseOnError(() => { resolvablePosedHead(deps.db, target, examinees[0]!); });
+      fire(examinees);
     },
     agent: async (value) => {
       const quarantineAgentName = value!;

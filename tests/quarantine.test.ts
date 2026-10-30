@@ -1,8 +1,10 @@
-import { rmSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { quarantineChecks } from "../src/human-verbs.js";
+import { namePickupPredicates } from "../src/pickup-predicates.js";
 import {
   openQuarantineQuestion,
   parseTableRowEffortValue,
@@ -315,6 +317,33 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(settled).not.toContain(examinee!.id);
     expect(settled).not.toContain("resolves in the interview room");
     expect(settled).toContain("git init");
+  }, GIT_FIXTURE_TEST_TIMEOUT);
+
+  it("予告の項と解除の門の検査は名前の pickup の述語の一覧から導かれ、落ちた項が拒否の理由に入る(ADR 0329 追記 決定6)", async () => {
+    const db = openDb(":memory:");
+    const root = interviewRoot(db);
+    openTestInterviewRoom(db, root);
+    const room = interviewRoomPath(db, root.id)!;
+    const [examinee] = poseAccepted(db, root, { title: "probe", probe: "solve it", completion_criteria: "solved", rubric: "correct" }, "auditor", NOW, "worker", git(room, "rev-parse", "HEAD"));
+    const checkout = openTestExamineeCheckout(db, examinee!);
+    rmSync(join(checkout, ".git"), { recursive: true });
+    writeFileSync(join(checkout, ".git"), "gitdir: /nowhere\n");
+
+    const { own, examinees } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
+    const predicates = [...own, ...examinees];
+    const describes = predicates.map((predicate) => predicate.describe);
+    const items = purposeFor(db, root.id).split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));
+    expect(items.filter((item) => describes.includes(item))).toEqual(describes);
+    const failed = predicates.filter(({ check }) => {
+      try {
+        check();
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    expect(failed).toHaveLength(1);
+    await expect(quarantineChecks({ db }).workspace!(root.id)).rejects.toThrow(failed[0]!.describe);
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
 });
