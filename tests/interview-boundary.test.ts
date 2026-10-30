@@ -433,6 +433,44 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
   expect(JSON.parse(readFileSync(settingsPath, "utf8")).sandbox.filesystem.allowRead).toContain(room);
   expect(JSON.parse((await callAsTask(t, measured.id, "read_evidence_history", { task_id: first.id })).content[0].text).interview_room).toBe(room);});
 
+/** 面接室の `.git` を gitfile に差し替える(linked worktree・submodule の形、ADR 0146)。戻す関数を返す。 */
+function gitFileRoom(room: string): () => void {
+  renameSync(join(room, ".git"), join(room, ".git.real"));
+  writeFileSync(join(room, ".git"), "gitdir: /nowhere\n");
+  return () => {
+    rmSync(join(room, ".git"));
+    renameSync(join(room, ".git.real"), join(room, ".git"));
+  };
+}
+const gitFileRoomStop = (roomRootId: string) => ({ kind: "pickup_stopped", quarantine: "workspace", value: roomRootId, reason: expect.stringContaining(".git is not a directory") });
+const roomOpenedEvents = async (rootId: string) =>
+  (await api(t.baseUrl, "GET", `/api/tasks/${rootId}/events`)).json.filter((e: any) => e.kind === "interview_room_opened");
+
+it("根拠の root の面接室の `.git` が gitfile なら、それを読む root の pickup は自分の面接室を作らずにその面接室の root id で止まり、解除は拒まれ、`.git` をディレクトリに戻した回答の後は root が走る(ADR 0329 追記 決定7・8)", async () => {
+  t = await boot();
+  const first = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const score = await scoring(first.id);
+  expect((await callAsTask(t, score.id, "complete_interview", score.args)).isError).toBeFalsy();
+  t.worker.exit(first.id);
+  await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD });
+  const measured = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, evidence_task_ids: [first.id], interview_targets: [opus46] })).json;
+  await api(t.baseUrl, "POST", `/api/tasks/${measured.id}/move`, { after: null });
+  const restore = gitFileRoom(roomOf(first.id));
+  await runNow(t, measured.id);
+
+  await vi.waitFor(async () => expect(await pickupStops(measured.id)).toEqual([gitFileRoomStop(first.id)]));
+  expect(t.worker.started.map((s) => s.id)).not.toContain(measured.id);
+  expect(await roomOpenedEvents(measured.id)).toEqual([]);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", first.id);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
+  expect((await answer()).status).toBe(409);
+
+  restore();
+  expect((await answer()).status).toBe(200);
+  await runNow(t, measured.id);
+  expect(t.worker.started.map((s) => s.id)).toContain(measured.id);
+});
+
 it("root の面接室の在り処が root の session の後に消えると、root 配下の監査の pickup は worker を起こさずに面接室の quarantine に落ちて todo の先頭へ戻る(ADR 0277 追記 決定1)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -446,6 +484,42 @@ it("root の面接室の在り処が root の session の後に消えると、ro
   await completeMetaReviews(t);
 
   await expectStoppedOnGoneRoom(audit_id, root.id, room);
+});
+
+it("root の面接室の `.git` が gitfile なら、root 配下の監査の pickup は root id で止まり、解除は拒まれ、`.git` をディレクトリに戻した回答の後は監査が走る(ADR 0329 追記 決定7・8)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await routingMaterialViaWebui(t);
+  await startFirstMetaReviewViaWebui(t, "routing");
+  const { audit_id } = JSON.parse((await callAsTask(t, root.id, "pose_probe", POSE)).content[0].text);
+  t.worker.exit(root.id);
+  const restore = gitFileRoom(roomOf(root.id));
+  await completeMetaReviews(t);
+
+  await vi.waitFor(async () => expect(await pickupStops(audit_id)).toEqual([gitFileRoomStop(root.id)]));
+  expect(t.worker.started.map((s) => s.id)).not.toContain(audit_id);
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored by hand"] });
+  expect((await answer()).status).toBe(409);
+
+  restore();
+  expect((await answer()).status).toBe(200);
+  await runNow(t, audit_id);
+  expect(t.worker.started.map((s) => s.id)).toContain(audit_id);
+});
+
+it("purely-local の実環境に `origin` が残ると、それを読む root の pickup は実環境の名前で remote 宣言と clone のずれの理由で止まる(ADR 0329 追記 決定9)", async () => {
+  t = await boot();
+  git(workspacePath, "remote", "add", "origin", "https://github.com/acme/reef.git");
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+
+  await vi.waitFor(async () =>
+    expect(await pickupStops(root.id)).toEqual([
+      { kind: "pickup_stopped", quarantine: "workspace", value: "reef", reason: expect.stringContaining("declares no remote source of truth (no repo) but its checkout has an 'origin' remote") },
+    ]),
+  );
+  expect(t.worker.started.map((s) => s.id)).not.toContain(root.id);
 });
 
 it("監査後に復帰する root は記録済みの面接室の repo が無ければ作り直さず、worker の前で root 名の quarantine に止まる(ADR 0329 決定3)", async () => {

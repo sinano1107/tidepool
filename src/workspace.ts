@@ -15,10 +15,12 @@ import {
   assertOwnGitDirectory,
   checkoutPickupPredicates,
   conventionCheckoutPath,
+  examineePickupPredicates,
   gonePlaceReason,
   isRemoteBacked,
   pathIsRegistryClone,
   resolvablePosedHead,
+  roomPickupPredicates,
   safeRealpath,
 } from "./pickup-predicates.js";
 import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
@@ -218,26 +220,65 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
   return path === undefined ? undefined : { name: rootId, path };
 }
 
-/** 読む場所のうち、在り処に repo の無い記録された面接室(ADR 0277 追記 決定1)。名前が開いた event を持つ root の id なら面接室で、
- *  述語は起動時の sparse snapshot の掃除と同じ `.git` の有無。盤面は面接室を消さないので、外で消されたものである。 */
-export function readOnlyRoomWithoutRepo(db: Db, reads: readonly WorkspaceConfig[]): WorkspaceConfig | undefined {
-  return reads.find((read) => recordedPlace(db, read.name, "interview_room_opened")?.hasRepository === false);
+/** pickup の門で落ちた場所。message は落ちた述語の理由そのまま —— 呼び手はこの場所の名前で止める。 */
+export class PickupGateStop extends Error {
+  constructor(readonly place: WorkspaceConfig, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  }
+}
+
+/** pickup の門(ADR 0329 追記 決定7・8): task が開く場所すべてを、走る場所を開く**前**に種類付きで列挙し、種類ごとの一覧を撃つ。
+ *  集合は停止の門(tasks.ts の `openedPlaceNamesSql`)が数える名前と同じ —— 受験者は自分の checkout(名前は root id)、root は自分の
+ *  面接室と `workspace` 列の実環境と読む面接室、root 配下の review は実環境と読む面接室、他は実環境。番地は記録があれば event の綴り、
+ *  無ければ規約の番地。読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。最初に落ちた場所で `PickupGateStop` を投げる。 */
+export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource): Promise<void> {
+  const room = (rootId: string) => ({
+    name: rootId,
+    path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir),
+    predicates: roomPickupPredicates(db, rootId, workspacesBaseDir, registry),
+  });
+  const real = { ...workspace, predicates: checkoutPickupPredicates(workspace, registry) };
+  const reads = readRooms(db, task).map((read) => room(read.name));
+  const rootId = interviewRootIdOf(db, task);
+  const places =
+    rootId === undefined
+      ? [real, ...reads]
+      : task.type === "interview"
+        ? [room(rootId), real, ...reads]
+        : [{
+            name: rootId,
+            path: examineeCheckoutPath(db, task.id) ?? conventionCheckoutPath(task.id, workspacesBaseDir),
+            predicates: examineePickupPredicates(db, task, rootId, workspacesBaseDir, registry),
+          }];
+  for (const { predicates, ...place } of places) {
+    try {
+      for (const { check } of predicates) check();
+    } catch (err) {
+      throw new PickupGateStop(place, err);
+    }
+  }
+}
+
+/** task が読みだけ開く面接室(ADR 0273 決定4・9): root は開ける面接室、review の親を review の鎖で辿って Interview の root に着く
+ *  review(監査、root や監査の行への異議の RCA、人間登録の review 子)は root の面接室と開ける面接室。どれも記録された在り処。 */
+function readRooms(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">): WorkspaceConfig[] {
+  const rootId = interviewRootIdOf(db, task);
+  if (rootId !== undefined) return task.type === "interview" ? readableInterviewRooms(db, rootId) : [];
+  let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
+  while (parent?.type === "review" && parent.parent_id !== null) parent = getTask(db, parent.parent_id);
+  if (parent?.type !== "interview") return [];
+  const room = recordedInterviewRoom(db, parent.id);
+  return [...(room ? [room] : []), ...readableInterviewRooms(db, parent.id)];
 }
 
 /** task が走る場所(ADR 0273 決定1・8 / ADR 0276 決定1・3): interview の root は面接室、受験者は自分の checkout(名前は面接室の
  *  root id、ref の基準の鍵だけ受験者の id)、他は task の workspace。許可ドメインと層は呼び手が
  *  実環境の `workspace` から読み、root は実環境と開ける面接室を読みだけ開く。付帯子の review は親の読みの面を継ぐ(ADR 0273 決定4)
- *  —— review の親をたどって Interview の root に着く review(監査、root や監査の行への異議の RCA、人間登録の review 子)は、実環境で
- *  走り root の面接室と開ける面接室を読みだけ開く。門の側の対(開く場所の名前)は tasks.ts の `openedPlaceNamesSql`。 */
+ *  —— root 配下の review は実環境で走り root の面接室と開ける面接室を読みだけ開く(`readRooms`)。開く前の対(開く場所の列挙)は
+ *  `pickupGate`、それが通った後に走る場所が開くので、ここは開いた後しか返せない。 */
 export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview_target_id" | "parent_id">, workspace: WorkspaceConfig): RunPlace {
   const rootId = interviewRootIdOf(db, task);
-  if (rootId === undefined) {
-    let parent = task.type === "review" && task.parent_id !== null ? getTask(db, task.parent_id) : undefined;
-    while (parent?.type === "review" && parent.parent_id !== null) parent = getTask(db, parent.parent_id);
-    if (parent?.type !== "interview") return { ...workspace, reads: [] };
-    const room = recordedInterviewRoom(db, parent.id);
-    return { ...workspace, reads: [...(room ? [room] : []), ...readableInterviewRooms(db, parent.id)].map(inRealSpelling) };
-  }
+  if (rootId === undefined) return { ...workspace, reads: readRooms(db, task).map(inRealSpelling) };
   if (task.type !== "interview") {
     const place = examineeRunPlace(db, task.id, rootId);
     if (!place) throw new PlaceNotOpenError(`the checkout of ${task.id} is not open`);
@@ -245,7 +286,7 @@ export function taskRunPlace(db: Db, task: Pick<Task, "id" | "type" | "interview
   }
   const room = recordedInterviewRoom(db, rootId);
   if (!room) throw new PlaceNotOpenError(`the interview room of ${rootId} is not open`);
-  return { ...room, reads: [workspace, ...readableInterviewRooms(db, rootId)].map(inRealSpelling) };
+  return { ...room, reads: [workspace, ...readRooms(db, task)].map(inRealSpelling) };
 }
 
 /** 受験者の走る場所(ADR 0276 決定1・3): 自分の checkout、名前は面接室の root id、ref の基準の鍵だけ受験者の id。開いていなければ undefined。 */
@@ -670,15 +711,11 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
   fetchCommit(workspace.path, auth, sha);
 }
 
-/** pickup の鮮度の段(issue #211 / issue #2223): 宣言どうし・宣言と実態を突き合わせ、remote 正本を宣言していれば refresh し、
- *  休止位置(ADR 0052 決定7)へ追従させる。走る場所と、読む場所(`RunPlace.reads`)のうち remote 正本を持つものに当てる:
- *  盤面が読む正本は pickup 直前の remote の保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。
- *
- *  1つの関数にまとめてあるのは、どれが失敗しても行き先が同じ —— その場所の quarantine —— だからである(scheduler 側の
- *  try/catch 1つが全部受ける)。順序は意味を持つ: 宣言のずれを先に見るので、remote を持たない clone に対する fetch の
- *  生のエラーではなく「宣言がずれている」という読める理由が人間に届く。 */
+/** pickup の鮮度の段(issue #211 / issue #2223): remote 正本を宣言していれば refresh し、休止位置(ADR 0052 決定7)へ追従させる。
+ *  走る場所と、読む場所(`RunPlace.reads`)のうち remote 正本を持つものに当てる: 盤面が読む正本は pickup 直前の remote の
+ *  保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。宣言どうし・宣言と実態の突き合わせは手前の `pickupGate` が
+ *  撃つ(ADR 0329 追記 決定7・9)—— remote を持たない clone に対する fetch の生のエラーより先に「宣言がずれている」が人間に届く。 */
 export async function freshenPlaceAtPickup(place: WorkspaceConfig, board: PickupPrep): Promise<void> {
-  for (const { check } of checkoutPickupPredicates(place, board.registry)) check();
   await ensureWorkspaceToken(place, board.githubAuth);
   if (board.live?.() === false) return;
   refreshWorkspace(place, board.githubAuth);
@@ -687,7 +724,7 @@ export async function freshenPlaceAtPickup(place: WorkspaceConfig, board: Pickup
 
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
  *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
-type PickupPrep = { githubAuth?: GitHubAuth; registry?: RegistrySource; live?: () => boolean };
+type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
 
 /** 走る場所の pickup の準備: 鮮度の段の上にブランチ規律と ref の基準を積む。読む場所には当てない —— タスクブランチも基準も
  *  走る場所だけのもの(実環境に root のブランチを立てない、ADR 0273 決定2)。 */
