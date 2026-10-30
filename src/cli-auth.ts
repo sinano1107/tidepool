@@ -4,7 +4,7 @@ import type { Db } from "./db.js";
 import type { ResourceStop, RowRefusal, RowRefusalCause } from "./events.js";
 import { loadExecutionSettingTable } from "./execution-setting.js";
 import type { Provider } from "./provider.js";
-import { registerQuarantine, tableRowValue } from "./quarantine.js";
+import { registerQuarantine, registerResourceStop, tableRowValue } from "./quarantine.js";
 import { registerTask } from "./tasks.js";
 
 export const CLI_AUTH_EXPIRY_WARNING_TITLE = "Claude authentication token expires soon";
@@ -167,8 +167,7 @@ export function quarantineCliAuthForProvider(
   now: Date,
   reason = `A worker session or Board call returned an authentication failure while speaking the ${provider} provider`,
 ): ResourceStop {
-  registerQuarantine(db, "providerAuth", provider, reason, now);
-  return { quarantine: "providerAuth", value: provider, reason };
+  return registerResourceStop(db, "providerAuth", provider, reason, now);
 }
 
 export function warnCliAuthExpiry(db: Db, expiresAt: Date | undefined, now: Date): void {

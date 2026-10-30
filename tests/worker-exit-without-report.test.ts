@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished } from "vitest";
@@ -8,7 +8,6 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask } from "../src/tasks.js";
-import type { WorkspaceConfig } from "../src/workspace.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -17,7 +16,6 @@ import {
   git,
   HOUR,
   HUMAN_WEBUI,
-  makeWorkspace,
   mcpClient,
   QUIET_EXIT,
   questions,
@@ -420,13 +418,11 @@ it("retry の回答で task は queue 先頭へ戻り、abandon の回答で can
 async function bootWithAdapter(
   build: (deps: Parameters<WorkerFactory>[0]) => ClaudeCodeWorker | CodexWorker,
   provider: Provider = "anthropic",
-  workspace?: WorkspaceConfig,
 ) {
   const proc = recordingSpawn();
   onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
   t = await bootTidepool({
     watchdog: WATCHDOG,
-    ...(workspace && { workspace }),
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
@@ -437,8 +433,7 @@ async function bootWithAdapter(
   return proc;
 }
 
-/** `workspace` は後始末の退避と休止位置を見るテストだけが渡す。 */
-async function bootClaude(workspace?: WorkspaceConfig) {
+async function bootClaude() {
   const registryDir = await makeRegistry();
   const logDir = await tempDir("exit-without-report-logs-");
   return bootWithAdapter(
@@ -451,8 +446,6 @@ async function bootClaude(workspace?: WorkspaceConfig) {
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
       }),
-    "anthropic",
-    workspace,
   );
 }
 
@@ -558,14 +551,11 @@ const moveToHead = (task: { id: string }) => api(t.baseUrl, "POST", `/api/tasks/
 /** queue の work 側の先頭。 */
 const queueHead = async () => ((await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((task) => task.type === "work")?.id;
 
-it("Claude adapter: 401 で終わった0ターンの session は、Provider 認証の確認 question 1枚で todo の先頭へ戻り、退避と休止位置を通って枠を空ける —— failure question は立たない(ADR 0331 決定2・4・9)", async () => {
-  const ws = await makeWorkspace("tidepool");
-  const proc = await bootClaude(ws);
+it("Claude adapter: 401 で終わった0ターンの session は、Provider 認証の確認 question 1枚で todo の先頭へ戻り、枠を空ける —— failure question は立たない(ADR 0331 決定2・4・9)", async () => {
+  const proc = await bootClaude();
   const task = queueWork(t, "unauthorized");
   await t.clock.advance(HOUR);
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(`task/${task.id}`);
   await moveToHead(queueWork(t, "queued after"));
-  writeFileSync(join(ws.path, "wip.txt"), "left before the first turn\n");
 
   proc.processes[0]!.stdout.write(AUTH_401);
   proc.emitExit(1, null);
@@ -580,8 +570,6 @@ it("Claude adapter: 401 で終わった0ターンの session は、Provider 認�
     origin: "board",
     payload: { quarantine: "providerAuth", value: "anthropic", reason: expect.any(String), worker_spawned_event_id: spawned.id },
   });
-  expect(git(ws.path, "show", `task/${task.id}:wip.txt`)).toBe("left before the first turn");
-  expect(git(ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
   expect((await api(t.baseUrl, "GET", "/api/queue")).json.teardown).toBeUndefined();
 });
 

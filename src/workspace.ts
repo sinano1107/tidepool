@@ -23,7 +23,7 @@ import {
   roomPickupPredicates,
   safeRealpath,
 } from "./pickup-predicates.js";
-import { openQuarantineQuestion, registerQuarantine } from "./quarantine.js";
+import { openQuarantineQuestion, registerResourceStop } from "./quarantine.js";
 import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
 import {
   fetchBranchCopy,
@@ -1138,9 +1138,7 @@ export function quarantineWorkspace(
   cause: unknown,
   now: Date,
 ): ResourceStop {
-  const reason = cause instanceof Error ? cause.message : String(cause);
-  registerQuarantine(db, "workspace", workspaceName, reason, now);
-  return { quarantine: "workspace", value: workspaceName, reason };
+  return registerResourceStop(db, "workspace", workspaceName, cause instanceof Error ? cause.message : String(cause), now);
 }
 
 /** Whether a workspace entry's checkout is the board's own registry clone,

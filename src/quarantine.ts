@@ -530,9 +530,19 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
  *  and agent.ts value-imports landing.ts — a cycle ADR 0204 決定1 forbids
  *  (issue #1709). */
 export function quarantineAgent(db: Db, agentName: string, cause: unknown, now: Date): ResourceStop {
-  const reason = cause instanceof Error ? cause.message : String(cause);
-  registerQuarantine(db, "agent", agentName, reason, now);
-  return { quarantine: "agent", value: agentName, reason };
+  return registerResourceStop(db, "agent", agentName, cause instanceof Error ? cause.message : String(cause), now);
+}
+
+/** 資源の Quarantine を登録し、止めた資源を返す —— 呼び手が `pickup_stopped` / `session_stopped_by_resource` に刻む(ADR 0274 / ADR 0331 決定9)。 */
+export function registerResourceStop(
+  db: Db,
+  quarantine: ResourceStop["quarantine"],
+  value: string | null,
+  reason: string,
+  now: Date,
+): ResourceStop {
+  registerQuarantine(db, quarantine, value, reason, now);
+  return { quarantine, value, reason };
 }
 
 /** 唯一の登録口。鍵が開いていれば既存の question に `quarantine_refired` を追記する
