@@ -481,7 +481,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   const onRowRefused = rowRefusalHandler(sessionTeardown);
   // ADR 0118: worker が1度も走らなかった pickup の一撃。scheduler と adapter の両方の観測点が呼ぶ
   const onSpawnFailed = spawnFailureHandler(sessionTeardown, containers);
-  // ADR 0274: process を持たないまま先頭へ戻す pickup の一撃。資源の停止は scheduler と adapter の両方の観測点が呼ぶ
+  // ADR 0274: process を持たないまま `todo` へ戻す pickup の一撃。資源の停止は scheduler と adapter の両方の観測点が呼ぶ
   const onPickupStopped = queueReturnHandler(sessionTeardown, containers);
   // ADR 0266 決定3・4: 記録の器が書けない pickup の一撃。停止を登録してから上と同じ一撃を通る
   const onRecordContainerFailed = recordContainerHaltHandler(sessionTeardown, containers);
@@ -498,7 +498,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onSpawnFailed,
     onRecordContainerFailed,
     onPickupStopped,
-    // ADR 0331 決定2: 0ターンの session の先頭復帰も同じ一撃を通る(ADR 0274 決定4)
+    // ADR 0331 決定2: 0ターンの session の `todo` への復帰も同じ一撃を通る(ADR 0274 決定4)
     onSessionStoppedByResource: onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit, cap) => watchdog?.onWorkerExited(taskId, exit, cap),

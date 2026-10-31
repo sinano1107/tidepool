@@ -95,7 +95,7 @@ it.each([
   ["agent が別 Harness の行も宣言していれば、次の pickup がその行で同じ task を選び直す", "both-agent", ["anthropic", "openai"], "head"],
   ["宣言が1つの agent なら、戻った task は skipped のまま下の task が拾われる", "claude-agent", ["anthropic", "openai"], "next"],
 ] as const)(
-  "start の中で (claude-code, B) の組が止めた pickup は先頭へ戻って枠を空け、tick を待たずに次の pickup が走る —— %s(ADR 0274 決定1)",
+  "start の中で (claude-code, B) の組が止めた pickup は todo へ戻って枠を空け、tick を待たずに次の pickup が走る —— %s(ADR 0274 決定1)",
   async (_case, assignee, providers, secondRun) => {
     const db = openDb(":memory:");
     const clock = new FakeClock();

@@ -683,7 +683,7 @@ describe("CodexWorker (ADR 0098)", () => {
     );
     expect(listEvents(f.db, value.id).map((event) => event.kind)).not.toEqual(expect.arrayContaining(["worker_spawned", "spawn_failed"]));
     expect(onSpawnFailed).not.toHaveBeenCalled();
-    // 組の停止として盤面の一撃に1回渡す —— 一撃が先頭へ戻して枠を空ける(ADR 0274)
+    // 組の停止として盤面の一撃に1回渡す —— 一撃が todo へ戻して枠を空ける(ADR 0274)
     expect(onPickupStopped.mock.calls).toEqual([
       [value.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "codex/work", reason: expect.stringContaining("Codex still reports these skills enabled: flat") }],
     ]);
@@ -694,7 +694,7 @@ describe("CodexWorker (ADR 0098)", () => {
     ["registry に無い workspace 名(registry drift)", { workspace: "ghost" }, false, { quarantine: "workspace", value: "ghost", reason: "unknown workspace: ghost" }],
     ["registry に無い agent 名(registry drift)", { assignee: "ghost" }, false, { quarantine: "agent", value: "ghost", reason: expect.stringContaining("ghost") }],
     ["盤面の状態パスと重なる workspace", {}, true, { quarantine: "workspace", value: "work", reason: expect.stringContaining("board database (TIDEPOOL_DB)") }],
-  ])("%s は spawn も skill の列挙もせずに quarantine し、spawn_failed ではなく盤面の一撃で先頭へ戻す(ADR 0274)", async (_case, fields, overlap, stop) => {
+  ])("%s は spawn も skill の列挙もせずに quarantine し、spawn_failed ではなく盤面の一撃で todo へ戻す(ADR 0274)", async (_case, fields, overlap, stop) => {
     const onSpawnFailed = vi.fn();
     const onPickupStopped = vi.fn();
     const f = await fixture(onSpawnFailed, undefined, undefined, undefined, {

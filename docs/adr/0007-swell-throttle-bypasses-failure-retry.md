@@ -1,10 +1,10 @@
 # Swell throttle は watchdog の失敗リトライ経路を経由しない — 使用量リミットのみ自動再開の例外とする
 
-**Status 追記: 「`todo` 先頭へ戻す」の先頭は ADR 0333 で落ちた(2026-10-31、issue #2780)** —— 中断した task は位置を変えずに `todo` へ戻る。retry 回答の先頭復帰を借用した形だったが、キュー順を動かすのは人間の行為の帰結だけになった。
-
 **Status: superseded by ADR-0008** — throttle は実行中タスクに触れない設計へ転換し、本 ADR が扱う mid-run 中断という事象自体が消滅した。
 
 **Status 追記: ADR-0104 で復活** — 中断は throttle ではなく Provider の 429 exit として起きることが #447 で実測され(`result` envelope の `api_error_status: 429`)、本 ADR の扱い(failure question を経ず `todo` 先頭へ戻す)がその事象に対して復活した。再開の門は ADR 0008 以降の Throttle が担う。
+
+**Status 追記: 「`todo` 先頭へ戻す」の先頭は ADR 0333 で落ちた(2026-10-31、issue #2780)** —— 中断した task は位置を変えずに `todo` へ戻る。retry 回答の先頭復帰を借用した形だったが、キュー順を動かすのは人間の行為の帰結だけになった。
 
 使用量リミット(Usage limit)による実行中タスクの中断は、watchdog の SIGKILL と同じ slot-release tree rule(WIP 退避)を使うが、failure question は登録しない。タスクは `todo` としてキュー先頭に戻り、`resets_at` を過ぎた時点で人間の判断を一切介さず自動的に再ピックアップされる — CONTEXT.md の Watchdog が定める「自動リトライはデフォルトでは存在しない、リトライ判断は常に人間の30秒の回答」の唯一の例外である。
 

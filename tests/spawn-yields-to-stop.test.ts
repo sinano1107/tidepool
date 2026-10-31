@@ -11,7 +11,7 @@ import type { GitHubAuth } from "../src/github-auth.js";
 import type { Provider } from "../src/provider.js";
 import { refireRetrospectiveCalls } from "../src/retrospective.js";
 import type { WorkerFactory } from "../src/server.js";
-import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueueHead } from "../src/tasks.js";
+import { answerQuestion, cancelTaskDirectly, getTask, listBoard, listChildren, pickupTask, registerTask, returnToQueue } from "../src/tasks.js";
 import { liveSession, markTeardown, sessionInTeardown } from "../src/teardown.js";
 import { recordHumanStop } from "../src/watchdog.js";
 import type { WorkspaceConfig } from "../src/workspace.js";
@@ -100,7 +100,7 @@ describe("生きた session の述語(継続が冒頭で取った pickup がま�
   it("status が in_progress を離れると閉じる", () => {
     const { db, task } = picked();
     const live = liveSession(db, task.id);
-    returnToQueueHead(db, task, { kind: "cap_interrupted" }, at);
+    returnToQueue(db, task, { kind: "cap_interrupted" }, at);
     expect(live()).toBe(false);
   });
 

@@ -44,7 +44,7 @@ describe("ADR 索引の生成内容", () => {
     [
       "Status 行と追記は / で連結される(0007)",
       "0007",
-      "- [0007](0007-swell-throttle-bypasses-failure-retry.md) — Swell throttle は watchdog の失敗リトライ経路を経由しない — 使用量リミットのみ自動再開の例外とする **(superseded by ADR-0008 / ADR-0104 で復活)**",
+      "- [0007](0007-swell-throttle-bypasses-failure-retry.md) — Swell throttle は watchdog の失敗リトライ経路を経由しない — 使用量リミットのみ自動再開の例外とする **(superseded by ADR-0008 / ADR-0104 で復活 / 「`todo` 先頭へ戻す」の先頭は ADR 0333 で落ちた(2026-10-31、issue #2780))**",
     ],
     [
       "複数の Status 行は / で連結される(0008)",

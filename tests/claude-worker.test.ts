@@ -529,7 +529,7 @@ describe("ClaudeCodeWorker", () => {
     expect(calls[0]!.cwd).toBe(FIXTURE_WORKSPACE);
   });
 
-  it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn せず、盤面の一撃で先頭へ戻す(issue #26 / ADR 0009 / ADR 0274)", async () => {
+  it("task.workspace が registry に存在しない名前(registry drift)なら、投げずに quarantine して spawn せず、盤面の一撃で todo へ戻す(issue #26 / ADR 0009 / ADR 0274)", async () => {
     const { start, calls, db, stops } = await makeWorker();
     const task = start("task-drifted", "ghost");
     expect(calls).toEqual([]);
@@ -558,7 +558,7 @@ describe("ClaudeCodeWorker", () => {
     expect(systemPrompt).toContain("You are Deckhand");
   });
 
-  it("task.assignee が registry に存在しない agent 名(registry drift)なら、投げずに agent を quarantine して spawn せず、盤面の一撃で先頭へ戻す(ADR 0012 / issue #36 / ADR 0274)", async () => {
+  it("task.assignee が registry に存在しない agent 名(registry drift)なら、投げずに agent を quarantine して spawn せず、盤面の一撃で todo へ戻す(ADR 0012 / issue #36 / ADR 0274)", async () => {
     const { start, calls, db, stops } = await makeWorker();
     const task = start("task-drifted-agent", null, "ghost");
     expect(calls).toEqual([]);
@@ -1699,7 +1699,7 @@ describe("ClaudeCodeWorker", () => {
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     const question = quarantineQuestion(db, "workspaceContainment", "claude-code/tidepool");
     expect(question?.purpose).toContain(`.claude/${name}`);
-    // spawn_failed にはせず、組の停止として盤面の一撃に1回渡す —— 一撃が先頭へ戻して枠を空ける(ADR 0274)
+    // spawn_failed にはせず、組の停止として盤面の一撃に1回渡す —— 一撃が todo へ戻して枠を空ける(ADR 0274)
     expect(listEvents(db, task.id).map((e) => e.kind)).not.toContain("spawn_failed");
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspaceContainment", value: "claude-code/tidepool", reason: expect.stringContaining(`.claude/${name}`) }]]);
   });
@@ -1797,7 +1797,7 @@ describe("ClaudeCodeWorker", () => {
     expect(stops).toEqual([[task.id, { kind: "pickup_stopped", quarantine: "workspace", value: "tidepool", reason: expect.stringContaining("could not exclude") }]]);
   });
 
-  it("隠れたままの tracked settings.json を戻せなければ workspace を quarantine して spawn せず、盤面の一撃で先頭へ戻す(ADR 0158 / ADR 0274)", async () => {
+  it("隠れたままの tracked settings.json を戻せなければ workspace を quarantine して spawn せず、盤面の一撃で todo へ戻す(ADR 0158 / ADR 0274)", async () => {
     const ws = await makeWorkspace("tracked-settings-unrestorable");
     await mkdir(join(ws.path, ".claude"), { recursive: true });
     // 床キーも hooks も持たない settings は隠さずに走る —— 隠れたままなら戻すだけの枝に入る
@@ -2047,7 +2047,7 @@ describe("ClaudeCodeWorker", () => {
     // 面が広い側にずれていればそれは worker が持つべきでない能力を持ったまま走る
     // ことであり、狭い側にずれていれば能力を1つ失ったまま詰まるだけである。どちらも
     // 走らせる理由がない。slot は回収後の root の exit が0ターンの資源の停止として
-    // 先頭へ戻して後始末へ入れる(ADR 0331 決定4)。
+    // todo へ戻して後始末へ入れる(ADR 0331 決定4)。
     const { start, processes, killed } = await makeWorker();
     start("task-init-kill", null, "deckhand", "work");
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
@@ -4595,7 +4595,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   const kinds = (db: ReturnType<typeof openDb>, taskId: string) =>
     listEvents(db, taskId).map((e) => e.kind);
 
-  it("429 で exit した session の task は todo の先頭へ戻り slot が解放される — failure question は立たない", async () => {
+  it("429 で exit した session の task は todo へ戻り slot が解放される — failure question は立たない", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped");
     processes[0]!.stdout.write(CAP_STREAM);
@@ -4604,7 +4604,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
     expect(getTask(db, task.id)!.status).toBe("todo");
-    // 戻る先は queue の**先頭** = sort_key が盤面の最小値である
+    // ほかに候補が無いので、そのまま次に拾われる
     expect(nextSlotTask(db)?.id).toBe(task.id);
     // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);

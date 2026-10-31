@@ -9,7 +9,7 @@ import type { GitHubAuth } from "./github-auth.js";
 import type { ProcessContainers } from "./process-container.js";
 import { openQuarantineValues, questionRefusedTarget, registerQuarantine } from "./quarantine.js";
 import type { Slot } from "./slot.js";
-import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, registerTask, returnToQueue, returnToQueueHead, type Task, type TaskType, unrowedTarget } from "./tasks.js";
+import { abandonConsequence, escalateTask, getTask, type QueueReturnPayload, registerTask, returnToQueue, type Task, type TaskType, unrowedTarget } from "./tasks.js";
 import {
   markTeardown,
   resumeUnfinishedTeardown,
@@ -190,8 +190,8 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
 
 /** 行の拒否(GLOSSARY.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
- *  Quarantine(行が表に残っているときだけ)・`row_refused`・`todo` 先頭への復帰(行でない Interview の対象なら対象の question と
- *  `target_refused` と位置を変えない `todo`)を1 transaction で済ませてから後始末に入るので、
+ *  Quarantine(行が表に残っているときだけ)・`row_refused`・位置を変えない `todo` への復帰(ADR 0333 決定1。行でない Interview の
+ *  対象なら対象の question と `target_refused`)を1 transaction で済ませてから後始末に入るので、
  *  後始末中の status は `todo` で、経路は解放の step に読まれる(ADR 0113 決定3)—— `in_progress` の
  *  まま入れば中断と読まれ `cap_interrupted` が書かれる。slot の解放は回収済み観測の後ろ。 */
 export function rowRefusalHandler(
@@ -202,7 +202,7 @@ export function rowRefusalHandler(
     const task = getTask(deps.db, taskId);
     if (task?.status !== "in_progress") return;
     const now = deps.clock.now();
-    // 行でない Interview の対象(ADR 0199 決定4): pin の子には別の候補が無いので、先頭へ戻さず対象の question を立てる
+    // 行でない Interview の対象(ADR 0199 決定4): pin の子には別の候補が無いので、行の Quarantine でなく対象の question を立てる
     const target = unrowedTarget(deps.db, task);
     deps.db.transaction(() => {
       if (target) {
@@ -210,7 +210,7 @@ export function rowRefusalHandler(
         returnToQueue(deps.db, task, { kind: "target_refused", ...refusal }, now);
       } else {
         quarantineRefusedRow(deps.db, refusal, `The worker session for task ${taskId}`, now);
-        returnToQueueHead(deps.db, task, { kind: "row_refused", ...refusal }, now);
+        returnToQueue(deps.db, task, { kind: "row_refused", ...refusal }, now);
       }
       // 同じ transaction に置く —— 間で落ちると後始末の印の無い todo が残り、起動時の復旧が後始末を走らせない
       markTeardown(deps.db, taskId, now);
@@ -220,10 +220,10 @@ export function rowRefusalHandler(
   };
 }
 
-/** process を1つも持たないまま失敗にせず先頭へ戻す pickup の盤面側の一撃(ADR 0274 決定3・4)。入口は資源の停止で worker が
+/** process を1つも持たないまま失敗にせず位置を変えずに `todo` へ戻す pickup の盤面側の一撃(ADR 0274 決定3・4 / ADR 0333 決定1)。入口は資源の停止で worker が
  *  1度も走らなかった pickup(`pickup_stopped`)と盤面の記録の器が書けない pickup(`record_container_unwritable`、ADR 0266 決定3・4)で、
  *  Quarantine の登録はどちらも呼び手が先に済ませている —— 資源はもうその question を持つので failure question は立てない。
- *  形は行の拒否(ADR 0184 決定4)と同じ: 先頭復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
+ *  形は行の拒否(ADR 0184 決定4)と同じ: `todo` への復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
  *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
  *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
  *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。3つ目の入口は process は起きたが0ターンで終わった session
@@ -239,7 +239,7 @@ export function queueReturnHandler(
     if (task?.status !== "in_progress") return;
     const now = deps.clock.now();
     deps.db.transaction(() => {
-      returnToQueueHead(deps.db, task, payload, now);
+      returnToQueue(deps.db, task, payload, now);
       markTeardown(deps.db, taskId, now);
     })();
     deps.slot.enterTeardown();
@@ -249,16 +249,16 @@ export function queueReturnHandler(
 }
 
 /** 盤面の記録の器が書けない pickup(ADR 0266 決定3・4)。入口は transcript の open(ADR 0276 決定5)で、観測点は
- *  scheduler の catch と adapter の launch の catch。盤面全体の停止を登録してから `queueReturnHandler` で先頭へ戻す —— 盤面が
+ *  scheduler の catch と adapter の launch の catch。盤面全体の停止を登録してから `queueReturnHandler` で `todo` へ戻す —— 盤面が
  *  止まっているので、後始末の pickup の契機は `boardHalts` が止める。踏んだ task は解放後の pickup で自分のブランチへ戻って続ける。 */
 export function recordContainerHaltHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
 ): (taskId: string, err: RecordContainerError) => void {
-  const returnToHead = queueReturnHandler(deps, containers);
+  const queueReturn = queueReturnHandler(deps, containers);
   return (taskId, err) => {
-    registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue head, not failed`, deps.clock.now());
-    returnToHead(taskId, { kind: "record_container_unwritable", path: err.path, reason: err.reason });
+    registerQuarantine(deps.db, "recordContainer", null, `while picking up task ${taskId}, ${err.message}. Task ${taskId} was returned to the queue in its current place, not failed`, deps.clock.now());
+    queueReturn(taskId, { kind: "record_container_unwritable", path: err.path, reason: err.reason });
   };
 }
 
@@ -287,7 +287,7 @@ export function spawnFailureHandler(
  *  event は常に書く。question と強制回収は、まだ後始末に入っていない session だけ ——
  *  決着後に届いた失敗には止めるものが無く、「盤面が止めた」が偽になる。後始末の印が
  *  先に置かれるので、続く exit で ADR 0145 の question は立たない。止めた session は、その failure question を
- *  残したまま盤面全体の記録の器の停止も立てる(ADR 0266 決定4)—— 先頭へは戻さない。 */
+ *  残したまま盤面全体の記録の器の停止も立てる(ADR 0266 決定4)—— `queueReturnHandler` の `todo` への復帰は通らない。 */
 export function transcriptFailureHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,
@@ -397,7 +397,7 @@ export function startWatchdog(deps: {
    *  cap と同じ順であり、escalate verb の順でもある。後始末の中(ツリー規律の前に走る
    *  記録)に置くと、後始末がそこへ届く前に投げたとき failure question が立たないまま
    *  status が `in_progress` で残り、落ちた後始末の受理は `teardownStep`(ADR 0113 決定3)に
-   *  cap 経路と読まれる —— watchdog が殺したタスクが retry / abandon の問いなしに queue head
+   *  cap 経路と読まれる —— watchdog が殺したタスクが retry / abandon の問いなしに todo
    *  へ戻り、`cap_interrupted` という起きていない event が書かれる(GLOSSARY.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
@@ -511,7 +511,7 @@ export function startWatchdog(deps: {
     quarantineContainment(
       db,
       (task.status === "in_progress"
-        ? `the worker session for task ${taskId} was interrupted by the Provider usage cap and will return to the queue head after teardown, but its `
+        ? `the worker session for task ${taskId} was interrupted by the Provider usage cap and will go back to the queue in its current place after teardown, but its `
         : `the worker session for task ${taskId} is settled — teardown has already decided the task's status — but its `) +
         "processes may still be running on this host: the board force-reclaimed the container and " +
         `could not observe it going empty within ${reclaimTimeout}ms. The task itself stays ` +

@@ -116,7 +116,7 @@ it("空を観測できない容器では、読み口が後始末中を報せ、�
   expect(t.worker.gracefulStops).toEqual([]);
 });
 
-it("後始末の途中で再起動しても failure question は残り、cap として queue 先頭へ戻らず、再起動中断の question も立たない", async () => {
+it("後始末の途中で再起動しても failure question は残り、cap として todo へ戻らず、再起動中断の question も立たない", async () => {
   const ws = await makeWorkspace("sandbox");
   t = await bootTidepool({ workspace: ws, watchdog: WATCHDOG });
   const task = queueWork(t, "never runs");

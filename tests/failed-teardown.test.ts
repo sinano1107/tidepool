@@ -180,7 +180,7 @@ it("通常完了・上限到達による中断・watchdog の強制回収のど�
   ]);
 });
 
-it("watchdog の強制回収で落ちた後始末の受理は、殺したタスクを queue head へ戻さない", async () => {
+it("watchdog の強制回収で落ちた後始末の受理は、殺したタスクを上限到達による中断として todo へ戻さない", async () => {
   const f = await session("watchdog");
   await runTeardown(f.deps, f.task.id, teardownStep(f.db, f.task.id));
   const question = openQuestion(f);

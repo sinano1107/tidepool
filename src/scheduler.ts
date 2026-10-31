@@ -309,7 +309,7 @@ export function startScheduler(deps: {
   /** ADR 0266 決定3・4: 記録の器が書けない pickup(`start` の中の transcript の open、ADR 0276 決定5)の一撃
    *  (`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
-  /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— 先頭へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
+  /** ADR 0274: 資源の Quarantine が worker の起動前に pickup を止めた —— `todo` へ戻して後始末を通す一撃(`queueReturnHandler` 製)。
    *  adapter の中の停止は adapter が同じ一撃を呼ぶ。 */
   onPickupStopped: (taskId: string, payload: PickupStopped) => void;
   workspace?: WorkspaceConfig;
@@ -588,7 +588,7 @@ export function startScheduler(deps: {
       // branch discipline is the board's own, not the worker's: by the time
       // the worker starts, the workspace already sits on the task branch
       const resolve = buildWorkspaceResolver(resolveWorkspace, workspace);
-      // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、先頭へ戻して後始末を通す
+      // ADR 0274: 資源の Quarantine が止めた pickup は失敗にせず、`todo` へ戻して後始末を通す
       // 停止が無い(準備の失敗が session の終わった後に届いた、#1973)なら一撃も無い
       const stopped = (stop: ResourceStop | undefined) => stop && (() => onPickupStopped(picked.id, { kind: "pickup_stopped", ...stop }));
       if (resolve) {
@@ -596,15 +596,15 @@ export function startScheduler(deps: {
         const resolved = resolveOrQuarantine(db, resolve, picked.workspace, clock.now(), (stop) => (drift = stopped(stop)));
         // an unknown workspace name (registry drift) quarantines in place of a
         // thrown error, and the picked task — not itself the failure — returns
-        // to the queue head through teardown, freeing the slot (ADR 0274)
+        // to todo through teardown, keeping its place, freeing the slot (ADR 0274 / ADR 0333 決定1)
         if (!resolved) return drift;
         // a branch discipline gap (issue #27: the workspace's configured
         // branch doesn't exist in this checkout) is a resource problem, same
         // as registry drift above — the *workspace* is quarantined immediately
         // rather than surfacing only as a console.error, so a human sees an
         // actionable repair question and no other task aimed at this workspace
-        // gets picked up meanwhile; the picked task returns to the queue head
-        // the same way (ADR 0274).
+        // gets picked up meanwhile; the picked task returns to todo the same
+        // way (ADR 0274).
         // ADR 0052 / issue #211: remote 正本の宣言と実態のずれ、そしてその refresh の
         // 失敗も同じ行き先 —— どれも特定 workspace の性質なので資源単位で止まる
         // ADR 0067 決定2: 失敗した**瞬間**だけが repo アクセスの修復の契機である ——
@@ -915,8 +915,8 @@ export function startScheduler(deps: {
       // #26 / ADR 0009) and assignee (ADR 0012 / issue #36) — a quarantined
       // workspace or agent keeps its own tasks out of the candidates, never the
       // whole board. The slot is one (ADR 0001), so this holds only because a
-      // pickup such a quarantine stopped before its worker ran returns to the
-      // queue head through teardown and frees the slot (ADR 0274).
+      // pickup such a quarantine stopped before its worker ran returns to todo
+      // through teardown and frees the slot (ADR 0274).
       // No resolvers here: provider / Harness names are taken out below.
       if (!nextSlotTask(db, workspace?.name, worker.id, auditorName, quarantineStops(db), undefined, undefined, interviewerName)) return SUCCEEDED;
       // agent 名で外れるのは、定義が成立しない agent(quarantineAgent)だけである
