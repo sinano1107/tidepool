@@ -155,6 +155,9 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
 
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
+/** Harness 単位の行(封じ込め能力・Worker MCP 到達性)が外す Provider: その Harness を正準経路に持つもの。 */
+const providersOnHarnesses = (harnesses: string[]) => PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider)));
+
 export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,
@@ -326,8 +329,7 @@ export const QUARANTINES = [
   {
     kind: "harnessContainment",
     scope: "assignees",
-    excludesProviders: (harnesses: string[]) =>
-      PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
+    excludesProviders: providersOnHarnesses,
     prose: (harness: string | null, reason: string): QuarantineProse => ({
       title: `${harness} Harness containment is not established`,
       purpose:
@@ -341,8 +343,7 @@ export const QUARANTINES = [
     // Worker MCP 到達性(CONTEXT.md「Quarantine」/ ADR 0331 決定7)。値は Harness 名。止める範囲は封じ込め能力と同じ形
     kind: "workerMcpReachability",
     scope: "assignees",
-    excludesProviders: (harnesses: string[]) =>
-      PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
+    excludesProviders: providersOnHarnesses,
     prose: (harness: string | null, reason: string): QuarantineProse => ({
       title: `${harness} Worker MCP reachability is not established`,
       purpose:
