@@ -1267,6 +1267,25 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned.payload).toMatchObject({ skills: { workspace: ["inner", "tdd"], permitted: ["inner", "tdd"] } });
   });
 
+  it("名前の違う symlink(alias -> tdd)の skill は entry 名で workspace に数え、@workspace で deny しない(issue #2785 —— 固定版 CLI は entry 名で名乗る)", async () => {
+    const wsDir = await tempDir("tidepool-ws-");
+    await mkdir(join(wsDir, ".agents", "skills", "tdd"), { recursive: true });
+    await mkdir(join(wsDir, ".claude", "skills"), { recursive: true });
+    await symlink("../../.agents/skills/tdd", join(wsDir, ".claude", "skills", "alias"));
+    const rec = recordingEnumerator(["alias", "plug:deploy"]);
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@workspace"\n') },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-skill-symlink-alias");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Skill(plug:deploy)");
+    expect(deny).not.toContain("Skill(alias)");
+    const spawned = listEvents(db, "task-skill-symlink-alias").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["alias"], permitted: ["alias"] } });
+  });
+
   it("checkout の外・名前が前方一致する隣の dir・壊れた先・ファイルを指す symlink は数えず、spawn は進む(issue #2774)", async () => {
     const parent = await tempDir("tidepool-ws-parent-");
     const wsDir = join(parent, "ws");
