@@ -106,6 +106,7 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
+import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -571,6 +572,8 @@ export interface QuarantineCheckDeps {
   clock?: Clock;
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
+  /** ADR 0331 決定8: Worker MCP 到達性の受理の実接続 probe(盤面が id を発行して撃つ形)。Absent → その回答は拒まれる。 */
+  workerMcpReachability?: WorkerMcpReachabilityCheck;
   /** ADR 0259 決定5: (codex, workspace) の組の検査。Absent → その組への回答は拒まれる。 */
   codexWorkspaceContainment?: CodexWorkspaceCheck;
   /** ADR 0266 決定3: 盤面の記録の器の dir —— 解放の検査はここへ一時ファイルを書いて消す。Absent → その確認への回答は拒まれる。 */
@@ -584,7 +587,7 @@ export interface QuarantineCheckDeps {
 /** 解除の門の map(ADR 0137 決定5)。材料が無い種類は map に載らず、その確認への
  *  回答は拒まれる —— 検証できないまま受理する経路は無い。 */
 export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
-  const { containment, registryReachability, teardownQuarantine, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, recordDir } = deps;
+  const { containment, registryReachability, teardownQuarantine, rerunPoll, recheckIssueExpansion, providerCliAuth, modelProbes, clock, harnessContainment, workerMcpReachability, recordDir } = deps;
   // modelProbes / clock は下の `modelProbes && clock` の内側でだけ呼ぶので、絞った型で受け取る
   const recheckRow = async (
     presentProbes: Partial<Record<Provider, ModelProbe>>,
@@ -788,6 +791,12 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
             `${harness} Harness containment is still not established: ${capability.reason}`,
           );
         }
+      },
+    }),
+    ...(workerMcpReachability && {
+      workerMcpReachability: async (value) => {
+        const reachable = await workerMcpReachability(value as Harness);
+        if (!reachable.available) throw new DomainError(`${value} Worker MCP reachability is still not established: ${reachable.reason}`);
       },
     }),
   };

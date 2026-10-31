@@ -6,24 +6,26 @@ import { parseStreamLine, readInitAutoMemoryPath, readInitMcpServers } from "../
  *  **面に付いていながらツールを1本も出さない**状態(認証待ち・接続失敗)を持ち、
  *  ベンダー側の門が動いたとき最初に現れるのはまさにその状態だからである。
  *
- *  この射影が読むのは**名前だけ**である。`status` を返さないことが、照合側で
- *  「`tidepool` が `status: "failed"` で現れても不成立にしない」(ADR 0039 決定3 の
- *  欠落側)を構造として守っている。 */
+ *  読み手は名前と `status` の両方を返す(ADR 0331 決定6): `tidepool` の status は Worker MCP 到達性が読み、
+ *  封じ込めの照合は名前だけに写して読む。 */
 describe("readInitMcpServers", () => {
   const init = (extra: Record<string, unknown>) =>
     parseStreamLine(JSON.stringify({ type: "system", subtype: "init", ...extra }));
 
-  it("init 行の `mcp_servers` から名前が取れる — status は読まない", () => {
+  it("init 行の `mcp_servers` から名前と status が取れる", () => {
     expect(
       readInitMcpServers(
         init({
           mcp_servers: [
             { name: "tidepool", status: "failed" },
-            { name: "computer-use", status: "connected" },
+            { name: "computer-use", status: "connected", source: "dynamic" },
           ],
         }),
       ),
-    ).toEqual(["tidepool", "computer-use"]);
+    ).toEqual([
+      { name: "tidepool", status: "failed" },
+      { name: "computer-use", status: "connected" },
+    ]);
   });
 
   it("MCP サーバが1つも無い面は空配列 — probe が撃つ形がこれである", () => {
@@ -43,6 +45,11 @@ describe("readInitMcpServers", () => {
   it("要素が名前を持たなければ null — 半分だけ読めた面を面として通さない", () => {
     expect(readInitMcpServers(init({ mcp_servers: [{ status: "connected" }] }))).toBeNull();
     expect(readInitMcpServers(init({ mcp_servers: ["tidepool"] }))).toBeNull();
+  });
+
+  it("要素が文字列の status を持たなければ null — 読めない init 報告", () => {
+    expect(readInitMcpServers(init({ mcp_servers: [{ name: "tidepool" }] }))).toBeNull();
+    expect(readInitMcpServers(init({ mcp_servers: [{ name: "tidepool", status: null }] }))).toBeNull();
   });
 });
 

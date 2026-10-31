@@ -1928,9 +1928,8 @@ describe("ClaudeCodeWorker", () => {
   // ものを**測れる。不成立時は既存の封じ込め能力の経路にそのまま乗る(盤面全体の
   // pickup 停止 + Tidepool 名義の確認 question)。
   // `mcp_servers` は 2.1.267 の init 行に必ず出る(実測)。実セッションでは盤面が
-  // 書いた `tidepool` が1つ載るが、載っている名前が宣言どおりかは MCP 軸の話なので、
-  // 組み込みツールの照合を見るここでは空で置く。
-  const initLine = (tools: string[], mcpServers: unknown[] = [], memoryPaths?: Record<string, string>) =>
+  // 書いた `tidepool` が接続済みで1つ載る —— 既定はその形(Worker MCP 到達性が止めない、ADR 0331 決定6)。
+  const initLine = (tools: string[], mcpServers: unknown[] = [{ name: "tidepool", status: "connected" }], memoryPaths?: Record<string, string>) =>
     `${JSON.stringify({ type: "system", subtype: "init", tools, mcp_servers: mcpServers, memory_paths: memoryPaths })}\n`;
   const containmentQuestion = (db: ReturnType<typeof openDb>) =>
     quarantineQuestion(db, "containment", null);

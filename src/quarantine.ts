@@ -153,6 +153,9 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
   };
 }
 
+/** Harness 単位の行(封じ込め能力・Worker MCP 到達性)が外す Provider: その Harness を正準経路に持つもの。 */
+const providersOnHarnesses = (harnesses: string[]) => PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider)));
+
 /** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
  *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
@@ -326,8 +329,7 @@ export const QUARANTINES = [
   {
     kind: "harnessContainment",
     scope: "assignees",
-    excludesProviders: (harnesses: string[]) =>
-      PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
+    excludesProviders: providersOnHarnesses,
     prose: (harness: string | null, reason: string): QuarantineProse => ({
       title: `${harness} Harness containment is not established`,
       purpose:
@@ -335,6 +337,22 @@ export const QUARANTINES = [
         "slot until it is repaired. Answering confirms the repair; the board re-runs the same " +
         "Harness check before accepting the answer.",
       completion_criteria: `the ${harness} Harness containment is repaired by hand`,
+    }),
+  },
+  {
+    // Worker MCP 到達性(CONTEXT.md「Quarantine」/ ADR 0331 決定7)。値は Harness 名。止める範囲は封じ込め能力と同じ形
+    kind: "workerMcpReachability",
+    scope: "assignees",
+    excludesProviders: providersOnHarnesses,
+    prose: (harness: string | null, reason: string): QuarantineProse => ({
+      title: `${harness} Worker MCP reachability is not established`,
+      purpose:
+        `${reason}. This is Worker MCP reachability — whether a ${harness} worker can report to the board — ` +
+        `not containment, which is whether a worker is confined. Agents whose canonical route uses ${harness} ` +
+        "stay out of the slot until it is repaired; other Harnesses keep running. Answering confirms the repair; " +
+        `before accepting the answer the board starts one ${harness} probe that connects to the Worker MCP from ` +
+        "inside the Harness sandbox, and refuses the answer while it still cannot connect.",
+      completion_criteria: `${harness} workers reach the board's Worker MCP again`,
     }),
   },
   {

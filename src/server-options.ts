@@ -880,6 +880,7 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
     quarantineResolvers: {
       providerAuth: agentsSpeakingProvidersResolver(board),
       harnessContainment: agentsUsingHarnessesResolver(board, db),
+      workerMcpReachability: agentsUsingHarnessesResolver(board, db),
     },
     credentialAbsence: {
       moonshot: () => moonshotKeyAbsence(board.moonshotApiKeyFile),

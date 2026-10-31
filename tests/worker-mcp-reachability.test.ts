@@ -1,12 +1,14 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { claudeMcpReachabilityThrough } from "../src/claude-worker.js";
 import { codexMcpReachabilityThrough } from "../src/codex-worker.js";
 import { ProcessContainers } from "../src/process-container.js";
+import { registerQuarantine } from "../src/quarantine.js";
 import { probeWorkerMcpReachability } from "../src/worker-mcp-reachability.js";
 import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import { api, bootTidepool, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 
 // ADR 0331 決定8: 解放の検証の probe。盤面は probe ごとに使い捨ての id を発行し、その id を `?probe=` に載せた listener の
 // URL で Harness の probe を撃ち、終わったら id を無効にする —— 投げても timeout でも
@@ -168,4 +170,42 @@ it("Codex の probe の timeout(Board call の上限)は不成立", async () => 
   const result = await probe.result;
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain("did not complete");
+});
+
+// ── 盤面: 止まっている間の pickup と、回答の受理(ADR 0331 決定7・8)──────────────────────
+
+let t: Tidepool | undefined;
+afterEach(() => t?.stop());
+
+it("Worker MCP 到達性の回答は probe が繋がらなければ観測値つきで拒まれて question が開いたまま、繋がれば受理される。probe は bind した扉を使い捨ての帰属で叩く", async () => {
+  let reachable = false;
+  const probed: Array<{ harness: string; url: string; door: number }> = [];
+  const board = await bootTidepool({
+    workerMcpReachability: async (harness, url) => {
+      // probe の間、その帰属で扉の initialize が通る(router と同じ id の集合)
+      const door = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "probe", version: "0" } } }),
+      });
+      probed.push({ harness, url, door: door.status });
+      return reachable ? { available: true } : { available: false, reason: "a Claude worker reports the board's Worker MCP `tidepool` as failed" };
+    },
+  });
+  t = board;
+  registerQuarantine(board.db, "workerMcpReachability", "claude-code", "this Claude worker session reports `tidepool` as failed", board.clock.now());
+  const question = await servedQuarantineQuestion(board, "workerMcpReachability", "claude-code");
+
+  const answer = () => api(board.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("as failed");
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
+
+  reachable = true;
+  expect((await answer()).status).toBe(200);
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).not.toBe("todo");
+  // probe は bind した Worker MCP の扉を、Harness ごとの使い捨ての帰属で叩く
+  expect(probed.map(({ harness, door }) => [harness, door])).toEqual([["claude-code", 200], ["claude-code", 200]]);
+  for (const { url } of probed) expect(url).toMatch(new RegExp(`^${board.mcpBaseUrl}/mcp\\?probe=.+`));
 });

@@ -30,6 +30,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   agent: ["deckhand", "bosun"],
   providerAuth: ["anthropic", "openai"],
   harnessContainment: ["claude-code", "codex"],
+  workerMcpReachability: ["claude-code", "codex"],
   workspaceContainment: ["claude-code/sandbox", "codex/sandbox"],
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
@@ -113,6 +114,7 @@ describe.each(QUARANTINES.filter((row) => row.scope === "workspace" || row.scope
     const stops = quarantineStops(db, {
       providerAuth: () => ["deckhand"],
       harnessContainment: () => ["deckhand"],
+      workerMcpReachability: () => ["deckhand"],
     });
     return { db, task, stops };
   }
@@ -148,6 +150,13 @@ describe("pickupExclusions の quarantine 由来の Provider", () => {
   it("harnessContainment の開いた値は、その Harness を正準経路に持つ Provider だけを外す", () => {
     const db = openDb(":memory:");
     registerQuarantine(db, "harnessContainment", "claude-code", "cause", NOW);
+
+    expect(pickupExclusions(db)).toEqual({ providers: ["anthropic", "moonshot"], models: [] });
+  });
+
+  it("workerMcpReachability の開いた値も、その Harness を正準経路に持つ Provider だけを外す —— 別の Harness の行は流れる(ADR 0331 決定7)", () => {
+    const db = openDb(":memory:");
+    registerQuarantine(db, "workerMcpReachability", "claude-code", "cause", NOW);
 
     expect(pickupExclusions(db)).toEqual({ providers: ["anthropic", "moonshot"], models: [] });
   });

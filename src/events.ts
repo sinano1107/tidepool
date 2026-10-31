@@ -24,7 +24,7 @@ export interface RowRefusal {
 /** pickup を止めた資源の Quarantine(ADR 0274 決定2)と、0ターンで終わった session が署名で止めた資源(ADR 0331 決定3・4):
  *  種類・値(盤面全体の封じ込めは null)・登録の理由。 */
 export interface ResourceStop {
-  quarantine: "workspaceContainment" | "workspace" | "agent" | "providerAuth" | "containment";
+  quarantine: "workspaceContainment" | "workspace" | "agent" | "providerAuth" | "containment" | "workerMcpReachability";
   value: string | null;
   reason: string;
 }

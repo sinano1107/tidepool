@@ -80,6 +80,7 @@ import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
@@ -311,6 +312,8 @@ export interface BootOptions {
   checkHarnessCliVersion?: HarnessContainmentCheck;
   /** ADR 0331 決定8: 開いている Worker MCP の probe の id。テストが id を直に足し引きする。 */
   probeIds?: Set<string>;
+  /** ADR 0331 決定8: Worker MCP 到達性の解放の probe。Absent → その確認への回答は拒まれる。 */
+  workerMcpReachability?: WorkerMcpReachabilityProbe;
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -416,6 +419,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     harnessContainment: options.harnessContainment,
     checkHarnessCliVersion: options.checkHarnessCliVersion ?? pinnedCliVersions,
     probeIds: options.probeIds,
+    workerMcpReachability: options.workerMcpReachability,
     providerCliAuth: options.providerCliAuth,
     modelProbes: options.modelProbes,
     registryReachability: options.registryReachability,
@@ -627,6 +631,12 @@ export const FIXTURE_SPAWNED_EVENT_ID = 5;
 // 2.1.284 以降の CLI は面に出さず、盤面の宣言からも外した(#1269)。
 const sessionFixture = (name: string) =>
   readFileSync(join(import.meta.dirname, "fixtures", `worker-session-2.1.237.${name}`), "utf8");
+
+/** 2.1.237 の実セッションの init 行の `mcp_servers` だけを差し替える —— 封じ込めの照合は通る面(Worker MCP 到達性、ADR 0331 決定6)。 */
+export const initWithMcpServers = (mcpServers: unknown[]) => {
+  const [init] = sessionFixture("stream.jsonl").split("\n");
+  return `${JSON.stringify({ ...JSON.parse(init!), mcp_servers: mcpServers })}\n`;
+};
 
 /** #386 のフィクスチャをそのまま持つ盤面。events は id ごと写す(投影の結合は
  *  盤面が発行した event id の完全一致なので、採番が変わると意味が変わる)。

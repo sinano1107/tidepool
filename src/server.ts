@@ -77,7 +77,7 @@ import {
   type WatchdogConfig,
 } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
-import type { WorkerMcpReachabilityProbe } from "./worker-mcp-reachability.js";
+import { probeWorkerMcpReachability, type WorkerMcpReachabilityProbe } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   restoreWorkspaceProjectSettingsAtBoot,
@@ -590,6 +590,12 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
         return common.available ? adapterContainment(harness) : common;
       }
     : undefined;
+  // ADR 0331 決定8: 解放の probe は bind した Worker MCP の扉を、router と同じ id の集合で叩く。URL は listen の後に決まる
+  // (テスト盤面は mcpPort: 0)ので、`probeHumanSurface` と同じく後から組む
+  const probeIds = options.probeIds ?? new Set<string>();
+  let workerMcpUrl = "";
+  const reachabilityProbe = options.workerMcpReachability;
+  const workerMcpReachability = reachabilityProbe && ((harness: Harness) => probeWorkerMcpReachability(probeIds, workerMcpUrl, harness, reachabilityProbe));
   // 人間 verb には後始末の deps 一式ではなく、束ねた callback ひとつを渡す
   // (`containment` / `registryReachability` と同じ配線)。
   const teardownQuarantine = (taskId: string) => acceptTeardownQuarantine(teardownDeps, taskId);
@@ -688,6 +694,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     modelProbes,
     clock: options.clock,
     harnessContainment,
+    workerMcpReachability,
     codexWorkspaceContainment: options.codexWorkspaceContainment,
     recordDir: options.transcripts.dir,
     workspacesDir: options.workspacesDir,
@@ -832,7 +839,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       listAgents: options.listAgents,
       agentAdmin,
       taskExecutionCandidates: options.taskExecutionCandidates,
-      probeIds: options.probeIds,
+      probeIds,
       pollNow,
     }),
   );
@@ -856,6 +863,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   });
 
   const humanPort = (listener.address() as AddressInfo).port;
+  const mcpPort = (mcpListener.address() as AddressInfo).port;
+  workerMcpUrl = `http://127.0.0.1:${mcpPort}/mcp`;
   // 自己検査を arm するのは**ここ**(listen の後)。ADR 0036 が測れと言っている
   // のは「token ファイルが読めたか」ではなく「組み上がった実物が無認証を断るか」
   // なので、撃つ相手はこの実ポートでなければならない。`options.port` ではなく
@@ -893,7 +902,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
 
   return {
     port: humanPort,
-    mcpPort: (mcpListener.address() as AddressInfo).port,
+    mcpPort,
     stop: async () => {
       stopTriageWatchdog();
       stopAutoMergePoll?.();
