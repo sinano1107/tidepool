@@ -42,3 +42,9 @@ symlink は、固定版 CLI 2.1.286 が worker の形(sandbox profile + `--setti
   同梱に落ちる負の定義に戻る。
 - **封じ込めの probe の init 行から同梱集合を読んで scheduler から spawn へ配線する** —— 封じ込めの型・scheduler・適合試験(ADR 0186)に
   触り、失敗の単位が「Claude の pickup 全部」になる。
+
+## 追記(2026-11-01、起草と同じ session)
+
+決定1・2 の「user 層・plugin の名前は許可の外に落ちる」「同梱集合 = tier フラグ付き neutral cwd の ping が返す集合」のうち、plugin の側は
+2.1.286 で測っていない —— #2779 の実測で落ちたのは user 層(`~/.claude/skills`)だけで、plugin の除外は ADR 0038 の当時の版の実測に乗る。
+#2796 が測り直す。plugin skill がこの ping の形に載るなら、決定2 の ping は同梱集合に等しくなく、#2796 は決定1・2 に戻る。
