@@ -77,6 +77,7 @@ import {
   type WatchdogConfig,
 } from "./watchdog.js";
 import type { WorkerAdapter, WorkerExit, WorkerExitClassification } from "./worker.js";
+import type { WorkerMcpReachabilityProbe } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   restoreWorkspaceProjectSettingsAtBoot,
@@ -231,6 +232,12 @@ export interface ServerOptions {
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0259 決定5: (codex, workspace) の組の question への回答時に撃ち直す検査。Absent → その回答は拒まれる。 */
   codexWorkspaceContainment?: CodexWorkspaceCheck;
+  /** ADR 0331 決定8: Worker MCP 到達性の解放の probe(Harness ごと)。盤面は `probeWorkerMcpReachability` で包んで撃つ。
+   *  起動時と pickup ごとには撃たない。Absent → 解放の検証ができない。 */
+  workerMcpReachability?: WorkerMcpReachabilityProbe;
+  /** ADR 0331 決定8: 開いている Worker MCP の probe の id。Worker MCP の router が `?probe=` をここで引く。
+   *  合成 root が空の集合を渡し、テストは id を直に足し引きするために自分のものを渡す。Absent → probe の扉は閉じている。 */
+  probeIds?: Set<string>;
   /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
    *  **省略できない** —— 渡し忘れで版の門が開かないように。 */
   checkHarnessCliVersion: HarnessContainmentCheck;
@@ -335,6 +342,7 @@ export type BoardCallers = Pick<
   | "openaiUsage"
   | "harnessContainment"
   | "codexWorkspaceContainment"
+  | "workerMcpReachability"
   | "cliAuth"
   | "providerCliAuth"
   | "modelProbes"
@@ -824,6 +832,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       listAgents: options.listAgents,
       agentAdmin,
       taskExecutionCandidates: options.taskExecutionCandidates,
+      probeIds: options.probeIds,
       pollNow,
     }),
   );

@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import type { Router } from "express";
 import { z } from "zod";
 import type { AgentAdmin } from "./agent-create.js";
@@ -222,6 +223,8 @@ export interface McpDeps {
   agentAdmin?: Partial<Pick<AgentAdmin, "list">>;
   /** pickup と同じ候補の口(ADR 0110 決定3): 出題と Interview の登録が対象の走れる候補を確かめる(ADR 0253 決定3)。Absent → 確かめない。 */
   taskExecutionCandidates?: TaskExecutionCandidates;
+  /** ADR 0331 決定8: 開いている Worker MCP の probe の id(`?probe=`)。Absent → probe の扉は閉じている。 */
+  probeIds?: ReadonlySet<string>;
 }
 
 /** Every MCP call is attributed to a real agent session (never human — that's
@@ -1802,7 +1805,20 @@ function registerMemoryMoves(server: McpServer, deps: McpDeps, run: MetaReviewRu
 
 export function createMcpRouter(deps: McpDeps): Router {
   return createStatelessMcpRouter((req) => {
-    const taskParam = typeof req.query.task === "string" ? req.query.task : null;
-    return buildMcpServer(deps, taskParam);
+    const { task, probe } = req.query;
+    if (probe === undefined) return buildMcpServer(deps, typeof task === "string" ? task : null);
+    // ADR 0331 決定8: probe の帰属は task の帰属と別の扉。開いている id だけを、どの要求でも通す(閉じた後は initialize も拒む)
+    if (task !== undefined || typeof probe !== "string" || !deps.probeIds?.has(probe)) {
+      return "call is not attributed to an open Worker MCP probe";
+    }
+    return probeServer();
   });
+}
+
+/** probe が開いている間に出す面: tools の capability を宣言し、`tools/list` は空、verb は1本も無い。
+ *  capability が無いと Codex は `tools/list` の -32601 で起動を断る(#2701 の実測)。 */
+function probeServer(): McpServer {
+  const server = new McpServer({ name: "tidepool", version: "0.0.0" }, { capabilities: { tools: {} } });
+  server.server.setRequestHandler(ListToolsRequestSchema, () => ({ tools: [] }));
+  return server;
 }

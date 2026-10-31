@@ -76,6 +76,25 @@ export function readInitMcpServers(parsed: Record<string, unknown> | null): stri
   return names as string[];
 }
 
+/** The init line's `status` of the server named `name` (ADR 0331 決定8) — what the
+ *  Worker MCP reachability probe reads, beside the names-only reader above so the
+ *  containment comparison keeps not seeing status. `listed: false` when the init
+ *  line's `mcp_servers` carries no entry of that name. Null when this is not the
+ *  init line, or `mcp_servers` / the entry's status is not readable — the same
+ *  unreadable init report as `readInitMcpServers`. */
+export function readInitMcpServerStatus(
+  parsed: Record<string, unknown> | null,
+  name: string,
+): { listed: true; status: string } | { listed: false } | null {
+  if (!isInitLine(parsed)) return null;
+  const value = (parsed as Record<string, unknown>).mcp_servers;
+  if (!Array.isArray(value)) return null;
+  const entry = value.find((server) => (server as { name?: unknown } | null)?.name === name);
+  if (entry === undefined) return { listed: false };
+  const status = (entry as { status?: unknown }).status;
+  return typeof status === "string" ? { listed: true, status } : null;
+}
+
 /** The init line's `memory_paths.auto` — the host auto-memory directory the CLI
  *  loaded into this session (ADR 0156; measured 2.1.283: `memory_paths: {auto:
  *  <dir>}` while auto-memory is on, the whole field gone with

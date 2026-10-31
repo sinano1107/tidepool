@@ -34,7 +34,7 @@ import {
 } from "./sandbox.js";
 import { closeSession, taskTempPrefix } from "./session-close.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
-import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServers } from "./stream-json.js";
+import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServerStatus, readInitMcpServers } from "./stream-json.js";
 import {
   carriesReadOnly,
   type PickupStopped,
@@ -1162,6 +1162,67 @@ export async function probeToolSurfaceCapability(
   const surface = checkToolSurface(observed.tools, "work", false, observed.mcpServers);
   return surface.available ? checkAutoMemoryClosed(observed.autoMemoryPath) : surface;
 }
+
+/** init 行の `tidepool` の status のうち、listener に接続済みを示す値。実測(2026-10-31、macOS、sandbox の profile なし、
+ *  CLI 2.1.314 と pin の 2.1.286 で同じ): verb の無い McpServer を `createStatelessMcpRouter` で出す listener に繋がれば
+ *  `{name:"tidepool", status:"connected", source:"dynamic"}`、届かない port なら `status:"failed"`。sandbox の profile を
+ *  運んだ経路は未観測。 */
+const MCP_CONNECTED_STATUS = "connected";
+
+/** Worker MCP 到達性の probe(ADR 0331 決定8)の Claude 側。probe 名義の一時 dir を workspace にした sandbox の profile
+ *  (実 session と同じ `buildSandboxSettings`、`failIfUnavailable: true`)と、`url` の listener だけを指す MCP 設定を、
+ *  実 session と同じくファイルで渡して `/usage` ping を撃ち、init 行の `tidepool` の status を読む。どちらも probe 名義の
+ *  固定設定で task 単位の生成物ではないので、封じ込めの probe が運ばない線(ADR 0108 決定3)の外。読みは fail-closed:
+ *  接続済みの値以外は観測値を理由に不成立。timeout は封じ込めの probe と同じ広さ。 */
+export const claudeMcpReachabilityThrough =
+  (call: BoardCall) =>
+  (url: string): Promise<ContainmentCapability> =>
+    atNeutralCwd("tidepool-mcp-probe-", async (neutral) => {
+      // 実 session と同じく profile と cwd を実体の綴りで書く(issue #1954)
+      const dir = realpathSync(neutral);
+      const mcpConfig = join(dir, "probe.mcp.json");
+      writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: "http", url } } }));
+      const settings = join(dir, "probe.sandbox.json");
+      writeFileSync(
+        settings,
+        JSON.stringify(
+          buildSandboxSettings({
+            taskType: "work",
+            workspacePath: dir,
+            permittedSkills: [],
+            allowedDomains: [],
+            taskTemp: dir,
+            lib64: existsSync("/lib64"),
+          }),
+        ),
+      );
+      const status = await call(
+        {
+          kind: "Worker MCP reachability probe",
+          harness: "claude-code",
+          command: "claude",
+          args: [...SKILL_ENUM_ARGS, "--setting-sources", "project", "--mcp-config", mcpConfig, "--strict-mcp-config", "--settings", settings],
+          cwd: dir,
+          // sandbox.ts の taskTemp: CLI の TMPDIR もそこを指さないと proxy の socket が閉じた /tmp に残る
+          env: { ...boardCallEnv(), TMPDIR: dir },
+          limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
+        },
+        (proc) => readInitReport(proc.stdout, (parsed) => readInitMcpServerStatus(parsed, MCP_SERVER_NAME)),
+      );
+      if (status?.listed && status.status === MCP_CONNECTED_STATUS) return { available: true };
+      const started = `a Claude worker started under the board's sandbox profile`;
+      return {
+        available: false,
+        reason:
+          status === null
+            ? "the Worker MCP reachability probe produced no readable init report (a missing binary, a sandbox that " +
+              "failed to start, a stalled auth prompt, or a timeout) — whether a Claude worker reaches the board is unknown"
+            : status.listed
+              ? `${started} reports the board's Worker MCP \`${MCP_SERVER_NAME}\` as ${status.status}, not ` +
+                `${MCP_CONNECTED_STATUS} — such a worker could not report to the board`
+              : `${started} lists no \`${MCP_SERVER_NAME}\` server in its init report — such a worker could not report to the board`,
+      };
+    });
 
 /** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版が
  *  違えばツール面の probe を撃たない。版の門を `probeToolSurfaceCapability` の外に置くのは、

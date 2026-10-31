@@ -992,10 +992,11 @@ async function probePermission(
 }
 
 /** 形の正しい placeholder の spawn 設定(ADR 0142 決定2)。preflight の strict parse と回答時の組の検査が問うのは、
- *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。 */
+ *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。Worker MCP 到達性の probe は繋ぐ先が問いなので
+ *  `mcpUrl` だけを実物で上書きする(ADR 0331 決定8)。 */
 function placeholderSpawnConfig(
   taskType: Task["type"],
-  input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook">,
+  input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook"> & { mcpUrl?: string },
 ): string[] {
   return spawnConfig({
     taskType,
@@ -1004,6 +1005,80 @@ function placeholderSpawnConfig(
     enabledTools: BOARD_VERBS,
     ...input,
   });
+}
+
+/** Worker MCP 到達性の probe(ADR 0331 決定8)の Codex 側。worker と同じ `codex exec` の形と、同じ spawnConfig を
+ *  placeholder で組んだ設定(`mcp_servers.tidepool.required=true` を含む)で `url` の listener へ繋ぐ。成立は
+ *  `thread.started` の観測で、見えた時点で止める(モデルのターンを払わない)。実測(0.163.0、sandbox の設定なし、#2701):
+ *  届かなければ `required MCP servers failed to initialize: tidepool` で exit 1、届けば `thread.started` が先に出る。
+ *  thread.started 無しの exit / timeout は不成立で、理由に stderr の末尾。 */
+export function codexMcpReachabilityThrough(options: { executable: string; codexHome: string; call: BoardCall }) {
+  return async (url: string): Promise<ContainmentCapability> => {
+    const created: string[] = [];
+    const disposableDir = (prefix: string) => {
+      const dir = mkdtempSync(prefix);
+      created.push(dir);
+      return realpathSync(dir);
+    };
+    try {
+      const taskTemp = disposableDir(join(tmpdir(), "tidepool-codex-mcp-probe-"));
+      // preflight と同じく、worker の checkout と同じ homedir() の下の使い捨ての空の git repo を workspace に見立てる
+      const workspace = disposableDir(join(homedir(), ".tidepool-codex-mcp-probe-workspace-"));
+      git(workspace, "init");
+      const config = placeholderSpawnConfig("work", {
+        mcpUrl: url,
+        workspace,
+        allowedDomains: [],
+        taskTemp,
+        executable: options.executable,
+        skills: closedSkillsConfig([]),
+        hook: installBoardHook(options.codexHome),
+      });
+      const observed = await options.call(
+        {
+          kind: "Worker MCP reachability probe",
+          harness: "codex",
+          command: options.executable,
+          args: [
+            "--ask-for-approval", "never",
+            "exec", "--json", ...WORKER_EXEC_FLAGS, "--dangerously-bypass-hook-trust",
+            "-C", workspace,
+            ...configArgs(config),
+          ],
+          cwd: workspace,
+          env: workerEnv(options.executable, options.codexHome, taskTemp, "tidepool"),
+          limitMs: CODEX_PREFLIGHT_LIMIT_MS,
+          stdin: "pipe",
+          input: "Reply with OK.",
+        },
+        (proc, done) => {
+          let started = false;
+          const flush = readLines(proc.stdout, (line) => {
+            if ((parseJsonl(line) as { type?: unknown } | null)?.type !== "thread.started") return;
+            started = true;
+            done();
+          });
+          const stderr = readStderrTail(proc.stderr);
+          return (exitCode) => {
+            flush();
+            return { started, exitCode, stderr: stderr() };
+          };
+        },
+      );
+      if (observed?.started) return { available: true };
+      return {
+        available: false,
+        reason:
+          "a Codex worker started with the board's required Worker MCP `tidepool` did not start its thread " +
+          (observed
+            ? `(exit ${observed.exitCode}${observed.stderr ? `: ${observed.stderr}` : ""})`
+            : "(the probe did not complete: limit, spawn failure, or no container)") +
+          " — such a worker could not report to the board",
+      };
+    } finally {
+      for (const dir of created) rmSync(dir, { recursive: true, force: true });
+    }
+  };
 }
 
 async function actualCodexCapability(options: {

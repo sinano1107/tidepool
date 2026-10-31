@@ -309,6 +309,8 @@ export interface BootOptions {
   /** ADR 0186 決定3: Board call の口が呼び出しのたびに読む Harness の CLI の版の検査。
    *  Absent → 常に一致(版の門を駆動するテストだけが渡す)。 */
   checkHarnessCliVersion?: HarnessContainmentCheck;
+  /** ADR 0331 決定8: 開いている Worker MCP の probe の id。テストが id を直に足し引きする。 */
+  probeIds?: Set<string>;
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -413,6 +415,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     taskExecutionCandidates: options.taskExecutionCandidates ?? implicitTaskExecutionCandidates(db),
     harnessContainment: options.harnessContainment,
     checkHarnessCliVersion: options.checkHarnessCliVersion ?? pinnedCliVersions,
+    probeIds: options.probeIds,
     providerCliAuth: options.providerCliAuth,
     modelProbes: options.modelProbes,
     registryReachability: options.registryReachability,

@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { floorResponse, type ResponseSurface } from "./response-budget.js";
+import { sendJson } from "./send-json.js";
 
 /** issue #1075: 登録の入口で inputSchema を strict にし、未知の引数を tool error にする。
  *  schema の無い verb も空の strict object を持つ。共有 schema は `.strict()` の複製なので変わらない。
@@ -33,12 +34,20 @@ export function floorEveryResponse(
   return server;
 }
 
-/** The shared per-request Streamable HTTP lifecycle for stateless MCP servers. */
-export function createStatelessMcpRouter(buildServer: (req: Request) => McpServer): Router {
+/** The shared per-request Streamable HTTP lifecycle for stateless MCP servers.
+ *  `buildServer` returning a string refuses the request (initialize included) with that message. */
+export function createStatelessMcpRouter(buildServer: (req: Request) => McpServer | string): Router {
   const router = Router();
   router.use(json());
   router.post("/", async (req, res) => {
     const server = buildServer(req);
+    if (typeof server === "string") {
+      // 403 にしない: Claude CLI は 403 を受けた server 名を `~/.claude/mcp-needs-auth-cache.json` に記録し、以後その名前の
+      // server を繋ぎに行かず `needs-auth` と報告する(実測 2026-10-31、macOS、CLI 2.1.314 / 2.1.286)—— 古い probe 1回で
+      // 同じホストの `tidepool` を使う worker が全部繋がらなくなる。404 / 400 / 401 は `failed` で記録は残らなかった
+      sendJson(res.status(404), { jsonrpc: "2.0", error: { code: -32000, message: server }, id: null });
+      return;
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();
