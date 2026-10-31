@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Clock } from "./clock.js";
 import type { Db } from "./db.js";
 import { floorResponse, type ResponseSurface } from "./response-budget.js";
+import { sendJson } from "./send-json.js";
 
 /** issue #1075: 登録の入口で inputSchema を strict にし、未知の引数を tool error にする。
  *  schema の無い verb も空の strict object を持つ。共有 schema は `.strict()` の複製なので変わらない。
@@ -33,12 +34,17 @@ export function floorEveryResponse(
   return server;
 }
 
-/** The shared per-request Streamable HTTP lifecycle for stateless MCP servers. */
-export function createStatelessMcpRouter(buildServer: (req: Request) => McpServer): Router {
+/** The shared per-request Streamable HTTP lifecycle for stateless MCP servers.
+ *  `buildServer` returning a string refuses the request (initialize included) with that message. */
+export function createStatelessMcpRouter(buildServer: (req: Request) => McpServer | string): Router {
   const router = Router();
   router.use(json());
   router.post("/", async (req, res) => {
     const server = buildServer(req);
+    if (typeof server === "string") {
+      sendJson(res.status(403), { jsonrpc: "2.0", error: { code: -32000, message: server }, id: null });
+      return;
+    }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on("close", () => {
       void transport.close();

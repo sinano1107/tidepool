@@ -30,6 +30,7 @@ import {
   ClaudeCodeWorker,
   type ClaudeWorkerOptions,
   checkClaudeCliVersion,
+  claudeMcpReachabilityThrough,
   enumerateHostSkills,
   enumerateToolsThrough,
   execThrough,
@@ -48,6 +49,7 @@ import {
   CODEX_CLI_VERSION,
   CodexWorker,
   type CodexWorkerOptions,
+  codexMcpReachabilityThrough,
   createCodexCapabilityCheck,
   createCodexWorkspaceCheck,
 } from "./codex-worker.js";
@@ -794,6 +796,11 @@ function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCa
     harnessContainment: board.registryDir
       ? (harness: Harness) => (harness === "codex" ? codexContainment() : claudeContainment())
       : undefined,
+    // ADR 0331 決定8: Worker MCP 到達性の解放の probe。封じ込めの probe と同じく Board call の口から組む
+    workerMcpReachability: (harness, url) =>
+      harness === "codex"
+        ? codexMcpReachabilityThrough({ executable: board.codexExecutable, codexHome: board.codexHome, call })(url)
+        : claudeMcpReachabilityThrough(call)(url),
     cliAuth: createClaudeCliAuthCheck(cliAuthCommandThrough(call, "Claude authentication probe")),
     // OpenAI is derived from the same App Server probe in server.ts; this
     // record supplies the Claude-harness Provider probes.
@@ -879,6 +886,8 @@ export async function buildServerOptions(board: BoardComposition, db: Db): Promi
       openai: () => codexLoginAbsence(board.codexHome),
     },
     taskExecutionCandidates: taskExecutionCandidatesResolver(board, db),
+    // ADR 0331 決定8: Worker MCP の probe の帰属の扉が引く、開いている probe の id
+    probeIds: new Set(),
     registryReachability: registryReachabilityCheck(board, writeRegistryRef),
     cliAuthExpiresAt: board.cliAuthExpiresAt,
     // ADR 0093 / issue #211: remote 正本を宣言した workspace の pickup 直前の fetch は
