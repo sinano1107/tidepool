@@ -6,7 +6,7 @@
 
 1. **gate を抜けた資源の故障は、観測点によらず資源に帰属し、資源の停止(Quarantine か除外)を先に登録する。** ADR 0118 決定4 の2文目を置き換える。ADR 0274 決定1 が spawn の前に引いた線 ——「task に帰属しうるか資源に帰属するかの線で、観測点の数ではない」—— を spawn の後まで延ばす。残る「盤面のバグ」は資源の署名を持たない throw(fs / git の一過性の失敗)だけで、そちらは `spawn_failed` → failure question のまま。
 2. **task 側は「ターンが走ったか」で分かれる。** root がモデルの応答を1つも出さずに終わった session(0ターン)は、資源の停止を登録したうえで failure question を立てず todo の先頭へ戻す(ADR 0274 / ADR 0184 決定4 の形)。ターンが走った session は ADR 0145 のまま —— 途中の成果がありうるので retry / abandon に判断価値があり、資源の question と2枚になる(ADR 0145 決定5)。2つの条件はどちらも必須で、資源の停止を登録せずに先頭へ戻すと毎 poll 同じ故障を黙って踏む。ADR 0145 決定1「走った時間では切らない」とは矛盾しない —— 切るのは時間ではなくターンの有無である。
-3. **0ターンの exit を資源へ返す鍵は、記録から読める資源の署名である。** 今ある3本(401 → Provider 認証、404 → 行、cap)に、init 行の `mcp_servers[].status`、Codex の `required` な MCP の起動時 exit、Claude の `failIfUnavailable` の起動時 exit を足す(後2つの署名は member issue で実測)。署名を持たない0ターンの exit は資源を名指せないので ADR 0145 のまま —— fail-closed 側で、人間に届く。署名は transcript の行か exit の事実にあるものに限る(起動時の復旧が同じ読み手で読める形、ADR 0316 決定1)。
+3. **0ターンの exit を資源へ返す鍵は、記録から読める資源の署名である。** 今ある3本(401 → Provider 認証、404 → 行、cap)に、init 行の `mcp_servers[].status` と Codex の `required` な MCP の起動時 exit を足す(後者の署名は member issue #2701 で実測)。Claude の proxy の起動失敗は0ターンの exit にならないので、ここには入らない(帰結の #2703 を参照)。署名を持たない0ターンの exit は資源を名指せないので ADR 0145 のまま —— fail-closed 側で、人間に届く。署名は transcript の行か exit の事実にあるものに限る(起動時の復旧が同じ読み手で読める形、ADR 0316 決定1)。
 4. **既存の 401 と drift にも決定2 を当てる。** どちらも最初のターンの前に決着する(401 は最初の API 呼び出し、drift は init 行の強制回収)ので、資源の停止 + 先頭復帰、question 無し。ADR 0145 の退けた案が「今回は決めない」と保留した問いの答えである。session 途中の失効はターンが走っているので2枚のまま。
 5. **spawn の前に実使用の読みが手元にある資源は、gate がその読みをそのまま使う(1つの関数)。** moonshot の「不在」(ADR 0116 決定4)は「鍵ファイル無し」から「読めて空でない鍵が無い」に改める。openai は ADR 0098 決定5 が `auth.json` の中身を読まないので存否のまま。`socat` は binary の有無までしか spawn 前に読めないので対象外。
 6. **Claude の init 行の欠落側を観測し、`tidepool` が `failed` なら最初のターンの前に強制回収する。** 実測(CLI 2.1.314、pin 2.1.286 は未確認): 到達不能な URL を渡すと init 行に `{name:"tidepool", status:"failed"}` が載り、CLI は exit せず1ターン完走する。channel の無い worker は作業できても報告できず、watchdog の時間制限まで slot を握る。Codex の `mcp_servers.tidepool.required=true` はこの決定が根拠。`status` は server 名で振り分ける —— `tidepool` は決定7 の資源、代理 MCP(ADR 0327)の名前はそのサーバの故障(ADR 0327 決定7)。
@@ -24,7 +24,7 @@
 
 ## 帰結
 
-- #2703(proxy 起動失敗)の資源はその Harness の封じ込め能力(gate の `socat` と同じ)。観測点は実測後に member issue が決める —— 起動時 exit なら決定3 の署名、egress 無しで走るなら署名が無い限り観測できず、別の問い(ADR 0072 の形)になる。
+- #2703(proxy 起動失敗)の資源はその Harness の封じ込め能力(gate の `socat` と同じ)。**2026-10-31 追記(#2703 の実測、pin 2.1.286):** 起動時 exit でも egress 無しでもなかった。`failIfUnavailable` が起動時に見るのは依存検査(socat / bwrap の有無)だけで、そこは pickup の gate が先に塞ぐ。sandbox は最初の Bash の時に遅延して初期化されるので、host 側の bridge が起動に失敗すると、session は exit 0・result `success` のまま走り、Bash だけが `echo` まで `Sandbox is required but failed to initialize: …` で拒否される。署名は transcript の tool_result の行で、そこまでにターンが走っているので、決定2 のうちターンが走った側(2枚)に当たる。観測点は #2746 が決めた —— その tool_result を見た時点で強制回収する。Write / Edit だけで作業して検証なしに完了を報告させないためである。受理の検査が bridge の起動を見ない件は #2770、sandbox 内の socat だけが死んで egress が黙って欠ける形は #2769。
 - Codex の `required=true` が本当に起動時 exit かは未実測。走り続けるなら Codex 側の観測点は #2701 が決める。
 - 再起動を跨いだ0ターンの exit は、復旧が分類を撃ち直さない(401 / 404 も同じ)ので署名なし側に落ちる。既存の非対称で、ここでは変えない。
 - 学習器・配分評価は0ターンの session を分母に入れない(404 の既存規則)。pin の子(Interview の受験者)が資源の停止に当たれば skipped の待ちで、`target_refused` ではない —— 資源は回復する。
