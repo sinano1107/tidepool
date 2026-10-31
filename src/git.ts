@@ -23,8 +23,7 @@ const TIDEPOOL_GIT_IDENTITY_ENV = {
   GIT_COMMITTER_EMAIL: TIDEPOOL_BOT_NOREPLY_EMAIL,
 } as const;
 
-/** Shared by every board-driven git call (workspace.ts and workspace-create.ts).
- *  stderr captured, not inherited: git narrates checkouts on stderr and the
+/** The board's plain (unauthenticated) git runner. stderr captured, not inherited: git narrates checkouts on stderr and the
  *  board's console is not the place for it. */
 export function git(cwd: string, ...args: string[]): string {
   return run(cwd, args).toString().trim();
@@ -53,7 +52,7 @@ function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: strin
   }
 }
 
-/** 盤面の git の2つの口(`run` と github-auth.ts の `runAuthedGit`)が共有する。Node は cwd が無いときも git が
+/** git の2つの runner(`run` と github-auth.ts の `runAuthedGit`)が共有する —— 直に `execFileSync` する呼び出しは通らない。Node は cwd が無いときも git が
  *  PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま載る
  *  (issue #2722)—— cwd が無いほうだけを在り処を名指す理由に書き換え、git が無いほうは元のまま投げる。 */
 export function rethrowNamingMissingCwd(err: unknown, cwd: string, args: string[]): never {
