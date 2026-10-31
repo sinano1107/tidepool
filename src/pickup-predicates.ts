@@ -69,17 +69,19 @@ export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: Regi
 }
 
 function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean): PickupPredicate[] {
-  const branch = protectedBranch(place);
+  // 予告の実環境は設定を持たないので、既定名や remote の有無を答えにしない(ADR 0329 決定10)。
+  const branch = place.path ? `protected branch \`${protectedBranch(place)}\`` : "configured protected branch";
+  const remoteRef = place.path && isRemoteBacked(place) ? `\`${protectedBranchRef(place)}\`` : "its remote-tracking ref";
   const prefix = `${scope}${IF_REPOSITORY_PRESENT}`;
   return [
     {
       phase: "after-open", place,
-      describe: `${prefix}the remote protected branch \`${branch}\` can be fetched (no-op without a remote source of truth).`,
+      describe: `${prefix}the remote ${branch} can be fetched (no-op without a remote source of truth).`,
       check: async (fire) => { if (placeHasRepository(place.path)) await fire.fetch(place); },
     },
     {
       phase: "after-open", place,
-      describe: `${prefix}the protected branch \`${branch}\` can be checked out; when remote-backed, the local branch can fast-forward to \`${protectedBranchRef(place)}\` without ahead or diverged commits.` +
+      describe: `${prefix}the ${branch} can be checked out; when remote-backed, the local branch can fast-forward to ${remoteRef} without ahead or diverged commits.` +
         (unbornRoom ? " An unborn HEAD passes: the opening step supplies `main` with an empty commit." : ""),
       check: (fire) => {
         if (!placeHasRepository(place.path)) return;

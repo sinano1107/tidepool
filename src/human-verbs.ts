@@ -88,6 +88,7 @@ import {
   latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  openedPlaceNames,
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
   presentTask,
@@ -647,6 +648,11 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           const overlap = boardStateOverlap(target.path, deps.boardState);
           if (overlap) throw new DomainError(overlap.reason);
         }
+      }
+      // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。
+      const sessions = deps.db.prepare("SELECT id FROM tasks WHERE status = 'in_progress' OR teardown_started_at IS NOT NULL").pluck().all() as string[];
+      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name).includes(value!))) {
+        throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
       }
       await fire([...own, ...examinees], "after-open");
       if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));

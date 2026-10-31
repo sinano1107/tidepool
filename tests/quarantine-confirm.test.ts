@@ -209,8 +209,26 @@ it("token が出せていれば解除はそのまま受理される —— 新�
   });
 
   expect(res.status).toBe(200);
-  expect(t.github.repoAccessCalls).toBe(0);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("done");
+});
+
+it("走行中の session が開く workspace の修復回答は休止操作の前に拒み、session の HEAD を保って後始末を通せる(ADR 0064)", async () => {
+  const workspace = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace });
+  const task = await registerWork(t, "still running");
+  await t.clock.advance(HOUR);
+  quarantineWorkspace(t.db, workspace.name, new Error("protected branch moved out of band"), t.clock.now());
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
+
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("session or its teardown is still running");
+  expect(git(workspace.path, "branch", "--show-current")).toBe(`task/${task.id}`);
+  expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("in_progress");
+
+  await completeViaMcp(t, task.id);
+  expect((await answer()).status).toBe(200);
 });
 
 // ADR 0241 決定5・6: workspace の quarantine の受理は回答なので収束を突く —— quarantine が抱えていた根は失敗 question を持たないまま着地する

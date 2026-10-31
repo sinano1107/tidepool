@@ -583,6 +583,24 @@ it("purely-local の読む実環境も root の pickup で保護ブランチへ�
   expect(git(workspacePath, "branch", "--show-current")).toBe("main");
 });
 
+it.each(["room", "read", "examinee"])("Interview の %s を開く session の間は、その名前の修復回答を拒む(ADR 0064)", async (place) => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const running = place === "examinee" ? (await pose(root.id))[0] : root.id;
+  await runNow(t, running);
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(running));
+  const path = place === "examinee" ? examineeCheckoutOf(running) : roomOf(root.id);
+  const name = place === "read" ? "reef" : root.id;
+  registerQuarantine(t.db, "workspace", name, "repair the place", t.clock.now());
+  const question = await servedQuarantineQuestion(t, "workspace", name);
+
+  const refused = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
+
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain("session or its teardown is still running");
+  expect(git(path, "branch", "--show-current")).toBe(`task/${running}`);
+});
+
 it("受験者の後半の休止も解除で撃ち直し、main が無ければ拒み、main 上の dirty な答案は捨てずに再開する(ADR 0329 決定12)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
@@ -847,6 +865,8 @@ async function bootReef(registry: boolean): Promise<Tidepool> {
 it.each(ROOM_ANSWER_BOARDS)("面接室の quarantine の回答は、%sでも実環境ではなく root の面接室を検査して受理する(ADR 0273 決定8)", async (_board, registry) => {
   t = await bootReef(registry);
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await callAsTask(t, root.id, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
+  t.worker.exit(root.id);
   registerQuarantine(t.db, "workspace", root.id, "the interview room broke", t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", root.id);
   const stray = join(roomOf(root.id), "stray.txt");

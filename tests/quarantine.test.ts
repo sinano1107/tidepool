@@ -263,6 +263,21 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     expect(purpose).toContain("can be checked out");
   });
 
+  it("設定を持たない予告は main やローカル ref を決めつけず、実際の一覧は custom な保護ブランチと remote ref を名指す", () => {
+    const db = openDb(":memory:");
+    const purpose = purposeFor(db, "sandbox");
+    const { own } = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "/unused", branch: "trunk", repo: "https://github.com/acme/sandbox.git" }, "");
+    expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
+      expect.stringContaining("`trunk` can be fetched"), expect.stringContaining("`refs/remotes/origin/trunk`"),
+    ]);
+    const unknown = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "" }, "").own;
+    for (const predicate of unknown) expect(purpose).toContain(predicate.describe);
+    expect(purpose).toContain("configured protected branch");
+    expect(purpose).toContain("its remote-tracking ref");
+    expect(purpose).not.toContain("`main`");
+    db.close();
+  });
+
   it("開いた event が無い面接室は mkdir と、repo が既にある場合の git 検査を条件つきで予告する(ADR 0329 決定4・5)", () => {
     const db = openDb(":memory:");
     const purpose = purposeFor(db, interviewRoot(db).id);
