@@ -46,6 +46,16 @@ it("probe の終了(id の無効化)の後は同じ id の initialize も拒ま�
   await expect(connect({ probe: "probe-1" })).rejects.toThrow("not attributed to an open Worker MCP probe");
 });
 
+it("扉の拒否は 403 でない —— Claude CLI は 403 の server 名を needs-auth としてホストに記録し、以後の worker が繋がらない", async () => {
+  t = await bootTidepool({ probeIds: new Set() });
+  const res = await fetch(`${t.mcpBaseUrl}/mcp?probe=never-issued`, {
+    method: "POST",
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }),
+  });
+  expect(res.status).toBe(404);
+});
+
 it("発行していない id と、?task= と ?probe= の併用は initialize から拒まれる", async () => {
   t = await bootTidepool({ probeIds: new Set(["probe-1"]) });
   await expect(connect({ probe: "never-issued" })).rejects.toThrow("not attributed to an open Worker MCP probe");

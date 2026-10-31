@@ -42,7 +42,10 @@ export function createStatelessMcpRouter(buildServer: (req: Request) => McpServe
   router.post("/", async (req, res) => {
     const server = buildServer(req);
     if (typeof server === "string") {
-      sendJson(res.status(403), { jsonrpc: "2.0", error: { code: -32000, message: server }, id: null });
+      // 403 にしない: Claude CLI は 403 を受けた server 名を `~/.claude/mcp-needs-auth-cache.json` に記録し、以後その名前の
+      // server を繋ぎに行かず `needs-auth` と報告する(実測 2026-10-31、macOS、CLI 2.1.314 / 2.1.286)—— 古い probe 1回で
+      // 同じホストの `tidepool` を使う worker が全部繋がらなくなる。404 / 400 / 401 は `failed` で記録は残らなかった
+      sendJson(res.status(404), { jsonrpc: "2.0", error: { code: -32000, message: server }, id: null });
       return;
     }
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
