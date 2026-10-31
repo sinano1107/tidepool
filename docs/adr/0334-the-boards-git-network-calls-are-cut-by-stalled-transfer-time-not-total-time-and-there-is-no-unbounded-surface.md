@@ -38,5 +38,6 @@ stall 検出(`http.lowSpeedLimit` / `http.lowSpeedTime`)があり、接続前の
 - 中断してもサーバ側の push は完走しうる(実測: 中断の約 57 秒後に ref が動く)。ADR 0330 決定3 の畳みと publish の up-to-date の再送がそれを引き受け、
   新しい機構は足さない。
 - #2773 の経路は増えない: git 自身の中断は clone の宛先を消す。
+- ADR 0330 の「probe の有界 30 秒の凍結を受容する」は「無音 30 秒」に読み替わる —— pickup の probe(registry と保護ブランチの fetch)も健全に動いている限り完走し、凍結は転送の長さになる(#2793 と同じ性質)。
 - `authedGitBounded` の ETIMEDOUT の書き換えと、その釘の文は決定4 の文に変わる。`http.lowSpeedTime` は整数秒なので釘の最短は 1 秒。
 - 実装は 1 slice。#2731 のコメントが spec。
