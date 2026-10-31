@@ -88,6 +88,7 @@ import {
   latestChild,
   logDecision,
   MERGE_QUESTION_OPTIONS,
+  openedPlaceNames,
   PR_PROMOTION_FAILURE_OPTIONS,
   type ProposalAmendment,
   presentTask,
@@ -108,9 +109,12 @@ import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchd
 import type { SettledMark } from "./wire-contract.js";
 import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
+  boardRefWriter,
   buildWorkspaceResolver,
+  firePickupPredicates,
   mergeTaskToProtected,
   OutOfBandProtectedBranchError,
+  PickupGateError,
   quarantineWorkspace,
   redoMergeBacks,
   resolveWorkspacesBaseDir,
@@ -617,40 +621,41 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
           throw new DomainError(err instanceof Error ? err.message : String(err));
         }
       };
-      // 名前に掛かる場所すべてに pickup と同じ述語の一覧を撃ち直し、落ちた項を名指す(ADR 0329 決定4・追記 決定6)
-      const fire = (predicates: PickupPredicate[]) => {
-        for (const { describe, check } of predicates) {
-          try {
-            check();
-          } catch (err) {
-            throw new DomainError(`${err instanceof Error ? err.message : String(err)}\n\nThe check that failed: ${describe}`);
+      // ADR 0329 決定14: 前半(全場所) → 読みだけの上乗せ(自分) → 後半(全場所) → merge-back。
+      const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
+      const fire = async (predicates: PickupPredicate[], phase: PickupPredicate["phase"]) => {
+        try {
+          await firePickupPredicates(target, predicates, phase, {
+            githubAuth: deps.githubAuth, fresh: true, writeRef: (place) => boardRefWriter(deps.db, place),
+          });
+        } catch (err) {
+          let message = err instanceof Error ? err.message : String(err);
+          const ref = parseGitHubRepo(err instanceof PickupGateError ? err.place.repo : target.repo);
+          if (phase === "after-open" && deps.github && ref) {
+            const { guidance } = await repairRepoAccess(deps.github, ref);
+            if (guidance) message += `\n\n${guidance}`;
           }
+          throw new DomainError(message);
         }
       };
-      const { own, examinees } = namePickupPredicates(deps.db, value!, target, resolveWorkspacesBaseDir(deps.workspacesDir), deps.registry);
-      fire(own);
+      await fire([...own, ...examinees], "before-open");
       const room = getTask(deps.db, value!)?.type === "interview";
       if (room) target.path = interviewRoomPath(deps.db, value!) ?? target.path;
-      // 解除だけの上乗せは名前の場所(実環境か面接室)にだけ当て、受験者の checkout には当てない(WIP を残す)
+      // clean tree は受験者の checkout には当てない(WIP を残す、ADR 0329 決定12)。
       if (!room || placeHasRepository(target.path)) {
         await refuseOnError(() => verifyWorkspaceClean(target));
         if (deps.boardState) {
           const overlap = boardStateOverlap(target.path, deps.boardState);
           if (overlap) throw new DomainError(overlap.reason);
         }
-        // ADR 0067 決定2 の3つ目の扉。remote 正本を宣言した workspace だけが対象で、
-        // 「盤面は確認を鵜呑みにせず検証してから受理する」に1条件足すだけである ——
-        // 仲介が token を出せれば受理し、まだ出せなければ回答を拒んで question は開いた
-        // ままになる(ADR 0093 決定8)。ローカルの検査を先に済ませてから撃つので、
-        // purely-local な workspace では1つもネットワークに出ない。
-        const ref = parseGitHubRepo(target.repo);
-        if (deps.github && ref) {
-          const { guidance } = await repairRepoAccess(deps.github, ref);
-          if (guidance) throw new DomainError(guidance);
-        }
-        await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
       }
-      fire(examinees);
+      // ADR 0064: 後半の checkout は、その名前を開く session と後始末が終わるまで待つ。
+      const sessions = deps.db.prepare("SELECT id FROM tasks WHERE status = 'in_progress' OR teardown_started_at IS NOT NULL").pluck().all() as string[];
+      if (sessions.some((id) => openedPlaceNames(deps.db, id, deps.workspace?.name).includes(value!))) {
+        throw new DomainError(`a session or its teardown is still running in workspace ${value} — answer again once it has finished`);
+      }
+      await fire([...own, ...examinees], "after-open");
+      if (placeHasRepository(target.path)) await refuseOnError(() => redoMergeBacks(deps.db, target, deps.workspace?.name, deps.githubAuth));
     },
     agent: async (value) => {
       const quarantineAgentName = value!;

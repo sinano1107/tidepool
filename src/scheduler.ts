@@ -29,7 +29,6 @@ import { closedRootOf } from "./landing.js";
 import { loadEpisodes, loadSeeds, observedInTier, type RoutingEpisode, recordShadow, type Seed, selectorBranch } from "./learner.js";
 import { type InjectionQuery, injectionQueryText } from "./memory.js";
 import { registerDueMetaReviews } from "./meta-review.js";
-import { isRemoteBacked } from "./pickup-predicates.js";
 import type { ProcessContainers } from "./process-container.js";
 import type { Provider } from "./provider.js";
 import {
@@ -91,7 +90,7 @@ import type { IssueExpansionFailure, PollFailure } from "./wire-contract.js";
 import type { WorkerAdapter } from "./worker.js";
 import {
   buildWorkspaceResolver,
-  freshenPlaceAtPickup,
+  firePickupPredicates,
   openExamineeCheckout,
   openInterviewRoom,
   PickupGateError,
@@ -511,7 +510,7 @@ export function startScheduler(deps: {
   }
 
   /** ADR 0067 決定2 の pickup 側の扉(修復の中身は ADR 0093 決定8)。
-   *  pickup の門と準備(`pickupGate` / `freshenPlaceAtPickup` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
+   *  pickup の門と準備(`pickupGate` / `prepareWorkspaceAtPickup`)が落ちた瞬間に**1回だけ**、その repo の token を
    *  仲介が出せるかを訊き、出せなければ install の案内を quarantine の理由に連ねる。
    *
    *  訊かない条件は2つで、どちらも今日どおり quarantine に落ちる: `github` 不在
@@ -612,8 +611,9 @@ export function startScheduler(deps: {
         // ADR 0329 追記 決定7・8: 走る場所を開く前に、task が開く場所すべての一覧を撃つ。落ちた場所の名前で止まり、remote 正本を
         // 持つ場所なら修復案内込み(ADR 0067 決定2)—— 持たない場所(面接室・purely-local の実環境)は案内が無く、そのまま quarantine
         const base = resolveWorkspacesBaseDir(workspacesDir);
+        let checks: Awaited<ReturnType<typeof pickupGate>>;
         try {
-          await pickupGate(db, resolved, picked, base, registry);
+          checks = await pickupGate(db, resolved, picked, base, registry, live);
         } catch (err) {
           if (!(err instanceof PickupGateError)) throw err;
           return stopped(await quarantineWithRepoAccessGuidance(err.place, err, live));
@@ -630,21 +630,17 @@ export function startScheduler(deps: {
             return stopped(quarantineWorkspace(db, rootId, err, clock.now()));
           }
         }
-        // issue #2223: 読む場所のうち remote 正本を持つもの(Interview の root が読む実環境)を pickup 直前の remote へ追従させ
-        // (ADR 0052 決定1・2)、落ちればその場所の quarantine に落ちる。面接室は remote を持たないので当てない(ADR 0329 追記 決定9)
+        // ADR 0329 決定10・11: 読む場所も remote の有無で絞らず、同じ一覧の後半で休止させる。
         const place = taskRunPlace(db, picked, resolved);
-        for (const read of place.reads.filter(isRemoteBacked)) {
-          try {
-            await freshenPlaceAtPickup(read, { githubAuth, live });
-          } catch (err) {
-            return stopped(await quarantineWithRepoAccessGuidance(read, err, live));
-          }
-          if (!live()) return;
-        }
         try {
+          for (const { place: read, predicates } of checks) {
+            if (read.path === place.path) continue;
+            await firePickupPredicates(read, predicates, "after-open", { githubAuth, live });
+            if (!live()) return;
+          }
           await prepareWorkspaceAtPickup(db, place, picked, { githubAuth, live });
         } catch (err) {
-          return stopped(await quarantineWithRepoAccessGuidance(place, err, live));
+          return stopped(await quarantineWithRepoAccessGuidance(err instanceof PickupGateError ? err.place : place, err, live));
         }
         if (!live()) return;
       }

@@ -18,7 +18,11 @@ import {
   examineePickupPredicates,
   gonePlaceReason,
   isRemoteBacked,
+  type PickupPredicate,
+  type PlaceFire,
   pathIsRegistryClone,
+  protectedBranch,
+  protectedBranchRef,
   resolvablePosedHead,
   roomPickupPredicates,
   safeRealpath,
@@ -33,7 +37,6 @@ import {
   type RefWriter,
   type Registry,
   type RegistrySource,
-  remoteTrackingRef,
   type WorkspaceEntry,
 } from "./registry.js";
 import { SANDBOX_SHADOW_PATHS } from "./sandbox.js";
@@ -90,6 +93,8 @@ export type RunPlace = WorkspaceConfig & { reads: WorkspaceConfig[]; snapshot_ke
 /** The protected branch: no task ever works on it directly. */
 const MAIN_BRANCH = "main";
 
+export { protectedBranch, protectedBranchRef } from "./pickup-predicates.js";
+
 /** ADR 0018: the base directory a workspace entry's path derives from when
  *  the entry omits `path`. `configured` is `TIDEPOOL_WORKSPACES_DIR` as read
  *  by the caller (env access stays at the board's config edge, not here) —
@@ -109,27 +114,6 @@ export type WorkspacesBaseDirSource = "configured" | "default";
 
 export function workspacesBaseDirSource(configured: string | undefined): WorkspacesBaseDirSource {
   return configured === undefined ? "default" : "configured";
-}
-
-/** ADR 0023: `branch` is a reference resolved fresh at every use, same
- *  posture as `resolveExecutionWorkspace` itself — never pinned to what a
- *  task branch actually forked from. */
-export function protectedBranch(workspace: WorkspaceConfig): string {
-  return workspace.branch ?? MAIN_BRANCH;
-}
-
-/** 盤面が保護ブランチを**参照として**読むときの1つの ref —— remote 正本を宣言した
- *  workspace ではリモート側の remote-tracking ref、そうでなければローカルの同名
- *  ブランチ(`registryRef(mode)` の workspace 側の対、綴りは `remoteTrackingRef` を
- *  共有する)。
- *
- *  `protectedBranch` の返す**名前**とは役が違う: PR の base や直接書き込み禁止の
- *  対象はリモートのブランチ名そのものなので今も名前を使い、「今この保護ブランチは
- *  どのコミットか」を訊く側だけがこの ref を使う(タスクブランチの fork 元、
- *  slot 解放後の休止位置の追従先、完了時の未着地 commit 比較)。 */
-export function protectedBranchRef(workspace: WorkspaceConfig): string {
-  const branch = protectedBranch(workspace);
-  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
 }
 
 /** A task's `workspace` (or the board's default) names a workspace absent
@@ -181,8 +165,11 @@ export function openInterviewRoom(db: Db, root: Task, workspacesBaseDir: string,
 }
 
 function initialRoomCommit(path: string, rootId: string): void {
+  if (readRef({ name: rootId, path }, "HEAD") !== "") return;
+  // ADR 0329 決定13: 未生の HEAD だけ main へ向け直す —— 人間の init.defaultBranch に依らない。
+  git(path, "symbolic-ref", "HEAD", "refs/heads/main");
   // 受験者の履歴に載るので、盤面の語を持たない件名(ADR 0273 決定1)
-  if (readRef({ name: rootId, path }, "HEAD") === "") git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
+  git(path, "commit", "--quiet", "--allow-empty", "-m", "Initial commit");
 }
 
 /** 受験者は出題の head だけを fetch した自分の checkout で解く。記録済みなら何も作り直さず WIP を残す(ADR 0276 / ADR 0329)。 */
@@ -220,10 +207,10 @@ export function recordedInterviewRoom(db: Db, rootId: string): WorkspaceConfig |
   return path === undefined ? undefined : { name: rootId, path };
 }
 
-/** pickup の門で落ちた場所。message は落ちた述語の理由そのまま —— 呼び手はこの場所の名前で止める。 */
+/** ADR 0329 決定10: 落ちた項の説明と場所を pickup / 解除で共有する。 */
 export class PickupGateError extends Error {
-  constructor(readonly place: WorkspaceConfig, cause: unknown) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
+  constructor(readonly place: WorkspaceConfig, cause: unknown, describe?: string) {
+    super(`${cause instanceof Error ? cause.message : String(cause)}${describe ? `\n\nThe check that failed: ${describe}` : ""}`, { cause });
   }
 }
 
@@ -233,7 +220,7 @@ export class PickupGateError extends Error {
  *  無ければ規約の番地。読む面接室は記録されたものだけなので、面接室の一覧は記録分岐だけを通る。root 自身の面接室は最後に撃つ —— 未記録なら
  *  作る分岐の `mkdir -p` が走るので、読む場所が落ちた root は自分の面接室を作らずに止まる。一覧の組み立ても撃つのと同じ場所の失敗として、
  *  最初に落ちた場所で `PickupGateError` を投げる。 */
-export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource): Promise<void> {
+export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task, workspacesBaseDir: string, registry?: RegistrySource, live?: () => boolean) {
   const room = (rootId: string) => ({
     name: rootId,
     path: interviewRoomPath(db, rootId) ?? conventionCheckoutPath(rootId, workspacesBaseDir),
@@ -252,11 +239,45 @@ export async function pickupGate(db: Db, workspace: WorkspaceConfig, task: Task,
             path: examineeCheckoutPath(db, task.id) ?? conventionCheckoutPath(task.id, workspacesBaseDir),
             predicates: () => examineePickupPredicates(db, task, rootId, workspacesBaseDir, registry),
           }];
+  const checks = [];
   for (const { predicates, ...place } of places) {
+    if (live?.() === false) return checks;
     try {
-      for (const { check } of predicates()) check();
+      const list = predicates();
+      await firePickupPredicates(place, list, "before-open", { live });
+      checks.push({ place, predicates: list });
     } catch (err) {
+      if (err instanceof PickupGateError) throw err;
       throw new PickupGateError(place, err);
+    }
+  }
+  return checks;
+}
+
+/** ADR 0329 決定10・14: 同じ項を pickup と解除で撃ち、後半の書き手と token の鮮度だけは呼び手が決める。 */
+export async function firePickupPredicates(
+  place: WorkspaceConfig,
+  predicates: PickupPredicate[],
+  phase: PickupPredicate["phase"],
+  board: PickupPrep & { writeRef?: (place: WorkspaceConfig) => RefWriter; fresh?: boolean } = {},
+): Promise<void> {
+  const fire: PlaceFire = {
+    fetch: async (target) => {
+      await ensureWorkspaceToken(target, board.githubAuth, { fresh: board.fresh });
+      if (board.live?.() === false) return;
+      if (board.writeRef && isRemoteBacked(target)) fetchBranchCopy(target.path, board.githubAuth, protectedBranch(target), board.writeRef(target));
+      else refreshWorkspace(target, board.githubAuth);
+    },
+    park: (target) => parkOnProtectedBranch(target, board.writeRef?.(target) ?? outsideTheGate),
+  };
+  for (const predicate of predicates) {
+    if (board.live?.() === false) return;
+    if (predicate.phase !== phase) continue;
+    try {
+      if (predicate.phase === "before-open") predicate.check();
+      else await predicate.check(fire);
+    } catch (err) {
+      throw new PickupGateError(predicate.phase === "after-open" ? predicate.place : place, err, predicate.describe);
     }
   }
 }
@@ -658,9 +679,10 @@ function recordedPlaceOf(db: Db, key: string): WorkspaceConfig | undefined {
 export async function ensureWorkspaceToken(
   workspace: WorkspaceConfig,
   auth: GitHubAuth | undefined,
+  options: { fresh?: boolean } = {},
 ): Promise<void> {
   if (!isRemoteBacked(workspace)) return;
-  await auth?.ensureToken(originRepo(workspace.path));
+  await auth?.ensureToken(originRepo(workspace.path), options);
 }
 
 /** ADR 0052 決定2 の pickup 直前の refresh を workspace 側にも(issue #211 やること4)。
@@ -713,17 +735,6 @@ export async function fetchCommitIfMissing(workspace: WorkspaceConfig, sha: stri
   fetchCommit(workspace.path, auth, sha);
 }
 
-/** pickup の鮮度の段(issue #211 / issue #2223): remote 正本を宣言していれば refresh し、休止位置(ADR 0052 決定7)へ追従させる。
- *  走る場所と、読む場所(`RunPlace.reads`)のうち remote 正本を持つものに当てる: 盤面が読む正本は pickup 直前の remote の
- *  保護ブランチ(ADR 0052 決定1・2)で、読むだけの場所でも同じである。宣言どうし・宣言と実態の突き合わせは手前の `pickupGate` が
- *  撃つ(ADR 0329 追記 決定7・9)—— remote を持たない clone に対する fetch の生のエラーより先に「宣言がずれている」が人間に届く。 */
-export async function freshenPlaceAtPickup(place: WorkspaceConfig, board: PickupPrep): Promise<void> {
-  await ensureWorkspaceToken(place, board.githubAuth);
-  if (board.live?.() === false) return;
-  refreshWorkspace(place, board.githubAuth);
-  parkOnProtectedBranch(place, outsideTheGate);
-}
-
 /** pickup の準備に要る盤面の deps。`live` は pickup の継続の門(#1973、`liveSession`): token の await の後に閉じていれば
  *  git に進まずに戻る —— 呼び手は戻った後に同じ門を読む。 */
 type PickupPrep = { githubAuth?: GitHubAuth; live?: () => boolean };
@@ -736,7 +747,10 @@ export async function prepareWorkspaceAtPickup(
   task: Task,
   board: PickupPrep = {},
 ): Promise<void> {
-  await freshenPlaceAtPickup(workspace, board);
+  const rootId = interviewRootIdOf(db, task);
+  const predicates = rootId === undefined ? checkoutPickupPredicates(workspace)
+    : task.type === "interview" ? roomPickupPredicates(db, rootId, "") : examineePickupPredicates(db, task, rootId, "");
+  await firePickupPredicates(workspace, predicates, "after-open", board);
   if (board.live?.() === false) return;
   ensureTaskBranch(db, workspace, task);
   // ADR 0064 決定5: fetch と休止位置の**後**でなければならない —— `refreshWorkspace` が `refs/remotes` を、休止位置の ff が
@@ -1077,19 +1091,27 @@ function assertNothingWrittenAfterCompletion(workspace: WorkspaceConfig, task: T
  *  決定7 が求めるのは「追従していること」なので、ff のあと HEAD がリモートの ref と
  *  同じコミットを指していることまで要求する。分岐(両側に差がある)は merge 自身が
  *  弾き、先行はこの検査が弾く。どちらも投げて quarantine に落とす(呼び出し元の
- *  `releaseWorkspace` と pickup の鮮度の段 `freshenPlaceAtPickup` が受ける)。
+ *  `releaseWorkspace` と pickup の後半が受ける)。
  *
  *  ff は呼び手が渡す `writeRef` で書く: 後始末と受理のやり直しは口(ADR 0243 決定4)、pickup の鮮度の段だけが
  *  `outsideTheGate` を明示して渡す(#2459)。 */
 function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter): void {
   const branch = protectedBranch(workspace);
-  git(workspace.path, "checkout", branch);
+  try {
+    git(workspace.path, "checkout", branch);
+  } catch (cause) {
+    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot be checked out: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
   if (!isRemoteBacked(workspace)) return;
   const ref = protectedBranchRef(workspace);
   const remoteSha = git(workspace.path, "rev-parse", ref);
   // identity を渡すのは ff が commit を作らない場合でも git が要求しうるため —
   // 盤面が打つ git はすべて Tidepool 名義という線(issue #53)をここでも切らない
-  writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
+  try {
+    writeRef(`refs/heads/${branch}`, remoteSha, () => git(workspace.path, "merge", "--ff-only", remoteSha));
+  } catch (cause) {
+    throw new Error(`workspace ${workspace.name}: protected branch '${branch}' cannot fast-forward to ${ref}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause });
+  }
   if (git(workspace.path, "rev-parse", "HEAD") === remoteSha) return;
   throw new Error(
     `workspace ${workspace.name}: local '${branch}' is ahead of ${ref} — out-of-band local ` +

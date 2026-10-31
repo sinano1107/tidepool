@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createAgent } from "../src/agent-create.js";
@@ -19,6 +19,7 @@ import {
   makeWorkspace,
   mcpClient,
   registerWork,
+  runNow,
   servedQuarantineQuestion,
   type Tidepool,
 } from "./harness.js";
@@ -47,6 +48,63 @@ function commitOn(path: string, file: string, body: string, message: string): vo
   git(path, "add", "-A");
   git(path, "commit", "-m", message);
 }
+
+it("保護ブランチが無い停止は落ちた項を名指し、修復回答を拒み、main を戻した回答の後に pickup できる(ADR 0329 決定10・14、#2775)", async () => {
+  const workspace = await makeWorkspace("sandbox");
+  t = await bootTidepool({ workspace });
+  git(workspace.path, "checkout", "-b", "rescue");
+  git(workspace.path, "branch", "-D", "main");
+  const task = await registerWork(t, "needs main");
+  await t.clock.advance(HOUR);
+  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped");
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
+  const reason = (await stops())[0].payload.reason;
+  expect(reason).toContain("workspace sandbox");
+  expect(reason).toContain("protected branch 'main'");
+  expect(reason).toMatch(/The check that failed: .*protected branch `main`/);
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(reason);
+
+  git(workspace.path, "branch", "main");
+  expect((await answer()).status).toBe(200);
+  await runNow(t, task.id);
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(task.id));
+  expect(await stops()).toHaveLength(1);
+});
+
+it.each(["ahead", "diverged", "unreachable"])("remote 正本の %s は停止と回答で同じ項が拒み、復元後の回答だけが次の pickup を通す(ADR 0329 決定10・14)", async (fault) => {
+  const { workspace, publish } = await makeRemoteBackedWorkspace("sandbox");
+  t = await bootTidepool({ workspace });
+  const original = git(workspace.path, "rev-parse", "main");
+  if (fault === "unreachable") renameSync(workspace.repo!, `${workspace.repo}-saved`);
+  else {
+    commitOn(workspace.path, "local.txt", "local only\n", "unpublished local commit");
+    if (fault === "diverged") publish("remote.txt", "remote only\n", "remote commit");
+  }
+  const task = await registerWork(t, `repair ${fault}`);
+  await t.clock.advance(HOUR);
+  const stops = async () => (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped");
+  await vi.waitFor(async () => expect(await stops()).toHaveLength(1));
+  const reason = (await stops())[0].payload.reason;
+  const check = reason.split("The check that failed: ")[1];
+  expect(check).toContain(fault === "unreachable" ? "can be fetched" : "can be checked out");
+  const question = await servedQuarantineQuestion(t, "workspace", workspace.name);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired"] });
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(`The check that failed: ${check}`);
+  expect(t.worker.started.map((s) => s.id)).not.toContain(task.id);
+
+  if (fault === "unreachable") renameSync(`${workspace.repo}-saved`, workspace.repo!);
+  else git(workspace.path, "reset", "--hard", original);
+  expect((await answer()).status).toBe(200);
+  await runNow(t, task.id);
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(task.id));
+  expect(await stops()).toHaveLength(1);
+});
 
 // ADR 0064 決定1/2: 見張るのは `refs/*` 全部で、除外は自分のタスクブランチ1本のみ。
 // 別の非保護ブランチへ寄り道して戻ってくる形は、`releaseTree` の HEAD 検査を素通り

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { openDb } from "../src/db.js";
 import { listEvents } from "../src/events.js";
+import { GitHubAuth } from "../src/github-auth.js";
 import { quarantineChecks } from "../src/human-verbs.js";
 import { examineePickupPredicates, gonePlaceReason, namePickupPredicates } from "../src/pickup-predicates.js";
 import {
@@ -17,7 +18,10 @@ import {
 } from "../src/quarantine.js";
 import { pickupExclusions } from "../src/scheduler.js";
 import { cancelTaskDirectly, completeTask, getTask, interviewRoomPath, listBoard, listQueue, nextSlotTask, registerTask } from "../src/tasks.js";
-import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { issuedToken, startFakeBroker } from "./fake-broker.js";
+import { FakeGitHubClient } from "./fakes.js";
+import { FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeRemoteBackedWorkspace, openTestExamineeCheckout, openTestInterviewRoom, poseAccepted } from "./harness.js";
+import { tempDir } from "./temp-dir.js";
 
 /** Quarantine の種類の表(ADR 0137 決定1・2)。行を総なめにするので、1行足せば
  *  このテストも足した行について同じことを述べる —— 足すのは下の見本の値だけである。 */
@@ -255,6 +259,23 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const purpose = purposeFor(openDb(":memory:"), "sandbox");
     expect(purpose).toContain('a workspace named "sandbox" is still configured');
     expect(purpose).toContain("git status --porcelain");
+    expect(purpose).toContain("can be fetched");
+    expect(purpose).toContain("can be checked out");
+  });
+
+  it("設定を持たない予告は main やローカル ref を決めつけず、実際の一覧は custom な保護ブランチと remote ref を名指す", () => {
+    const db = openDb(":memory:");
+    const purpose = purposeFor(db, "sandbox");
+    const { own } = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "/unused", branch: "trunk", repo: "https://github.com/acme/sandbox.git" }, "");
+    expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
+      expect.stringContaining("`trunk` can be fetched"), expect.stringContaining("`refs/remotes/origin/trunk`"),
+    ]);
+    const unknown = namePickupPredicates(db, "sandbox", { name: "sandbox", path: "" }, "").own;
+    for (const predicate of unknown) expect(purpose).toContain(predicate.describe);
+    expect(purpose).toContain("configured protected branch");
+    expect(purpose).toContain("its remote-tracking ref");
+    expect(purpose).not.toContain("`main`");
+    db.close();
   });
 
   it("開いた event が無い面接室は mkdir と、repo が既にある場合の git 検査を条件つきで予告する(ADR 0329 決定4・5)", () => {
@@ -341,9 +362,17 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     const { own, examinees } = namePickupPredicates(db, root.id, { name: root.id, path: room }, "/never-created");
     const predicates = [...own, ...examinees];
     const describes = predicates.map((predicate) => predicate.describe);
+    expect(own.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
+      expect.stringContaining("can be fetched"), expect.stringContaining("An unborn HEAD passes"),
+    ]);
+    expect(examinees.filter((p) => p.phase === "after-open").map((p) => p.describe)).toEqual([
+      expect.stringContaining(`for the examinee checkout of ${examinee!.id}`), expect.stringContaining("can be checked out"),
+    ]);
     const items = purposeFor(db, root.id).split("\n").filter((line) => /^\d+\. /.test(line)).map((line) => line.replace(/^\d+\. /, ""));
     expect(items.filter((item) => describes.includes(item))).toEqual(describes);
-    const failed = predicates.filter(({ check }) => {
+    const failed = predicates.filter((predicate) => {
+      if (predicate.phase !== "before-open") return false;
+      const { check } = predicate;
       try {
         check();
         return false;
@@ -365,7 +394,7 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
     rmSync(join(room, ".git"), { recursive: true });
 
     const posedHead = examineePickupPredicates(db, examinee!, root.id, "/never-created").find((p) => p.describe.includes("posed head"))!;
-    expect(() => posedHead.check()).toThrow(gonePlaceReason(root.id, room, "interview_room_opened"));
+    expect(() => { if (posedHead.phase === "before-open") posedHead.check(); }).toThrow(gonePlaceReason(root.id, room, "interview_room_opened"));
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
   it("解除の門は未決着の受験者の記録済み checkout に clean tree を当てず、WIP が残っていても回答を受理する(ADR 0329 追記 決定6)", async () => {
@@ -380,3 +409,26 @@ describe("workspace の Quarantine の本文が予告する受理の検査", () 
   }, GIT_FIXTURE_TEST_TIMEOUT);
 
 });
+
+it("GitHub workspace の解除は cached token を fresh に取り直して fetch し、通れば repo-access の修復を撃たない(ADR 0329 決定14)", async () => {
+  const db = openDb(":memory:");
+  const { workspace } = await makeRemoteBackedWorkspace("reef");
+  git(workspace.path, "config", `url.${workspace.repo}.insteadOf`, "https://github.com/acme/reef.git");
+  git(workspace.path, "remote", "set-url", "origin", "https://github.com/acme/reef.git");
+  workspace.repo = "https://github.com/acme/reef.git";
+  const file = join(await tempDir("release-token-"), "token");
+  writeFileSync(file, "test-user-token\n", { mode: 0o600 });
+  const broker = await startFakeBroker(() => issuedToken("test-installation-token"));
+  const auth = new GitHubAuth(file, broker.url);
+  const github = new FakeGitHubClient();
+  try {
+    await auth.ensureToken("acme/reef");
+    await quarantineChecks({ db, workspace, github, githubAuth: auth }).workspace!(workspace.name);
+
+    expect(broker.requests.map((r) => r.repo)).toEqual(["acme/reef", "acme/reef"]);
+    expect(github.repoAccessCalls).toBe(0);
+  } finally {
+    await broker.close();
+    db.close();
+  }
+}, GIT_FIXTURE_TEST_TIMEOUT);
