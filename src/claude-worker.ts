@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { type ResolvedAgent, resolveAgentOrQuarantine, resolveExecutionAgent } from "./agent.js";
 import { atNeutralCwd, type BoardCall, type BoardCallSpec, readOutput } from "./board-call.js";
 import { boardDoctrine, boardProse, taskPrompt } from "./board-prose.js";
@@ -1281,20 +1281,37 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
 export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
   atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }));
 
-/** The checkout's own skills (issue #56 / ADR 0025): the directory names under
- *  `<workspace>/.claude/skills/`. This one-directory scan is the only discovery
+/** The checkout's own skills (issue #56 / ADR 0025): the entry names under
+ *  `<workspace>/.claude/skills/` that are a directory, or a symlink to a
+ *  directory inside the checkout (issue #2774 — the CLI follows the link and
+ *  names the skill by the entry). This one-directory scan is the only discovery
  *  logic tidepool keeps in-house — the `@workspace`/`@host` split is a
  *  difference against it (a skill the CLI enumerated but the checkout doesn't
- *  carry is host-provided). A missing directory is an empty set, not an error
- *  (a workspace need not carry any skills). */
+ *  carry is host-provided). A checkout or `.claude/skills` that cannot be read
+ *  (missing, unresolvable, EACCES) is an empty set, not an error (a workspace
+ *  need not carry any skills). */
 function scanWorkspaceSkills(workspacePath: string): string[] {
+  const skillsDir = join(workspacePath, ".claude", "skills");
   try {
-    return readdirSync(join(workspacePath, ".claude", "skills"), { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+    // real paths on both sides: the workspace path itself may pass through a symlink (macOS /var -> /private/var)
+    const checkout = realpathSync(workspacePath);
+    return readdirSync(skillsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksToDirInsideCheckout(join(skillsDir, entry.name), checkout)))
       .map((entry) => entry.name)
       .sort();
   } catch {
     return [];
+  }
+}
+
+/** A link whose target is outside the checkout is not carried by it (GLOSSARY.md `@workspace`); a broken
+ *  link or one to a non-directory is no skill. Unreadable means not counted, so one entry never stops the scan. */
+function linksToDirInsideCheckout(link: string, checkout: string): boolean {
+  try {
+    const target = realpathSync(link);
+    return target.startsWith(checkout + sep) && statSync(target).isDirectory();
+  } catch {
+    return false;
   }
 }
 
