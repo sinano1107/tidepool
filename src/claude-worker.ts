@@ -1177,14 +1177,23 @@ const MCP_CONNECTED_STATUS = "connected";
 export const claudeMcpReachabilityThrough =
   (call: BoardCall) =>
   (url: string): Promise<ContainmentCapability> =>
-    atNeutralCwd("tidepool-mcp-probe-", async (dir) => {
+    atNeutralCwd("tidepool-mcp-probe-", async (neutral) => {
+      // 実 session と同じく profile と cwd を実体の綴りで書く(issue #1954)
+      const dir = realpathSync(neutral);
       const mcpConfig = join(dir, "probe.mcp.json");
       writeFileSync(mcpConfig, JSON.stringify({ mcpServers: { [MCP_SERVER_NAME]: { type: "http", url } } }));
       const settings = join(dir, "probe.sandbox.json");
       writeFileSync(
         settings,
         JSON.stringify(
-          buildSandboxSettings({ taskType: "work", workspacePath: dir, permittedSkills: [], taskTemp: dir, lib64: existsSync("/lib64") }),
+          buildSandboxSettings({
+            taskType: "work",
+            workspacePath: dir,
+            permittedSkills: [],
+            allowedDomains: [],
+            taskTemp: dir,
+            lib64: existsSync("/lib64"),
+          }),
         ),
       );
       const status = await call(
@@ -1200,15 +1209,18 @@ export const claudeMcpReachabilityThrough =
         },
         (proc) => readInitReport(proc.stdout, (parsed) => readInitMcpServerStatus(parsed, MCP_SERVER_NAME)),
       );
-      if (status === MCP_CONNECTED_STATUS) return { available: true };
+      if (status?.listed && status.status === MCP_CONNECTED_STATUS) return { available: true };
+      const started = `a Claude worker started under the board's sandbox profile`;
       return {
         available: false,
         reason:
           status === null
             ? "the Worker MCP reachability probe produced no readable init report (a missing binary, a sandbox that " +
               "failed to start, a stalled auth prompt, or a timeout) — whether a Claude worker reaches the board is unknown"
-            : `a Claude worker started under the board's sandbox profile reports the board's Worker MCP \`${MCP_SERVER_NAME}\` ` +
-              `as ${status}, not ${MCP_CONNECTED_STATUS} — such a worker could not report to the board`,
+            : status.listed
+              ? `${started} reports the board's Worker MCP \`${MCP_SERVER_NAME}\` as ${status.status}, not ` +
+                `${MCP_CONNECTED_STATUS} — such a worker could not report to the board`
+              : `${started} lists no \`${MCP_SERVER_NAME}\` server in its init report — such a worker could not report to the board`,
       };
     });
 

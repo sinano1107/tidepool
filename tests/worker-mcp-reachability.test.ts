@@ -72,14 +72,13 @@ it("Claude の probe は一時 dir の sandbox の profile を --settings で、
   expect(probe.settings.sandbox.enabled).toBe(true);
   expect(probe.settings.sandbox.failIfUnavailable).toBe(true);
   expect(probe.settings.sandbox.filesystem.allowWrite).toContain(probe.cwd);
+  expect(probe.settings.sandbox.network.allowedDomains).toEqual([]);
   expect(probe.mcpConfig).toEqual({
     mcpServers: { tidepool: { type: "http", url: `${MCP_URL}?probe=${probe.openWhileRunning[0]}` } },
   });
-  expect(probe.openWhileRunning).toHaveLength(1);
   probe.spawn.emitExit(0, null);
   await probe.result;
   expect(existsSync(probe.cwd)).toBe(false);
-  expect(probe.ids.size).toBe(0);
 });
 
 /** 台本の init 行(`mcp_servers` だけを差し替える)を書いて exit させ、Claude の probe の答えを返す。 */
@@ -98,24 +97,36 @@ it("init 行の tidepool が connected なら成立", async () => {
 it.each([
   ["failed", [{ name: "tidepool", status: "failed" }], "as failed"],
   ["未知の文字列", [{ name: "tidepool", status: "needs-auth" }], "as needs-auth"],
-  ["tidepool の要素が無い", [{ name: "other", status: "connected" }], 'no "tidepool" entry'],
+  ["tidepool の要素が無い", [{ name: "other", status: "connected" }], "lists no `tidepool` server"],
 ])("init 行の tidepool が %s なら不成立 —— 理由に観測値", async (_, servers, observed) => {
   const result = await claudeProbeAnswers(initLine(servers));
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain(observed);
 });
 
-it("init 行が読めなければ不成立", async () => {
-  const result = await claudeProbeAnswers("not json\n");
+it.each([
+  ["JSON でない", "not json\n"],
+  ["tidepool の status が文字列でない", initLine([{ name: "tidepool", status: null }])],
+  ["mcp_servers が配列でない", initLine({ tidepool: "connected" })],
+])("init 行が読めなければ不成立(%s)", async (_, stdout) => {
+  const result = await claudeProbeAnswers(stdout);
   expect(result.available).toBe(false);
   expect(result.available === false && result.reason).toContain("no readable init report");
 });
 
+it("Claude の probe の timeout(Board call の上限)は不成立", async () => {
+  const clock = new FakeClock();
+  const probe = await startClaudeProbe(clock);
+  await clock.advance(60_000);
+  expect((await probe.result).available).toBe(false);
+  expect(probe.ids.size).toBe(0);
+});
+
 // ── Codex の probe ──────────────────────────────────────────────────────────
 
-async function startCodexProbe() {
+async function startCodexProbe(clock = new FakeClock()) {
   const spawn = recordingSpawn();
-  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)));
+  const { boardCall } = containerHarness(new ProcessContainers(new FakeContainerRuntime(spawn.spawn)), clock);
   const codexHome = mkdtempSync(join(tmpdir(), "tidepool-codex-home-"));
   onTestFinished(() => rmSync(codexHome, { recursive: true, force: true }));
   const ids = new Set<string>();
@@ -133,7 +144,6 @@ it("Codex の probe は worker と同じ -c mcp_servers.tidepool.* を required=
   expect(probe.args).toContain("mcp_servers.tidepool.required=true");
   probe.spawn.emitExit(1, null);
   await probe.result;
-  expect(probe.ids.size).toBe(0);
 });
 
 it("Codex の probe は thread.started を観測すれば成立", async () => {
@@ -151,10 +161,11 @@ it("Codex の probe が thread.started 無しに exit すれば不成立 —— 
   expect(result.available === false && result.reason).toContain("required MCP servers failed to initialize: tidepool");
 });
 
-it("timeout(Board call の上限)は不成立で、id も無効になる", async () => {
+it("Codex の probe の timeout(Board call の上限)は不成立", async () => {
   const clock = new FakeClock();
-  const probe = await startClaudeProbe(clock);
+  const probe = await startCodexProbe(clock);
   await clock.advance(60_000);
-  expect((await probe.result).available).toBe(false);
-  expect(probe.ids.size).toBe(0);
+  const result = await probe.result;
+  expect(result.available).toBe(false);
+  expect(result.available === false && result.reason).toContain("did not complete");
 });

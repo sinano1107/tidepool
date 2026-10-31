@@ -992,7 +992,8 @@ async function probePermission(
 }
 
 /** 形の正しい placeholder の spawn 設定(ADR 0142 決定2)。preflight の strict parse と回答時の組の検査が問うのは、
- *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。 */
+ *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。Worker MCP 到達性の probe は繋ぐ先が問いなので
+ *  `mcpUrl` だけを実物で上書きする(ADR 0331 決定8)。 */
 function placeholderSpawnConfig(
   taskType: Task["type"],
   input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook"> & { mcpUrl?: string },

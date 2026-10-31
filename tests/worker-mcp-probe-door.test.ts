@@ -31,7 +31,7 @@ it("発行中の probe の id で verb を呼ぶと拒まれる", async () => {
   t = await bootTidepool({ probeIds: new Set(["probe-1"]) });
   const client = await connect({ probe: "probe-1" });
   try {
-    await expect(client.callTool({ name: "get_current_task", arguments: {} })).rejects.toThrow();
+    await expect(client.callTool({ name: "get_current_task", arguments: {} })).rejects.toThrow("Method not found");
   } finally {
     await client.close();
   }
