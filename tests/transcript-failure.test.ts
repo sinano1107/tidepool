@@ -140,7 +140,7 @@ const HARNESSES = [
 ] as const;
 
 for (const [harness, boot] of HARNESSES) {
-  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、盤面全体が記録の器の停止で止まり、踏んだ task は位置を変えずに todo へ戻る —— 器が直って回答すれば同じ位置から走り直す`, async () => {
+  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、盤面全体が記録の器の停止で止まり、踏んだ task は todo へ戻る —— 器が直って回答すれば走り直す`, async () => {
     const { proc, transcriptDir } = await boot();
     await rm(transcriptDir, { recursive: true });
     const task = queueWork(t, "no transcript");

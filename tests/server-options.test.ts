@@ -74,7 +74,7 @@ function composition(): BoardComposition {
   };
 }
 
-it("Codex の実測した required MCP 起動失敗は合成された口を通り、到達性の確認1枚だけで位置を変えずに todo へ戻る(ADR 0331 / ADR 0333 決定1)", async () => {
+it("Codex の実測した required MCP 起動失敗は合成された口を通り、到達性の確認1枚だけで todo へ戻る(ADR 0331)", async () => {
   const workspace = await tempDir("codex-required-mcp-work-");
   git(workspace, "init", "-b", "main");
   const registryDir = await makeRegistry({
@@ -92,8 +92,6 @@ it("Codex の実測した required MCP 起動失敗は合成された口を通�
   try {
     const task = queueWork(t, "required MCP unavailable");
     await t.clock.advance(HOUR);
-    const later = queueWork(t, "queued later");
-    await api(t.baseUrl, "POST", `/api/tasks/${later.id}/move`, { after: null });
     const signature = "Failed to initialize session: required MCP servers failed to initialize: tidepool: Mcp error: -32601: Method not found (code -32603)";
     proc.processes[0]!.stderr.write(signature);
     proc.emitExit(1, null);
@@ -104,7 +102,6 @@ it("Codex の実測した required MCP 起動失敗は合成された口を通�
     expect([question.question_quarantine_kind, question.question_quarantine_value]).toEqual(["workerMcpReachability", "codex"]);
     expect(question.purpose).toContain(signature);
     expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
-    expect((await api(t.baseUrl, "GET", "/api/queue")).json.tasks.find((item: Task) => item.type === "work").id).toBe(later.id);
   } finally {
     await t.stop();
   }

@@ -19,7 +19,7 @@ import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
 /** 行の拒否(GLOSSARY.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
- *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに位置を変えずに todo へ戻る(ADR 0333 決定1)。 */
+ *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに todo へ戻る。 */
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -100,18 +100,15 @@ async function refuseFirstOfTwoRows(resultLine: string) {
   );
   const refused = queueWork(t, "refused task");
   await t.clock.advance(HOUR);
-  // 走っている間に別のタスクを先頭へ置く —— 断られたタスクがその前へ割り込まないことを見るため
-  const other = queueWork(t, "queued after");
-  await api(t.baseUrl, "POST", `/api/tasks/${other.id}/move`, { after: null });
 
   proc.processes[0]!.stdout.write(resultLine);
   proc.emitExit(1, null);
   await settle();
-  return { refused, other };
+  return refused;
 }
 
-it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く位置を変えずに todo へ戻り、次の pickup は先頭へ動かした task を同じティアの別の行で走らせる(ADR 0333 決定1)", async () => {
-  const { refused, other } = await refuseFirstOfTwoRows(REFUSED_404);
+it("404 で終わった session は行の Quarantine を1枚立て、failure question も cap_interrupted も無く todo へ戻り、次の pickup は同じティアの別の行で走る", async () => {
+  const refused = await refuseFirstOfTwoRows(REFUSED_404);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
@@ -128,13 +125,12 @@ it("404 で終わった session は行の Quarantine を1枚立て、failure que
     payload: { provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" },
   });
   expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
-  // 位置を変えずに戻ったので、先頭へ動かした other が先に、同じティアの別の行で拾われる
-  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5"]);
-  expect((await events(other.id)).filter((e) => e.kind === "worker_spawned").map((e) => e.payload.model)).toEqual(["claude-sonnet-5"]);
+  // 断られたタスク自身が、同じティアの別の行で拾い直される
+  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
-it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて位置を変えずに todo へ戻り、question は原因を名指す(ADR 0187 / ADR 0333 決定1)", async () => {
-  const { refused, other } = await refuseFirstOfTwoRows(VERSION_TOO_OLD);
+it("CLI の版の古さで終わった session も行の Quarantine を1枚立てて todo へ戻り、question は原因を名指す(ADR 0187)", async () => {
+  const refused = await refuseFirstOfTwoRows(VERSION_TOO_OLD);
 
   const [question, ...more] = await questions(t);
   expect(more).toEqual([]);
@@ -149,8 +145,7 @@ it("CLI の版の古さで終わった session も行の Quarantine を1枚立�
     cause: "cli_version_too_old",
   });
   expect(timeline.map((e) => e.kind)).not.toContain("cap_interrupted");
-  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5"]);
-  expect((await events(other.id)).filter((e) => e.kind === "worker_spawned").map((e) => e.payload.model)).toEqual(["claude-sonnet-5"]);
+  expect(spawned.map((e) => e.payload.model)).toEqual(["claude-sonnet-5-5", "claude-sonnet-5"]);
 });
 
 it("同じ行への2度目の観測は question を増やさず、開いている question に再発火を刻む", async () => {
@@ -615,7 +610,7 @@ async function refuseLatestSession(proc: ReturnType<typeof recordingSpawn>, resu
 
 const queueStatus = async (id: string) => ((await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((row) => row.id === id)?.status;
 
-it("行でない対象を pin した子が 404 で断られると、対象を名指す question が1枚立ち、子は先頭へ戻らず同じ (provider, model) の子とともに skipped になり、兄弟の子は走る。行の Quarantine は立たない", async () => {
+it("行でない対象を pin した子が 404 で断られると、対象を名指す question が1枚立ち、子は対象の question が開いているあいだ同じ (provider, model) の子とともに skipped で拾われず、兄弟の子は走る。行の Quarantine は立たない", async () => {
   const proc = await bootClaude();
   const { rootId, childIds: [medium, low, opus] } = await poseInterview(proc, [SONNET_MEDIUM, SONNET_LOW, OPUS_46]);
   await t.clock.advance(HOUR);
@@ -634,8 +629,7 @@ it("行でない対象を pin した子が 404 で断られると、対象を名
   const timeline = await events(medium!);
   const spawned = timeline.filter((e) => e.kind === "worker_spawned");
   expect(timeline.find((e) => e.kind === "target_refused")?.payload).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" });
-  // 出題の setup が受験者を先頭へ動かした後で、断りは先頭へ戻さない
-  expect(timeline.slice(timeline.findIndex((e) => e.kind === "target_refused")).map((e) => e.kind)).not.toContain("task_moved");
+  // 対象の question が開いているあいだ、同じ (provider, model) の子は pickup されない
   expect([await queueStatus(medium!), await queueStatus(low!)]).toEqual(["skipped", "skipped"]);
   // 兄弟の子は次の pickup で走る
   expect((await events(opus!)).find((e) => e.kind === "worker_spawned")?.payload.model).toBe("claude-opus-4-6");

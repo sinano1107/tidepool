@@ -4604,7 +4604,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     await vi.waitFor(() => expect(slot.currentTaskId).toBeNull());
 
     expect(getTask(db, task.id)!.status).toBe("todo");
-    // 位置は変わらない(ADR 0333 決定1)—— 拾われた時点の Pickable head なので、そのまま次に拾われる
+    // ほかに候補が無いので、そのまま次に拾われる
     expect(nextSlotTask(db)?.id).toBe(task.id);
     // 失敗ではなく環境事象なので、リトライ判断を問う question は生まれない
     expect(listBoard(db).filter((t) => t.type === "question")).toEqual([]);

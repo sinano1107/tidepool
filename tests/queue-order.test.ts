@@ -28,7 +28,8 @@ const RETURNS: [string, BoardReturn][] = [
   }],
   ["row_refused", (deps, _, task) => {
     const { provider, model } = loadExecutionSettingTable(deps.db)[0]!;
-    rowRefusalHandler(deps)(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: 1 }, Promise.resolve());
+    const spawned = appendEvent(deps.db, { taskId: task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: deps.clock.now() });
+    rowRefusalHandler(deps)(task.id, { provider, model, cause: "api_404", worker_spawned_event_id: spawned }, Promise.resolve());
   }],
 ];
 

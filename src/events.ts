@@ -225,10 +225,10 @@ export type EventPayload =
   | ({ kind: "row_refused" } & RowRefusal)
   // 行でない Interview の対象の拒否(ADR 0199 決定4): 子は `todo` へ戻り、対象の question が開くあいだ pickup されない
   | ({ kind: "target_refused" } & (RowRefusal | ListedRefusal))
-  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに位置を変えずに `todo` へ戻された。path は書けなかった先、
+  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされず、位置を変えないまま `todo` へ戻された。path は書けなかった先、
   // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
   | { kind: "record_container_unwritable"; path: string; reason: string }
-  // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに位置を変えずに `todo` へ戻された。
+  // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされず、位置を変えないまま `todo` へ戻された。
   // failure question は無い —— 資源の question がもう開いている
   | ({ kind: "pickup_stopped" } & ResourceStop)
   // ADR 0331 決定2・9: process は起きたが0ターンで終わった session が資源の署名を持ち、止めた資源を先に登録して位置を変えずに

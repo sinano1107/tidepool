@@ -40,7 +40,7 @@ function stoppingBoard(workspace: WorkspaceConfig, resolveWorkspace: (name: stri
   return { db, clock, worker, slot, scheduler };
 }
 
-/** 失敗にされずに位置を変えずに todo へ戻り、止めた資源を1件だけ刻んでいる(ADR 0274 決定1・2 / ADR 0333 決定1)。 */
+/** 失敗にされず、位置を変えないまま todo へ戻り、止めた資源を1件だけ刻んでいる(ADR 0274 決定1・2 / ADR 0333 決定1)。 */
 function expectReturnedToQueue(db: Db, task: Task, stop: Record<string, unknown>): void {
   const taskId = task.id;
   const returned = getTask(db, taskId)!;
