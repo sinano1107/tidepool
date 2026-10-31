@@ -961,8 +961,8 @@ export function displayedEntries(db: Db, ids: readonly number[]): Set<number> {
   return new Set(rows.map((r) => r.entry_id));
 }
 
-/** decision 以外のマーカー、および events から何も見つからなかった decision の
- *  outcome。`objections` は積まれるので、共有せず毎回新しく作る。 */
+/** decision 以外のマーカーの outcome。`decisionOutcomes` が decision の初期値にも使い、events の行で上書きする。
+ *  `objections` は積まれるので、共有せず毎回新しく作る。 */
 const noOutcome = (): DecisionOutcome => ({ line: null, displayed: false, objections: [], cause: null, wrong_memory_entries: null });
 
 /** decision マーカーの outcome — 表示済み(異議の分母)と異議の本文。`listLog` と
