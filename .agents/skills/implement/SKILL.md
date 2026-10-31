@@ -63,7 +63,7 @@ One more, and it comes from the originating issue rather than from the run: **it
 
 ## The pull request
 
-Push the branch and open a PR. Follow the shape this repo already uses: a Japanese body with `## Summary`, a `## Test plan` checklist, and `Closes #<issue>` — plus `Closes #<originating issue>` when the spec names one it came from (`docs/agents/workflow.md`, step 5 of the grilling landing).
+Push the branch and open a PR. Write a Japanese body in the `/pr` skill's shape (Summary, Evidence, Merge Danger), with the checks this run passed as the Evidence and CI named as what still runs. Below it, `Closes #<issue>` — plus `Closes #<originating issue>` when the spec names one it came from (`docs/agents/workflow.md`, step 5 of the grilling landing).
 
 Record the delegation decision the run actually used — model and effort for the implementation, strength for the review — so a run dispatched at the wrong tier is visible afterwards.
 
