@@ -69,7 +69,13 @@ export interface WorkerSessionSettings {
      *  all. The vendor default is false — "a warning is shown and commands run
      *  unsandboxed", which is precisely the state ADR 0033 refuses
      *  (「サンドボックスされているつもりで裸」は機構不在より悪い). With it true
-     *  the session exits at startup instead, and the board sees a failed spawn. */
+     *  a missing dependency (bwrap / socat) makes the session exit at startup —
+     *  exit 1, no init line, the reason on stderr — which the board reads as an
+     *  unreported exit (ADR 0145), not as `spawn_failed`. It does not cover the
+     *  network bridge: the sandbox initialises lazily at the first Bash call, so
+     *  a socat bridge that fails to start leaves the session running (exit 0)
+     *  with every Bash call refused as "Sandbox is required but failed to
+     *  initialize" (measured on pinned 2.1.286, #2703). */
     failIfUnavailable: true;
     /** ADR 0035: the CLI treats a sandboxed Bash command as pre-approved
      *  (`autoAllowBashIfSandboxed`, vendor default true) — the OS is the guard,
