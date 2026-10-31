@@ -1,5 +1,7 @@
 # skill は条件付きで注入される prompt であり、scope は spawn 時の記録と worker 自身の報告から引き、従った文面は transcript の投影から判事が読む
 
+**Status 追記: 決定2 の記録 `{ workspace, permitted }` と「workspace の集合で2分」は ADR 0335 決定3 で `{ workspace, host, permitted: string[] }` と記録の2列での正の分けに** —— `"all"` は廃止、`host` は同梱集合から checkout の entry 名を引いた実効集合(issue #2779)。
+
 2026-10-29 の triage → grilling(issue #2682、ADR 0324 帰結の派生)で決定。帰責の判事の prompt は「harness 同梱の skill に従った
 外れは `environment`、workspace の skill は `workspace_document`」と分けるが、どの skill がどちらかを言う事実は判事に届かず、停止の
 判事の行動列も `Skill` の引数を落としていた(`tool: "Skill", args: null`)。盤面は spawn 時に scope を解いて deny に折り込むだけで

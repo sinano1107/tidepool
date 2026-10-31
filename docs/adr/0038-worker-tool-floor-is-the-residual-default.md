@@ -1,5 +1,7 @@
 # worker のツール層の床は permission モードが持つ: `auto` は permission に背いていない — 残余の既定が「はい」だっただけ
 
+**Status 追記: 「失うもの」で絞った `@host` = CLI 同梱 は ADR 0335 で実装も正の集合になり、決定4「`src/sandbox.ts` は無変更」は反転** —— `skillReadPaths` は消える(user / plugin の名前は許可に入らず、workspace の entry は workspace の下で既に読める)。`名前:*` / `plugin:skill` の2形が本 ADR 以降 inert のままだった件は派生 issue で扱う(issue #2779)。
+
 issue #151 のグリリング(2026-08-03)で決定。ADR 0033 のサンドボックスが**届かない層** — ハーネス内 in-process のツール(Read / Write / Edit / Glob / Grep …) — に床を建てる決定であり、ADR 0035 が review について狭く述べたことの一般化である。
 
 **この文書が塞ぐ穴**: work プロファイルの worker は、ツール層にサンドボックスの床が一切掛かっていなかった。ADR 0033 の line 11/12 が「Read は permission 層が cwd に閉じている」という前提で役割分担を書いたが、その前提は `--permission-mode auto` では成立しない。読みだけではない — #143 のグリリングが Write ツールも同じ層にいることを実測しており、**work worker はホスト上の読める物すべてを読め、書ける場所すべてに書けた**。

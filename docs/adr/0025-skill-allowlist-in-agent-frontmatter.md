@@ -1,5 +1,7 @@
 # skill アクセスは agent frontmatter の許可リスト — 強制は spawn 前列挙の補集合 deny
 
+**Status 追記: 決定2 の `@host` と決定4 の「走査との差分」は ADR 0335 で正の集合への解決に、決定5 の「`*` は ping 不要」は `[]` だけに** —— 許可 = 解決の和 ∩ (checkout が運ぶ ∪ ハーネス同梱)で、どちらにも無い名前(checkout の外を指す link、user / plugin の名前)はどの entry 形でも閉じる。補集合 deny(決定3)はそのまま(2026-10-31 の grilling、issue #2779)。
+
 2026-07-15 の grilling(issue #56)で決定。workspace checkout に置かれた skill は全エージェントに等しく見え、さらに検証で、ホストユーザーの skill(`~/.claude/skills/`)や plugin の skill も worker session に素通りしていることが判明した(本 spawn は `--safe-mode` なしの workspace cwd 実行のため)。CONTEXT.md の Worker 定義「エージェント = ベース AI + skills + instructions + authority profile」の skills に、実装の対応物を与える。
 
 決定:
