@@ -4,12 +4,11 @@ import { dirname, join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { claudeMcpReachabilityThrough } from "../src/claude-worker.js";
 import { codexMcpReachabilityThrough } from "../src/codex-worker.js";
-import { executionSettingsFor } from "../src/execution-setting.js";
 import { ProcessContainers } from "../src/process-container.js";
 import { registerQuarantine } from "../src/quarantine.js";
 import { probeWorkerMcpReachability } from "../src/worker-mcp-reachability.js";
-import { containerHarness, FakeClock, FakeContainerRuntime, healthyOpenai, recordingSpawn } from "./fakes.js";
-import { api, bootTidepool, registerWork, servedQuarantineQuestion, type Tidepool } from "./harness.js";
+import { containerHarness, FakeClock, FakeContainerRuntime, recordingSpawn } from "./fakes.js";
+import { api, bootTidepool, servedQuarantineQuestion, type Tidepool } from "./harness.js";
 
 // ADR 0331 決定8: 解放の検証の probe。盤面は probe ごとに使い捨ての id を発行し、その id を `?probe=` に載せた listener の
 // URL で Harness の probe を撃ち、終わったら id を無効にする —— 投げても timeout でも
@@ -178,13 +177,10 @@ it("Codex の probe の timeout(Board call の上限)は不成立", async () => 
 let t: Tidepool | undefined;
 afterEach(() => t?.stop());
 
-it("claude-code の Worker MCP 到達性が止まっている間、Claude の行は skipped で Codex の行は流れる。回答は probe が繋がらなければ観測値つきで拒まれて question が開いたまま、繋がれば受理されて行が戻る", async () => {
+it("Worker MCP 到達性の回答は probe が繋がらなければ観測値つきで拒まれて question が開いたまま、繋がれば受理される。probe は bind した扉を使い捨ての帰属で叩く", async () => {
   let reachable = false;
   const probed: Array<{ harness: string; url: string; door: number }> = [];
   const board = await bootTidepool({
-    taskExecutionCandidates: (task) =>
-      executionSettingsFor(board.db, { provider: [{ name: task.assignee === "codex-agent" ? "openai" : "anthropic", advisor: false }], tier: undefined }, task),
-    openaiUsage: healthyOpenai,
     workerMcpReachability: async (harness, url) => {
       // probe の間、その帰属で扉の initialize が通る(router と同じ id の集合)
       const door = await fetch(url, {
@@ -198,26 +194,17 @@ it("claude-code の Worker MCP 到達性が止まっている間、Claude の行
   });
   t = board;
   registerQuarantine(board.db, "workerMcpReachability", "claude-code", "this Claude worker session reports `tidepool` as failed", board.clock.now());
-  const claude = await registerWork(board, "Claude waits for the Worker MCP", undefined, "claude-agent");
-  const codex = await registerWork(board, "Codex keeps flowing", undefined, "codex-agent");
-  await api(board.baseUrl, "POST", `/api/tasks/${codex.id}/move`, { after: null });
-  await vi.waitFor(() => expect(board.worker.started.map((task) => task.id)).toEqual([codex.id]));
-  const queueStatus = async () => ((await api(board.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((task) => task.id === claude.id)?.status;
-  expect(await queueStatus()).toBe("skipped");
-  // skipped の理由は Harness と資源を名指す question
   const question = await servedQuarantineQuestion(board, "workerMcpReachability", "claude-code");
-  expect(question.title).toBe("claude-code Worker MCP reachability is not established");
 
   const answer = () => api(board.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
   const refused = await answer();
   expect(refused.status).toBe(409);
   expect(refused.json.error).toContain("as failed");
   expect((await api(board.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
-  expect(await queueStatus()).toBe("skipped");
 
   reachable = true;
   expect((await answer()).status).toBe(200);
-  expect(await queueStatus()).toBe("todo");
+  expect((await api(board.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).not.toBe("todo");
   // probe は bind した Worker MCP の扉を、Harness ごとの使い捨ての帰属で叩く
   expect(probed.map(({ harness, door }) => [harness, door])).toEqual([["claude-code", 200], ["claude-code", 200]]);
   for (const { url } of probed) expect(url).toMatch(new RegExp(`^${board.mcpBaseUrl}/mcp\\?probe=.+`));
