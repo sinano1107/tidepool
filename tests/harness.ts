@@ -80,6 +80,7 @@ import type { TranslationClient } from "../src/translate.js";
 import { commitTriage, raiseObjection, startTriage } from "../src/triage.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import type { WorkerExit } from "../src/worker.js";
+import type { WorkerMcpReachabilityProbe } from "../src/worker-mcp-reachability.js";
 import { openInterviewRoom, UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceAdmin } from "../src/workspace-create.js";
 import {
@@ -311,6 +312,8 @@ export interface BootOptions {
   checkHarnessCliVersion?: HarnessContainmentCheck;
   /** ADR 0331 決定8: 開いている Worker MCP の probe の id。テストが id を直に足し引きする。 */
   probeIds?: Set<string>;
+  /** ADR 0331 決定8: Worker MCP 到達性の解放の probe。Absent → その確認への回答は拒まれる。 */
+  workerMcpReachability?: WorkerMcpReachabilityProbe;
   /** ADR 0097 決定2 / issue #446: per-provider auth probes for the
    *  answer-time re-verification of a provider-auth Confirmation question. */
   providerCliAuth?: Partial<Record<Provider, CliAuthCheck>>;
@@ -416,6 +419,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
     harnessContainment: options.harnessContainment,
     checkHarnessCliVersion: options.checkHarnessCliVersion ?? pinnedCliVersions,
     probeIds: options.probeIds,
+    workerMcpReachability: options.workerMcpReachability,
     providerCliAuth: options.providerCliAuth,
     modelProbes: options.modelProbes,
     registryReachability: options.registryReachability,

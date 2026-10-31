@@ -20,7 +20,7 @@ import { claudeWorkspaceContainment } from "./harness-containment.js";
 import { buildMemoryInjection, buildMetaReviewMaterial, type InjectionQuery, recordMemoryInjection, recordMetaReviewMaterial } from "./memory.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainedProcess, ProcessContainers, PtyFn, PtyProcess } from "./process-container.js";
-import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
+import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
 import {
   loadRegistry,
   type Registry,
@@ -34,7 +34,7 @@ import {
 } from "./sandbox.js";
 import { closeSession, taskTempPrefix } from "./session-close.js";
 import { isPluginGlob, SKILL_WILDCARD } from "./skill-allowlist.js";
-import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServerStatus, readInitMcpServers } from "./stream-json.js";
+import { parseStreamLine, readInitAutoMemoryPath, readInitField, readInitMcpServers } from "./stream-json.js";
 import {
   carriesReadOnly,
   type PickupStopped,
@@ -1120,7 +1120,7 @@ export function readToolSurface(
   if (parsed?.type === "result" && parsed.startup_failure_reason === "cli_version_too_old") return { retired: true };
   const tools = readInitField(parsed, "tools");
   const mcpServers = readInitMcpServers(parsed);
-  return tools && mcpServers ? { tools, mcpServers, autoMemoryPath: readInitAutoMemoryPath(parsed) } : null;
+  return tools && mcpServers ? { tools, mcpServers: mcpServers.map(({ name }) => name), autoMemoryPath: readInitAutoMemoryPath(parsed) } : null;
 }
 
 /** 封じ込め能力の3つ目の問い(ADR 0039 決定3)の正本: `/usage` ping を**その場で
@@ -1169,6 +1169,17 @@ export async function probeToolSurfaceCapability(
  *  運んだ経路は未観測。 */
 const MCP_CONNECTED_STATUS = "connected";
 
+/** init 行の `mcp_servers` のうち `tidepool` だけを Worker MCP 到達性として読む(ADR 0331 決定6・8)。接続済みなら null、
+ *  そうでなければ観測値を載せた理由 —— 要素が無いのも不成立(fail-closed)。他の名前の status は読まない(代理 MCP は spec #2710)。
+ *  実 session の init 行と解放の probe が同じこれで読む。`subject` は init 報告を書いた側。 */
+function workerMcpUnreachable(subject: string, servers: Array<{ name: string; status: string }>): string | null {
+  const tidepool = servers.find(({ name }) => name === MCP_SERVER_NAME);
+  if (tidepool?.status === MCP_CONNECTED_STATUS) return null;
+  return tidepool
+    ? `${subject} reports the board's Worker MCP \`${MCP_SERVER_NAME}\` as ${tidepool.status}, not ${MCP_CONNECTED_STATUS} — such a worker could not report to the board`
+    : `${subject} lists no \`${MCP_SERVER_NAME}\` server in its init report — such a worker could not report to the board`;
+}
+
 /** Worker MCP 到達性の probe(ADR 0331 決定8)の Claude 側。probe 名義の一時 dir を workspace にした sandbox の profile
  *  (実 session と同じ `buildSandboxSettings`、`failIfUnavailable: true`)と、`url` の listener だけを指す MCP 設定を、
  *  実 session と同じくファイルで渡して `/usage` ping を撃ち、init 行の `tidepool` の status を読む。どちらも probe 名義の
@@ -1196,7 +1207,7 @@ export const claudeMcpReachabilityThrough =
           }),
         ),
       );
-      const status = await call(
+      const servers = await call(
         {
           kind: "Worker MCP reachability probe",
           harness: "claude-code",
@@ -1207,21 +1218,14 @@ export const claudeMcpReachabilityThrough =
           env: { ...boardCallEnv(), TMPDIR: dir },
           limitMs: TOOL_SURFACE_PROBE_TIMEOUT_MS,
         },
-        (proc) => readInitReport(proc.stdout, (parsed) => readInitMcpServerStatus(parsed, MCP_SERVER_NAME)),
+        (proc) => readInitReport(proc.stdout, readInitMcpServers),
       );
-      if (status?.listed && status.status === MCP_CONNECTED_STATUS) return { available: true };
-      const started = `a Claude worker started under the board's sandbox profile`;
-      return {
-        available: false,
-        reason:
-          status === null
-            ? "the Worker MCP reachability probe produced no readable init report (a missing binary, a sandbox that " +
-              "failed to start, a stalled auth prompt, or a timeout) — whether a Claude worker reaches the board is unknown"
-            : status.listed
-              ? `${started} reports the board's Worker MCP \`${MCP_SERVER_NAME}\` as ${status.status}, not ` +
-                `${MCP_CONNECTED_STATUS} — such a worker could not report to the board`
-              : `${started} lists no \`${MCP_SERVER_NAME}\` server in its init report — such a worker could not report to the board`,
-      };
+      const reason =
+        servers === null
+          ? "the Worker MCP reachability probe produced no readable init report (a missing binary, a sandbox that " +
+            "failed to start, a stalled auth prompt, or a timeout) — whether a Claude worker reaches the board is unknown"
+          : workerMcpUnreachable("a Claude worker started under the board's sandbox profile", servers);
+      return reason === null ? { available: true } : { available: false, reason };
     });
 
 /** Claude Harness の封じ込めの問いのうち、版の一致とツール面(ADR 0186 決定2)。版が
@@ -2076,7 +2080,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // teed alongside the file write (issue #32): the one reader (ADR 0316 決定1) collects what
     // worker_exited needs at exit without re-reading the file back off disk
     const streamObserved = claudeStreamObservation();
-    // 面の照合は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
+    // 面の照合(封じ込めと Worker MCP 到達性)は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
     let driftStop: ResourceStop | null | undefined;
     // 行は1度だけ decode し、読み手と live だけの tool surface の検査が同じ `parsed` を読む(issue #1301)。
     // stream のループと exit の flush が同じこれを通す
@@ -2225,7 +2229,11 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  **同じ init 行で auto-memory の閉鎖(`checkAutoMemoryClosed`)も確かめる**(ADR 0156
    *  決定3)。正本の probe は閉じる2キーを inline で運ぶので、per-task の `--settings`
    *  ファイルが丸ごと黙って無視されたことは probe には見えず、ここが初めての実行時の
-   *  観測面になる。不成立の扱いはツール面のずれとまったく同じ(強制回収 + quarantine)。 */
+   *  観測面になる。不成立の扱いはツール面のずれとまったく同じ(強制回収 + quarantine)。
+   *
+   *  **封じ込めが成立した init 行では Worker MCP 到達性も読む**(ADR 0331 決定6・7)。`tidepool` が接続済みでなければ
+   *  (要素が無いのも)同じく強制回収し、Harness ごとの到達性の Quarantine を登録する —— channel の無い worker は作業できても
+   *  報告できない。封じ込めと両方崩れた行は封じ込めの1枚だけ(安全の側、1 session に資源の停止は1つ)。 */
   private checkSessionToolSurface(
     task: Task,
     slashCommandsDisabled: boolean,
@@ -2236,13 +2244,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const mcpServers = readInitMcpServers(parsed);
     // 読めない mcp_servers は ADR 0108、unknown is not safe は ADR 0039
     const toolSurface: ContainmentCapability = mcpServers
-      ? checkToolSurface(tools, task.type, slashCommandsDisabled, mcpServers)
+      ? checkToolSurface(tools, task.type, slashCommandsDisabled, mcpServers.map(({ name }) => name))
       : {
           available: false,
           reason:
             "this host's claude CLI reported a session's built-in tools but an `mcp_servers` " +
             "the board could not read: the init line carried the field in a shape " +
-            "with no server names. The /usage probe cannot cover this — it runs " +
+            "without a server name and status on every element. The /usage probe cannot cover this — it runs " +
             "`--strict-mcp-config` with no `--mcp-config`, so its own MCP surface is empty by " +
             "construction and an element shape it never sees cannot fail it. Whether an " +
             "undeclared MCP server is on the surface is therefore unknown here, and unknown is " +
@@ -2252,10 +2260,17 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const surface = toolSurface.available
       ? checkAutoMemoryClosed(readInitAutoMemoryPath(parsed))
       : toolSurface;
-    if (surface.available) return null;
-    console.error(`[worker] containment drift on task ${task.id}: ${surface.reason}`);
+    if (!surface.available) {
+      console.error(`[worker] containment drift on task ${task.id}: ${surface.reason}`);
+      this.containers.forceReclaim(task.id);
+      return quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
+    }
+    // 封じ込めが成立した init 行でだけ到達性を読む —— 両方が崩れた行は安全の側の1枚だけ(1 session に資源の停止は1つ)
+    const unreachable = workerMcpUnreachable("this Claude worker session", mcpServers!);
+    if (unreachable === null) return null;
+    console.error(`[worker] Worker MCP unreachable on task ${task.id}: ${unreachable}`);
     this.containers.forceReclaim(task.id);
-    return quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
+    return registerResourceStop(this.options.db, "workerMcpReachability", "claude-code", unreachable, this.options.clock.now());
   }
 
   /** 畳み込み停止の送達だけが adapter の仕事(ADR 0099 決定1)。Claude の合図は

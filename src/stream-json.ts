@@ -51,48 +51,27 @@ export function readInitField(
   return value as string[];
 }
 
-/** The init line's `mcp_servers` — **the names only** (ADR 0108 決定2). Beside
- *  `readInitField` rather than inside it: that one's contract is "a field that
- *  is an array of strings", and this field is an array of `{name, status}`
- *  objects, so generalizing it would dirty the `skills`/`tools` contract for
- *  one caller.
+/** The init line's `mcp_servers` — each server's name and `status` (ADR 0108 決定2 /
+ *  ADR 0331 決定6). Beside `readInitField` rather than inside it: that one's contract
+ *  is "a field that is an array of strings", and this field is an array of
+ *  `{name, status}` objects.
  *
- *  `status` is deliberately dropped on the floor. The board compares names and
- *  only in the excess direction — a `tidepool` that shows up `status: "failed"`
- *  is a *missing*-side event, which ADR 0039 決定3 chose not to fail containment
- *  on; returning the status here would invite that back in through the side
- *  door. Reading the surface at all (rather than counting `mcp__` verbs in
- *  `tools`) is what catches a server that is attached but hands out no verbs.
+ *  The two readers split the field: containment maps it to names and compares only
+ *  in the excess direction (ADR 0039 決定3 does not fail containment on a missing or
+ *  failed server), while Worker MCP reachability reads the `tidepool` entry's status.
+ *  Reading the surface at all (rather than counting `mcp__` verbs in `tools`) is what
+ *  catches a server that is attached but hands out no verbs.
  *
  *  Fail-closed like every vendor-shape read here: a non-init line, a field that
- *  isn't an array, or an element with no name reads as "not the init report"
- *  rather than as an empty surface. */
-export function readInitMcpServers(parsed: Record<string, unknown> | null): string[] | null {
+ *  isn't an array, or an element without a string name or status reads as "not the
+ *  init report" rather than as an empty surface. */
+export function readInitMcpServers(parsed: Record<string, unknown> | null): Array<{ name: string; status: string }> | null {
   if (!isInitLine(parsed)) return null;
   const value = (parsed as Record<string, unknown>).mcp_servers;
   if (!Array.isArray(value)) return null;
-  const names = value.map((entry) => (entry as { name?: unknown } | null)?.name);
-  if (!names.every((name) => typeof name === "string")) return null;
-  return names as string[];
-}
-
-/** The init line's `status` of the server named `name` (ADR 0331 決定8) — what the
- *  Worker MCP reachability probe reads, beside the names-only reader above so the
- *  containment comparison keeps not seeing status. `listed: false` when the init
- *  line's `mcp_servers` carries no entry of that name. Null when this is not the
- *  init line, or `mcp_servers` / the entry's status is not readable — the same
- *  unreadable init report as `readInitMcpServers`. */
-export function readInitMcpServerStatus(
-  parsed: Record<string, unknown> | null,
-  name: string,
-): { listed: true; status: string } | { listed: false } | null {
-  if (!isInitLine(parsed)) return null;
-  const value = (parsed as Record<string, unknown>).mcp_servers;
-  if (!Array.isArray(value)) return null;
-  const entry = value.find((server) => (server as { name?: unknown } | null)?.name === name);
-  if (entry === undefined) return { listed: false };
-  const status = (entry as { status?: unknown }).status;
-  return typeof status === "string" ? { listed: true, status } : null;
+  const servers = value.map((entry) => ({ name: (entry as { name?: unknown } | null)?.name, status: (entry as { status?: unknown } | null)?.status }));
+  if (!servers.every(({ name, status }) => typeof name === "string" && typeof status === "string")) return null;
+  return servers as Array<{ name: string; status: string }>;
 }
 
 /** The init line's `memory_paths.auto` — the host auto-memory directory the CLI

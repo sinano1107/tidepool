@@ -338,6 +338,23 @@ export const QUARANTINES = [
     }),
   },
   {
+    // Worker MCP 到達性(CONTEXT.md「Quarantine」/ ADR 0331 決定7)。値は Harness 名。止める範囲は封じ込め能力と同じ形
+    kind: "workerMcpReachability",
+    scope: "assignees",
+    excludesProviders: (harnesses: string[]) =>
+      PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider))),
+    prose: (harness: string | null, reason: string): QuarantineProse => ({
+      title: `${harness} Worker MCP reachability is not established`,
+      purpose:
+        `${reason}. This is Worker MCP reachability — whether a ${harness} worker can report to the board — ` +
+        `not containment, which is whether a worker is confined. Agents whose canonical route uses ${harness} ` +
+        "stay out of the slot until it is repaired; other Harnesses keep running. Answering confirms the repair; " +
+        `before accepting the answer the board starts one ${harness} probe that connects to the Worker MCP from ` +
+        "inside the Harness sandbox, and refuses the answer while it still cannot connect.",
+      completion_criteria: `${harness} workers reach the board's Worker MCP again`,
+    }),
+  },
+  {
     // 値は `workspaceContainmentValue` の綴り。Harness 名として読む箇所(停止の読み口・Harness の文面と検査・resolver)は
     // `harnessContainment` の kind で引くので、この種類は混ざらない
     kind: "workspaceContainment",

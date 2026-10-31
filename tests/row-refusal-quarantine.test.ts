@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
@@ -637,6 +637,24 @@ it("行でない対象を pin した子が 404 で断られると、対象を名
   expect([await queueStatus(medium!), await queueStatus(low!)]).toEqual(["skipped", "skipped"]);
   // 兄弟の子は次の pickup で走る
   expect((await events(opus!)).find((e) => e.kind === "worker_spawned")?.payload.model).toBe("claude-opus-4-6");
+});
+
+it("pin の子が Worker MCP 到達性の停止に当たると、対象の question も target_refused も立たず、子は skipped で待つ(ADR 0331 帰結)", async () => {
+  const proc = await bootClaude();
+  const { childIds: [child] } = await poseInterview(proc, [SONNET_MEDIUM]);
+  await t.clock.advance(HOUR);
+  // 2.1.237 の実セッションの init 行で、`tidepool` だけが繋がっていない
+  const [init] = readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8").split("\n");
+  const index = proc.processes.length - 1;
+  proc.processes[index]!.stdout.write(`${JSON.stringify({ ...JSON.parse(init!), mcp_servers: [{ name: "tidepool", status: "failed" }] })}\n`);
+  proc.emitExitAt(index, null, "SIGKILL");
+  await settle();
+
+  expect((await questions(t)).map((q) => [q.question_quarantine_kind, q.question_quarantine_value])).toEqual([["workerMcpReachability", "claude-code"]]);
+  const kinds = (await events(child!)).map((e) => e.kind);
+  expect(kinds).toContain("session_stopped_by_resource");
+  expect(kinds).not.toContain("target_refused");
+  expect(await queueStatus(child!)).toBe("skipped");
 });
 
 /** openai の行でない対象: 一覧に無い model / 一覧がその effort を広告しない model / 一覧にある model。 */

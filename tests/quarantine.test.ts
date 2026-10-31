@@ -30,6 +30,7 @@ const SAMPLE: Record<QuarantineKind, readonly [string, string] | readonly [null]
   agent: ["deckhand", "bosun"],
   providerAuth: ["anthropic", "openai"],
   harnessContainment: ["claude-code", "codex"],
+  workerMcpReachability: ["claude-code", "codex"],
   workspaceContainment: ["claude-code/sandbox", "codex/sandbox"],
   containment: [null],
   failedTeardown: ["task-1", "task-2"],
@@ -113,6 +114,7 @@ describe.each(QUARANTINES.filter((row) => row.scope === "workspace" || row.scope
     const stops = quarantineStops(db, {
       providerAuth: () => ["deckhand"],
       harnessContainment: () => ["deckhand"],
+      workerMcpReachability: () => ["deckhand"],
     });
     return { db, task, stops };
   }

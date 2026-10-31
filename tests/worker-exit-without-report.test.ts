@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { ClaudeCodeWorker } from "../src/claude-worker.js";
 import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
@@ -421,16 +421,17 @@ async function bootWithAdapter(
 ) {
   const proc = recordingSpawn();
   onTestFinished(proc.removeClaudeTaskTemps); // task temp の後始末(ADR 0257)
+  const runtime = new FakeContainerRuntime(proc.spawn);
   t = await bootTidepool({
     watchdog: WATCHDOG,
     // 盤面が pickup で選ぶ実行設定の provider を adapter に揃える
     taskExecutionCandidates: (task) =>
       executionSettingsFor(t.db, { provider: [{ name: provider, advisor: false }], tier: undefined }, task),
     openaiUsage: healthyOpenai,
-    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    containerRuntime: runtime,
     workerAdapter: (deps) => withHealthyUsage(build(deps), deps.clock),
   });
-  return proc;
+  return Object.assign(proc, { forceReclaims: runtime.forceReclaims });
 }
 
 async function bootClaude() {
@@ -598,4 +599,40 @@ it("Claude adapter: 資源の署名を持たない0ターンの exit(exit 1、st
 
   expect((await questions(t)).map((q: any) => q.title)).toEqual(["worker exited without reporting: died silently"]);
   expect(await stoppedByResource(task.id)).toBeUndefined();
+});
+
+// ── Worker MCP 到達性(ADR 0331 決定6・7)──────────────────────────────────────
+
+/** 2.1.237 の実セッションの init 行の `mcp_servers` だけを差し替える —— 封じ込めの照合は通る面。 */
+const initWithMcpServers = (mcpServers: unknown[]) => {
+  const [init] = readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8").split("\n");
+  return `${JSON.stringify({ ...JSON.parse(init!), mcp_servers: mcpServers })}\n`;
+};
+
+it.each([
+  ["failed", [{ name: "tidepool", status: "failed" }], "as failed"],
+  ["接続済みでない未知の値", [{ name: "tidepool", status: "needs-auth" }], "as needs-auth"],
+  ["無い(mcp_servers が空)", [], "lists no `tidepool`"],
+])("Claude adapter: init 行の tidepool が %s の session は最初のターンの前に強制回収され、Worker MCP 到達性の確認 question 1枚で todo の先頭へ戻る —— failure question は立たない(ADR 0331 決定6・7)", async (_, servers, observed) => {
+  const proc = await bootClaude();
+  const task = queueWork(t, "unreachable");
+  await t.clock.advance(HOUR);
+  await moveToHead(queueWork(t, "queued after"));
+
+  proc.processes[0]!.stdout.write(initWithMcpServers(servers));
+  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([task.id]));
+  proc.emitExit(null, "SIGKILL");
+  await settle();
+
+  const [question, ...more] = await questions(t);
+  expect(more).toEqual([]);
+  expect([question.question_quarantine_kind, question.question_quarantine_value]).toEqual(["workerMcpReachability", "claude-code"]);
+  expect(question.purpose).toContain(observed);
+  expect(await status(task.id)).toBe("todo");
+  expect(await queueHead()).toBe(task.id);
+  expect((await stoppedByResource(task.id))?.payload).toMatchObject({
+    quarantine: "workerMcpReachability",
+    value: "claude-code",
+    reason: expect.stringContaining(observed),
+  });
 });
