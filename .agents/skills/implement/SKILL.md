@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Build a ready-for-agent tidepool issue end to end — branch, delegated TDD at the decided model, two-axis code review, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way.
+description: Build a ready-for-agent tidepool issue end to end — branch, delegated TDD at the decided model, review on three axes from a fresh context, one commit per stage, a PR that records how every review finding was handled, and the filing of what the run found along the way.
 disable-model-invocation: true
 argument-hint: "<issue> [decision already taken]"
 ---
@@ -18,7 +18,7 @@ argument-hint: "<issue> [decision already taken]"
 Either way, before touching the branch, say which models the run will use. They land like this:
 
 - **Implementation** — the TDD loop goes to a sub-agent at the implementation model.
-- **`/code-review`** — its sub-agents take the review strength.
+- **Review** — the `/code-review` sub-agents and the ponytail-review sub-agent take the review strength.
 
 **Effort is passed at spawn on both providers.** Codex takes it alongside the model; a model on its own does not fix the compute budget. Claude Code takes it as the Agent tool's `effort` parameter, which overrides the session's level. The one thing that parameter cannot override is `CLAUDE_CODE_EFFORT_LEVEL` in the environment: when that is set below the decided effort, stop before dispatching and ask the user to relaunch without it.
 
@@ -39,19 +39,21 @@ Dispatch one `ponytail-implementer` sub-agent at the decided implementation mode
 
 The agent definition owns its standing behavior and completion steps. Pass the implementation task rather than restating those instructions.
 
-Ask for the commits, changed behavior, checks and outcomes, all findings and their dispositions, and problems outside the issue's scope: where, observed or suspected, and any matching existing issue. Wait for the completed report before proceeding. A stage with no diff produces no commit; never amend. Filing happens in this thread, below.
+Ask for the commit, changed behavior, checks and outcomes, what it skipped or did not check, and problems outside the issue's scope: where, observed or suspected, and any matching existing issue. Wait for the completed report before proceeding, and keep the agent reachable — it applies the review fixes below. A stage with no diff produces no commit; never amend. Filing happens in this thread, below.
 
 ## Code review
 
-Back in this thread, run `/code-review` on both axes (Standards + Spec) against this branch's merge-base with `main`, then apply the findings that should be applied and commit them as the next stage.
+Back in this thread, run `/code-review` on both axes (Standards + Spec) against this branch's merge-base with `main`, and alongside it one fresh sub-agent that runs the `ponytail-review` skill on the same diff. All three take the review strength. Do not pass the implementation agent's report to any of them, its skipped and not-checked lines included: the review runs outside the writer's context so the writer's view stays out of it (ADR 0332 決定4). Present the ponytail-review report beside the two axes, without merging or reranking across them.
 
-Add one line to each sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
+Add one line to each review sub-agent's brief: "Separately, list anything wrong you noticed that the diff did not cause — where, and whether you observed it or only suspect it." Those notes feed the filing step below.
 
 Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A seam agreed before dispatch is not one: when a finding shows a behaviour stated above its lowest seam, take it back to the user instead of citing the agreement. Every other call is yours, and it is accountable because it goes in the pull request.
 
+Send the findings you decided to apply to the same implementation agent, continued rather than re-dispatched, so the fixes are written under ponytail and its one commit is the next stage. When that agent can no longer be reached, dispatch a new `ponytail-implementer` with the findings and the branch, and say so in the PR.
+
 ## Filing what the run found
 
-Before opening the PR, gather everything the run surfaced, wherever it came from: the sub-agent's report, the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
+Before opening the PR, gather everything the run surfaced, wherever it came from: the implementation agent's report (what it skipped or did not check included — check it yourself or file it as suspected), the review sub-agents' notes on what the diff did not cause, every review finding you left unapplied because it lies outside the issue, and what you noticed yourself — reading the issue and ADRs, agreeing the seams, applying findings. Search the tracker for each, closed issues included (`gh issue list --state all --search "<words>"`), then settle it:
 
 - **Belongs to an existing open issue** — comment there.
 - **Hits a closed issue** — closed as not planned means "not worth an issue", and the reason cites it. Closed as completed: what you found is a leftover or regression of it, so treat it as new, citing the closed issue.
@@ -73,9 +75,9 @@ Then add the section this flow depends on:
 ## レビュー指摘の対応
 ```
 
-List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `GLOSSARY.md`, an existing test. "Out of scope" on its own is not a reason.
+List **every** finding returned by the three reviews (Standards, Spec, ponytail-review) — the applied ones included, none omitted. A finding two reviews raised on the same spot is one line naming both. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `GLOSSARY.md`, an existing test. "Out of scope" on its own is not a reason.
 
-A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
+A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the implementation agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 
 ## Waiting for CI
 
