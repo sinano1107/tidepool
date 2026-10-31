@@ -1,5 +1,7 @@
 # 決着した pin の子のブランチを外すときは checkout の git の読み口を全部閉じ、答案は盤面の記録の器に写す —— 器が書けなければ盤面全体が止まる
 
+**Status 追記: 決定3 の「todo の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 踏んだ task は位置を変えずに `todo` へ戻る。
+
 **Status 追記: 決定1(reflog expire / repack / prune)と決定2(答案の bundle への写し)は [ADR 0276](0276-an-interview-examinee-solves-in-its-own-checkout-fetched-from-the-posed-head-and-a-settled-examinees-checkout-stays-as-the-record.md) で要らなくなった(2026-10-19)—— 受験者ごとの checkout が決着後も記録として残る。決定3 の停止種別は残り、入口は transcript の open の1つになる。**
 
 2026-10-16 の grilling(issue #2020)で決定。ADR 0263 決定5 は決着した pin の子のブランチの ref を外して head を記録に残すが、

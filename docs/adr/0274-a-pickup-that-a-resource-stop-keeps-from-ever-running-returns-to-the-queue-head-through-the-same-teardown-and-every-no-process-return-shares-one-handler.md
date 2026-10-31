@@ -1,5 +1,7 @@
 # 資源の停止で worker が1度も走らなかった pickup は、同じ後始末を通って todo の先頭へ戻り、process を持たない復帰は一撃を1本で共有する
 
+**Status 追記: 決定1・4 の「todo の先頭へ戻す」は ADR 0333 で置き換え(2026-10-31、issue #2780)** —— 位置を変えずに `todo` へ戻る。1 transaction に後始末の印を置く形(決定3)と一撃を1本で共有する形(決定4)は変わらない。
+
 **Status 追記: 決定2 の kind の並びに `target_refused` を加える(issue #2580)** —— 表の行でない Interview の対象の拒否は `row_refused` から分ける。戻した後の扱いが行の Quarantine でなく対象の question だからで、表の行の拒否は `row_refused` のままである。
 
 **Status 追記: 決定1 の線は ADR 0331 で spawn の後まで延びた(2026-10-30、issue #2700)** —— process は起きたが0ターンで終わった資源の故障も、資源の停止を先に登録して先頭へ戻る。刻む kind は `pickup_stopped` の流用ではなく新しい1つ(決定3 の「process を持たなかった」の導出を守る、ADR 0331 決定9)。
