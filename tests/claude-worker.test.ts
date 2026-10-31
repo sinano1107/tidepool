@@ -53,6 +53,7 @@ import {
   definitionPart,
   FakeClock,
   FakeContainerRuntime,
+  noSkillPings,
   passthroughContainers,
   recordingPty,
   recordingSpawn,
@@ -463,7 +464,6 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const call = calls[0]!;
     expect(call.command).toBe("claude");
     // cwd comes from the registry's workspaces.yaml, not from tidepool itself
@@ -479,7 +479,6 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const { env } = calls[0]!;
     // エージェントの善意に依存せず、盤面が author/committer 双方を焼き込む。
     // 名義は spawn された既定エージェント(deckhand)、email は .invalid
@@ -494,7 +493,6 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const { env } = calls[0]!;
     expect(env.GIT_AUTHOR_NAME).toBe("navigator");
     expect(env.GIT_AUTHOR_EMAIL).toBe("navigator@tidepool.invalid");
@@ -537,7 +535,6 @@ describe("ClaudeCodeWorker", () => {
     });
     start("task-prod", "prod");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(calls[0]!.cwd).toBe(prod);
   });
 
@@ -547,7 +544,6 @@ describe("ClaudeCodeWorker", () => {
     });
     start("task-default", null);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(calls[0]!.cwd).toBe(FIXTURE_WORKSPACE);
   });
 
@@ -565,7 +561,6 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Navigator");
@@ -576,7 +571,6 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-default-agent", null, null);
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Deckhand");
@@ -665,7 +659,6 @@ describe("ClaudeCodeWorker", () => {
     );
     start("task-review", null, null, "review");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Keeper");
@@ -1125,7 +1118,6 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-sources-review", null, "deckhand", "review");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
-    expect(calls).toHaveLength(2);
     for (const call of calls) {
       expect(call.args[call.args.indexOf("--setting-sources") + 1]).toBe("project");
     }
@@ -1275,7 +1267,6 @@ describe("ClaudeCodeWorker", () => {
     start();
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     // ping はタスクの workspace cwd で走る
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(rec.calls).toEqual([FIXTURE_WORKSPACE]);
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Workflow");
@@ -1287,7 +1278,7 @@ describe("ClaudeCodeWorker", () => {
     expect(spawnedTools(calls[0]!.args)).toContain("Skill");
   });
 
-  it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {
+  it("@workspace は checkout が運ぶ skill だけを許可し、列挙に載った user 層・plugin の名前を deny する(ADR 0025 / ADR 0335 決定1)", async () => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
     await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
@@ -1391,20 +1382,23 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned.payload).toMatchObject({ skills: { workspace: ["dataviz", "inner", "tdd"], host: ["debug"], permitted } });
   });
 
-  it.each<[string, () => Promise<string[] | null>]>([
-    ["null", async () => null],
-    ["reject", async () => {
-      throw new Error("bundled ping blew up");
-    }],
-  ])("同梱 ping が失敗(%s)したら spawn_failed を書いて onSpawnFailed を呼び、worker を起こさない(ADR 0335 決定2)", async (_shape, enumerateHostSkills) => {
+  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp]>([
+    ["同梱 ping の null", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so /],
+    ["同梱 ping の reject", {
+      enumerateHostSkills: async () => {
+        throw new Error("bundled ping blew up");
+      },
+    }, /^bundled skill enumeration failed, so /],
+    ["両方の ping の null", { enumerateSkills: async () => null, enumerateHostSkills: async () => null }, /^skill enumeration and bundled skill enumeration failed, so /],
+  ])("%s は spawn_failed を書いて onSpawnFailed を呼び、どの ping が落ちたかを名指し、worker を起こさない(ADR 0335 決定2)", async (_shape, pings, message) => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
     const { start, calls, db } = await makeWorker({}, {
-      enumerateHostSkills,
+      ...pings,
       onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
     });
     start("task-bundled-fail");
     await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
-    expect(spawnFailures).toEqual([["task-bundled-fail", { error_code: null, message: expect.stringContaining("bundled skill enumeration failed") }]]);
+    expect(spawnFailures).toEqual([["task-bundled-fail", { error_code: null, message: expect.stringMatching(message) }]]);
     expect(listEvents(db, "task-bundled-fail").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
     expect(calls).toEqual([]);
   });
@@ -1506,7 +1500,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
     const [[, failure]] = spawnFailures as [[string, { error_code: string | null; message: string }]];
     expect(spawnFailures).toEqual([
-      ["task-ping-fail", { error_code: null, message: expect.stringContaining("skill enumeration failed") }],
+      ["task-ping-fail", { error_code: null, message: expect.stringMatching(/^skill enumeration failed, so /) }],
     ]);
     expect(failure.message).not.toMatch(/time limit|reclaim/i);
     const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
@@ -1840,7 +1834,6 @@ describe("ClaudeCodeWorker", () => {
     );
     start("task-no-overlap");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
@@ -1881,7 +1874,6 @@ describe("ClaudeCodeWorker", () => {
     });
     start("task-sbx-plain-settings");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
     expect(git(ws.path, "status", "--porcelain")).toBe("");
@@ -1940,7 +1932,6 @@ describe("ClaudeCodeWorker", () => {
     });
     start("task-sbx-unrestorable-after-reclaim");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     await writeFile(join(ws.path, ".git", "index.lock"), "");
 
     emitExit(0, null);
@@ -1964,7 +1955,6 @@ describe("ClaudeCodeWorker", () => {
 
     start("task-human-cone");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
     expect(git(ws.path, "config", "--get", "core.sparseCheckoutCone")).toBe("true");
@@ -1998,7 +1988,6 @@ describe("ClaudeCodeWorker", () => {
 
     start("task-hooks-safe");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     git(ws.path, "checkout", "unsafe-settings");
     start("task-hooks-unsafe");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
@@ -2024,7 +2013,6 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-hooks-second");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
-    expect(calls).toHaveLength(2);
 
     emitExitAt(0, 0, null);
     await Promise.resolve();
@@ -2057,7 +2045,6 @@ describe("ClaudeCodeWorker", () => {
 
     start("task-hooks-safe");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     git(ws.path, "checkout", "ordinary-settings");
     start("task-hooks-ordinary");
     await vi.waitFor(() => expect(calls).toHaveLength(2));
@@ -2080,7 +2067,6 @@ describe("ClaudeCodeWorker", () => {
     });
     start("task-sbx-harmless-settings");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
@@ -2479,8 +2465,7 @@ describe("ClaudeCodeWorker", () => {
         logDir: "worker-logs",
         transcripts: new TranscriptStore("worker-logs"),
         ...containerHarness(passthroughContainers(recorder.spawn)),
-        enumerateSkills: async () => [],
-        enumerateHostSkills: async () => [],
+        ...noSkillPings,
       });
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
@@ -3465,8 +3450,7 @@ describe("ClaudeCodeWorker", () => {
       logDir: await tempDir("tidepool-worker-logs-"),
       transcripts: new TranscriptStore(await tempDir("tidepool-worker-logs-")),
       ...containerHarness(passthroughContainers(recorder.spawn)),
-      enumerateSkills: async () => [],
-      enumerateHostSkills: async () => [],
+      ...noSkillPings,
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
@@ -3517,7 +3501,6 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // executes as the current definition (ADR 0019: repair is not a re-enactment)
@@ -3542,7 +3525,6 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // the injected 当時版 evidence is the objected session's, not the later re-spawn's
@@ -3565,7 +3547,6 @@ describe("ClaudeCodeWorker", () => {
     worker.start(rca, setting(rca));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // both 当時版 bodies are injected — neither session's record is folded away
@@ -3594,7 +3575,6 @@ describe("ClaudeCodeWorker", () => {
     insertTask(db, audit);
     worker.start(audit, setting(audit));
     await vi.waitFor(() => expect(calls).toHaveLength(1));
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     expect(prompt).toContain("You are the Auditor");
@@ -4703,7 +4683,6 @@ You are Kipper, the tidepool board's Kimi work agent.
       await vi.waitFor(() => expect(calls).toHaveLength(1));
       start("task-kimi", null, "kipper");
       await vi.waitFor(() => expect(calls).toHaveLength(2));
-      expect(calls).toHaveLength(2);
       for (const call of calls) for (const name of HOST_CREDENTIAL_ENVS) expect(call.env[name]).toBeUndefined();
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
     } finally {
@@ -5182,6 +5161,17 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
     expect(seen.cwd).not.toBe(process.cwd());
     expect(seen.entries).toEqual([]);
     expect(existsSync(seen.cwd)).toBe(false);
+  });
+
+  // ADR 0335 決定2: 同梱集合は worker と同じ tier フラグで撃つ —— user 層の skill は同梱に数えない
+  it("ホストの skill 列挙(同梱集合)は --setting-sources project で撃つ", async () => {
+    let args: string[] = [];
+    await enumerateHostSkills((async (spec: BoardCallSpec) => {
+      args = spec.args;
+      return null;
+    }) as BoardCall);
+
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
   });
 
   it.each(probes)("%s の空の cwd は、口が throw したあとにも残らない", async (_, probe) => {

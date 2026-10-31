@@ -8,7 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { type PromptRecord, RecordContainerError, type Transcript, TranscriptStore } from "../src/transcript-store.js";
-import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -84,9 +84,7 @@ async function bootClaude(registryFiles: Record<string, string> = {}, extra: Par
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir: deps.transcripts.dir,
-        // `*` の agent も skill の ping を2本撃つ(ADR 0335 決定1)。この盤面の容器はそれに答えないので spawn の手前で済ませる
-        enumerateSkills: async () => [],
-        enumerateHostSkills: async () => [],
+        ...noSkillPings,
         ...extra,
       }),
     "anthropic",
@@ -134,11 +132,17 @@ const SKILLED_DECKHAND = {
     "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
     "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
 };
+/** skill 許可リストが空の agent —— ping の無い形で、spawn は start() の中で同期に起きる(ADR 0335 決定1)。 */
+const SKILLLESS_DECKHAND = {
+  "agents/deckhand.md":
+    "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
+    "description: General work agent\nskills: []\n---\nYou are Deckhand.\n",
+};
 const bootClaudeAfterSkillEnumeration = () =>
   bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"], enumerateHostSkills: async () => ["code-review"] });
 
 const HARNESSES = [
-  ["Claude", () => bootClaude()],
+  ["Claude", () => bootClaude(SKILLLESS_DECKHAND)],
   ["Claude(skill 列挙の後)", bootClaudeAfterSkillEnumeration],
   ["Codex", bootCodex],
 ] as const;

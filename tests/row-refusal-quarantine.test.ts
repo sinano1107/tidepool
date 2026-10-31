@@ -13,7 +13,7 @@ import type { Provider } from "../src/provider.js";
 import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/quarantine.js";
 import { listExaminees } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
-import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, initWithMcpServers, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
@@ -80,8 +80,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         logDir,
         moonshotApiKeyFile,
         // Interview の pin の子は skill の allowlist を持つ agent で走るので、列挙の ping を spawn の手前で済ませる
-        enumerateSkills: async () => [],
-        enumerateHostSkills: async () => [],
+        ...noSkillPings,
       });
       return withHealthyUsage(worker, deps.clock);
     },

@@ -6,7 +6,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, FakeContainerRuntime, pinnedCliVersions, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, noSkillPings, pinnedCliVersions, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -236,9 +236,7 @@ You are Tako.
         transcripts: new TranscriptStore(logDir),
         containers,
         boardCall,
-        // `*` の agent は skill の ping を2本撃つ(ADR 0335 決定1)。この盤面の容器はそれに答えないので spawn の手前で済ませる
-        enumerateSkills: async () => [],
-        enumerateHostSkills: async () => [],
+        ...noSkillPings,
       });
       return withHealthyUsage(worker, clock);
     },

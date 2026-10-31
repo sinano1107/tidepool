@@ -8,7 +8,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
 import { moveTask, registerTask } from "../src/tasks.js";
-import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -447,9 +447,7 @@ async function bootClaude() {
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir,
-        // `*` の agent は skill の ping を2本撃つ(ADR 0335 決定1)。この盤面の容器はそれに答えないので spawn の手前で済ませる
-        enumerateSkills: async () => [],
-        enumerateHostSkills: async () => [],
+        ...noSkillPings,
       }),
   );
 }

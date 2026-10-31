@@ -86,17 +86,17 @@ export function resolveSkillAllowlist(
   const entries = new Set(checkout.entries);
   const host = bundled.filter((skill) => !entries.has(skill));
   const carried = new Set(checkout.carried);
-  const hosted = new Set(host);
+  const hostSet = new Set(host);
   const permits = (entry: string, skill: string) => {
     if (entry === SKILL_WILDCARD) return true;
     if (entry === "@workspace") return carried.has(skill);
-    if (entry === "@host") return hosted.has(skill);
+    if (entry === "@host") return hostSet.has(skill);
     // "plug:*" → prefix "plug:"; isPluginGlob is the one shared definition of that shape
     if (isPluginGlob(entry)) return skill.startsWith(entry.slice(0, -1));
     return entry === skill;
   };
   const permitted = enumerated.filter(
-    (skill) => (carried.has(skill) || hosted.has(skill)) && allowlist.some((entry) => permits(entry, skill)),
+    (skill) => (carried.has(skill) || hostSet.has(skill)) && allowlist.some((entry) => permits(entry, skill)),
   );
   const allowed = new Set(permitted);
   return { deny: enumerated.filter((skill) => !allowed.has(skill)), permitted, host };
@@ -980,8 +980,8 @@ export function readInitReport<T>(
  *  `awaitReclaimed` は cwd で決まる: workspace を cwd にする呼び出しだけが回収済み
  *  観測のあとに返り、skill 列挙の結果を待ってから launch する既存の流れがそのまま
  *  門になる —— workspace が持ち込んだ MCP server の残存が、次にその workspace で
- *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(skills picker)は
- *  待つ相手を持たないので既定のまま root の exit で返る。 */
+ *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(同梱集合 —— spawn の ping と skills picker の両方、
+ *  ADR 0335 決定2)は待つ相手を持たないので root の exit で返る。`args` は SKILL_ENUM_ARGS に足す tier フラグ。 */
 function enumerateSkillsThrough(
   call: BoardCall,
   cwd: string,
@@ -1481,7 +1481,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private readonly containers: ProcessContainers;
   private readonly pty: PtyFn;
   private readonly enumerateSkills: EnumerateSkillsFn;
-  private readonly enumerateBundledSkills: () => Promise<string[] | null>;
+  private readonly enumerateHostSkills: () => Promise<string[] | null>;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
@@ -1505,7 +1505,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.enumerateSkills =
       options.enumerateSkills ??
       ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, { awaitReclaimed: true }));
-    this.enumerateBundledSkills = options.enumerateHostSkills ?? (() => enumerateHostSkills(options.boardCall));
+    this.enumerateHostSkills = options.enumerateHostSkills ?? (() => enumerateHostSkills(options.boardCall));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
@@ -1707,7 +1707,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // a rejected probe is the same "could not enumerate" as null — never the old wedge
     void Promise.all([
       this.enumerateSkills(place.path).catch(() => null),
-      this.enumerateBundledSkills().catch(() => null),
+      this.enumerateHostSkills().catch(() => null),
     ]).then(([enumerated, bundled]) => {
       if (!live()) return;
       if (enumerated === null || bundled === null) {
@@ -1724,7 +1724,8 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         this.recordSpawnFailed(task, agent, {
           error_code: null,
           message:
-            `${enumerated === null ? "skill enumeration" : "bundled skill enumeration"} failed, so the skill deny list ` +
+            `${[enumerated === null && "skill enumeration", bundled === null && "bundled skill enumeration"].filter(Boolean).join(" and ")} ` +
+            "failed, so the skill deny list " +
             "could not be resolved and the worker was not spawned (no fail-open)",
         });
         return;
