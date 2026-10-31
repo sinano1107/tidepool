@@ -154,6 +154,13 @@ describe("pickupExclusions の quarantine 由来の Provider", () => {
     expect(pickupExclusions(db)).toEqual({ providers: ["anthropic", "moonshot"], models: [] });
   });
 
+  it("workerMcpReachability の開いた値も、その Harness を正準経路に持つ Provider だけを外す —— 別の Harness の行は流れる(ADR 0331 決定7)", () => {
+    const db = openDb(":memory:");
+    registerQuarantine(db, "workerMcpReachability", "claude-code", "cause", NOW);
+
+    expect(pickupExclusions(db)).toEqual({ providers: ["anthropic", "moonshot"], models: [] });
+  });
+
   it.each(QUARANTINES.filter((row) => "excludesProviders" in row))(
     "行が $kind の外す Provider を持てば、開いた値の Provider が除外に現れる",
     (row) => {
