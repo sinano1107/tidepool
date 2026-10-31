@@ -1,5 +1,7 @@
 # 盤面が読む正本はリモートの保護ブランチであり、ホスト上の clone はキャッシュである
 
+**Status 追記: §7 追記(pickup の休止位置)の「読む場所は remote 正本を持つものだけ」は外れ、purely-local の読む場所も休止させる(ADR 0329 追記 決定11、2026-11-01、issue #2730)。**
+
 issue #209 / #210 のグリリング(2026-08-08)で決定。実環境での初回動作確認の段取りを組む過程で、
 `src/` 全体に `git fetch` / `git pull` の呼び出しが**1つも存在しない**ことが判明した(`push` は
 `src/github.ts:136` と `src/registry-write.ts:43` の2箇所のみ。`scripts/deploy-pi.sh:69` の fetch は

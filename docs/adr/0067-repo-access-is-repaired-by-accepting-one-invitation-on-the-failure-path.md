@@ -2,6 +2,8 @@
 
 **Status 追記: 修復の形は [ADR 0093](0093-the-boards-github-identity-is-one-app-and-a-token-broker-mints-per-repo-tokens.md) で「招待1枚の受諾」から「App を repo に install する」に置き換わった(2026-08-21)。** 決定2(ループは作らない・3つの扉)、決定3(「書けるか」)、決定5〜8 の線は生きている。受諾の seam(決定1)と `viewerPermission` の probe・`gh api user` の観測(決定4)は installation token では動かず、仲介の発行成否に代わる。
 
+**Status 追記: 決定2 の解除の扉(回答時に無条件に仲介へ訊く)は、解除が pickup と同じ fetch を fresh な token で撃ち、失敗経路に案内を連ねる形に畳んだ(ADR 0329 追記 決定14、2026-11-01、issue #2730)。**
+
 **Status 追記: 決定6 の「既存の `GhCliClient` の呼び出しは上限を持たない」は閉じた —— `gh` は非同期で有界、上限は同じ `GIT_NETWORK_TIMEOUT_MS`(ADR 0330、2026-10-30、issue #2726)。**
 
 **Status 追記: 決定6 の `GIT_NETWORK_TIMEOUT_MS` は git では「転送が止まった時間」として読む —— 総時間は `gh` と仲介だけ(ADR 0334、2026-11-01、issue #2731)。**
