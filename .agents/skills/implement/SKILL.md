@@ -49,7 +49,7 @@ Add one line to each review sub-agent's brief: "Separately, list anything wrong 
 
 Judge each finding rather than applying the set wholesale. One finding is never yours to apply: one that contradicts a decision recorded in an ADR. The ADR is the decision of record, and overturning it is a fresh decision, not a fix. A seam agreed before dispatch is not one: when a finding shows a behaviour stated above its lowest seam, take it back to the user instead of citing the agreement. Every other call is yours, and it is accountable because it goes in the pull request.
 
-Send the findings you decided to apply to the same implementation agent, continued rather than re-dispatched, so the fixes are written under ponytail and its one commit is the next stage. When that agent can no longer be reached, dispatch a new `ponytail-implementer` with the findings and the branch, and say so in the PR.
+Send the findings you decided to apply to the same implementation agent, continued rather than re-dispatched, so the fixes are written under ponytail and its one commit is the next stage. When that agent can no longer be reached, dispatch a new `ponytail-implementer` with the findings and the branch, and record it with the delegation decision in the PR (below).
 
 ## Filing what the run found
 
@@ -67,7 +67,7 @@ One more, and it comes from the originating issue rather than from the run: **it
 
 Push the branch and open a PR. Write a Japanese body in the `/pr` skill's shape (Summary, Evidence, Merge Danger), with the checks this run passed as the Evidence and CI named as what still runs. Below it, `Closes #<issue>` — plus `Closes #<originating issue>` when the spec names one it came from (`docs/agents/workflow.md`, step 5 of the grilling landing).
 
-Record the delegation decision the run actually used — model and effort for the implementation, strength for the review — so a run dispatched at the wrong tier is visible afterwards.
+Record the delegation decision the run actually used — model and effort for the implementation, strength for the review, and whether the review fixes were applied by the continued implementation agent or a new one — so a run dispatched at the wrong tier, or fixed without the implementation's context, is visible afterwards.
 
 Then add the section this flow depends on:
 
