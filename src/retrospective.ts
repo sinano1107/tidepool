@@ -519,7 +519,7 @@ const bundleRegistered = (db: Db, objectedId: string, bundle: number) =>
 /** 異議群ごとの帰責の状態(ADR 0168 決定3 / ADR 0170 決定1)。第2回を待つ(`awaiting`)のは、帰責が初回の `uncertain` の
  *  異議群と未帰責の異議群 —— 後者の出所はその異議群。それ以外は確定
  *  (`confirmed`、同じ異議群では after_rca が有効)。前の異議群の状態は後の異議群があっても落とさない。 */
-// ponytail: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
+// shortcut: poll の sweep のたびに全帰責と全異議を読む。帰責が数万に育ったら結果の不在を SQL 1本に寄せる
 function attributionStates(db: Db): Array<{ task_id: string } & ({ awaiting: SecondRoundSource } | { confirmed: Attribution })> {
   return [...objectionBundles(db).values()].flat().map(({ task_id, entry_id, objection_event_ids, attribution }) => {
     if (!attribution) return { task_id, awaiting: { entry_id, objection_event_ids } };
@@ -697,7 +697,7 @@ type StopTarget = { task_id: string; stop: EventRowOf<"session_stopped_by_human"
 /** 停止の帰責の扉が開いた停止(ADR 0310 決定1・3・6): 人間の停止のうち、理由が解けていて、その session が閉じていて(spawn の
  *  worker_exited 観測済みで、その Episode の投影が決着済み —— issue #2570)、停止承認付き cancel の出口でなく(その cancel は同じ transaction で停止より前に task_cancelled_directly を書く)、
  *  受験者の task でないもの。 */
-// ponytail: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の確定を SQL で先に絞る
+// shortcut: poll の sweep のたびに停止のある task の全 event を読む。停止が数千に育ったら判定の確定を SQL で先に絞る
 function stopTargets(db: Db): StopTarget[] {
   return listEventsOfKinds(db, ["session_stopped_by_human"]).flatMap((stop): StopTarget[] => {
     const task_id = stop.task_id!;
@@ -902,7 +902,7 @@ function writtenBodies(db: Db, entry: DecisionLogEntry): Pick<AttributionInput, 
 }
 
 function memoryBodies(db: Db, ids: number[]): AttributionInput["memory_read"] {
-  // ponytail: 数件の id を引くのに記憶の全件を読む。記憶が数万に育って commit が重くなったら id で引く読み口を足す
+  // shortcut: 数件の id を引くのに記憶の全件を読む。記憶が数万に育って commit が重くなったら id で引く読み口を足す
   const byId = new Map(listMemoryEntries(db, {}).map((m) => [m.id, m]));
   return ids.map((id) => {
     const { kind, title, text } = byId.get(id)!;

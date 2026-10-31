@@ -416,7 +416,7 @@ export function createCodexAppServerProbe(options: {
 }): CodexAppServerProbe {
   const { command } = options;
   const env = probeEnv(options.codexHome);
-  // ponytail: concurrent calls before the first pass each run their own check; share the in-flight promise if that cost shows up
+  // shortcut: concurrent calls before the first pass each run their own check; share the in-flight promise if that cost shows up
   let passed: { ok: true; cliVersion: string } | undefined;
   return async (now) => {
     const compatible = passed ?? await compatibilityCheck(options);

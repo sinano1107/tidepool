@@ -9,7 +9,7 @@ import { sendJson } from "./send-json.js";
 
 /** issue #1075: 登録の入口で inputSchema を strict にし、未知の引数を tool error にする。
  *  schema の無い verb も空の strict object を持つ。共有 schema は `.strict()` の複製なので変わらない。
- *  ponytail: top-level のキーだけ —— 入れ子の object(decompose の children など)は strict にしない。
+ *  shortcut: top-level のキーだけ —— 入れ子の object(decompose の children など)は strict にしない。
  *  入れ子のキーの綴り違いが観測されたら shape を辿って strict にする */
 export function rejectUnknownArguments(server: McpServer): McpServer {
   const register = server.registerTool.bind(server) as (...args: any[]) => any;

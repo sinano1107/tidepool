@@ -690,7 +690,7 @@ export interface FollowedSkill {
 }
 
 /** `spawned` の session を transcript の書かれたところまで読んでその場で投影する(ADR 0325 決定5)。記録が読めなければ null。 */
-// ponytail: 異議された行ごと・self RCA の spawn ごとに transcript 全体を読んで投影し直し、skillsFollowed が本文のためにもう1度 parse する。
+// shortcut: 異議された行ごと・self RCA の spawn ごとに transcript 全体を読んで投影し直し、skillsFollowed が本文のためにもう1度 parse する。
 // 長い transcript で commit が重くなったら、session ごとに1回の投影を呼び手で共有する
 export function projectSession(recordDir: string | undefined, events: EventRow[], spawned: EventRow): { episode: Episode; lines: string[] } | null {
   const lines = recordDir === undefined ? null : new TranscriptStore(recordDir).readStream(spawned.task_id!, spawned.id);

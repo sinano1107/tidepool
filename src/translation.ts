@@ -130,7 +130,7 @@ export async function translateMemoryEntry(
   language: string,
   now: Date,
 ): Promise<{ status: "translated"; title: string; text: string; cached: boolean } | { status: "throttled" }> {
-  // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
+  // shortcut: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
   const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
   if (!entry) throw new TranslationTargetError(`no memory entry ${entryId}`);
   const outcome = await translateFragments(db, client, [entry.title, entry.text], language, now);

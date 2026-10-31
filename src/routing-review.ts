@@ -100,7 +100,7 @@ function shadowRows(db: Db, { after, upTo = Number.MAX_SAFE_INTEGER }: MetaRevie
   return rows.flatMap((row, i) => {
     if (!inWindow(row.event_watermark, { after, upTo })) return [];
     const diverged = row.cell_recommended !== row.cell_actual;
-    // ponytail: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
+    // shortcut: 行ごとに後続の行と全 episode を走査する O(n²)。shadow が大きくなったら task ごとに1度だけ並べる
     const next = rows.slice(i + 1).find((r) => r.task_id === row.task_id)?.event_watermark ?? Infinity;
     const session = episodes.find(
       (e) => e.task_id === row.task_id && e.worker_spawned_event_id > row.event_watermark && e.worker_spawned_event_id <= next,
@@ -746,7 +746,7 @@ const offAxis: Record<keyof FixedAxes, (e: RoutingEpisode, actual: string, value
 /** 学習器でない op の根拠の母集団(ADR 0302 決定1 / ADR 0307 決定1): 引けるのは work 側の task の session(判定者の review・Interview の root
  *  などには配分評価も outcome も無い)で、受験者の session は本番でない。述語は `conditions`(値が1つでない軸と時間の世代 —— 先に見る)と
  *  `fixed` の軸ごとの一致で、組の鍵は6軸から `fixed` の軸を落とした残り(ADR 0306 決定4)。 */
-// ponytail: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
+// shortcut: 条件と鍵が episode ごとに段・文面の書き手を引き直す(全 episode × クエリ)。提案が重くなったら段の名前 ↔ id と文面の書き手を1度だけ Map に引く
 function productionPopulation(db: Db, fixed: FixedAxes, conditions: readonly Condition<RoutingEpisode>[] = [], within?: Population<RoutingEpisode>["within"]): Population<RoutingEpisode> {
   const axis = (e: RoutingEpisode, label: SessionAxis) => sessionAxes(db, e).find(([l]) => l === label)![1];
   const equals = (Object.entries(fixed) as Array<[keyof FixedAxes, string | Condition<RoutingEpisode>]>).map(([label, value]): Condition<RoutingEpisode> =>

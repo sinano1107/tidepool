@@ -31,7 +31,7 @@ export function closeUnclosedSessions(db: Db, opts: { logDir: string; tmpDir: st
   const events = listEventsOfKinds(db, SESSION_WINDOW_KINDS);
   for (const spawned of events) {
     if (spawned.payload.kind !== "worker_spawned" || spawned.id > opts.watermark || spawned.task_id === null) continue;
-    // ponytail: spawn ごとに盤面全体の event を舐める O(n²)、transcript も読み手と投影器で2度読む。起動が遅くなったら task ごとに分けて渡し、読みを1度にする
+    // shortcut: spawn ごとに盤面全体の event を舐める O(n²)、transcript も読み手と投影器で2度読む。起動が遅くなったら task ごとに分けて渡し、読みを1度にする
     const window = sessionWindow(events, spawned);
     // process を1つも持たなかった session は閉じない —— exit も Episode も一時領域の削除も無い(ADR 0316 決定4 / #2633)
     if (window.neverRan) continue;

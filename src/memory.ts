@@ -246,7 +246,7 @@ function writeSuperseding(
  *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
  *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
  *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
- *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
+ *  shortcut: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
 function requireOneTree(db: Db, since: number): void {
   const pairs = db
     .prepare(
@@ -1942,7 +1942,7 @@ function examineeHidden(db: Db): Set<number> {
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
- *  ponytail: stream は FTS の1本なのでその順位そのもの。埋め込み stream(#589)が来たら
+ *  shortcut: stream は FTS の1本なのでその順位そのもの。埋め込み stream(#589)が来たら
  *  ここで RRF(k = 60)融合する。 */
 export function searchMemory(
   db: Db,
@@ -2454,7 +2454,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
       if (tail.id === id) found.set(id, undefined);
       else if (!found.has(tail.id)) found.set(tail.id, id);
     }
-    // ponytail: 一覧を全件材料化して id で引く —— コストは #1056
+    // shortcut: 一覧を全件材料化して id で引く —— コストは #1056
     const listed = new Map(listMemoryEntries(db, {}, hidden).map((e) => [e.id, e]));
     const entries = [...found]
       .sort(([a], [b]) => a - b)

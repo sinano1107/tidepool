@@ -212,7 +212,7 @@ export interface RoutingEpisode extends LearnerEpisode {
  *  ので、events を直に読む)。受理は task の派生なので task の**最後の** session に
  *  だけ付け、前の session は自分の窓の中の負の信号でしか数えない。異議の窓は
  *  Precedent と同じ規則(spawn より後、exit または次の spawn より前)。 */
-// ponytail: pickup ごとに work 側の task の全 session を読み直す。表が大きくなったら集計を増分で持つ
+// shortcut: pickup ごとに work 側の task の全 session を読み直す。表が大きくなったら集計を増分で持つ
 export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(

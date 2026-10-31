@@ -878,7 +878,7 @@ export type RenameAgentTiers = (input: RenameAgentTiersInput) => Promise<void>;
 /** 扉(settings タブ / 管理MCP)が撃つ1つの変更。段の改名だけは、agent.md の `tier` が名前で書かれているので、先に registry へ
  *  書き換えを着地させてから盤面の名前を変える(ADR 0200 決定2)。push は DB transaction の外なので、着地できなければ改名ごと
  *  拒む(ADR 0150 決定5 と同じ扉)。書き換えの前に名前を検査する —— 拒む改名で registry を動かさない。
- *  ponytail: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
+ *  shortcut: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
 export async function changeExecutionSettings(
   db: Db,
   change: ExecutionSettingsChange,

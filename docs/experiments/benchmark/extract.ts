@@ -292,7 +292,7 @@ type Priced = { group: string; key: string; cost_usd: number | null };
 const tallyBy = (entries: readonly Priced[]) =>
   Object.fromEntries([...new Set(entries.map((e) => e.group))].map((group) => [group, tally(entries.filter((e) => e.group === group))]));
 
-// ponytail: landing.ts の LANDING_ENDED_KINDS は SQL の断片で export されない —— 着地の事実の種類を足したらここも足す
+// shortcut: landing.ts の LANDING_ENDED_KINDS は SQL の断片で export されない —— 着地の事実の種類を足したらここも足す
 const LANDINGS = ["local_merge_executed", "pr_merged", "landing_finished", "nothing_to_land"] as const;
 
 /** 人間が盤面の面で見た・異議を打った記録(triage)—— 仕事の時間を伸ばさない。 */
@@ -333,7 +333,7 @@ function duration(db: Db, root: Task, tasks: readonly Task[]) {
   const end = Math.max(start, ...events.map((e) => Date.parse(e.created_at)));
   const spawn = events.find((e) => e.kind === "worker_spawned");
   const queue = [start, spawn ? Date.parse(spawn.created_at) : end] as const;
-  // ponytail: 閉じた時刻は question 自身の最後の記録 —— PR の決着を根に刻む merge question(ADR 0265 決定1)は question に記録が
+  // shortcut: 閉じた時刻は question 自身の最後の記録 —— PR の決着を根に刻む merge question(ADR 0265 決定1)は question に記録が
   // 残らず登録の時刻になる。ベンチマークの workspace はローカル着地なので当たらない。PR の面を測るなら settledByObservation から根を引く
   const waits = tasks
     .filter((task) => task.type === "question")

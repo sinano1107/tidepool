@@ -1950,7 +1950,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       // ADR 0099 決定2: 盤面が先に作った容器の中へ spawn するだけ。scheduler を
       // 通らずに直接動かされた adapter でも `open` が器を作るので、force /
       // reclaimed の相手が居ない session は生まれない。
-      // ponytail: open の後の設定の書き込みか spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の
+      // shortcut: open の後の設定の書き込みか spawn が同期で投げると開いた2本の fd は閉じない(ADR 0118 の
       // question が1枚ずつ立つ稀な経路)。積み上がりが観測されたら catch で destroy する。
       child = this.containers.open(task.id).spawn(
         "claude",

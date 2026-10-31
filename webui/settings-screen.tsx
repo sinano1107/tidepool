@@ -2556,7 +2556,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
     setBusy(true);
     try {
       // 削除を先に送る —— 書く行が、消した行の effort や段を引き継げるように。
-      // ponytail: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
+      // shortcut: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
       for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model, effort: row.effort });
       for (const write of writes) await api('/api/settings/execution', { setting: 'row', ...write });
       say('success', 'execution table saved', `${writes.length} row${writes.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
@@ -2626,7 +2626,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 )}
               </div>
             ))}
-            {/* ponytail: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}
+            {/* shortcut: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}
             <Button variant="ghost" size="sm" onClick={addRow} disabled={draft.some((d) => d.key === 'new')}>Add row</Button>
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               a row says "this model meets this tier's quality on this provider" — classify by measured capability, not price.

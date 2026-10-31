@@ -386,7 +386,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に
   // 読み直される — ここは containment ゲートを持たない盤面のための boot 時の1回。
-  // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
+  // shortcut: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
   // spec #586 B: 索引の版(tokenizer id + 前処理の版)が今の版と違えば events から作り直す
   ensureMemoryIndex(db, options.clock.now());

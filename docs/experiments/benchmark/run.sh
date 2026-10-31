@@ -143,7 +143,7 @@ save_state() {
 }
 
 # A resume reads the run as it started: its configuration, and its sequence and exercises copied back from the VM.
-# ponytail: a --rows file is not copied back, so a resume checks the Codex / Moonshot logins against the exercises' rows only
+# shortcut: a --rows file is not copied back, so a resume checks the Codex / Moonshot logins against the exercises' rows only
 restore_state() {
   vm 'test -f ~/bench/state.json' || fail "no run in $BENCH_VM's ~/bench to resume: start one with --new"
   { read -r TIDEPOOL_COMMIT; read -r CLI_PINS; read -r REGISTRY_COMMIT; read -r LABEL; } \
@@ -219,7 +219,7 @@ configure_board() {
 }
 
 # Closed, and for a work root its land question answered (landed or held) or nothing to land.
-# ponytail: the landing kinds mirror extract.ts's LANDINGS plus the hold — add a kind there, add it here.
+# shortcut: the landing kinds mirror extract.ts's LANDINGS plus the hold — add a kind there, add it here.
 settled() {
   local task
   task="$(api GET "/tasks/$1")"
@@ -333,7 +333,7 @@ human_step() { # item, instructions
     fi
     poll
   done
-  # ponytail: settled is isSettled's statuses (src/task-status.ts) — add a settled status there, add it here
+  # shortcut: settled is isSettled's statuses (src/task-status.ts) — add a settled status there, add it here
   until api GET /tasks | jq -e 'all(.[]; .status == "done" or .status == "cancelled")' > /dev/null; do
     poll
     sleep 60
