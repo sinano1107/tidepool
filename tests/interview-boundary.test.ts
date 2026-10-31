@@ -487,6 +487,22 @@ it("root の面接室の在り処が root の session の後に消えると、ro
   await expectStoppedOnGoneRoom(audit_id, root.id, room);
 });
 
+it("root の session 中に面接室の在り処が消えると、escalate の後始末は面接室の quarantine に落ち、その理由は在り処を名指す(issue #2722)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const room = roomOf(root.id);
+  rmSync(room, { recursive: true });
+  const escalation = { context: "which format?", questions: [{ title: "which format?", options: ["yaml", "toml"], recommendation: "yaml" }] };
+  expect((await callAsTask(t, root.id, "escalate", escalation)).isError).toBeFalsy();
+  t.worker.exit(root.id);
+
+  const quarantine = await vi.waitFor(async () => (await servedQuarantineQuestion(t, "workspace", root.id)) ?? Promise.reject(new Error("no quarantine yet")));
+  // 下の述語の一覧は元から在り処を名指すので、停止の理由の文(一覧の前)だけを見る
+  const reason = quarantine.purpose.split("Tasks in this workspace")[0];
+  expect(reason).toContain(room);
+  expect(reason).not.toContain("spawnSync git ENOENT");
+});
+
 it("root の面接室の `.git` が gitfile なら、root 配下の監査の pickup は root id で止まり、解除は拒まれ、`.git` をディレクトリに戻した回答の後は監査が走る(ADR 0329 追記 決定7・8)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;

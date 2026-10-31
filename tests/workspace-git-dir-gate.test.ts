@@ -1,10 +1,10 @@
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { openDb } from "../src/db.js";
 import { registerTask } from "../src/tasks.js";
 import { pickupGate, verifyWorkspaceClean } from "../src/workspace.js";
-import { GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace } from "./harness.js";
+import { api, bootTidepool, GIT_FIXTURE_TEST_TIMEOUT, git, HUMAN_WEBUI, makeWorkspace, registerWork } from "./harness.js";
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
@@ -61,6 +61,21 @@ it("親 repo の部分ディレクトリは pickup の門で拒否され、親 r
   expect(git(parent.path, "symbolic-ref", "HEAD")).toBe(headBefore);
   expect(git(parent.path, "branch", "--list")).toBe(branchesBefore);
   db.close();
+});
+
+it("checkout のディレクトリが消えた実環境の work の pickup は実環境の名前で止まり、理由は checkout の在り処を名指す(issue #2722)", async () => {
+  const workspace = await makeWorkspace("reef");
+  const t = await bootTidepool({ workspace });
+  onTestFinished(() => t.stop());
+  await rm(workspace.path, { recursive: true });
+  const task = await registerWork(t, "runs in a removed checkout", "reef");
+
+  await vi.waitFor(async () => {
+    const stops = (await api(t.baseUrl, "GET", `/api/tasks/${task.id}/events`)).json.filter((e: any) => e.kind === "pickup_stopped");
+    expect(stops.map((e: any) => e.payload)).toEqual([
+      { kind: "pickup_stopped", quarantine: "workspace", value: "reef", reason: expect.stringContaining(workspace.path) },
+    ]);
+  });
 });
 
 it("修理確認の検証は親 repo の部分ディレクトリを拒否する", async () => {

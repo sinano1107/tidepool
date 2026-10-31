@@ -3,6 +3,8 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   authedGit,
+  authedGitBounded,
+  GIT_NETWORK_TIMEOUT_MS,
   GitHubAuth,
   githubLoggedIn,
   loadGitHubAuth,
@@ -267,5 +269,13 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
 
     expect(git(join(base, "ws"), "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
     expect(broker.requests.length).toBe(0);
+  });
+
+  it("cwd が無い呼び出しは上限つきの面でも subcommand と在り処を名指して投げる(issue #2722)", async () => {
+    const missing = join(await tempDir("tidepool-authed-"), "gone");
+    const expected = `\`git fetch\` cannot run: the directory ${missing} does not exist`;
+
+    expect(() => authedGit(undefined, missing, undefined, "fetch")).toThrow(expected);
+    expect(() => authedGitBounded(undefined, missing, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch")).toThrow(expected);
   });
 });
