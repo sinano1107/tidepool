@@ -22,7 +22,7 @@ This is `/triage`'s per-issue evaluation with its maintainer checkpoints replace
 
 Read the issue in full — `gh issue view <n> --json title,labels,body,comments`. Earlier triage comments, including earlier sweep comments, are settled ground: build on them and re-ask nothing they resolved.
 
-Explore the code in the worktree in `CONTEXT.md`'s vocabulary, and read the ADRs in the area. Then two checks:
+Explore the code in the worktree in `GLOSSARY.md`'s vocabulary, and read the ADRs in the area. Then two checks:
 
 - **Redundancy** — search for an existing implementation of the asked-for behaviour by domain concept, not just the issue's wording. Note where you looked.
 - **Prior rejection** — read `.out-of-scope/*.md` and note any that resembles the request.
@@ -39,7 +39,7 @@ When the claim does not hold, find what in the code makes it not hold, break tha
 
 Exactly one:
 
-- **Agent Brief** — the record (ADRs, `CONTEXT.md`, the issue thread, your verification) settles everything an implementer needs. Write it in the format of `AGENT-BRIEF.md` in the sibling `triage` skill directory, under the comment's outcome heading in place of the brief's own `## Agent Brief` line. Next step: move to `ready-for-agent`. When the change is text only — docs, an ADR, `CONTEXT.md`, comments, UI copy, or a test whose asserts only tighten — add `text-only` to the issue's return line, with any issue that must land first.
+- **Agent Brief** — the record (ADRs, `GLOSSARY.md`, the issue thread, your verification) settles everything an implementer needs. Write it in the format of `AGENT-BRIEF.md` in the sibling `triage` skill directory, under the comment's outcome heading in place of the brief's own `## Agent Brief` line. Next step: move to `ready-for-agent`. When the change is text only — docs, an ADR, `GLOSSARY.md`, comments, UI copy, or a test whose asserts only tighten — add `text-only` to the issue's return line, with any issue that must land first.
 - **Questions for grilling** — the brief would take a decision the record does not ground, or there is a fork with two or more viable options. This is where `/triage` would grill. Post what you established, then each question as
 
   ```

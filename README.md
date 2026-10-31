@@ -19,7 +19,7 @@ Delegating to an AI agent today means staying in the room: it asks a question, a
 - **Review is read-only.** Reviewers never fix. Findings become repair tasks; improvement proposals become concrete diffs you approve.
 - **Two MCP doors, never confused.** A worker session gets a tool surface bounded by its authority profile. Your own interactive agent (Claude Code, say) can work the board through a separate management MCP — as your hand, so every action it takes is attributed to you, not to an agent.
 
-The vocabulary is defined in [`CONTEXT.md`](./CONTEXT.md); the reasoning behind each decision is in [`docs/adr/`](./docs/adr/README.md).
+The vocabulary is defined in [`GLOSSARY.md`](./GLOSSARY.md); the reasoning behind each decision is in [`docs/adr/`](./docs/adr/README.md).
 
 ## How it differs
 
@@ -49,7 +49,7 @@ A purely local board on an Apple Silicon Mac, first task completed in about 30 m
 
 ## Contributing
 
-Issues and pull requests are welcome. Code, agent-facing text, and the public docs are English; ADRs, `CONTEXT.md`, and commit messages are often Japanese. Contributors will be asked to sign a lightweight CLA (being set up, see [#438](https://github.com/sinano1107/tidepool/issues/438)).
+Issues and pull requests are welcome. Code, agent-facing text, and the public docs are English; ADRs, `GLOSSARY.md`, and commit messages are often Japanese. Contributors will be asked to sign a lightweight CLA (being set up, see [#438](https://github.com/sinano1107/tidepool/issues/438)).
 
 ## License
 

@@ -80,7 +80,7 @@ To recover once the code is fixed and deployed: nothing extra needed, the very n
 
 ## A registered task is not picked up
 
-Registration, a worker session's teardown freeing the slot, and boot completion each trigger an immediate poll (CONTEXT.md "Pickup trigger"); the hourly tick is only the floor. A task that stays `todo` on a free slot is therefore held by a gate, not waiting for a trigger: read `GET /api/queue` — its halts (pause, triage session, open quarantine question) and each row's `skipped` status (Provider usage throttle, agent quarantine) say which.
+Registration, a worker session's teardown freeing the slot, and boot completion each trigger an immediate poll (GLOSSARY.md "Pickup trigger"); the hourly tick is only the floor. A task that stays `todo` on a free slot is therefore held by a gate, not waiting for a trigger: read `GET /api/queue` — its halts (pause, triage session, open quarantine question) and each row's `skipped` status (Provider usage throttle, agent quarantine) say which.
 
 ## Board crashes at boot with a ZodError from `registry.ts`
 

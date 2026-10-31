@@ -43,13 +43,13 @@ const workspacesDirSource = workspacesBaseDirSource(process.env.TIDEPOOL_WORKSPA
 // agent, not "the one worker" — an unspecified assignee resolves here, but a
 // pre-set delegation to a different registry name overrides it per task
 const defaultAgentName = process.env.TIDEPOOL_AGENT ?? DEFAULT_AGENT_NAME;
-// issue #15 layer 2 / CONTEXT.md's Auditor: same shape as TIDEPOOL_AGENT
+// issue #15 layer 2 / GLOSSARY.md's Auditor: same shape as TIDEPOOL_AGENT
 // above, a pointer to the board's independent-review agent.
 const auditorName = process.env.TIDEPOOL_AUDITOR ?? DEFAULT_AUDITOR_NAME;
 // ADR 0269 決定2: Interview の root の空の assignee が解決する先、同じ形のポインタ
 const interviewerName = process.env.TIDEPOOL_INTERVIEWER ?? DEFAULT_INTERVIEWER_NAME;
 
-// this board's own CONTEXT.md (issue #47): resolved against the module's own
+// this board's own GLOSSARY.md (issue #47): resolved against the module's own
 // file location, not process.cwd(), so it finds the checkout regardless of
 // where the process was launched from — same posture as server.ts's static
 // `root` (dirname(fileURLToPath(import.meta.url)) + "..").
@@ -92,13 +92,13 @@ const boardState = boardStatePaths({
 // なら実 worker は立たないので(合成側が LoggingWorker に落ちる)作る必要もない。
 if (registryDir) mkdirSync(logDir, { recursive: true });
 
-/** CONTEXT.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
- *  for the translation client's prompt. Absent/unreadable CONTEXT.md → no
+/** GLOSSARY.md's own `## Term(日本語)` pairs (issue #47), parsed once at boot
+ *  for the translation client's prompt. Absent/unreadable GLOSSARY.md → no
  *  glossary guidance rather than a boot failure — the glossary sharpens
  *  translation quality, it isn't required for the feature to function. */
 function boardGlossary(): ReturnType<typeof parseGlossary> {
   try {
-    return parseGlossary(readFileSync(join(repoRoot, "CONTEXT.md"), "utf8"));
+    return parseGlossary(readFileSync(join(repoRoot, "GLOSSARY.md"), "utf8"));
   } catch {
     return [];
   }
@@ -106,7 +106,7 @@ function boardGlossary(): ReturnType<typeof parseGlossary> {
 
 /** TranslationClient (issue #47 / ADR 0015's display-time translation),
  *  wired to the real Claude CLI. Unlike the draft client, this needs no
- *  registry — only the `claude` CLI and the board's own CONTEXT.md — so it's
+ *  registry — only the `claude` CLI and the board's own GLOSSARY.md — so it's
  *  always configured, never gated. */
 function translationClientFactory(call: BoardCall): TranslationClient {
   return new ClaudeTranslationClient({ glossary: boardGlossary(), exec: execThrough(call, "translation") });
