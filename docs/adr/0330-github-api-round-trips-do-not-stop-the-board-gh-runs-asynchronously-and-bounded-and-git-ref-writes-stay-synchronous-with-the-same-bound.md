@@ -1,5 +1,7 @@
 # GitHub API 面の往復は盤面の実行を止めない —— `gh` は非同期で有界に撃ち、git の ref 書き込みは ADR 0243 どおり同期のまま同じ上限だけ掛ける
 
+**Status 追記: 決定2・3 の上限の読みは ADR 0334 で「総時間」から「転送が止まった時間」(git 自身の stall 検出)に変わり、「決めないこと」の clone・publish の push・registry の push の無界は閉じた —— 無界の面は無い(2026-11-01、issue #2731)。**
+
 2026-10-30 の triage → grilling(issue #2726 —— ADR 0328 の派生)で決定。盤面の `gh` 呼び出し(issue の読み・PR の作成・状態・検索・comment)は
 `execFileSync` で上限が無く、hang すれば盤面の process の唯一の実行の糸が永久に止まり、poll は `inFlight` のまま、ADR 0036 が復旧経路と定めた
 人間面(WebUI・管理 MCP)まで応答しなくなる。上限を足すだけでは 1 回 30 秒の凍結が残り、着地の tick は PR を全件ループして 1 件ごとに撃つので、

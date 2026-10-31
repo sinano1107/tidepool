@@ -4,6 +4,8 @@
 
 **Status 追記: 決定6 の「既存の `GhCliClient` の呼び出しは上限を持たない」は閉じた —— `gh` は非同期で有界、上限は同じ `GIT_NETWORK_TIMEOUT_MS`(ADR 0330、2026-10-30、issue #2726)。**
 
+**Status 追記: 決定6 の `GIT_NETWORK_TIMEOUT_MS` は git では「転送が止まった時間」として読む —— 総時間は `gh` と仲介だけ(ADR 0334、2026-11-01、issue #2731)。**
+
 issue #213 のグリリング(2026-08-12)で決定。#209 の machine user 対応から派生し、#212 / ADR 0066(所有権と作成経路)とは独立 — org を採っても採らなくても要る。
 
 盤面は GitHub に触れるとき常に tidepool-bot 名義で撃つ(ADR 0024)。したがって外部の repo を workspace として取り込むには、その repo に tidepool-bot のアクセスが要る。今日は `clone` モードが `authedGit(... "clone" ...)` で落ちるだけで、人間には git の生のエラーしか見えず、**何をすれば直るのかが示されない。**
