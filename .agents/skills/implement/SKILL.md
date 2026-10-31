@@ -7,7 +7,7 @@ argument-hint: "<issue> [decision already taken]"
 
 # Implement
 
-`$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5 / high, review at Fable 5.1`.
+`$ARGUMENTS` is the issue number, optionally followed by a delegation decision already taken — written however `/implementation-delegation` phrased it, e.g. `378 Opus 5.5 / high, review at Opus 5.5 / xhigh`.
 
 ## Model and effort
 
