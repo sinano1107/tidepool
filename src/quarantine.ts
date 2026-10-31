@@ -153,11 +153,11 @@ function targetRefusalProse(target: string, reason: string, why: string, keep: s
   };
 }
 
-/** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
- *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 /** Harness 単位の行(封じ込め能力・Worker MCP 到達性)が外す Provider: その Harness を正準経路に持つもの。 */
 const providersOnHarnesses = (harnesses: string[]) => PROVIDER_VALUES.filter((provider) => harnesses.includes(canonicalHarness(provider)));
 
+/** 表の並びは盤面全体の停止の列挙と同じ(containment → failedTeardown →
+ *  registryReachability → recordContainer)で、資源単位の種類がその後に続く。 */
 export const QUARANTINES = [
   {
     kind: "containment" satisfies HaltKind,

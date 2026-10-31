@@ -632,6 +632,12 @@ export const FIXTURE_SPAWNED_EVENT_ID = 5;
 const sessionFixture = (name: string) =>
   readFileSync(join(import.meta.dirname, "fixtures", `worker-session-2.1.237.${name}`), "utf8");
 
+/** 2.1.237 の実セッションの init 行の `mcp_servers` だけを差し替える —— 封じ込めの照合は通る面(Worker MCP 到達性、ADR 0331 決定6)。 */
+export const initWithMcpServers = (mcpServers: unknown[]) => {
+  const [init] = sessionFixture("stream.jsonl").split("\n");
+  return `${JSON.stringify({ ...JSON.parse(init!), mcp_servers: mcpServers })}\n`;
+};
+
 /** #386 のフィクスチャをそのまま持つ盤面。events は id ごと写す(投影の結合は
  *  盤面が発行した event id の完全一致なので、採番が変わると意味が変わる)。
  *  workspace / assignee / handoff は events には無いので tasks 行から解決される。 */

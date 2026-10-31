@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { CLAUDE_CLI_VERSION } from "../src/claude-cli-version.js";
@@ -14,7 +14,7 @@ import { registerQuarantine, tableRowEffortValue, tableRowValue } from "../src/q
 import { listExaminees } from "../src/tasks.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
-import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
+import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_FIXTURE_TEST_TIMEOUT, HOUR, initWithMcpServers, makeWorkspace, poseThroughAudit, questions, queueWork, registerQuestion, registerWork, routingMaterialViaWebui, startFirstMetaReviewViaWebui, type Tidepool } from "./harness.js";
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
@@ -644,9 +644,8 @@ it("pin の子が Worker MCP 到達性の停止に当たると、対象の quest
   const { childIds: [child] } = await poseInterview(proc, [SONNET_MEDIUM]);
   await t.clock.advance(HOUR);
   // 2.1.237 の実セッションの init 行で、`tidepool` だけが繋がっていない
-  const [init] = readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8").split("\n");
   const index = proc.processes.length - 1;
-  proc.processes[index]!.stdout.write(`${JSON.stringify({ ...JSON.parse(init!), mcp_servers: [{ name: "tidepool", status: "failed" }] })}\n`);
+  proc.processes[index]!.stdout.write(initWithMcpServers([{ name: "tidepool", status: "failed" }]));
   proc.emitExitAt(index, null, "SIGKILL");
   await settle();
 

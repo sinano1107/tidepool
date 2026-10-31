@@ -16,6 +16,7 @@ import {
   git,
   HOUR,
   HUMAN_WEBUI,
+  initWithMcpServers,
   mcpClient,
   QUIET_EXIT,
   questions,
@@ -602,12 +603,6 @@ it("Claude adapter: 資源の署名を持たない0ターンの exit(exit 1、st
 });
 
 // ── Worker MCP 到達性(ADR 0331 決定6・7)──────────────────────────────────────
-
-/** 2.1.237 の実セッションの init 行の `mcp_servers` だけを差し替える —— 封じ込めの照合は通る面。 */
-const initWithMcpServers = (mcpServers: unknown[]) => {
-  const [init] = readFileSync(join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"), "utf8").split("\n");
-  return `${JSON.stringify({ ...JSON.parse(init!), mcp_servers: mcpServers })}\n`;
-};
 
 it.each([
   ["failed", [{ name: "tidepool", status: "failed" }], "as failed"],

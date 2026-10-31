@@ -106,6 +106,7 @@ import { probeRecordContainer } from "./transcript-store.js";
 import { stageFrontInsert, triageActivity } from "./triage.js";
 import { type PendingReclaim, recordHumanStop, type StopSession } from "./watchdog.js";
 import type { SettledMark } from "./wire-contract.js";
+import type { WorkerMcpReachabilityCheck } from "./worker-mcp-reachability.js";
 import {
   buildWorkspaceResolver,
   mergeTaskToProtected,
@@ -572,7 +573,7 @@ export interface QuarantineCheckDeps {
   /** ADR 0098: re-run the named Harness check before accepting repair. */
   harnessContainment?: HarnessContainmentCheck;
   /** ADR 0331 決定8: Worker MCP 到達性の受理の実接続 probe(盤面が id を発行して撃つ形)。Absent → その回答は拒まれる。 */
-  workerMcpReachability?: HarnessContainmentCheck;
+  workerMcpReachability?: WorkerMcpReachabilityCheck;
   /** ADR 0259 決定5: (codex, workspace) の組の検査。Absent → その組への回答は拒まれる。 */
   codexWorkspaceContainment?: CodexWorkspaceCheck;
   /** ADR 0266 決定3: 盤面の記録の器の dir —— 解放の検査はここへ一時ファイルを書いて消す。Absent → その確認への回答は拒まれる。 */

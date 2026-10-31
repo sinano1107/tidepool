@@ -1018,7 +1018,7 @@ export type EnumerateToolsFn = () => Promise<{
 // 2本目は撃たない。** review は work の真部分集合なので、改名で不活性化した名前
 // (測定8)はどちらのリストでも同じように欠ける。review 固有の失敗形は「編集系の
 // **除去**が honor されなくなった」だけで、それは実 review セッションの init 行を
-// task type ごとに照合する深層防御側(`checkSessionToolSurface`)が観測する。
+// task type ごとに照合する深層防御側(`checkSessionInit`)が観測する。
 //
 // **この ping が運ぶのは本番フラグ一式のうち面を決める分だけである。** `--tools` は
 // 測る対象そのもの、`--permission-mode` と `--setting-sources project` は本番と同じ値。
@@ -2080,15 +2080,15 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // teed alongside the file write (issue #32): the one reader (ADR 0316 決定1) collects what
     // worker_exited needs at exit without re-reading the file back off disk
     const streamObserved = claudeStreamObservation();
-    // 面の照合(封じ込めと Worker MCP 到達性)は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
-    let driftStop: ResourceStop | null | undefined;
+    // init 行の照合(封じ込めと Worker MCP 到達性)は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
+    let initStop: ResourceStop | null | undefined;
     // 行は1度だけ decode し、読み手と live だけの tool surface の検査が同じ `parsed` を読む(issue #1301)。
     // stream のループと exit の flush が同じこれを通す
     const flushStdout = readLines(child.stdout, (line) => {
       const parsed = parseStreamLine(line);
       observeClaudeLine(streamObserved, parsed);
-      if (driftStop === undefined) {
-        driftStop = this.checkSessionToolSurface(task, enforcement.disableSlashCommands, parsed);
+      if (initStop === undefined) {
+        initStop = this.checkSessionInit(task, enforcement.disableSlashCommands, parsed);
       }
     });
     this.running.set(task.id, child);
@@ -2166,7 +2166,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
       // ADR 0331 決定2・4: 資源の署名を持つ0ターンの session は、止めた資源を上で登録済みのまま同じ位置で先頭へ戻す。
       // ターンが走った session は下の exit の一撃(failure question)へ —— 資源の question と2枚になる
-      const resourceStop = authStop ?? driftStop;
+      const resourceStop = authStop ?? initStop;
       if (resourceStop && !streamObserved.turnRan) {
         this.options.onSessionStoppedByResource?.(task.id, { kind: "session_stopped_by_resource", ...resourceStop, worker_spawned_event_id: spawnedEventId });
       }
@@ -2234,7 +2234,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  **封じ込めが成立した init 行では Worker MCP 到達性も読む**(ADR 0331 決定6・7)。`tidepool` が接続済みでなければ
    *  (要素が無いのも)同じく強制回収し、Harness ごとの到達性の Quarantine を登録する —— channel の無い worker は作業できても
    *  報告できない。封じ込めと両方崩れた行は封じ込めの1枚だけ(安全の側、1 session に資源の停止は1つ)。 */
-  private checkSessionToolSurface(
+  private checkSessionInit(
     task: Task,
     slashCommandsDisabled: boolean,
     parsed: Record<string, unknown> | null,
@@ -2266,6 +2266,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       return quarantineContainment(this.options.db, surface.reason, this.options.clock.now());
     }
     // 封じ込めが成立した init 行でだけ到達性を読む —— 両方が崩れた行は安全の側の1枚だけ(1 session に資源の停止は1つ)
+    // surface が成立したなら mcp_servers は読めている(読めない形は上で封じ込めの不成立)
     const unreachable = workerMcpUnreachable("this Claude worker session", mcpServers!);
     if (unreachable === null) return null;
     console.error(`[worker] Worker MCP unreachable on task ${task.id}: ${unreachable}`);
