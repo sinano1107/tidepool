@@ -174,23 +174,25 @@ it("worker id が BOARD_ACTOR_ID(\"tidepool\")と衝突しても、MCP 経由の
   expect(res.content[0].text).toContain("2 to 4 options");
 });
 
-/** ADR 0067 決定2 の3つ目の扉。上のテスト群は purely-local な workspace が対象なので
- *  この条件は効いてはならない —— 効いてしまったら `isRemoteBacked` で絞れていない。 */
+/** ADR 0329 決定14: repo アクセスの案内は後半の失敗経路だけで付く。 */
 const DECLARED = "https://github.com/sinano1107/tidepool";
 
-it("remote 正本を宣言した workspace の解除は、仲介が token を出せない間は拒否され question は開いたままである(ADR 0093 決定8)", async () => {
+it("remote 正本の fetch が失敗する解除は、仲介が token を出せなければ案内つきで拒否され question は開いたままである(ADR 0329 決定14)", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("sandbox");
+  git(workspace.path, "remote", "set-url", "origin", "/nonexistent/sandbox-remote");
   t = await bootTidepool({ workspace: { ...workspace, repo: DECLARED } });
   t.github.scriptUnreachable("sinano1107/tidepool");
   quarantineWorkspace(t.db, "sandbox", new Error("fetch failed"), t.clock.now());
   const question = await servedQuarantineQuestion(t, "workspace", "sandbox");
 
-  // ツリーはクリーンなので、拒む理由は repo アクセスだけである
+  // ローカルの検査を通った後、pickup と同じ fetch の項が拒む。
   const res = await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, {
     answers: ["repaired by hand"],
   });
 
   expect(res.status).toBe(409);
+  expect(res.json.error).toContain("The check that failed:");
+  expect(res.json.error).toContain("can be fetched");
   expect(res.json.error).toContain("/installations/new");
   expect(res.json.error).toContain("HTTP 404: repo_unreachable");
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("todo");
@@ -207,6 +209,7 @@ it("token が出せていれば解除はそのまま受理される —— 新�
   });
 
   expect(res.status).toBe(200);
+  expect(t.github.repoAccessCalls).toBe(0);
   expect((await api(t.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).toBe("done");
 });
 

@@ -1,13 +1,10 @@
-/** pickup の門の純粋な前半 —— 場所の種類(実環境の workspace・面接室・受験者の checkout)ごとの述語の一覧(ADR 0329 追記 決定6)。
- *  pickup はこれを撃ってから不純な段(開いた event・fetch・休止位置・タスクブランチ・ref の基準)へ進み、workspace quarantine の解除は
- *  名前に掛かる場所の一覧を全部撃ち直し、予告の文は同じ一覧の説明を番号付きで並べる。解除だけの上乗せ(clean tree・状態 path との
- *  重なり・repo アクセスの修復・merge-back のやり直し)は一覧に入れない。予告(quarantine.ts)が読むので workspace.ts の下に置く。 */
+/** Two-phase place checks shared by pickup, release and prose (ADR 0329 決定10〜14). */
 import { mkdirSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import { placeHasRepository, type RecordedPlaceKind, recordedPlace } from "./recorded-place.js";
-import type { RegistrySource } from "./registry.js";
+import { type RegistrySource, remoteTrackingRef } from "./registry.js";
 import { getTask, interviewRoomPath, latestPosedProbe, type Task, unsettledExaminees } from "./tasks.js";
 import type { WorkspaceConfig } from "./workspace.js";
 
@@ -19,20 +16,82 @@ const GONE_POSED_PLACE_EXITS = "restore it there or cancel the task that opens i
 /** 開いた event の無い場所で、repo が既にあるときだけ当たる項の頭。予告の解除だけの上乗せも同じ句で条件を言う。 */
 export const IF_REPOSITORY_PRESENT = "if a repository is already present, ";
 
-/** 一覧の1項: 人間向けの説明と、落ちれば今日の pickup と同じ理由で投げる検査。 */
-export type PickupPredicate = { describe: string; check: () => void };
+/** workspace 側が渡す記録を書かない操作 —— 一覧は workspace の実装へ依存しない。 */
+export type PlaceFire = {
+  fetch: (place: WorkspaceConfig) => Promise<void>;
+  park: (place: WorkspaceConfig) => void;
+};
+
+/** 一覧の1項: 後半を撃つ呼び手は操作の context を必ず渡す。 */
+export type PickupPredicate = { describe: string } & (
+  | { phase: "before-open"; check: () => void }
+  | { phase: "after-open"; place: WorkspaceConfig; check: (fire: PlaceFire) => void | Promise<void> }
+);
+
+/** ADR 0023: `branch` is a reference resolved fresh at every use, same
+ *  posture as `resolveExecutionWorkspace` itself — never pinned to what a
+ *  task branch actually forked from. */
+export function protectedBranch(workspace: WorkspaceConfig): string {
+  return workspace.branch ?? "main";
+}
+
+/** 盤面が保護ブランチを**参照として**読むときの1つの ref —— remote 正本を宣言した
+ *  workspace ではリモート側の remote-tracking ref、そうでなければローカルの同名
+ *  ブランチ(`registryRef(mode)` の workspace 側の対、綴りは `remoteTrackingRef` を
+ *  共有する)。
+ *
+ *  `protectedBranch` の返す**名前**とは役が違う: PR の base や直接書き込み禁止の
+ *  対象はリモートのブランチ名そのものなので今も名前を使い、「今この保護ブランチは
+ *  どのコミットか」を訊く側だけがこの ref を使う(タスクブランチの fork 元、
+ *  slot 解放後の休止位置の追従先、完了時の未着地 commit 比較)。 */
+export function protectedBranchRef(workspace: WorkspaceConfig): string {
+  const branch = protectedBranch(workspace);
+  return isRemoteBacked(workspace) ? remoteTrackingRef(branch) : branch;
+}
+
 
 /** 実体のある checkout に撃つ述語 —— 実環境の workspace と読む場所、開いた面接室と受験者の checkout。`scope` は説明の頭に付く場所の名指し。 */
-export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: RegistrySource, scope = ""): PickupPredicate[] {
+export function checkoutPickupPredicates(place: WorkspaceConfig, registry?: RegistrySource, scope = "", unbornRoom = false): PickupPredicate[] {
   return [
-    { describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
+    { phase: "before-open", describe: `${scope}its \`.git\` is a directory — not a linked worktree or submodule.`, check: () => assertOwnGitDirectory(place.path) },
     {
+      phase: "before-open",
       describe: `${scope}its declarations as the registry and as a workspace agree, when it is the board's own registry clone.`,
       check: () => assertRegistryRoleAgrees(place, registry),
     },
     {
+      phase: "before-open",
       describe: `${scope}it has an \`origin\` remote exactly when it declares a remote source of truth (\`repo\`).`,
       check: () => assertRemoteDeclarationMatchesClone(place),
+    },
+    ...afterOpenPredicates(place, scope, unbornRoom),
+  ];
+}
+
+function afterOpenPredicates(place: WorkspaceConfig, scope: string, unbornRoom: boolean): PickupPredicate[] {
+  const branch = protectedBranch(place);
+  const prefix = `${scope}${IF_REPOSITORY_PRESENT}`;
+  return [
+    {
+      phase: "after-open", place,
+      describe: `${prefix}the remote protected branch \`${branch}\` can be fetched (no-op without a remote source of truth).`,
+      check: async (fire) => { if (placeHasRepository(place.path)) await fire.fetch(place); },
+    },
+    {
+      phase: "after-open", place,
+      describe: `${prefix}the protected branch \`${branch}\` can be checked out; when remote-backed, the local branch can fast-forward to \`${protectedBranchRef(place)}\` without ahead or diverged commits.` +
+        (unbornRoom ? " An unborn HEAD passes: the opening step supplies `main` with an empty commit." : ""),
+      check: (fire) => {
+        if (!placeHasRepository(place.path)) return;
+        if (unbornRoom) {
+          try { git(place.path, "rev-parse", "--verify", "--quiet", "HEAD"); }
+          catch (err) {
+            if ((err as { status?: number })?.status === 1) return;
+            throw err;
+          }
+        }
+        fire.park(place);
+      },
     },
   ];
 }
@@ -58,6 +117,7 @@ export function examineePickupPredicates(db: Db, examinee: Task, rootId: string,
       scope,
     }),
     {
+      phase: "before-open",
       describe: `${scope}the posed head ${posedHeadOf(db, examinee)} resolves in the interview room — ${GONE_POSED_PLACE_EXITS}.`,
       check: () => {
         // 面接室の repo が無ければ git の生のエラー(や外側の repo での解決)ではなく、面接室が消えた理由で止まる
@@ -100,20 +160,22 @@ function recordedPlacePredicates(
   if (recorded) {
     return [
       {
+        phase: "before-open",
         describe: text.recorded(place.path),
         check: () => {
           if (!placeHasRepository(place.path)) throw new Error(gonePlaceReason(taskId, place.path, kind));
         },
       },
-      ...checkoutPickupPredicates(place, registry, text.scope),
+      ...checkoutPickupPredicates(place, registry, text.scope, kind === "interview_room_opened"),
     ];
   }
   return [
-    { describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
-    ...checkoutPickupPredicates(place, registry, `${text.scope}${IF_REPOSITORY_PRESENT}`).map(({ describe, check }) => ({
-      describe,
+    { phase: "before-open", describe: text.create, check: () => void mkdirSync(place.path, { recursive: true }) },
+    ...checkoutPickupPredicates(place, registry, text.scope, kind === "interview_room_opened").map((predicate): PickupPredicate => predicate.phase === "after-open" ? predicate : ({
+      ...predicate,
+      describe: `${text.scope}${IF_REPOSITORY_PRESENT}${predicate.describe.slice(text.scope.length)}`,
       check: () => {
-        if (placeHasRepository(place.path)) check();
+        if (placeHasRepository(place.path)) predicate.check();
       },
     })),
   ];

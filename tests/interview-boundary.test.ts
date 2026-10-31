@@ -554,6 +554,64 @@ it("監査後に復帰する root は記録済みの面接室の repo が無け�
   expect(existsSync(join(room, ".git"))).toBe(false);
 });
 
+it("再開する root の消えた repo を master の未生 HEAD で復元すると回答が受理され、次の pickup で main を補って走る(ADR 0329 決定13)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await callAsTask(t, root.id, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
+  t.worker.exit(root.id);
+  const question = (await questions(t)).find((q) => q.parent_id === root.id && q.status !== "done")!;
+  const room = roomOf(root.id);
+  rmSync(join(room, ".git"), { recursive: true });
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] })).status).toBe(200);
+  await runNow(t, root.id);
+  await vi.waitFor(async () => expect(await pickupStops(root.id)).toHaveLength(1));
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  git(room, "init", "--quiet", "--initial-branch=master");
+
+  expect((await api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored"] })).status).toBe(200);
+  await runNow(t, root.id);
+  await vi.waitFor(() => expect(t.worker.started.filter((s) => s.id === root.id)).toHaveLength(2));
+  expect(await pickupStops(root.id)).toHaveLength(1);
+});
+
+it("purely-local の読む実環境も root の pickup で保護ブランチへ休止する(ADR 0329 決定11)", async () => {
+  t = await boot();
+  git(workspacePath, "checkout", "-b", "other");
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  await runNow(t, root.id);
+  await vi.waitFor(() => expect(t.worker.started.map((s) => s.id)).toContain(root.id));
+  expect(git(workspacePath, "branch", "--show-current")).toBe("main");
+});
+
+it("受験者の後半の休止も解除で撃ち直し、main が無ければ拒み、main 上の dirty な答案は捨てずに再開する(ADR 0329 決定12)", async () => {
+  t = await boot();
+  const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
+  const [child] = await pose(root.id);
+  await completeMetaReviews(t);
+  await callAsTask(t, child, "escalate", { context: "which format?", questions: [{ title: "format?", options: ["yaml", "toml"], recommendation: "yaml" }] });
+  t.worker.exit(child);
+  const filler = (await api(t.baseUrl, "POST", "/api/tasks", { type: "work", ...CHILD })).json;
+  await runNow(t, filler.id);
+  const checkout = examineeCheckoutOf(child);
+  git(checkout, "checkout", "-b", "rescue");
+  git(checkout, "branch", "-D", "main");
+  const question = (await questions(t)).find((q) => q.parent_id === child && q.status !== "done")!;
+  await api(t.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["yaml"] });
+  await runNow(t, child);
+  await vi.waitFor(async () => expect(await pickupStops(child)).toHaveLength(1));
+  const quarantine = await servedQuarantineQuestion(t, "workspace", root.id);
+  const answer = () => api(t.baseUrl, "POST", `/api/tasks/${quarantine.id}/answer`, { answers: ["restored"] });
+  const refused = await answer();
+  expect(refused.status).toBe(409);
+  expect(refused.json.error).toContain(`for the examinee checkout of ${child}`);
+  git(checkout, "checkout", "-b", "main");
+  writeFileSync(join(checkout, "wip.txt"), "unfinished answer\n");
+  expect((await answer()).status).toBe(200);
+  await runNow(t, child);
+  await vi.waitFor(() => expect(t.worker.started.filter((s) => s.id === child)).toHaveLength(2));
+  expect(readFileSync(join(checkout, "wip.txt"), "utf8")).toBe("unfinished answer\n");
+});
+
 it("再開する受験者の記録済み checkout が消えたら作り直さず root 名で止め、checkout と出題 head の復元を順に確かめた回答だけで受験者を再開する(ADR 0329 決定3・4)", async () => {
   t = await boot();
   const root = (await api(t.baseUrl, "POST", "/api/tasks", { ...INTERVIEW, interview_targets: [opus46] })).json;
