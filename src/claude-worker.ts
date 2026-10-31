@@ -63,43 +63,43 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 
-/** Does one allowlist entry permit one enumerated skill? (issue #56 / ADR
- *  0025) The five-form vocabulary, resolved against the CLI's enumerated set:
- *  `"*"` permits everything; `@workspace` permits a skill the checkout carries;
- *  `@host` permits a skill the checkout does not (the user/plugin remainder);
- *  a `名前:*` glob permits that plugin's skills; an individual name permits its
- *  exact match. `workspaceSkills` is the checkout's own set — the seam the
- *  `@workspace`/`@host` split is a difference against. */
-function skillPermitted(entry: string, skill: string, workspaceSkills: Set<string>): boolean {
-  if (entry === SKILL_WILDCARD) return true;
-  if (entry === "@workspace") return workspaceSkills.has(skill);
-  if (entry === "@host") return !workspaceSkills.has(skill);
-  // entries are already grammar-validated (registry.ts), so a glob is a
-  // well-formed "名前:*" — strip the trailing "*" and prefix-match ("plug:*" →
-  // "plug:"). isPluginGlob is the one shared definition of that shape.
-  if (isPluginGlob(entry)) return skill.startsWith(entry.slice(0, -1));
-  return entry === skill;
-}
+/** The checkout's side of the resolution (issue #56 / ADR 0335 決定1): `carried` is what the checkout carries
+ *  (a dir, or a link to a dir inside the checkout — issue #2774), `entries` is every name directly under
+ *  `.claude/skills` whatever it points at. */
+export type CheckoutSkills = { carried: string[]; entries: string[] };
 
-/** The complement deny (issue #56 / ADR 0025 point 3): the only enforcement
- *  primitive is per-skill deny, so an agent's allowlist is enforced as
- *  "everything the CLI enumerated minus everything the allowlist permits".
- *  Pure set algebra over the three inputs — the vendor ping that produces
- *  `enumeratedSkills` and the `--disallowedTools` plumbing that consumes the
- *  result live in `start()`. An allowlist entry that matches nothing in
- *  `enumeratedSkills` (a typo, a workspace-absent name) is naturally inert:
- *  only enumerated skills are ever iterated, so an unmatched entry neither
- *  denies nor permits anything (ADR 0023's "reference, not a claim of stock").
- *  Order follows `enumeratedSkills` for a stable, auditable deny list. */
-export function computeSkillDenials(
+/** The skill allowlist resolved (ADR 0025 point 3 / ADR 0335 決定1): every entry resolves to one of the two
+ *  positively known sets — `@workspace` → what the checkout carries, `@host` → the bundled set minus every
+ *  checkout entry name (a same-named checkout skill wins in the CLI, and the CLI's loading rules are not copied
+ *  here, so over-subtracting is the fail-closed side), `*` → both, a name or `名前:*` → its match in the
+ *  enumeration. Permitted = the union ∩ (carried ∪ host), so a name in neither set — a link pointing outside the
+ *  checkout, a user-tier or plugin name, an unknown source — stays closed under every entry form; deny =
+ *  enumerated − permitted, the only enforcement primitive being per-skill deny. Entries are already
+ *  grammar-validated (registry.ts). Both lists follow the enumeration order; `host` is the effective `@host` set
+ *  the spawn records (ADR 0335 決定3). */
+export function resolveSkillAllowlist(
   allowlist: string[],
-  enumeratedSkills: string[],
-  workspaceSkills: string[],
-): string[] {
-  const workspaceSet = new Set(workspaceSkills);
-  return enumeratedSkills.filter(
-    (skill) => !allowlist.some((entry) => skillPermitted(entry, skill, workspaceSet)),
+  enumerated: string[],
+  checkout: CheckoutSkills,
+  bundled: string[],
+): { deny: string[]; permitted: string[]; host: string[] } {
+  const entries = new Set(checkout.entries);
+  const host = bundled.filter((skill) => !entries.has(skill));
+  const carried = new Set(checkout.carried);
+  const hostSet = new Set(host);
+  const permits = (entry: string, skill: string) => {
+    if (entry === SKILL_WILDCARD) return true;
+    if (entry === "@workspace") return carried.has(skill);
+    if (entry === "@host") return hostSet.has(skill);
+    // "plug:*" → prefix "plug:"; isPluginGlob is the one shared definition of that shape
+    if (isPluginGlob(entry)) return skill.startsWith(entry.slice(0, -1));
+    return entry === skill;
+  };
+  const permitted = enumerated.filter(
+    (skill) => (carried.has(skill) || hostSet.has(skill)) && allowlist.some((entry) => permits(entry, skill)),
   );
+  const allowed = new Set(permitted);
+  return { deny: enumerated.filter((skill) => !allowed.has(skill)), permitted, host };
 }
 
 // review の書き込み系 Bash パターン。**この配列の役割は ADR 0035(issue #144)
@@ -158,7 +158,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
  *  ここはその追記が狙う CLI ツール層の強制 — 両方とも「task type が profile を
  *  上書きする」という ADR 0013 の同じ原則の別レイヤーでの実装。issue #56 の
- *  computeSkillDenials と同じ「組み立ては純関数、配線は launch() 側」という
+ *  resolveSkillAllowlist と同じ「組み立ては純関数、配線は launch() 側」という
  *  分離だが、CLI 側の列挙が要らない(Edit/Write/NotebookEdit とパターンは
  *  task.type だけで決まる固定集合)ぶん同期・ping 不要。*/
 export function reviewToolDenials(taskType: Task["type"]): string[] {
@@ -871,6 +871,9 @@ export interface ClaudeWorkerOptions {
   /** issue #56 / ADR 0025: the skill-enumeration boundary the complement-deny
    *  ping runs at. Injected so the deny plumbing is tested without a real CLI. */
   enumerateSkills?: EnumerateSkillsFn;
+  /** ADR 0335 決定2: the bundled-set ping, the same one the skills picker reads. Absent → `enumerateHostSkills`
+   *  over `boardCall`; injected for the same reason as `enumerateSkills`. */
+  enumerateHostSkills?: () => Promise<string[] | null>;
   /** 行の拒否(ADR 0184 決定4)の盤面側の一撃 —— `rowRefusalHandler` 製。
    *  `onWorkerExited` と同じ機能フィールドで、渡すのは spawn 時の行と回収済み観測だけ。 */
   onRowRefused?: (taskId: string, refusal: RowRefusal, reclaimed: Promise<void>) => void;
@@ -923,7 +926,7 @@ export type EnumerateSkillsFn = (cwd: string) => Promise<string[] | null>;
 // ADR 0025 point 4: let the CLI itself report the resolved skill set instead
 // of re-deriving project/user/plugin discovery on tidepool's side (which would
 // drift). A `/usage` ping's init event carries `skills` = the full resolved set
-// (workspace + user + plugin-prefixed), and `/usage` is local processing — cost
+// at its cwd under its tier flags, and `/usage` is local processing — cost
 // 0, num_turns 0, ~2s natural exit (verified, CLI 2.1.210). Guardrails mirror
 // checkUsage's old cost ceiling; --safe-mode is deliberately absent (it would
 // hide the very skills being enumerated — leakage is the observation target
@@ -977,19 +980,19 @@ export function readInitReport<T>(
  *  `awaitReclaimed` は cwd で決まる: workspace を cwd にする呼び出しだけが回収済み
  *  観測のあとに返り、skill 列挙の結果を待ってから launch する既存の流れがそのまま
  *  門になる —— workspace が持ち込んだ MCP server の残存が、次にその workspace で
- *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(skills picker)は
- *  待つ相手を持たないので既定のまま root の exit で返る。 */
+ *  走る worker と同居しない(ADR 0136 決定5)。neutral cwd の列挙(同梱集合 —— spawn の ping と skills picker の両方、
+ *  ADR 0335 決定2)は待つ相手を持たないので root の exit で返る。`args` は SKILL_ENUM_ARGS に足す tier フラグ。 */
 function enumerateSkillsThrough(
   call: BoardCall,
   cwd: string,
-  { awaitReclaimed }: { awaitReclaimed: boolean },
+  { awaitReclaimed, args = [] }: { awaitReclaimed: boolean; args?: string[] },
 ): Promise<string[] | null> {
   return call(
     {
       kind: "skill enumeration",
       harness: "claude-code",
       command: "claude",
-      args: SKILL_ENUM_ARGS,
+      args: [...SKILL_ENUM_ARGS, ...args],
       cwd,
       env: boardCallEnv(),
       limitMs: SKILL_ENUM_TIMEOUT_MS,
@@ -1034,8 +1037,8 @@ export type EnumerateToolsFn = () => Promise<{
 // `--setting-sources project` を足すのは**本番と同じ tier を読ませる**ため。足さないと
 // ホストの人間の `~/.claude/settings.json` の `permissions.deny` が面を削り
 // (ADR 0039 測定3)、本番の worker では起きない欠落を封じ込めの不成立に化けさせる。
-// SKILL_ENUM_ARGS 側には足さない — skill 列挙は user tier の skill を見るのが
-// 目的で(`enumerateHostSkills` の @host 集合)、そこに足すと集合が壊れる。
+// 同梱集合の ping(`enumerateHostSkills`)も同じ理由でこれを足す。workspace cwd の列挙 ping は足さない ——
+// user 層の名前が載っても、worker に届かない名前を余分に deny するだけで害が無い(ADR 0335 決定4)。
 //
 // `--strict-mcp-config` は**姿勢であってタスク単位の生成物ではない**ので、probe が
 // `--mcp-config` を運ばないと決めた線に抵触しない(ADR 0108 決定3)。足さないと probe の
@@ -1200,7 +1203,6 @@ export const claudeMcpReachabilityThrough =
           buildSandboxSettings({
             taskType: "work",
             workspacePath: dir,
-            permittedSkills: [],
             allowedDomains: [],
             taskTemp: dir,
             lib64: existsSync("/lib64"),
@@ -1260,14 +1262,11 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
   };
 }
 
-/** The skills-picker candidate source (issue #106 / ADR 0025): the `@host`
- *  individual skills the WebUI's agent skills picker offers, enumerated by the
- *  same `/usage` ping mechanism the spawn-time complement-deny uses — but at a
- *  *neutral* cwd (a fresh empty directory), so nothing but the host's own
- *  user-level + plugin-prefixed skills is resolved. At an empty cwd there is no
- *  `.claude/skills/`, so the whole enumerated set *is* the `@host` set; the
- *  caller returns it verbatim (the scope words `*`/`@workspace`/`@host` are the
- *  picker's own additions, not this API's).
+/** The bundled set (ADR 0335 決定2): the harness-bundled skills, enumerated by the same `/usage` ping the
+ *  spawn-time complement-deny uses — at a *neutral* cwd (a fresh empty directory, so no `.claude/skills/`) and
+ *  under the worker's tier flag (`--setting-sources project`, so no user-tier skill). Its one owner is read by both
+ *  the spawn (the `@host` half of the resolution) and the WebUI's skills picker (issue #106), which returns it
+ *  verbatim as its candidates (the scope words `*`/`@workspace`/`@host` are the picker's own additions).
  *
  *  Why the picker deliberately does NOT enumerate a workspace's own skills: the
  *  settings screen has no workspace context to enumerate against — an agent
@@ -1279,28 +1278,30 @@ export async function checkClaudeCliVersion(readVersion: () => Promise<string>):
  *  failed probe, same fail-closed shape as the spawn-time enumeration; the route
  *  degrades that to an empty candidate set rather than a spawn failure. */
 export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =>
-  atNeutralCwd("tidepool-skills-", (cwd) => enumerateSkillsThrough(call, cwd, { awaitReclaimed: false }));
+  atNeutralCwd("tidepool-skills-", (cwd) =>
+    enumerateSkillsThrough(call, cwd, { awaitReclaimed: false, args: ["--setting-sources", "project"] }),
+  );
 
-/** The checkout's own skills (issue #56 / ADR 0025): the entry names under
- *  `<workspace>/.claude/skills/` that are a directory, or a symlink to a
- *  directory inside the checkout (issue #2774 — the CLI follows the link and
- *  names the skill by the entry). This one-directory scan is the only discovery
- *  logic tidepool keeps in-house — the `@workspace`/`@host` split is a
- *  difference against it (a skill the CLI enumerated but the checkout doesn't
- *  carry is host-provided). A checkout or `.claude/skills` that cannot be read
- *  (missing, unresolvable, EACCES) is an empty set, not an error (a workspace
- *  need not carry any skills). */
-function scanWorkspaceSkills(workspacePath: string): string[] {
+/** The checkout's own skills (issue #56 / ADR 0335 決定1): `carried` is the entry names under
+ *  `<workspace>/.claude/skills/` that are a directory, or a symlink to a directory inside the checkout (issue
+ *  #2774 — the CLI follows the link and names the skill by the entry); `entries` is every entry name there, which
+ *  the bundled set is subtracted by. This one-directory scan is the only discovery logic tidepool keeps in-house.
+ *  A checkout or `.claude/skills` that cannot be read (missing, unresolvable, EACCES) is two empty sets, not an
+ *  error (a workspace need not carry any skills). */
+function scanWorkspaceSkills(workspacePath: string): CheckoutSkills {
   const skillsDir = join(workspacePath, ".claude", "skills");
   try {
     // real paths on both sides: the workspace path itself may pass through a symlink (macOS /var -> /private/var)
     const checkout = realpathSync(workspacePath);
-    return readdirSync(skillsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksToDirInsideCheckout(join(skillsDir, entry.name), checkout)))
-      .map((entry) => entry.name)
-      .sort();
+    const entries = readdirSync(skillsDir, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : 1));
+    return {
+      carried: entries
+        .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksToDirInsideCheckout(join(skillsDir, entry.name), checkout)))
+        .map((entry) => entry.name),
+      entries: entries.map((entry) => entry.name),
+    };
   } catch {
-    return [];
+    return { carried: [], entries: [] };
   }
 }
 
@@ -1480,6 +1481,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
   private readonly containers: ProcessContainers;
   private readonly pty: PtyFn;
   private readonly enumerateSkills: EnumerateSkillsFn;
+  private readonly enumerateHostSkills: () => Promise<string[] | null>;
   /** logDir pinned to an absolute path: the spawned CLI resolves relative
    *  paths against its own cwd (the workspace), not against the board. */
   private readonly logDir: string;
@@ -1503,6 +1505,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     this.enumerateSkills =
       options.enumerateSkills ??
       ((cwd) => enumerateSkillsThrough(options.boardCall, cwd, { awaitReclaimed: true }));
+    this.enumerateHostSkills = options.enumerateHostSkills ?? (() => enumerateHostSkills(options.boardCall));
     this.logDir = resolve(options.logDir);
     this.workspacesDir = resolveWorkspacesBaseDir(options.workspacesDir);
     // fail at boot, not at first pickup: a misconfigured registry must refuse
@@ -1682,43 +1685,32 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           ? readMoonshotApiKey(resolveMoonshotApiKeyFile(this.options.moonshotApiKeyFile))
           : undefined,
     };
-    // ADR 0025: skill access is the agent's frontmatter allowlist, enforced
-    // here as the complement deny of the CLI-enumerated full set. The two
-    // ping-free shapes launch synchronously (nothing changes for the
-    // unrestricted default agent): `["*"]` denies nothing, `[]` disables slash
-    // commands wholesale. A finite list needs the CLI to enumerate the full set
-    // first (a ~2s zero-token /usage ping at the workspace cwd); that failure
-    // fails the spawn closed — never run without the deny list (no fail-open,
-    // ADR 0025 point 6).
+    // ADR 0025 / ADR 0335 決定1: skill access is the agent's frontmatter allowlist, enforced here as the
+    // complement deny of the CLI-enumerated set. `[]` is the one ping-free shape and launches synchronously:
+    // `--disable-slash-commands` closes every skill. Every other allowlist (`*` included) resolves against the two
+    // positively known sets, so it needs two ~2s zero-token /usage pings first — the enumeration at the
+    // workspace cwd and the bundled set at a neutral cwd. Either failing fails the spawn closed — never run
+    // without the deny list (no fail-open, ADR 0025 point 6).
     const skills = agent.definition.skills;
-    // the checkout's own skills: the @workspace/@host split and the spawn record (ADR 0325 決定2) both read this one scan
-    const workspaceSkills = scanWorkspaceSkills(place.path);
-    if (skills.length === 1 && skills[0] === SKILL_WILDCARD) {
-      this.launch(task, workspace, place, agent, registry, {
-        deny: [],
-        disableSlashCommands: false,
-        // nothing is denied, so ADR 0033's sandbox may open the skill roots
-        // wholesale — there is no allowlist for a `cat` to route around
-        permittedSkills: "all",
-        workspaceSkills,
-      }, routing, query);
-      return;
-    }
+    const checkout = scanWorkspaceSkills(place.path);
     if (skills.length === 0) {
       this.launch(task, workspace, place, agent, registry, {
         deny: [],
         disableSlashCommands: true,
-        permittedSkills: [],
-        workspaceSkills,
+        // no ping ran, so the bundled set is unknown — nothing is permitted for it to split
+        skills: { workspace: checkout.carried, host: [], permitted: [] },
       }, routing, query);
       return;
     }
-    // 列挙の間に session が終わったら(停止・解放・再 pickup)、継続は何も書かずに終わる —— 記録は停止の側が持つ(#1973)
+    // ping の間に session が終わったら(停止・解放・再 pickup)、継続は何も書かずに終わる —— 記録は停止の側が持つ(#1973)
     const live = liveSession(this.options.db, task.id);
     // a rejected probe is the same "could not enumerate" as null — never the old wedge
-    void this.enumerateSkills(place.path).catch(() => null).then((enumerated) => {
+    void Promise.all([
+      this.enumerateSkills(place.path).catch(() => null),
+      this.enumerateHostSkills().catch(() => null),
+    ]).then(([enumerated, bundled]) => {
       if (!live()) return;
-      if (enumerated === null) {
+      if (enumerated === null || bundled === null) {
         // spawn failure with no fail-open (ADR 0025 point 6): the deny list
         // could not be resolved, so no process starts and the allowlist is
         // never bypassed. This is the third observation point of ADR 0118's
@@ -1728,29 +1720,24 @@ export class ClaudeCodeWorker implements WorkerAdapter {
         // Node spawn() "error" point below. Deliberately NOT degraded into a
         // --disable-slash-commands spawn: that would silently drop the
         // equipment the agent was promised and make the failure unobservable.
+        // ADR 0335 決定2: a failed bundled ping is this spawn's failure only, not the harness's containment.
         this.recordSpawnFailed(task, agent, {
           error_code: null,
           message:
-            "skill enumeration failed, so the skill deny list could not be resolved " +
-            "and the worker was not spawned (no fail-open)",
+            `${[enumerated === null && "skill enumeration", bundled === null && "bundled skill enumeration"].filter(Boolean).join(" and ")} ` +
+            "failed, so the skill deny list " +
+            "could not be resolved and the worker was not spawned (no fail-open)",
         });
         return;
       }
-      const deny = computeSkillDenials(skills, enumerated, workspaceSkills);
-      // ADR 0033: the sandbox's skill re-allow is the *permitted* set — the
-      // same complement, the other way round — so a denied skill's directory
-      // is never opened for reading either (issue #132's semantics must hold
-      // for `cat`, not just for the Skill tool).
-      const denied = new Set(deny);
-      const permittedSkills = enumerated.filter((skill) => !denied.has(skill));
+      const { deny, permitted, host } = resolveSkillAllowlist(skills, enumerated, checkout, bundled);
       // ADR 0149 決定6: ここは scheduler の catch の外なので、launch の同期 throw をこの continuation が
       // `spawn_failed` に落とす。transcript が開けない器の失敗だけは盤面全体の停止へ渡す(ADR 0266 決定4)
       try {
         this.launch(task, workspace, place, agent, registry, {
           deny,
           disableSlashCommands: false,
-          permittedSkills,
-          workspaceSkills,
+          skills: { workspace: checkout.carried, host, permitted },
         }, routing, query);
       } catch (err) {
         if (err instanceof RecordContainerError) return this.options.onRecordContainerFailed?.(task.id, err);
@@ -1787,7 +1774,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  process boundary (issue #32). `enforcement` carries the per-skill denies
    *  (folded into --disallowedTools alongside the always-present Workflow ban)
    *  and whether to --disable-slash-commands (the empty-allowlist shape), plus
-   *  the permitted-skill set ADR 0033's sandbox re-allows for reading.
+   *  the three skill sets the spawn record carries (ADR 0335 決定3).
    *  `routing` is the provider routing start() derived once for this pickup —
    *  carried, never re-derived here, so the key is read and the model fallback
    *  is spelled exactly once per pickup. */
@@ -1801,8 +1788,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     enforcement: {
       deny: string[];
       disableSlashCommands: boolean;
-      permittedSkills: string[] | "all";
-      workspaceSkills: string[];
+      skills: { workspace: string[]; host: string[]; permitted: string[] };
     },
     routing: ProviderRouting,
     query: InjectionQuery | undefined,
@@ -1894,7 +1880,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           source: routing.source,
           harness: "claude-code",
           cli_version: cliVersion,
-          skills: { workspace: enforcement.workspaceSkills, permitted: enforcement.permittedSkills },
+          skills: enforcement.skills,
         },
         at: this.options.clock.now(),
       });
@@ -1956,7 +1942,6 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           buildSandboxSettings({
             taskType: task.type,
             workspacePath,
-            permittedSkills: enforcement.permittedSkills,
             allowedDomains: workspace.allowed_domains,
             taskTemp,
             lib64: existsSync("/lib64"),

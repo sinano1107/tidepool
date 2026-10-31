@@ -658,9 +658,11 @@ export interface ApiRouterDeps {
   profileAdmin?: Partial<ProfileAdmin>;
   /** The skills picker's candidate source (issue #106 / ADR 0025 点4), bound by
    *  main.ts to the adapter's neutral-cwd `/usage` ping (claude-worker.ts's
-   *  `enumerateHostSkills`). Returns the host's enumerated `@host` skills, or
-   *  null on a failed probe. Absent → no CLI to enumerate against; GET /api/
-   *  skills degrades to an empty candidate set (never 503 — see the route). */
+   *  `enumerateHostSkills`, the same bundled set the spawn reads — the spawn then
+   *  resolves `@host` to it minus the checkout's `.claude/skills` entry names, ADR
+   *  0335 決定1・2). Returns the harness-bundled skills, or null on a failed probe.
+   *  Absent → no CLI to enumerate against; GET /api/skills degrades to an empty
+   *  candidate set (never 503 — see the route). */
   hostSkills?: () => Promise<string[] | null>;
   /** ADR 0093 決定5: `TIDEPOOL_GITHUB_TOKEN_FILE` の**パス**。settings の
    *  「GitHub にログイン済みか」は毎回このファイルを検査し直す —— ログインは
@@ -1054,8 +1056,8 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     } satisfies WireContract["GET /api/agents"]);
   });
 
-  // The skills picker's candidate source (issue #106 / ADR 0025 点4): the host's
-  // `@host` skills, enumerated fresh per request (no cache) by the adapter's
+  // The skills picker's candidate source (issue #106 / ADR 0025 点4): the
+  // harness-bundled skills (ADR 0335 決定2), enumerated fresh per request (no cache) by the adapter's
   // neutral-cwd /usage ping. Deliberately NOT 503 when unconfigured or on a
   // failed probe, unlike the agents/workspaces/profiles settings routes above:
   // this only *assists* input, so it degrades — `{ skills: [], degraded: true }`

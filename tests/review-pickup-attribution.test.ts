@@ -16,6 +16,7 @@ import {
   FakeContainerRuntime,
   fakeContainers,
   noRetrospectiveCalls,
+  noSkillPings,
   pinnedCliVersions,
   recordingSpawn,
   ScriptedWorker,
@@ -90,6 +91,7 @@ You are Fugu.
         transcripts: new TranscriptStore(logDir),
         containers,
         boardCall,
+        ...noSkillPings,
       });
       return withHealthyUsage(worker, clock);
     },

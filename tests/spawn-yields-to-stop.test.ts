@@ -178,6 +178,7 @@ async function bootClaudeHeldInEnumeration(workspace?: WorkspaceConfig) {
             await hold.wait();
             return ["code-review"];
           },
+          enumerateHostSkills: async () => ["code-review"],
         }),
       "anthropic",
       { workspace, dir },

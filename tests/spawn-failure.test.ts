@@ -232,7 +232,8 @@ it("skill 列挙の容器が空にならず回収 timeout で null に落ちる�
     "worker never started for task: never runs",
   ]);
   const [failure] = await neverStarted();
-  expect(failure.purpose).toContain("skill enumeration failed");
+  // 同梱集合の ping も同じ口と容器機構を通るので、両方が null に落ちる(ADR 0335 決定2)
+  expect(failure.purpose).toContain("skill enumeration and bundled skill enumeration failed, so ");
   const containment = all.find((q: any) => q.title.includes("containment"));
   expect(containment.purpose).toContain("skill enumeration Board call");
 

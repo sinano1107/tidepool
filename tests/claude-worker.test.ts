@@ -53,6 +53,7 @@ import {
   definitionPart,
   FakeClock,
   FakeContainerRuntime,
+  noSkillPings,
   passthroughContainers,
   recordingPty,
   recordingSpawn,
@@ -294,6 +295,9 @@ async function makeWorker(
   const stops: Array<[string, unknown]> = [];
   const watchdog = startWatchdog({ db, clock, slot, containers, worker: new ScriptedWorker(clock), resolveWorkspace, pollNow: () => {}, config: { timeLimits: {}, grace: 0 } });
   onTestFinished(watchdog.stop);
+  // 既定 agent の `*` は列挙 ping と同梱 ping を撃つ(ADR 0335 決定1)。既定はどちらも空集合を返す偽物で、deny は空のまま
+  const enumeration = recordingEnumerator([]);
+  const bundled = recordingBundledSet([]);
   const worker = new ClaudeCodeWorker({
     db,
     clock,
@@ -306,6 +310,8 @@ async function makeWorker(
     ...containerHarness(containers, clock),
     onWorkerExited: (taskId, exit, cap) => { if (cap) watchdog.onWorkerExited(taskId, exit, cap); },
     onPickupStopped: (taskId, payload) => stops.push([taskId, payload]),
+    enumerateSkills: enumeration.enumerateSkills,
+    enumerateHostSkills: bundled.enumerateHostSkills,
     ...extraOptions,
   });
   /** Register a board task and hand it to the worker, as the scheduler would. */
@@ -333,7 +339,7 @@ async function makeWorker(
       extraOptions.agent,
       extraOptions.auditorName,
     );
-  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, ...recorder };
+  return { worker, start, setting, logDir, db, slot, clock, registryDir, containers, stops, watchdog, enumeration, bundled, ...recorder };
 }
 
 /** Scripted stand-in at the skill-enumeration boundary (issue #56 / ADR 0025):
@@ -346,6 +352,18 @@ function recordingEnumerator(result: string[] | null) {
     return result;
   };
   return { calls, enumerateSkills };
+}
+
+/** Scripted stand-in for the bundled-set ping (ADR 0335 決定2): counts the pings and returns a scripted set (or null). */
+function recordingBundledSet(result: string[] | null) {
+  const rec = {
+    pings: 0,
+    enumerateHostSkills: async () => {
+      rec.pings += 1;
+      return result;
+    },
+  };
+  return rec;
 }
 
 /** The `--disallowedTools` value a spawn used, split into its comma-separated
@@ -445,7 +463,7 @@ describe("ClaudeCodeWorker", () => {
   it("タスクの workspace を cwd に、stream-json 出力のヘッドレス Claude Code を起動する", async () => {
     const { start, calls } = await makeWorker();
     start();
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const call = calls[0]!;
     expect(call.command).toBe("claude");
     // cwd comes from the registry's workspaces.yaml, not from tidepool itself
@@ -460,7 +478,7 @@ describe("ClaudeCodeWorker", () => {
   it("spawn する worker child の env に、spawn されたエージェント名義の GIT_* 4変数を機械注入する(issue #53)", async () => {
     const { start, calls } = await makeWorker();
     start();
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { env } = calls[0]!;
     // エージェントの善意に依存せず、盤面が author/committer 双方を焼き込む。
     // 名義は spawn された既定エージェント(deckhand)、email は .invalid
@@ -474,7 +492,7 @@ describe("ClaudeCodeWorker", () => {
   it("GIT_* の名義は task.assignee で解決された実 spawn エージェントに従う(issue #53 / ADR 0012)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const { env } = calls[0]!;
     expect(env.GIT_AUTHOR_NAME).toBe("navigator");
     expect(env.GIT_AUTHOR_EMAIL).toBe("navigator@tidepool.invalid");
@@ -516,7 +534,7 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${FIXTURE_WORKSPACE}\nprod:\n  path: ${prod}\n`,
     });
     start("task-prod", "prod");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.cwd).toBe(prod);
   });
 
@@ -525,7 +543,7 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${FIXTURE_WORKSPACE}\nprod:\n  path: /srv/pi/work/prod\n`,
     });
     start("task-default", null);
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.cwd).toBe(FIXTURE_WORKSPACE);
   });
 
@@ -542,7 +560,7 @@ describe("ClaudeCodeWorker", () => {
   it("task.assignee が指定されていれば、コンストラクタの agent より優先してそのエージェントとして spawn する(ADR 0012 / issue #36)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Navigator");
@@ -552,7 +570,7 @@ describe("ClaudeCodeWorker", () => {
   it("task.assignee が null なら、これまで通りコンストラクタの agent(既定 agent)として spawn する", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-default-agent", null, null);
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Deckhand");
@@ -569,6 +587,7 @@ describe("ClaudeCodeWorker", () => {
   it("system prompt に roster を push する: assignable_to(既定は \"*\")を解決した registry 全体が「名前 — description」で並ぶ(issue #43 / ADR 0014)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("## Roster");
@@ -582,6 +601,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/navigator.md": NAVIGATOR_MD,
     });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("navigator — Navigation specialist");
@@ -600,6 +620,7 @@ describe("ClaudeCodeWorker", () => {
         "agents/navigator.md": NAVIGATOR_MD,
       });
       start();
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
       const args = calls[0]!.args;
       const systemPrompt = systemText(args);
       expect(systemPrompt).toContain("navigator — Navigation specialist");
@@ -612,6 +633,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/fugu.md": `---\nversion: 1.0.0\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: Shadowing work agent\n---\nYou are Fugu.\n`,
     });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("fugu — Shadowing work agent");
@@ -622,6 +644,7 @@ describe("ClaudeCodeWorker", () => {
       "authority/standard.yaml": `guidance: be careful\nassignable_to:\n  - toString\nallowed_workspaces:\n  - "*"\nmerge: external\n`,
     });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Roster");
@@ -635,7 +658,7 @@ describe("ClaudeCodeWorker", () => {
       { auditorName: "keeper" },
     );
     start("task-review", null, null, "review");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Keeper");
@@ -650,6 +673,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/keeper.md": KEEPER_MD,
     });
     start("task-review-authority", null, "keeper", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -680,6 +704,7 @@ describe("ClaudeCodeWorker", () => {
     };
     insertTask(db, review);
     worker.start(review, setting(review));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -690,6 +715,7 @@ describe("ClaudeCodeWorker", () => {
   it("親を持たないルート review の system prompt には roster セクションを出さない(ADR 0056 / issue #249)", async () => {
     const { start, calls } = await makeWorker({ "agents/keeper.md": KEEPER_MD });
     start("task-root-review", null, "keeper", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -713,6 +739,7 @@ describe("ClaudeCodeWorker", () => {
     };
     insertTask(db, review);
     worker.start(review, setting(review));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -728,6 +755,7 @@ describe("ClaudeCodeWorker", () => {
       new FakeClock().now(),
     );
     const task = start("task-memory", null, "deckhand", type);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -739,9 +767,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("start の入力が英語の view を持てば memory_injected はその文面を持ち、持たなければ query の欄は無い(view で引くことは memory-injection.test.ts —— ADR 0175)", async () => {
-    const { start, db } = await makeWorker();
+    const { calls, start, db } = await makeWorker();
     const viewed = start("task-view", null, "deckhand", "work", { view: "Find the attic ladder" });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const bare = start("task-bare");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     const injected = (id: string) => listEvents(db, id).find((e) => e.kind === "memory_injected")!.payload;
     expect(injected(viewed.id)).toMatchObject({ query: { view: "Find the attic ladder" } });
@@ -751,6 +781,7 @@ describe("ClaudeCodeWorker", () => {
   it("見える approved の記憶が無ければ注入節を置かず、memory_injected は entries 空で残る(issue #592)", async () => {
     const { start, calls, db } = await makeWorker();
     const task = start("task-no-memory");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     expect(systemText(args)).not.toContain("## Memory");
@@ -761,7 +792,7 @@ describe("ClaudeCodeWorker", () => {
 
   it("meta-review の spawn は主題の材料の節を記憶の節の枠(system prompt の連結の末尾)に置き、memory_injected の直後に meta_review_material_injected を書く —— 主題 memory には routing の節が入らず、普通の task には節も記録も無い(ADR 0180 決定2・追記 #1239)", async () => {
     const { worker, setting, slot, calls, db } = await makeWorker();
-    const spawn = (subject: "memory" | "routing" | null) => {
+    const spawn = async (subject: "memory" | "routing" | null) => {
       // setup のみ: 盤面名義の登録を deckhand に割り当てる(既定の auditor は skill の列挙 ping を挟んで spawn が非同期になる)
       if (subject) {
         registerMetaReview(db, subject, new FakeClock().now());
@@ -771,13 +802,15 @@ describe("ClaudeCodeWorker", () => {
       if (!subject) insertTask(db, task);
       slot.release();
       slot.occupy(task.id);
+      const before = calls.length;
       worker.start(task, setting(task));
+      await vi.waitFor(() => expect(calls).toHaveLength(before + 1));
       const args = calls.at(-1)!.args;
       return { task, systemPrompt: systemText(args) };
     };
 
     for (const subject of ["memory", "routing"] as const) {
-      const review = spawn(subject);
+      const review = await spawn(subject);
       const { section } = buildMetaReviewMaterial(db, review.task.id)!;
       expect(review.systemPrompt.endsWith(`\n\n${section}`)).toBe(true);
       const events = listEvents(db, review.task.id);
@@ -788,7 +821,7 @@ describe("ClaudeCodeWorker", () => {
       ]);
       if (subject === "memory") expect(review.systemPrompt).not.toContain("## Routing meta-review material");
     }
-    const work = spawn(null);
+    const work = await spawn(null);
     expect(work.systemPrompt).not.toContain("meta-review material");
     expect(listEvents(db, work.task.id).map((e) => e.kind)).not.toContain("meta_review_material_injected");
   });
@@ -804,6 +837,7 @@ describe("ClaudeCodeWorker", () => {
     slot.release();
     slot.occupy(task.id);
     worker.start(task, setting(task));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls.at(-1)!.args;
     const guidance = buildMemoryInjection(db, task, "work", "deckhand");
@@ -816,8 +850,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("worker_spawned イベントの actor_id は解決済みの assignee になる(コンストラクタの既定 agent 固定ではない)", async () => {
-    const { start, db } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
+    const { calls, start, db } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-attributed", null, "navigator");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, "task-attributed").find((e) => e.kind === "worker_spawned");
     expect(spawned?.actor_id).toBe("navigator");
   });
@@ -825,6 +860,7 @@ describe("ClaudeCodeWorker", () => {
   it("一時 MCP 設定でボードを ?task= 付きで指す(呼び出しのタスク帰属)", async () => {
     const { start, calls } = await makeWorker();
     start("task-42");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const configPath = args[args.indexOf("--mcp-config") + 1]!;
     const config = JSON.parse(await readFile(configPath, "utf8"));
@@ -836,6 +872,7 @@ describe("ClaudeCodeWorker", () => {
   it("エージェント定義の本文と authority guidance をシステムプロンプトへ注入する", async () => {
     const { start, calls } = await makeWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("You are Deckhand");
@@ -848,6 +885,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/navigator.md": NAVIGATOR_MD,
     });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain("## Authority");
@@ -861,6 +899,7 @@ describe("ClaudeCodeWorker", () => {
   it("盤面教義(subagent/workflow は説明責任を分割しない労力の分割にのみ使う)を、agent や profile によらず system prompt に注入する(ADR 0010 / issue #31)", async () => {
     const { start, calls } = await makeWorker({ "agents/navigator.md": NAVIGATOR_MD });
     start("task-navigator", null, "navigator");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain("Agent tool");
@@ -879,6 +918,7 @@ describe("ClaudeCodeWorker", () => {
     openTestExamineeCheckout(db, child!);
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "record_knowledge", "define_memory_branch"], added: [] }));
@@ -891,6 +931,7 @@ describe("ClaudeCodeWorker", () => {
     openTestInterviewRoom(db, root);
     slot.occupy(root.id);
     worker.start(root, setting(root));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     // 文面そのものは tests/board-prose.test.ts が固定する。ここは task ごとの verb の差し替えの配線だけ
     expect(systemText(args)).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["pose_probe"] }));
@@ -904,6 +945,7 @@ describe("ClaudeCodeWorker", () => {
     poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "auditor", new Date(0), "worker", POSED_HEAD);
     slot.occupy(root.id);
     worker.start(root, setting(root));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     expect(systemText(args)).toContain(boardDoctrine({ delegate: "the Agent tool", workflow: true }, { withheld: ["decompose", "redecompose", "complete_task"], added: ["complete_interview", "report_broken_probe"] }));
   });
@@ -918,6 +960,7 @@ describe("ClaudeCodeWorker", () => {
   it("本文が空の既定エージェントでも、ワーカープロトコル(rules of the road)を system prompt に注入する(ADR 0017 / issue #51)", async () => {
     const { start, calls } = await makeWorker({ "agents/tako.md": TAKO_MD });
     start("task-tako", null, "tako");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     // cwd = the task's workspace
@@ -939,6 +982,7 @@ describe("ClaudeCodeWorker", () => {
   it("英語ルールは WORKER_PROTOCOL から移設され、system prompt には複写されない(ADR 0015 2026-08-21 追補 / issue #415)", async () => {
     const { start, calls } = await makeWorker();
     start("task-canonical-text");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
     expect(systemPrompt).not.toContain(
@@ -957,6 +1001,7 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-network-protocol");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -970,6 +1015,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
 
     start("task-closed-network-protocol");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const systemPrompt = systemText(args);
@@ -982,6 +1028,7 @@ describe("ClaudeCodeWorker", () => {
   it("Workflow ツールを spawn 時に無効化する(オーケストレーションは worker にカテゴリ禁止・ADR 0010 追補 / issue #31)", async () => {
     const { start, calls } = await makeWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     expect(args[args.indexOf("--disallowedTools") + 1]).toBe("Workflow");
   });
@@ -993,6 +1040,7 @@ describe("ClaudeCodeWorker", () => {
   it("review タスクの spawn は Edit / Write / NotebookEdit と Bash の書き込み系パターンを deny する(ADR 0013 追記 / issue #59)", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-deny", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Workflow");
     expect(deny).toContain("Edit");
@@ -1006,6 +1054,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls } = await makeWorker();
     // deckhand 自身が review タスクの assignee — self review でも例外なし
     start("task-self-rca", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Edit");
     expect(deny).toContain("Write");
@@ -1014,6 +1063,7 @@ describe("ClaudeCodeWorker", () => {
   it("work タスクの spawn には影響しない(deny は Workflow のみ)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-no-deny", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toEqual(["Workflow"]);
   });
@@ -1023,12 +1073,14 @@ describe("ClaudeCodeWorker", () => {
   it("review タスクの spawn は --permission-mode manual で走る(ADR 0035)", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-manual", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 
   it.each(["memory_repair", "routing_repair"] as const)("%s タスクの spawn も --permission-mode manual で走る —— read-only 保証を運ぶ type(ADR 0272 決定3 / ADR 0279 決定4)", async (type) => {
     const { start, calls } = await makeWorker();
     start("task-memory-repair-manual", null, "deckhand", type);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode manual");
   });
 
@@ -1040,6 +1092,7 @@ describe("ClaudeCodeWorker", () => {
   it("work タスクの spawn は --permission-mode acceptEdits で走る(ADR 0038)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-accept-edits", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--permission-mode acceptEdits");
   });
 
@@ -1062,8 +1115,9 @@ describe("ClaudeCodeWorker", () => {
   it("両プロファイルの spawn が --setting-sources project で走る(ADR 0038)", async () => {
     const { start, calls } = await makeWorker();
     start("task-sources-work", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-sources-review", null, "deckhand", "review");
-    expect(calls).toHaveLength(2);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
     for (const call of calls) {
       expect(call.args[call.args.indexOf("--setting-sources") + 1]).toBe("project");
     }
@@ -1077,12 +1131,14 @@ describe("ClaudeCodeWorker", () => {
   it("work タスクの spawn は --tools に work の16本を渡す(ADR 0039 決定1)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-tools", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(spawnedTools(calls[0]!.args)).toEqual(WORK_SURFACE);
   });
 
   it("review タスクの spawn は --tools に review の13本を渡す — 編集系が面から消える(ADR 0039 決定2)", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-tools", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(spawnedTools(calls[0]!.args)).toEqual(REVIEW_SURFACE);
   });
 
@@ -1108,6 +1164,7 @@ describe("ClaudeCodeWorker", () => {
     // deny の列に足したのではなく、allowlist に**書いていない**ことが塞ぎ方である。
     const { start, calls } = await makeWorker();
     start("task-tools-default-deny", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spelled = calls[0]!.args.join(" ");
     for (const tool of ["CronCreate", "RemoteTrigger", "PushNotification", "EnterWorktree"]) {
       expect(spelled).not.toContain(tool);
@@ -1117,6 +1174,7 @@ describe("ClaudeCodeWorker", () => {
   it("review タスクの spawn は tidepool MCP をサーバ単位で allow する — 無いと盤面への唯一の channel が承認待ちで詰まる", async () => {
     const { start, calls } = await makeWorker();
     start("task-review-mcp-allow", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
   });
 
@@ -1127,6 +1185,7 @@ describe("ClaudeCodeWorker", () => {
     // 突き合わせる — 実装の定数を import して比べると同語反復になる。
     const { start, calls, logDir } = await makeWorker();
     const task = start("task-review-mcp-key", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const config = JSON.parse(
       await readFile(join(logDir, `${task.id}.mcp.json`), "utf8"),
     ) as { mcpServers: Record<string, unknown> };
@@ -1143,6 +1202,7 @@ describe("ClaudeCodeWorker", () => {
 `,
     });
     start("task-review-allowed-cmds", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool", "Bash(npm test*)"]);
   });
 
@@ -1154,6 +1214,7 @@ describe("ClaudeCodeWorker", () => {
   it("work タスクの spawn も tidepool MCP をサーバ単位で allow する(ADR 0038)", async () => {
     const { start, calls } = await makeWorker();
     start("task-work-mcp-allow", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
   });
 
@@ -1166,6 +1227,7 @@ describe("ClaudeCodeWorker", () => {
 `,
     });
     start("task-work-no-allow", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     // Bash の接頭辞 allow は review 専用のまま — work は元から書けるので何も買わず、
     // 開けば registry のデータが work の Bash 面を広げる経路になる。
     expect(allowedTools(calls[0]!.args)).toEqual(["mcp__tidepool"]);
@@ -1176,25 +1238,21 @@ describe("ClaudeCodeWorker", () => {
   const skilledMd = (skillsYaml: string) =>
     `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n${skillsYaml}---\nYou are Deckhand.\n`;
 
-  it("skills が ['*'] の agent は列挙 ping を呼ばず、skill deny も付けない(Workflow のみ・ADR 0025 point 5)", async () => {
-    const rec = recordingEnumerator(["code-review", "tdd"]);
-    const { start, calls } = await makeWorker({}, { enumerateSkills: rec.enumerateSkills });
+  it("skills が ['*'] の agent は workspace cwd の列挙 ping と同梱 ping の両方を撃ってから spawn する(ADR 0335 決定1)", async () => {
+    const { start, calls, enumeration, bundled } = await makeWorker();
     start();
-    expect(calls).toHaveLength(1);
-    expect(rec.calls).toEqual([]); // '*' はゼロトークン ping すら不要
-    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow"]);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(enumeration.calls).toEqual([FIXTURE_WORKSPACE]);
+    expect(bundled.pings).toBe(1);
     expect(calls[0]!.args).not.toContain("--disable-slash-commands");
   });
 
   it("skills が空リストの agent は列挙 ping を呼ばず --disable-slash-commands 一発で全禁止し、--tools に Skill を載せない(ADR 0025 point 5 / ADR 0185)", async () => {
-    const rec = recordingEnumerator(["code-review", "tdd"]);
-    const { start, calls } = await makeWorker(
-      { "agents/deckhand.md": skilledMd("  []\n") },
-      { enumerateSkills: rec.enumerateSkills },
-    );
+    const { start, calls, enumeration, bundled } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") });
     start();
     expect(calls).toHaveLength(1);
-    expect(rec.calls).toEqual([]);
+    expect(enumeration.calls).toEqual([]);
+    expect(bundled.pings).toBe(0);
     expect(calls[0]!.args).toContain("--disable-slash-commands");
     // disable フラグが CLI の面から外す `Skill` を、宣言からも外す
     expect(spawnedTools(calls[0]!.args)).not.toContain("Skill");
@@ -1204,11 +1262,11 @@ describe("ClaudeCodeWorker", () => {
     const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
     const { start, calls } = await makeWorker(
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
-      { enumerateSkills: rec.enumerateSkills },
+      { enumerateSkills: rec.enumerateSkills, enumerateHostSkills: recordingBundledSet(["code-review", "tdd", "grilling"]).enumerateHostSkills },
     );
     start();
-    // ping はタスクの workspace cwd で走る
     await vi.waitFor(() => expect(calls).toHaveLength(1));
+    // ping はタスクの workspace cwd で走る
     expect(rec.calls).toEqual([FIXTURE_WORKSPACE]);
     const deny = disallowedTools(calls[0]!.args);
     expect(deny).toContain("Workflow");
@@ -1220,7 +1278,7 @@ describe("ClaudeCodeWorker", () => {
     expect(spawnedTools(calls[0]!.args)).toContain("Skill");
   });
 
-  it("@workspace は checkout の .claude/skills 走査との差分でホスト由来(user + plugin)だけを deny する(ADR 0025)", async () => {
+  it("@workspace は checkout が運ぶ skill だけを許可し、列挙に載った user 層・plugin の名前を deny する(ADR 0025 / ADR 0335 決定1)", async () => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
     await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
@@ -1291,13 +1349,67 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned.payload).toMatchObject({ skills: { workspace: ["tdd"], permitted: ["tdd"] } });
   });
 
+  // ADR 0335 決定1・3: 実 dir・内側を指す link・外を指す link・壊れた link・同梱と同名の dir を置いた checkout で、entry の形ごとの
+  // deny と記録の3列。列挙は workspace cwd の ping(user 層の名前も載る)、同梱は neutral cwd の ping の生の結果
+  const mixedSkillWorkspace = async () => {
+    const wsDir = await symlinkedSkillWorkspace(); // tdd(実 dir)と inner(内側を指す link)
+    const outside = await tempDir("tidepool-outside-");
+    await mkdir(join(outside, "ext"));
+    const skillsDir = join(wsDir, ".claude", "skills");
+    await symlink(join(outside, "ext"), join(skillsDir, "ext"));
+    await symlink("../../missing", join(skillsDir, "broken"));
+    await mkdir(join(skillsDir, "dataviz"));
+    return wsDir;
+  };
+  it.each([
+    ["@workspace", '  - "@workspace"\n', ["tdd", "inner", "dataviz"], ["ext", "debug", "user-skill"]],
+    ["@host", '  - "@host"\n', ["debug"], ["tdd", "inner", "ext", "dataviz", "user-skill"]],
+    ["*", '  - "*"\n', ["tdd", "inner", "dataviz", "debug"], ["ext", "user-skill"]],
+    ["名前指定", "  - ext\n  - debug\n", ["debug"], ["tdd", "inner", "ext", "dataviz", "user-skill"]],
+  ] as const)("%s の agent は運ぶ・同梱のどちらにも無い名前を開かず、deny と worker_spawned の3列が checkout の置き方どおりになる(ADR 0335 決定1・3)", async (_entry, skillsYaml, permitted, deny) => {
+    const wsDir = await mixedSkillWorkspace();
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd(skillsYaml) },
+      {
+        enumerateSkills: recordingEnumerator(["tdd", "inner", "ext", "dataviz", "debug", "user-skill"]).enumerateSkills,
+        enumerateHostSkills: recordingBundledSet(["dataviz", "debug", "broken"]).enumerateHostSkills,
+      },
+    );
+    start("task-skill-matrix");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    expect(disallowedTools(calls[0]!.args)).toEqual(["Workflow", ...deny.map((name) => `Skill(${name})`)]);
+    const spawned = listEvents(db, "task-skill-matrix").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["dataviz", "inner", "tdd"], host: ["debug"], permitted } });
+  });
+
+  it.each<[string, Partial<ConstructorParameters<typeof ClaudeCodeWorker>[0]>, RegExp]>([
+    ["同梱 ping の null", { enumerateHostSkills: async () => null }, /^bundled skill enumeration failed, so /],
+    ["同梱 ping の reject", {
+      enumerateHostSkills: async () => {
+        throw new Error("bundled ping blew up");
+      },
+    }, /^bundled skill enumeration failed, so /],
+    ["両方の ping の null", { enumerateSkills: async () => null, enumerateHostSkills: async () => null }, /^skill enumeration and bundled skill enumeration failed, so /],
+  ])("%s は spawn_failed を書いて onSpawnFailed を呼び、どの ping が落ちたかを名指し、worker を起こさない(ADR 0335 決定2)", async (_shape, pings, message) => {
+    const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
+    const { start, calls, db } = await makeWorker({}, {
+      ...pings,
+      onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
+    });
+    start("task-bundled-fail");
+    await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
+    expect(spawnFailures).toEqual([["task-bundled-fail", { error_code: null, message: expect.stringMatching(message) }]]);
+    expect(listEvents(db, "task-bundled-fail").filter((e) => e.kind === "spawn_failed")).toHaveLength(1);
+    expect(calls).toEqual([]);
+  });
+
   // ADR 0325 決定2: 帰責の判事が scope を引けるよう、spawn の記録は allowlist の形に関わらず checkout の skill と許可した集合を持つ
   it.each([
-    ["*", '  - "*"\n', "all"],
+    ["*", '  - "*"\n', ["tdd", "code-review"]],
     ["[]", "  []\n", []],
     ["有限", "  - code-review\n", ["code-review"]],
     ["scope 語", '  - "@workspace"\n', ["tdd", "code-review"]],
-  ] as const)("allowlist が %s でも worker_spawned は checkout の skill の集合と許可した集合を記録する(ADR 0325 決定2)", async (_shape, skillsYaml, permitted) => {
+  ] as const)("allowlist が %s でも worker_spawned は checkout の skill の集合・同梱の集合・許可した集合を記録する(ADR 0325 決定2 / ADR 0335 決定3)", async (_shape, skillsYaml, permitted) => {
     const wsDir = await tempDir("tidepool-ws-");
     await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
     await mkdir(join(wsDir, ".claude", "skills", "code-review"), { recursive: true });
@@ -1309,7 +1421,7 @@ describe("ClaudeCodeWorker", () => {
     start("task-skills-record");
     await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, "task-skills-record").find((e) => e.kind === "worker_spawned")!;
-    expect(spawned.payload).toMatchObject({ skills: { workspace: ["code-review", "tdd"], permitted } });
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["code-review", "tdd"], host: [], permitted } });
   });
 
   // ADR 0136 決定5 / issue #767: skill 列挙は Board call の口を1回通る。ここは
@@ -1324,7 +1436,8 @@ describe("ClaudeCodeWorker", () => {
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const worker = await makeWorker(
       { "agents/deckhand.md": skilledMd("  - code-review\n") },
-      { containers: new ProcessContainers(runtime) },
+      // 列挙だけ実物に戻す(`undefined` で constructor の既定へ落ちる)。同梱 ping は偽物のままなので、口を通る spawn は列挙の1本
+      { containers: new ProcessContainers(runtime), enumerateSkills: undefined },
     );
     return { ...worker, recorder, runtime };
   };
@@ -1387,7 +1500,7 @@ describe("ClaudeCodeWorker", () => {
     await vi.waitFor(() => expect(spawnFailures).toHaveLength(1));
     const [[, failure]] = spawnFailures as [[string, { error_code: string | null; message: string }]];
     expect(spawnFailures).toEqual([
-      ["task-ping-fail", { error_code: null, message: expect.stringContaining("skill enumeration failed") }],
+      ["task-ping-fail", { error_code: null, message: expect.stringMatching(/^skill enumeration failed, so /) }],
     ]);
     expect(failure.message).not.toMatch(/time limit|reclaim/i);
     const failed = listEvents(db, "task-ping-fail").filter((e) => e.kind === "spawn_failed");
@@ -1428,6 +1541,7 @@ describe("ClaudeCodeWorker", () => {
   it("spawn ごとに sandbox settings を per-task ファイルで書き、--settings で注入する(ADR 0033)", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const sandbox = sandboxSettings(calls[0]!.args, logDir);
     expect(sandbox.enabled).toBe(true);
     expect(sandbox.allowUnsandboxedCommands).toBe(false);
@@ -1448,10 +1562,10 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, logDir } = await makeWorker({ "workspaces.yaml": `tidepool:\n  path: ${registered}\n` });
 
     start("task-sbx-workspace-path");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const { allowRead, allowWrite, denyWrite } = sandboxSettings(calls[0]!.args, logDir).filesystem;
     expect(allowRead).toContain(real);
-    expect(allowRead).toContain(join(real, ".claude", "skills"));
     expect(allowWrite).toEqual([real, calls[0]!.env.TMPDIR]);
     expect(denyWrite).toEqual([join(real, ".claude", "settings.json"), join(real, ".claude", "settings.local.json")]);
     expect(calls[0]!.cwd).toBe(real);
@@ -1468,6 +1582,7 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-domain-egress");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     expect(sandboxSettings(calls[0]!.args, logDir).network).toEqual({
       allowLocalBinding: true,
@@ -1480,12 +1595,14 @@ describe("ClaudeCodeWorker", () => {
   it("review タスクは allowWrite が task temp だけの profile で走る — profile は行為の性質(task.type)だけで決まり assignee によらない(ADR 0013)", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-review", null, "deckhand", "review");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([calls[0]!.env.TMPDIR]);
   });
 
   it("work タスクは workspace 内書き込みを許す profile で走る", async () => {
     const { start, calls, logDir } = await makeWorker();
     start("task-sbx-work", null, "deckhand", "work");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(sandboxSettings(calls[0]!.args, logDir).filesystem.allowWrite).toEqual([
       FIXTURE_WORKSPACE,
       calls[0]!.env.TMPDIR,
@@ -1500,11 +1617,13 @@ describe("ClaudeCodeWorker", () => {
     openTestInterviewRoom(db, root);
     slot.occupy(root.id);
     worker.start(root, setting(root));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const [child] = poseAccepted(db, root, { title: "probe", probe: "p", completion_criteria: "c", rubric: "r" }, "deckhand", new Date(0), "worker", POSED_HEAD);
     const checkout = openTestExamineeCheckout(db, child!);
     slot.release();
     slot.occupy(child!.id);
     worker.start(child!, setting(child!));
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
     expect(calls.map((call) => call.cwd)).toEqual([room, checkout]);
@@ -1540,6 +1659,7 @@ describe("ClaudeCodeWorker", () => {
           );
     slot.occupy(task.id);
     worker.start(task, setting(task));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const room = realpathSync(interviewRoomPath(db, root.id)!);
     const [call] = calls as [(typeof calls)[0]];
@@ -1571,7 +1691,9 @@ describe("ClaudeCodeWorker", () => {
   it("task temp は task ごとに別のパスになる(ADR 0257)", async () => {
     const { start, calls } = await makeWorker();
     start("task-temp-a");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-temp-b");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[0]!.env.TMPDIR).not.toBe(calls[1]!.env.TMPDIR);
   });
 
@@ -1594,6 +1716,7 @@ describe("ClaudeCodeWorker", () => {
     const { start, calls, processes, emitExit, db, watchdog, containers, killed } = await makeWorker({}, { onWorkerExited: onExit });
     onExit.mockImplementation(watchdog.onWorkerExited);
     const value = start("stdin-error");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
     expect(existsSync(file)).toBe(true);
     expect(() => processes[0]!.stdin.emit("error", new Error("broken pipe"))).not.toThrow();
@@ -1609,6 +1732,7 @@ describe("ClaudeCodeWorker", () => {
   it("停止はsystem fileをCLIの終了まで保ち、終了の後始末で消す", async () => {
     const { worker, start, calls, emitExit, killed } = await makeWorker();
     const value = start("prompt-stop");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
     worker.gracefulStop(value.id);
     expect(killed).toContain("SIGTERM");
@@ -1620,6 +1744,7 @@ describe("ClaudeCodeWorker", () => {
   it("spawn の失敗(exit が来ないことがある)の後も、task temp は残らない(ADR 0257)", async () => {
     const { start, calls, emitError } = await makeWorker();
     start("task-temp-spawn-error");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const taskTemp = calls[0]!.env.TMPDIR!;
     const file = calls[0]!.args[calls[0]!.args.indexOf("--append-system-prompt-file") + 1]!;
     expect(existsSync(file)).toBe(true);
@@ -1631,7 +1756,8 @@ describe("ClaudeCodeWorker", () => {
 
   it("spawn までの間に例外が出たら start はそれを投げ直し、task temp は残らない(ADR 0257 / issue #705 と同じ)", async () => {
     let file = "";
-    const { start } = await makeWorker({}, {
+    // 同期に launch するのは ping の無い `[]` の形だけ(ADR 0335 決定1)。ping の後の throw は spawn_failed に落ちる(ADR 0149 決定6)
+    const { start } = await makeWorker({ "agents/deckhand.md": skilledMd("  []\n") }, {
       containers: passthroughContainers((_command, args) => {
         file = args[args.indexOf("--append-system-prompt-file") + 1]!;
         expect(existsSync(file)).toBe(true);
@@ -1642,27 +1768,6 @@ describe("ClaudeCodeWorker", () => {
     expect(() => start("task-temp-sync-throw")).toThrow("spawn blew up");
     expect(existsSync(file)).toBe(false);
     expect(readdirSync(tmpdir()).filter((name) => name.startsWith("tidepool-claude-task-temp-sync-throw-"))).toEqual([]);
-  });
-
-  it("有限の許可リストの agent は、許可された skill のディレクトリだけが allowRead に載る(拒否 skill のものは載らない・ADR 0033)", async () => {
-    const rec = recordingEnumerator(["code-review", "tdd", "grilling"]);
-    const { start, calls, logDir } = await makeWorker(
-      { "agents/deckhand.md": skilledMd("  - code-review\n") },
-      { enumerateSkills: rec.enumerateSkills },
-    );
-    start("task-sbx-skills");
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    const { allowRead } = sandboxSettings(calls[0]!.args, logDir).filesystem;
-    expect(allowRead).toContain("~/.claude/skills/code-review");
-    // ホスト側の skill ルートは開かない — 開けば拒否 skill の本文が cat で読める
-    expect(allowRead).not.toContain("~/.claude/skills");
-    expect(allowRead).not.toContain("~/.claude/plugins");
-    expect(allowRead).not.toContain("~/.claude/skills/tdd");
-    expect(allowRead).not.toContain("~/.claude/skills/grilling");
-    // 注: workspace 側の同名エントリも配列には載らないが、そちらは allowRead が
-    // workspace そのものを再帰的に開いている以上どのみち読める。この per-skill
-    // 封じ込めが実効を持つのはホスト側だけ(workspace の中身は定義上、封じ込め
-    // 境界の内側)。
   });
 
   it.each([
@@ -1728,7 +1833,7 @@ describe("ClaudeCodeWorker", () => {
       { boardState: [{ label: "board database (TIDEPOOL_DB)", path: join(boardDir, "board.sqlite") }] },
     );
     start("task-no-overlap");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
@@ -1768,7 +1873,7 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     start("task-sbx-plain-settings");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(() => readFileSync(join(ws.path, ".claude", "settings.json"), "utf8")).toThrow();
     expect(git(ws.path, "status", "--porcelain")).toBe("");
@@ -1826,7 +1931,7 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${ws.path}\n`,
     });
     start("task-sbx-unrestorable-after-reclaim");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     await writeFile(join(ws.path, ".git", "index.lock"), "");
 
     emitExit(0, null);
@@ -1849,7 +1954,7 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-human-cone");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
     expect(git(ws.path, "sparse-checkout", "list")).toBe("pkg-a");
     expect(git(ws.path, "config", "--get", "core.sparseCheckoutCone")).toBe("true");
@@ -1882,9 +1987,10 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-hooks-safe");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     git(ws.path, "checkout", "unsafe-settings");
     start("task-hooks-unsafe");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     expect(calls).toHaveLength(2);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
@@ -1904,8 +2010,9 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-hooks-first");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-hooks-second");
-    expect(calls).toHaveLength(2);
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     emitExitAt(0, 0, null);
     await Promise.resolve();
@@ -1937,9 +2044,10 @@ describe("ClaudeCodeWorker", () => {
     });
 
     start("task-hooks-safe");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     git(ws.path, "checkout", "ordinary-settings");
     start("task-hooks-ordinary");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
 
     expect(calls).toHaveLength(2);
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
@@ -1958,7 +2066,7 @@ describe("ClaudeCodeWorker", () => {
       "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`,
     });
     start("task-sbx-harmless-settings");
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(workspaceNeedsHuman(db, "tidepool")).toBe(false);
   });
 
@@ -1986,6 +2094,7 @@ describe("ClaudeCodeWorker", () => {
   it("宣言どおりの init 行なら何も起きない — 封じ込めの question は立たない", async () => {
     const { start, processes, db } = await makeWorker();
     start("task-init-ok", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       // 実セッションには MCP verb も並ぶ — 比較対象外
       initLine([...WORK_SURFACE, "mcp__tidepool__get_current_task"]),
@@ -2025,6 +2134,7 @@ describe("ClaudeCodeWorker", () => {
   it("init 行に allowlist 外のツールが並んでいたら封じ込め能力の question が立つ(ADR 0039 決定3)", async () => {
     const { start, processes, db } = await makeWorker();
     start("task-init-drift", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // `CronCreate` は測定2 でそのまま実行できてしまったツールそのもの。`--tools` が
     // honor されていないホストでは、これが面に残る。
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
@@ -2050,6 +2160,7 @@ describe("ClaudeCodeWorker", () => {
     // todo へ戻して後始末へ入れる(ADR 0331 決定4)。
     const { start, processes, killed } = await makeWorker();
     start("task-init-kill", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(killed).toContain("SIGKILL"));
   });
@@ -2062,6 +2173,7 @@ describe("ClaudeCodeWorker", () => {
     const runtime = new FakeContainerRuntime(recorder.spawn);
     const { start } = await makeWorker({}, { containers: new ProcessContainers(runtime) });
     const task = start("task-init-container-kill", null, "deckhand", "work");
+    await vi.waitFor(() => expect(recorder.processes).toHaveLength(1));
     recorder.processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(runtime.forceReclaims).toEqual([task.id]));
     expect(recorder.killed).toEqual([]);
@@ -2070,6 +2182,7 @@ describe("ClaudeCodeWorker", () => {
   it("宣言どおりのセッションは kill されない", async () => {
     const { start, processes, killed, db } = await makeWorker();
     start("task-init-nokill", null, "deckhand", "review");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       initLine([...REVIEW_SURFACE, "mcp__tidepool__get_current_task"]),
     );
@@ -2081,6 +2194,7 @@ describe("ClaudeCodeWorker", () => {
   it("review セッションの init 行は review の期待集合で照合される — 編集系が残っていたら不成立", async () => {
     const { start, processes, db } = await makeWorker();
     start("task-init-review-drift", null, "deckhand", "review");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       initLine([...REVIEW_SURFACE, "Write", "Edit", "NotebookEdit"]),
     );
@@ -2097,6 +2211,7 @@ describe("ClaudeCodeWorker", () => {
   it("ずれたまま何セッション走っても question は1枚(封じ込めは1資源につき確認1枚)", async () => {
     const { start, processes, db } = await makeWorker();
     start("task-init-dup-1", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
@@ -2113,10 +2228,12 @@ describe("ClaudeCodeWorker", () => {
     // (issue #873)。各セッションが実際に照合されたことは、既存 question への
     // `quarantine_refired` 追記が1つずつ増えることで確かめる。
     start("task-init-dup-2", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(2));
     processes[1]!.stdout.write(initLine(["Bash", "Read", "CronCreate"]));
     await vi.waitFor(() => expect(refiredCount()).toBe(1));
 
     start("task-init-dup-3", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(3));
     processes[2]!.stdout.write(initLine(["Bash", "Read", "RemoteTrigger"]));
     await vi.waitFor(() => expect(refiredCount()).toBe(2));
 
@@ -2129,6 +2246,7 @@ describe("ClaudeCodeWorker", () => {
     // 正本である `/usage` ping が答えるべき問いを stdout の欠落で代弁してしまう。
     const { start, processes, db } = await makeWorker();
     start("task-init-absent", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`{"type":"system","subtype":"init"}\n`);
     processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
     processes[0]!.stdout.write(`{not json\n`);
@@ -2143,6 +2261,7 @@ describe("ClaudeCodeWorker", () => {
     // `tidepool` が付いた実セッションだけなので、ここで倒さないと MCP 軸が黙って死ぬ。
     const { start, processes, db } = await makeWorker();
     start("task-init-mcp-unreadable", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine(WORK_SURFACE, [{ status: "connected" }]));
     const question = await vi.waitFor(() => {
       const q = containmentQuestion(db);
@@ -2158,6 +2277,7 @@ describe("ClaudeCodeWorker", () => {
   it("init 行に memory_paths.auto が有ればそのセッションを強制回収し、封じ込めの question が立つ", async () => {
     const { start, processes, db, killed } = await makeWorker();
     start("task-init-auto-memory", null, "deckhand", "work");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       initLine(WORK_SURFACE, [], { auto: "/home/pi/.claude/projects/x/memory" }),
     );
@@ -2173,6 +2293,7 @@ describe("ClaudeCodeWorker", () => {
   it("セッションの stream-json を全量ファイルに記録する(監査性)", async () => {
     const { start, processes, logDir, db } = await makeWorker();
     start("task-7");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`{"type":"system","subtype":"init"}\n`);
     processes[0]!.stdout.write(`{"type":"result","result":"done"}\n`);
     processes[0]!.stdout.end();
@@ -2193,6 +2314,7 @@ describe("ClaudeCodeWorker", () => {
   it("セッションの stderr を <taskId>.<event id>.stderr.log として stream.jsonl の隣に全量保存する(issue #125 / #379)", async () => {
     const { start, processes, logDir, db } = await makeWorker();
     start("task-stderr");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stderr.write("Error: Invalid API key\n");
     processes[0]!.stderr.write("(run /login to authenticate)\n");
     processes[0]!.stderr.end();
@@ -2238,6 +2360,7 @@ describe("ClaudeCodeWorker", () => {
   it("user turn は Codex と同じ文で title / purpose / 完了基準を持ち、記録した prompt の user も同じ文になる(ADR 0320 決定2 / ADR 0124 決定1)", async () => {
     const { start, calls, processes, logDir, db } = await makeWorker();
     start("task-user-turn");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawnedId = listEvents(db, "task-user-turn").find((e) => e.kind === "worker_spawned")!.id;
     const args = calls[0]!.args;
 
@@ -2267,6 +2390,7 @@ describe("ClaudeCodeWorker", () => {
   it("worker session の終わりに transcript を Precedent に投影する — 書き込みが flush され worker_exited が記録されたあと(issue #356)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     const task = start("task-precedent", "tidepool", "deckhand");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`{"type":"system","subtype":"init","claude_code_version":"9.9.9"}\n`);
     processes[0]!.stdout.write(
       `{"type":"assistant","uuid":"u1","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"ls"}}]}}\n`,
@@ -2292,6 +2416,7 @@ describe("ClaudeCodeWorker", () => {
   it("session の Episode の投影待ちは transcript を開いた時点から立ち、投影の決着で外れる(issue #2570)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     const task = start("task-projection-pending", "tidepool", "deckhand");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     const spawnedId = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!.id;
     expect(projectionPending(db, spawnedId)).toBe(true);
 
@@ -2306,8 +2431,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("worker_exited は自分を開いた worker_spawned の event id を持ち、そのセッションの transcript ファイル名を再構成できる(issue #379 code review)", async () => {
-    const { start, emitExit, db, logDir } = await makeWorker();
+    const { calls, start, emitExit, db, logDir } = await makeWorker();
     const task = start("task-exit-pointer");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     emitExit(0, null);
     const spawned = listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!;
     const exited = listEvents(db, task.id).find((e) => e.kind === "worker_exited")!;
@@ -2339,11 +2465,13 @@ describe("ClaudeCodeWorker", () => {
         logDir: "worker-logs",
         transcripts: new TranscriptStore("worker-logs"),
         ...containerHarness(passthroughContainers(recorder.spawn)),
+        ...noSkillPings,
       });
       await mkdir(join(base, "worker-logs"), { recursive: true });
       const task = makeTask("task-rel");
       insertTask(db, task);
       worker.start(task, pickedSetting(db, { dir: registryDir, mode: "purely-local" }, task));
+      await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
       const args = recorder.calls[0]!.args;
       const configPath = args[args.indexOf("--mcp-config") + 1]!;
       expect(isAbsolute(configPath)).toBe(true);
@@ -2359,6 +2487,7 @@ describe("ClaudeCodeWorker", () => {
   it("model は常に明示的に渡す: agent が tier を書かなければ盤面既定のティアの行(ホストのモデル設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
@@ -2367,12 +2496,14 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: economy\n---\nYou are Deckhand.\n`,
     });
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-sonnet-5-5");
   });
 
   it("effort は明示的に渡す: 値は表の行から来る(ホストの effort 設定を漏らさない)", async () => {
     const { start, calls } = await makeWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--effort high");
   });
 
@@ -2381,6 +2512,7 @@ describe("ClaudeCodeWorker", () => {
     const task = makeTask("task-no-effort", null, "deckhand", "work");
     insertTask(db, task);
     worker.start(task, { provider: "anthropic", model: "claude-haiku-4-5-20251001", effort: null, advisor: undefined, tier_id: 1, source: { tier: "board", provider: "only" } });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-haiku-4-5-20251001");
     expect(calls[0]!.args).not.toContain("--effort");
     expect(listEvents(db, "task-no-effort").find((e) => e.kind === "worker_spawned")!.payload).toMatchObject({ effort: null });
@@ -2389,6 +2521,7 @@ describe("ClaudeCodeWorker", () => {
   it("worker_spawned は選ばれた実行設定と、そのティアの出所を刻む(ADR 0110 決定3 — agent.md からはもう復元できない事実)", async () => {
     const board = await makeWorker();
     board.start("task-setting-board");
+    await vi.waitFor(() => expect(board.calls).toHaveLength(1));
     expect(
       listEvents(board.db, "task-setting-board").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({
@@ -2402,6 +2535,7 @@ describe("ClaudeCodeWorker", () => {
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\nskills:\n  - "*"\ndescription: General work agent\ntier: frontier\n---\nYou are Deckhand.\n`,
     });
     agent.start("task-setting-agent");
+    await vi.waitFor(() => expect(agent.calls).toHaveLength(1));
     expect(
       listEvents(agent.db, "task-setting-agent").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({ model: "claude-fable-5-1", source: { tier: "agent", provider: "only" } });
@@ -2410,6 +2544,7 @@ describe("ClaudeCodeWorker", () => {
   it("worker_spawned は Provider の出所も刻む —— 単一 entry の agent は only(ADR 0110 決定5 / issue #544)", async () => {
     const board = await makeWorker();
     board.start("task-provider-source");
+    await vi.waitFor(() => expect(board.calls).toHaveLength(1));
     expect(
       listEvents(board.db, "task-provider-source").find((e) => e.kind === "worker_spawned")!.payload,
     ).toMatchObject({ provider: "anthropic", source: { tier: "board", provider: "only" } });
@@ -2428,6 +2563,7 @@ describe("ClaudeCodeWorker", () => {
       advisor: undefined,
       tier_id: 1, source: { tier: "task", provider: "rank" },
     });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model opus");
     expect(calls[0]!.args.join(" ")).toContain("--effort max");
     expect(
@@ -2436,10 +2572,11 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it.each(["work", "review"] as const)("%s task の worker_spawned は、盤面が選んだ候補の段の id を持つ(ADR 0210 決定1)", async (type) => {
-    const { worker, db } = await makeWorker();
+    const { calls, worker, db } = await makeWorker();
     const task = makeTask(`task-tier-${type}`, null, "deckhand", type);
     insertTask(db, task);
     worker.start(task, { provider: "anthropic", model: "opus", effort: "high", advisor: undefined, tier_id: 3, source: { tier: "task", provider: "rank" } });
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(listEvents(db, task.id).find((e) => e.kind === "worker_spawned")!.payload).toMatchObject({ tier_id: 3 });
   });
 
@@ -2449,6 +2586,7 @@ describe("ClaudeCodeWorker", () => {
       "UPDATE execution_settings SET model = 'claude-opus-5', effort = 'max' WHERE provider = 'anthropic' AND tier_id = (SELECT id FROM tiers WHERE name = 'economy')",
     ).run();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     expect(calls[0]!.args.join(" ")).toContain("--model claude-opus-5");
     expect(calls[0]!.args.join(" ")).toContain("--effort max");
   });
@@ -2832,6 +2970,7 @@ describe("ClaudeCodeWorker", () => {
   it("正常終了したセッションは worker_exited イベントにトークン内訳と estimated_cost_usd を記録する(issue #32)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-usage");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
@@ -2883,6 +3022,7 @@ describe("ClaudeCodeWorker", () => {
   it("最終チャンクが改行なしで終わっても、最後の result 行を usage として拾う(issue #32 code review: 偽の欠測を防ぐ)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-no-trailing-newline");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // no trailing "\n": the stream just closes mid-line, as a real process
     // exit can — this line must not get stranded in the tee's buffer
     processes[0]!.stdout.write(
@@ -2914,6 +3054,7 @@ describe("ClaudeCodeWorker", () => {
   it("result 行の usage が期待した形と食い違えば、投げずに usage null として fail-closed する(issue #32 code review)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-malformed-usage");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       `${JSON.stringify({
         type: "result",
@@ -2930,6 +3071,7 @@ describe("ClaudeCodeWorker", () => {
   it("is_error の result 行は usage の自己申告ではない — 途中で止まった session は欠測(issue #534)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-aborted-streaming");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 2.1.241 を SIGINT で止めたときの実測(2026-09-12 のトリアージ)から、
     // 読まれる欄だけを写したもの。主モデルの出力は実際に流れているのに
     // envelope は全ゼロで、形検査は通る。
@@ -2960,6 +3102,7 @@ describe("ClaudeCodeWorker", () => {
   it("total_cost_usd が非ゼロでも is_error なら usage null — 判定はゼロではなく is_error 一点(issue #534)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-aborted-nonzero-cost");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 2.1.269 の形: helper モデル分だけコストが乗った「ゼロではないが誤り」の envelope
     processes[0]!.stdout.write(
       `${JSON.stringify({
@@ -2982,8 +3125,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("非ゼロ終了は worker_exited イベントに加えて console.error でも観測できる(issue #32 code review: defaultSpawn から失われた診断ログの復元)", async () => {
-    const { start, emitExit } = await makeWorker();
+    const { calls, start, emitExit } = await makeWorker();
     start("task-crashed");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       emitExit(1, null);
@@ -2996,6 +3140,7 @@ describe("ClaudeCodeWorker", () => {
   it("実行中セッションの result が API 401 を返したら anthropic Provider 認証停止へ昇格する(issue #454)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-cli-auth-expired");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
@@ -3019,6 +3164,7 @@ describe("ClaudeCodeWorker", () => {
         }]),
     });
     f.start("task-exit-without-report");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
     f.processes[0]!.stderr.write("boom\n");
     f.emitExit(0, null);
 
@@ -3030,6 +3176,7 @@ describe("ClaudeCodeWorker", () => {
   it("worker_exited イベントに stderr の末尾20行を stderr_tail として載せる(issue #125)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-tail");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 20行を超える stderr — イベントに載るのは末尾20行だけ
     const lines = Array.from({ length: 25 }, (_, i) => `stderr line ${i + 1}`);
     processes[0]!.stderr.write(`${lines.join("\n")}\n`);
@@ -3050,6 +3197,7 @@ describe("ClaudeCodeWorker", () => {
   it("マルチバイト文字が chunk 境界で割れても stderr_tail に置換文字が混入しない(issue #125 code review)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-mb");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // "認証" の2文字目(証)のバイト列の途中で chunk を切る
     const bytes = Buffer.from("認証エラー: トークン期限切れ\n");
     processes[0]!.stderr.write(bytes.subarray(0, 4));
@@ -3062,6 +3210,7 @@ describe("ClaudeCodeWorker", () => {
   it("改行だけで実内容の無い stderr も stderr_tail null(空文字で「捕捉欠落」と紛れさせない — issue #125 code review)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-stderr-blank");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stderr.write("\n");
     emitExit(0, null);
     const exited = listEvents(db, "task-stderr-blank").find((e) => e.kind === "worker_exited");
@@ -3072,6 +3221,7 @@ describe("ClaudeCodeWorker", () => {
   async function exitedAfter(lines: object[]): Promise<Record<string, unknown>> {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-exited-after");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(lines.map((line) => `${JSON.stringify(line)}\n`).join(""));
     emitExit(1, null);
     return listEvents(db, "task-exited-after").find((e) => e.kind === "worker_exited")!.payload as Record<string, unknown>;
@@ -3123,6 +3273,7 @@ describe("ClaudeCodeWorker", () => {
   it("is_error の行が2本あれば最後の1本を、改行で終わらない最終行も拾う(ADR 0188)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-reported-error-last");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`${JSON.stringify({ type: "result", is_error: true, result: "earlier" })}\n`);
     processes[0]!.stdout.write(JSON.stringify({ type: "result", is_error: true, result: "later" }));
     emitExit(1, null);
@@ -3133,6 +3284,7 @@ describe("ClaudeCodeWorker", () => {
   it("マルチバイト文字の途中で割れた stdout からも reported_error が化けずに載る(#1298)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-stdout-mb");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     const bytes = Buffer.from(`${JSON.stringify({ type: "result", is_error: true, result: "認証エラー" })}\n`);
     const cut = bytes.indexOf(Buffer.from("証")) + 1;
     processes[0]!.stdout.write(bytes.subarray(0, cut));
@@ -3174,6 +3326,7 @@ describe("ClaudeCodeWorker", () => {
   it("改行で終わらない最終行の text も exit の flush で拾う(ADR 0189)", async () => {
     const { start, processes, emitExit, db } = await makeWorker();
     start("task-last-message-flush");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`${JSON.stringify(said([text("earlier")]))}\n${JSON.stringify(said([text("later")]))}`);
     emitExit(0, null);
     const exited = listEvents(db, "task-last-message-flush").find((e) => e.kind === "worker_exited");
@@ -3181,8 +3334,9 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("最終 result イベントが出ないまま終了したセッション(watchdog kill 等)は usage null で worker_exited を記録する(issue #32)", async () => {
-    const { start, emitExit, db } = await makeWorker();
+    const { calls, start, emitExit, db } = await makeWorker();
     start("task-killed");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     emitExit(null, "SIGKILL");
     const spawned = listEvents(db, "task-killed").find((e) => e.kind === "worker_spawned");
     const exited = listEvents(db, "task-killed").find((e) => e.kind === "worker_exited");
@@ -3205,10 +3359,11 @@ describe("ClaudeCodeWorker", () => {
   // opened.
   it("spawn 自体が ENOENT で失敗(syscall が \"spawn\" で始まる)すると spawn_failed を error_code/message 付きで記録し running から消す(issue #127)", async () => {
     const spawnFailures: Array<[string, { error_code: string | null; message: string }]> = [];
-    const { start, emitError, db, worker, killed } = await makeWorker({}, {
+    const { calls, start, emitError, db, worker, killed } = await makeWorker({}, {
       onSpawnFailed: (taskId, failure) => spawnFailures.push([taskId, failure]),
     });
     const task = start("task-spawn-enoent");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const err = Object.assign(new Error("spawn claude ENOENT"), {
       code: "ENOENT",
       syscall: "spawn claude",
@@ -3231,8 +3386,9 @@ describe("ClaudeCodeWorker", () => {
 
   it("spawn 族でない error(例: kill 失敗の syscall: \"kill\")は console.error のみで spawn_failed イベントは書かない(issue #127)", async () => {
     const spawnFailures: string[] = [];
-    const { start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId) => spawnFailures.push(taskId) });
+    const { calls, start, emitError, db } = await makeWorker({}, { onSpawnFailed: (taskId) => spawnFailures.push(taskId) });
     const task = start("task-non-spawn-error");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const err = Object.assign(new Error("kill EPERM"), { code: "EPERM", syscall: "kill" });
@@ -3246,11 +3402,12 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("使用中レジストリの commit hash を events に記録する(判断の来歴)", async () => {
-    const { start, db, registryDir } = await makeWorker();
+    const { calls, start, db, registryDir } = await makeWorker();
     const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
     start("task-9");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, "task-9").find((e) => e.kind === "worker_spawned");
     expect(spawned).toBeDefined();
     expect(spawned!.actor_id).toBe("deckhand");
@@ -3293,10 +3450,12 @@ describe("ClaudeCodeWorker", () => {
       logDir: await tempDir("tidepool-worker-logs-"),
       transcripts: new TranscriptStore(await tempDir("tidepool-worker-logs-")),
       ...containerHarness(passthroughContainers(recorder.spawn)),
+      ...noSkillPings,
     });
     const task = makeTask("task-remote", null, "deckhand", "work");
     insertTask(db, task);
     worker.start(task, pickedSetting(db, { dir: registryDir, mode: "remote-backed" }, task));
+    await vi.waitFor(() => expect(recorder.calls).toHaveLength(1));
 
     const spawned = listEvents(db, "task-remote").find((e) => e.kind === "worker_spawned");
     const args = recorder.calls[0]!.args;
@@ -3340,8 +3499,8 @@ describe("ClaudeCodeWorker", () => {
     const rca: Task = { ...makeTask("rca-1", null, "deckhand", "review"), parent_id: "objected-1" };
     insertSelfRca(db, rca);
     worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // executes as the current definition (ADR 0019: repair is not a re-enactment)
@@ -3364,8 +3523,8 @@ describe("ClaudeCodeWorker", () => {
     const rca: Task = { ...makeTask("rca-3", null, "deckhand", "review"), parent_id: "objected-3" };
     insertSelfRca(db, rca);
     worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // the injected 当時版 evidence is the objected session's, not the later re-spawn's
@@ -3386,8 +3545,8 @@ describe("ClaudeCodeWorker", () => {
     const rca: Task = { ...makeTask("rca-4", null, "deckhand", "review"), parent_id: "objected-4" };
     insertSelfRca(db, rca);
     worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
-    expect(calls).toHaveLength(1);
     const args = calls[0]!.args;
     const prompt = systemText(args);
     // both 当時版 bodies are injected — neither session's record is folded away
@@ -3415,7 +3574,7 @@ describe("ClaudeCodeWorker", () => {
     const audit: Task = { ...makeTask("audit-1", null, null, "review"), parent_id: "objected-2" };
     insertTask(db, audit);
     worker.start(audit, setting(audit));
-    expect(calls).toHaveLength(1);
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const args = calls[0]!.args;
     const prompt = systemText(args);
     expect(prompt).toContain("You are the Auditor");
@@ -3436,6 +3595,7 @@ describe("ClaudeCodeWorker", () => {
     const rca: Task = { ...makeTask("rca-6", null, "deckhand", "review"), parent_id: "objected-6" };
     insertSelfRca(db, rca);
     worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const prompt = systemText(args);
@@ -3462,6 +3622,7 @@ describe("ClaudeCodeWorker", () => {
     const rca: Task = { ...makeTask("rca-10", null, "deckhand", "review"), parent_id: "objected-10" };
     insertSelfRca(db, rca);
     worker.start(rca, setting(rca));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     const args = calls[0]!.args;
     const prompt = systemText(args);
@@ -3523,7 +3684,7 @@ describe("ClaudeCodeWorker", () => {
   });
 
   it("registry チェックアウトがタスクブランチ上にあっても、記録する commit hash と版は main のもの(ADR 0020 part 3)", async () => {
-    const { start, db, registryDir } = await makeWorker();
+    const { calls, start, db, registryDir } = await makeWorker();
     const main = execFileSync("git", ["rev-parse", "main"], { cwd: registryDir })
       .toString()
       .trim();
@@ -3538,6 +3699,7 @@ describe("ClaudeCodeWorker", () => {
     git("add", "-A");
     git("commit", "-m", "unmerged bump");
     start("task-branch-spawn");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, "task-branch-spawn").find((e) => e.kind === "worker_spawned");
     expect(spawned!.payload).toMatchObject({
       kind: "worker_spawned",
@@ -3590,6 +3752,7 @@ describe("advisor capability (issue #33)", () => {
   it("frontmatter に advisor があれば --advisor でピン留めし、無効化 env は立てない(ADR 0005)", async () => {
     const { start, calls } = await makeAdvisorWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
@@ -3607,6 +3770,7 @@ describe("advisor capability (issue #33)", () => {
     try {
       const { start, calls } = await makeAdvisorWorker();
       start();
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
       const call = calls[0]!;
       expect(advisorFlag(call.args)).toBe("claude-sonnet-5-5");
       expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBeUndefined();
@@ -3627,6 +3791,7 @@ describe("advisor capability (issue #33)", () => {
   it("frontmatter に advisor が無ければフラグを渡さず、CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1 で明示的に閉じる", async () => {
     const { start, calls } = await makeWorker();
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBeUndefined();
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
@@ -3637,6 +3802,7 @@ describe("advisor capability (issue #33)", () => {
   it("上限が off なら、frontmatter が advisor を持っていてもフラグを渡さず env で閉じる(ADR 0208 決定3)", async () => {
     const { start, calls } = await makeWorker(withAdvisor);
     start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const call = calls[0]!;
     expect(advisorFlag(call.args)).toBeUndefined();
     expect(call.env.CLAUDE_CODE_DISABLE_ADVISOR_TOOL).toBe("1");
@@ -3652,10 +3818,13 @@ describe("advisor capability (issue #33)", () => {
   it("#69238 の回避 env(stream idle / API timeout)は advisor の有無に依らず全 spawn に立つ", async () => {
     const off = await makeWorker();
     off.start("task-no-advisor");
+    await vi.waitFor(() => expect(off.calls).toHaveLength(1));
     const on = await makeAdvisorWorker();
     on.start("task-advisor");
+    await vi.waitFor(() => expect(on.calls).toHaveLength(1));
     const ceilingOff = await makeWorker(withAdvisor);
     ceilingOff.start("task-advisor-ceiling-off");
+    await vi.waitFor(() => expect(ceilingOff.calls).toHaveLength(1));
     for (const call of [off.calls[0]!, on.calls[0]!, ceilingOff.calls[0]!]) {
       expect(call.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS).toBe("600000");
       expect(call.env.API_TIMEOUT_MS).toBe("600000");
@@ -3673,8 +3842,9 @@ describe("advisor capability (issue #33)", () => {
   // ── 判断6 前半: worker_spawned は「盤面が何をピン留めしたか」 ──────
 
   it("worker_spawned は盤面がピン留めした advisor とその出所を記録する(判断6 / ADR 0208 決定6)—— agent.md には真偽しか書かれていない", async () => {
-    const { start, db } = await makeAdvisorWorker();
+    const { calls, start, db } = await makeAdvisorWorker();
     start("task-spawn-advisor");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const spawned = listEvents(db, "task-spawn-advisor").find((e) => e.kind === "worker_spawned");
     expect(spawned!.payload).toMatchObject({ kind: "worker_spawned", advisor: "claude-sonnet-5-5", source: { advisor: "ceiling" } });
   });
@@ -3685,8 +3855,10 @@ describe("advisor capability (issue #33)", () => {
   it("advisor 不在の agent と上限 off は、どちらも worker_spawned.advisor が null で、出所 off があるのは上限 off の側だけ(判断6 / ADR 0208 決定6)", async () => {
     const plain = await makeWorker();
     plain.start("task-plain");
+    await vi.waitFor(() => expect(plain.calls).toHaveLength(1));
     const ceilingOff = await makeWorker(withAdvisor);
     ceilingOff.start("task-ceiling-off-event");
+    await vi.waitFor(() => expect(ceilingOff.calls).toHaveLength(1));
     const spawned = (w: { db: Db }, id: string) => listEvents(w.db, id).find((e) => e.kind === "worker_spawned")!.payload;
     expect(spawned(plain, "task-plain")).toMatchObject({ kind: "worker_spawned", advisor: null, source: { tier: "board", provider: "only" } });
     expect(spawned(plain, "task-plain")).not.toHaveProperty("source.advisor");
@@ -3761,6 +3933,7 @@ describe("advisor capability (issue #33)", () => {
   it("相談が観測されたセッションは、解決済み advisor id・相談回数・分離した消費を記録する(判断6)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-usage");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
@@ -3810,6 +3983,7 @@ describe("advisor capability (issue #33)", () => {
   it("相談回数は stream 中の、助言が返った advisor_tool_result の本数を数える(判断6 / ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-count");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
@@ -3823,6 +3997,7 @@ describe("advisor capability (issue #33)", () => {
   it("呼び出しと結果が別々の assistant 行に出る実物の形でも、1行の形と同じ数になる(ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-two-lines");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01", { twoLines: true }));
     processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
@@ -3840,6 +4015,7 @@ describe("advisor capability (issue #33)", () => {
   it("失敗だけの session は consultations 0 で、失敗の error_code を逐語で残す(ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-failed-only");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01", { twoLines: true, result: failure("too_many_requests") }));
     // 失敗した呼び出しには advisor_message が来ない(#1524 の triage で観測した形)
@@ -3866,6 +4042,7 @@ describe("advisor capability (issue #33)", () => {
   it("成功と失敗が混ざれば、相談は成功の数、failed_calls は出た順で error_code の無い失敗は null(ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-mixed");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01", { result: failure("unavailable") }));
     processes[0]!.stdout.write(advisorCall("srvtoolu_02"));
@@ -3883,6 +4060,7 @@ describe("advisor capability (issue #33)", () => {
   it("成功でも失敗でもない結果と、結果の無い呼び出しは数えない(ADR 0214)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-neither");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01", { result: { type: "advisor_something_new" } }));
     processes[0]!.stdout.write(assistantLine([{ type: "server_tool_use", id: "srvtoolu_02", name: "advisor", input: {} }]));
@@ -3894,6 +4072,7 @@ describe("advisor capability (issue #33)", () => {
   it("改行なしの最終チャンクにある相談も数える(issue #1301)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-final-chunk");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(resultLine());
     processes[0]!.stdout.write(advisorCall("srvtoolu_01").trimEnd());
@@ -3906,6 +4085,7 @@ describe("advisor capability (issue #33)", () => {
   it("advisor の結果でないブロックは、中身が助言の型でも相談として数えない", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-noise");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(
       assistantLine([{ type: "tool_result", tool_use_id: "toolu_01", content: { type: "advisor_redacted_result" } }]),
@@ -3922,6 +4102,7 @@ describe("advisor capability (issue #33)", () => {
   it("advisor をピン留めしても相談が1本も観測されなければ worker_exited.advisor は null(判断6)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-silent");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(resultLine({ modelUsage: { "claude-sonnet-5": { costUSD: 0.09 } }, usage: {
       input_tokens: 4,
@@ -3940,6 +4121,7 @@ describe("advisor capability (issue #33)", () => {
   it("未 attach の警告は判定に使わず、stderr_tail に verbatim で残す(判断3)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-warning");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 実測の文言(main opus × advisor sonnet のセル)
     const warning =
       '"sonnet" cannot advise "claude-opus-5" (the advisor must be at least as ' +
@@ -3965,6 +4147,7 @@ describe("advisor capability (issue #33)", () => {
   it("main と advisor が同じモデルに解決されたら usage は null(0 ではない)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-same-model");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
@@ -3998,6 +4181,7 @@ describe("advisor capability (issue #33)", () => {
   it("最終ターンに相談が無ければ解決済み id は残らない — model は null、相談回数は残る", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-earlier-turn");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
@@ -4033,6 +4217,7 @@ describe("advisor capability (issue #33)", () => {
   it("main モデルの解決先が観測できていなければ usage は null(分離可否そのものが不明)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-init");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // init 行を一切流さない
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(resultLine());
@@ -4050,6 +4235,7 @@ describe("advisor capability (issue #33)", () => {
   it("modelUsage を持たない result 行でも相談の事実は失わない", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-no-modelusage");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
@@ -4082,6 +4268,7 @@ describe("advisor capability (issue #33)", () => {
   it("modelUsage の1エントリが五項目のうち1つでも欠けば usage.models は丸ごと省略される(ADR 0094)", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-models-malformed-entry");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(initLine("claude-sonnet-5"));
     processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
     processes[0]!.stdout.write(
@@ -4113,6 +4300,7 @@ describe("advisor capability (issue #33)", () => {
   it("stdout が空のまま exit 1 したセッションは usage null のまま", async () => {
     const { start, processes, emitExit, db } = await makeAdvisorWorker();
     start("task-advisor-exit1");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stderr.write('Error: The model "haiku" cannot be used as an advisor.\n');
     emitExit(1, null);
     const exited = listEvents(db, "task-advisor-exit1").find((e) => e.kind === "worker_exited");
@@ -4133,6 +4321,7 @@ describe("advisor capability (issue #33)", () => {
       try {
         const { start, calls } = await makeWorker();
         start();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
         for (const name of SUBAGENT_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
       } finally {
         vi.unstubAllEnvs();
@@ -4151,6 +4340,7 @@ describe("advisor capability (issue #33)", () => {
       try {
         const { start, calls } = await makeWorker();
         start();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
         for (const name of PIN_OVERRIDE_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
       } finally {
         vi.unstubAllEnvs();
@@ -4183,6 +4373,7 @@ describe("advisor capability (issue #33)", () => {
       try {
         const { start, calls } = await makeWorker();
         start();
+        await vi.waitFor(() => expect(calls).toHaveLength(1));
         for (const name of REFUSAL_ENVS) expect(calls[0]!.env[name]).toBeUndefined();
       } finally {
         vi.unstubAllEnvs();
@@ -4193,6 +4384,7 @@ describe("advisor capability (issue #33)", () => {
       const exits: WorkerExit[] = [];
       const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
       start("task-swaps");
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
       processes[0]!.stdout.write(swapLine());
       processes[0]!.stdout.write(
@@ -4229,6 +4421,7 @@ describe("advisor capability (issue #33)", () => {
     it("root の拒否は message.id ごとに1つ、分類を出た順に worker_exited.refusals へ載せ、subagent の拒否は数えない(決定3)", async () => {
       const { start, processes, emitExit, db } = await makeWorker();
       start("task-refusals");
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
       processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "thinking", thinking: "" }));
       processes[0]!.stdout.write(refusalLine("msg_011CfpqdBwiLDBbB6Zw8pMEK", { type: "text", text: "Let me check" }));
@@ -4250,6 +4443,7 @@ describe("advisor capability (issue #33)", () => {
     it("差し替えも拒否も無い session でも model_swaps と refusals は空の列で置かれる", async () => {
       const { start, processes, emitExit, db } = await makeWorker();
       start("task-no-swap");
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-sonnet-5"));
       processes[0]!.stdout.write(resultLine());
       emitExit(0, null);
@@ -4261,6 +4455,7 @@ describe("advisor capability (issue #33)", () => {
       const exits: WorkerExit[] = [];
       const { start, processes, emitExit, db } = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
       start("task-swap-killed");
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-fable-5-1"));
       processes[0]!.stdout.write(refusalLine("msg_01", { type: "text", text: "no" }));
       processes[0]!.stdout.write(swapLine());
@@ -4274,6 +4469,7 @@ describe("advisor capability (issue #33)", () => {
       const run = async (id: string, scope: string | undefined) => {
         const { start, processes, emitExit, db } = await makeAdvisorWorker();
         start(id);
+        await vi.waitFor(() => expect(processes).toHaveLength(1));
         processes[0]!.stdout.write(initLine("claude-sonnet-5"));
         processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
         processes[0]!.stdout.write(swapLine({ scope }));
@@ -4307,6 +4503,7 @@ describe("advisor capability (issue #33)", () => {
     const run = async (id: string, lines: string[]) => {
       const { start, processes, emitExit, db } = await makeAdvisorWorker();
       start(id);
+      await vi.waitFor(() => expect(processes).toHaveLength(1));
       processes[0]!.stdout.write(initLine("claude-sonnet-5"));
       for (const line of lines) processes[0]!.stdout.write(line);
       processes[0]!.stdout.write(advisorCall("srvtoolu_01"));
@@ -4401,6 +4598,7 @@ You are Kipper, the tidepool board's Kimi work agent.
     try {
       const { start, calls } = await makeWorker();
       start();
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
       const expected: NodeJS.ProcessEnv = {
         ...process.env,
         CLAUDE_STREAM_IDLE_TIMEOUT_MS: "600000",
@@ -4440,6 +4638,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       { moonshotApiKeyFile: keyFile },
     );
     start("task-kimi", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     const env = calls[0]!.env;
     expect(env.ANTHROPIC_BASE_URL).toBe("https://api.moonshot.ai/anthropic");
     // キーは盤面 env ではなく spawn 時にファイルから読まれた値が載る
@@ -4458,6 +4657,7 @@ You are Kipper, the tidepool board's Kimi work agent.
         { moonshotApiKeyFile: keyFile },
       );
       start("task-kimi", null, "kipper");
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
       const env = calls[0]!.env;
       expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
       expect(env.ANTHROPIC_API_KEY).toBeUndefined();
@@ -4480,8 +4680,9 @@ You are Kipper, the tidepool board's Kimi work agent.
         { moonshotApiKeyFile: keyFile },
       );
       start("task-claude");
+      await vi.waitFor(() => expect(calls).toHaveLength(1));
       start("task-kimi", null, "kipper");
-      expect(calls).toHaveLength(2);
+      await vi.waitFor(() => expect(calls).toHaveLength(2));
       for (const call of calls) for (const name of HOST_CREDENTIAL_ENVS) expect(call.env[name]).toBeUndefined();
       expect(calls[0]!.env.CLAUDE_CODE_OAUTH_TOKEN).toBe("claude-subscription-token");
     } finally {
@@ -4497,7 +4698,9 @@ You are Kipper, the tidepool board's Kimi work agent.
       { moonshotApiKeyFile: keyFile },
     );
     start("task-claude");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     start("task-kimi", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls.map((call) => call.env.DISABLE_AUTOUPDATER)).toEqual(["1", "1"]);
   });
 
@@ -4508,6 +4711,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       { moonshotApiKeyFile: keyFile },
     );
     worker.start("task-kimi-default", null, "kipper");
+    await vi.waitFor(() => expect(worker.calls).toHaveLength(1));
     const flag = (args: string[]) => args[args.indexOf("--model") + 1];
     // ホストのモデル設定を漏らさないための値も provider の表記で(ADR 0005)。
     // moonshot は economy の1行(ADR 0114)なので、既定ティア(economy)はこの1つに解決する。
@@ -4551,9 +4755,11 @@ You are Kipper, the tidepool board's Kimi work agent.
       { moonshotApiKeyFile: keyFile },
     );
     start("task-kimi-first", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
     // ローテーション: 同じパスに新しいキーを書く(盤面の再起動はない)
     await writeFile(keyFile, "sk-rotated-key\n", { mode: 0o600 });
     start("task-kimi-second", null, "kipper");
+    await vi.waitFor(() => expect(calls).toHaveLength(2));
     expect(calls[0]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-first-key");
     expect(calls[1]!.env.ANTHROPIC_AUTH_TOKEN).toBe("sk-rotated-key");
   });
@@ -4567,6 +4773,7 @@ You are Kipper, the tidepool board's Kimi work agent.
       { moonshotApiKeyFile: keyFile },
     );
     start("task-kimi-auth-expired", null, "kipper");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
@@ -4598,6 +4805,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("429 で exit した session の task は todo へ戻り slot が解放される — failure question は立たない", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
@@ -4616,6 +4824,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
     });
     start("task-capped-order");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
@@ -4630,6 +4839,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
       onWorkerExited: () => order.push("exited"),
     });
     const task = start("task-row-refused-order");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 2026-10-01 実測の形(#1249): subtype は success のまま is_error と 404 が立つ
     processes[0]!.stdout.write(
       `${JSON.stringify({ type: "result", subtype: "success", is_error: true, api_error_status: 404, total_cost_usd: 0, modelUsage: {} })}\n`,
@@ -4647,6 +4857,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("中断の事実を盤面名義の event として worker_exited と並べて刻む(ADR 0104 決定4)", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped-event");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(CAP_STREAM);
 
     emitExit(1, null);
@@ -4666,6 +4877,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("Provider 使用量の観測には書かない — 再開の門は次の pickup の使用量観測である(ADR 0104 決定3)", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     start("task-capped-throttle");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     // 空の表と比べても「書かなかった」は測れない。直前の pickup が残した観測を
     // 1行置き、それが 429 の後も1文字も動かないことを見る
     const observedAt = new Date("2026-08-24T13:00:00.000Z");
@@ -4700,6 +4912,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("401 の envelope は従来どおり認証 quarantine に落ち、上限到達とは混ざらない", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-capped-401");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(`${JSON.stringify({ type: "result", subtype: "error", api_error_status: 401 })}\n`);
 
     emitExit(1, null);
@@ -4719,6 +4932,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
   it("rate_limit_event を含むだけの正常な session では何も起きない(既存 fixture の回帰)", async () => {
     const { start, processes, emitExit, db, slot } = await makeWorker();
     const task = start("task-not-capped");
+    await vi.waitFor(() => expect(processes).toHaveLength(1));
     processes[0]!.stdout.write(
       readFileSync(
         join(import.meta.dirname, "fixtures", "worker-session-2.1.237.stream.jsonl"),
@@ -4785,7 +4999,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
 
   it("spawn が落ちた pickup の後始末は、読み口に process を1つも持たなかった session として報される(ADR 0274 決定3 / #651)", async () => {
     let onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void = () => {};
-    const { worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
+    const { calls, worker, setting, emitError, db, slot, clock, containers } = await makeWorker({}, {
       onSpawnFailed: (taskId, failure) => onSpawnFailed(taskId, failure),
     });
     onSpawnFailed = spawnFailureHandler({ db, clock, slot, resolve: undefined, pollNow: () => {} }, containers);
@@ -4793,6 +5007,7 @@ describe("上限到達による中断(issue #467 / ADR 0104)", () => {
     const task = pickupTask(db, registered, "deckhand", clock.now(), { assignee: "deckhand" })!;
     slot.occupy(task.id);
     worker.start(task, setting(task));
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
 
     emitError(Object.assign(new Error("spawn claude ENOENT"), { code: "ENOENT", syscall: "spawn claude" }));
 
@@ -4829,6 +5044,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("exit のあと読み切りの前に届いた result 行の消費が worker_exited に載り、読み切った事実が残る", async () => {
     const f = await makeWorker();
     f.start("task-late-result");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     await lateOutput(f, { stdout: resultLine({}) });
 
@@ -4841,6 +5057,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("exit のあと読み切りの前に届いた stderr の末尾が stderr_tail に載る", async () => {
     const f = await makeWorker();
     f.start("task-late-stderr");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     await lateOutput(f, { stderr: "early\nLAST-STDERR\n" }, 1);
 
@@ -4853,6 +5070,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
       onWorkerExited: (_taskId, _exit, cap) => order.push(cap),
     });
     f.start("task-late-429");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 429 }) }, 1);
 
@@ -4863,6 +5081,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     const refused: unknown[] = [];
     const f = await makeWorker({}, { onRowRefused: (_taskId, refusal) => refused.push(refusal.cause) });
     f.start("task-late-404");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 404 }) }, 1);
 
@@ -4872,6 +5091,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("exit のあと読み切りの前に届いた 401 の result 行で、Provider 認証停止へ昇格する", async () => {
     const f = await makeWorker();
     f.start("task-late-401");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     await lateOutput(f, { stdout: resultLine({ is_error: true, api_error_status: 401 }) }, 1);
 
@@ -4883,6 +5103,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
   it("強制回収は root の exit の時点で撃たれ、worker_exited は読み切りまで書かれない", async () => {
     const f = await makeWorker();
     f.start("task-force-at-exit");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
 
     f.emitExitOnlyAt(0, 0, null);
 
@@ -4896,6 +5117,7 @@ describe("root の出力の読み切り(issue #1336 / ADR 0201)", () => {
     const exits: WorkerExit[] = [];
     const f = await makeWorker({}, { onWorkerExited: (_taskId, exit) => exits.push(exit) });
     f.start("task-never-closed");
+    await vi.waitFor(() => expect(f.calls).toHaveLength(1));
     f.processes[0]!.stdout.write(resultLine({}));
     f.processes[0]!.stderr.write("stuck\n");
     await new Promise((resolve) => setImmediate(resolve));
@@ -4939,6 +5161,17 @@ describe("Claude 側の probe は中立の cwd で走る(skill 列挙: issue #10
     expect(seen.cwd).not.toBe(process.cwd());
     expect(seen.entries).toEqual([]);
     expect(existsSync(seen.cwd)).toBe(false);
+  });
+
+  // ADR 0335 決定2: 同梱集合は worker と同じ tier フラグで撃つ —— user 層の skill は同梱に数えない
+  it("ホストの skill 列挙(同梱集合)は --setting-sources project で撃つ", async () => {
+    let args: string[] = [];
+    await enumerateHostSkills((async (spec: BoardCallSpec) => {
+      args = spec.args;
+      return null;
+    }) as BoardCall);
+
+    expect(args[args.indexOf("--setting-sources") + 1]).toBe("project");
   });
 
   it.each(probes)("%s の空の cwd は、口が throw したあとにも残らない", async (_, probe) => {

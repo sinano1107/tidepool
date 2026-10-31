@@ -14,7 +14,7 @@ import { tierIdOf } from "../src/tier.js";
 import type { WatchdogConfig } from "../src/watchdog.js";
 import { UnknownWorkspaceError, type WorkspaceConfig } from "../src/workspace.js";
 import type { WorkspaceDeletionReferences } from "../src/workspace-create.js";
-import { FakeContainerRuntime, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { FakeContainerRuntime, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   type BootOptions,
@@ -415,7 +415,7 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
       workspacesDir: join(dir, "workspaces"),
       mcpUrl: "http://127.0.0.1:1/mcp",
       logDir,
-      enumerateSkills: async () => [],
+      ...noSkillPings,
     }), deps.clock),
   });
 

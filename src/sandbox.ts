@@ -174,17 +174,6 @@ export const SANDBOX_SHADOW_PATHS = [
   ".claude/workflows",
 ] as const;
 
-/** The skill roots a permitted skill name is mapped into. ADR 0033's invariant
- *  lives here, in code: an allowlist carries skill *names*, never paths, so the
- *  name → path mapping and its "under a skill root, always" confinement are the
- *  board's, not the registry's. `~` is expanded by the CLI itself. */
-const USER_SKILL_ROOT = "~/.claude/skills";
-const WORKSPACE_SKILL_SUBDIR = ".claude/skills";
-/** The wildcard case's plugin allowance: with `skills: ["*"]` nothing is
- *  denied, so opening the plugin cache wholesale bypasses no allowlist. A
- *  finite allowlist never gets this — see `skillReadPaths`. */
-const PLUGIN_ROOT = "~/.claude/plugins";
-
 /** The workspace-side settings files the CLI merges into a session's settings.
  *  Both live inside the checkout, so a `work` session can write them — which is
  *  what ADR 0037 closes and what `workspaceSettingsDisposition` guards behind it. One
@@ -339,66 +328,11 @@ const SUBAGENT_BOARD_VERB_DENY: WorkerSessionSettings["hooks"]["PreToolUse"][0] 
   ],
 };
 
-/** A skill name safe to map into a path: no separator, no `..`, no leading dot.
- *  Plugin-prefixed names (`plugin:skill`) are excluded by the same rule — their
- *  directory lives under a version-stamped plugin cache path the board cannot
- *  derive from the name alone, so a finite allowlist re-allows nothing for
- *  them. Under-permission, never over: a plugin skill's body still rides the
- *  system prompt (ADR 0033 fact 3); only its auxiliary files stay unreadable. */
-const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
-
-/** One root + one name → the path, or nothing. Belt and braces over
- *  `SAFE_SKILL_NAME`: the joined path must still start with the root, so no
- *  spelling of a name can climb out of the skill root. Kept string-only (no
- *  `node:path`) because roots may be `~`-relative — the CLI expands those. */
-function underRoot(root: string, name: string): string | undefined {
-  if (!SAFE_SKILL_NAME.test(name)) return undefined;
-  const path = `${root}/${name}`;
-  return path.startsWith(`${root}/`) ? path : undefined;
-}
-
-/** The `allowRead` skill share (ADR 0033): the directories of exactly the
- *  skills the agent's allowlist permits — never the skill root wholesale, which
- *  would let a denied skill's body be `cat`-ed and hand-replayed, routing around
- *  "an allowlist decides whether the door is open" (issue #132).
- *
- *  `"all"` (the `["*"]` agent) is the one case that does open the roots: with
- *  nothing denied there is no allowlist to route around. An empty list (the
- *  `--disable-slash-commands` shape) opens nothing.
- *
- *  Honest scope note: `allowRead` is recursive and always contains the
- *  workspace itself, so a *workspace* skill's directory is readable whatever
- *  this returns — the per-skill confinement is only enforceable over the host
- *  half (`~/.claude/skills`, `~/.claude/plugins`), which is also the half ADR
- *  0033 was written about (a workspace's own files are inside the containment
- *  boundary by definition). The workspace entries are kept because the mapping
- *  is one rule, not two, and a future workspace layout outside the session cwd
- *  would need them — but they buy no permission today. */
-export function skillReadPaths(
-  permittedSkills: string[] | "all",
-  workspacePath: string,
-): string[] {
-  const workspaceRoot = `${workspacePath}/${WORKSPACE_SKILL_SUBDIR}`;
-  if (permittedSkills === "all") return [workspaceRoot, USER_SKILL_ROOT, PLUGIN_ROOT];
-  const paths: string[] = [];
-  for (const name of permittedSkills) {
-    for (const root of [workspaceRoot, USER_SKILL_ROOT]) {
-      const path = underRoot(root, name);
-      if (path !== undefined) paths.push(path);
-    }
-  }
-  return paths;
-}
-
 export interface WorkerSessionSettingsInput {
   /** ADR 0013: read-only is a property of the `review` task type, not of the
    *  agent executing it — so the write half is keyed on this alone. */
   taskType: Task["type"];
   workspacePath: string;
-  /** ADR 0025's allowlist resolved against the CLI's own enumeration: the skill
-   *  names this session may actually use, or `"all"` for the unrestricted
-   *  (`["*"]`) agent. */
-  permittedSkills: string[] | "all";
   /** ADR 0072: workspace-scoped egress. Absent keeps the allowlist empty. */
   allowedDomains?: string[];
   /** ADR 0257 決定2: this session's own temp directory, readable and writable on
@@ -472,7 +406,7 @@ export interface WorkerSessionSettingsInput {
  *  The CLI's own default project protections still refuse `.git/config`,
  *  `.git/hooks` and friends underneath all of it. */
 export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerSessionSettings {
-  const { taskType, workspacePath, permittedSkills, allowedDomains, taskTemp, lib64, readPaths = [] } = input;
+  const { taskType, workspacePath, allowedDomains, taskTemp, lib64, readPaths = [] } = input;
   const readOnly = carriesReadOnly(taskType);
   return {
     // issue #378: not keyed on the profile — a subagent can smuggle a board
@@ -502,7 +436,6 @@ export function buildSandboxSettings(input: WorkerSessionSettingsInput): WorkerS
           workspacePath,
           taskTemp,
           ...TOOLCHAIN_READ,
-          ...skillReadPaths(permittedSkills, workspacePath),
           ...OS_READ,
           ...(lib64 ? ["/lib64"] : []),
           ...readPaths,

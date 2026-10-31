@@ -7,7 +7,7 @@ import { executionSettingsFor } from "../src/execution-setting.js";
 import { loadRegistry } from "../src/registry.js";
 import { registerTask } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { FakeClock, FakeContainerRuntime, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, noSkillPings, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -419,6 +419,7 @@ it.each([
           mcpUrl: "http://127.0.0.1:1/mcp",
           logDir,
           transcripts: new TranscriptStore(logDir),
+          ...noSkillPings,
         });
         return withHealthyUsage(worker, clock);
       },

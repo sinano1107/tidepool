@@ -6,7 +6,7 @@ import { startServer, type TidepoolServer } from "../src/server.js";
 import { implicitTaskExecutionCandidates } from "../src/server-options.js";
 import { TranscriptStore } from "../src/transcript-store.js";
 import type { WorkerAdapter } from "../src/worker.js";
-import { FakeClock, FakeContainerRuntime, pinnedCliVersions, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { FakeClock, FakeContainerRuntime, noSkillPings, pinnedCliVersions, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
   bootTidepool,
@@ -236,6 +236,7 @@ You are Tako.
         transcripts: new TranscriptStore(logDir),
         containers,
         boardCall,
+        ...noSkillPings,
       });
       return withHealthyUsage(worker, clock);
     },

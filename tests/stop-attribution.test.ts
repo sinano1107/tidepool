@@ -302,7 +302,7 @@ async function stoppedWithTranscript(b: ReturnType<typeof fixture>, lines: strin
 }
 
 it("the stop judge reads every skill the session followed from its projected Episode, split by scope, with the text the harness gave (ADR 0325 決定2・3)", async () => {
-  const b = fixture({ spawn: { skills: { workspace: ["deploy"], permitted: "all" } } });
+  const b = fixture({ spawn: { skills: { workspace: ["deploy"], host: ["dataviz"], permitted: ["deploy", "dataviz"] } } });
   const recordDir = await tempDir("tidepool-records-");
   await stoppedWithTranscript(b, [skillsInit(["deploy", "dataviz"]), ...skillCall(1, "deploy", "Run make deploy."), ...toolCall(2, "mcp__tidepool__log_decision", b.entry), ...skillCall(3, "dataviz", "Chart it.")], recordDir);
 
@@ -314,7 +314,7 @@ it("the stop judge reads every skill the session followed from its projected Epi
 });
 
 it("a stop whose session's transcript is gone after projection still gets the followed skills' names and positions, with null text (ADR 0325 決定3)", async () => {
-  const b = fixture();
+  const b = fixture({ spawn: { skills: { workspace: [], host: ["deploy"], permitted: ["deploy"] } } });
   const recordDir = await tempDir("tidepool-records-");
   rmSync(await stoppedWithTranscript(b, [skillsInit(["deploy"]), ...skillCall(1, "deploy", "Run make deploy.")], recordDir));
 

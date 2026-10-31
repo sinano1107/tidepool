@@ -400,9 +400,10 @@ export type EventPayload =
       /** ADR 0098: the Harness/version actually selected for this session. */
       harness: "claude-code" | "codex";
       cli_version: string;
-      /** ADR 0325 決定2: the skills the workspace checkout carries (`.claude/skills` entry names: dirs, and symlinks to a dir inside the checkout) and the set the board permitted
-       *  (`"all"` for `*`) —— the judge splits what the worker saw into workspace / host by these. Codex closes every skill: both empty. */
-      skills: { workspace: string[]; permitted: "all" | string[] };
+      /** ADR 0325 決定2 / ADR 0335 決定3: the skills the workspace checkout carries (dirs, and links to a dir inside the checkout), the
+       *  effective harness-bundled set (`@host`: the bundled set minus every checkout entry name) and the names the board permitted —— the
+       *  judge splits what the worker saw into workspace / host by the first two. Codex closes every skill: all three empty. */
+      skills: { workspace: string[]; host: string[]; permitted: string[] };
     }
   // ADR 0137: a quarantine key that already has an open Confirmation question
   // fired again — recorded on that same question rather than opening a second

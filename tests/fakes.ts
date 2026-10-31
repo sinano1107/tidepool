@@ -14,6 +14,7 @@ import { type BoardCall, type BoardCallSpec, createBoardCalls } from "../src/boa
 import type { BoardCallAnswer, BoardCallSetting, BoardCallUsage } from "../src/board-call-usage.js";
 import type { PromptPart } from "../src/board-prose.js";
 import { runClaudeBoardCallJson } from "../src/claude-board-call-runner.js";
+import type { ClaudeWorkerOptions } from "../src/claude-worker.js";
 import type { Clock } from "../src/clock.js";
 import type { CodexAppServerProbeResult } from "../src/codex-app-server.js";
 import { createCodexCapabilityCheck } from "../src/codex-worker.js";
@@ -1168,6 +1169,13 @@ export function fakeAppServerCall(answer: (args: readonly string[], cwds: readon
   }) as BoardCall;
   return { call, calls };
 }
+
+/** Claude worker の skill の ping 2本(workspace cwd の列挙・同梱集合)を空集合で答える偽物。`*` の agent も spawn の前に両方を撃つ
+ *  (ADR 0335 決定1)が、盤面のテストの fake の容器はそれに答えないので、spawn の手前で済ませる。 */
+export const noSkillPings: Pick<ClaudeWorkerOptions, "enumerateSkills" | "enumerateHostSkills"> = {
+  enumerateSkills: async () => [],
+  enumerateHostSkills: async () => [],
+};
 
 /** 列挙には実物の応答を、観測には全部閉じた実物の応答を返す app-server の口 —— skill の閉鎖を駆動しない Codex adapter の
  *  テストが渡す(ADR 0259)。 */

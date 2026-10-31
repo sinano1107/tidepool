@@ -351,11 +351,11 @@ it("ClaudeWorkerOptions の任意フィールドは、テスト用の注入 seam
   const emitted = new Set(
     Object.keys(buildWorkerOptions({ ...composition(), registryDir }, { db: openDb(":memory:"), clock: new FakeClock(), reclaimTimeout: 1, ...containerHarness(fakeContainers()), onRowRefused: () => {}, onSpawnFailed: () => {}, onRecordContainerFailed: () => {}, onPickupStopped: () => {}, onSessionStoppedByResource: () => {}, onWorkerExited: () => {}, transcripts: new TranscriptStore("/nonexistent/worker-logs") })),
   );
-  // 不在が正当なのは注入 seam の2つだけ —— そこでの不在は「機能が静かに切れる」
+  // 不在が正当なのは注入 seam の3つだけ(同梱集合の ping は ADR 0335 決定2)—— そこでの不在は「機能が静かに切れる」
   // ではなく「実プロセスを使う」を意味する(ADR 0027 の fake 注入の形)。#463 で
   // `spawn` はここから消えた: worker session の process 境界は容器機構(必須の
   // `containers`)の側にあり、adapter がそれを迂回して spawn する口はもう無い。
-  expect(optional.filter((key) => !emitted.has(key))).toEqual(["pty", "enumerateSkills"]);
+  expect(optional.filter((key) => !emitted.has(key))).toEqual(["pty", "enumerateSkills", "enumerateHostSkills"]);
 });
 
 /** 同じ網羅を `CodexWorkerOptions` にも掛ける(ADR 0261)。使用量の読み口と中断の一撃は、渡し忘れれば
