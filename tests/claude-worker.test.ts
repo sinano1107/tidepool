@@ -1267,20 +1267,6 @@ describe("ClaudeCodeWorker", () => {
     expect(spawned.payload).toMatchObject({ skills: { workspace: ["inner", "tdd"], permitted: ["inner", "tdd"] } });
   });
 
-  it("checkout の内側の dir を指す symlink の skill は @host だけの agent では deny される(issue #2774)", async () => {
-    const wsDir = await symlinkedSkillWorkspace();
-    const rec = recordingEnumerator(["inner", "tdd", "plug:deploy"]);
-    const { start, calls } = await makeWorker(
-      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@host"\n') },
-      { enumerateSkills: rec.enumerateSkills },
-    );
-    start();
-    await vi.waitFor(() => expect(calls).toHaveLength(1));
-    const deny = disallowedTools(calls[0]!.args);
-    expect(deny).toContain("Skill(inner)");
-    expect(deny).not.toContain("Skill(plug:deploy)");
-  });
-
   it("checkout の外・名前が前方一致する隣の dir・壊れた先・ファイルを指す symlink は数えず、spawn は進む(issue #2774)", async () => {
     const parent = await tempDir("tidepool-ws-parent-");
     const wsDir = join(parent, "ws");

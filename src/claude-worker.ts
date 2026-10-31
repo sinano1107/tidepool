@@ -1287,15 +1287,16 @@ export const enumerateHostSkills = (call: BoardCall): Promise<string[] | null> =
  *  names the skill by the entry). This one-directory scan is the only discovery
  *  logic tidepool keeps in-house — the `@workspace`/`@host` split is a
  *  difference against it (a skill the CLI enumerated but the checkout doesn't
- *  carry is host-provided). A missing directory is an empty set, not an error
- *  (a workspace need not carry any skills). */
+ *  carry is host-provided). A checkout or `.claude/skills` that cannot be read
+ *  (missing, unresolvable, EACCES) is an empty set, not an error (a workspace
+ *  need not carry any skills). */
 function scanWorkspaceSkills(workspacePath: string): string[] {
   const skillsDir = join(workspacePath, ".claude", "skills");
   try {
     // real paths on both sides: the workspace path itself may pass through a symlink (macOS /var -> /private/var)
     const checkout = realpathSync(workspacePath);
     return readdirSync(skillsDir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksIntoCheckout(join(skillsDir, entry.name), checkout)))
+      .filter((entry) => entry.isDirectory() || (entry.isSymbolicLink() && linksToDirInsideCheckout(join(skillsDir, entry.name), checkout)))
       .map((entry) => entry.name)
       .sort();
   } catch {
@@ -1305,7 +1306,7 @@ function scanWorkspaceSkills(workspacePath: string): string[] {
 
 /** A link whose target is outside the checkout is not carried by it (GLOSSARY.md `@workspace`); a broken
  *  link or one to a non-directory is no skill. Unreadable means not counted, so one entry never stops the scan. */
-function linksIntoCheckout(link: string, checkout: string): boolean {
+function linksToDirInsideCheckout(link: string, checkout: string): boolean {
   try {
     const target = realpathSync(link);
     return target.startsWith(checkout + sep) && statSync(target).isDirectory();
