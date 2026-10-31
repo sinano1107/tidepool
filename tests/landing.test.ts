@@ -43,6 +43,7 @@ import {
   OutOfBandProtectedBranchError,
   prepareWorkspaceAtPickup,
   quarantineWorkspace,
+  redoMergeBacks,
   refreshProtectedBranch,
   releaseWorkspace,
   UnknownWorkspaceError,
@@ -3976,12 +3977,11 @@ it("purely-local な workspace で、やり直しの前に帯域外に動いた�
   expect(() => mergeTaskToProtected(db, workspace, work.id)).toThrow(OutOfBandProtectedBranchError);
 });
 
-it("内容が帰り先に届いていない done の work が無ければ、受理の検査は checkout を動かさない", async () => {
+it("内容が帰り先に届いていない done の work が無ければ、merge back のやり直しは checkout を動かさない(ADR 0240 決定4)", async () => {
   const pr = await openPushedPr("redo-merge-back-nothing", "escalate");
-  const { workspace, db, clock, work } = pr;
-  quarantineWorkspace(db, workspace.name, new Error("repaired out of band"), clock.now());
+  const { workspace, db, work } = pr;
 
-  await answerWorkspaceQuarantine(pr, quarantineQuestion(db, "workspace", workspace.name)!);
+  await redoMergeBacks(db, workspace, workspace.name, undefined);
 
   expect(head(workspace)).toBe(`task/${work.id}`);
 });
