@@ -5,7 +5,7 @@ import { type BoardStatePath, boardStateOverlap } from "./board-state.js";
 import type { Db } from "./db.js";
 import { git } from "./git.js";
 import type { GitHubClient } from "./github.js";
-import { authedGit, type GitHubAuth, repoKey } from "./github-auth.js";
+import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, repoKey } from "./github-auth.js";
 import { assertOwnGitDirectory, conventionCheckoutPath, originUrl } from "./pickup-predicates.js";
 import {
   assertValidAllowedDomains,
@@ -482,11 +482,11 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
   // なければならない —— 拒んだとき、巻き戻す痕跡がそもそも作られない側に立つ。
   await assertRepoAccess(input.repo, deps.github);
   // ADR 0093: token の**取得**(ネットワーク)は同期区間の手前で済ませる。以降の
-  // `authedGit` は温まったキャッシュから同期に注入するだけなので、下の「await は
+  // `authedGitBounded` は温まったキャッシュから同期に注入するだけなので、下の「await は
   // 1つも無い」が保てる。宛先はまだ origin として存在しないので URL から導く。
   const destination = repoKey(input.repo);
   await deps.githubAuth.ensureToken(destination);
-  // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGit` も
+  // ── ここから下に `await` は1つも無い(ADR 0066 決定5)。`authedGitBounded` も
   // `commitToRegistry` も `execFileSync` なので、await を挟まなければ publish 全体が
   // イベントループに対して不可分になり、pickup が中間状態(clone に remote があるのに
   // 宣言が無い = ADR 0052 の quarantine 事由)を観測できない ──
@@ -513,8 +513,8 @@ export async function publishWorkspace(input: PublishWorkspaceInput, deps: Publi
       // **成功してしまう**。非 atomic だと publish は失敗扱いでローカルを巻き戻すのに、
       // 人間の「空のはずの repo」にはタスクブランチが載ったまま残る。
       // 送るのは `refs/heads/*` だけ —— タグはドメイン上の意味を持たないので送らない
-      // (ADR 0066 決定6)。上限は掛けない: 人間が起こす一括転送なので clone と同じ扱い。
-      authedGit(githubAuth, dir, destination, "push", "--atomic", "origin", ...branches.map(([ref, sha]) => `${sha}:${ref}`));
+      // (ADR 0066 決定6)。
+      authedGitBounded(githubAuth, dir, destination, GIT_NETWORK_TIMEOUT_MS, "push", "--atomic", "origin", ...branches.map(([ref, sha]) => `${sha}:${ref}`));
       commitWorkspaceEntry(
         deps,
         input.name,
@@ -742,7 +742,7 @@ function cloneAndDescribe(name: string, repo: string, deps: WorkspaceGitHubDeps)
   // `buildEntry` が先に温めてある)。
   // 流用してよいのは `origin` が要求 repo と一致するときだけ(ADR 0087 決定5)
   if (existsSync(dir)) assertReusableOrphan(dir, repo);
-  else authedGit(deps.githubAuth, deps.workspacesBaseDir, repoKey(repo), "clone", repo, dir);
+  else authedGitBounded(deps.githubAuth, deps.workspacesBaseDir, repoKey(repo), GIT_NETWORK_TIMEOUT_MS, "clone", repo, dir);
   // a fresh clone's HEAD is the upstream default branch — recorded when it
   // isn't "main" so branch discipline and the PR base start out right
   // (issue #27); "main" stays implicit (protectedBranch's default)

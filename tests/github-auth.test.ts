@@ -2,7 +2,6 @@ import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  authedGit,
   authedGitBounded,
   GIT_NETWORK_TIMEOUT_MS,
   GitHubAuth,
@@ -234,7 +233,7 @@ describe("originRepo: 呼び出し元 checkout の origin から repo を決め�
   });
 });
 
-describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)", () => {
+describe("authedGitBounded: 認証つき git 実行(ADR 0024 の唯一の注入経路)", () => {
   it("キャッシュ済みの installation token を子プロセスに渡し、ホストの helper を先に消す", async () => {
     const remote = await tempDir("tidepool-remote-");
     git(remote, "init", "--bare", "-b", "main");
@@ -249,7 +248,7 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
     await auth.ensureToken("acme/widget");
     // ローカル remote では credential helper は無害(実物の git で通ることを見る)
-    authedGit(auth, repo, "acme/widget", "push", "origin", "main");
+    authedGitBounded(auth, repo, "acme/widget", GIT_NETWORK_TIMEOUT_MS, "push", "origin", "main");
 
     expect(git(remote, "rev-parse", "main")).toBe(git(repo, "rev-parse", "main"));
     expect(process.env.GH_TOKEN).toBeUndefined();
@@ -265,7 +264,7 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
     const base = await tempDir("tidepool-ws-base-");
     const broker = await openBroker(() => issuedToken("inst-token", 60));
     const auth = new GitHubAuth(await makeTokenFile("gho_user\n", 0o600), broker.url);
-    authedGit(auth, base, undefined, "clone", upstream, join(base, "ws"));
+    authedGitBounded(auth, base, undefined, GIT_NETWORK_TIMEOUT_MS, "clone", upstream, join(base, "ws"));
 
     expect(git(join(base, "ws"), "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
     expect(broker.requests.length).toBe(0);
@@ -275,7 +274,6 @@ describe("authedGit: 認証つき git 実行(ADR 0024 の唯一の注入経路)"
     const missing = join(await tempDir("tidepool-authed-"), "gone");
     const expected = `\`git fetch\` cannot run: the directory ${missing} does not exist`;
 
-    expect(() => authedGit(undefined, missing, undefined, "fetch")).toThrow(expected);
     expect(() => authedGitBounded(undefined, missing, undefined, GIT_NETWORK_TIMEOUT_MS, "fetch")).toThrow(expected);
   });
 });

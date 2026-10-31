@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { chmod, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { loadRegistry } from "../src/registry.js";
@@ -17,9 +17,27 @@ import {
 } from "../src/workspace-create.js";
 import { type FakeBroker, issuedToken, startFakeBroker } from "./fake-broker.js";
 import { FakeClock, FakeGitHubClient } from "./fakes.js";
+import { startGitHttpRemote } from "./git-http-remote.js";
 import { HUMAN_WEBUI, quarantineQuestion } from "./harness.js";
 import { makeRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
+
+vi.mock("../src/github-auth.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/github-auth.js")>(),
+  GIT_NETWORK_TIMEOUT_MS: 1000,
+}));
+
+it("publish の push が無音なら origin を巻き戻し、registry に repo を書かない(ADR 0334 / ADR 0066)", async () => {
+  const { registryDir, deps, checkout } = await makeBoard();
+  const dest = await makeDestination();
+  const repo = await startGitHttpRemote(dest, "stall-push");
+
+  await expect(publishWorkspace({ name: "sandbox", repo }, deps)).rejects.toThrow(
+    "`git push` stalled: no bytes for 1 s (in " + checkout + ")",
+  );
+  expect(() => git(checkout, "remote", "get-url", "origin")).toThrow();
+  expect(loadRegistry(registryDir, "purely-local").workspaces.sandbox?.repo).toBeUndefined();
+}, 15_000);
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync(

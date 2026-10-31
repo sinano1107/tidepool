@@ -1,11 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, writeFileSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { NoOwnGitDirError } from "../src/pickup-predicates.js";
 import { InvalidWorkspaceNameError, loadRegistry } from "../src/registry.js";
-import { RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
+import { commitToRegistry, RegistryFetchFailedError, RegistryPushFailedError } from "../src/registry-write.js";
 import { RepoAccessMissingError } from "../src/repo-access.js";
 import {
   BoardStateOverlapError,
@@ -15,8 +16,66 @@ import {
   OrphanCheckoutMismatchError,
 } from "../src/workspace-create.js";
 import { FakeGitHubClient } from "./fakes.js";
+import { startGitHttpRemote } from "./git-http-remote.js";
 import { makeRegistry, makeRemoteBackedRegistry, writeUnannounced } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
+
+vi.mock("../src/github-auth.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../src/github-auth.js")>(),
+  GIT_NETWORK_TIMEOUT_MS: 1000,
+}));
+
+it("clone が無音なら中断し、宛先を残さない(ADR 0334)", async () => {
+  const registryDir = await makeMainRegistry();
+  const deps = await makeDeps(registryDir);
+  const remote = await tempDir("tidepool-clone-stall-");
+  git(remote, "init", "--bare", "-b", "main");
+  const repo = await startGitHttpRemote(remote, "stall-info");
+
+  await expect(createWorkspace({ mode: "clone", name: "lagoon", repo }, deps)).rejects.toThrow(
+    "`git clone` stalled: no bytes for 1 s (in " + deps.workspacesBaseDir + ")",
+  );
+  expect(existsSync(join(deps.workspacesBaseDir, "lagoon"))).toBe(false);
+}, 15_000);
+
+it("registry の push が無音なら RegistryPushFailedError に中断理由を包む(ADR 0334)", async () => {
+  const { registryDir } = await makeRemoteBackedRegistry();
+  const remote = git(registryDir, "remote", "get-url", "origin");
+  const repo = await startGitHttpRemote(remote, "stall-push");
+  git(registryDir, "remote", "set-url", "origin", repo);
+  let failure: unknown;
+  try {
+    commitToRegistry(
+      { dir: registryDir, mode: "remote-backed", writeRef: writeUnannounced },
+      undefined,
+      (dir) => writeFileSync(join(dir, "notes.txt"), "registry write"),
+      "write registry notes",
+    );
+  } catch (err) {
+    failure = err;
+  }
+  expect(failure).toBeInstanceOf(RegistryPushFailedError);
+  expect(failure).toHaveProperty("message", expect.stringContaining("`git push` stalled: no bytes for 1 s"));
+}, 15_000);
+
+it("健全な遅い clone は stall の間隔より長く転送しても完走する(ADR 0334)", async () => {
+  const registryDir = await makeMainRegistry();
+  const deps = await makeDeps(registryDir);
+  const upstream = await makeUpstream();
+  await writeFile(join(upstream, "payload.bin"), randomBytes(160_000));
+  commitAll(upstream, "bulk transfer");
+  const remote = join(await tempDir("tidepool-slow-clone-"), "remote.git");
+  git(upstream, "clone", "--bare", ".", remote);
+  const repo = await startGitHttpRemote(remote, "slow-clone");
+
+  const started = performance.now();
+  const path = await createWorkspace({ mode: "clone", name: "lagoon", repo }, deps);
+
+  expect(performance.now() - started).toBeGreaterThan(1000);
+  expect(git(path, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
+  expect(git(path, "fsck", "--no-progress")).toBe("");
+  expect(loadRegistry(registryDir, "purely-local").workspaces.lagoon).toEqual({ repo });
+}, 15_000);
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] })

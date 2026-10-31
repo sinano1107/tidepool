@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { git } from "./git.js";
-import { authedGit, type GitHubAuth, originRepo } from "./github-auth.js";
+import { authedGitBounded, GIT_NETWORK_TIMEOUT_MS, type GitHubAuth, originRepo } from "./github-auth.js";
 import { REGISTRY_BRANCH, refreshRegistry, registryRef, remoteTrackingRef, type WritableRegistry } from "./registry.js";
 
 /** ADR 0052 決定4: registry 書き込みの入口の fetch は致命 — fetch できなければ
@@ -162,7 +162,7 @@ function land(registry: WritableRegistry, worktreeDir: string, baseSha: string, 
       // 決定5 が要求する「publish の同期区間に await を入れない」の帰結)。
       // worktree は元の clone の config を共有するので origin は同じ1つ。push は写しも動かす
       registry.writeRef(remoteTrackingRef(REGISTRY_BRANCH), newSha, () =>
-        authedGit(auth, worktreeDir, originRepo(worktreeDir), "push", "origin", `HEAD:${REGISTRY_BRANCH}`),
+        authedGitBounded(auth, worktreeDir, originRepo(worktreeDir), GIT_NETWORK_TIMEOUT_MS, "push", "origin", `HEAD:${REGISTRY_BRANCH}`),
       );
     } else {
       registry.writeRef(`refs/heads/${REGISTRY_BRANCH}`, newSha, () =>

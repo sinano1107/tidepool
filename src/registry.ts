@@ -780,7 +780,7 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *
  *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / GLOSSARY.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
- *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
+ *  registry は private なので認証が要り、しかも `authedGitBounded` の credential 引数は
  *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」
  *  だけでなく「人間の `gh` ログインに寄りかからない」ことを同時に成立させる。
  *  ホストに人間の helper が居ると認証なしでも fetch が通ってしまうため、実機で

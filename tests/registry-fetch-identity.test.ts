@@ -150,8 +150,8 @@ it("GitHub 身元を持たない盤面の fetch は credential を1つも渡さ�
     { args: lsRemote.args, token: lsRemote.env.GH_TOKEN },
     { args: fetch.args, token: fetch.env.GH_TOKEN },
   ]).toEqual([
-    { args: ["ls-remote", "origin", "refs/heads/main"], token: "" },
-    { args: ["fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
+    { args: ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "ls-remote", "origin", "refs/heads/main"], token: "" },
+    { args: ["-c", "http.lowSpeedLimit=1", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", "origin", ORIGIN_SHA], token: "" },
   ]);
 });
 
