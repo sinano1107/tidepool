@@ -40,6 +40,8 @@ it("発行中の probe の id で verb を呼ぶと拒まれる", async () => {
 it("probe の終了(id の無効化)の後は同じ id の initialize も拒まれる —— 古い process が扉を通らない", async () => {
   const probeIds = new Set(["probe-1"]);
   t = await bootTidepool({ probeIds });
+  const open = await connect({ probe: "probe-1" });
+  await open.close();
   probeIds.delete("probe-1");
   await expect(connect({ probe: "probe-1" })).rejects.toThrow("not attributed to an open Worker MCP probe");
 });
