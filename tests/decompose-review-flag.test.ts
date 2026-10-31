@@ -419,6 +419,9 @@ it.each([
           mcpUrl: "http://127.0.0.1:1/mcp",
           logDir,
           transcripts: new TranscriptStore(logDir),
+          // `*` の agent は skill の ping を2本撃つ(ADR 0335 決定1)。この盤面の容器はそれに答えないので spawn の手前で済ませる
+          enumerateSkills: async () => [],
+          enumerateHostSkills: async () => [],
         });
         return withHealthyUsage(worker, clock);
       },

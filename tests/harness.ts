@@ -1477,7 +1477,7 @@ export const WORKER_SPAWNED: Extract<EventPayload, { kind: "worker_spawned" }> =
   tier_id: 1, source: { tier: "task", provider: "only" },
   harness: "claude-code",
   cli_version: "1",
-  skills: { workspace: [], permitted: "all" },
+  skills: { workspace: [], host: [], permitted: [] },
 };
 
 /** transcript の tool 呼び出し1回 = tool_use と、event_id を返した tool_result の2行(投影器のテストの setup)。 */

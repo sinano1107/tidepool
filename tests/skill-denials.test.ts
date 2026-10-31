@@ -1,55 +1,77 @@
 import { describe, expect, it } from "vitest";
-import { computeSkillDenials } from "../src/claude-worker.js";
+import { resolveSkillAllowlist } from "../src/claude-worker.js";
 
-/** ADR 0025 point 3: the only enforcement primitive is per-skill deny, so the
- *  adapter denies the complement of the allowlist against the CLI-enumerated
- *  full set. `computeSkillDenials` is that set algebra, pure and isolated —
- *  the vendor ping (enumeration) and the flag plumbing are tested separately.
- *  The `@workspace`/`@host` split is a difference against the checkout's own
- *  skills (the third argument). */
-describe("computeSkillDenials", () => {
-  it("['*'] は allow-all — 何も deny しない", () => {
-    expect(computeSkillDenials(["*"], ["code-review", "tdd", "plug:deploy"], ["tdd"])).toEqual([]);
+/** ADR 0025 point 3 / ADR 0335 決定1: the only enforcement primitive is per-skill deny, so the adapter denies
+ *  the CLI-enumerated set minus what the allowlist permits. Each entry resolves to one of two positively known
+ *  sets — what the checkout carries (the scan) and what the harness bundles (the neutral-cwd ping minus every
+ *  `.claude/skills` entry name) — and a name in neither stays closed under every entry form. Pure set algebra;
+ *  the pings and the flag plumbing are tested at the spawn adapter. */
+describe("resolveSkillAllowlist", () => {
+  const checkout = (carried: string[], entries: string[] = carried) => ({ carried, entries });
+
+  it("@host は同梱集合だけを許可し、checkout の skill・user 層・plugin の名前を deny する", () => {
+    const enumerated = ["tdd", "dataviz", "user-skill", "plug:deploy"];
+    expect(resolveSkillAllowlist(["@host"], enumerated, checkout(["tdd"]), ["dataviz", "debug"])).toEqual({
+      deny: ["tdd", "user-skill", "plug:deploy"],
+      permitted: ["dataviz"],
+      host: ["dataviz", "debug"],
+    });
   });
 
-  it("空リストは全禁止 — 列挙された全 skill を deny する", () => {
-    expect(computeSkillDenials([], ["code-review", "tdd", "plug:deploy"], ["tdd"])).toEqual([
-      "code-review",
-      "tdd",
-      "plug:deploy",
-    ]);
+  it("同梱と同名の entry が checkout にあると、その名前は @host から外れ @workspace に入る", () => {
+    const resolve = (allowlist: string[]) =>
+      resolveSkillAllowlist(allowlist, ["dataviz", "debug"], checkout(["dataviz"]), ["dataviz", "debug"]);
+    expect(resolve(["@host"])).toEqual({ deny: ["dataviz"], permitted: ["debug"], host: ["debug"] });
+    expect(resolve(["@workspace"])).toEqual({ deny: ["debug"], permitted: ["dataviz"], host: ["debug"] });
   });
 
-  it("個別名は完全一致で許可し、それ以外を deny する", () => {
-    expect(computeSkillDenials(["code-review"], ["code-review", "tdd", "grilling"], [])).toEqual([
+  it.each([
+    ["@workspace", ["ext", "debug"]],
+    ["@host", ["tdd", "ext"]],
+    ["ext", ["tdd", "ext", "debug"]],
+    ["*", ["ext"]],
+  ])("checkout の外を指す link の名前は %s でも deny に残る", (entry, deny) => {
+    const outsideLink = checkout(["tdd"], ["ext", "tdd"]);
+    expect(resolveSkillAllowlist([entry], ["tdd", "ext", "debug"], outsideLink, ["debug"]).deny).toEqual(deny);
+  });
+
+  it("user 層の名前は '*' でも deny に残り、'*' は運ぶ ∪ 同梱を許可する", () => {
+    expect(resolveSkillAllowlist(["*"], ["tdd", "user-skill", "debug"], checkout(["tdd"]), ["debug"])).toEqual({
+      deny: ["user-skill"],
+      permitted: ["tdd", "debug"],
+      host: ["debug"],
+    });
+  });
+
+  it("空リストは列挙された全 skill を deny する", () => {
+    expect(resolveSkillAllowlist([], ["tdd", "debug"], checkout(["tdd"]), ["debug"])).toEqual({
+      deny: ["tdd", "debug"],
+      permitted: [],
+      host: ["debug"],
+    });
+  });
+
+  it("deny と許可の順序は列挙の順に従う", () => {
+    expect(resolveSkillAllowlist(["mid", "zeta"], ["zeta", "alpha", "mid"], checkout([]), ["mid", "alpha", "zeta"])).toEqual({
+      deny: ["alpha"],
+      permitted: ["zeta", "mid"],
+      host: ["mid", "alpha", "zeta"],
+    });
+  });
+
+  it("個別名は完全一致で許可し、実在しない参照は inert(deny も許可も増やさない)", () => {
+    const enumerated = ["code-review", "tdd", "grilling"];
+    expect(resolveSkillAllowlist(["code-review", "does-not-exist"], enumerated, checkout(["tdd"]), ["code-review", "grilling"]).deny).toEqual([
       "tdd",
       "grilling",
     ]);
   });
 
-  it("@workspace は checkout の skill だけを許可し、ホスト由来(user + plugin)を deny する", () => {
-    const enumerated = ["tdd", "code-review", "plug:deploy", "user-skill"];
-    const workspace = ["tdd", "code-review"];
-    expect(computeSkillDenials(["@workspace"], enumerated, workspace)).toEqual([
-      "plug:deploy",
-      "user-skill",
+  it("'名前:*' の glob は前方一致の名前を許可する(運ぶ・同梱に無い名前は開かない)", () => {
+    const enumerated = ["myplugin:deploy", "myplugin:test", "other:x"];
+    expect(resolveSkillAllowlist(["myplugin:*"], enumerated, checkout([]), ["myplugin:deploy", "other:x"]).deny).toEqual([
+      "myplugin:test",
+      "other:x",
     ]);
-  });
-
-  it("@host はホスト由来(列挙 − workspace)だけを許可し、workspace の skill を deny する", () => {
-    const enumerated = ["tdd", "plug:deploy", "user-skill"];
-    const workspace = ["tdd"];
-    expect(computeSkillDenials(["@host"], enumerated, workspace)).toEqual(["tdd"]);
-  });
-
-  it("'名前:*' の plugin glob はその plugin の全 skill を許可し、それ以外を deny する", () => {
-    const enumerated = ["myplugin:deploy", "myplugin:test", "other:x", "tdd"];
-    expect(computeSkillDenials(["myplugin:*"], enumerated, [])).toEqual(["other:x", "tdd"]);
-  });
-
-  it("語を組み合わせられ、実在しない参照は inert(deny を増やさない・許可を増やさない)", () => {
-    const enumerated = ["code-review", "tdd", "plug:deploy"];
-    const allowlist = ["code-review", "does-not-exist", "otherplugin:*"];
-    expect(computeSkillDenials(allowlist, enumerated, [])).toEqual(["tdd", "plug:deploy"]);
   });
 });

@@ -676,8 +676,8 @@ function stopSkills(db: Db, recordDir: string | undefined, spawned: EventRowOf<"
   return skillFields(spawned, episode ?? null, lines, stop);
 }
 
-/** 判事の skill の欄(ADR 0325 決定2・3): 見た集合 ∩ 許可した集合を spawn 記録の checkout の集合で分け、`anchor` より前に従った skill を
- *  並べる。Episode が無い・読めない session は両方 null。 */
+/** 判事の skill の欄(ADR 0325 決定2・3 / ADR 0335 決定3): 見た集合 ∩ 許可した集合を spawn 記録の workspace / host の2列で正に分け
+ *  (どちらにも無い名前は落とす)、`anchor` より前に従った skill を並べる。Episode が無い・読めない session は両方 null。 */
 function skillFields(
   spawned: EventRowOf<"worker_spawned">,
   episode: Pick<Episode, "skillsSeen" | "skillCalls" | "markers" | "unrecognizedFormat"> | null,
@@ -685,10 +685,10 @@ function skillFields(
   anchor: EventRow,
 ): Pick<AttributionInput, "skills" | "skills_followed"> {
   if (!episode || episode.unrecognizedFormat) return { skills: null, skills_followed: null };
-  const { workspace, permitted } = spawned.payload.skills;
-  const visible = episode.skillsSeen.filter((name) => permitted === "all" || permitted.includes(name));
+  const { workspace, host, permitted } = spawned.payload.skills;
+  const visible = episode.skillsSeen.filter((name) => permitted.includes(name));
   return {
-    skills: { workspace: visible.filter((name) => workspace.includes(name)), host: visible.filter((name) => !workspace.includes(name)) },
+    skills: { workspace: visible.filter((name) => workspace.includes(name)), host: visible.filter((name) => host.includes(name)) },
     skills_followed: skillsFollowed(episode, lines, anchor),
   };
 }

@@ -7,7 +7,9 @@
  *  中途半端に残る。デプロイに載る恒久的なスクリプトにしておく方が安い。
  *
  *  使い方: tsx scripts/emit-sandbox-settings.ts <work|review|interview> <workspacePath>
- *          --task-temp dir [skill...] [--allowed-domain domain] [--read path]
+ *          --task-temp dir [--allowed-domain domain] [--read path]
+ *
+ *  skill の名前は取らない: settings に skill 由来の read path は無い(ADR 0335 決定3)。
  *
  *  `interview` は Interview の root の床(ADR 0273 決定2): workspacePath は cwd の面接室、`--read` は読みだけ開く実環境
  *  (と開ける面接室)。面接室 canary が手で足していた1行の代わり。
@@ -22,7 +24,7 @@ import { NETWORK_PROXY_CONFIG, permissionConfig, resolveCodexExecutable } from "
 import { buildSandboxSettings, type WorkerSessionSettingsInput } from "../src/sandbox.js";
 
 const USAGE =
-  "usage: emit-sandbox-settings.ts <work|review|interview> <workspacePath> --task-temp dir [skill...] [--allowed-domain domain] [--read path] [--codex]";
+  "usage: emit-sandbox-settings.ts <work|review|interview> <workspacePath> --task-temp dir [--allowed-domain domain] [--read path] [--codex]";
 const [taskType, workspacePath, ...rest] = process.argv.slice(2);
 
 if ((taskType !== "work" && taskType !== "review" && taskType !== "interview") || !workspacePath) {
@@ -30,7 +32,6 @@ if ((taskType !== "work" && taskType !== "review" && taskType !== "interview") |
   process.exit(2);
 }
 
-const permittedSkills: string[] = [];
 const allowedDomains: string[] = [];
 const readPaths: string[] = [];
 let taskTemp: string | undefined;
@@ -56,7 +57,8 @@ for (let i = 0; i < rest.length; i += 1) {
   } else if (rest[i] === "--codex") {
     codex = true;
   } else {
-    permittedSkills.push(rest[i]!);
+    console.error(USAGE);
+    process.exit(2);
   }
 }
 
@@ -75,7 +77,6 @@ if (codex) {
 const input: WorkerSessionSettingsInput = {
   taskType,
   workspacePath,
-  permittedSkills,
   ...(allowedDomains.length > 0 && { allowedDomains }),
   taskTemp,
   lib64: existsSync("/lib64"),

@@ -416,6 +416,7 @@ it.each(["directory", "repository"])("根拠の root の面接室の在り処が
       mcpUrl: "http://127.0.0.1:1/mcp",
       logDir,
       enumerateSkills: async () => [],
+      enumerateHostSkills: async () => [],
     }), deps.clock),
   });
 

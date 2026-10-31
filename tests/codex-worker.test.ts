@@ -447,8 +447,8 @@ describe("CodexWorker (ADR 0098)", () => {
       advisor: null,
       harness: "codex",
       cli_version: CLI_VERSION,
-      // ADR 0325 決定6: Codex は skill を全部閉じるので、checkout の集合も許可した集合も空
-      skills: { workspace: [], permitted: [] },
+      // ADR 0325 決定6 / ADR 0335 決定3: Codex は skill を全部閉じるので、checkout の集合も同梱の集合も許可した集合も空
+      skills: { workspace: [], host: [], permitted: [] },
     });
   });
 

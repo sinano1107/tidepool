@@ -84,6 +84,9 @@ async function bootClaude(registryFiles: Record<string, string> = {}, extra: Par
         workspace: "tidepool",
         mcpUrl: "http://127.0.0.1:1/mcp",
         logDir: deps.transcripts.dir,
+        // `*` の agent も skill の ping を2本撃つ(ADR 0335 決定1)。この盤面の容器はそれに答えないので spawn の手前で済ませる
+        enumerateSkills: async () => [],
+        enumerateHostSkills: async () => [],
         ...extra,
       }),
     "anthropic",
@@ -131,7 +134,8 @@ const SKILLED_DECKHAND = {
     "---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\n" +
     "description: General work agent\nskills:\n  - code-review\n---\nYou are Deckhand.\n",
 };
-const bootClaudeAfterSkillEnumeration = () => bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"] });
+const bootClaudeAfterSkillEnumeration = () =>
+  bootClaude(SKILLED_DECKHAND, { enumerateSkills: async () => ["code-review"], enumerateHostSkills: async () => ["code-review"] });
 
 const HARNESSES = [
   ["Claude", () => bootClaude()],
@@ -200,6 +204,7 @@ const NON_OPEN_FAILURES = [
     async () =>
       bootClaude(SKILLED_DECKHAND, {
         enumerateSkills: async () => ["code-review"],
+        enumerateHostSkills: async () => ["code-review"],
         logDir: join(await tempDir("transcript-failure-logs-"), "gone"),
       }),
   ],

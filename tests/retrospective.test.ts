@@ -2275,12 +2275,13 @@ it("完了の行への異議には session の呼び出しが全部、記憶の�
   expect((await write.judged()).map((i) => i.skills_followed?.map((s) => [s.name, s.position]))).toEqual([[["deploy", 0]]]);
 });
 
-it.each<[string, string[] | "all", object]>([
+it.each<[string, string[], object]>([
   ["有限の許可", ["deploy", "dataviz"], { workspace: ["deploy"], host: ["dataviz"] }],
-  ["*", "all", { workspace: ["deploy"], host: ["dataviz", "debug"] }],
-])("skills は worker が見た集合と許可した集合(%s)の共通部分を、spawn 記録の checkout の集合で workspace / host に分ける(ADR 0325 決定2)", async (_shape, permitted, skills) => {
-  const b = await skillBoard({ skills: { workspace: ["deploy", "lint"], permitted } });
-  b.transcript([skillsInit(["deploy", "dataviz", "debug"])]);
+  ["*", ["deploy", "lint", "dataviz", "debug"], { workspace: ["deploy"], host: ["dataviz", "debug"] }],
+  ["どちらの列にも無い名前を含む", ["deploy", "ext"], { workspace: ["deploy"], host: [] }],
+])("skills は worker が見た集合と許可した集合(%s)の共通部分を、spawn 記録の workspace / host の2列で分ける(ADR 0335 決定3)", async (_shape, permitted, skills) => {
+  const b = await skillBoard({ skills: { workspace: ["deploy", "lint"], host: ["dataviz", "debug"], permitted } });
+  b.transcript([skillsInit(["deploy", "dataviz", "debug", "ext"])]);
 
   expect((await b.judged()).map((i) => i.skills)).toEqual([skills]);
 });
@@ -2305,7 +2306,7 @@ it("transcript の無い session への異議は skills と skills_followed が 
 });
 
 it("第2回の帰責と Behavior candidate の起草の入力も、初回と同じ skill の欄を持つ(ADR 0325 決定3)", async () => {
-  const b = await skillBoard();
+  const b = await skillBoard({ skills: { workspace: [], host: ["deploy"], permitted: ["deploy"] } });
   b.transcript([skillsInit(["deploy"]), ...skillCall(1, "deploy", "Run make deploy."), ...toolCall(2, "mcp__tidepool__log_decision", b.decision)]);
   const client = new FakeAttributionClient();
   const drafter = new FakeBehaviorDraftClient();

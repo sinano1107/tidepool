@@ -81,6 +81,7 @@ async function bootClaude(options: { provider?: Provider; modelProbes?: Partial<
         moonshotApiKeyFile,
         // Interview の pin の子は skill の allowlist を持つ agent で走るので、列挙の ping を spawn の手前で済ませる
         enumerateSkills: async () => [],
+        enumerateHostSkills: async () => [],
       });
       return withHealthyUsage(worker, deps.clock);
     },
