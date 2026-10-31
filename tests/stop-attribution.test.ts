@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -370,6 +370,50 @@ it("a failing Board call leaves failure events, halts after 3 as a stop row with
   expect(listHaltedRefires(b.db)).toEqual([]);
 });
 
+/** 停止された session の stream の path を directory にした記録の dir(読むと EISDIR)。 */
+async function unreadableStream(b: ReturnType<typeof fixture>): Promise<string> {
+  const recordDir = await tempDir("tidepool-records-");
+  mkdirSync(join(recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`));
+  return recordDir;
+}
+
+it("a stop whose session transcript cannot be read (not ENOENT) is never judged: failure events say the input could not be built, and it halts after 3 as the stop's row (ADR 0336 決定1・4)", async () => {
+  const b = fixture();
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  const deps = { ...b.deps, recordDir: await unreadableStream(b) };
+  for (const hour of [0, 1, 2, 3]) await b.sweep(new Date(at.getTime() + hour * HOUR), deps);
+
+  expect(b.client.stopCalls).toEqual([]);
+  const unbuilt = expect.stringMatching(/^Input could not be built: .*EISDIR/);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "stop_attribution_failed").map((e) => e.payload)).toEqual(
+    Array(3).fill({ kind: "stop_attribution_failed", stop_event_id: b.stopEvent().id, reason: unbuilt }),
+  );
+  expect(listHaltedRefires(b.db)).toEqual([
+    expect.objectContaining({ refire: "stop_attribution", target: b.stopEvent().id, last_failure: { reason: unbuilt, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
+  ]);
+});
+
+it("a draft from a stop judgment whose session transcript cannot be read (not ENOENT) never fires the drafter: failure events say the input could not be built, and it halts after 3 (ADR 0336 決定1・4)", async () => {
+  const b = fixture();
+  b.client.scriptStopJudgment({ cause: "preference", evidence: "e" });
+  recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
+  b.exit();
+  await b.sweep(); // 起草 client の無い盤面で判定だけ
+  const judgment = b.judgments()[0]!.id;
+  const { drafter, deps } = withDrafter(b, { recordDir: await unreadableStream(b) });
+  for (const hour of [0, 1, 2, 3]) await b.sweep(new Date(at.getTime() + hour * HOUR), deps);
+
+  expect(drafter.stopCalls).toEqual([]);
+  const unbuilt = expect.stringMatching(/^Input could not be built: .*EISDIR/);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual(
+    Array(3).fill({ kind: "memory_draft_failed", stop_event_id: b.stopEvent().id, round: "initial", attribution_event_id: judgment, reason: unbuilt }),
+  );
+  expect(listHaltedRefires(b.db)).toEqual([
+    expect.objectContaining({ refire: "draft", target: judgment, last_failure: { reason: unbuilt, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
+  ]);
+});
+
 it("the history's stop row carries the judgment's cause and evidence", async () => {
   const b = fixture();
   recordHumanStop(b.db, b.task.id, "deleting unrelated files", at, "webui");
@@ -689,7 +733,7 @@ it("a failing draft from a stop judgment leaves failure events naming the stop, 
 
   expect(drafter.stopCalls).toHaveLength(3);
   expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual(
-    Array(3).fill({ kind: "memory_draft_failed", stop_event_id: b.stopEvent().id, round: "initial", attribution_event_id: judgment, reason: "CLI exited 1" }),
+    Array(3).fill({ kind: "memory_draft_failed", stop_event_id: b.stopEvent().id, round: "initial", attribution_event_id: judgment, reason: "Board call failed: CLI exited 1" }),
   );
   expect(listHaltedRefires(b.db)).toEqual([
     {
@@ -699,7 +743,7 @@ it("a failing draft from a stop judgment leaves failure events naming the stop, 
       cause: "preference",
       round: "initial",
       task: { id: b.task.id, title: "parser" },
-      last_failure: { reason: "CLI exited 1", at: new Date(at.getTime() + 2 * HOUR).toISOString() },
+      last_failure: { reason: "Board call failed: CLI exited 1", at: new Date(at.getTime() + 2 * HOUR).toISOString() },
     },
   ]);
 

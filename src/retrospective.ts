@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID, isNonAgentActorId } from "./actor-id.js";
-import { type AllocationClient, type AllocationJudgment, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
-import { type BoardCallAnswer, type BoardCallSetting, recordedAnswer } from "./board-call-usage.js";
+import { type AllocationClient, type AllocationTarget, allocationInput, allocationTargets } from "./allocation-review.js";
+import { type BoardCallAnswer, type BoardCallSetting, type QuarantinableBoardCallUse, recordedAnswer } from "./board-call-usage.js";
 import { BOARD_TEXT_PARTS, type RecordedDefinition, recordedDefinition } from "./board-prose.js";
 import type { Cause } from "./cause.js";
 import { quarantineBoardCallRefusal } from "./cli-auth.js";
@@ -432,6 +432,30 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
   return !dismissed && n < MAX_FIRED_FAILURES && (last === null || now.getTime() - Date.parse(last) >= REFIRE_INTERVAL_MS);
 }
 
+/** 撃つ区間(ADR 0336 決定1・3): 撃てると決めた call で入力を組み、判事を撃ち、結果を記録する。区間の中の throw はどの段でも撃って失敗した ——
+ *  行の拒否と 401 は Quarantine に回して何も書かず(ADR 0202・0205)、それ以外は壊れた段の接頭辞つきの reason で失敗 event を書く(ADR 0336 決定4)。
+ *  記録できたら記録の戻り値を、失敗なら undefined を返す。 */
+async function fireSpan<C, I, A, R>(
+  db: Db,
+  { client, setting }: { client: C; setting: ExecutionSettingRow },
+  use: QuarantinableBoardCallUse,
+  taskId: string,
+  now: Date,
+  steps: { build: () => I; judge: (client: C, input: I, setting: ExecutionSettingRow) => Promise<BoardCallAnswer<A>>; record: (answer: A, input: I) => R; failed: (reason: string) => void },
+): Promise<R | undefined> {
+  let stage = "Input could not be built: ";
+  try {
+    const input = steps.build();
+    stage = "Board call failed: ";
+    const answer = await recordedAnswer(db, use, now, steps.judge(client, input, setting));
+    stage = "Result could not be recorded: ";
+    return steps.record(answer, input);
+  } catch (err) {
+    if (!quarantineBoardCallRefusal(db, err, use, taskId, now)) steps.failed(`${stage}${message(err)}`);
+    return undefined;
+  }
+}
+
 /** commit の前半(spec #563「commit の流れ」): open session の異議されたエントリを
  *  1度だけ集め、Board call を並列に問う。transaction の外で待ち、結果の map を持って
  *  従来の transaction に入る。撃てなかった・撃って失敗した entry は map に載らず(判断ではない)、
@@ -451,34 +475,29 @@ export async function attributeObjections(
   const call = boardCallSetting(db, deps.attributionClient, deps.containers);
   if ("unavailable" in call) return judgments;
   await Promise.all(
-    objected.map(async (o) => {
-      try {
-        // 入力の組み立て(記録の読み出しを含む)も守りの内側 —— 落ちても commit を止めない
-        const input: AttributionInput = {
-          entry_id: o.entry.id,
-          entry: logRow(o.entry),
-          actor: o.entry.actor_id,
-          steering: o.comments,
-          decision_log: decisionLogRows(db, o.entry.task_id),
-          ...sessionReads(db, deps.recordDir, o.entry),
-          ...writtenBodies(db, o.entry),
-          ...sessionHumanStop(db, o.entry),
-        };
-        const through = taskDecisionLog(db, o.entry.task_id).at(-1)!.id;
-        const judgment = await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting));
-        judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through });
-      } catch (err) {
-        if (quarantineBoardCallRefusal(db, err, "attribution", o.entry.task_id, now)) return;
-        const payload = {
-          kind: "objection_attribution_failed" as const,
-          entry_id: o.entry.id,
-          objection_event_id: bundleName(o),
-          round: "initial" as const,
-          reason: `Board call failed: ${message(err)}`,
-        };
-        appendEvent(db, { taskId: o.entry.task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
-      }
-    }),
+    objected.map((o) =>
+      fireSpan(db, call, "attribution", o.entry.task_id, now, {
+        build: () => ({
+          input: {
+            entry_id: o.entry.id,
+            entry: logRow(o.entry),
+            actor: o.entry.actor_id,
+            steering: o.comments,
+            decision_log: decisionLogRows(db, o.entry.task_id),
+            ...sessionReads(db, deps.recordDir, o.entry),
+            ...writtenBodies(db, o.entry),
+            ...sessionHumanStop(db, o.entry),
+          } satisfies AttributionInput,
+          through: taskDecisionLog(db, o.entry.task_id).at(-1)!.id,
+        }),
+        judge: (client, { input }, setting) => client.judge(input, setting),
+        record: (judgment, { input, through }) => void judgments.set(o.entry.id, { ...gate(judgment, input), decision_log_through: through }),
+        failed: (reason) => {
+          const payload = { kind: "objection_attribution_failed" as const, entry_id: o.entry.id, objection_event_id: bundleName(o), round: "initial" as const, reason };
+          appendEvent(db, { taskId: o.entry.task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+        },
+      }),
+    ),
   );
   return judgments;
 }
@@ -535,31 +554,19 @@ async function attributeSecondRound(db: Db, deps: RetrospectiveCallDeps, objecte
     if (!refireDue(db, { refire: "second_round", target: bundleName(source) }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = secondRoundInput(db, deps.recordDir, objectedId, source);
-    let judgment: GatedJudgment;
-    try {
-      judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judge(input, call.setting)), input);
-    } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "attribution", objectedId, now)) return;
-      const payload = {
-        kind: "objection_attribution_failed" as const,
-        entry_id: source.entry_id,
-        objection_event_id: bundleName(source),
-        round: "after_rca" as const,
-        reason: `Board call failed: ${message(err)}`,
-      };
+    const append = (payload: Extract<EventPayload, { kind: "objection_attributed" | "objection_attribution_failed" }>) =>
       appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
-      return;
-    }
-    const payload = {
-      kind: "objection_attributed" as const,
-      entry_id: source.entry_id,
-      objection_event_ids: source.objection_event_ids,
-      ...judgment,
-      round: "after_rca" as const,
-    };
-    const id = appendEvent(db, { taskId: objectedId, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
-    await draftBehaviorCandidate(db, deps, { id, ...payload }, now);
+    const judged = await fireSpan(db, call, "attribution", objectedId, now, {
+      build: () => secondRoundInput(db, deps.recordDir, objectedId, source),
+      judge: (client, input, setting) => client.judge(input, setting),
+      record: (judgment, input) => {
+        const payload = { kind: "objection_attributed" as const, entry_id: source.entry_id, objection_event_ids: source.objection_event_ids, ...gate(judgment, input), round: "after_rca" as const };
+        return { id: append(payload), ...payload };
+      },
+      failed: (reason) => append({ kind: "objection_attribution_failed", entry_id: source.entry_id, objection_event_id: bundleName(source), round: "after_rca", reason }),
+    });
+    // 判定の直後の起草は別の撃ち(ADR 0336 決定1)—— 区間の外で撃つ
+    if (judged) await draftBehaviorCandidate(db, deps, judged, now);
   });
 }
 
@@ -579,25 +586,21 @@ function secondRoundInput(db: Db, recordDir: string | undefined, objectedId: str
 const fireAndForget = (fired: Promise<void>, target: string) => void fired.catch((err) => console.error(`[retrospective] ${target}: ${String(err)}`));
 
 /** 配分評価を1 review ぶん撃つ(ADR 0172): 判断が返れば注釈を被レビュー task に載せ、撃てなかったら何も書かず、
- *  撃って失敗したら `allocation_review_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。入力が組めないのは撃って失敗したのではないので投げる。 */
+ *  撃って失敗したら `allocation_review_failed` だけを残す(行の拒否と 401 は除く、ADR 0202・0205)。入力の組み立ても撃つ区間の中で、組めなければ撃って失敗した(ADR 0336 決定1)。 */
 async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: AllocationTarget, now: Date): Promise<void> {
   await singleFlight(db, `allocation:${target.completed_event_id}`, async () => {
     if (!refireDue(db, { refire: "allocation", target: target.completed_event_id }, now)) return;
     const call = boardCallSetting(db, deps.allocationClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = allocationInput(db, target);
     const { review_task_id, reviewed_task_id } = target;
-    const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
-    let judgment: AllocationJudgment;
-    try {
-      judgment = await recordedAnswer(db, "allocation_review", now, call.client.judge(input, call.setting));
-    } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "allocation_review", reviewed_task_id, now)) return;
-      record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason: message(err) });
-      return;
-    }
+    const append = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     const { provider, model, effort } = call.setting;
-    record({ kind: "allocation_reviewed", review_task_id, worker_spawned_event_id: target.spawned_event_id, judge: { provider, model, effort }, ...judgment });
+    await fireSpan(db, call, "allocation_review", reviewed_task_id, now, {
+      build: () => allocationInput(db, target),
+      judge: (client, input, setting) => client.judge(input, setting),
+      record: (judgment) => append({ kind: "allocation_reviewed", review_task_id, worker_spawned_event_id: target.spawned_event_id, judge: { provider, model, effort }, ...judgment }),
+      failed: (reason) => append({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason }),
+    });
   });
 }
 
@@ -611,23 +614,23 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTa
     if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const input = stopInput(db, deps.recordDir, target, round);
-    const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
+    const append = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
       appendEvent(db, { taskId: task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
-    let judgment: GatedJudgment;
-    try {
-      judgment = gate(await recordedAnswer(db, "attribution", now, call.client.judgeStop(input, call.setting)), input);
-    } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "attribution", task_id, now)) return;
-      record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason: `Board call failed: ${message(err)}` });
-      return;
-    }
-    const judged = db.transaction(() => {
-      const id = record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round });
-      if (round === "initial" && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, now);
-      return getEvent(db, id) as EventRowOf<"stop_attributed">;
-    })();
-    await draftStopBehaviorCandidate(db, deps, target, judged, now);
+    const judged = await fireSpan(db, call, "attribution", task_id, now, {
+      build: () => stopInput(db, deps.recordDir, target, round),
+      judge: (client, input, setting) => client.judgeStop(input, setting),
+      record: (answer, input) => {
+        const judgment = gate(answer, input);
+        return db.transaction(() => {
+          const id = append({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round });
+          if (round === "initial" && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, now);
+          return getEvent(db, id) as EventRowOf<"stop_attributed">;
+        })();
+      },
+      failed: (reason) => append({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason }),
+    });
+    // 判定の直後の起草は別の撃ち(ADR 0336 決定1)—— 区間の外で撃つ
+    if (judged) await draftStopBehaviorCandidate(db, deps, target, judged, now);
   });
 }
 
@@ -662,7 +665,7 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
     decisions: episode.markers.flatMap(({ kind, eventId, position, line }) => {
       if (kind !== "decision") return [];
-      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けていれば入力を組まずに投げる
+      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けていれば入力を組まずに投げる —— Board call の経路では Input could not be built の失敗に数える(ADR 0336 決定1・4)
       if (eventId === null || line === null) throw new Error(`decision marker of spawn ${spawnedId} lacks its event id or line`);
       return [{ id: eventId, position, line }];
     }),
@@ -754,7 +757,7 @@ function refireTargets(db: Db): RefireTarget[] {
 
 /** sweep(ADR 0164 決定1・4): 第2回の帰責・起草・配分評価を撃つ唯一の契機(ADR 0169 決定1 / ADR 0172 決定1)。pickup の poll が同期で呼び、
  *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
- *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
+ *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `draftStopBehaviorCandidate` / `attributeSecondRound` / `attributeStop` / `reviewAllocation`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
 export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
@@ -945,7 +948,7 @@ async function draftStopBehaviorCandidate(db: Db, deps: RetrospectiveCallDeps, t
   }, now);
 }
 
-/** 起草の出所: 帰責 event、学ぶ worker とその task、失敗 event が指す材料、入力を組んで(組めなければ投げる)起草 client を撃つ口。 */
+/** 起草の出所: 帰責 event、学ぶ worker とその task、失敗 event が指す材料、入力を組んで起草 client を撃つ口(撃つ区間の中で呼ぶ —— 組めなければ撃って失敗した、ADR 0336 決定1)。 */
 type DraftSource = {
   attribution: { id: number; cause: Cause; round: AttributionRound };
   taskId: string;
@@ -960,7 +963,7 @@ type DraftSource = {
  *  `task_ambiguity` / `missing_information`、ADR 0164 決定2)・workspace の無い task は何もしない。主題つきの task の行は scope null
  *  (盤面全体)に起草し、INDEX もその視界で組む(ADR 0279 決定1)。宛先は cause から導出し
  *  (ADR 0115 決定4)、Board call の `addressee` は `preference` だけが読む。撃てなかったら何も書かず、
- *  撃って失敗したら —— 書き込みが一木の門(ADR 0178)に当たったときも —— `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
+ *  撃って失敗したら —— 入力が組めないときも、書き込みが一木の門(ADR 0178)に当たったときも(ADR 0336 決定1)—— `memory_draft_failed` を残す(ADR 0164 決定3。行の拒否と 401 は除く、ADR 0202・0205)。poll の sweep が fire-and-forget で撃つ
  *  (第2回と停止の帰責は判定の追記の直後、ADR 0169)ので poll を止めない。 */
 async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution, taskId, worker, material, prepare }: DraftSource, now: Date): Promise<void> {
   const { cause, round } = attribution;
@@ -988,37 +991,39 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   }
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
-    // 入力が組めない帰責(出所の異議が壊れている)は撃って失敗したのではないので、失敗 event に畳まず投げる
-    const fire = prepare();
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
     if ("unavailable" in call) return;
-    // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
-    const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
-    const index = memoryIndex(db, task, scope, worker, query).section;
-    try {
-      const { addressee, ...fields } = await recordedAnswer(db, "behavior_draft", now, fire(call.client, index, call.setting));
-      createBehaviorCandidate(
-        db,
-        {
-          ...fields,
-          scope,
-          addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : worker,
-          source: { event_id: attribution.id },
-          author: { activity: "board", name: BOARD_ACTOR_ID },
-        },
-        "board",
-        now,
-      );
-    } catch (err) {
-      if (quarantineBoardCallRefusal(db, err, "behavior_draft", taskId, now)) return;
-      appendEvent(db, {
-        taskId,
-        actorId: BOARD_ACTOR_ID,
-        origin: "board",
-        payload: { kind: "memory_draft_failed", ...material, round, attribution_event_id: attribution.id, reason: message(err) },
-        at: now,
-      });
-    }
+    await fireSpan(db, call, "behavior_draft", taskId, now, {
+      build: () => {
+        const fire = prepare();
+        // INDEX は撃つ時点のもの(ADR 0164 決定4)。関連 leaf は spawn 時の view で引き、ここでは訳さない(ADR 0175 決定6)
+        const query = latestEventOfTask(db, taskId, "memory_injected")?.payload.query;
+        return { fire, index: memoryIndex(db, task, scope, worker, query).section };
+      },
+      judge: (client, { fire, index }, setting) => fire(client, index, setting),
+      record: ({ addressee, ...fields }) => {
+        createBehaviorCandidate(
+          db,
+          {
+            ...fields,
+            scope,
+            addressee: derived?.kind === "behavior" ? derived.addressee : addressee === "all" ? null : worker,
+            source: { event_id: attribution.id },
+            author: { activity: "board", name: BOARD_ACTOR_ID },
+          },
+          "board",
+          now,
+        );
+      },
+      failed: (reason) =>
+        appendEvent(db, {
+          taskId,
+          actorId: BOARD_ACTOR_ID,
+          origin: "board",
+          payload: { kind: "memory_draft_failed", ...material, round, attribution_event_id: attribution.id, reason },
+          at: now,
+        }),
+    });
   });
 }
 
