@@ -1,6 +1,6 @@
 ---
 name: ponytail-implementer
-description: Carry out implementation tasks with ponytail, then review the changes for over-engineering.
+description: Carry out implementation tasks with ponytail, then review the changes with ponytail-review.
 model: inherit
 ---
 
