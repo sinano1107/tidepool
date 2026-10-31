@@ -1009,8 +1009,9 @@ function placeholderSpawnConfig(
 
 /** Worker MCP 到達性の probe(ADR 0331 決定8)の Codex 側。worker と同じ `codex exec` の形と、同じ spawnConfig を
  *  placeholder で組んだ設定(`mcp_servers.tidepool.required=true` を含む)で `url` の listener へ繋ぐ。成立は
- *  `thread.started` の観測で、見えた時点で止める(モデルのターンを払わない)。実測(0.163.0、sandbox の設定なし、#2701):
- *  届かなければ `required MCP servers failed to initialize: tidepool` で exit 1、届けば `thread.started` が先に出る。
+ *  `thread.started` の観測で、見えた時点で止める(モデルのターンを払わない)。実測(0.163.0、#2701。macOS で sandbox
+ *  無し、Linux で worker と同じ permission profile): 届かなければ `required MCP servers failed to initialize: tidepool` で exit 1、
+ *  届けば `thread.started` が先に出る。盤面の扉が拒んだ応答のメッセージ(`unknown probe id`)は stderr にそのまま出る。
  *  thread.started 無しの exit / timeout は不成立で、理由に stderr の末尾。 */
 export function codexMcpReachabilityThrough(options: { executable: string; codexHome: string; call: BoardCall }) {
   return async (url: string): Promise<ContainmentCapability> => {
