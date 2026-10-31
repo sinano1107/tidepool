@@ -379,9 +379,9 @@ export interface CodexWorkerOptions {
   onSpawnFailed?: (taskId: string, failure: { error_code: string | null; message: string }) => void;
   /** ADR 0266 決定4: transcript の open が記録の器に書けなかった pickup を受ける盤面側の一撃(`recordContainerHaltHandler` 製)。 */
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
-  /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が先頭へ戻す。 */
+  /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が `todo` へ戻す。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
-  /** ADR 0331 決定2: 資源の署名を持つ0ターンの session を先頭へ戻す盤面側の一撃(`queueReturnHandler` 製)。 */
+  /** ADR 0331 決定2: 資源の署名を持つ0ターンの session を `todo` へ戻す盤面側の一撃(`queueReturnHandler` 製)。 */
   onSessionStoppedByResource?: (taskId: string, payload: SessionStoppedByResource) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
@@ -1271,7 +1271,7 @@ export class CodexWorker implements WorkerAdapter {
 
   start(task: Task, setting: ExecutionSetting, query?: InjectionQuery): Promise<void> | undefined {
     const registry = loadRegistry(this.options.registry.dir, this.options.registry.mode);
-    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が先頭へ戻す
+    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が `todo` へ戻す
     const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,

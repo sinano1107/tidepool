@@ -1570,7 +1570,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     // into quarantine rather than throwing out of start() — defense in depth
     // alongside the scheduler's own pre-pickup gate, which is what
     // ordinarily catches this before start() is ever called.
-    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が先頭へ戻す
+    // ADR 0274: 資源の Quarantine で spawn まで届かなかった pickup は盤面が `todo` へ戻す
     const stopped = (stop: ResourceStop) => this.options.onPickupStopped?.(task.id, { kind: "pickup_stopped", ...stop });
     const workspace = resolveOrQuarantine(
       this.options.db,
@@ -2189,7 +2189,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
           this.containers.reclaimed(task.id),
         );
       }
-      // ADR 0331 決定2・4: 資源の署名を持つ0ターンの session は、止めた資源を上で登録済みのまま同じ位置で先頭へ戻す。
+      // ADR 0331 決定2・4: 資源の署名を持つ0ターンの session は、止めた資源を上で登録済みのまま、ここで `todo` へ戻す。
       // ターンが走った session は下の exit の一撃(failure question)へ —— 資源の question と2枚になる
       const resourceStop = authStop ?? initStop;
       if (resourceStop && !streamObserved.turnRan) {
@@ -2226,7 +2226,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
    *  「このセッションは走らせない(fail-open しない)」である。ずれが広い側なら
    *  worker は持つべきでない能力を持ったまま走ることになり、狭い側なら能力を1つ
    *  失って詰まるだけなので、どちらの向きも走らせる理由がない。回収で root が exit
-   *  すると、0ターンの session は failure question を立てずに todo の先頭へ戻る(ADR 0331 決定4)——
+   *  すると、0ターンの session は failure question を立てずに todo へ戻る(ADR 0331 決定4)——
    *  封じ込めの確認 question 1枚だけが立つ。
    *  畳み込み停止ではなく**強制回収**なのは、猶予の目的が「エージェントに畳ませる」
    *  ことであり、ここで止めたい相手がまさにその「これ以上動くこと」だから。回収は

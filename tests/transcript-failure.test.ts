@@ -140,7 +140,7 @@ const HARNESSES = [
 ] as const;
 
 for (const [harness, boot] of HARNESSES) {
-  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、盤面全体が記録の器の停止で止まり、踏んだ task は todo の先頭へ戻る —— 器が直って回答すれば先頭から走り直す`, async () => {
+  it(`${harness} adapter: transcript を開けない pickup は process を起こさず、盤面全体が記録の器の停止で止まり、踏んだ task は位置を変えずに todo へ戻る —— 器が直って回答すれば同じ位置から走り直す`, async () => {
     const { proc, transcriptDir } = await boot();
     await rm(transcriptDir, { recursive: true });
     const task = queueWork(t, "no transcript");
@@ -166,7 +166,7 @@ for (const [harness, boot] of HARNESSES) {
     const halt = await servedQuarantineQuestion(t, "recordContainer", null);
     expect((await questions(t)).map((q: any) => q.id)).toEqual([halt.id]);
     expect(halt.purpose).toContain(task.id);
-    expect(halt.purpose).toContain("returned to the queue head");
+    expect(halt.purpose).toContain("returned to the queue in its current place");
     expect(queue.tasks.filter((x: any) => x.type === "work").map((x: any) => [x.id, x.status])).toEqual([
       [task.id, "todo"],
       [behind.id, "todo"],

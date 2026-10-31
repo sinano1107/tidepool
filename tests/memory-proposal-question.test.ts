@@ -546,7 +546,7 @@ it("修正値の宛先が registry に無い approve は HTTP・管理MCP の両
 it("candidate の宛先や scope が registry から消えた後の修正なしの approve は両方の面で拒まれ、宛先は生きた名前へ修正すれば通り、scope が消えた candidate は修正でも通らない(ADR 0173 決定2)", async () => {
   const agents = new Set(["deckhand", "anemone"]);
   const workspaces = new Set(["reef"]);
-  // slot の meta-review が走り続けるよう、既定の workspace は本物の checkout(準備が落ちれば先頭へ戻る、ADR 0274)
+  // slot の meta-review が走り続けるよう、既定の workspace は本物の checkout(準備が落ちれば todo へ戻る、ADR 0274)
   const board = await boardWithMetaReview(undefined, registryOf(agents, workspaces, (await makeWorkspace("tidepool")).path));
   try {
     const addressed = await board.propose(board.ids[0]!);

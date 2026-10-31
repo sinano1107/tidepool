@@ -517,16 +517,17 @@ it("Claude adapter: 上限到達による中断で exit した session には、
   await settle();
 
   expect(await questions(t)).toEqual([]);
-  // queue 先頭へ戻り、そのまま拾い直される
+  // todo へ戻り、ほかに候補が無いのでそのまま拾い直される
   expect(await status(task.id)).toBe("in_progress");
   expect(proc.calls).toHaveLength(2);
 });
 
-it("Claude adapter: tool surface drift で回収された0ターンの session は、Containment quarantine の確認 question 1枚で todo の先頭へ戻り、この failure question は立たない(ADR 0331 決定4)", async () => {
+it("Claude adapter: tool surface drift で回収された0ターンの session は、Containment quarantine の確認 question 1枚で位置を変えずに todo へ戻り、この failure question は立たない(ADR 0331 決定4)", async () => {
   const proc = await bootClaude();
   const drifted = queueWork(t, "drifted");
   await t.clock.advance(HOUR);
-  await moveToHead(queueWork(t, "queued after"));
+  const after = queueWork(t, "queued after");
+  await moveToHead(after);
 
   proc.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", tools: ["Bash", "Read", "CronCreate"], mcp_servers: [] })}\n`);
   proc.emitExit(null, "SIGKILL");
@@ -535,7 +536,7 @@ it("Claude adapter: tool surface drift で回収された0ターンの session �
   expect((await questions(t)).map((q: any) => q.title).sort()).toEqual([
     "worker containment is not established — pickup is stopped",
   ]);
-  expect(await queueHead()).toBe(drifted.id);
+  expect(await queueHead()).toBe(after.id);
   expect((await stoppedByResource(drifted.id))?.payload).toMatchObject({ quarantine: "containment", value: null, reason: expect.stringContaining("CronCreate") });
 });
 
@@ -554,11 +555,12 @@ const moveToHead = (task: { id: string }) => api(t.baseUrl, "POST", `/api/tasks/
 /** queue の work 側の先頭。 */
 const queueHead = async () => ((await api(t.baseUrl, "GET", "/api/queue")).json.tasks as any[]).find((task) => task.type === "work")?.id;
 
-it("Claude adapter: 401 で終わった0ターンの session は、Provider 認証の確認 question 1枚で todo の先頭へ戻り、枠を空ける —— failure question は立たない(ADR 0331 決定2・4・9)", async () => {
+it("Claude adapter: 401 で終わった0ターンの session は、Provider 認証の確認 question 1枚で位置を変えずに todo へ戻り、枠を空ける —— failure question は立たない(ADR 0331 決定2・4・9)", async () => {
   const proc = await bootClaude();
   const task = queueWork(t, "unauthorized");
   await t.clock.advance(HOUR);
-  await moveToHead(queueWork(t, "queued after"));
+  const after = queueWork(t, "queued after");
+  await moveToHead(after);
 
   proc.processes[0]!.stdout.write(AUTH_401);
   proc.emitExit(1, null);
@@ -566,7 +568,7 @@ it("Claude adapter: 401 で終わった0ターンの session は、Provider 認�
 
   expect((await questions(t)).map((q: any) => q.title)).toEqual([AUTH_TITLE]);
   expect(await status(task.id)).toBe("todo");
-  expect(await queueHead()).toBe(task.id);
+  expect(await queueHead()).toBe(after.id);
   const spawned = (await timeline(task.id)).find((e) => e.kind === "worker_spawned");
   expect(await stoppedByResource(task.id)).toMatchObject({
     actor_id: "tidepool",
@@ -645,11 +647,12 @@ it.each([
   ["failed", [{ name: "tidepool", status: "failed" }], "as failed"],
   ["接続済みでない未知の値", [{ name: "tidepool", status: "needs-auth" }], "as needs-auth"],
   ["無い(mcp_servers が空)", [], "lists no `tidepool`"],
-])("Claude adapter: init 行の tidepool が %s の session は最初のターンの前に強制回収され、Worker MCP 到達性の確認 question 1枚で todo の先頭へ戻る —— failure question は立たない(ADR 0331 決定6・7)", async (_, servers, observed) => {
+])("Claude adapter: init 行の tidepool が %s の session は最初のターンの前に強制回収され、Worker MCP 到達性の確認 question 1枚で位置を変えずに todo へ戻る —— failure question は立たない(ADR 0331 決定6・7)", async (_, servers, observed) => {
   const proc = await bootClaude();
   const task = queueWork(t, "unreachable");
   await t.clock.advance(HOUR);
-  await moveToHead(queueWork(t, "queued after"));
+  const after = queueWork(t, "queued after");
+  await moveToHead(after);
 
   proc.processes[0]!.stdout.write(initWithMcpServers(servers));
   await vi.waitFor(() => expect(proc.forceReclaims).toEqual([task.id]));
@@ -661,7 +664,7 @@ it.each([
   expect([question.question_quarantine_kind, question.question_quarantine_value]).toEqual(["workerMcpReachability", "claude-code"]);
   expect(question.purpose).toContain(observed);
   expect(await status(task.id)).toBe("todo");
-  expect(await queueHead()).toBe(task.id);
+  expect(await queueHead()).toBe(after.id);
   expect((await stoppedByResource(task.id))?.payload).toMatchObject({
     quarantine: "workerMcpReachability",
     value: "claude-code",

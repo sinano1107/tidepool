@@ -679,7 +679,7 @@ it("行の拒否で落ちた session は、そのタスクが別の行で受理�
   expect({ refused: outcomeOf(refusedId), rerun: outcomeOf(rerunId) }).toEqual({ refused: "excluded", rerun: "accepted" });
 });
 
-it("資源の署名で先頭へ戻った0ターンの session は、そのタスクが次の session で受理されても excluded —— 行の拒否と同じ(ADR 0331 帰結、loadEpisodes)", () => {
+it("資源の署名で todo へ戻った0ターンの session は、そのタスクが次の session で受理されても excluded —— 行の拒否と同じ(ADR 0331 帰結、loadEpisodes)", () => {
   const b = bareBoard();
   const { task, spawnedId: stoppedId } = spawnedWork(b, "a");
   const at = b.clock.now();

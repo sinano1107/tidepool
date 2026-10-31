@@ -215,24 +215,24 @@ export type EventPayload =
   // ADR 0276 決定1・4: 盤面が受験者の最初の pickup で自分の checkout を面接室の外に作った —— path はその在り処(面接室と同じ形)
   | { kind: "examinee_checkout_opened"; path: string }
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
-  // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
+  // 位置を変えずに `todo` へ戻された(ADR 0333 決定1)。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
   // (GLOSSARY.md「上限到達による中断」)。
   | { kind: "cap_interrupted" }
   | { kind: "session_stopped_by_human"; reason?: string; reason_question_id?: string }
-  // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
-  // 戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
+  // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが位置を変えずに
+  // `todo` へ戻された。cap_interrupted は流用しない —— 上限到達による中断と読み違えないための専用の記録。
   | ({ kind: "row_refused" } & RowRefusal)
-  // 行でない Interview の対象の拒否(ADR 0199 決定4): 子は先頭へ戻らず対象の question が開くあいだ待つ
+  // 行でない Interview の対象の拒否(ADR 0199 決定4): 子は `todo` へ戻り、対象の question が開くあいだ pickup されない
   | ({ kind: "target_refused" } & (RowRefusal | ListedRefusal))
-  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに `todo` の先頭へ戻された。path は書けなかった先、
+  // ADR 0266 決定3: pickup で transcript を開けず(盤面の記録の器に書けず、ADR 0276 決定5 / ADR 0149 追記1)、タスクが失敗にされずに位置を変えずに `todo` へ戻された。path は書けなかった先、
   // reason は fs の例外の本文。盤面全体の停止(recordContainer)が開いている間は pickup されない
   | { kind: "record_container_unwritable"; path: string; reason: string }
-  // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに `todo` の先頭へ戻された。
+  // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに位置を変えずに `todo` へ戻された。
   // failure question は無い —— 資源の question がもう開いている
   | ({ kind: "pickup_stopped" } & ResourceStop)
-  // ADR 0331 決定2・9: process は起きたが0ターンで終わった session が資源の署名を持ち、止めた資源を先に登録して `todo` の先頭へ
-  // 戻された。pickup_stopped は流用しない —— 後始末が「process を持たなかった」と読み、checkout を休止位置へ戻さなくなる
+  // ADR 0331 決定2・9: process は起きたが0ターンで終わった session が資源の署名を持ち、止めた資源を先に登録して位置を変えずに
+  // `todo` へ戻された。pickup_stopped は流用しない —— 後始末が「process を持たなかった」と読み、checkout を休止位置へ戻さなくなる
   | ({ kind: "session_stopped_by_resource"; worker_spawned_event_id: number } & ResourceStop)
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.

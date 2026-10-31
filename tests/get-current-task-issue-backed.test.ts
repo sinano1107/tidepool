@@ -6,7 +6,7 @@ let t: Tidepool;
 afterEach(() => t?.stop());
 
 it("get_current_task はissue参照タスクの場合、spawn で展開した文面を返し、session 中に issue が変わっても読み直さない(ADR 0320 決定1)", async () => {
-  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば先頭へ戻る、ADR 0274)
+  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば todo へ戻る、ADR 0274)
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
 
   const task = registerTask(
@@ -39,7 +39,7 @@ it("get_current_task はissue参照タスクの場合、spawn で展開した文
 });
 
 it("issue の本文で purpose が予算を超えると、get_current_task は task の欄を history より先に partial の切れで返し、next を追うと purpose が逐語で戻り、その後に history が届く(ADR 0195 追記 #1393)", async () => {
-  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば先頭へ戻る、ADR 0274)
+  // 拾った task が slot に残るよう本物の checkout で準備を通す(準備が落ちれば todo へ戻る、ADR 0274)
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   const task = registerTask(t.db, { type: "work", workspace: "tidepool", github_issue_number: 1393 }, t.clock.now(), ...HUMAN_WEBUI);
   const body = '潮だまり"\n'.repeat(3_500); // 49,000 バイト

@@ -3,7 +3,7 @@ import { fakeContainers } from "./fakes.js";
 
 /** 盤面側 supervisor が持つ帳簿の寿命。session の終わりは回収済み観測である
  *  (ADR 0109 決定2)。同じ session id での再 open は retry・上限到達による中断からの
- *  先頭復帰で実際に起きる(GLOSSARY.md「Worker session」)。 */
+ *  todo への復帰で実際に起きる(GLOSSARY.md「Worker session」)。 */
 
 const SESSION = "task-1";
 

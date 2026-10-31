@@ -211,7 +211,7 @@ export const QUARANTINES = [
     kind: "recordContainer" satisfies HaltKind,
     scope: "board",
     // 断言するのは、どの task の・どの path への書き込みが・どの例外で落ちたか(reason)だけで、原因の所在は言わない(ADR 0266 決定3)。
-    // 踏んだ task がどうなったか(先頭へ戻った / 自分の failure question を持つ)は入口ごとに違うので、観測した入口が reason に書く
+    // 踏んだ task がどうなったか(`todo` へ戻った / 自分の failure question を持つ)は入口ごとに違うので、観測した入口が reason に書く
     prose: (_value: string | null, reason: string): QuarantineProse => ({
       title: "the board's record container cannot be written — pickup is stopped",
       purpose:

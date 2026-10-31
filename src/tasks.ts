@@ -1509,35 +1509,23 @@ export function moveTask(
 /** 走っていたタスクを失敗にせず `todo` へ戻す理由の event。 */
 export type QueueReturnPayload = Extract<EventPayload, { kind: "cap_interrupted" | "row_refused" | "target_refused" | "record_container_unwritable" | "pickup_stopped" | "session_stopped_by_resource" }>;
 
-/** 資源の Quarantine が worker の起動前に pickup を止めた先頭復帰(ADR 0274)。 */
+/** 資源の Quarantine が worker の起動前に pickup を止めた todo への復帰(ADR 0274)。 */
 export type PickupStopped = Extract<QueueReturnPayload, { kind: "pickup_stopped" }>;
 
-/** 0ターンで終わった session の、資源の署名による先頭復帰(ADR 0331 決定2・9)。 */
+/** 0ターンで終わった session の、資源の署名による todo への復帰(ADR 0331 決定2・9)。 */
 export type SessionStoppedByResource = Extract<QueueReturnPayload, { kind: "session_stopped_by_resource" }>;
 
-/** 上限到達による中断(GLOSSARY.md / ADR 0104 決定1・決定4): 走っていたタスクを
- *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
- *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
- *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
- *  行の拒否(ADR 0184 決定4)・盤面の記録の器が書けない pickup(ADR 0266 決定3)・資源の停止で worker が1度も走らなかった
- *  pickup(ADR 0274)も同じ一撃で、刻む event だけが違う。 */
-export function returnToQueueHead(
-  db: Db,
-  task: Task,
-  payload: QueueReturnPayload,
-  now: Date,
-): void {
-  db.transaction(() => {
-    returnToQueue(db, task, payload, now);
-    moveTask(db, task, null, now, BOARD_ACTOR_ID, "board");
-  })();
-}
-
-/** 走っていたタスクを位置を変えずに `todo` へ戻し、理由を盤面名義で刻む。行でない Interview の対象の拒否(ADR 0199 決定4)は
- *  先頭へ戻さない —— 対象の question が開いているあいだ pickup されない。 */
+/** 走っていたタスクを失敗にせず `todo` へ戻し、理由を盤面名義で1件刻む。位置は変えない —— キュー順を動かすのは登録と人間の行為だけで、
+ *  盤面は判断していないものを「次に走れ」と言わない(ADR 0333 決定1・2)。上限到達による中断(ADR 0104 決定1・決定4)・行の拒否
+ *  (ADR 0184 決定4)・盤面の記録の器が書けない pickup(ADR 0266 決定3)・資源の停止(ADR 0274 / ADR 0331 決定2)は刻む event だけが
+ *  違う。失敗ではないので failure question(`registerFailureQuestion`)は立たず失敗統計も生まれない —— 中断の再開の門は次の pickup の
+ *  Throttle である。行でない Interview の対象の拒否(ADR 0199 決定4)は、対象の question が開いているあいだ pickup されない。 */
 export function returnToQueue(db: Db, task: Task, payload: QueueReturnPayload, now: Date): void {
-  db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
-  appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+  // 中断の後始末(`teardownStep` の transition)は transaction の外から呼ぶ
+  db.transaction(() => {
+    db.prepare("UPDATE tasks SET status = 'todo' WHERE id = ?").run(task.id);
+    appendEvent(db, { taskId: task.id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+  })();
 }
 
 function fractionalKeyAfter(db: Db, task: Task, after: Task | null): number {
