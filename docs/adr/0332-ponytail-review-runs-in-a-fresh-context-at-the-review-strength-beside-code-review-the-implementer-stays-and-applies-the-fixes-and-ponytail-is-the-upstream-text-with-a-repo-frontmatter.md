@@ -23,8 +23,8 @@
    書かれただけで、ADR は無かった。
 8. **コメントは上流の「コードからは読めない why だけを1行で」に従う。記録された決定に由来する why は宛先(`ADR N 決定M`)を
    名指す。** 宛先の規約は repo 直下の `CODING_STANDARDS.md` に置き、implementer と `/code-review` の Standards 軸が読む。
-   ADR 番号は、書き換えの前にコードからの引用を数える grep の宛先になる(`docs/agents/domain.md`)。宛先だけで why を書かないと、
-   読み手は理由を知るために ADR を開くことになる。既存コメントの扱いは #2764。
+   ADR 番号と決定N は引用の宛先(`docs/agents/domain.md`)であり、コードに書けば、その箇所も書き換えの前に数える引用元になる。
+   宛先だけで why を書かないと、読み手は理由を知るために ADR を開くことになる。既存コメントの扱いは #2764。
 
 ## Considered options
 
