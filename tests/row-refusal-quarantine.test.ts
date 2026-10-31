@@ -629,6 +629,8 @@ it("行でない対象を pin した子が 404 で断られると、対象を名
   const timeline = await events(medium!);
   const spawned = timeline.filter((e) => e.kind === "worker_spawned");
   expect(timeline.find((e) => e.kind === "target_refused")?.payload).toMatchObject({ provider: "anthropic", model: "claude-sonnet-5-5", worker_spawned_event_id: spawned[0].id, cause: "api_404" });
+  // 対象の拒否も盤面名義の task_moved を書かない(ADR 0333 決定2)
+  expect(timeline.slice(timeline.findIndex((e) => e.kind === "target_refused")).map((e) => e.kind)).not.toContain("task_moved");
   // 対象の question が開いているあいだ、同じ (provider, model) の子は pickup されない
   expect([await queueStatus(medium!), await queueStatus(low!)]).toEqual(["skipped", "skipped"]);
   // 兄弟の子は次の pickup で走る
