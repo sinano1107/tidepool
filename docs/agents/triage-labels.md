@@ -35,6 +35,8 @@ Orthogonal to the five roles above: every open issue carries exactly one `priori
 its state role. The meaning is relative to a **named gate** (ADR 0244) — the label ranks what stands
 between the repo and that gate, not urgency in the abstract. This is the tracker's "issue priority";
 the board's 「優先順位」 (a task's `quality` / `cost` key, ADR 0114) is a different thing.
+The exception is a `/wayfinder` map and its tickets: they carry only `wayfinder:` labels, because they
+hold decisions, not work queued against the gate.
 
 **Current gate: start real use on the maintainer's own Mac — #1879.** When the gate is passed, write
 the next gate on this line first, then relabel every open issue; until then the old labels are not read.
