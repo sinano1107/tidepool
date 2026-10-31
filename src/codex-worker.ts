@@ -44,13 +44,13 @@ import {
 import { META_REVIEW_SUBJECTS, WORKER_MEMORY_VERBS } from "./meta-review.js";
 import { markProjectionPending, projectWhenTranscriptCloses } from "./precedent.js";
 import type { ContainerSpawn, ProcessContainers } from "./process-container.js";
-import { registerQuarantine, workspaceContainmentValue } from "./quarantine.js";
+import { registerQuarantine, registerResourceStop, workspaceContainmentValue } from "./quarantine.js";
 import { loadRegistry, type RegistrySource } from "./registry.js";
 import { routingRepairVerbs } from "./routing-review.js";
 import { closeSession, taskTempPrefix } from "./session-close.js";
 
 
-import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
+import { carriesReadOnly, isSubjectReaderRca, metaReviewSubjectOf, type PickupStopped, resolveTaskAgent, type SessionStoppedByResource, type Task, type TaskVerbSwap, taskVerbSwap } from "./tasks.js";
 import { liveSession } from "./teardown.js";
 
 
@@ -381,6 +381,8 @@ export interface CodexWorkerOptions {
   onRecordContainerFailed?: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に pickup を止めた —— 盤面側の一撃(`queueReturnHandler` 製)が先頭へ戻す。 */
   onPickupStopped?: (taskId: string, payload: PickupStopped) => void;
+  /** ADR 0331 決定2: 資源の署名を持つ0ターンの session を先頭へ戻す盤面側の一撃(`queueReturnHandler` 製)。 */
+  onSessionStoppedByResource?: (taskId: string, payload: SessionStoppedByResource) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃。報告なき exit かどうかの判定は盤面側が持つ。 */
   onWorkerExited?: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
   /** ADR 0261 決定1・4: `turn.failed` の行を見た exit の直後に読み直す使用量の口(盤面の `openaiUsage` と同じ probe)。
@@ -689,6 +691,7 @@ function spawnConfig(input: {
     FORCED_LOGIN_METHOD,
     `mcp_servers.tidepool.url=${toml(input.mcpUrl)}`,
     `mcp_servers.tidepool.enabled_tools=${toml(input.enabledTools)}`,
+    // ADR 0331 決定6: 盤面へ報告できない worker は最初のターンの前に止める
     "mcp_servers.tidepool.required=true",
     // ADR 0129 決定1: 答える人の居ない exec では承認の問いは Cancel にしかならない。verb の権限は盤面側が縛る
     'mcp_servers.tidepool.default_tools_approval_mode="approve"',
@@ -1521,6 +1524,13 @@ export class CodexWorker implements WorkerAdapter {
           removeTaskTemp,
           () => projectWhenTranscriptCloses(this.options.db, transcript.stream, { workerSpawnedEventId: spawned, transcriptPath: transcript.streamPath, taskId: task.id }),
         );
+        // ADR 0331 決定3・7: #2701 の実測した署名だけを資源に帰属させ、観測値を理由に残す
+        if (exit.exit_code === 1 && exit.stderr_tail?.includes("Failed to initialize session: required MCP servers failed to initialize: tidepool:")) {
+          const stop = registerResourceStop(this.options.db, "workerMcpReachability", "codex", `this Codex worker session exited with code 1: ${exit.stderr_tail}`, this.options.clock.now());
+          if (!streamObserved.turnRan) {
+            this.options.onSessionStoppedByResource?.(task.id, { kind: "session_stopped_by_resource", ...stop, worker_spawned_event_id: spawned });
+          }
+        }
       };
       // ADR 0109 決定4: root の exit は容器に残るものが孤児である証拠 —— 読み切りを待たずに
       // 強制回収を撃つ(ADR 0201 決定1)。Harness 非依存に、盤面 supervisor 経由。

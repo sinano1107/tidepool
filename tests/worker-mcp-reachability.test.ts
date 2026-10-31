@@ -177,24 +177,24 @@ it("Codex の probe の timeout(Board call の上限)は不成立", async () => 
 let t: Tidepool | undefined;
 afterEach(() => t?.stop());
 
-it("Worker MCP 到達性の回答は probe が繋がらなければ観測値つきで拒まれて question が開いたまま、繋がれば受理される。probe は bind した扉を使い捨ての帰属で叩く", async () => {
+it.each(["claude-code", "codex"] as const)("%s Worker MCP 到達性の回答は probe が繋がらなければ観測値つきで拒まれて question が開いたまま、繋がれば受理される。probe は bind した扉を使い捨ての帰属で叩く", async (harness) => {
   let reachable = false;
   const probed: Array<{ harness: string; url: string; door: number }> = [];
   const board = await bootTidepool({
-    workerMcpReachability: async (harness, url) => {
+    workerMcpReachability: async (probedHarness, url) => {
       // probe の間、その帰属で扉の initialize が通る(router と同じ id の集合)
       const door = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json", accept: "application/json, text/event-stream" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "probe", version: "0" } } }),
       });
-      probed.push({ harness, url, door: door.status });
-      return reachable ? { available: true } : { available: false, reason: "a Claude worker reports the board's Worker MCP `tidepool` as failed" };
+      probed.push({ harness: probedHarness, url, door: door.status });
+      return reachable ? { available: true } : { available: false, reason: `a ${probedHarness} worker reports the board's Worker MCP \`tidepool\` as failed` };
     },
   });
   t = board;
-  registerQuarantine(board.db, "workerMcpReachability", "claude-code", "this Claude worker session reports `tidepool` as failed", board.clock.now());
-  const question = await servedQuarantineQuestion(board, "workerMcpReachability", "claude-code");
+  registerQuarantine(board.db, "workerMcpReachability", harness, `this ${harness} worker session reports \`tidepool\` as failed`, board.clock.now());
+  const question = await servedQuarantineQuestion(board, "workerMcpReachability", harness);
 
   const answer = () => api(board.baseUrl, "POST", `/api/tasks/${question.id}/answer`, { answers: ["repaired by hand"] });
   const refused = await answer();
@@ -206,6 +206,6 @@ it("Worker MCP 到達性の回答は probe が繋がらなければ観測値つ�
   expect((await answer()).status).toBe(200);
   expect((await api(board.baseUrl, "GET", `/api/tasks/${question.id}`)).json.status).not.toBe("todo");
   // probe は bind した Worker MCP の扉を、Harness ごとの使い捨ての帰属で叩く
-  expect(probed.map(({ harness, door }) => [harness, door])).toEqual([["claude-code", 200], ["claude-code", 200]]);
+  expect(probed.map(({ harness, door }) => [harness, door])).toEqual([[harness, 200], [harness, 200]]);
   for (const { url } of probed) expect(url).toMatch(new RegExp(`^${board.mcpBaseUrl}/mcp\\?probe=.+`));
 });

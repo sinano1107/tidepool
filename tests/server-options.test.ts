@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { platform } from "node:process";
 import { expect, it, vi } from "vitest";
 import type { CodexAppServerProbe } from "../src/codex-app-server.js";
+import { CodexWorker } from "../src/codex-worker.js";
 import { openDb } from "../src/db.js";
+import { executionSettingsFor } from "../src/execution-setting.js";
 import { GitHubAuth } from "../src/github-auth.js";
 import { QUARANTINES } from "../src/quarantine.js";
 import { InvalidAgentDefinitionError, UnknownAgentError } from "../src/registry.js";
@@ -19,9 +21,10 @@ import {
 } from "../src/server-options.js";
 import type { Task } from "../src/tasks.js";
 import { TranscriptStore } from "../src/transcript-store.js";
-import { containerHarness, FakeClock, FakeTranslationClient, fakeContainers } from "./fakes.js";
-import { bootTidepool, HOUR, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
+import { closedCodexSkillsCall, containerHarness, FakeClock, FakeContainerRuntime, FakeTranslationClient, fakeContainers, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
+import { api, bootTidepool, git, HOUR, questions, queueWork, registerWork, servedQuarantineQuestion, TEST_CREDENTIAL } from "./harness.js";
 import { makeRegistry, makeRemoteBackedRegistry } from "./registry-fixture.js";
+import { tempDir } from "./temp-dir.js";
 
 /** 盤面1台ぶんの入力。渡すのは env 由来のスカラと、合成 root でしか作れない
  *  部品だけで、**口の一覧はここには無い** —— 一覧を持つのは `buildServerOptions`
@@ -70,6 +73,42 @@ function composition(): BoardComposition {
     cliAuthExpiresAt: undefined,
   };
 }
+
+it("Codex の実測した required MCP 起動失敗は合成された口を通り、到達性の確認1枚だけで todo の先頭へ戻る(ADR 0331)", async () => {
+  const workspace = await tempDir("codex-required-mcp-work-");
+  git(workspace, "init", "-b", "main");
+  const registryDir = await makeRegistry({
+    "agents/codex-agent.md": "---\ndescription: Codex agent\nversion: 1.0.0\nauthority: standard\nprovider: openai\nskills: []\n---\nCodex worker.",
+    "workspaces.yaml": `work:\n  path: ${workspace}\n`,
+  });
+  const board = { ...composition(), registryDir, workspaceName: "work", defaultAgentName: "codex-agent", codexHome: await tempDir("codex-required-mcp-home-") };
+  const proc = recordingSpawn();
+  const t = await bootTidepool({
+    containerRuntime: new FakeContainerRuntime(proc.spawn),
+    openaiUsage: healthyOpenai,
+    taskExecutionCandidates: (task) => executionSettingsFor(t.db, { provider: [{ name: "openai", advisor: false }], tier: undefined }, task),
+    workerAdapter: (deps) => withHealthyUsage(new CodexWorker({ ...buildCodexWorkerOptions(board, deps), boardCall: closedCodexSkillsCall() }), deps.clock),
+  });
+  try {
+    const task = queueWork(t, "required MCP unavailable");
+    await t.clock.advance(HOUR);
+    const later = queueWork(t, "queued later");
+    await api(t.baseUrl, "POST", `/api/tasks/${later.id}/move`, { after: null });
+    const signature = "Failed to initialize session: required MCP servers failed to initialize: tidepool: Mcp error: -32601: Method not found (code -32603)";
+    proc.processes[0]!.stderr.write(signature);
+    proc.emitExit(1, null);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const [question, ...more] = await questions(t);
+    expect(more).toEqual([]);
+    expect([question.question_quarantine_kind, question.question_quarantine_value]).toEqual(["workerMcpReachability", "codex"]);
+    expect(question.purpose).toContain(signature);
+    expect((await api(t.baseUrl, "GET", `/api/tasks/${task.id}`)).json.status).toBe("todo");
+    expect((await api(t.baseUrl, "GET", "/api/queue")).json.tasks.find((item: Task) => item.type === "work").id).toBe(task.id);
+  } finally {
+    await t.stop();
+  }
+});
 
 // ADR 0052 決定3 の宣言そのもの。main.ts の三項をここへ引き出してあるのは、
 // **main.ts が import した瞬間に盤面が起動する top-level await のスクリプト**で、
