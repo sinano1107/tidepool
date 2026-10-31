@@ -25,7 +25,7 @@ vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });
 
 /** ADR 0109(issue #531)。通常完了の解放も**回収済み観測**を門とし、後始末は
  *  worker session の最後の局面である —— タスクが決着しても、その session の後始末が
- *  終わるまで枠は空かない(CONTEXT.md「後始末」/「Slot」)。
+ *  終わるまで枠は空かない(GLOSSARY.md「後始末」/「Slot」)。
  *
  *  容器を `hold` した盤面が、この ADR がずっと語っている状況そのものである: 最終 verb は
  *  着地したのに、その session の process はまだホストに残っている。 */

@@ -1851,7 +1851,7 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
 /** 採点者の印の欄(ADR 0264 決定6): 受験者の視界に無いエントリなら true。読み手が Interview の root のときだけある。 */
 type ExamineeMark = { not_shown_to_examinees?: boolean };
 
-/** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
+/** 読み手の視界(ADR 0264 決定2、GLOSSARY.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
  *  2段目 宛先、3段目 未無効化(liveTo)。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。mark は採点者の印

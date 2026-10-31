@@ -351,7 +351,7 @@ describe("loadRegistry", () => {
     expect(() => loadRegistry(dir, "purely-local")).toThrow(/icon/i);
   });
 
-  it("frontmatter の skills 許可リストを読み込む(CONTEXT.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
+  it("frontmatter の skills 許可リストを読み込む(GLOSSARY.md: エージェント = ベース AI + skills + ...・issue #56 / ADR 0025)", async () => {
     const dir = await makeRegistry({
       "agents/deckhand.md": `---\nversion: 0.3.1\nauthority: standard\nprovider: anthropic\ndescription: General work agent for the tidepool board\nskills:\n  - "@workspace"\n  - "@host"\n  - "myplugin:*"\n  - code-review\n  - "myplugin:deploy"\n  - does-not-exist-anywhere\n---\nYou are Deckhand.\n`,
     });

@@ -336,15 +336,15 @@ export function registerRcaReview(
  *  completion review (workspace inheritance included):
  *
  *  - **self**, one per distinct worker who wrote an RCA-needing objected entry
- *    (CONTEXT.md's Review — 当事者レビュー: "why did I make that call" only
+ *    (GLOSSARY.md's Review — 当事者レビュー: "why did I make that call" only
  *    the worker who actually wrote the entry can answer). `assignee` is
  *    baked to that worker's id as a historical fact, not a live pointer
- *    (CONTEXT.md's Review: "確定値であり、ポインタへの参照ではない") — a
+ *    (GLOSSARY.md's Review: "確定値であり、ポインタへの参照ではない") — a
  *    human-written entry never spawns one (the final auditor cannot audit
  *    itself).
  *  - **auditor**, exactly one per objected task with an RCA-needing entry,
  *    regardless of who wrote it — its distance from the original judgment is
- *    the value (CONTEXT.md's Review: 独立レビュー), so it fires even when
+ *    the value (GLOSSARY.md's Review: 独立レビュー), so it fires even when
  *    every entry was human-written. `assignee` is left unset, a live
  *    reference to the board's Auditor pointer resolved fresh at pickup, not
  *    a value baked here at commit time — and, unlike an unset work

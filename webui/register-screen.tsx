@@ -6,13 +6,13 @@
 // (posting it is the approval; the board never posts on its own).
 // parentTask (issue #129, human decompose): when set, this screen registers
 // a child of parentTask instead of a root task — same dump → draft → edit →
-// submit flow (CONTEXT.md's Decompose point 2: "登録画面に木モードは作らない
+// submit flow (GLOSSARY.md's Decompose point 2: "登録画面に木モードは作らない
 // — ルート登録 + 子追加の合成で足りる", no separate tree-registration mode),
 // with the type/source pickers and issue-backed path dropped (a decompose
 // child is always type work, never issue-backed — decomposeTask's own
 // ChildSpec has no such fields either) and one field added: a required
 // free-text reason for the split, which lands as a decision-log entry
-// (CONTEXT.md's Decompose point 5) and steers the child's own AI
+// (GLOSSARY.md's Decompose point 5) and steers the child's own AI
 // draft as context (point 4).
 // この画面がサーバとやりとりする形 —— 画面内で閉じた型で、集合ごとの移送は
 // issue #352 が持つ。POST /api/tasks の本文(登録の門が読む)。
@@ -269,7 +269,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
             : { purpose: TidepoolRules.normalizeText(purpose), completion_criteria: TidepoolRules.normalizeText(criteria) }),
           risk_flag: risk, ...(showReviewFlag ? { review_flag: review } : {}),
           // unset assignee/workspace resolve to the board's defaults at
-          // execution time (CONTEXT.md) — omit rather than send '' so an
+          // execution time (GLOSSARY.md) — omit rather than send '' so an
           // unknown-workspace 400 never fires on a field the human left blank
           ...(assignee ? { assignee } : {}),
           ...(workspace.trim() ? { workspace: workspace.trim() } : {}),
@@ -375,7 +375,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }: RegisterScreenProps
   const riskCheckbox = <Checkbox label="risk flag — this task has irreversible external effects" checked={risk} onChange={() => setRisk(!risk)} />;
   // manual content's workspace is optional (unset → the board's default at
   // execution time); an issue reference's workspace is required — it fixes
-  // *which* issue the reference means (CONTEXT.md), so its placeholder reads
+  // *which* issue the reference means (GLOSSARY.md), so its placeholder reads
   // as a prompt to choose, never as an implicit default
   const workspaceOptions = withPlaceholder('', '(default workspace)', candidates.workspaces);
   const issueWorkspaceOptions = withPlaceholder('', 'select workspace…', candidates.workspaces);

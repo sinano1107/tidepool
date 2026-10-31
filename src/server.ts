@@ -195,17 +195,17 @@ export interface ServerOptions {
   /** The public half of the board's VAPID keypair (issue #14), exposed to the
    *  WebUI via /api/push/vapid-public-key. Absent → the WebUI can't subscribe. */
   vapidPublicKey?: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2) — same
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2) — same
    *  shape as the default agent (`worker.id` below): the fallback a `review`
    *  task's unset `assignee` resolves to, at pickup (scheduler), spawn
    *  (claude-worker.ts via `resolveExecutionAgent`), and MCP attribution
    *  (mcp.ts) alike, in place of the default agent (issue #42). Absent →
-   *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset,
+   *  `DEFAULT_AUDITOR_NAME` — GLOSSARY.md's Auditor never reads as unset,
    *  resolved once here rather than by each consumer separately. */
   auditorName?: string;
   /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
-  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
    *  protected workspace / ADR 0013), read fresh against the registry by the
    *  caller — a decompose child naming a protected workspace converts to an
    *  approval question unconditionally (mcp.ts), regardless of the
@@ -534,7 +534,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       }
     : options.modelProbes;
   // resolved here for this board's actual wiring, same as `worker.id` below
-  // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
+  // — GLOSSARY.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
   // McpDeps by hand) still carry their own `?? DEFAULT_AUDITOR_NAME` fallback
   // (mcp.ts's attributedActorId, claude-worker.ts's start()) — defense in

@@ -48,7 +48,7 @@ export function openDb(path: string): Db {
       status              TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'done', 'cancelled')),
       assignee            TEXT,
       -- where this task runs (issue #11): a registry workspace name, or null
-      -- to inherit the board's default. First-class per CONTEXT.md; resolved
+      -- to inherit the board's default. First-class per GLOSSARY.md; resolved
       -- against the registry fresh at every use — pickup, release, watchdog,
       -- restart (issue #26 / ADR 0009) — never pinned to a path.
       workspace           TEXT,
@@ -136,7 +136,7 @@ export function openDb(path: string): Db {
       -- task. workspace (already above) doubles as the repo half of the
       -- reference for such a task.
       github_issue_number INTEGER,
-      -- the task's execution request (ADR 0110 決定2, CONTEXT.md「要求」): the
+      -- the task's execution request (ADR 0110 決定2, GLOSSARY.md「要求」): the
       -- required quality tier and the priority that orders that tier's candidates (ADR 0114),
       -- either null for "unstated". Null is the *absence* of a request, and
       -- is distinguished in the record from "the board default was chosen" —
@@ -325,7 +325,7 @@ export function openDb(path: string): Db {
     );
 
     -- Pause (issue #34): a single, board-wide, human-only toggle for new-task
-    -- pickup — one row, with no auto-resume (CONTEXT.md's Pause: clearing it
+    -- pickup — one row, with no auto-resume (GLOSSARY.md's Pause: clearing it
     -- is purely manual). No row means never paused.
     CREATE TABLE IF NOT EXISTS pause_state (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
@@ -365,7 +365,7 @@ export function openDb(path: string): Db {
     -- human via push (issue #116) — the exact twin of question_notifications
     -- above: a human child registered by an agent's decompose blocks its
     -- parent the same way a question does, so it is a notification target of
-    -- equal urgency (CONTEXT.md's Quiet hours / Digest). A row here means "no
+    -- equal urgency (GLOSSARY.md's Quiet hours / Digest). A row here means "no
     -- longer pending notification", however delivered (individual or digest).
     -- Kept a separate table from question_notifications, not a shared one,
     -- because the two notification streams are counted separately in the
@@ -386,7 +386,7 @@ export function openDb(path: string): Db {
 
     -- quiet hours config (issue #14): one row, "HH:MM" bounds read against
     -- tz's wall clock (issue #63 / ADR 0022) — tz is the one board timezone
-    -- (CONTEXT.md's Timezone), not a quiet-hours-specific setting; it lives
+    -- (GLOSSARY.md's Timezone), not a quiet-hours-specific setting; it lives
     -- here because quiet hours is the one feature that reads it today.
     -- No row means never configured — callers fall back to the 23:00–07:00
     -- Asia/Tokyo default rather than reading this table directly.
@@ -414,7 +414,7 @@ export function openDb(path: string): Db {
     -- decision-log line, completion report, question purpose/item, handoff
     -- doc section — shares one lookup shape regardless of whether its source
     -- lives on an events row or a tasks row. Log entries are immutable
-    -- (CONTEXT.md: 記録は不滅・不変) so a cache hit never needs invalidating.
+    -- (GLOSSARY.md: 記録は不滅・不変) so a cache hit never needs invalidating.
     -- It holds text only: usage belongs to the call, not to a fragment (ADR 0296 決定5).
     CREATE TABLE IF NOT EXISTS translation_cache (
       source_hash TEXT NOT NULL,
@@ -552,7 +552,7 @@ export function openDb(path: string): Db {
     -- candidates: 除外を当てた後の候補の行数 —— 1 なら推薦は必ず表と一致する(ADR 0181 決定5)。
     -- event_watermark: この行が乗る pickup の task_picked_up の id(書き手が結ぶ、ADR 0319 決定1)。同じ task の次の worker_spawned(id がこれより大きい最初のもの)が
     -- この pickup の session で、meta-review の watermark とも同じ軸で比べられる(時刻は Clock の同時刻で並ばない)。
-    -- Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2・3 / ADR 0273 決定6): interview root が持つ (provider, model, effort) の一覧。
+    -- Interview の対象(GLOSSARY.md「Interview」/ ADR 0199 決定2・3 / ADR 0273 決定6): interview root が持つ (provider, model, effort) の一覧。
     -- 表の行でなくてよく、価格を持たない。effort の NULL は「無い」という値(ADR 0218 決定5)。段は root の tier_id(測る段)。
     CREATE TABLE IF NOT EXISTS interview_targets (
       id       INTEGER PRIMARY KEY,

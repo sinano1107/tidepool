@@ -125,7 +125,7 @@ const claudeCliVersion = () =>
 const readCliVersion = (command: string) => async () =>
   (await promisify(execFile)(command, ["--version"], { encoding: "utf8", timeout: VERSION_READ_TIMEOUT_MS })).stdout;
 
-/** 盤面の watchdog(#9 / CONTEXT.md の Watchdog)を本番で成立させる時間リミット。
+/** 盤面の watchdog(#9 / GLOSSARY.md の Watchdog)を本番で成立させる時間リミット。
  *  **コード定数であってホストごとの設定ではない** — ADR 0037 と同じ軸で、盤面の
  *  不変条件(唯一の slot が誰にも回収されずに握られたままにならない)を
  *  `/etc/default/tidepool` の綴りに委ねない。
@@ -151,7 +151,7 @@ const readCliVersion = (command: string) => async () =>
  *    だけなので、**watchdog が question 型のタスクを見ることは起こり得ない**。
  *    したがってここに値を書いても死んだ設定にしかならず、しかも「watchdog が
  *    question も governs する」という誤った含意を残す。question は人間タスクと
- *    して slot の外で回答される(CONTEXT.md の Held)。
+ *    して slot の外で回答される(GLOSSARY.md の Held)。
  *  - `grace` = 60秒 = 1 tick。畳み込み停止から強制回収までの猶予で、watchdog.ts の
  *    比較は `>=` なので次の tick で回収が出る。
  *  - `reclaimTimeout` は既定のまま(watchdog.ts の `RECLAIM_TIMEOUT`)。ここに
@@ -191,9 +191,9 @@ export interface BoardComposition {
   workspacesDirSource: WorkspacesBaseDirSource;
   /** ADR 0012 / issue #36: assignee 未設定のタスクが解決される既定 agent。 */
   defaultAgentName: string;
-  /** issue #15 layer 2 / CONTEXT.md の Auditor。 */
+  /** issue #15 layer 2 / GLOSSARY.md の Auditor。 */
   auditorName: string;
-  /** ADR 0269 決定2 / CONTEXT.md の Interviewer。 */
+  /** ADR 0269 決定2 / GLOSSARY.md の Interviewer。 */
   interviewerName: string;
   /** ADR 0040 / issue #149: 盤面自身の状態パス(プロセスで固定の5点)。 */
   boardState: BoardStatePath[];
@@ -218,7 +218,7 @@ export interface BoardComposition {
    *  読む合成 root 側にあり、ここは push クライアントと公開鍵の**両方**をこの
    *  1つから導く — 2つの口が別々の判定を持つと黙ってずれる。 */
   vapid: VapidConfig | undefined;
-  /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の CONTEXT.md を読んで作るので
+  /** issue #47 / ADR 0015: 表示時翻訳。盤面自身の GLOSSARY.md を読んで作るので
    *  合成 root 側で組む。Board call の口を受け取って組む(ADR 0136 決定2)。 */
   translationClient: (call: BoardCall) => TranslationClient;
   /** ADR 0075: optional token expiry; absent disables only advance warning. */
@@ -775,7 +775,7 @@ function boardCallers(board: BoardComposition, call: BoardCall, db: Db): BoardCa
   return {
     draftClient: draftClientFactory(board, call, db),
     translationClient: board.translationClient(call),
-    // ADR 0111 決定4: 配分評価の Board call。registry にも CONTEXT.md にも依らず
+    // ADR 0111 決定4: 配分評価の Board call。registry にも GLOSSARY.md にも依らず
     // `claude` CLI だけで組めるので、翻訳と同じく常に配線する
     allocationClient: new ClaudeAllocationClient({ exec: execThrough(call, "allocation review") }),
     // ADR 0115 決定2: 帰責の Board call。同じ理由で常に配線する

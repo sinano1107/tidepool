@@ -173,7 +173,7 @@ export type TranslateQuestionOutcome =
   | { status: "translated"; purpose: string; items: TranslatedQuestionItem[]; cached: boolean }
   | { status: "throttled" };
 
-/** A question's purpose and each item's title/detail (issue #47) — CONTEXT.md's
+/** A question's purpose and each item's title/detail (issue #47) — GLOSSARY.md's
  *  scope exclusion: option labels and the recommendation are never sent here
  *  (a mistranslated option is a 30-second decision an agent reads back, ADR
  *  0015's precision addendum keeps those original). */

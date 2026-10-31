@@ -430,7 +430,7 @@ function mapData(
     ? pickupHalt.slot
     : teardown
     ? {
-        // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
+        // ADR 0109 決定2 / GLOSSARY.md「後始末」: 枠を握っているのは task ではなく
         // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
         // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
         color: 'var(--sun-4)', taskId: teardown.taskId,
@@ -797,7 +797,7 @@ function EditTaskDialog({ taskCard, onSaved, onClose, say }: {
   );
 }
 
-// issue #130: the human's direct cancel (CONTEXT.md's Cancel). Optional reason;
+// issue #130: the human's direct cancel (GLOSSARY.md's Cancel). Optional reason;
 // the target and its unfinished descendants go cancelled together (道連れ),
 // enforced server-side. An open Tidepool question over the subtree gates it —
 // the domain error surfaces as a toast.
@@ -1004,7 +1004,7 @@ function App() {
   );
 
   // Display-time translation is meaningless when the board already presents in
-  // English (canonical text is English — CONTEXT.md's Display language), so an
+  // English (canonical text is English — GLOSSARY.md's Display language), so an
   // English board shows no translation toggle at all. We read the board's
   // display language once at launch: English → withhold the onTranslate prop
   // from every kit face (prop absent = no toggle, the kit's own design). This
@@ -1528,7 +1528,7 @@ function App() {
       )}
 
       {/* human decompose (issue #129): a board task-card tap opens this
-          instead of building a separate tree-registration screen (CONTEXT.md's
+          instead of building a separate tree-registration screen (GLOSSARY.md's
           Decompose point 2) — the line itself (unsettled / not in-progress
           unless it's the human's own / no agent-decomposed child yet) is
           enforced server-side; a task outside it just surfaces the domain

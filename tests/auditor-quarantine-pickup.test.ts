@@ -11,7 +11,7 @@ afterEach(async () => {
 
 /** Register a standalone review task with no explicit assignee — the same
  *  shape layer 1's completion review / layer 2's independent auditor RCA /
- *  layer 3's meta-review all register with (CONTEXT.md's Review). Placed
+ *  layer 3's meta-review all register with (GLOSSARY.md's Review). Placed
  *  without the human door: a door registration is itself a pickup trigger
  *  (ADR 0119 決定2), and this fixture must wait for the quarantine below. */
 function registerIndependentReview(t: Tidepool, title: string) {

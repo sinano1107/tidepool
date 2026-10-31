@@ -115,7 +115,7 @@ export const LOG_ROW_RULE =
   "while memory entry 3 names a memory entry, not a row.";
 
 /** 帰責と起草の prompt が第2回の `rca_findings` に添える文(ADR 0322 決定5 / 追記): `review` は当事者レビューか独立レビューか
- *  (CONTEXT.md「Review」)、`actor` は self の当事者。読み手は盤面の語(Auditor・独立レビュー)を渡されないので、盤面が持つ事実
+ *  (GLOSSARY.md「Review」)、`actor` は self の当事者。読み手は盤面の語(Auditor・独立レビュー)を渡されないので、盤面が持つ事実
  *  —— 誰に割り当てたか —— で書く(Auditor の解決先が executor 自身でも割り当ては役割のまま)。どちらをどう重く読むかは書かない
  *  —— 決めた ADR が無い(#2675 / ADR 0324 決定4)。文は欄ごとに `RCA_FINDING_FIELDS` から組む。 */
 export const RCA_FINDINGS_RULE = `rca_findings holds one object per root-cause review: ${RCA_FINDING_FIELDS.review}; ${RCA_FINDING_FIELDS.entries}.`;

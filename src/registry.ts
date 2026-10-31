@@ -31,7 +31,7 @@ export interface AgentDefinition {
    *  label. Required — an agent registered without one has no way to be
    *  picked from a roster, same hygiene as issue #41's assignable_to. */
   description: string;
-  /** この agent が走ってよい Provider(CONTEXT.md の Provider / ADR 0110 決定1)。
+  /** この agent が走ってよい Provider(GLOSSARY.md の Provider / ADR 0110 決定1)。
    *  **正規化された entry の配列**であり、agent.md 側の3つの綴り(省略 / 単一
    *  文字列 / 配列)は `normalizeProviderEntries` が1つのこの形へ畳む —— 読み手
    *  (selector・門・spawn)が綴りの分岐を持たないための正規形である。
@@ -44,7 +44,7 @@ export interface AgentDefinition {
    *  (ADR 0005)。名前は自由文字列のまま持つ — 列挙・組み合わせの違反は読み込みを
    *  倒さず、登録と pickup の門が拒否/隔離する(ADR 0097 決定3)。 */
   provider: readonly AgentProviderEntry[];
-  /** 既定の要求ティア(CONTEXT.md「要求」/ ADR 0110 決定1): この agent の
+  /** 既定の要求ティア(GLOSSARY.md「要求」/ ADR 0110 決定1): この agent の
    *  セッションが既定でどの品質ティアを要求するか。省略 → 盤面既定
    *  (盤面設定、ADR 0200 決定4)。「常に上位で」と言いたい Auditor のような役割の
    *  ための1行であり、model 名ではない —— 具体の model / effort は pickup 時に
@@ -69,7 +69,7 @@ export interface AgentDefinition {
   icon?: string;
   /** Skill allowlist (issue #56 / ADR 0025): the skills this agent may use in
    *  a worker session — the implementation counterpart of the `skills` in
-   *  CONTEXT.md's Worker definition (agent = base AI + skills + instructions +
+   *  GLOSSARY.md's Worker definition (agent = base AI + skills + instructions +
    *  authority profile). Required — omission is a load error (省略=無制限 の
    *  footgun is refused, issue #41's line); unrestricted is the explicit sole
    *  `["*"]`, all-denied is the empty list. The loader validates only the
@@ -98,11 +98,11 @@ export interface AgentDefinition {
  *  ("gitignored, so I can just delete them"). Issue #489's 2026-08-25
  *  re-measurement, in `docs/real-environment-trial.md`, has the conditions and
  *  the counts. However it is written, guidance is never a floor (ADR 0013 /
- *  0035, CONTEXT.md 「床(Floor)」): a boundary that must hold goes in the two
+ *  0035, GLOSSARY.md 「床(Floor)」): a boundary that must hold goes in the two
  *  allowlists below or in a protected workspace, where the act converts to an
  *  approval question with no model in the path (ADR 0002 / 0013). Not in a
  *  flag — `risk` is a declaration the registrant makes, and `review` an opt-in
- *  to observation that widens nothing (CONTEXT.md 「Risk flag」/「Review flag」).
+ *  to observation that widens nothing (GLOSSARY.md 「Risk flag」/「Review flag」).
  *  `assignable_to` (issue #11) is a machine-enforced delegation allowlist —
  *  confused-deputy prevention: a decompose child assigned outside this list
  *  converts to an approval question rather than registering (ADR 0002).
@@ -248,7 +248,7 @@ export const PROVIDERS_WITH_ADVISOR: readonly Provider[] = PROVIDER_VALUES.filte
   (provider) => CANONICAL_ROUTES[provider].advisor,
 );
 
-/** 組み込み agent の定義(CONTEXT.md「組み込み agent」/ ADR 0117 決定1): 盤面の
+/** 組み込み agent の定義(GLOSSARY.md「組み込み agent」/ ADR 0117 決定1): 盤面の
  *  code が frontmatter 相当を運び、registry にファイルを持たない。名前は Auditor
  *  ポインタの既定と**同じ1つの定数**から組む —— 組み込みの名前と既定の指し先は
  *  drift できない。`provider` は省略の展開そのもの(ADR 0116 決定1)で、非空の
@@ -778,7 +778,7 @@ const GIT_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
  *  `buildServerOptions` の先頭に留まるので、「registry を1文字も読む前に撃つ」
  *  という順序は変わらない。
  *
- *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / CONTEXT.md の GitHub identity:
+ *  **`tidepool-board[bot]` 名義で撃つ**(ADR 0093 / GLOSSARY.md の GitHub identity:
  *  「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」)。
  *  registry は private なので認証が要り、しかも `authedGit` の credential 引数は
  *  ホストに設定済みの helper を**先にクリアする** —— つまりこの1行は「認証を足す」

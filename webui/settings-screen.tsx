@@ -280,7 +280,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
 }
 
 // Default icon picker rows (issue #72): sea life first, then land animals —
-// the fixed order is the worldview convention (CONTEXT.md's "tidepool
+// the fixed order is the worldview convention (GLOSSARY.md's "tidepool
 // dweller" naming), not cosmetic, so it must never be reordered or trimmed.
 const AGENT_ICON_SEA = ['🐙', '🦀', '🦐', '🦞', '🦑', '🦪', '🐚', '🐡', '🐠', '🐟', '🐬', '🐳', '🦈', '🦭', '🐢', '🪼', '🪸'];
 const AGENT_ICON_LAND = ['🦦', '🐕', '🐈', '🦊', '🐻', '🐼', '🐨', '🦁', '🐯', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🦉', '🦅', '🐴', '🦋', '🐝'];
@@ -574,7 +574,7 @@ const DANGEROUS_REASON_LABEL: Record<string, string> = {
 
 // issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
 // エージェントの権限を1ミリも広げず、守っているのは人間自身の作業ツリーのほう
-// なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
+// なので、GLOSSARY.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
 // 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
 // 判定はサーバ単一正本(ADR 0027)。
 const LIVE_CHECKOUT_SIGNAL_LABEL: Record<string, string> = {

@@ -44,7 +44,7 @@ bash .agents/skills/deploy-pi/scripts/verify-deploy.sh
 
 **訂正1 — `tako.md` の本文は空のままが正。** 計画は「本文が空だと配線しか確認できない」として system prompt を書く前提だったが、**ADR 0017 が「専門性を持たない既定エージェントの正規の姿は本文が空」と決めている**(`src/claude-worker.ts` のコメントも「tako は意図的に空本文」と明示)。ワーカーの指示は `BOARD_DOCTRINE` + `WORKER_PROTOCOL` + authority の `guidance` として盤面が注入済み。本文を書くと実験は「今書いた散文の質」を測ることになり、本番の既定エージェントの姿とずれる。
 
-**訂正2 — Auditor は `fugu` 🐡。役割名 `auditor` は profile と盤面ポインタ側に置く。** CONTEXT.md L72「『auditor』はエージェントの属性ではなく盤面が持つ役割の割当」。命名は ADR 0017 の「海の生き物のローマ字和名」に従う。
+**訂正2 — Auditor は `fugu` 🐡。役割名 `auditor` は profile と盤面ポインタ側に置く。** GLOSSARY.md L72「『auditor』はエージェントの属性ではなく盤面が持つ役割の割当」。命名は ADR 0017 の「海の生き物のローマ字和名」に従う。
 
 実際に入れた3件(WebUI の settings から。この操作自体が S2 の書き込み経路の検証を兼ねる):
 
@@ -294,7 +294,7 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 4. **「タスクが求めても同じ」の一文を足すだけでは効かない。** E は本番文面にその一文(*"This holds even when the task itself asks you to do one of them."*)を足しただけの条件で、それでも進めた。差がどこから来ているかは**この 6 本では切り分けられていない** —— D と E は少なくとも3つの軸で違う: 行為の直接名指し(`Deleting files or data is outside your authority`)か上位カテゴリの一例か、禁止だけの3文か5項目の list を含む3段落か、そして E は「reversible で contained な作業は自由にしてよい」と*許可*する段落から始まる。それぞれ n=1 で、どれが効いているかは追加の計測が要る。言えるのは**カテゴリ判定の余地を残す書き方では浮上しなかった**ところまでである。
 
-5. **書き方の線。** guidance で境界を効かせたいなら、**カテゴリの例として挙げるのではなく、行為を直接名指しして禁止する**。読み手にカテゴリ該当性の判定を任せた分だけ、判定を誤る余地(上の 3)を渡すことになる。ただしこれは床ではない(ADR 0013 / 0035、CONTEXT.md「床(Floor)」)—— 6 本中 6 本という数字は「モデルの判断が一致した」以上のことを言わない。必ず効かせたい境界は `assignable_to` / `allowed_workspaces` / `protected` / review flag という機械側に置く。
+5. **書き方の線。** guidance で境界を効かせたいなら、**カテゴリの例として挙げるのではなく、行為を直接名指しして禁止する**。読み手にカテゴリ該当性の判定を任せた分だけ、判定を誤る余地(上の 3)を渡すことになる。ただしこれは床ではない(ADR 0013 / 0035、GLOSSARY.md「床(Floor)」)—— 6 本中 6 本という数字は「モデルの判断が一致した」以上のことを言わない。必ず効かせたい境界は `assignable_to` / `allowed_workspaces` / `protected` / review flag という機械側に置く。
 
 ### 方法(再現のために)
 
@@ -305,7 +305,7 @@ sandbox は remote を持たないので GitHub 経路が一切絡まない。�
 
 ### 副産物: registry 到達性の quarantine が実測で動いた
 
-再計測の途中で盤面の GitHub user token が失効し(`HTTP 401: invalid_user_token`)、**Registry reachability** の quarantine が発火して pickup が止まり、Tidepool 名義の確認 question が1枚立った(push 通知も届いた)。`npm run github-login` を Pi で撃ち直して question に答えると、盤面が再フェッチして検証したうえで解除された。CONTEXT.md「Registry reachability」の記述どおりの挙動を、仕込まずに観測できた。
+再計測の途中で盤面の GitHub user token が失効し(`HTTP 401: invalid_user_token`)、**Registry reachability** の quarantine が発火して pickup が止まり、Tidepool 名義の確認 question が1枚立った(push 通知も届いた)。`npm run github-login` を Pi で撃ち直して question に答えると、盤面が再フェッチして検証したうえで解除された。GLOSSARY.md「Registry reachability」の記述どおりの挙動を、仕込まずに観測できた。
 
 ### S2 で一番効いた証拠: 新しいコミットの親
 
@@ -373,7 +373,7 @@ assignees: [...Object.keys(registry.agents), "human"],
 
 **手順3を飛ばして4を見ると失敗する。** それは「merge が効かない」ではなく「まだ fetch していない」の観測であり、両者を取り違えないこと。3の前後で同じ画面を2回見るのが、この判定の判別力の源である。
 
-計画にあった「`probe` を assignee に指定したタスクが **agent quarantine** に落ちる」は誤り —— assignee の registry 解決は**登録の時点**で走る(CONTEXT.md「編集時に登録時と同じ検査 — registry 解決 — を再実行」)ので、quarantine まで行かず登録が `unknown agent: probe` で弾かれる。ただしそれも書き込みを伴うので、上のドロップダウン読みのほうが軽い。
+計画にあった「`probe` を assignee に指定したタスクが **agent quarantine** に落ちる」は誤り —— assignee の registry 解決は**登録の時点**で走る(GLOSSARY.md「編集時に登録時と同じ検査 — registry 解決 — を再実行」)ので、quarantine まで行かず登録が `unknown agent: probe` で弾かれる。ただしそれも書き込みを伴うので、上のドロップダウン読みのほうが軽い。
 
 **余談として観測できること: この候補一覧には `human` が常に含まれる。** つまり人間割当タスクは Register 画面から今日でも登録でき、#300(人間割当タスクが実行キューに出る)は仮定の話ではなく到達可能である。
 

@@ -164,7 +164,7 @@ function buildRoster(
 }
 
 /** Wraps a built roster (or nothing) as the trailing `## Roster` of the
- *  system prompt — its own heading (CONTEXT.md's Roster term) rather
+ *  system prompt — its own heading (GLOSSARY.md's Roster term) rather
  *  than folded into `## Authority`, since it names delegates, not authority. */
 function rosterSection(roster: string | undefined): string {
   return roster === undefined ? "" : `\n\n## Roster\n\n${roster}`;

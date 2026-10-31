@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { reviewToolDenials } from "../src/claude-worker.js";
 
 /** ADR 0013 追記(issue #59): review は行為の性質であって行為者の性質ではない
- *  (CONTEXT.md の Review)——ため、read-only はエージェントの authority profile
+ *  (GLOSSARY.md の Review)——ため、read-only はエージェントの authority profile
  *  ではなく task.type だけから決まる。`reviewToolDenials` はその1点だけを見る
  *  純関数で、`--disallowedTools` に折り込む前段。ping や CLI 呼び出しを伴わない
  *  ので computeSkillDenials と違って同期・純粋(issue #56 と同じ「組み立ては

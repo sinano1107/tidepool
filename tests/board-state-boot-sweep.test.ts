@@ -47,7 +47,7 @@ it("起動そのものは拒まない — 早く騒ぐだけで、床は pickup 
   expect((await api(t.baseUrl, "GET", "/api/tasks")).status).toBe(200);
 });
 
-it("重なったまま再起動しても question は増えない(1資源につき確認は最大1枚 — CONTEXT.md)", async () => {
+it("重なったまま再起動しても question は増えない(1資源につき確認は最大1枚 — GLOSSARY.md)", async () => {
   const overlapping = await makeWorkspace("self");
   const boardState = {
     paths: [{ label: "board database (TIDEPOOL_DB)", path: join(overlapping.path, "board.sqlite") }],

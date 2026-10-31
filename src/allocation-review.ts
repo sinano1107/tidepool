@@ -5,7 +5,7 @@ import { type EventPayload, getEvent, listEvents } from "./events.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { type Tier, tierNameOf } from "./tier.js";
 
-/** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
+/** 「この結果に対する実行設定は適切だったか」の4値(GLOSSARY.md「配分評価」)。
  *  `overpowered` は成功 episode からの唯一の下方向信号(ADR 0111 決定4)。 */
 export const ALLOCATIONS = ["appropriate", "underpowered", "overpowered", "uncertain"] as const;
 export type Allocation = (typeof ALLOCATIONS)[number];

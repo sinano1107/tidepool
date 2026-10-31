@@ -267,12 +267,12 @@ function createResumeTimers(clock: Clock, onFire: () => void) {
 
 export interface Scheduler {
   stop: () => void;
-  /** Immediate poll, fired by every pickup trigger (CONTEXT.md「Pickup trigger」/ ADR 0119).
+  /** Immediate poll, fired by every pickup trigger (GLOSSARY.md「Pickup trigger」/ ADR 0119).
    *  Same poll as the hourly tick: a no-op while the slot is occupied. It first pokes the landing
    *  convergence and judges pickup only after that pass (ADR 0241 決定5). */
   pollNow: () => void;
   /** Settles when no poll is in flight — a convergence pass waits on it so that landing's push never overlaps
-   *  pickup's fetch / checkout in the same checkout (CONTEXT.md「収束」). */
+   *  pickup's fetch / checkout in the same checkout (GLOSSARY.md「収束」). */
   idle: () => Promise<void>;
   /** 最後の poll の失敗(ADR 0294 決定1): 本体に入った poll が成功するまで残る。memory だけで、再起動で消える。 */
   lastPollFailure: () => PollFailure | undefined;
@@ -320,10 +320,10 @@ export function startScheduler(deps: {
   /** 規約の基点(ADR 0018): interview の root の最初の pickup が面接室を作る場所(ADR 0273 決定1)。
    *  Absent → `resolveWorkspacesBaseDir` 自身の既定(adapter の `workspacesDir` と同じ)。 */
   workspacesDir?: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), the
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2), the
    *  fallback a `review` task's unset assignee resolves to instead of
    *  `worker.id` (issue #42: `nextSlotTask`'s own type-aware gate). Absent →
-   *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset. */
+   *  `DEFAULT_AUDITOR_NAME` — GLOSSARY.md's Auditor never reads as unset. */
   auditorName?: string;
   /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
@@ -560,7 +560,7 @@ export function startScheduler(deps: {
     parentBriefing: ParentBriefing | undefined,
     onPicked: (pickupEventId: number) => void,
   ): Promise<(() => void) | void> {
-    // resolveTaskAgent is the three-value read CONTEXT.md's Assignee
+    // resolveTaskAgent is the three-value read GLOSSARY.md's Assignee
     // describes: pre-set name as-is, unspecified review to the Auditor
     // pointer (an Interview root's to the Interviewer pointer, ADR 0269), and unspecified work to the board's default agent. Questions
     // never enter the execution slot. The default reference ends at pickup
@@ -1059,7 +1059,7 @@ export function startScheduler(deps: {
           continue;
         }
         // 盤面全体の資源の門だけが poll 全体で返り、task の性質の門はこの head だけを外す(ADR 0328 決定5)。
-        // 順序は Throttle の観測 → registry → issue のまま(CONTEXT.md「Registry reachability」)
+        // 順序は Throttle の観測 → registry → issue のまま(GLOSSARY.md「Registry reachability」)
         if (!registryChecked) {
           registryChecked = true;
           if (registryReachability && (await registryReachabilityPickupBlocked(db, registryReachability, clock.now()))) return SUCCEEDED;

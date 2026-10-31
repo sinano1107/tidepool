@@ -7,7 +7,7 @@ import type { Provider } from "./provider.js";
 import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
 import type { TierId } from "./tier.js";
 
-/** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
+/** 学習器のセル(GLOSSARY.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
  *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、main の pin が世代を
  *  名指す(ADR 0182 決定3)。advisor の綴りは `fable` か具体 id で、alias なら世代が進んでも同じセルに
  *  数え続ける(ADR 0200 決定6)。advisor も spawn 時の **pin**

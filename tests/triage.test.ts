@@ -707,7 +707,7 @@ it("two objected entries written by the same worker fold into one self RCA revie
   expect(selfReviews[0].purpose).toContain("bring the fixtures back");
 });
 
-it("an objection against a human-completed task's log entry generates no self RCA review (CONTEXT.md's Review: 最終監査者に自分を監査させる輪は作らない)", async () => {
+it("an objection against a human-completed task's log entry generates no self RCA review (GLOSSARY.md's Review: 最終監査者に自分を監査させる輪は作らない)", async () => {
   t = await bootTidepool();
   const humanTask = (
     await api(t.baseUrl, "POST", "/api/tasks", {
@@ -739,7 +739,7 @@ it("an objection against a human-completed task's log entry generates no self RC
   );
   expect(selfReview).toBeUndefined();
   // the independent auditor RCA still fires — it never depends on who wrote
-  // the objected entry (CONTEXT.md's Review: 独立レビュー)
+  // the objected entry (GLOSSARY.md's Review: 独立レビュー)
   const auditorReview = board.find(
     (x: any) =>
       x.type === "review" && x.parent_id === humanTask.id && x.title.startsWith("rca (auditor):"),

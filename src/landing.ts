@@ -318,7 +318,7 @@ export function landingAnnotation(
 
 export type RootVerdict = { taskId: string; verdict: LandingVerdict };
 
-/** 盤面がまだ着地を運ぶ根(CONTEXT.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
+/** 盤面がまだ着地を運ぶ根(GLOSSARY.md「着地」)。`outlivedForkSource` は lineage が読んだ事実で、PR を開く前の追いつきに
  *  使う。`lineageError` は lineage が読めなかった候補 —— 根かどうか分からないので、根として人間に失敗を見せる。 */
 interface LandingRoot {
   task: Task;
@@ -552,7 +552,7 @@ export interface LandingDeps {
   /** merge 済みの根を比べる前の保護ブランチの fetch(ADR 0241 決定1)が使う盤面の GitHub 身元(ADR 0093)。 */
   githubAuth?: GitHubAuth;
   /** 走っている pickup の poll が終わると解ける。収束の回はこれを待ってから始まる —— 同じ checkout で pickup の
-   *  fetch・checkout と着地の push が重ならない(CONTEXT.md「収束」)。Absent → pickup を持たない盤面。 */
+   *  fetch・checkout と着地の push が重ならない(GLOSSARY.md「収束」)。Absent → pickup を持たない盤面。 */
   pickupIdle?: () => Promise<void>;
 }
 
@@ -1055,7 +1055,7 @@ export function createLanding(deps: LandingDeps): Landing {
     // 内容が変わっていれば、PR を開かず(profile も読まず)昇格の question を立て直す。retry はこの守りを外す
     const abandoned = ctx.answered ? undefined : abandonEventInForce(deps.db, task.id);
     if (abandoned) {
-      // 門が閉じていれば他の理由より先に待つ(CONTEXT.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
+      // 門が閉じていれば他の理由より先に待つ(GLOSSARY.md「収束」)。待った記録は刻まない —— 立て直しは門が開いてから(ADR 0225 決定2)
       const block = landingBlock(deps.db, task.id);
       if (block) return { kind: "deferred", reason: block.kind, count: block.count };
       if (!changedSince(task, abandoned.payload.head)) return undefined;

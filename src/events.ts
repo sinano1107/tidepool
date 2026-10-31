@@ -86,7 +86,7 @@ export interface AdvisorRecord {
   consultations: number;
   /** The advisor's own slice of the session's consumption — the same shape the
    *  sibling `worker_exited.usage` reports for the main model, hence the same name
-   *  (CONTEXT.md's Worker session: 「トークン消費の内訳と推定ドル」). It is
+   *  (GLOSSARY.md's Worker session: 「トークン消費の内訳と推定ドル」). It is
    *  deliberately **not** called `spend`: this codebase already spells
    *  Spend-down(使い切り)that way, and one word for two unrelated concepts
    *  is how a glossary starts to rot.
@@ -217,7 +217,7 @@ export type EventPayload =
   // ADR 0104 決定4: 走行中の session が Provider の使用量上限で断られ、タスクが
   // `todo` の先頭へ戻された。失敗ではなく環境事象なので failure question は無く、
   // これが「なぜ途中で終わったか」を次のセッションへ伝える唯一の記録である
-  // (CONTEXT.md「上限到達による中断」)。
+  // (GLOSSARY.md「上限到達による中断」)。
   | { kind: "cap_interrupted" }
   | { kind: "session_stopped_by_human"; reason?: string; reason_question_id?: string }
   // ADR 0184 決定4: Provider が spawn 時の行の model id を断り(行の拒否)、タスクが `todo` の先頭へ
@@ -304,7 +304,7 @@ export type EventPayload =
   | { kind: "task_cancelled"; origin_question_id: string }
   // ADR 0121: 再分解が破棄した旧判断の子 —— origin_breach_task_id は前提の破綻を宣言した子
   | { kind: "task_cancelled"; origin_breach_task_id: string }
-  // issue #130: a human's direct cancel — the second cancel path (CONTEXT.md's
+  // issue #130: a human's direct cancel — the second cancel path (GLOSSARY.md's
   // Cancel), no failure question above it, so reason is the human's own free
   // text (null when they gave none). Shared by every task the cascade touches
   // (the target and its unfinished descendants), same as task_cancelled above.
@@ -354,7 +354,7 @@ export type EventPayload =
   // no advisor capability; `off` / `main_above_ceiling`: the board's ceiling). Recording the
   // *pinned* value rather than the frontmatter's is deliberate — the
   // frontmatter is already recoverable from registry_commit, whereas the ceiling
-  // at that pickup is not recoverable from anything else, and CONTEXT.md's Advisor requires
+  // at that pickup is not recoverable from anything else, and GLOSSARY.md's Advisor requires
   // each session's effective configuration to be settleable from the event
   // history alone.
   //
@@ -386,7 +386,7 @@ export type EventPayload =
        *  because "which model" and "who asked for it" are separate facts: the
        *  learner reads the first, a human asking "why was it this model" reads
        *  the second. It is also the only place "the default was chosen" is
-       *  distinguished from "nothing was requested" (CONTEXT.md「要求」).
+       *  distinguished from "nothing was requested" (GLOSSARY.md「要求」).
        *
        *  `provider` は Provider の出所(ADR 0110 決定5 / issue #544、ADR 0114 決定4):
        *  `"only"` は agent が entry を1つしか宣言していなかった、`"rank"` は残った
@@ -406,7 +406,7 @@ export type EventPayload =
     }
   // ADR 0137: a quarantine key that already has an open Confirmation question
   // fired again — recorded on that same question rather than opening a second
-  // one (CONTEXT.md's Quarantine: 1資源につき確認は最大1枚)
+  // one (GLOSSARY.md's Quarantine: 1資源につき確認は最大1枚)
   | { kind: "quarantine_refired"; reason: string }
   // ADR 0137 決定4: a quarantine Confirmation question's answer passed its
   // kind's check and was accepted — pickup resumes for what that kind stops.
@@ -624,7 +624,7 @@ export type EventPayload =
     }
   // ADR 0110 決定5 / issue #545: 人間が settings タブ / 管理MCP から実行設定(表の
   // 行・advisor の上限・Provider 順位・優先順位の既定)を変えた操作イベント。
-  // `origin` がどの手から入ったか(webui / mcp)を機械記録する(CONTEXT.md「管理MCP」)。
+  // `origin` がどの手から入ったか(webui / mcp)を機械記録する(GLOSSARY.md「管理MCP」)。
   // question_id = 提案 question への approve の適用(ADR 0151: meta-review の材料にも「人間が変えた行」にも数えない)。
   // tier_id = 種を置いた行の追加(`seed`)だけ: 足した行の段の id(ADR 0273 決定7)。
   | ({ kind: "execution_settings_changed"; question_id?: string } & (

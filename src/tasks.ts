@@ -28,7 +28,7 @@ import {
 } from "./webui-rules.js";
 
 /** The one roster entry `human` gets (issue #43 / ADR 0014): human carries
- *  no registry definition, but CONTEXT.md's Roster still surfaces it as a
+ *  no registry definition, but GLOSSARY.md's Roster still surfaces it as a
  *  delegable worker. A single `RosterAgent` value, not a string and a
  *  separately-built object — claude-worker.ts's push roster formats it into
  *  a "name — description" line, mcp.ts's `list_agents` pull returns it
@@ -51,7 +51,7 @@ export const HUMAN_ROSTER_AGENT: RosterAgent = {
     "human attention is scarce, delegate only what genuinely needs a human",
 };
 
-/** Fallback for the board's Auditor pointer (CONTEXT.md) when no
+/** Fallback for the board's Auditor pointer (GLOSSARY.md) when no
  *  configuration overrides it — the pointer "常に値を持ち「未設定」という状態
  *  はない" (ADR 0013's issue #15 grilling notes). The shared literal lives in
  *  defaults.ts so boot and pre-boot registry seeding cannot drift. */
@@ -65,7 +65,7 @@ export const isRepairType = (type: TaskType): type is RepairType => (REPAIR_TYPE
 /** REPAIR_TYPES の SQL の `IN` の中身。 */
 const REPAIR_TYPES_SQL = REPAIR_TYPES.map((type) => `'${type}'`).join(", ");
 
-/** read-only 保証を運ぶ type(CONTEXT.md の type): review と修理子の type(ADR 0272 決定3 / ADR 0279 決定4)。repo への書き込みの床
+/** read-only 保証を運ぶ type(GLOSSARY.md の type): review と修理子の type(ADR 0272 決定3 / ADR 0279 決定4)。repo への書き込みの床
  *  (harness deny・spawn の面・sandbox・permission mode・Codex の profile)と lineage の透明さが同じここを引く。 */
 export const carriesReadOnly = (type: TaskType): boolean => type === "review" || isRepairType(type);
 
@@ -110,14 +110,14 @@ export interface Task {
   review_flag: number;
   review_by: string[] | null;
   review_tier: Tier | null;
-  /** The task's execution request (CONTEXT.md「要求」, ADR 0110 決定2): the
+  /** The task's execution request (GLOSSARY.md「要求」, ADR 0110 決定2): the
    *  required quality tier, or null when the text author stated none — the
    *  selector then falls back to the agent's `tier` and the board default,
    *  and records which of the three decided (`worker_spawned.source.tier`).
    *  Null is "unstated", never "the default was chosen". */
   tier: Tier | null;
   /** The other half of the request: how tied candidates are ordered
-   *  (CONTEXT.md「要求」). Stored only — the selector does not read it while
+   *  (GLOSSARY.md「要求」). Stored only — the selector does not read it while
    *  an agent speaks a single Provider and there is nothing to order. */
   priority: Priority | null;
   parent_id: string | null;
@@ -397,7 +397,7 @@ export function rowToTask({ tier_id: _tierId, review_tier_id: _reviewTierId, ...
 }
 
 /** One question in a bundle (issue #30): a single-item bundle is the
- *  degenerate case of the same shape (CONTEXT.md's Question), not a second
+ *  degenerate case of the same shape (GLOSSARY.md's Question), not a second
  *  form. `detail` holds implications specific to this item — the shared
  *  situation goes on the question task's `purpose` instead, so a triage
  *  reader isn't re-reading the same context once per item. */
@@ -434,9 +434,9 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   review_tier?: string;
   type: TaskType;
   parent_id?: string;
-  /** CONTEXT.md's risk flag — declares external effect at registration. */
+  /** GLOSSARY.md's risk flag — declares external effect at registration. */
   risk_flag?: boolean;
-  /** CONTEXT.md's review flag — opts this task into on-completion review
+  /** GLOSSARY.md's review flag — opts this task into on-completion review
    *  (layer 1) at registration time (issue #12). */
   review_flag?: boolean;
   /** Pre-assigns the task to a specific worker at registration (issue #11). */
@@ -462,7 +462,7 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   /** Issue-backed task reference (issue #49, ADR 0016): the GitHub issue
    *  number this task is a live reference to. Absent for an ordinary task. */
   github_issue_number?: number;
-  /** CONTEXT.md「要求」 — the required quality tier and the priority that
+  /** GLOSSARY.md「要求」 — the required quality tier and the priority that
    *  orders that tier's candidates (ADR 0110 決定2 / ADR 0114). Typed as open strings, not the
    *  enums, because every door keeps its schema permissive and lets this
    *  layer say once which values exist (`assertExecutionRequest`); a narrower
@@ -475,7 +475,7 @@ export interface RegisterTaskInput extends Partial<TaskContent>, Partial<Intervi
   interview_target_id?: number;
 }
 
-/** Interview の対象(CONTEXT.md「Interview」/ ADR 0199 決定2 / ADR 0273 決定6): (provider, model, effort)。表の行でなくてよく、
+/** Interview の対象(GLOSSARY.md「Interview」/ ADR 0199 決定2 / ADR 0273 決定6): (provider, model, effort)。表の行でなくてよく、
  *  advisor は名指さない。effort の null は「無い」という値(ADR 0218 決定5)。段は root の tier(測る段)。 */
 export interface InterviewTarget {
   provider: string;
@@ -761,7 +761,7 @@ export function assertTargetsRunnable(db: Db, rootId: string, candidates: TaskEx
  *  options, no recommendation.
  *
  *  An item's option floor relaxes to 1 only for an actual quarantine
- *  Confirmation question (issue #21, CONTEXT.md) — a `quarantine` kind, which
+ *  Confirmation question (issue #21, GLOSSARY.md) — a `quarantine` kind, which
  *  only the Quarantine module's registration ever does: it asks for a
  *  completion confirmation, not a choice, and a fake second option would be
  *  filler with no effect of its own. This is deliberately keyed on that field
@@ -818,7 +818,7 @@ function assertQuestionSpec(input: RegisterTaskInput): void {
   }
 }
 
-/** ADR 0110 決定2 / CONTEXT.md「要求」: the two request columns hold an enum
+/** ADR 0110 決定2 / GLOSSARY.md「要求」: the two request columns hold an enum
  *  each, stated **once**, here. Every door (JSON API, 管理MCP, worker MCP's
  *  decompose) keeps its own schema permissive and lets a bad value arrive as
  *  a DomainError from this layer — spelling the enum per door would mean
@@ -850,7 +850,7 @@ function assertGithubRef(input: RegisterTaskInput): void {
   if (input.github_issue_number !== undefined) {
     const reason = whyNotPositiveInteger(input.github_issue_number);
     if (reason) throw new DomainError(reason);
-    // CONTEXT.md defines the issue-backed task as a *work* task (issue #49
+    // GLOSSARY.md defines the issue-backed task as a *work* task (issue #49
     // 設計点8) — the restriction is the definition's, not any one door's
     if (input.type !== "work") {
       throw new DomainError("an issue-backed task must be a work task");
@@ -1093,7 +1093,7 @@ function assertReviewFieldsTakeEffect(
   if (reviewTier !== undefined && state.type !== "review" && state.type !== "interview") refuse("review_tier", whyNoCompletionReview(state));
 }
 
-/** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (CONTEXT.md "Review", #1512). */
+/** review_by is a set of names: naming the same reviewer twice is refused, not silently folded (GLOSSARY.md "Review", #1512). */
 function assertReviewByDistinct(reviewBy: string[] | undefined): void {
   if (reviewBy?.some(whyBlank)) throw new DomainError("review_by names cannot be blank");
   const dup = reviewBy?.find((name, i) => reviewBy.indexOf(name) !== i);
@@ -1515,7 +1515,7 @@ export type PickupStopped = Extract<QueueReturnPayload, { kind: "pickup_stopped"
 /** 0ターンで終わった session の、資源の署名による先頭復帰(ADR 0331 決定2・9)。 */
 export type SessionStoppedByResource = Extract<QueueReturnPayload, { kind: "session_stopped_by_resource" }>;
 
-/** 上限到達による中断(CONTEXT.md / ADR 0104 決定1・決定4): 走っていたタスクを
+/** 上限到達による中断(GLOSSARY.md / ADR 0104 決定1・決定4): 走っていたタスクを
  *  `todo` の先頭へ戻し、中断の事実を盤面名義で1件刻む。失敗ではないので
  *  failure question(`registerFailureQuestion`)は立たず、失敗統計も生まれない —— 再開の門は次の pickup の
  *  Throttle である。先頭復帰そのものは retry 回答と同じ `moveTask` の一撃。
@@ -1705,7 +1705,7 @@ export interface CancelDefaults {
   closedRootOf?: ClosedRootOf;
 }
 
-/** The direct-cancel question gate (issue #130, CONTEXT.md's Cancel): while a
+/** The direct-cancel question gate (issue #130, GLOSSARY.md's Cancel): while a
  *  Tidepool-registered question whose subject lies in the cancelled subtree
  *  remains open, direct cancel is refused. Otherwise the question would be
  *  stranded and its answer-only state transition broken. Two families qualify:
@@ -1765,7 +1765,7 @@ function assertNoGatingQuestion(db: Db, taskId: string, defaults: CancelDefaults
   }
 }
 
-/** The human's direct cancel (issue #130, CONTEXT.md's Cancel): the second
+/** The human's direct cancel (issue #130, GLOSSARY.md's Cancel): the second
  *  cancel path beside abandon. Its scope line is wider than edit's (ADR 0198,
  *  `assertDirectlyCancellableScope` — human-authored or a board-registered
  *  root other than a question, unsettled), the target and
@@ -1982,7 +1982,7 @@ export function isLandingQuestion(task: QuestionColumns<TierRef>): boolean {
  *  either). This deliberately leaves two documented exceptions untouched:
  *  an agent's own escalate question, whose free-text override is a real
  *  feature (escalate.test.ts), and a Confirmation question (quarantine
- *  resolution), which takes any answer text as a repair note (CONTEXT.md's
+ *  resolution), which takes any answer text as a repair note (GLOSSARY.md's
  *  Quarantine) — neither carries this kind of consequence. */
 export function isFixedChoiceQuestion(question: QuestionColumns<TierRef>): boolean {
   switch (questionKindOf(question).kind) {
@@ -2039,7 +2039,7 @@ export function needsComment(question: QuestionColumns<TierRef>): string[] {
  *
  *  Every system-internal special case below (abandon, quarantine
  *  confirmation, pending-child approval) is reachable only through a
- *  length-1 question (CONTEXT.md's Confirmation question / ADR 0006), so each
+ *  length-1 question (GLOSSARY.md's Confirmation question / ADR 0006), so each
  *  reads `answers[0]` — the degenerate case of the same bundle shape, not a
  *  second code path.
  *
@@ -2834,7 +2834,7 @@ function brokenProbeReported(db: Db, rootId: string): boolean {
 export interface ChildSpec extends TaskContent {
   review_by?: string[];
   review_tier?: string;
-  /** Declares this child has external effect (CONTEXT.md's risk flag). A
+  /** Declares this child has external effect (GLOSSARY.md's risk flag). A
    *  child riskier than its parent is out of the registering worker's
    *  authority: decomposeTask converts it into an approval question rather
    *  than registering it (ADR 0002 / issue #11). */
@@ -2853,7 +2853,7 @@ export interface ChildSpec extends TaskContent {
    *  sits outside the authority checks above, unlike risk_flag/assignee/
    *  workspace). */
   review_flag?: boolean;
-  /** The child's own execution request (CONTEXT.md「要求」): the decomposing
+  /** The child's own execution request (GLOSSARY.md「要求」): the decomposing
    *  parent's judgement about how hard this slice is, carried into the
    *  child's own pickup. Same open-string posture as RegisterTaskInput. */
   tier?: string;
@@ -2991,7 +2991,7 @@ export function recordPrNumber(db: Db, taskId: string, prNumber: number): void {
  *  opens and the board takes no further action — a declared inertness, not a
  *  residual one, so it is spelled as its own case below (ADR 0079).
  *  A task executing against a protected workspace
- *  (CONTEXT.md / ADR 0013) always asks, same as `escalate`, overriding
+ *  (GLOSSARY.md / ADR 0013) always asks, same as `escalate`, overriding
  *  whatever dial (including none) the executing worker's profile carries —
  *  "PR to a protected workspace always needs a human merge" is a
  *  resource-side invariant, independent of the dial. */
@@ -3155,7 +3155,7 @@ export function decomposeTask(
   actorId: string,
   now: Date,
   authority: AuthorityContext | undefined,
-  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
    *  protected workspace / ADR 0013), resolved by the caller against the
    *  registry. A protected target converts unconditionally, regardless of
    *  the registering worker's `allowed_workspaces` — "changes to it always
@@ -3236,7 +3236,7 @@ export function decomposeTask(
       if (child.workspace !== undefined && isProtectedWorkspace?.(child.workspace)) {
         reasons.push(`targets protected workspace "${child.workspace}"`);
       }
-      // an unstated workspace inherits the parent's (CONTEXT.md): it was
+      // an unstated workspace inherits the parent's (GLOSSARY.md): it was
       // already authorized when the parent landed there, so this is a
       // default fill-in, never itself a reason for a question
       const workspace = child.workspace ?? parent.workspace ?? undefined;
@@ -3344,7 +3344,7 @@ export function assertUnsettledNotInProgress(task: Task, verb: string): void {
   }
 }
 
-/** The human-decompose gate (issue #129, CONTEXT.md's Decompose: "線は
+/** The human-decompose gate (issue #129, GLOSSARY.md's Decompose: "線は
  *  「agent の判断がまだ存在しないところ」"). A human may add a child to
  *  `parent` only when all three hold: `parent` is unsettled, `parent` is not
  *  in_progress, and `parent` carries no child an agent has already registered
@@ -3365,7 +3365,7 @@ function assertHumanDecomposable(db: Db, parent: Task): void {
   }
 }
 
-/** The edit scope gate (issue #130, CONTEXT.md's Edit): the task must be
+/** The edit scope gate (issue #130, GLOSSARY.md's Edit): the task must be
  *  human-authored (agent-authored children, including approved ones, are out of scope; the
  *  objection → repair route handles dissatisfaction with it; a
  *  board-registered task's text is the board's own instruction, ADR 0198
@@ -3379,7 +3379,7 @@ function assertHumanEditableScope(db: Db, task: Task): void {
   assertUnsettledNotInProgress(task, "edited");
 }
 
-/** The direct-cancel scope gate (ADR 0198 / 0211, CONTEXT.md's Cancel): the task must
+/** The direct-cancel scope gate (ADR 0198 / 0211, GLOSSARY.md's Cancel): the task must
  *  be human-authored or a root other than a question (an Interview examinee has no
  *  parent but is no root), unsettled. The cascade's stop-approval gate covers in_progress. An agent registers only children (decompose children,
  *  escalate questions), so a root the human did not register is the board's —
@@ -3407,7 +3407,7 @@ function assertDirectlyCancellableScope(db: Db, task: Task, closedRootOf: Closed
  *  (`decomposeTask` — one decision, children queue at the tail, the parent
  *  returns to `todo` and blocks on the derived-unfinished-children rule until
  *  they all settle) with the registering worker fixed to `human` and no
- *  authority restrictions (CONTEXT.md's Worker: "人間は全権限を持つ
+ *  authority restrictions (GLOSSARY.md's Worker: "人間は全権限を持つ
  *  worker") — `outsideAuthority`'s own "no allowlist configured means
  *  unrestricted" reading already gives this for free by passing `authority:
  *  undefined`, so no separate bypass is needed. The reason is required, just
@@ -3436,7 +3436,7 @@ export function humanDecomposeTask(
 }
 
 /** The fields a human may overwrite on a registered task (issue #130,
- *  CONTEXT.md's Edit). Deliberately a subset of RegisterTaskInput: `type`,
+ *  GLOSSARY.md's Edit). Deliberately a subset of RegisterTaskInput: `type`,
  *  `parent_id`, and `github_issue_number` are absent because they are not
  *  editable (a type change is a permission-model swap; a parent relink is the
  *  objection route's tree surgery; the issue reference is the burned-in
@@ -3456,12 +3456,12 @@ export interface EditTaskInput {
 
 /** issue #130: the one risk edit the spec names as machine-refused — a
  *  **demotion** that would break the upward-propagation invariant "parent risk
- *  ≥ approved child risk" (CONTEXT.md's Risk flag: "risk ありの未決着子を持つ
+ *  ≥ approved child risk" (GLOSSARY.md's Risk flag: "risk ありの未決着子を持つ
  *  親を risk なしへ下げる編集は拒否"). Clearing a task's risk while it still has
  *  an unsettled risk-bearing child would drop the parent below an already-
  *  approved child. The promotion direction (raising a child above a non-risk
  *  parent) is deliberately NOT refused here: the spec names only the demotion,
- *  and CONTEXT.md's Risk flag keeps declared risk a *secondary* input to
+ *  and GLOSSARY.md's Risk flag keeps declared risk a *secondary* input to
  *  attention allocation ("誤分類によって監査から逃れることはできない"), so a
  *  human's edit-time promotion needs no re-escalation. Only called when the
  *  flag actually flips off. */
@@ -3481,7 +3481,7 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
 }
 
 /** Edit a registered task's unconsumed fields in place (issue #130,
- *  CONTEXT.md's Edit). The scope line (`assertHumanEditableScope`):
+ *  GLOSSARY.md's Edit). The scope line (`assertHumanEditableScope`):
  *  human-authored, unsettled, not in_progress — narrower than direct
  *  cancel's (ADR 0198).
  *  Values are consumed at spawn / pickup / completion, so a rewrite before
@@ -3491,7 +3491,7 @@ function assertRiskDemotionKeepsInvariant(db: Db, task: Task): void {
  *  statistical purity). Unchanged fields emit nothing.
  *
  *  Issue-backed content and workspace are immutable here (their source of
- *  truth is the GitHub issue / the burned-in reference identity — CONTEXT.md);
+ *  truth is the GitHub issue / the burned-in reference identity — GLOSSARY.md);
  *  the assignee/workspace/reviewer registry-resolution recheck is the caller's, mirror
  *  of registration (see api.ts), since it needs the injected registry seams. */
 export function editTask(
@@ -3554,7 +3554,7 @@ export function editTask(
   // text, nullable, and boolean fields. An unchanged submission (same value)
   // is a no-op — no event. The `field` doubles as the (hardcoded, never
   // input-derived) column name in the UPDATE below. An empty assignee/
-  // workspace string means "unset — resolve to the board default" (CONTEXT.md's
+  // workspace string means "unset — resolve to the board default" (GLOSSARY.md's
   // Assignee/Workspace), so it is normalized to null, same "" ⇢ default the
   // registration door omits the field for — before the first pickup only (below).
   const flag = (v: number): string => (v ? "true" : "false");
@@ -3606,7 +3606,7 @@ export function editTask(
   return getTask(db, task.id)!;
 }
 
-/** The one SQL shape of the derived-blocked rule (CONTEXT.md): an unsettled
+/** The one SQL shape of the derived-blocked rule (GLOSSARY.md): an unsettled
  *  child the parent waits for — either part of a decomposition decision or an
  *  escalation question — or, for a posed Interview root, its unsettled audit or a target whose answer
  *  task is unsettled (ADR 0267 決定2: 出題前の対象は task を持たないので塞がない / ADR 0273 決定3).
@@ -3827,7 +3827,7 @@ export function countUnsettledAttachedChildren(db: Db, taskId: string): number {
 }
 
 /** Resolve the execution agent for a task that can enter the slot
- * (CONTEXT.md's Assignee/Auditor; an Interview root's unset assignee goes to
+ * (GLOSSARY.md's Assignee/Auditor; an Interview root's unset assignee goes to
  * the Interviewer pointer, ADR 0269 決定2). Questions are answered by a human and have
  * no execution agent; accepting one here would hide a broken execution path. */
 export function resolveTaskAgent(
@@ -3843,7 +3843,7 @@ export function resolveTaskAgent(
 }
 
 /** The type-aware execution fallback pointer the assignee gates COALESCE an
- *  unset assignee to (issue #42 / #242 / CONTEXT.md's Auditor): a question has
+ *  unset assignee to (issue #42 / #242 / GLOSSARY.md's Auditor): a question has
  *  no executor, an unset review resolves to the Auditor pointer — an Interview
  *  root's to the Interviewer pointer (ADR 0269 決定2) — and an unset work task
  *  resolves to the board's default agent. The statement binds
@@ -3904,7 +3904,7 @@ export function openedPlaceNames(db: Db, taskId: string, defaultWorkspaceName: s
   return (JSON.parse(names) as (string | null)[]).filter((name): name is string => name !== null);
 }
 
-/** Held (CONTEXT.md, ADR 0006 / 0048): while a question is unanswered, keep
+/** Held (GLOSSARY.md, ADR 0006 / 0048): while a question is unanswered, keep
  *  everything its abandon answer could cancel out of the slot. A general
  *  question still holds its parent's children downward. A failure question
  *  holds the failed task's descendants plus each unfinished same-decision
@@ -3946,7 +3946,7 @@ function heldSql(idRef: string): string {
             (SELECT id FROM tasks WHERE type = 'question'))`;
 }
 
-/** Settled tree (CONTEXT.md's Board, issue #35): walks every tree down from
+/** Settled tree (GLOSSARY.md's Board, issue #35): walks every tree down from
  *  its root, tagging each task with that root's id and whether the task
  *  itself is unsettled (not done/cancelled). A root's tree only fully
  *  retreats from the board once none of its descendants are unsettled — a
@@ -4011,7 +4011,7 @@ export function getRegistrant(db: Db, taskId: string): string {
   return latestEventOfTask(db, taskId, "task_registered")!.actor_id;
 }
 
-/** 文面の書き手(CONTEXT.md の Registrant / ADR 0197): 分解判断に乗る task ならその分解判断の書き手、
+/** 文面の書き手(GLOSSARY.md の Registrant / ADR 0197): 分解判断に乗る task ならその分解判断の書き手、
  *  無ければ登録者。承認で実体化した子は登録者が human でも、書き手は分解した agent。 */
 export function getTextAuthor(db: Db, taskId: string): string {
   const decision = getTask(db, taskId)!.based_on_decision;
@@ -4196,14 +4196,14 @@ export function listBoard(
  *  quarantine (ADR 0097 決定2), or every one of its entries excluded (ADR 0110
  *  決定3). Board-wide halts are not row properties and never reach here: the queue read's
  *  envelope answers them once with `boardHalts` (ADR 0068 決定4). `skipped` is
- *  display-only and queue-view-only (CONTEXT.md's Quarantine) — it never
+ *  display-only and queue-view-only (GLOSSARY.md's Quarantine) — it never
  *  reaches `listBoard`/`presentTask`, so the board keeps showing plain `todo`
  *  while the condition holds. `defaultWorkspaceName` mirrors `nextSlotTask`'s own pickup
  *  gate (every place the task opens, `openedPlaceNamesSql`, whose own workspace is
  *  the derived one falling back to the board's default — ADR 0009 / ADR 0290) —
  *  absent, no workspace tracking exists and the gate is skipped entirely.
  *  `defaultAgentName`/`auditorName` resolve an unset assignee the same
- *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / CONTEXT.md's
+ *  type-aware way (`typeAwareDefaultAgentSql`, issue #42 / GLOSSARY.md's
  *  Auditor) before it is matched against `stopped.assignees`; an absent
  *  pointer leaves the rows that would have fallen back to it ungated. A `human`-assignee
  *  task never appears here at all (issue #13): it lives outside the
@@ -4600,7 +4600,7 @@ export function unsettledExaminees(db: Db, rootId: string): Task[] {
  *  gate entirely, same as no workspace tracking existing.
  *
  *  `stopped.assignees` is matched against `task.assignee ??` the type-aware
- *  fallback (ADR 0012 / issue #36 / issue #42 / CONTEXT.md's Auditor): an
+ *  fallback (ADR 0012 / issue #36 / issue #42 / GLOSSARY.md's Auditor): an
  *  unset review resolves to `auditorName`, an unset work task to
  *  `defaultAgentName` — `typeAwareDefaultAgentSql` picks the pointer per row
  *  by `t.type`. An absent pointer leaves the rows that would have fallen back

@@ -271,7 +271,7 @@ function gateFailureStatus(kind: GateFailure["kind"]): 400 | 404 | 422 | 502 | 5
 // the edit payload (issue #130): a strict subset of registerTaskSchema — only
 // the editable fields, and strict so an attempt to edit an immutable field
 // (type / parent_id / github_issue_number) is a 400 rather than a silent drop
-// (CONTEXT.md's Edit: those are 編集不可). The issue-backed content/workspace
+// (GLOSSARY.md's Edit: those are 編集不可). The issue-backed content/workspace
 // immutability and the risk invariant live in the domain (editTask), so a
 // caller gets a domain error there — this file's usual split.
 const editTaskSchema = z.strictObject({
@@ -335,7 +335,7 @@ const createWorkspaceCommon = z.object({
 });
 const createWorkspaceSchema = z.discriminatedUnion("mode", [
   // confirm は register だけが持つ(issue #383): 信号の同意であって、危険な値
-  // (ADR 0061 / CONTEXT.md「危険な値」)の族ではない
+  // (ADR 0061 / GLOSSARY.md「危険な値」)の族ではない
   createWorkspaceCommon.extend({
     mode: z.literal("register"),
     path: requiredTextSchema,
@@ -488,7 +488,7 @@ const displayLanguageSchema = z.object({
 });
 
 // display-time translation (issue #47 / ADR 0015): a discriminated union over
-// the 3 UX surfaces (CONTEXT.md's toggles) — triage log skim (log_entry,
+// the 3 UX surfaces (GLOSSARY.md's toggles) — triage log skim (log_entry,
 // any decision-log row by event id: a decision line, a completion report, a
 // premise breach, a memory write; log_entries is the skim's chunk of them,
 // ADR 0296 決定4), question card, handoff expansion — plus memory (issue
@@ -520,7 +520,7 @@ function isValidTimezone(tz: string): boolean {
   }
 }
 
-// the human's own pause toggle (CONTEXT.md's Pause, issue #34) — never
+// the human's own pause toggle (GLOSSARY.md's Pause, issue #34) — never
 // exposed via MCP (the same human-steering-channel posture as answering and
 // reordering)
 const pauseSchema = z.object({
@@ -630,7 +630,7 @@ export interface ApiRouterDeps {
    *  needs this to call `pushManager.subscribe`. Absent → push is not
    *  configured on this board at all. */
   vapidPublicKey?: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), threaded to
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2), threaded to
    *  `/api/queue`'s `skipped` display: a `review` task's unset assignee gates
    *  on this pointer's quarantine instead of `defaultAgentName` (issue #42,
    *  `listQueue`'s own `typeAwareDefaultAgentSql`). Same shape as
@@ -674,7 +674,7 @@ export interface ApiRouterDeps {
   /** The retrospective Board calls: POST /triage/close awaits attribution (ADR 0168);
    *  drafting and allocation review are fired by the poll sweep (ADR 0169 / ADR 0172). */
   retrospectiveCalls: RetrospectiveCallDeps;
-  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
    *  protected workspace / ADR 0013), threaded straight to human decompose's
    *  own call into decomposeTask (issue #129) — same resource-side invariant
    *  the MCP `decompose` tool's own `isProtectedWorkspace` already enforces
@@ -898,7 +898,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       } else if (err instanceof LiveCheckoutSignalsError) {
         // issue #383: 危険な値の 409 と同じラウンドトリップ(WebUI の
         // useDangerousSave がそのまま乗る)。ただし理由コードの欄は分ける ——
-        // この信号は CONTEXT.md「危険な値」の族ではなく、同じ欄に載せると
+        // この信号は GLOSSARY.md「危険な値」の族ではなく、同じ欄に載せると
         // ADR 0088 の「確認は WebUI 専用」がここまで及ぶと読める。
         // `clone_landing` はサーバが合成した着地先で、origin を持たない
         // checkout では null —— 出せる代替の入口が無いことを、空文字ではなく null で言う
@@ -1291,7 +1291,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
           return;
         }
         // resolves an issue-backed parent's *live* content (ADR 0016: the
-        // board never special-cases an issue-backed parent — CONTEXT.md's
+        // board never special-cases an issue-backed parent — GLOSSARY.md's
         // Decompose point 6), same short-TTL cache/resolver GET routes use
         const live = await issueContent.present(
           presentTask(db, parent, defaultAgentName, auditorName, interviewerName),
@@ -1956,7 +1956,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
     return providerUsage.length === 0 ? {} : { providerUsage };
   }
 
-  // ADR 0109 決定2 / CONTEXT.md「後始末」: 「今なぜ pickup が起きないか」に答える
+  // ADR 0109 決定2 / GLOSSARY.md「後始末」: 「今なぜ pickup が起きないか」に答える
   // 読み口は、盤面全体の停止の列挙と**並べて**後始末を報せる。想定どおり走っている
   // 後始末は停止ではなく枠がまだ空いていないだけなので、列挙には入らない —— 人間から
   // 見れば「タスクは done なのに次が始まらない」であり、説明が無ければ古い停止と
@@ -2009,7 +2009,7 @@ export function createApiRouter(deps: ApiRouterDeps): Router {
       return;
     }
     // resuming is the one explicit "run now" trigger pause carries
-    // (CONTEXT.md's Pause) — pausing itself fires nothing
+    // (GLOSSARY.md's Pause) — pausing itself fires nothing
     const resuming = isPaused(db) && !parsed.data.paused;
     setPaused(db, parsed.data.paused);
     if (resuming) pollNow();

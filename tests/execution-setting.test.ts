@@ -338,7 +338,7 @@ it("盤面設定の変更の検証は advisor の上限5値だけを受け、旧
   expect(executionSettingsChangeSchema.safeParse({ setting: "advisor_above_main", value: true }).success).toBe(false);
 });
 
-it("優先順位は quality / cost の2値で、既定は quality(CONTEXT.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
+it("優先順位は quality / cost の2値で、既定は quality(GLOSSARY.md「要求」/ ADR 0114 決定1: speed は落とした)", () => {
   expect(PRIORITIES).toEqual(["quality", "cost"]);
   expect(BOARD_DEFAULT_PRIORITY).toBe("quality");
 });

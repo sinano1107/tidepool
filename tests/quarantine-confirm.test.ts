@@ -65,7 +65,7 @@ it("task の応答は quarantine を kind と value の2欄で運び、種類ご
   ]);
 });
 
-// v1 has one board workspace and slot concurrency 1 (CONTEXT.md), so a
+// v1 has one board workspace and slot concurrency 1 (GLOSSARY.md), so a
 // second tree-rule failure on an already-quarantined workspace can never
 // arise through the ordinary scheduler/HTTP/MCP path — the pickup gate
 // (workspaceNeedsHuman) already keeps any second task out of the slot. The

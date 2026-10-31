@@ -1269,7 +1269,7 @@ function RegisterScreen({ onRegister, parentTask, onClose }) {
     risk_flag: risk,
     ...showReviewFlag ? { review_flag: review } : {},
     // unset assignee/workspace resolve to the board's defaults at
-    // execution time (CONTEXT.md) — omit rather than send '' so an
+    // execution time (GLOSSARY.md) — omit rather than send '' so an
     // unknown-workspace 400 never fires on a field the human left blank
     ...assignee ? { assignee } : {},
     ...workspace.trim() ? { workspace: workspace.trim() } : {},
@@ -4276,7 +4276,7 @@ function mapData(board, log, pause, icons, triage, queueEnvelope, yourTasks) {
     never_ran: "worker never ran \xB7 freeing the slot"
   };
   const slot = running ? paused ? { color: "var(--rock-4)", line: "pickup paused \xB7 task finishes, nothing new starts", meta: "poll idle", taskId: running.id } : { color: "var(--tide-4)", line: liveTitle(running), meta: running.assignee ?? "", taskId: running.id } : pickupHalt ? pickupHalt.slot : teardown ? {
-    // ADR 0109 決定2 / CONTEXT.md「後始末」: 枠を握っているのは task ではなく
+    // ADR 0109 決定2 / GLOSSARY.md「後始末」: 枠を握っているのは task ではなく
     // session である。**停止ではない**ので HALT_COPY には居ない —— 人間から見た
     // 「タスクは done なのに次が始まらない」に、待ちの色で答える行がこれ
     color: "var(--sun-4)",

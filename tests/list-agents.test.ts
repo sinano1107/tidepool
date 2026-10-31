@@ -47,7 +47,7 @@ it("list_agents は委譲できる agent を返し、assignable_to の内外を 
   }
 });
 
-it("list_agents は registry に定義の無い human も、direct/needs_approval 込みで roster に載せる(CONTEXT.md の Roster)", async () => {
+it("list_agents は registry に定義の無い human も、direct/needs_approval 込みで roster に載せる(GLOSSARY.md の Roster)", async () => {
   t = await bootTidepool({
     listAgents: () => [],
     resolveAuthority: () => ({

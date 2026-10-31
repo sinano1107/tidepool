@@ -1,6 +1,6 @@
 import type { Db } from "./db.js";
 
-/** Board-wide pickup pause (CONTEXT.md's Pause): a human-only toggle, one row,
+/** Board-wide pickup pause (GLOSSARY.md's Pause): a human-only toggle, one row,
  *  with no auto-resume — clearing it is purely manual (issue #34). No row means
  *  never paused. */
 export function setPaused(db: Db, paused: boolean): void {

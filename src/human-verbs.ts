@@ -752,7 +752,7 @@ export function quarantineChecks(deps: QuarantineCheckDeps): QuarantineChecks {
       },
     }),
     // ADR 0097 決定2 / issue #446: 確認を鵜呑みにせず、その provider を喋る
-    // 再検証を回答受理の直前に撃つ(CONTEXT.md「Quarantine」の検証つき解除)。
+    // 再検証を回答受理の直前に撃つ(GLOSSARY.md「Quarantine」の検証つき解除)。
     ...(providerCliAuth && clock && {
       providerAuth: async (value) => {
         const provider = value as Provider;

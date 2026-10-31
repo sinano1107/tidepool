@@ -10,7 +10,7 @@ export type ParentBriefing = Partial<TaskContent> & {
 /** The single execution slot (concurrency = 1, ADR 0001): one in-process fact.
  *
  *  枠を占めるのは **worker session であって task ではない**(ADR 0109 決定2 /
- *  CONTEXT.md「Slot」)—— タスクが決着しても、その session の後始末が終わるまで
+ *  GLOSSARY.md「Slot」)—— タスクが決着しても、その session の後始末が終わるまで
  *  枠は空かない。`inTeardown` がその局面を表す。 */
 export class Slot {
   private taskId: string | null = null;
@@ -22,7 +22,7 @@ export class Slot {
     return this.taskId;
   }
 
-  /** 後始末(CONTEXT.md「後始末」)に入っているか。最終 verb が着地してから
+  /** 後始末(GLOSSARY.md「後始末」)に入っているか。最終 verb が着地してから
    *  回収済み観測が届いて枠が空くまでの間だけ true —— この間、その session が
    *  盤面に触れる口は attribution の門が閉じている(ADR 0109 決定6)。 */
   get inTeardown(): boolean {

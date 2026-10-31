@@ -134,7 +134,7 @@ function TpSegmentGauge({ total, filled }: { total: number; filled: number }) {
 // its own item's value, never submits on its own.
 // translated: { title, detail } for this item (issue #47), shown as a second
 // line under each original — the options below never take a translated
-// variant (CONTEXT.md's scope exclusion: a mistranslated option is a
+// variant (GLOSSARY.md's scope exclusion: a mistranslated option is a
 // 30-second decision an agent reads back).
 function TpQuestionItemPicker({ item, value, locked, freeText, onChange, translated, disabled = [] }: {
   item: TpQuestionItem;
@@ -460,7 +460,7 @@ function TpMemoryAmendment({ candidateId, onTranslate, onChange, onDeadAddressee
 // in item order — only from its Submit button, which stays disabled until
 // every item has a pick. An answer can merge a PR or cancel a tree with no
 // way back, so a mis-tap only ever changes the draft (issue #1233). Still one submission for the whole
-// bundle, never a partial-answer state (CONTEXT.md's Question).
+// bundle, never a partial-answer state (GLOSSARY.md's Question).
 // onTranslate(target): the display-time translation seam (issue #47 / ADR
 // 0015), a POST /api/translate caller — absent in the standalone kit (no
 // toggle rendered), passed through by both TriageScreen (section 0) and
@@ -673,7 +673,7 @@ const S_COMMIT = 4;
 
 // 盤面が返す回答不能の理由(`landing.blocked_by`)を1行の文言にする。判定は盤面側で
 // 済んでいるので、ここは描画だけ(ADR 0092 決定4)。"held" とは呼ばない —
-// CONTEXT.md の Held は祖先の未回答 question による導出状態で「question 自身は held の
+// GLOSSARY.md の Held は祖先の未回答 question による導出状態で「question 自身は held の
 // 影響を受けない」と定義されており、同じ画面の `hold` 回答とも読み違えられる。
 const TP_LANDING_BLOCKED: Record<string, string> = {
   attached_children: 'attached children unsettled',
@@ -1217,7 +1217,7 @@ function TriageScreen({ data, onCommit, loadHandoff, onAnswer, onObject, onScrat
       )}
 
       {section === S_COMMIT && (() => {
-        // 振り分けと束ねの件数は終端に置く(CONTEXT.md の Scratchpad / Objection) —
+        // 振り分けと束ねの件数は終端に置く(GLOSSARY.md の Scratchpad / Objection) —
         // どちらもコミットが適用する行為であって、キューの確認ではない
         return (
           <div>

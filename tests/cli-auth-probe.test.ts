@@ -154,7 +154,7 @@ it("api_error_status を伴わない「session limit」の文言からは推測�
   expect(isCapInterruptionEnvelope(null)).toBe(false);
 });
 
-/** 行の拒否(CONTEXT.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。401 / 429 と同じ形で、envelope の
+/** 行の拒否(GLOSSARY.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。401 / 429 と同じ形で、envelope の
  *  構造化フィールド一点だけを見る。 */
 it("result envelope の api_error_status: 404 だけを行の拒否に分類する(ADR 0184 決定3)", () => {
   // moonshot(Claude CLI 2.1.286)が未知の id に返した envelope の形(2026-10-01 実測、#1249)

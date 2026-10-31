@@ -1,7 +1,7 @@
 # 学習器(shadow)の参照設計
 
 spec #541「学習器(shadow)」/ ADR 0110 決定4 / issue #548 の実装が置いた統計モデルの記述。
-コードは `src/learner.ts`、用語は CONTEXT.md「学習器」「実行設定」「要求」「Selector」「帰責」「配分評価」。
+コードは `src/learner.ts`、用語は GLOSSARY.md「学習器」「実行設定」「要求」「Selector」「帰責」「配分評価」。
 この文書は「なぜこの式か」を持ち、コードは「何をするか」だけを持つ。
 
 ## 位置

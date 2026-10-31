@@ -9,7 +9,7 @@ export interface QuietHoursConfig {
   /** "HH:MM", exclusive end of the quiet window, read against tz's wall
    *  clock. */
   end: string;
-  /** The one board timezone (CONTEXT.md's Timezone, ADR 0022) this window is
+  /** The one board timezone (GLOSSARY.md's Timezone, ADR 0022) this window is
    *  read against — set only via POST /api/settings/timezone, never by
    *  setQuietHours. */
   tz: string;

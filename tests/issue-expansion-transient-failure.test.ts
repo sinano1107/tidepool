@@ -218,7 +218,7 @@ it("連続が開いている間、queue は GitHub を読む task を skipped �
   expect(rows.find((row: any) => row.id === waiting.id).status).toBe("todo");
 });
 
-it("連続が開いている間、GitHub を読む task は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0328 決定7 / CONTEXT.md「Pickable head」)", async () => {
+it("連続が開いている間、GitHub を読む task は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0328 決定7 / GLOSSARY.md「Pickable head」)", async () => {
   t = await bootTidepool({ workspace: await makeWorkspace("tidepool") });
   issueBacked(49);
   t.github.scriptIssueFailure(new Error("GitHub is down"));

@@ -40,7 +40,7 @@ export async function refreshRegistryForWrite(
  *  で確認を要求するので、資源ごとにクラスを分ける意味が無い。危険な値の確認
  *  (ADR 0061 決定1)と同じく執行はドメインの verb 内に1箇所、API は 409
  *  `confirm_required` に写す。**理由コードは持たない**: 危険な値の
- *  `DangerousValueReason` は「権限を広げる値」の列挙(CONTEXT.md 危険な値)で
+ *  `DangerousValueReason` は「権限を広げる値」の列挙(GLOSSARY.md 危険な値)で
  *  あって削除はその族ではなく、削除に問う理由は「消すのか」1つきりだから
  *  である —— 資源ごとの説明は WebUI 側の文言が持つ。 */
 type DeletionResource = "agent" | "workspace" | "profile";

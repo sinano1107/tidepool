@@ -535,7 +535,7 @@ describe("ClaudeDraftClient", () => {
       missing: "completion criteria cannot be derived",
       suggested_comment: "## Completion criteria\n- the login form submits cleanly",
     });
-    // 「issue」= タイトル + 本文 + 全コメント(CONTEXT.md)を検査対象に渡す
+    // 「issue」= タイトル + 本文 + 全コメント(GLOSSARY.md)を検査対象に渡す
     const prompt = calls[0]!.input!;
     expect(prompt).toContain("曖昧なメモ");
     expect(prompt).toContain("なんとかする");

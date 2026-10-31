@@ -123,7 +123,7 @@ it.each([
   expect(started()).toEqual([next.id]);
 });
 
-// CONTEXT.md「収束」: 同じ checkout で pickup の fetch・checkout と着地の push が重ならない —— 逆向きも同じ
+// GLOSSARY.md「収束」: 同じ checkout で pickup の fetch・checkout と着地の push が重ならない —— 逆向きも同じ
 it("poll が走っている間に届いた契機の収束は、その poll が終わってから走る", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("converge-after-poll");
   const poll = awaitWindow();

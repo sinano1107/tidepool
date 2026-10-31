@@ -1,7 +1,7 @@
 # 呼び手の SQL の `json_extract` の path を `EventPayload` の型の下に置く
 
 events モジュールの外の SQL が `json_extract(payload, '$.x')` で payload のフィールドを参照するのを、型から導く path・読み口への
-移設・lint のいずれでも縛らない。payload の rename からの守りは振る舞いのテストが担う(CONTEXT.md「イベント履歴の読みの線」)。
+移設・lint のいずれでも縛らない。payload の rename からの守りは振る舞いのテストが担う(GLOSSARY.md「イベント履歴の読みの線」)。
 
 ## なぜ範囲外か
 

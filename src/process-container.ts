@@ -60,7 +60,7 @@ export type PtyFn = (
  *  reason の文面が担うのであって、型ではない)。 */
 export type ContainerRuntimeCapability = SandboxCapability;
 
-/** 1つの単位(worker session、または Board call 1回)ぶんの容器(CONTEXT.md「容器」)。 */
+/** 1つの単位(worker session、または Board call 1回)ぶんの容器(GLOSSARY.md「容器」)。 */
 export interface ProcessContainer {
   /** 容器の中への spawn。その単位に属する process は全部この中で生きる。 */
   spawn: ContainerSpawn;
@@ -87,7 +87,7 @@ export interface ProcessContainer {
  *  reclaimed の意味はここで1度だけ書かれる。 */
 export interface ContainerRuntime {
   /** 機構前提検査(ADR 0099 決定5)。boot 時だけでなく pickup と quarantine 回答時
-   *  にも読み直される(CONTEXT.md「Containment capability」)。毎回の live kill
+   *  にも読み直される(GLOSSARY.md「Containment capability」)。毎回の live kill
    *  canary は行わない — ここで見るのは前提の存在だけである。`live` は supervisor
    *  が今持っている単位の id — 稼働中の容器を前回の run の残骸と読み違えないため。 */
   preflight(live?: ReadonlySet<string>): ContainerRuntimeCapability;

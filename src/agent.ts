@@ -29,7 +29,7 @@ export interface ResolvedAgent {
   profile: AuthorityProfile;
 }
 
-/** CONTEXT.md's Assignee: `task.assignee` is a reference to a registry agent
+/** GLOSSARY.md's Assignee: `task.assignee` is a reference to a registry agent
  *  name, resolved fresh against the registry every time it's used (spawn,
  *  quarantine clearance). Null falls back to `defaultAgentName`; a work task
  *  picked up never carries null, since pickup writes the default's name
@@ -111,7 +111,7 @@ export function resolveAgentOrQuarantine(
   }
 }
 
-/** Quarantine resolution's verification gate for an agent name (CONTEXT.md's
+/** Quarantine resolution's verification gate for an agent name (GLOSSARY.md's
  *  Quarantine, ADR 0012 / issue #36) — never taken on faith. Clearance holds
  *  either the registry has the name back (`resolution` is `"registry"`), or there is no more
  *  unsettled work left depending on it and no completed task awaiting landing

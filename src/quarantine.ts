@@ -1,4 +1,4 @@
-/** Quarantine(CONTEXT.md)の種類の表(ADR 0137 決定1・2)。1種類足すことは下の表に
+/** Quarantine(GLOSSARY.md)の種類の表(ADR 0137 決定1・2)。1種類足すことは下の表に
  *  1行足すことである。行が持つのは kind・散文の組み立て・停止範囲で、**いつ立てるかは
  *  呼び出し側に残る** —— 生きた検査の位置と順序は ADR 0008 / 0030 / 0052 が根拠を持つ。
  *
@@ -340,7 +340,7 @@ export const QUARANTINES = [
     }),
   },
   {
-    // Worker MCP 到達性(CONTEXT.md「Quarantine」/ ADR 0331 決定7)。値は Harness 名。止める範囲は封じ込め能力と同じ形
+    // Worker MCP 到達性(GLOSSARY.md「Quarantine」/ ADR 0331 決定7)。値は Harness 名。止める範囲は封じ込め能力と同じ形
     kind: "workerMcpReachability",
     scope: "assignees",
     excludesProviders: providersOnHarnesses,
@@ -375,7 +375,7 @@ export const QUARANTINES = [
     },
   },
   {
-    // 行の拒否(CONTEXT.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)——
+    // 行の拒否(GLOSSARY.md / ADR 0184)。値は `tableRowValue` の綴り。文面は原因を断言しない(決定1)——
     // 例外は CLI の版の古さで、構造化された証拠が区別するので原因を名指す(ADR 0187 決定3)。原因は値に
     // 入れない: 鍵は (provider, model) で、別の原因の2度目の観測は再発火だけで文面は最初の原因のまま
     kind: "tableRow",
@@ -543,7 +543,7 @@ export function openQuarantineQuestions(db: Db, kind: QuarantineKind): Map<strin
 /** The agent-name generalization of workspace.ts's quarantineWorkspace (ADR
  *  0012 / issue #36): put the repair in front of the human as a 1-choice
  *  Confirmation question (its tasks stay out of the slot while it is open) —
- *  same shape, same "1 resource, at most 1 open question" dedup (CONTEXT.md's
+ *  same shape, same "1 resource, at most 1 open question" dedup (GLOSSARY.md's
  *  Quarantine). Lives here rather than in agent.ts because landing.ts calls it
  *  and agent.ts value-imports landing.ts — a cycle ADR 0204 決定1 forbids
  *  (issue #1709). */

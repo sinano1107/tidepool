@@ -153,7 +153,7 @@ const REVIEW_BASH_WRITE_DENIALS = [
 
 /** read-only 保証を運ぶ type(review と修理子の type、`carriesReadOnly`)の harness deny(ADR 0013 追記 / issue #59 /
  *  ADR 0272 決定3 / ADR 0279 決定4): read-only は task type の性質であって実行エージェントの性質ではない
- *  (CONTEXT.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
+ *  (GLOSSARY.md の Review、ADR 0013)——ので、この関数は `task.type` だけを見る。
  *  従来の reviewer profile(registry.ts の REVIEWER_AUTHORITY_PROFILE)は MCP verb
  *  層(decompose/list_agents の assignable_to・allowed_workspaces)の強制で、
  *  ここはその追記が狙う CLI ツール層の強制 — 両方とも「task type が profile を
@@ -166,7 +166,7 @@ export function reviewToolDenials(taskType: Task["type"]): string[] {
   return ["Edit", "Write", "NotebookEdit", ...REVIEW_BASH_WRITE_DENIALS];
 }
 
-// ツール許可リスト(CONTEXT.md の Tool allowlist / ADR 0039)。**盤面のコード
+// ツール許可リスト(GLOSSARY.md の Tool allowlist / ADR 0039)。**盤面のコード
 // 定数**であって registry データではない — 床はデータの状態に依存しない
 // (ADR 0013、`REVIEW_BASH_WRITE_DENIALS` / `src/sandbox.ts` と同じ位置づけ)。
 // 面を決めるのは task type で、agent のデータが面を広げることはない。agent に依る
@@ -258,7 +258,7 @@ export function spawnTools(taskType: Task["type"], slashCommandsDisabled: boolea
  *  封じ込め能力の不成立に化ける。それは別の障害であり別の扱いを受けるべきである。 */
 const MCP_TOOL_PREFIX = "mcp__";
 
-/** 封じ込め能力の3つ目の問い(ADR 0039 決定3 / CONTEXT.md の Containment
+/** 封じ込め能力の3つ目の問い(ADR 0039 決定3 / GLOSSARY.md の Containment
  *  capability): **観測されたツール面が盤面の宣言どおりか**。ツール面のドリフトは
  *  workspace の性質でも agent の性質でもなく**ホストの性質**である — このホストの
  *  CLI が盤面の宣言を honor しなくなった、という事実 — なので、既存2つ(fs
@@ -318,7 +318,7 @@ function checkToolSurface(
       ? `it attached the MCP server ${unexpectedServers.join(", ")}, which the board never declared`
       : undefined,
   ].filter((part) => part !== undefined);
-  // 宣言したツール面は ADR 0039 / ADR 0108、見るもの(Tool allowlist)は CONTEXT.md
+  // 宣言したツール面は ADR 0039 / ADR 0108、見るもの(Tool allowlist)は GLOSSARY.md
   return {
     available: false,
     reason:
@@ -827,10 +827,10 @@ export interface ClaudeWorkerOptions {
   registry: RegistrySource;
   /** Agent name in the registry (`agents/<name>.md`). */
   agent: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2), same shape
    *  as `agent` above — the fallback a `review` task's unset `assignee`
    *  resolves to at spawn (issue #42), instead of `agent`. Absent →
-   *  `DEFAULT_AUDITOR_NAME` (the pointer always resolves — CONTEXT.md's
+   *  `DEFAULT_AUDITOR_NAME` (the pointer always resolves — GLOSSARY.md's
    *  Auditor). */
   auditorName?: string;
   /** The board's Interviewer pointer (ADR 0269 決定2): what an Interview
@@ -1127,7 +1127,7 @@ export function readToolSurface(
  *  撃ち**、観測されたツール面を `checkToolSurface` に渡す。
  *
  *  **memoize しない**のが要件である。解除は「能力検査を回答時にもう一度走らせて
- *  成立する」ことで検証される(CONTEXT.md の Quarantine)ので、再実行できない検査は
+ *  成立する」ことで検証される(GLOSSARY.md の Quarantine)ので、再実行できない検査は
  *  確認 question を受理できない。呼ばれるのは起動時 / pickup ごと / quarantine の
  *  回答受理時。
  *
@@ -1622,7 +1622,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       }
     }
     // a review task's unset assignee resolves to the Auditor pointer, not
-    // this worker's configured default agent (issue #42 / CONTEXT.md's
+    // this worker's configured default agent (issue #42 / GLOSSARY.md's
     // Auditor: independent review's value is its distance from the original
     // judgment, so it must never fall back to the same agent that did the
     // work) — work keeps resolving to `this.options.agent`; questions have no
