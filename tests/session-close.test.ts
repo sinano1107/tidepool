@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { claudeExitFields, claudeStreamObservation, observeClaudeLine } from "../src/claude-stream-reader.js";
@@ -171,11 +171,12 @@ const CODEX_STREAM = [
 ];
 
 /** live の adapter と同じ形で、読み手に1行ずつ食わせる。 */
-function liveClaude(lines: string[]) {
+function observeClaude(lines: readonly string[]) {
   const observed = claudeStreamObservation();
   for (const line of lines) observeClaudeLine(observed, parseStreamLine(line));
-  return claudeExitFields(observed);
+  return observed;
 }
+const liveClaude = (lines: string[]) => claudeExitFields(observeClaude(lines));
 function liveCodex(lines: string[]) {
   const observed = codexStreamObservation();
   for (const line of lines) observeCodexLine(observed, parseJsonl(line));
@@ -214,6 +215,22 @@ it("Claude の読み手は行の列から usage 一式・CLI の報告した失�
     reported_error: "API error status 500: Overloaded",
     last_message: "parser done",
   });
+});
+
+const fixture = (name: string) => readFileSync(join(import.meta.dirname, "fixtures", name), "utf8").split("\n");
+
+it.each([
+  ["CLI が合成した `<synthetic>` の行と 401 の result 行だけ", [
+    JSON.stringify({ type: "system", subtype: "init", model: "claude-sonnet-5" }),
+    JSON.stringify({ type: "assistant", message: { model: "<synthetic>", content: [{ type: "text", text: "Invalid API key" }] } }),
+    JSON.stringify({ type: "result", is_error: true, api_error_status: 401 }),
+  ], false],
+  ["subagent の行だけ", [JSON.stringify({ type: "assistant", parent_tool_use_id: "t1", message: { model: "claude-haiku-5", content: [{ type: "text", text: "sub" }] } })], false],
+  ["上限到達の実測(`<synthetic>` の行だけ)", fixture("worker-session-cap-429.stream.jsonl"), false],
+  ["root の tool_use", [JSON.stringify({ type: "assistant", message: { model: "claude-sonnet-5", content: [{ type: "tool_use", id: "u1", name: "Bash", input: {} }] } })], true],
+  ["実 session の実測", fixture("worker-session-2.1.237.stream.jsonl"), true],
+] as const)("Claude の読み手は root のモデルの応答を観測したときだけターンが走ったと読む —— %s(ADR 0331 決定2)", (_, lines, ran) => {
+  expect(observeClaude(lines).turnRan).toBe(ran);
 });
 
 it("Codex の読み手は行の列から正規化した usage・`turn.failed` の文・最後の発話を作る", () => {

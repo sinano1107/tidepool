@@ -21,10 +21,11 @@ export interface RowRefusal {
   cause: RowRefusalCause;
 }
 
-/** worker を起動する前に pickup を止めた資源の Quarantine(ADR 0274 決定2): 種類・値・登録の理由。 */
+/** pickup を止めた資源の Quarantine(ADR 0274 決定2)と、0ターンで終わった session が署名で止めた資源(ADR 0331 決定3・4):
+ *  種類・値(盤面全体の封じ込めは null)・登録の理由。 */
 export interface ResourceStop {
-  quarantine: "workspaceContainment" | "workspace" | "agent";
-  value: string;
+  quarantine: "workspaceContainment" | "workspace" | "agent" | "providerAuth" | "containment";
+  value: string | null;
   reason: string;
 }
 
@@ -230,6 +231,9 @@ export type EventPayload =
   // ADR 0274: worker を起動する前に資源の Quarantine が pickup を止め、タスクが失敗にされずに `todo` の先頭へ戻された。
   // failure question は無い —— 資源の question がもう開いている
   | ({ kind: "pickup_stopped" } & ResourceStop)
+  // ADR 0331 決定2・9: process は起きたが0ターンで終わった session が資源の署名を持ち、止めた資源を先に登録して `todo` の先頭へ
+  // 戻された。pickup_stopped は流用しない —— 後始末が「process を持たなかった」と読み、checkout を休止位置へ戻さなくなる
+  | ({ kind: "session_stopped_by_resource"; worker_spawned_event_id: number } & ResourceStop)
   // ADR 0073: a completed root work task had no commits to carry to its
   // protected branch. This is a board-observed fact, not a human decision.
   | { kind: "nothing_to_land"; base: string }

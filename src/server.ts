@@ -58,7 +58,7 @@ import type { AttributionClient, BehaviorDraftClient, RetrospectiveCallDeps } fr
 import { type Scheduler, startScheduler, type TaskExecutionCandidates } from "./scheduler.js";
 import { closeUnclosedSessions } from "./session-close.js";
 import { Slot } from "./slot.js";
-import { getTask, type PickupStopped, type TaskType } from "./tasks.js";
+import { getTask, type PickupStopped, type SessionStoppedByResource, type TaskType } from "./tasks.js";
 import { acceptTeardownQuarantine, resumeUnfinishedTeardown, type TeardownDeps } from "./teardown.js";
 import type { RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -108,6 +108,8 @@ export type WorkerFactory = (deps: {
   onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
   /** ADR 0274: 資源の Quarantine が spawn の前に止めた pickup を受ける盤面側の一撃(`queueReturnHandler` 製)。 */
   onPickupStopped: (taskId: string, payload: PickupStopped) => void;
+  /** ADR 0331 決定2・4: 資源の署名を持つ0ターンの session を受ける盤面側の一撃(同じ `queueReturnHandler` 製)。 */
+  onSessionStoppedByResource: (taskId: string, payload: SessionStoppedByResource) => void;
   /** ADR 0145: root process の exit を受ける盤面側の一撃(watchdog の `onWorkerExited`)。 */
   onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
   /** ADR 0149: session ごとの transcript を開く盤面側の器。失敗の一撃は盤面が差し込み済み。 */
@@ -488,6 +490,8 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
     onSpawnFailed,
     onRecordContainerFailed,
     onPickupStopped,
+    // ADR 0331 決定2: 0ターンの session の先頭復帰も同じ一撃を通る(ADR 0274 決定4)
+    onSessionStoppedByResource: onPickupStopped,
     // ADR 0145: watchdog は worker の後に組まれるので、遅延で引く(`heldForContainment` と同じ)
     onWorkerExited: (taskId, exit, cap) => watchdog?.onWorkerExited(taskId, exit, cap),
     transcripts: options.transcripts,

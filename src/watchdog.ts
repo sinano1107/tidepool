@@ -226,7 +226,9 @@ export function rowRefusalHandler(
  *  形は行の拒否(ADR 0184 決定4)と同じ: 先頭復帰と後始末の印を1 transaction に置き、後始末中の status は `todo` なので
  *  経路は process を1つも持たなかった session の step に読まれる(ADR 0113 決定3 / ADR 0274 決定3)—— drift で解決できない
  *  workspace の Quarantine を撃ち直さず、動いていない checkout に触れないのは、記録から導く後始末の側である(再起動を跨ぐ)。
- *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。 */
+ *  process の無い容器へ強制回収を撃つのは `failAndReclaim` と同じ。3つ目の入口は process は起きたが0ターンで終わった session
+ *  (`session_stopped_by_resource`、ADR 0331 決定2・9)で、`worker_exited` が先に書かれているので後始末は走った session の step
+ *  (退避・tree rule・休止位置)に読む。強制回収は exit の時点で送達済みで、2度目の送達は回収の意味を変えない。 */
 export function queueReturnHandler(
   deps: TeardownDeps,
   containers: ProcessContainers,

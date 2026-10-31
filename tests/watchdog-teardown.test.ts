@@ -653,14 +653,47 @@ it("1度目の pickup で止まり、2度目の pickup で走ってエスカレ�
   expect(git(f.ws.path, "status", "--porcelain")).toContain("wip.txt");
 });
 
-it("資源の停止で後始末の印の書き込みが落ちると、pickup_stopped は残らず、タスクは in_progress のまま(issue #1935)", async () => {
+it.each([
+  { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: "unknown agent" },
+  { kind: "session_stopped_by_resource", quarantine: "providerAuth", value: "anthropic", reason: "401", worker_spawned_event_id: 1 },
+] as const)("資源の停止で後始末の印の書き込みが落ちると、$kind は残らず、タスクは in_progress のまま(issue #1935)", async (payload) => {
   const f = await stoppedBeforeSpawn();
   failTeardownMark(f.db);
 
-  expect(() => f.handler(f.task.id, { kind: "pickup_stopped", quarantine: "agent", value: "ghost", reason: "unknown agent" })).toThrow("teardown mark failed");
+  expect(() => f.handler(f.task.id, payload)).toThrow("teardown mark failed");
 
   expect(getTask(f.db, f.task.id)?.status).toBe("in_progress");
-  expect(listEvents(f.db, f.task.id).map((e) => e.kind)).not.toContain("pickup_stopped");
+  expect(listEvents(f.db, f.task.id).map((e) => e.kind)).not.toContain(payload.kind);
+});
+
+it.each([
+  ["そのまま", false],
+  ["再起動を跨いで", true],
+])("0ターンで終わった session の先頭復帰は、走った session と同じく退避して休止位置へ戻し、止めた資源の Quarantine を撃ち直さずに枠を空ける —— %s(ADR 0331 決定2・9)", async (_, restart) => {
+  const f = await stoppedBeforeSpawn();
+  const spawnedId = appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: WORKER_SPAWNED, at: f.clock.now() });
+  appendEvent(f.db, { taskId: f.task.id, actorId: "deckhand", origin: "board", payload: { kind: "worker_exited", advisor: null, model_swaps: [], refusals: [], ...QUIET_EXIT, exit_code: 1, worker_spawned_event_id: spawnedId, output_closed: true, usage: null }, at: f.clock.now() });
+  await writeFile(`${f.ws.path}/wip.txt`, "left by the session\n");
+  const stop = { quarantine: "providerAuth", value: "anthropic", reason: "401" } as const;
+  registerQuarantine(f.db, stop.quarantine, stop.value, stop.reason, f.clock.now());
+  const question = openQuarantineQuestion(f.db, "providerAuth", "anthropic")!;
+  if (restart) f.runtime.hold(f.task.id);
+
+  f.handler(f.task.id, { kind: "session_stopped_by_resource", ...stop, worker_spawned_event_id: spawnedId });
+  await settle();
+  const slot = restart ? restartMidTeardown(f, f.resolve) : f.slot;
+  await settle();
+
+  const returned = getTask(f.db, f.task.id)!;
+  expect(returned.status).toBe("todo");
+  expect(returned.sort_key).toBe(Math.min(...listBoard(f.db).map((t) => t.sort_key)));
+  expect(git(f.ws.path, "show", `task/${f.task.id}:wip.txt`)).toBe("left by the session");
+  expect(git(f.ws.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("main");
+  expect(questions(f.db).map((q) => q.id)).toEqual([question.id]);
+  expect(listEvents(f.db, question.id).map((e) => e.kind)).not.toContain("quarantine_refired");
+  expect(slot.currentTaskId).toBeNull();
+  expect(markedSession(f.db)).toBeUndefined();
+  expect(f.triggered).toEqual(["pollNow"]);
 });
 
 it("回収済み観測が中断の一撃より先に届いていても(Codex の読み直しの順)、中断は failure question を立てず、task を todo の先頭へ戻して cap_interrupted を残す(ADR 0261)", async () => {

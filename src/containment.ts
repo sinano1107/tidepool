@@ -14,7 +14,8 @@
  *  コードを信じるだけだが、後者は listen したリスナー・ミドルウェアの順序・
  *  credential の解決までを一度に測る。 */
 import type { Db } from "./db.js";
-import { quarantineUnlessClear, registerQuarantine } from "./quarantine.js";
+import type { ResourceStop } from "./events.js";
+import { quarantineUnlessClear, registerResourceStop } from "./quarantine.js";
 import { CAPABILITY_PROBE_TIMEOUT_MS, type SandboxCapability } from "./sandbox.js";
 
 /** 成立か、不成立ならその理由か。fs 検査(`SandboxCapability`)と同じ形を使う —
@@ -101,9 +102,9 @@ export async function checkHumanSurfaceRefusesAnonymous(
 /** ADR 0033 の fail-closed stop を issue #154 が広げたもの。quarantineWorkspace /
  *  quarantineAgent の host-wide 版で、封じ込めが成立しないホストは盤面全体の
  *  pickup を止め(封じ込めはホストと盤面自身の性質なので、止められるより狭い
- *  資源が存在しない)、Tidepool 名義の確認型 question を1枚立てる。 */
-export function quarantineContainment(db: Db, reason: string, now: Date): void {
-  registerQuarantine(db, "containment", null, reason, now);
+ *  資源が存在しない)、Tidepool 名義の確認型 question を1枚立てる。返すのは止めた資源(ADR 0331 決定4)。 */
+export function quarantineContainment(db: Db, reason: string, now: Date): ResourceStop {
+  return registerResourceStop(db, "containment", null, reason, now);
 }
 
 /** pickup ゲート: worker を1枚も spawn してよくない間 true。検査が初めて落ちた

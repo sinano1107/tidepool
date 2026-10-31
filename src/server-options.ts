@@ -89,7 +89,7 @@ import {
 import { checkSandboxCapability } from "./sandbox.js";
 import type { TaskExecutionCandidates } from "./scheduler.js";
 import type { BoardCallers, ServerOptions, WorkerFactory } from "./server.js";
-import { type PickupStopped, resolveTaskAgent, type Task, type TaskType } from "./tasks.js";
+import { type PickupStopped, resolveTaskAgent, type SessionStoppedByResource, type Task, type TaskType } from "./tasks.js";
 import { tierNames } from "./tier.js";
 import { type RecordContainerError, TranscriptStore } from "./transcript-store.js";
 import type { TranslationClient } from "./translate.js";
@@ -269,6 +269,7 @@ export function buildWorkerOptions(
     onSpawnFailed: (taskId: string, failure: { error_code: string | null; message: string }) => void;
     onRecordContainerFailed: (taskId: string, err: RecordContainerError) => void;
     onPickupStopped: (taskId: string, payload: PickupStopped) => void;
+    onSessionStoppedByResource: (taskId: string, payload: SessionStoppedByResource) => void;
     onWorkerExited: (taskId: string, exit: WorkerExit, capInterrupted: WorkerExitClassification) => void;
     transcripts: TranscriptStore;
   },
@@ -309,6 +310,8 @@ export function buildWorkerOptions(
     onRecordContainerFailed: session.onRecordContainerFailed,
     // ADR 0274: 渡し忘れは「資源の Quarantine が止めた pickup が in_progress のまま枠を握る」形で静かに fail する
     onPickupStopped: session.onPickupStopped,
+    // ADR 0331 決定2: 渡し忘れは「資源の署名を持つ0ターンの session が判断の無い failure question になる」形で静かに fail する
+    onSessionStoppedByResource: session.onSessionStoppedByResource,
     // ADR 0145: 渡し忘れは「報告なしに exit した session が時間制限まで枠を握る」形で静かに fail する
     onWorkerExited: session.onWorkerExited,
     // ADR 0149: transcript は盤面側の器が開く
