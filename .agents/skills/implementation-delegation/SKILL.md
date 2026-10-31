@@ -8,7 +8,7 @@ argument-hint: "[issue] [codex|claude]"
 
 決めるのは**モデル・effort・/code-review 強度**の3つ。「Opus 5.5 / medium」という判断の形で渡し、起動は人間が手動で指示する。
 
-**対象: $ARGUMENTS** —— issue 番号の後に `codex` / `claude` があればその提供元だけ、無ければ両方。§1〜§3 は提供元非依存 —— 同じ判断を §4 / §5 の表に写すだけ。ティアの対応は**役割で揃える**(§5 の対応表): 上位 = Fable 5.1 ↔ Astra、主力 = Opus 5.5 ↔ Sol、廉価 = Sonnet 5.5 ↔ Terra(§5 の条件付き)。
+**対象: $ARGUMENTS** —— issue 番号の後に `codex` / `claude` があればその提供元だけ、無ければ両方。§1〜§3 は提供元非依存 —— 同じ判断を §4 / §5 の表に写すだけ。主力 = Opus 5.5 ↔ Sol、廉価 = Sonnet 5.5 ↔ Terra(§5 の条件付き)。
 
 ## 出力
 
@@ -24,11 +24,13 @@ argument-hint: "[issue] [codex|claude]"
 
 | | 仕様が明確 | 仕様が曖昧/探索的 |
 |---|---|---|
-| **失敗コストが高い** | 上位ティア / high | `/grilling` で曖昧さを解消してから再判定(初回上限 xhigh) |
+| **失敗コストが高い** | 主力ティア / high | `/grilling` で曖昧さを解消してから再判定(初回上限 xhigh) |
 | **失敗コストが普通** | 主力ティア / medium | 主力ティア / high |
 | **機械的・反復的** | 廉価ティア / 提供元別の既定(§4・§5) | ——(曖昧なら廉価ティアに出さない) |
 
 **既定は主力ティア / medium。上げる理由を言えるときだけ上げる**: 床に触る(権限・封じ込め・ブランチ規律・不変条件の執行点)/ 既存テストが旧挙動を assert している(仕様変更かバグかの区別を委任先が付ける)/ スキーマ変更の判断を含む。
+
+主力の強度は実装・レビューとも `medium → high → xhigh` の順で上げる。廉価モデルで扱えない判断は主力へ移し、主力ではモデルを替えず effort を上げる。
 
 ### max は再試行
 
@@ -47,9 +49,9 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 ## 2. /code-review 強度
 
 - **実装難度ではなく、間違いの現れ方で決める。** 上げるのは失敗が**静か**な面 —— 記録の汚染、開くだけのセキュリティ窓、挙動不変のはずの逸脱など、テストが緑のまま動いて見える方向。fail-closed に**うるさく**壊れる面(スキーマ拒否で止まる、受け入れ基準の赤で見える)は実装と同モデルで足りる。上げるときは「この間違いはどう静かに壊れるか」を issue ごとに1行。パターン踏襲の実装を強くレビューする逆転も、この軸から自然に出る(migration 等、見所が1点なら下げてよい)。
-- **実装と同じ提供元・設定が既定。** 上の1行が書けたときだけ1段上げ(初回の上限は `xhigh`)、判断が割れるなら同じ設定に置く。review のトークンが実装より少ないことは理由にならない。別系列レビューは残量に余裕があるときの任意の上乗せ。
+- **実装と同じ提供元・設定が既定。** 上の1行が書けたときだけ §1 の順で1段上げ(初回の上限は `xhigh`)、判断が割れるなら同じ設定に置く。review のトークンが実装より少ないことは理由にならない。
 - **Codex**: モデルも effort も動かせる。spawn 時は必ず両方渡す(model だけでは compute budget が確定しない)。エージェントファイル側の設定は spawn 時より強いので、都度指定するならファイル側で固定しない。
-- **Claude Code**: Codex と同じく spawn 時に model と effort を渡す(Agent tool の `effort`。環境変数 `CLAUDE_CODE_EFFORT_LEVEL` だけは上書きできない)。梯子も同形: `Opus 5.5 / medium → Opus 5.5 / high → Opus 5.5 / xhigh → Fable 5.1`。モデルを1段上げると価格2.5倍(§4 の週次上限も共有)なので、同じ1行が書けたら先に effort で上げ、モデルは effort を登り切ってから。
+- **Claude Code**: Codex と同じく spawn 時に model と effort を渡す(Agent tool の `effort`。環境変数 `CLAUDE_CODE_EFFORT_LEVEL` だけは上書きできない)。
 - **インライン実行する構成だけはモデルも effort も動かさない**(effort はプロンプトにレンダリングされキャッシュが飛ぶ)。
 - **上げられないときは issue 本文で埋める**(発動条件はトークン残量と、リポジトリの `/code-review` が別物に差し替わっているときの2つだけ): 不変条件をテストファイル名で列挙する / 判断の分岐を PR 本文に書かせる。
 
@@ -67,31 +69,27 @@ compute で埋めず、`/grilling`・issue の補完・分割のいずれかで�
 
 | モデル | 向くタスク |
 |---|---|
-| **Fable 5.1** | 一発で解けていない難問、長時間の自律実装。既定 `high`。1リクエストが数分〜十数分走るので待ち方を先に決める |
 | **Opus 5.5** | 主力。複数ファイル実装・大きめリファクタ・床。既定 `medium`(Claude Code の既定)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
 | **Sonnet 5.5** | 既存パターン踏襲、テスト追加、定型配線。既定 `medium` —— モデル既定は `high` のままだが段が Sonnet 5 から再較正され、agentic coding は `medium` が起点。`low` は変更を検証せず完了報告しやすい |
 | **Haiku 5.5** | rename、機械的置換、大量読み取り。既定 `medium`(モデル既定)、effort は `low`〜`max`。価格はプロンプト 100K トークン以下で 0.10 / 0.50、超えると 0.50 / 2.50 |
 
-Max 席では Fable 5.1 も他モデルと同じ週次 usage limit を共有(上限50%)。
-
 ## 5. Codex(鮮度 2026-10-28。モデルが変わっていたら公式資料と実行環境の選択肢で更新)
 
-このスキルで **Sol は GPT-6.1 Sol (`gpt-6.1-sol`)、Terra は GPT-6.1 Terra (`gpt-6.1-terra`)** を指す。Codex の選定結果と spawn には表のモデル ID を使う。人間が旧モデルを明示指定した場合はその指定を守る。
+このスキルで **Sol は GPT-6.1 Sol (`gpt-6.1-sol`)、Terra は GPT-6.1 Terra (`gpt-6.1-terra`)** を指す。Codex の選定結果と spawn には表のモデル ID を使う。
 
 対応は**役割で揃える**。Claude 側の相方は能力の同等性を示さない。標準 API の入出力単価(in / out USD per MTok)は Sol 2 / 10、Terra 1 / 5。この比率から Codex の usage limit 消費は推定しない。
 
 | モデル(ID) | Claude 側の相方 | 向くタスク |
 |---|---|---|
-| **GPT-6 Astra** (`gpt-6-astra`) | Fable 5.1 | 一発で解けていない難問、床。既定 `high`。`ultra` は effort の延長ではない別枠 orchestration mode —— 選ぶ前に効果を検証 |
 | **GPT-6.1 Sol** (`gpt-6.1-sol`) | Opus 5.5 | 主力。複数ファイル実装・大きめリファクタ。既定 `medium`(OpenAI 既定、Opus 5.5 と同じ)、仕様が曖昧・床は `high`、要求の厳しい作業だけ `xhigh` |
 | **GPT-6.1 Terra** (`gpt-6.1-terra`) | Sonnet 5.5 | 下記の条件を満たす、既存パターンに沿った小修正。起点 `medium` |
 | **GPT-6 Luna** (`gpt-6-luna`) | Haiku 5.5 | rename、機械的置換、大量処理 |
 
-**Terra の選定条件**: 仕様・変更範囲・検証方法が明確で、既存パターンを踏襲する小修正。新しいドメイン判断、複数境界の調整、床(権限・封じ込め・不変条件の執行点等)を含む場合は Sol 以上を §1 で選ぶ。ファイル数や「テスト追加」「定型配線」という作業名だけでは決めず、委任先に残る判断で選ぶ。迷ったら Sol。
+**Terra の選定条件**: 仕様・変更範囲・検証方法が明確で、既存パターンを踏襲する小修正。新しいドメイン判断、複数境界の調整、床(権限・封じ込め・不変条件の執行点等)を含む場合は Sol の effort を §1 で選ぶ。ファイル数や「テスト追加」「定型配線」という作業名だけでは決めず、委任先に残る判断で選ぶ。迷ったら Sol。
 
-Terra のレビューで §2 の静かな失敗面を1行で示せたら、effort より先にモデルを Sol / medium 以上へ上げる。
+Terra のレビューで §2 の静かな失敗面を1行で示せたら、effort より先にモデルを Sol へ上げ、effort は medium 以上で選ぶ。
 
-effort は提供モデルで幅が違う: GPT-6.1 Sol / GPT-6 Astra は `low` / `medium` / `high` / `xhigh` / `max`、GPT-6.1 Terra / GPT-6 Luna はそれらに `none` を加えた範囲。実行環境で選べる範囲を確認する。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。強度を上げる梯子は `gpt-6.1-sol / medium → gpt-6.1-sol / high → gpt-6.1-sol / xhigh → gpt-6-astra`。
+effort は提供モデルで幅が違う: GPT-6.1 Sol は `low` / `medium` / `high` / `xhigh` / `max`、GPT-6.1 Terra / GPT-6 Luna はそれらに `none` を加えた範囲。実行環境で選べる範囲を確認する。low=軽作業、medium=標準・既定、high=曖昧さ・床、xhigh=難所、max=§1 の再試行。
 
 モデル・effort の根拠: [GPT-6.1 Sol](https://developers.openai.com/api/docs/models/gpt-6.1-sol)、[GPT-6.1 Terra](https://developers.openai.com/api/docs/models/gpt-6.1-terra)、[OpenAI のモデル選定ガイド](https://developers.openai.com/api/docs/guides/model-selection)。
 
@@ -99,14 +97,3 @@ effort は提供モデルで幅が違う: GPT-6.1 Sol / GPT-6 Astra は `low` / 
 
 - **Claude Code**: スキル・MCP・指示ファイルが効くが、スキルが差し替わっていることがある —— 特定の呼び方を前提にせず issue 本文で埋める(§2)。
 - **Codex App**: skill 発見は `.agents/skills` / `~/.agents/skills`。対話できるので、人間応答待ちのステップに「確認不要」と書き添えない。
-
-## 7. 実例(すべて「失敗コスト高 × 仕様明確」。判断の型の見本であって既定値ではない)
-
-| 案件 | 実装 | /code-review |
-|---|---|---|
-| #236/#237(床)Codex | Sol / xhigh・Sol / high | Sol / xhigh |
-| #236/#237(床)Claude | Opus 5 / high | Opus 5 / 親を継ぐ ← 床でも既定のまま |
-| #288(信頼境界)Claude | Opus 5 / high | **Fable 5** / 親を継ぐ ← 信頼境界の静かな窓が理由 |
-| #341/#342(ADR 0079)Claude | Opus 5 / high(両方) | #341 は Opus 5(fail-closed にうるさく壊れる)・#342 は **Fable 5**(観測の偽記録という静かな汚染) |
-
-床の #236/#237 でも Claude 側は既定のまま出しており、上げないことは不足ではない(当時の直接の理由は残量だが、1行が書けなければ同じ結論)。#288 は仕様が ADR に書き切れていたので実装は上げず、上げたのはレビューだけ。#341/#342 は同じ ADR 発の隣接 issue でもレビュー強度が割れた見本 —— 表の写経ではなく issue ごとの「どう静かに壊れるか」1行が決める。#131(Codex)は分割で Sol xhigh / Terra high / Terra medium に落ちた(Terra は当時の旧世代モデルで、分割後の定型部分を担当。GPT-6.1 Terra の実績ではない)。
