@@ -1242,6 +1242,69 @@ describe("ClaudeCodeWorker", () => {
     expect(deny).not.toContain("Skill(code-review)");
   });
 
+  // issue #2774: `.claude/skills/*` を `.agents/skills/*` への相対 symlink で置く checkout(tidepool 自身)
+  const symlinkedSkillWorkspace = async () => {
+    const wsDir = await tempDir("tidepool-ws-");
+    await mkdir(join(wsDir, ".agents", "skills", "inner"), { recursive: true });
+    await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
+    await symlink("../../.agents/skills/inner", join(wsDir, ".claude", "skills", "inner"));
+    return wsDir;
+  };
+
+  it("checkout の内側の dir を指す symlink の skill は @workspace で deny されず、worker_spawned の workspace と permitted に入る(issue #2774)", async () => {
+    const wsDir = await symlinkedSkillWorkspace();
+    const rec = recordingEnumerator(["inner", "tdd", "plug:deploy"]);
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@workspace"\n') },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-skill-symlink");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Skill(plug:deploy)");
+    expect(deny).not.toContain("Skill(inner)");
+    const spawned = listEvents(db, "task-skill-symlink").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["inner", "tdd"], permitted: ["inner", "tdd"] } });
+  });
+
+  it("checkout の内側の dir を指す symlink の skill は @host だけの agent では deny される(issue #2774)", async () => {
+    const wsDir = await symlinkedSkillWorkspace();
+    const rec = recordingEnumerator(["inner", "tdd", "plug:deploy"]);
+    const { start, calls } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@host"\n') },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start();
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const deny = disallowedTools(calls[0]!.args);
+    expect(deny).toContain("Skill(inner)");
+    expect(deny).not.toContain("Skill(plug:deploy)");
+  });
+
+  it("checkout の外・名前が前方一致する隣の dir・壊れた先・ファイルを指す symlink は数えず、spawn は進む(issue #2774)", async () => {
+    const parent = await tempDir("tidepool-ws-parent-");
+    const wsDir = join(parent, "ws");
+    const outside = await tempDir("tidepool-outside-");
+    await mkdir(join(wsDir, ".claude", "skills", "tdd"), { recursive: true });
+    await mkdir(join(outside, "ext"));
+    await mkdir(join(`${wsDir}-other`, "sibling"), { recursive: true });
+    await writeFile(join(wsDir, "file.md"), "not a skill");
+    const skillsDir = join(wsDir, ".claude", "skills");
+    await symlink(join(outside, "ext"), join(skillsDir, "ext"));
+    await symlink("../../../ws-other/sibling", join(skillsDir, "sibling"));
+    await symlink("../../missing", join(skillsDir, "broken"));
+    await symlink("../../file.md", join(skillsDir, "file"));
+    const rec = recordingEnumerator(["tdd", "ext", "sibling"]);
+    const { start, calls, db } = await makeWorker(
+      { "workspaces.yaml": `tidepool:\n  path: ${wsDir}\n`, "agents/deckhand.md": skilledMd('  - "@workspace"\n') },
+      { enumerateSkills: rec.enumerateSkills },
+    );
+    start("task-skill-symlink-rejected");
+    await vi.waitFor(() => expect(calls).toHaveLength(1));
+    const spawned = listEvents(db, "task-skill-symlink-rejected").find((e) => e.kind === "worker_spawned")!;
+    expect(spawned.payload).toMatchObject({ skills: { workspace: ["tdd"], permitted: ["tdd"] } });
+  });
+
   // ADR 0325 決定2: 帰責の判事が scope を引けるよう、spawn の記録は allowlist の形に関わらず checkout の skill と許可した集合を持つ
   it.each([
     ["*", '  - "*"\n', "all"],
