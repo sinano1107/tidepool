@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
 /** The board's own git identity: the author on the tree rule's WIP commits
  *  (releaseTree) and on the registry commits the WebUI flows make (issue #57,
@@ -40,10 +41,24 @@ export function gitWithInput(input: string, cwd: string, ...args: string[]): str
 }
 
 function run(cwd: string, args: string[], env?: NodeJS.ProcessEnv, input?: string): Buffer {
-  return execFileSync("git", args, {
-    cwd,
-    env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env },
-    input,
-    stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-  });
+  try {
+    return execFileSync("git", args, {
+      cwd,
+      env: { ...process.env, ...TIDEPOOL_GIT_IDENTITY_ENV, ...env },
+      input,
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+  } catch (err) {
+    rethrowNamingMissingCwd(err, cwd, args);
+  }
+}
+
+/** 盤面の git の2つの口(`run` と github-auth.ts の `runAuthedGit`)が共有する。Node は cwd が無いときも git が
+ *  PATH に無いときも在り処を言わない「spawnSync git ENOENT」だけを投げ、それが quarantine の理由にそのまま載る
+ *  (issue #2722)—— cwd が無いほうだけを在り処を名指す理由に書き換え、git が無いほうは元のまま投げる。 */
+export function rethrowNamingMissingCwd(err: unknown, cwd: string, args: string[]): never {
+  if ((err as NodeJS.ErrnoException).code === "ENOENT" && !existsSync(cwd)) {
+    throw new Error(`\`git ${args[0]}\` cannot run: the directory ${cwd} does not exist`, { cause: err });
+  }
+  throw err;
 }

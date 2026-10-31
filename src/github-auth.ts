@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
+import { rethrowNamingMissingCwd } from "./git.js";
 import { parseGitHubRepo } from "./repo-access.js";
 
 /** ADR 0093 (issue #392): the board's GitHub identity is the single GitHub App
@@ -242,14 +243,18 @@ function runAuthedGit(
   timeoutMs?: number,
 ): string {
   const authenticated = auth !== undefined && repo !== undefined;
-  return execFileSync("git", authenticated ? [...GIT_CREDENTIAL_ARGS, ...args] : args, {
-    cwd,
-    env: authenticated ? auth.env(repo) : undefined,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: timeoutMs,
-  })
-    .toString()
-    .trim();
+  try {
+    return execFileSync("git", authenticated ? [...GIT_CREDENTIAL_ARGS, ...args] : args, {
+      cwd,
+      env: authenticated ? auth.env(repo) : undefined,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs,
+    })
+      .toString()
+      .trim();
+  } catch (err) {
+    rethrowNamingMissingCwd(err, cwd, args);
+  }
 }
 
 /** The fail-closed checks on the user token file (issue #50, unchanged by ADR
