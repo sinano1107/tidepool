@@ -1,6 +1,7 @@
 # 盤面呼び出しは advisor を持たない —— 不在はホスト設定に委ねず、呼び出しごとに明示する
 
 **Status 追記: 決定4 の「有効・無効の正本は registry と kill switch」は ADR 0208 で「registry と盤面設定の `off`」に** —— `TIDEPOOL_DISABLE_ADVISOR` は退役した。Board call が `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` で不在を明示する決定は変わらない。
+
 **Status 追記: 追記2 の「skill 列挙に `--setting-sources` を使えない —— user 層まで含めた集合が `@host` に要る」の理由は ADR 0335 決定4 で消えた** —— `@host` は同梱集合への正の解決になり、workspace cwd の列挙 ping を flag 無しのまま残す理由は「余分に deny しても害が無い」だけ(issue #2779)。
 
 
