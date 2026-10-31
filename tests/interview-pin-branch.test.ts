@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, it, vi } from "vitest";
 import { type Db, openDb } from "../src/db.js";
@@ -108,6 +108,23 @@ it("git init が落ちた面接室はディレクトリを残し、開いた eve
   expect(() => openInterviewRoom(db, root, base, NOW)).toThrow();
   expect(interviewRoomPath(db, root.id)).toBeUndefined();
   expect(existsSync(path)).toBe(true);
+  db.close();
+});
+
+it.each([false, true])("記録済みの master の面接室は、未生の HEAD だけ main に向け直して空コミットを補い、生まれた HEAD は保つ(born=%s、ADR 0329 決定13)", async (born) => {
+  const db = openDb(":memory:");
+  const root = registerTask(db, { type: "interview", title: "interview", hypothesis: "h", tier: "standard", interview_targets: [opusHigh] as never }, NOW, ...HUMAN_WEBUI);
+  const base = await tempDir("tidepool-room-master-");
+  openInterviewRoom(db, root, base, NOW);
+  const path = interviewRoomPath(db, root.id)!;
+  rmSync(join(path, ".git"), { recursive: true });
+  git(path, "init", "--quiet", "--initial-branch=master");
+  if (born) git(path, "commit", "--quiet", "--allow-empty", "-m", "Human history");
+
+  openInterviewRoom(db, root, base, NOW);
+
+  expect(git(path, "for-each-ref", "--format=%(refname)", "refs/heads")).toBe(born ? "refs/heads/master" : "refs/heads/main");
+  expect(git(path, "log", "--format=%s")).toBe(born ? "Human history" : "Initial commit");
   db.close();
 });
 

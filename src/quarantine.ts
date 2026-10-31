@@ -265,7 +265,6 @@ export const QUARANTINES = [
       if (!room || recorded?.hasRepository !== false) checks.push(...[
         "it is a usable git repository whose working tree is clean (`git status --porcelain` runs and is empty).",
         "the workspace path does not overlap the board's own state paths.",
-        "the board can still access the GitHub repo the workspace declares, when it declares one.",
       ].map((check) => room && !recorded ? `${IF_REPOSITORY_PRESENT}${check}` : check));
       checks.push(...examinees.map((p) => p.describe));
       return {
