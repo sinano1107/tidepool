@@ -175,6 +175,33 @@ function rowRefusalOf(parsed: Record<string, unknown> | null): RowRefusalCause |
   return parsed?.type === "result" ? rowRefusalCause(parsed) : null;
 }
 
+/** ADR 0331 帰結(#2703): bridge の故障は exit でなく、Bash の error tool_result に現れる。 */
+function readSandboxFailure(observed: StreamObservation, parsed: Record<string, unknown> | null): string | null {
+  if (parsed?.type !== "assistant" && parsed?.type !== "user") return null;
+  const content = (parsed.message as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return null;
+  for (const block of content) {
+    // tool_use_id は親スレッドごとに照合し、subagent の結果を別の Bash 呼び出しに結び付けない。
+    const key = (id: string) => JSON.stringify([parsed.parent_tool_use_id ?? null, id]);
+    if (parsed.type === "assistant" && block?.type === "tool_use" && block.name === "Bash" && typeof block.id === "string") {
+      observed.pendingBashToolUses.add(key(block.id));
+    }
+    if (parsed.type !== "user" || block?.type !== "tool_result" || typeof block.tool_use_id !== "string") continue;
+    if (!observed.pendingBashToolUses.delete(key(block.tool_use_id))) continue;
+    if (block.is_error !== true) continue;
+    const resultContent: unknown = block.content;
+    const text = typeof resultContent === "string" ? resultContent : Array.isArray(resultContent)
+      ? resultContent.filter((part) => part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n")
+      : "";
+    if ([
+      "Sandbox is required but failed to initialize",
+      "Linux sandbox HTTP bridge socket is missing (socat may have died)",
+      "Linux sandbox SOCKS bridge socket is missing (socat may have died)",
+    ].some((prefix) => text.startsWith(prefix))) return text;
+  }
+  return null;
+}
+
 /** What the stdout scan collected while the stream ran (ADR 0316 決定1: the
  *  one reader, fed live from the pipe or after the fact from the transcript).
  *  Besides the last result line and the facts the live caller acts on, the
@@ -192,6 +219,8 @@ interface StreamObservation {
   cliAuthFailed: boolean;
   capInterrupted: boolean;
   refusalCause: RowRefusalCause | null;
+  sandboxFailure: string | null;
+  pendingBashToolUses: Set<string>;
   /** ADR 0331 決定2: root のモデルの応答を1つでも観測したか —— false のまま閉じた session が0ターン。 */
   turnRan: boolean;
   /** ADR 0188 / ADR 0189: display-only transcriptions. */
@@ -322,6 +351,8 @@ export const claudeStreamObservation = (): StreamObservation => ({
   cliAuthFailed: false,
   capInterrupted: false,
   refusalCause: null,
+  sandboxFailure: null,
+  pendingBashToolUses: new Set(),
   turnRan: false,
   lastErrorResult: null,
   lastMessage: null,
@@ -339,6 +370,7 @@ export function observeClaudeLine(observed: StreamObservation, parsed: Record<st
   observed.cliAuthFailed ||= isCliAuthFailure(parsed);
   observed.capInterrupted ||= isCapInterruption(parsed);
   observed.refusalCause ??= rowRefusalOf(parsed);
+  observed.sandboxFailure ??= readSandboxFailure(observed, parsed);
   observed.turnRan ||= isRootTurn(parsed);
   observed.lastErrorResult = readErrorResult(parsed) ?? observed.lastErrorResult;
   observed.lastMessage = readRootText(parsed) ?? observed.lastMessage;
