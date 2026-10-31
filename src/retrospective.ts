@@ -662,7 +662,7 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
     decisions: episode.markers.flatMap(({ kind, eventId, position, line }) => {
       if (kind !== "decision") return [];
-      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けた記録は判事に見せない
+      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けていれば入力を組まずに投げる
       if (eventId === null || line === null) throw new Error(`decision marker of spawn ${spawnedId} lacks its event id or line`);
       return [{ id: eventId, position, line }];
     }),
