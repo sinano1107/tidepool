@@ -2230,13 +2230,14 @@ async function skillBoard({ skills = WORKER_SPAWNED.skills, entry }: { skills?: 
   const spawned = appendEvent(b.db, { taskId: b.task.id, actorId: "deckhand", origin: "board", at, payload: { ...WORKER_SPAWNED, skills } });
   const decision = entry?.(b) ?? b.decide("ran make deploy");
   const transcript = (lines: string[]) => writeFileSync(join(recordDir, `${b.task.id}.${spawned}.stream.jsonl`), lines.join("\n"));
+  const unreadable = () => mkdirSync(join(recordDir, `${b.task.id}.${spawned}.stream.jsonl`)); // 読むと EISDIR
   const deps = { ...noRetrospectiveCalls, recordDir };
   const judged = async () => {
     const client = new FakeAttributionClient();
     await attributeObjections(b.db, { ...deps, attributionClient: client }, b.objectTo(decision), at);
     return client.calls.map((c) => c.input);
   };
-  return { ...b, recordDir, spawned, decision, transcript, deps, judged };
+  return { ...b, recordDir, spawned, decision, transcript, unreadable, deps, judged };
 }
 
 it("走行中の session の判断への異議でも、判断より前に従った skill が名前・位置・本文つきで届き、判断より後の呼び出しと書きかけの末尾の行は届かない(ADR 0325 決定3・5)", async () => {
@@ -2285,16 +2286,19 @@ it.each<[string, string[] | "all", object]>([
   expect((await b.judged()).map((i) => i.skills)).toEqual([skills]);
 });
 
+/** 読むと EISDIR の transcript から入力を組めなかった失敗の reason(ADR 0336 決定4)。 */
+const UNBUILT_EISDIR = expect.stringMatching(/^Input could not be built: .*EISDIR/);
+
 it("transcript の読み出しが ENOENT 以外で落ちても commit の帰責は投げず、round initial の失敗 event を残す(ADR 0168 決定1)", async () => {
   const b = await skillBoard();
-  mkdirSync(join(b.recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`)); // 読むと EISDIR
+  b.unreadable();
   const client = new FakeAttributionClient();
 
   await expect(attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at)).resolves.toEqual(new Map());
 
   expect(client.calls).toEqual([]);
   expect(listEvents(b.db, b.task.id).flatMap((e) => (e.payload.kind === "objection_attribution_failed" ? [[e.payload.round, e.payload.reason]] : []))).toEqual([
-    ["initial", expect.stringMatching(/^Input could not be built: .*EISDIR/)],
+    ["initial", UNBUILT_EISDIR],
   ]);
 });
 
@@ -2311,16 +2315,17 @@ it("第2回の入力の transcript が ENOENT 以外で読めないと、判事�
   const client = new FakeAttributionClient();
   const deps = { ...b.deps, attributionClient: client };
   commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.objectTo(b.decision), at));
-  mkdirSync(join(b.recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`)); // 読むと EISDIR
+  b.unreadable();
   for (const r of listChildren(b.db, b.task.id).filter((c) => c.title.startsWith("rca ("))) settleReview(b.db, r, "auditor", at);
 
   await sweepHours(b.db, deps);
 
   expect(client.calls).toHaveLength(1); // 初回だけ
+  const bundle = listEvents(b.db, b.task.id).find((e) => e.kind === "objection_raised")!.id; // 異議群の名前は最初の異議
   const failed = listEvents(b.db, b.task.id).flatMap((e) => (e.payload.kind === "objection_attribution_failed" ? [[e.payload.round, e.payload.reason]] : []));
-  expect(failed).toEqual(Array(3).fill(["after_rca", expect.stringMatching(/^Input could not be built: .*EISDIR/)]));
+  expect(failed).toEqual(Array(3).fill(["after_rca", UNBUILT_EISDIR]));
   expect(listHaltedRefires(b.db)).toEqual([
-    expect.objectContaining({ refire: "second_round", last_failure: { reason: expect.stringMatching(/^Input could not be built: .*EISDIR/), at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
+    expect.objectContaining({ refire: "second_round", target: bundle, last_failure: { reason: UNBUILT_EISDIR, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
   ]);
 });
 
@@ -2330,18 +2335,17 @@ it("異議の帰責からの起草の入力の transcript が ENOENT 以外で�
   client.scriptJudgment(b.decision, { cause: "preference", evidence: "taste" });
   commitTriage(b.db, at, [], await attributeObjections(b.db, { ...b.deps, attributionClient: client }, b.objectTo(b.decision), at));
   const [judged] = listEvents(b.db, b.task.id).filter((e) => e.kind === "objection_attributed");
-  mkdirSync(join(b.recordDir, `${b.task.id}.${b.spawned}.stream.jsonl`)); // 読むと EISDIR
+  b.unreadable();
   const drafter = new FakeBehaviorDraftClient();
 
   await sweepHours(b.db, { ...b.deps, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } });
 
   expect(drafter.calls).toEqual([]);
-  const unbuilt = expect.stringMatching(/^Input could not be built: .*EISDIR/);
   expect(listEvents(b.db, b.task.id).filter((e) => e.kind === "memory_draft_failed").map((e) => e.payload)).toEqual(
-    Array(3).fill({ kind: "memory_draft_failed", log_entry_id: b.decision, round: "initial", attribution_event_id: judged!.id, reason: unbuilt }),
+    Array(3).fill({ kind: "memory_draft_failed", log_entry_id: b.decision, round: "initial", attribution_event_id: judged!.id, reason: UNBUILT_EISDIR }),
   );
   expect(listHaltedRefires(b.db)).toEqual([
-    expect.objectContaining({ refire: "draft", target: judged!.id, last_failure: { reason: unbuilt, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
+    expect.objectContaining({ refire: "draft", target: judged!.id, last_failure: { reason: UNBUILT_EISDIR, at: new Date(at.getTime() + 2 * HOUR).toISOString() } }),
   ]);
 });
 

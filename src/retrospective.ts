@@ -433,7 +433,7 @@ function refireDue(db: Db, key: RefireKey, now: Date): boolean {
 }
 
 /** 撃つ区間(ADR 0336 決定1・3): 撃てると決めた call で入力を組み、判事を撃ち、結果を記録する。区間の中の throw はどの段でも撃って失敗した ——
- *  行の拒否と 401 は Quarantine に回して何も書かず(ADR 0202・0205)、それ以外は壊れた段の接頭辞つきの reason で失敗 event を書く(決定4)。
+ *  行の拒否と 401 は Quarantine に回して何も書かず(ADR 0202・0205)、それ以外は壊れた段の接頭辞つきの reason で失敗 event を書く(ADR 0336 決定4)。
  *  記録できたら記録の戻り値を、失敗なら undefined を返す。 */
 async function fireSpan<C, I, A, R>(
   db: Db,
@@ -593,13 +593,13 @@ async function reviewAllocation(db: Db, deps: RetrospectiveCallDeps, target: All
     const call = boardCallSetting(db, deps.allocationClient, deps.containers);
     if ("unavailable" in call) return;
     const { review_task_id, reviewed_task_id } = target;
-    const record = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
+    const append = (payload: Extract<EventPayload, { kind: "allocation_reviewed" | "allocation_review_failed" }>) => appendEvent(db, { taskId: reviewed_task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     const { provider, model, effort } = call.setting;
     await fireSpan(db, call, "allocation_review", reviewed_task_id, now, {
       build: () => allocationInput(db, target),
       judge: (client, input, setting) => client.judge(input, setting),
-      record: (judgment) => record({ kind: "allocation_reviewed", review_task_id, worker_spawned_event_id: target.spawned_event_id, judge: { provider, model, effort }, ...judgment }),
-      failed: (reason) => record({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason }),
+      record: (judgment) => append({ kind: "allocation_reviewed", review_task_id, worker_spawned_event_id: target.spawned_event_id, judge: { provider, model, effort }, ...judgment }),
+      failed: (reason) => append({ kind: "allocation_review_failed", review_completed_event_id: target.completed_event_id, review_task_id, reviewed_task_id, reason }),
     });
   });
 }
@@ -614,7 +614,7 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTa
     if (!refireDue(db, { refire: "stop_attribution", target: stop.id }, now)) return;
     const call = boardCallSetting(db, deps.attributionClient, deps.containers);
     if ("unavailable" in call) return;
-    const record = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
+    const append = (payload: Extract<EventPayload, { kind: "stop_attributed" | "stop_attribution_failed" }>) =>
       appendEvent(db, { taskId: task_id, actorId: BOARD_ACTOR_ID, origin: "board", payload, at: now });
     const judged = await fireSpan(db, call, "attribution", task_id, now, {
       build: () => stopInput(db, deps.recordDir, target, round),
@@ -622,12 +622,12 @@ async function attributeStop(db: Db, deps: RetrospectiveCallDeps, target: StopTa
       record: (answer, input) => {
         const judgment = gate(answer, input);
         return db.transaction(() => {
-          const id = record({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round });
+          const id = append({ kind: "stop_attributed", stop_event_id: stop.id, ...judgment, round });
           if (round === "initial" && RCA_CAUSES.includes(judgment.cause)) registerStopRcas(db, task_id, stop.id, session.spawned.actor_id, input.human_stop.reason, now);
           return getEvent(db, id) as EventRowOf<"stop_attributed">;
         })();
       },
-      failed: (reason) => record({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason }),
+      failed: (reason) => append({ kind: "stop_attribution_failed", stop_event_id: stop.id, reason }),
     });
     // 判定の直後の起草は別の撃ち(ADR 0336 決定1)—— 区間の外で撃つ
     if (judged) await draftStopBehaviorCandidate(db, deps, target, judged, now);
@@ -665,7 +665,7 @@ function sessionActions(db: Db, spawnedId: number): StopAttributionInput["action
     calls: episode.actions.map(({ index, tool, args, failed }) => ({ index, tool, args, failed })),
     decisions: episode.markers.flatMap(({ kind, eventId, position, line }) => {
       if (kind !== "decision") return [];
-      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けていれば入力を組まずに投げる
+      // decision の marker は decision_logged event から作られ id / line を必ず持つ(#2686)。欠けていれば入力を組まずに投げる —— Board call の経路では Input could not be built の失敗に数える(ADR 0336 決定1・4)
       if (eventId === null || line === null) throw new Error(`decision marker of spawn ${spawnedId} lacks its event id or line`);
       return [{ id: eventId, position, line }];
     }),
@@ -757,7 +757,7 @@ function refireTargets(db: Db): RefireTarget[] {
 
 /** sweep(ADR 0164 決定1・4): 第2回の帰責・起草・配分評価を撃つ唯一の契機(ADR 0169 決定1 / ADR 0172 決定1)。pickup の poll が同期で呼び、
  *  対象を fire-and-forget で撃つ —— 1回目も撃ち直しもここから出る。
- *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `attributeSecondRound`)が見る。
+ *  起草の規則・回数・間隔・in-flight・撃てるか は撃つ側(`draftBehaviorCandidate` / `draftStopBehaviorCandidate` / `attributeSecondRound` / `attributeStop` / `reviewAllocation`)が見る。
  *  初回の帰責は撃ち直さない(ADR 0168 決定1)。 */
 export function refireRetrospectiveCalls(db: Db, deps: RetrospectiveCallDeps, now: Date): void {
   for (const target of refireTargets(db)) {
