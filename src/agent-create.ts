@@ -337,11 +337,11 @@ export interface AgentDeletionReferences {
   /** 盤面の既定 agent 名(ADR 0012)。一致すれば消せない —— 既定はポインタなので、
    *  指し先を消せば assignee 未指定のタスクが全部止まる。 */
   defaultAgentName?: string;
-  /** 盤面の Auditor 名(CONTEXT.md「Auditor」、既定 `fugu` — ADR 0089)。一致すれば
+  /** 盤面の Auditor 名(GLOSSARY.md「Auditor」、既定 `fugu` — ADR 0089)。一致すれば
    *  消せない —— 「消せない資源」は列挙ではなく盤面のポインタが指す先という規則で、
    *  Auditor は既定 agent / 既定 workspace と同型の第3のポインタである
    *  (ADR 0087 決定3 訂正 / issue #376)。既定 agent と違い optional ではない ——
-   *  Auditor ポインタは常に値を持ち「未設定」が無い(CONTEXT.md)ので、解決側と
+   *  Auditor ポインタは常に値を持ち「未設定」が無い(GLOSSARY.md)ので、解決側と
    *  同じく必ず名前が入る。 */
   auditorName: string;
   /** 盤面の Interviewer 名(既定 `suzumedai` — ADR 0269 決定2)。Auditor と同じ第4のポインタで、
@@ -367,7 +367,7 @@ export async function deleteAgent(
   // `assignable_to` に名前が並んでいるだけは参照ではない(ADR 0087 決定2)
   const reasons: DeletionBlockedReason[] = [];
   // 組み込みを shadow しているエントリだけは、Auditor ポインタの指す先でも review に
-  // 参照されていても消せる —— CONTEXT.md「削除」が「消せない」と数え上げた全体に対する
+  // 参照されていても消せる —— GLOSSARY.md「削除」が「消せない」と数え上げた全体に対する
   // 唯一の例外である(ADR 0117 決定2): 消えれば名前は組み込みへ落ち、review / interview / 修理子の type は
   // 組み込みが走らせ続ける。work は組み込みへ落ちられない(ADR 0275 決定1)ので、その未決着タスクと
   // 着地を待つ完了タスクは普通の agent と同じく数える(ADR 0228 決定3)。

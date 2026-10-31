@@ -490,7 +490,7 @@ export function registerDueMetaReviews(db: Db, now: Date, agents?: ListAgentTier
 function settleAndHasUnsettled(db: Db, subject: MetaReviewSubject, now: Date, agents?: ListAgentTiers): boolean {
   // registry の提案の pin は registry の変更 event が無いので、未決着を数える直前に盤面が今読んでいる registry と照合する(fetch はしない)
   if (subject === "routing" && agents) settleStaleProposals(db, now, null, agents);
-  // ponytail: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
+  // shortcut: 未決着の task ごとに祖先をたどる —— 未決着が数千に届いて poll が重くなったら subtree の SQL 1本に
   const unsettled = db.prepare(`SELECT id FROM tasks WHERE ${unsettledSql("status")}`).pluck().all() as string[];
   return unsettled.some((id) => lineageSubjectOf(db, id) === subject);
 }

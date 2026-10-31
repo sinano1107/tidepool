@@ -18,7 +18,7 @@ import { api, bootTidepool, callAsTask, completeMetaReviews, FULL_HANDOFF, GIT_F
 import { makeRegistry } from "./registry-fixture.js";
 import { tempDir } from "./temp-dir.js";
 
-/** 行の拒否(CONTEXT.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
+/** 行の拒否(GLOSSARY.md / ADR 0184、issue #1258)。Claude CLI を喋る Provider が spawn 時の行の
  *  model id を 404 で断った session は、行の Quarantine を1枚立て、失敗にならずに queue の先頭へ戻る。 */
 
 vi.setConfig({ testTimeout: GIT_FIXTURE_TEST_TIMEOUT });

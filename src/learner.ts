@@ -7,7 +7,7 @@ import type { Provider } from "./provider.js";
 import { acceptedSql, type Task, workSideTypeSql } from "./tasks.js";
 import type { TierId } from "./tier.js";
 
-/** 学習器のセル(CONTEXT.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
+/** 学習器のセル(GLOSSARY.md「学習器」/ ADR 0110 決定4): spawn 時の pin の綴りの
  *  (provider, model id, effort, advisor model)—— 表の行は具体 id だけなので、main の pin が世代を
  *  名指す(ADR 0182 決定3)。advisor の綴りは `fable` か具体 id で、alias なら世代が進んでも同じセルに
  *  数え続ける(ADR 0200 決定6)。advisor も spawn 時の **pin**
@@ -212,7 +212,7 @@ export interface RoutingEpisode extends LearnerEpisode {
  *  ので、events を直に読む)。受理は task の派生なので task の**最後の** session に
  *  だけ付け、前の session は自分の窓の中の負の信号でしか数えない。異議の窓は
  *  Precedent と同じ規則(spawn より後、exit または次の spawn より前)。 */
-// ponytail: pickup ごとに work 側の task の全 session を読み直す。表が大きくなったら集計を増分で持つ
+// shortcut: pickup ごとに work 側の task の全 session を読み直す。表が大きくなったら集計を増分で持つ
 export function loadEpisodes(db: Db): RoutingEpisode[] {
   const tasks = db
     .prepare(

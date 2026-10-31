@@ -302,7 +302,7 @@ it("question の purpose と各 item の title/detail を1回の呼び出しで�
     ],
     cached: false,
   });
-  // options/recommendation never reach the translation client (CONTEXT.md
+  // options/recommendation never reach the translation client (GLOSSARY.md
   // scope exclusion: 選択肢ラベル is never a translation target)
   expect(client.calls).toEqual([
     {

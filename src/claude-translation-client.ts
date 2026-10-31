@@ -41,7 +41,7 @@ const answerSchema = z.object({ items: z.array(z.object({ id: z.number(), text: 
 
 function buildPrompt(fragments: string[], language: string, glossary: GlossaryEntry[]): string {
   // the glossary's Japanese gloss only means something when translating into
-  // Japanese — CONTEXT.md carries no other language's terms (issue #47).
+  // Japanese — GLOSSARY.md carries no other language's terms (issue #47).
   // Exact match against the canonical value: display-language is normalized
   // at the write boundary (api.ts's displayLanguageSchema) against
   // SUPPORTED_DISPLAY_LANGUAGES, so only "Japanese" ever reaches here —
@@ -75,7 +75,7 @@ function buildPrompt(fragments: string[], language: string, glossary: GlossaryEn
 const MAX_CONCURRENT_TRANSLATIONS = 2;
 
 /** How long a translation waits for the floor to clear before giving up (ADR
- *  0063 決定2). Deliberately not called a "slot": CONTEXT.md gives `Slot` to the
+ *  0063 決定2). Deliberately not called a "slot": GLOSSARY.md gives `Slot` to the
  *  board's single execution frame, and a Board call — which this is — "タスクにも
  *  slot にも属さず". The floor is a different limit on a different resource.
  *  The point of having any limit is to not lean on someone else's timeout:
@@ -88,7 +88,7 @@ const MAX_CONCURRENT_TRANSLATIONS = 2;
 const FLOOR_WAIT_TIMEOUT_MS = 30_000;
 
 export interface ClaudeTranslationClientOptions {
-  /** CONTEXT.md's own term pairs (issue #47), injected as a translation aid
+  /** GLOSSARY.md's own term pairs (issue #47), injected as a translation aid
    *  when the target language is Japanese. Absent → no glossary guidance. */
   glossary?: GlossaryEntry[];
   exec: ExecFn;

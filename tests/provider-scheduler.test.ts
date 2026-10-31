@@ -459,7 +459,7 @@ it("上限 fable_then_opus で Fable の窓が throttled なら、advisor を op
   ]);
 });
 
-it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
+it("全 entry が除外された行は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / GLOSSARY.md「Pickable head」)", async () => {
   t = await bootTidepool();
   // 上の行は frontier を要求するので fable 行に解決され、唯一の entry が
   // 温存中の窓に当たる。下の行は要求なし = economy 行なのでその窓に当たらない

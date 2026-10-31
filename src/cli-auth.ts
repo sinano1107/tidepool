@@ -68,7 +68,7 @@ export function isCliAuthFailureEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 401;
 }
 
-/** 上限到達による中断(CONTEXT.md / ADR 0104 決定2): Provider の側から返る
+/** 上限到達による中断(GLOSSARY.md / ADR 0104 決定2): Provider の側から返る
  *  確定的な上限到達の証拠は `result` envelope の `api_error_status: 429` 一点で
  *  ある。認証の述語と同じ posture で、"session limit" のような文言や stream 中の
  *  `rate_limit_event` からは推測しない。 */
@@ -76,7 +76,7 @@ export function isCapInterruptionEnvelope(value: unknown): boolean {
   return typeof value === "object" && value !== null && "api_error_status" in value && value.api_error_status === 429;
 }
 
-/** 行の拒否(CONTEXT.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。Provider がその model id を
+/** 行の拒否(GLOSSARY.md / ADR 0184 決定3・ADR 0187 決定1)の証拠の分類。Provider がその model id を
  *  断った証拠は `result` envelope の `api_error_status: 404` と、CLI の版の古さを名指すサーバの識別子
  *  `api_error_code: claude_code_version_too_old` の2つ。401 / 429 と同じ posture で、HTTP の 400・CLI の
  *  enum の `api_error`・`result` の本文・stderr の `unrecognized_model` からは推測しない。 */

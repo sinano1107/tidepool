@@ -58,7 +58,7 @@ export interface OpenIssue {
  *  and the actual `gh` call never drift apart. */
 export const OPEN_ISSUES_LIMIT = 100;
 
-/** An issue-backed task's live content (issue #49, CONTEXT.md): "issue" means
+/** An issue-backed task's live content (issue #49, GLOSSARY.md): "issue" means
  *  the title, body, and the full comment thread — every element a live
  *  reference needs to derive title/purpose/completion_criteria from. */
 export interface Issue {
@@ -169,7 +169,7 @@ export interface GitHubClient {
    *  board. */
   addIssueComment(ref: IssueRef, body: string): Promise<void>;
   /** Why the broker refused a token for `ref`, or `null` when it minted one
-   *  (ADR 0093 決定8). `null` is CONTEXT.md's "書ける" verdict: the token
+   *  (ADR 0093 決定8). `null` is GLOSSARY.md's "書ける" verdict: the token
    *  broker issued an installation token for that one
    *  repository, which it does only when the tidepool App is installed on it
    *  **and** the logged-in user can push to it (ADR 0067 決定3's "can write",

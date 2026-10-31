@@ -146,7 +146,7 @@ export class PlaceNotOpenError extends Error {}
 /** ADR 0009: `task.workspace` is a reference to a registry name, resolved
  *  fresh against the registry every time it's used, never pinned to a path.
  *  Null — a task never picked up, since pickup writes the default's name
- *  (ADR 0233) — inherits the board's default (CONTEXT.md's Workspace). `workspacesBaseDir`
+ *  (ADR 0233) — inherits the board's default (GLOSSARY.md's Workspace). `workspacesBaseDir`
  *  is `resolveWorkspacesBaseDir`'s output, threaded in rather than read from
  *  env here (ADR 0018) — this stays a pure function of its arguments. */
 export function resolveExecutionWorkspace(
@@ -1097,7 +1097,7 @@ function parkOnProtectedBranch(workspace: WorkspaceConfig, writeRef: RefWriter):
   );
 }
 
-/** Quarantine resolution's verification gate (issue #21, CONTEXT.md): the
+/** Quarantine resolution's verification gate (issue #21, GLOSSARY.md): the
  *  board never takes a repair confirmation on faith. Any failure to observe
  *  a clean tree — dirty, or not even a usable git repository — is treated
  *  the same, fail-closed, same posture as the tree rule's own dirty-after-
@@ -1123,7 +1123,7 @@ export function workspaceNeedsHuman(db: Db, name: string): boolean {
   return openQuarantineQuestion(db, "workspace", name) !== undefined;
 }
 
-/** Tree-rule failure containment (quarantine, CONTEXT.md): put the repair in
+/** Tree-rule failure containment (quarantine, GLOSSARY.md): put the repair in
  *  front of the human as a 1-choice Confirmation question (issue #21) — its
  *  tasks stay out of the slot while it is open. The answer isn't a choice
  *  between outcomes, it's a confirmation that repair happened, verified before
@@ -1319,7 +1319,7 @@ function mergeBackInto(
 
 /** ADR 0240 決定4: 内容が帰り先(lineage が指す祖先のタスクブランチ)に届いていない done の work と、その帰り先。
  *  新しい行から並べる —— 子孫の内容を先に子へ運んでから、子を親へ運ぶ。読めなければ投げる(fail-closed)。
- *  ponytail: その workspace の done の子をすべて読む。回答のたびなので、遅くなれば着地の終わった木を SQL で外す。 */
+ *  shortcut: その workspace の done の子をすべて読む。回答のたびなので、遅くなれば着地の終わった木を SQL で外す。 */
 function undeliveredMergeBacks(
   db: Db,
   workspace: WorkspaceConfig,

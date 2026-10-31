@@ -6,7 +6,7 @@ export interface GlossaryEntry {
 const HEADING_WITH_GLOSS = /^## (.+?)\(([^()]+)\)\s*$/;
 
 /** Mechanically extracts the board's English-term ↔ Japanese-gloss pairs from
- *  CONTEXT.md's own `## Term(日本語)` heading shape (issue #47) — CONTEXT.md
+ *  GLOSSARY.md's own `## Term(日本語)` heading shape (issue #47) — GLOSSARY.md
  *  is itself the glossary (its own preamble: "このファイルは用語集"), so this
  *  reads it rather than duplicating a second term list that would drift.
  *  Headings without a parenthesized gloss (compound names like

@@ -138,7 +138,7 @@ export function blockedProviderUsageResources(db: Db): ProviderUsageResource[] {
 /** Whether an Anthropic Board call should be skipped right now: an open
  *  Provider 認証の Quarantine on anthropic blocks every call (#1466 / ADR 0164
  *  追記3) — only that kind, since Harness containment stops agents, not Board
- *  calls (CONTEXT.md「Quarantine」); otherwise the stored observation decides (no live
+ *  calls (GLOSSARY.md「Quarantine」); otherwise the stored observation decides (no live
  *  re-observation — Board calls have no usage poll). The
  *  Provider-wide account window always counts; a model window counts only
  *  against the model the call would pin (translation pins haiku and passes

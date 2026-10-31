@@ -13,7 +13,7 @@ import { GITHUB_APP_SLUG } from "./github-login.js";
  *  訂正コメント)。「書けるか」の門(ADR 0067 決定3)は仲介側にあるので、push を持たない
  *  人がログインしている形もここに落ちる。
  *
- *  人間向けの面なので英語(CONTEXT.md / 表示言語の正文は常に英語)。 */
+ *  人間向けの面なので英語(GLOSSARY.md / 表示言語の正文は常に英語)。 */
 function repoAccessGuidance(ref: RepoSlug, reason: string): string {
   const repo = `${ref.owner}/${ref.name}`;
   return (

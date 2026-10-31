@@ -17,7 +17,7 @@ export function getCachedTranslation(db: Db, sourceHash: string, language: strin
   return row?.translated;
 }
 
-/** Log entries are immutable (CONTEXT.md: 記録は不滅・不変), so a cached
+/** Log entries are immutable (GLOSSARY.md: 記録は不滅・不変), so a cached
  *  translation stays valid forever — this only ever inserts, never updates.
  *  `OR IGNORE`: two concurrent misses on the same source+language (e.g. a
  *  question's purpose translated twice from overlapping requests) can both

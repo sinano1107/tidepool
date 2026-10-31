@@ -267,7 +267,7 @@ it("openai を quarantine 中でも openai と anthropic の entry を持つ age
   }).toEqual({ solo: "skipped", multi: "in_progress" });
 });
 
-it("openai entry しか持たない行は quarantine 中は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / CONTEXT.md「Pickable head」)", async () => {
+it("openai entry しか持たない行は quarantine 中は Pickable head ではない —— 下の行の ↑ を飲まない(ADR 0110 決定3 / GLOSSARY.md「Pickable head」)", async () => {
   t = await bootTidepool({
     // openai の usage 観測を健全にしておく —— 理由は上のテストと同じ
     openaiUsage: healthyOpenai,

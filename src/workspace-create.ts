@@ -37,7 +37,7 @@ import {
 
 /** The WebUI's workspace-creation verbs (issue #57): three entrances, one
  *  resulting Workspace — the mode is a circumstance of creation, not a kind
- *  (CONTEXT.md's Workspace). Human-only; agents keep going through
+ *  (GLOSSARY.md's Workspace). Human-only; agents keep going through
  *  registry-edit tasks instead (2026-07-14 grilling). */
 export type CreateWorkspaceInput = {
   name: string;
@@ -632,7 +632,7 @@ export class NotAGitRepositoryError extends Error {
 
 /** issue #383 の信号コード: 「このパスは人間が今日も使っている作業ツリーに見える」を
  *  数え上げる、安定した機械可読な文字列。ADR 0061 の `DangerousWorkspaceValueReason`
- *  とは**別の族**である(CONTEXT.md「危険な値」= エージェントの権限を広げる値の列挙で
+ *  とは**別の族**である(GLOSSARY.md「危険な値」= エージェントの権限を広げる値の列挙で
  *  あり、これらはどれも権限を広げない)。したがって 409 でも `dangerous_values` には
  *  載せず、`live_checkout_signals` という自分の欄を持つ —— 同じ欄に相乗りすると、
  *  「危険な値の確認は WebUI 専用」(ADR 0088)がこの族まで縛ると読める。管理MCP を

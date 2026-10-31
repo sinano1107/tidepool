@@ -1530,7 +1530,7 @@ export class CodexWorker implements WorkerAdapter {
         this.containers.forceReclaim(task.id);
       });
     })().catch((error) => {
-      // ponytail: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
+      // shortcut: spawn が同期で投げると開いた transcript の2本の fd は閉じない(Claude adapter と同じ
       // 稀な経路)。積み上がりが観測されたらここで destroy する。
       // ADR 0149 決定6: scheduler の catch の外なので、検査のあとの同期 throw(quarantine の登録、spawn まで、
       // spawn のあとの配線)はすべて spawn_failed に落とす —— 未処理の reject にしない。transcript が開けない

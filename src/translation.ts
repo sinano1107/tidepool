@@ -130,7 +130,7 @@ export async function translateMemoryEntry(
   language: string,
   now: Date,
 ): Promise<{ status: "translated"; title: string; text: string; cached: boolean } | { status: "throttled" }> {
-  // ponytail: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
+  // shortcut: 表を全件読んで1行を探す。記憶が数千行になったら id で引く export を足す
   const entry = listMemoryEntries(db, {}).find((e) => e.id === entryId);
   if (!entry) throw new TranslationTargetError(`no memory entry ${entryId}`);
   const outcome = await translateFragments(db, client, [entry.title, entry.text], language, now);
@@ -173,7 +173,7 @@ export type TranslateQuestionOutcome =
   | { status: "translated"; purpose: string; items: TranslatedQuestionItem[]; cached: boolean }
   | { status: "throttled" };
 
-/** A question's purpose and each item's title/detail (issue #47) — CONTEXT.md's
+/** A question's purpose and each item's title/detail (issue #47) — GLOSSARY.md's
  *  scope exclusion: option labels and the recommendation are never sent here
  *  (a mistranslated option is a 30-second decision an agent reads back, ADR
  *  0015's precision addendum keeps those original). */

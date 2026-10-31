@@ -246,7 +246,7 @@ function writeSuperseding(
  *  無効化されていない workspace の Definition があってはならない。操作が残す状態で見る —— エントリを置く操作の transaction の終わりに、
  *  since(操作の前の watermark)より後に置かれたエントリを片側に含む組を探す。同じ操作で畳まれた定義・一緒に動いたエントリは当たらない。
  *  組はすべて名指し、出口は操作が盤面全体のエントリを置いたかで選ぶ。registry は見ない。rebuild と watermark 再生は掛けない。
- *  ponytail: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
+ *  shortcut: 生きたエントリの自己結合を書き込みごとに走らせる。店が大きくなったら path の索引か、置いた行だけから引く形へ */
 function requireOneTree(db: Db, since: number): void {
   const pairs = db
     .prepare(
@@ -1851,7 +1851,7 @@ function ftsQuery(query: string, join: " " | " OR " = " "): string | null {
 /** 採点者の印の欄(ADR 0264 決定6): 受験者の視界に無いエントリなら true。読み手が Interview の root のときだけある。 */
 type ExamineeMark = { not_shown_to_examinees?: boolean };
 
-/** 読み手の視界(ADR 0264 決定2、CONTEXT.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
+/** 読み手の視界(ADR 0264 決定2、GLOSSARY.md「視界」): 読み手ごとの1本の述語で、条件の正本はここだけ。層は3段で、行が N 段目の
  *  視界にある(has)のは 1〜N 段目の条件をすべて満たすとき —— 1段目 approved・scope・読み手に無い集合(readerHidden)、
  *  2段目 宛先、3段目 未無効化(liveTo)。INDEX と注入は3段目、read は2段目(無効化の鎖はそこからたどる)、search の候補は1段目から
  *  Definition を除いたもの。dropReason は1段目にある行が3段目に無い理由で、欠く層の深い方(無効化が宛先に勝つ)。mark は採点者の印
@@ -1942,7 +1942,7 @@ function examineeHidden(db: Db): Set<number> {
 }
 
 /** 順位は FTS の rank のみ(ADR 0083 決定9)。
- *  ponytail: stream は FTS の1本なのでその順位そのもの。埋め込み stream(#589)が来たら
+ *  shortcut: stream は FTS の1本なのでその順位そのもの。埋め込み stream(#589)が来たら
  *  ここで RRF(k = 60)融合する。 */
 export function searchMemory(
   db: Db,
@@ -2454,7 +2454,7 @@ export function readMemoryEntries(db: Db, reader: Pick<MemoryReader, "taskId" | 
       if (tail.id === id) found.set(id, undefined);
       else if (!found.has(tail.id)) found.set(tail.id, id);
     }
-    // ponytail: 一覧を全件材料化して id で引く —— コストは #1056
+    // shortcut: 一覧を全件材料化して id で引く —— コストは #1056
     const listed = new Map(listMemoryEntries(db, {}, hidden).map((e) => [e.id, e]));
     const entries = [...found]
       .sort(([a], [b]) => a - b)

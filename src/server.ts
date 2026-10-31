@@ -195,17 +195,17 @@ export interface ServerOptions {
   /** The public half of the board's VAPID keypair (issue #14), exposed to the
    *  WebUI via /api/push/vapid-public-key. Absent → the WebUI can't subscribe. */
   vapidPublicKey?: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2) — same
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2) — same
    *  shape as the default agent (`worker.id` below): the fallback a `review`
    *  task's unset `assignee` resolves to, at pickup (scheduler), spawn
    *  (claude-worker.ts via `resolveExecutionAgent`), and MCP attribution
    *  (mcp.ts) alike, in place of the default agent (issue #42). Absent →
-   *  `DEFAULT_AUDITOR_NAME` — CONTEXT.md's Auditor never reads as unset,
+   *  `DEFAULT_AUDITOR_NAME` — GLOSSARY.md's Auditor never reads as unset,
    *  resolved once here rather than by each consumer separately. */
   auditorName?: string;
   /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
-  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
    *  protected workspace / ADR 0013), read fresh against the registry by the
    *  caller — a decompose child naming a protected workspace converts to an
    *  approval question unconditionally (mcp.ts), regardless of the
@@ -386,7 +386,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
   // 落とさない — 毎 boot の live kill canary は行わず、前提の存在だけを見る。
   // 同じ検査は封じ込め能力の合成(下)にも入り、pickup と quarantine 回答時に
   // 読み直される — ここは containment ゲートを持たない盤面のための boot 時の1回。
-  // ponytail: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
+  // shortcut: 停止範囲は盤面全体(既存の Containment quarantine)。今日の盤面に
   // platform-scoped の停止は無く、この盤面が走るホストは1つである。
   // spec #586 B: 索引の版(tokenizer id + 前処理の版)が今の版と違えば events から作り直す
   ensureMemoryIndex(db, options.clock.now());
@@ -534,7 +534,7 @@ export async function startServer(given: ServerOptions): Promise<TidepoolServer>
       }
     : options.modelProbes;
   // resolved here for this board's actual wiring, same as `worker.id` below
-  // — CONTEXT.md's Auditor never reads as unset (issue #42). Consumers built
+  // — GLOSSARY.md's Auditor never reads as unset (issue #42). Consumers built
   // directly rather than through startServer (e.g. a unit test constructing
   // McpDeps by hand) still carry their own `?? DEFAULT_AUDITOR_NAME` fallback
   // (mcp.ts's attributedActorId, claude-worker.ts's start()) — defense in

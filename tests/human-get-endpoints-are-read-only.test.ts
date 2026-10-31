@@ -44,7 +44,7 @@ function listGetRoutes(db: Db): string[] {
     .map((layer) => layer.route!.path);
 }
 
-// 射程は**人間用リスナーの GET 全部**(CONTEXT.md の人間面)。今日それは `/api` の
+// 射程は**人間用リスナーの GET 全部**(GLOSSARY.md の人間面)。今日それは `/api` の
 // ルーターと `server.ts` が直接 `app` に置く静的配信の2種で尽きている — 管理MCP
 // (ADR 0032)はまだこのリスナーに mount されていない。mount された時点でその GET
 // (SSE のストリーム開始)はこことは別の扱いが要る。

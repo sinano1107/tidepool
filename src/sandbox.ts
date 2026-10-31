@@ -553,7 +553,7 @@ const BWRAP_NESTED_USERNS_PROBE =
  *  sandbox's network proxy is spawned through it, so its absence is fatal. */
 const SOCAT_PROBE = ["-V"];
 
-/** 封じ込め能力(CONTEXT.md)の**片方の半分**: is the harness sandbox actually
+/** 封じ込め能力(GLOSSARY.md)の**片方の半分**: is the harness sandbox actually
  *  usable on this host right now? もう半分(自分の人間面が無認証リクエストを
  *  拒むか — ADR 0036 / issue #154)は containment.ts が持ち、両者を束ねた1つの
  *  答えが pickup ゲートを引く。ここは fs 側だけを答える。

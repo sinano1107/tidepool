@@ -73,7 +73,7 @@ export interface Transcript {
   stderr: WriteStream;
 }
 
-/** worker session ごとの transcript(CONTEXT.md「Transcript」—— stream・stderr・prompt の3本で
+/** worker session ごとの transcript(GLOSSARY.md「Transcript」—— stream・stderr・prompt の3本で
  *  1単位、ADR 0313 決定1)を開く盤面側の器(ADR 0149 決定5)。容器(`ProcessContainers`)と同じ立て付けで、
  *  adapter は開いた stream と stderr へ pipe するだけである —— prompt は open が書き切って閉じる。記録の器への書き込み(この open・解放の検査)と
  *  その失敗方針はこの module 1箇所に住む —— 書けなければ `RecordContainerError`、走ってからなら `onFailed`。順序は

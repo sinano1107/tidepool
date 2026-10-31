@@ -5,7 +5,7 @@ import { type EventPayload, getEvent, listEvents } from "./events.js";
 import { episodeMarkerKinds, type MarkerKind } from "./precedent.js";
 import { type Tier, tierNameOf } from "./tier.js";
 
-/** 「この結果に対する実行設定は適切だったか」の4値(CONTEXT.md「配分評価」)。
+/** 「この結果に対する実行設定は適切だったか」の4値(GLOSSARY.md「配分評価」)。
  *  `overpowered` は成功 episode からの唯一の下方向信号(ADR 0111 決定4)。 */
 export const ALLOCATIONS = ["appropriate", "underpowered", "overpowered", "uncertain"] as const;
 export type Allocation = (typeof ALLOCATIONS)[number];
@@ -90,7 +90,7 @@ export interface AllocationTarget {
   reviewed_task_id: string;
   spawned_event_id: number;
 }
-// ponytail: poll の sweep のたびに全 review 完了と全注釈を json_extract で走査する。event が数万に育ったら索引か結果の不在の表に寄せる
+// shortcut: poll の sweep のたびに全 review 完了と全注釈を json_extract で走査する。event が数万に育ったら索引か結果の不在の表に寄せる
 export function allocationTargets(db: Db): AllocationTarget[] {
   return (
     db

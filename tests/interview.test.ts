@@ -17,7 +17,7 @@ import { registerFailureQuestion } from "../src/watchdog.js";
 import { whyAssigneeCannotTake, whyNoCompletionReview, whyReviewFlagIsInert } from "../src/webui-rules.js";
 import { answerQuestionViaWebui, decomposeTaskViaWorker, FULL_HANDOFF, failureQuestion, HUMAN_WEBUI, humanDecomposeTaskViaWebui, markPickedUp, POSED_HEAD, poseAccepted, WORKER_SPAWNED } from "./harness.js";
 
-// Interview(CONTEXT.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
+// Interview(GLOSSARY.md「Interview」/ ADR 0199)の domain 層の振る舞い。盤面境界の写像は interview-boundary.test.ts。
 
 const ROOT = { type: "interview" as const, title: "interview", hypothesis: "the targets write the parser", tier: "standard" };
 /** Interview でない task の欄。 */

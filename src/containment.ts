@@ -1,4 +1,4 @@
-/** 封じ込め能力(CONTEXT.md: Containment capability)の共通部分。このホストで
+/** 封じ込め能力(GLOSSARY.md: Containment capability)の共通部分。このホストで
  *  worker の封じ込めが成立しているかを答える2種類の問いを束ねる:
  *
  *  1. **worker 容器の機構前提が成立するか**(ADR 0099)。
@@ -43,7 +43,7 @@ const UNPROBED: ContainmentCapability = {
 /** Harnesses share the container runtime and the Board's human surface, while
  * each adapter proves its own sandbox and tool surface. This result is
  * prepended to each Harness check; it does not create a separate board-wide
- * stop (CONTEXT.md: Containment capability). */
+ * stop (GLOSSARY.md: Containment capability). */
 export function composeCommonContainment(
   containerRuntime: () => SandboxCapability,
   humanSurface: () => Promise<ContainmentCapability> | undefined,

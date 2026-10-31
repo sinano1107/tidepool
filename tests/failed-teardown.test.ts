@@ -189,7 +189,7 @@ it("watchdog の強制回収で落ちた後始末の受理は、殺したタス�
   await answer(f, question);
 
   // 決着済みなので上限到達による中断の復帰は走らない —— 自動リトライは存在せず
-  // (CONTEXT.md「Watchdog」)、queue へ戻すかは retry / abandon の回答が決める
+  // (GLOSSARY.md「Watchdog」)、queue へ戻すかは retry / abandon の回答が決める
   expect(events(f.db, f.task.id)).not.toContain("cap_interrupted");
   expect(getTask(f.db, question.id)?.status).toBe("done");
   // 殺したタスクの行き先を決めるのは、立ったままの retry / abandon の問いである

@@ -58,7 +58,7 @@ export function buildQuestionPushPayload(task: Task): PushPayload {
 
 /** An agent-registered human task's push notification content (issue #116):
  *  title is the task, body its purpose — the same shape as a question's, since
- *  a human child blocks its parent the same way (CONTEXT.md's Quiet hours).
+ *  a human child blocks its parent the same way (GLOSSARY.md's Quiet hours).
  *  Unlike a question there is no single-task answer view to deep-link into: the
  *  WebUI has no dedicated your-tasks screen yet (its `humanTasks` slice renders
  *  empty — public/index.html), so the url lands on the board root, the same "/"
@@ -99,7 +99,7 @@ export function markQuestionNotified(db: Db, taskId: string, now: Date): void {
  *  paths both stamp it `human` there (a WebUI registration and an approve
  *  answer materializing a pending child, both via registerTask's
  *  HUMAN_ACTOR_ID default / explicit arg), so excluding actor_id = 'human'
- *  keeps a human's own operation from pushing back at them (CONTEXT.md's Quiet
+ *  keeps a human's own operation from pushing back at them (GLOSSARY.md's Quiet
  *  hours: "自分の操作のエコー"). Filtered on `status = 'todo'` like the question
  *  query, so a task the human already settled before the next poll neither
  *  re-pushes nor inflates the digest's "K your tasks" figure — a human task is
@@ -132,7 +132,7 @@ export function markHumanTaskNotified(db: Db, taskId: string, now: Date): void {
  *  morning digest. Absent `push` (not configured), does nothing at all.
  *
  *  Agent-registered human tasks ride the same poll (issue #116): they are
- *  notification targets of equal urgency (both block their parent — CONTEXT.md's
+ *  notification targets of equal urgency (both block their parent — GLOSSARY.md's
  *  Quiet hours), and the poll shape is exactly why this is a poll and not a
  *  registerTask hook — a human task can enter through the API, MCP decompose,
  *  or an approve materialization, and none of them needs to know about push. */
@@ -192,7 +192,7 @@ function countLogEntriesSince(db: Db, lastReported: number): number {
  *  instead of N individual ones once quiet hours end. Now three counts:
  *  unnotified questions, unnotified agent-registered human tasks (issue #116),
  *  and new log entries — "the notification text doubles as the morning
- *  session's budget estimate" (CONTEXT.md's Digest). The triage tab badge
+ *  session's budget estimate" (GLOSSARY.md's Digest). The triage tab badge
  *  (public/index.html) is deliberately NOT grown to match: it counts the
  *  triage surface (questions to answer + unread log to skim), and your-tasks
  *  is a separate list that isn't triaged — the digest reaches wider than the

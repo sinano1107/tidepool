@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { parseGlossary } from "../src/glossary.js";
 
-it("CONTEXT.md の `## Term(日本語)` 見出しから対訳エントリを抽出する", () => {
+it("GLOSSARY.md の `## Term(日本語)` 見出しから対訳エントリを抽出する", () => {
   const md = [
     "# Tidepool — ubiquitous language",
     "",

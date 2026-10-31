@@ -184,11 +184,11 @@ export interface McpDeps {
    *  /answer route), so a task's unspecified (null) `assignee` resolves here,
    *  not to `HUMAN_ACTOR_ID`. Required: no default actor (ADR 0194). */
   defaultAgentName: string;
-  /** The board's Auditor pointer (CONTEXT.md / issue #15 layer 2), same shape
+  /** The board's Auditor pointer (GLOSSARY.md / issue #15 layer 2), same shape
    *  as `defaultAgentName` above — the fallback a `review` task's unset
    *  `assignee` attributes to instead (issue #42), never `defaultAgentName`.
    *  Absent → `DEFAULT_AUDITOR_NAME` (the pointer always resolves —
-   *  CONTEXT.md's Auditor). */
+   *  GLOSSARY.md's Auditor). */
   auditorName?: string;
   /** Interview の root の空の assignee が解決する先(ADR 0269 決定2)。Absent → `DEFAULT_INTERVIEWER_NAME`。 */
   interviewerName?: string;
@@ -203,7 +203,7 @@ export interface McpDeps {
    *  decompose child assigned to it is rejected outright like an unknown name.
    *  Absent → no registry configured. */
   resolvesToBuiltIn?: (name: string) => boolean;
-  /** Whether an explicitly named workspace is protected (CONTEXT.md's
+  /** Whether an explicitly named workspace is protected (GLOSSARY.md's
    *  protected workspace / ADR 0013), read fresh against the registry — a
    *  decompose child naming a protected workspace converts to an approval
    *  question unconditionally, regardless of the registering worker's
@@ -215,7 +215,7 @@ export interface McpDeps {
    *  (same pattern as `agentRegistered`) — `list_agents` marks each one
    *  direct/needs-approval against the caller's own `assignable_to` via the
    *  same `assigneeNeedsApproval` decompose enforces, plus a fixed `human`
-   *  line (CONTEXT.md's Roster: human is delegable but carries no registry
+   *  line (GLOSSARY.md's Roster: human is delegable but carries no registry
    *  definition). Absent → no registry configured, so `list_agents` reports
    *  only the fixed `human` line. */
   listAgents?: () => RosterAgent[];
@@ -230,7 +230,7 @@ export interface McpDeps {
 /** Every MCP call is attributed to a real agent session (never human — that's
  *  the separate /answer route), so an unspecified (null) assignee resolves to
  *  the board's default agent, not `HUMAN_ACTOR_ID` (ADR 0012 / issue #36) —
- *  made type-aware for `review` tasks (issue #42 / CONTEXT.md's Auditor): a
+ *  made type-aware for `review` tasks (issue #42 / GLOSSARY.md's Auditor): a
  *  review task's unset assignee attributes to the Auditor pointer instead —
  *  or, for an Interview root, to the Interviewer pointer (ADR 0269 決定2) —
  *  neither of which is ever unset (each falls back to its `DEFAULT_*`). */
@@ -370,7 +370,7 @@ function runReleasingVerb(
     if (gate && workspace) gate(task, workspace);
     // `verb(task)` は transaction の外: 拒否でも残す副作用(authority の quarantine)はここに置き、返す記録だけが中で走る
     const record = verb(task);
-    // 後始末に入った(CONTEXT.md「後始末」)。枠を握っているのは task ではなく
+    // 後始末に入った(GLOSSARY.md「後始末」)。枠を握っているのは task ではなく
     // session であり、この事実は再起動をまたぐので行にも持つ(ADR 0109 決定5)。
     // 記録と印は同じ transaction(issue #2025)—— 間で落ちると印の無い決着済み session が残る。
     const result = deps.db.transaction(() => {

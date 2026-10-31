@@ -90,7 +90,7 @@ export interface ExecutionSettingRow {
   price_out: number;
 }
 
-/** 盤面設定の表(CONTEXT.md「Selector」)。種の既定から DB へ初期化され、以後は
+/** 盤面設定の表(GLOSSARY.md「Selector」)。種の既定から DB へ初期化され、以後は
  *  DB が正本。 */
 export type ExecutionSettingTable = readonly ExecutionSettingRow[];
 
@@ -224,7 +224,7 @@ export const SEED_EXECUTION_SETTINGS: ExecutionSettingTable = [
   { provider: "openai", tier: "frontier", model: "gpt-6-astra", effort: "high", price_in: 10, price_out: 50 },
 ];
 
-/** worker session が実際に走る計算資源の組(CONTEXT.md「実行設定」)と、その出所。
+/** worker session が実際に走る計算資源の組(GLOSSARY.md「実行設定」)と、その出所。
  *  `advisor` が undefined であって null でないのは、消費する側 ——
  *  `advisorSpawnFlags` と `workerSpawnEnv`(claude-worker.ts)—— が「不在」を
  *  undefined で綴るため。`worker_spawned.advisor` の null はイベント層の綴りで
@@ -244,7 +244,7 @@ export interface ExecutionSetting {
   source: { tier: TierSource; provider: ProviderSource; advisor?: AdvisorSource };
 }
 
-/** entry を候補から外す資源(CONTEXT.md「Selector」/ ADR 0110 決定3)。Throttle の
+/** entry を候補から外す資源(GLOSSARY.md「Selector」/ ADR 0110 決定3)。Throttle の
  *  Provider 窓・model 窓、Provider 認証の quarantine、Harness の封じ込め —— 出所は
  *  違っても、selector から見ればどれも「この Provider は今使えない」「この model は
  *  今使えない」の2つに畳める。**agent 名の集合ではない**のが #544 の要点で、
@@ -278,11 +278,11 @@ export function windowMatchesSetting(windowModel: string, setting: Pick<Executio
   return windowMatchesModel(windowModel, setting.model) || (setting.advisor !== undefined && windowMatchesModel(windowModel, setting.advisor));
 }
 
-/** 1回の pickup が決める実行設定の入力(CONTEXT.md「Selector」)。
+/** 1回の pickup が決める実行設定の入力(GLOSSARY.md「Selector」)。
  *
- *  **`ExecutionRequest` とは呼ばない**: CONTEXT.md の「要求(Execution request)」は
+ *  **`ExecutionRequest` とは呼ばない**: GLOSSARY.md の「要求(Execution request)」は
  *  task が持つ2列のことで、この型はそれに盤面設定と agent の宣言を足した selector
- *  の入力である。用語は CONTEXT.md が正本(docs/agents/domain.md)なので、別物に
+ *  の入力である。用語は GLOSSARY.md が正本(docs/agents/domain.md)なので、別物に
  *  同じ名前を当てない。
  *
  *  ティアの要求元が2つになったので、どちらの `tier` かは**フィールド名で**言う
@@ -299,9 +299,9 @@ export interface SelectorInput {
    *  あること(`whyInvalidProviderRank`)は書く口が保証する —— 欠けた Provider は
    *  `indexOf` が -1 になって**先頭**に並んでしまう。 */
   providerRank: readonly Provider[];
-  /** task の要求ティア(CONTEXT.md「要求」)。省略 → agent の `tier`。 */
+  /** task の要求ティア(GLOSSARY.md「要求」)。省略 → agent の `tier`。 */
   taskTier: Tier | undefined;
-  /** 候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。selector はこの欄だけを読み、task の type を見ない ——
+  /** 候補を並べる鍵(GLOSSARY.md「要求」/ ADR 0114 決定1)。selector はこの欄だけを読み、task の type を見ない ——
    *  埋めるのは `selectorInputFor` で、work は task の優先順位 → 盤面設定の work 用の既定、review は盤面設定の
    *  review 用の既定(review task の要求は `review_tier` だけ —— ADR 0114 退けた案、ADR 0111 追記10)。
    *  selector 自身の倒れ先 `BOARD_DEFAULT_PRIORITY` は、それを通らない呼び手のためだけにある。 */
@@ -458,7 +458,7 @@ export function selectable(
   );
 }
 
-/** pickup 1回ぶんの実行設定を決める決定論の規則(CONTEXT.md「Selector」/ ADR 0110
+/** pickup 1回ぶんの実行設定を決める決定論の規則(GLOSSARY.md「Selector」/ ADR 0110
  *  決定3)。「誰が走るか」(Assignee)は選ばない —— 選ぶのは、その agent が走る
  *  計算資源だけである。
  *
@@ -770,7 +770,7 @@ export function parseTierDescriptionAmendment(amendment: unknown): string {
   return parsed.data.description;
 }
 
-/** 変更を書き、操作イベントとして経路つきで残す(CONTEXT.md「管理MCP」)。task を
+/** 変更を書き、操作イベントとして経路つきで残す(GLOSSARY.md「管理MCP」)。task を
  *  持たない盤面イベントなので task_id は NULL、帰属は人間。表を書くのはこの1本なので、routing の提案の陳腐化の hook
  *  (ADR 0150 決定1)もここに置く。`questionId` は提案 question への回答で適用したときの印で、meta-review の材料と「人間が変えた行」から外れる(ADR 0151)。
  *  返り値は execution_settings_changed の event id(何も変わらなければ null)。`listAgents` は段の削除の照合が読む(`tierDeletionBlockers`)。 */
@@ -878,7 +878,7 @@ export type RenameAgentTiers = (input: RenameAgentTiersInput) => Promise<void>;
 /** 扉(settings タブ / 管理MCP)が撃つ1つの変更。段の改名だけは、agent.md の `tier` が名前で書かれているので、先に registry へ
  *  書き換えを着地させてから盤面の名前を変える(ADR 0200 決定2)。push は DB transaction の外なので、着地できなければ改名ごと
  *  拒む(ADR 0150 決定5 と同じ扉)。書き換えの前に名前を検査する —— 拒む改名で registry を動かさない。
- *  ponytail: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
+ *  shortcut: 着地と transaction の間に別の変更が名前を取ると、registry だけ新しい名前になる。扉が増えて競合が見えたら直す。 */
 export async function changeExecutionSettings(
   db: Db,
   change: ExecutionSettingsChange,
@@ -902,7 +902,7 @@ export async function changeExecutionSettings(
 
 /** 行の Quarantine の解除の門1(ADR 0184 決定5 / ADR 0218 決定2): その (provider, model)、effort の Quarantine なら
  *  (provider, model, effort) の行が表から無くなった Quarantine の question を、回答なしで盤面名義に決着させる。誰も判断して
- *  いないので decision log には載せない(CONTEXT.md「Decision log」)。 */
+ *  いないので decision log には載せない(GLOSSARY.md「Decision log」)。 */
 function settleRemovedRowQuarantines(db: Db, at: Date, observedEventId: number): void {
   const table = loadExecutionSettingTable(db);
   const rows = {

@@ -96,7 +96,7 @@ async function tokenFile(token: string): Promise<string> {
 }
 
 // issue #209 の完了条件: 盤面の registry fetch が盤面自身の token で認証され、
-// **人間の `gh` credential helper に依存しない**こと。CONTEXT.md の GitHub identity
+// **人間の `gh` credential helper に依存しない**こと。GLOSSARY.md の GitHub identity
 // が「盤面が執行する操作は読み取り・書き込み・merge を問わずすべてこの名義」と
 // 書いており、registry の refresh は盤面が執行する読み取りである(ADR 0024)。
 // ADR 0093 で名義は App になり、子プロセスが運ぶのは**仲介が発行した repo 単位の

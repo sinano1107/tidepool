@@ -8,7 +8,7 @@ import { decomposeTaskViaWorker, HUMAN_WEBUI } from "./harness.js";
  *  decomposeTask の戻り値と例外**で言う。入口(JSON API / 管理MCP / worker MCP)は
  *  写像だけを言い、「economy 以外はダメ」を入口ごとに書き直さない(決定3)。 */
 
-it("登録された task は要求2列をそのまま持ち帰る(CONTEXT.md「要求」)", () => {
+it("登録された task は要求2列をそのまま持ち帰る(GLOSSARY.md「要求」)", () => {
   const db = openDb(":memory:");
   const task = registerTask(
     db,

@@ -52,7 +52,7 @@ export function readClaudeReceived(stdout: string): string | null {
  *  `function_call_output`、code mode なら `exec` の `custom_tool_call_output` に載る(0.147.0 の gpt-5.6 系は後者)。
  *  `mcp_tool_call_end` の event と `codex exec --json` の `item.completed` は切り詰め前の本文なので読まない。
  *  `code` はその call が exec ならモデルが書いたコードで、直接の MCP 呼び出しなら無い。
- *  ponytail: call は名前か入力に tool 名を含む最後の1回で選ぶ —— 呼んだあとに tool 名を含む別の exec を足されると
+ *  shortcut: call は名前か入力に tool 名を含む最後の1回で選ぶ —— 呼んだあとに tool 名を含む別の exec を足されると
  *  そのコードは指定と一致せず観測なしに落ちる(取り違えて合否を出すことはない)。観測なしが続いたら対応を event から取る */
 export function readCodexReceived(rollout: string): { received: string | null; code?: string } {
   const items = rollout.split("\n").flatMap((line) => {

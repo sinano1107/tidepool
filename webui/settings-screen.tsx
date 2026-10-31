@@ -280,7 +280,7 @@ function WorkspaceRecord({ ws, baseDir, say, onChanged, edit }: {
 }
 
 // Default icon picker rows (issue #72): sea life first, then land animals —
-// the fixed order is the worldview convention (CONTEXT.md's "tidepool
+// the fixed order is the worldview convention (GLOSSARY.md's "tidepool
 // dweller" naming), not cosmetic, so it must never be reordered or trimmed.
 const AGENT_ICON_SEA = ['🐙', '🦀', '🦐', '🦞', '🦑', '🦪', '🐚', '🐡', '🐠', '🐟', '🐬', '🐳', '🦈', '🦭', '🐢', '🪼', '🪸'];
 const AGENT_ICON_LAND = ['🦦', '🐕', '🐈', '🦊', '🐻', '🐼', '🐨', '🦁', '🐯', '🐮', '🐷', '🐸', '🐵', '🐔', '🐧', '🦉', '🦅', '🐴', '🦋', '🐝'];
@@ -574,7 +574,7 @@ const DANGEROUS_REASON_LABEL: Record<string, string> = {
 
 // issue #383 の信号コード。DANGEROUS_REASON_LABEL とは別の表である — この族は
 // エージェントの権限を1ミリも広げず、守っているのは人間自身の作業ツリーのほう
-// なので、CONTEXT.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
+// なので、GLOSSARY.md「危険な値」の列挙に混ぜない(混ぜると ADR 0088 の
 // 「確認は WebUI 専用」がこの族まで及ぶと読める)。訳すだけという性質は同じで、
 // 判定はサーバ単一正本(ADR 0027)。
 const LIVE_CHECKOUT_SIGNAL_LABEL: Record<string, string> = {
@@ -2556,7 +2556,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
     setBusy(true);
     try {
       // 削除を先に送る —— 書く行が、消した行の effort や段を引き継げるように。
-      // ponytail: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
+      // shortcut: 残す2行の間で effort / 段を入れ替えると途中で衝突して扉が拒む。2回の保存に分ける(一括の扉ができたら1回で済む)
       for (const row of deletes) await api('/api/settings/execution', { setting: 'delete_row', provider: row.provider, model: row.model, effort: row.effort });
       for (const write of writes) await api('/api/settings/execution', { setting: 'row', ...write });
       say('success', 'execution table saved', `${writes.length} row${writes.length === 1 ? '' : 's'} written, ${deletes.length} removed`);
@@ -2626,7 +2626,7 @@ function ExecutionTableCard({ settings, say, onSaved, edit }: {
                 )}
               </div>
             ))}
-            {/* ponytail: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}
+            {/* shortcut: one unsaved new row at a time (its key is the literal 'new'); key by a counter if adding several per save matters */}
             <Button variant="ghost" size="sm" onClick={addRow} disabled={draft.some((d) => d.key === 'new')}>Add row</Button>
             <p style={{ margin: 0, fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
               a row says "this model meets this tier's quality on this provider" — classify by measured capability, not price.

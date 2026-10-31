@@ -18,7 +18,7 @@ import {
   type WorkspaceConfig,
 } from "./workspace.js";
 
-/** 後始末(CONTEXT.md「後始末」/ ADR 0109)に要るもの。上限到達による中断の
+/** 後始末(GLOSSARY.md「後始末」/ ADR 0109)に要るもの。上限到達による中断の
  *  ハンドラが既に持っていた引数と**同じ**であり、後始末へ入るすべての経路がこの1つの型を
  *  共有する(ADR 0109 決定1)。 */
 export interface TeardownDeps {

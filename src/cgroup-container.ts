@@ -282,7 +282,7 @@ function createCgroup(own: string, id: string): ProcessContainer {
       // 生きている子が居るなら読みにいかない — wrapper が容器へ入る前の
       // populated 0 を空と読むのは、送達を回収と数えることそのものだからである。
       //
-      // ponytail: その window に force が届いた process は kill をすり抜けるが、
+      // shortcut: その window に force が届いた process は kill をすり抜けるが、
       // すり抜けた側は exit しないので空も観測されず、回収 timeout → Containment
       // quarantine に落ちる(fail-closed)。塞ぐには入場の完了を待つ同期が要り、
       // force は pickup から数十分後なのでこの窓は実質空である。

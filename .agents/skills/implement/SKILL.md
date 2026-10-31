@@ -26,13 +26,13 @@ Either way, before touching the branch, say which models the run will use. They 
 
 Stay in this thread for all three:
 
-1. Read the issue, its resolving comments, and every ADR it references. `CONTEXT.md` supplies the vocabulary for test names and interfaces.
+1. Read the issue, its resolving comments, and every ADR it references. `GLOSSARY.md` supplies the vocabulary for test names and interfaces.
 2. Create the branch: `issue-<n>-<slug>` — never commit wherever `HEAD` happens to be.
 3. Name the seams the work will be tested at and confirm them with the user. Pick from the three seams ADR 0107 names, and state each behaviour at the lowest seam it shows at. `/tdd` refuses to write a test at an unconfirmed seam, and a sub-agent cannot ask — so the agreement has to exist before the dispatch, and the agreed seams travel in the prompt. Handing a criterion to an existing test instead is a claim, and ADR 0107 決定3 makes it the attractive one — break the implementation and watch the test you named go red before you name it. One that stays green was never the evidence.
 
 ## The implementation sub-agent
 
-Dispatch one `ponytail-implementer` sub-agent at the decided implementation model and effort. Give it the issue number and resolving comments, agreed test seams, governing ADRs, and the current branch. Instruct it to read `CONTEXT.md`, implement with `/tdd` one red-green slice at a time, run the touched test files and typecheck. Follow `AGENTS.md` for the Node version and test permissions; the full suite runs in CI after the PR opens (ADR 0155).
+Dispatch one `ponytail-implementer` sub-agent at the decided implementation model and effort. Give it the issue number and resolving comments, agreed test seams, governing ADRs, and the current branch. Instruct it to read `GLOSSARY.md`, implement with `/tdd` one red-green slice at a time, run the touched test files and typecheck. Follow `AGENTS.md` for the Node version and test permissions; the full suite runs in CI after the PR opens (ADR 0155).
 
 - **Claude Code:** select `.claude/agents/ponytail-implementer.md`, passing the decided model and effort.
 - **Codex:** select `.codex/agents/ponytail-implementer.toml`, passing the decided model and effort. If this client cannot select custom agent types, pass that file's `developer_instructions` to an ordinary sub-agent with the same task and settings.
@@ -63,7 +63,7 @@ One more, and it comes from the originating issue rather than from the run: **it
 
 ## The pull request
 
-Push the branch and open a PR. Follow the shape this repo already uses: a Japanese body with `## Summary`, a `## Test plan` checklist, and `Closes #<issue>` — plus `Closes #<originating issue>` when the spec names one it came from (`docs/agents/workflow.md`, step 5 of the grilling landing).
+Push the branch and open a PR. Write a Japanese body in the `/pr` skill's shape (Summary, Evidence, Merge Danger), with the checks this run passed as the Evidence and CI named as what still runs. Below it, `Closes #<issue>` — plus `Closes #<originating issue>` when the spec names one it came from (`docs/agents/workflow.md`, step 5 of the grilling landing).
 
 Record the delegation decision the run actually used — model and effort for the implementation, strength for the review — so a run dispatched at the wrong tier is visible afterwards.
 
@@ -73,7 +73,7 @@ Then add the section this flow depends on:
 ## レビュー指摘の対応
 ```
 
-List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `CONTEXT.md`, an existing test. "Out of scope" on its own is not a reason.
+List **every** finding returned by the implementation agent and `/code-review` — the applied ones included, none omitted. For each, say what was raised and either which commit addresses it or why it was not applied. A reason has to point at something checkable: an ADR number, a term defined in `GLOSSARY.md`, an existing test. "Out of scope" on its own is not a reason.
 
 A review finding that was filed or commented on says so on its own line above (`→ #n に起票`). Then a second section, `## 発見した問題`, for the rest of what the filing step settled — the sub-agent's report, the reviewers' notes on what the diff did not cause, your own observations: each one filed as `#<n>`, commented on `#<n>`, or not filed and why. Each problem appears in exactly one of the two sections.
 

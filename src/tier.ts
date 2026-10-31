@@ -2,14 +2,14 @@ import type { Db } from "./db.js";
 import { DomainError } from "./domain-error.js";
 import type { QuestionProposal, TierNeighbour } from "./tasks.js";
 
-/** 必要品質のティア(CONTEXT.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
+/** 必要品質のティア(GLOSSARY.md「要求」/ ADR 0200 決定1)の名前。段は盤面の DB が持つ順序付きの一覧で(`readTiers`)、
  *  コードは名前を列挙しない —— 型が言えるのは「段の名前」であることだけ。 */
 export type Tier = string;
 
 /** 段の盤面内部の id(ADR 0200 決定2)。盤面の中の参照(行・task の要求・盤面設定・提案)は id で段を指し、外へは出さない。 */
 export type TierId = number;
 
-/** 要求のもう1列: 要求ティアの候補を並べる鍵(CONTEXT.md「要求」/ ADR 0114 決定1)。
+/** 要求のもう1列: 要求ティアの候補を並べる鍵(GLOSSARY.md「要求」/ ADR 0114 決定1)。
  *  `quality` = Provider 順位 → 価格、`cost` = 価格 → Provider 順位。ティアは床
  *  なので、どちらも床を下回る許可ではない。`speed` は落とした —— 締め切りは
  *  ティアの申告で表し、所要時間は学習器の outcome として観測される。 */

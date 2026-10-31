@@ -461,7 +461,7 @@ export async function bootTidepool(options: BootOptions = {}): Promise<Tidepool>
  *  client に「session がそこで終わる」を演じさせるために要る(下記)。 */
 const boards = new Map<string, ScriptedWorker>();
 
-/** 最終 verb を着地させた session は、そこで終わる(CONTEXT.md「後始末」)。行儀のよい
+/** 最終 verb を着地させた session は、そこで終わる(GLOSSARY.md「後始末」)。行儀のよい
  *  worker の root process は締めのターンの直後に exit し、adapter が盤面 supervisor 経由で
  *  強制回収を撃つ(ADR 0109 決定4)—— 既定の容器はそれで空になり、後始末が走って枠が空く。
  *
@@ -1117,7 +1117,7 @@ export async function questions(t: Tidepool): Promise<any[]> {
   );
 }
 
-/** その kind・value の、開いている quarantine question(CONTEXT.md の Quarantine)—
+/** その kind・value の、開いている quarantine question(GLOSSARY.md の Quarantine)—
  *  読み口(`GET /api/tasks`)から引く。board scope の kind の value は null。無ければ undefined。
  *  ドメイン層は `quarantineQuestion`。 */
 export async function servedQuarantineQuestion(
@@ -1133,7 +1133,7 @@ export async function servedQuarantineQuestion(
   );
 }
 
-/** その kind・value の、開いている quarantine question(CONTEXT.md の Quarantine)。
+/** その kind・value の、開いている quarantine question(GLOSSARY.md の Quarantine)。
  *  無ければ undefined。行は直に読まず、production の読み口 `openQuarantineQuestion` で引く
  *  (ADR 0107 決定2)。サーバ境界は `servedQuarantineQuestion`。 */
 export function quarantineQuestion(db: Db, kind: QuarantineKind, value: string | null): Task | undefined {

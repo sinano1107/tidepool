@@ -129,7 +129,7 @@ function buildHandoffPrompt(dump: string, language: string): string {
 
 /** The registration gate's question (issue #49 設計点4): can the board's
  *  three content fields be derived from this issue as it stands? "Issue"
- *  means the full thread — title + body + every comment (CONTEXT.md) — so a
+ *  means the full thread — title + body + every comment (GLOSSARY.md) — so a
  *  human's clarifying comment posted after an earlier rejection counts on
  *  the retry. A failing verdict must carry the drafted fix as an issue
  *  comment, because that's the only place a fix may land (ADR 0016: GitHub

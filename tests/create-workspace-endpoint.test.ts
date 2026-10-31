@@ -217,7 +217,7 @@ it("生きた dev checkout の信号は 409 に信号コードと clone 着地�
     live_checkout_signals: ["uncommitted_changes", "claude_settings_local"],
     clone_landing: "/mnt/workspaces/tidepool",
   });
-  // 危険な値(ADR 0061 / CONTEXT.md)とは別の族なので、同じ欄には載せない ——
+  // 危険な値(ADR 0061 / GLOSSARY.md)とは別の族なので、同じ欄には載せない ——
   // 相乗りすると ADR 0088 の「確認は WebUI 専用」がこの族まで及ぶと読める
   expect(refused.json.dangerous_values).toBeUndefined();
 

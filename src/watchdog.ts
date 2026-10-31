@@ -41,7 +41,7 @@ export interface WatchdogConfig {
   reclaimTimeout?: number;
 }
 
-/** 回収済み観測の不成立(CONTEXT.md「容器」)で止まっている slot の門
+/** 回収済み観測の不成立(GLOSSARY.md「容器」)で止まっている slot の門
  *  (ADR 0099 決定3)。Containment / Harness Containment quarantine の確認回答の
  *  受理側(human-verbs)だけがこれを読む。 */
 export interface PendingReclaim {
@@ -188,7 +188,7 @@ export function recordHumanStop(db: Db, taskId: string, reason: string | undefin
   })();
 }
 
-/** 行の拒否(CONTEXT.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
+/** 行の拒否(GLOSSARY.md / ADR 0184 決定4)の盤面側の一撃。上限到達による中断と同じく失敗では
  *  なく failure question を立てないが、**記録と status の決着を後始末より前に**置く: 行の
  *  Quarantine(行が表に残っているときだけ)・`row_refused`・`todo` 先頭への復帰(行でない Interview の対象なら対象の question と
  *  `target_refused` と位置を変えない `todo`)を1 transaction で済ませてから後始末に入るので、
@@ -398,7 +398,7 @@ export function startWatchdog(deps: {
    *  記録)に置くと、後始末がそこへ届く前に投げたとき failure question が立たないまま
    *  status が `in_progress` で残り、落ちた後始末の受理は `teardownStep`(ADR 0113 決定3)に
    *  cap 経路と読まれる —— watchdog が殺したタスクが retry / abandon の問いなしに queue head
-   *  へ戻り、`cap_interrupted` という起きていない event が書かれる(CONTEXT.md「Watchdog」:
+   *  へ戻り、`cap_interrupted` という起きていない event が書かれる(GLOSSARY.md「Watchdog」:
    *  自動リトライは存在しない)。記録を先に置けば status は決着し、決定3 はこの経路でも真になる。 */
   function onReclaimed(taskId: string, rec: WatchRecord, limit: number): void {
     if (rec.settled) return;
@@ -442,7 +442,7 @@ export function startWatchdog(deps: {
   /** 空を観測できないまま timeout。失敗の記録を置いてから後始末へ入る(ADR 0254 決定1)が、
    *  slot は解放しない — tree rule も走らせない(まだ生きている process が書いている作業ツリーを
    *  退避しても、退避そのものが競合する)。tree rule は確認 question の受理まで待つ
-   *  (ADR 0099 決定3 / CONTEXT.md「Slot-release tree rule」)。後始末の印が待ちを再起動の先へ運ぶ。 */
+   *  (ADR 0099 決定3 / GLOSSARY.md「Slot-release tree rule」)。後始末の印が待ちを再起動の先へ運ぶ。 */
   function onReclaimTimeout(task: Task, rec: WatchRecord, limit: number): void {
     if (rec.humanStop) return;
     if (rec.classification) {
@@ -667,7 +667,7 @@ export function startWatchdog(deps: {
       deps.closeLeftOpenSessions?.();
       const taskId = pending;
       pending = null;
-      // slot が解放される瞬間に tree rule が走る、の対を閉じる(CONTEXT.md
+      // slot が解放される瞬間に tree rule が走る、の対を閉じる(GLOSSARY.md
       // 「Slot-release tree rule」)— 回収 timeout の時点では走らせていない。
       // 完了済み session の後始末なら、通る型は通常完了と同じである(退避ではなく
       // 検査 + merge-back / 休止位置。ADR 0109 決定3)

@@ -15,7 +15,7 @@ INDEX は保存物ではなく派生(追記3)/ 数値閾値は使わない(決�
 (節ごとに記す)。**一次資料に無い主張は「未確認」と書く。** issue 本文・コメントの記述で一次資料と食い違った
 ものは各節の冒頭に「訂正」として残す。
 
-当てはめの語彙は CONTEXT.md「Memory」のもの: 種別 = Knowledge / Behavior / Precedent、状態 = candidate /
+当てはめの語彙は GLOSSARY.md「Memory」のもの: 種別 = Knowledge / Behavior / Precedent、状態 = candidate /
 approved、読み口 = spawn 注入(最上位 INDEX + 関連 leaf)/ MCP pull(枝を降りる)/ meta-review が読む
 (Precedent はエントリではなく投影であり、worker に注入も pull もされない — 決定10)。
 
