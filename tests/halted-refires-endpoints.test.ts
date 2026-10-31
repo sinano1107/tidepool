@@ -50,7 +50,7 @@ it("起草が撃って3回失敗すると、settings の一覧と管理MCP の�
       task: { id: s.task.id, title: "hopeless" },
       cause: "preference",
       round: "initial",
-      last_failure: { reason: "claude CLI timed out", at: last.created_at },
+      last_failure: { reason: "Board call failed: claude CLI timed out", at: last.created_at },
     },
   ]);
   const client = await managementMcpClient(t.baseUrl);
@@ -197,7 +197,7 @@ it("配分評価が撃って3回失敗すると、settings の一覧と管理MCP
       target: completed.id,
       review: { id: review.id, title: "review: hopeless" },
       task: { id: s.task.id, title: "hopeless" },
-      last_failure: { reason: "claude CLI timed out", at: last.created_at },
+      last_failure: { reason: "Board call failed: claude CLI timed out", at: last.created_at },
     },
   ]);
   const client = await managementMcpClient(t.baseUrl);

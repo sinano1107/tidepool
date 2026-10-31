@@ -174,7 +174,7 @@ it("配分評価の答えが schema に合わなくても allocation_review の�
 
   expect(listBoardCalls(db)).toEqual([allocationRow(at)]);
   expect(listEvents(db, work.id).filter((e) => e.payload.kind === "allocation_review_failed").map((e) => e.payload)).toEqual([
-    expect.objectContaining({ reason: "answer did not match the schema" }),
+    expect.objectContaining({ reason: "Board call failed: answer did not match the schema" }),
   ]);
 });
 
@@ -322,7 +322,7 @@ it("撃って失敗すると review の完了 event を鍵にした失敗 event 
     [
       "tidepool",
       "board",
-      { kind: "allocation_review_failed", review_completed_event_id: completed.id, review_task_id: review.id, reviewed_task_id: task.id, reason: "claude CLI timed out" },
+      { kind: "allocation_review_failed", review_completed_event_id: completed.id, review_task_id: review.id, reviewed_task_id: task.id, reason: "Board call failed: claude CLI timed out" },
     ],
   ]);
 });
