@@ -39,5 +39,5 @@ try の外で組んで投げていた。投げた先は sweep の fire-and-forge
 - 記録の dir 全体が読めなければ(EACCES)、対象ごとに3回失敗して打ち切り一覧に同じ reason の行が並ぶ。隠れはしない。
 - 起草は入力を撃てると決めた後に組むようになり、撃てないときの読みが消える。
 - 撃つ流れが4本ある観測(#2567)はこの実装に畳む。
-- worker 向けの記録の読み手(self RCA の証拠節・停止 RCA への `get_current_task` の行動列)は Board call ではなく verb / 注入の失敗で、別 issue。
+- worker 向けの記録の読み手(self RCA の証拠節・停止 RCA への `get_current_task` の行動列)は Board call ではなく verb / 注入の失敗で、#2800 に分けた。
 - GLOSSARY.md「帰責」の撃てなかった / 撃って失敗の文。
