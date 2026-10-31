@@ -636,3 +636,16 @@ it.each([
     reason: expect.stringContaining(observed),
   });
 });
+
+it("Claude adapter: 封じ込めの照合と Worker MCP 到達性が同じ init 行で崩れたら、封じ込めの確認 question 1枚だけ —— 安全の側(1 session に資源の停止は1つ)", async () => {
+  const proc = await bootClaude();
+  const task = queueWork(t, "drifted and unreachable");
+  await t.clock.advance(HOUR);
+
+  proc.processes[0]!.stdout.write(`${JSON.stringify({ type: "system", subtype: "init", tools: ["Bash", "Read", "CronCreate"], mcp_servers: [{ name: "tidepool", status: "failed" }] })}\n`);
+  proc.emitExit(null, "SIGKILL");
+  await settle();
+
+  expect((await questions(t)).map((q: any) => q.question_quarantine_kind)).toEqual(["containment"]);
+  expect((await stoppedByResource(task.id))?.payload.quarantine).toBe("containment");
+});
