@@ -485,20 +485,21 @@ async function bootCodex() {
 }
 
 for (const [harness, boot] of [["Claude", bootClaude], ["Codex", bootCodex]] as const) {
-  it(`${harness} adapter: 最終 verb なしに exit 0 した session は failure question を1枚立てて枠を空ける`, async () => {
+  it.each([0, 1])(`${harness} adapter: 資源の署名なしに exit %s した session は failure question を1枚立てて枠を空ける`, async (code) => {
     const proc = await boot();
     const task = queueWork(t, "exits quietly");
     await t.clock.advance(HOUR);
     expect(proc.calls).toHaveLength(1);
 
     proc.processes[0]!.stderr.write("last words\n");
-    proc.emitExit(0, null);
+    proc.emitExit(code, null);
     await settle();
 
     const [question, ...more] = await exitedWithoutReport();
     expect(more).toEqual([]);
     expect(question.title).toBe("worker exited without reporting: exits quietly");
-    expect(question.purpose).toContain("exit code 0");
+    expect((await questions(t)).map((item: any) => item.title)).toEqual([question.title]);
+    expect(question.purpose).toContain(`exit code ${code}`);
     expect(question.purpose).toContain("last words");
     expect(question.purpose).not.toMatch(/time limit|reclaimed/i);
     expect(await status(task.id)).toBe("blocked");

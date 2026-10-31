@@ -348,6 +348,7 @@ export function buildCodexWorkerOptions(
     onSpawnFailed: session.onSpawnFailed,
     onRecordContainerFailed: session.onRecordContainerFailed,
     onPickupStopped: session.onPickupStopped,
+    onSessionStoppedByResource: session.onSessionStoppedByResource,
     onWorkerExited: session.onWorkerExited,
     // ADR 0261 決定1・3: 渡し忘れは「Codex の上限到達による exit が報告なき exit の failure question になる」形で静かに fail する。
     // pickup の観測と同じ instance —— 互換の検査の済みを共有し、exit のたびに検査し直さない

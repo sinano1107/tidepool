@@ -55,6 +55,15 @@ function isTurnFailure(value: unknown): boolean {
   return !!value && typeof value === "object" && (value as { type?: unknown }).type === "turn.failed";
 }
 
+/** ADR 0331 決定2: モデルの応答(item)か完走を見たら0ターンではない。開始や CLI の失敗だけでは数えない。 */
+function isRootTurn(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const event = value as { type?: unknown; item?: { type?: unknown } };
+  return event.type === "turn.completed" ||
+    (["item.started", "item.updated", "item.completed"].includes(event.type as string) &&
+      typeof event.item?.type === "string" && event.item.type !== "error");
+}
+
 /** ADR 0189: worker の発話は `item.completed` の `agent_message`(空の text は前の発話を残す)。 */
 function readAgentMessage(value: unknown): string | null {
   if (!value || typeof value !== "object") return null;
@@ -79,14 +88,16 @@ interface CodexStreamObservation {
   lastMessage: string | null;
   /** ADR 0261 決定2: 読み直しの条件は `turn.failed` の行の有無だけ —— 文(reported_error)は読まない */
   turnFailed: boolean;
+  turnRan: boolean;
 }
 
-export const codexStreamObservation = (): CodexStreamObservation => ({ usage: null, reportedError: null, lastMessage: null, turnFailed: false });
+export const codexStreamObservation = (): CodexStreamObservation => ({ usage: null, reportedError: null, lastMessage: null, turnFailed: false, turnRan: false });
 
 export function observeCodexLine(observed: CodexStreamObservation, event: unknown): void {
   observed.usage = codexTokenUsage(event) ?? observed.usage;
   observed.reportedError = readTurnFailure(event) ?? observed.reportedError;
   observed.turnFailed ||= isTurnFailure(event);
+  observed.turnRan ||= isRootTurn(event);
   observed.lastMessage = readAgentMessage(event) ?? observed.lastMessage;
 }
 

@@ -210,6 +210,7 @@ async function fixture(
     containers,
     auditorName,
     onPickupStopped,
+    onSessionStoppedByResource,
     boardState,
   }: {
     auditorName?: string;
@@ -219,6 +220,7 @@ async function fixture(
     usageProbe?: CodexAppServerProbe;
     containers?: ProcessContainers;
     onPickupStopped?: CodexWorkerOptions["onPickupStopped"];
+    onSessionStoppedByResource?: CodexWorkerOptions["onSessionStoppedByResource"];
     boardState?: (workspace: string) => CodexWorkerOptions["boardState"];
   } = {},
 ) {
@@ -270,6 +272,7 @@ You are the Codex worker.`,
     usageProbe,
     auditorName,
     onPickupStopped,
+    onSessionStoppedByResource,
     boardState: boardState?.(workspace),
   });
   // scheduler が pickup の瞬間に選ぶ実行設定(除外なし)を渡す
@@ -289,6 +292,91 @@ You are the Codex worker.`,
 }
 
 describe("CodexWorker (ADR 0098)", () => {
+  it.each([
+    { type: "item.started", item: { type: "command_execution", command: "ls" } },
+    { type: "item.updated", item: { type: "agent_message", text: "working" } },
+    { type: "item.completed", item: { type: "reasoning", text: "considering" } },
+    { type: "turn.completed" },
+  ])("モデルの応答($type $item.type)を観測した exit は資源を止めても0ターンの復帰を通知しない(ADR 0331 決定2)", async (event) => {
+    const onSessionStoppedByResource = vi.fn();
+    const onWorkerExited = vi.fn();
+    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const value = task(f.db);
+    await f.start(value);
+    f.process.processes[0]!.stdout.write(`${JSON.stringify(event)}\n`);
+    f.process.processes[0]!.stderr.write("Failed to initialize session: required MCP servers failed to initialize: tidepool: failed");
+    f.process.emitExit(1, null);
+
+    expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
+    expect(onSessionStoppedByResource).not.toHaveBeenCalled();
+    expect(onWorkerExited).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "handshaking with MCP server failed: error sending request for url (http://127.0.0.1:1/mcp), when send initialize request",
+    "Mcp error: -32601: Method not found (code -32603)",
+    "handshaking with MCP server failed: JSON-RPC error: -32000: unknown probe id (code -32603)",
+  ])("required tidepool MCP の実測した起動時 exit(%s)は資源を止め、exit の通知より先に0ターンの資源の停止を通知する(ADR 0331)", async (cause) => {
+    const onSessionStoppedByResource = vi.fn();
+    const onWorkerExited = vi.fn();
+    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const value = task(f.db);
+    await f.start(value);
+    const spawned = listEvents(f.db, value.id).find((event) => event.kind === "worker_spawned")!;
+    const signature = `Error: thread/start: Failed to initialize session: required MCP servers failed to initialize: tidepool: ${cause}`;
+
+    f.process.processes[0]!.stderr.write(signature);
+    f.process.emitExit(1, null);
+
+    expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual(["codex"]);
+    expect(onSessionStoppedByResource.mock.calls).toEqual([[value.id, {
+      kind: "session_stopped_by_resource", quarantine: "workerMcpReachability", value: "codex",
+      reason: expect.stringContaining(signature), worker_spawned_event_id: spawned.id,
+    }]]);
+    expect(onSessionStoppedByResource.mock.invocationCallOrder[0]).toBeLessThan(onWorkerExited.mock.invocationCallOrder[0]!);
+    expect(onWorkerExited.mock.calls[0]?.[1]).toMatchObject({ exit_code: 1, stderr_tail: signature });
+  });
+
+  it.each([
+    [1, "config rejected"],
+    [1, "Failed to initialize session: required MCP servers failed to initialize: other: tidepool: unavailable"],
+    [1, "Failed to initialize session: required MCP servers failed to initialize: tidepool-proxy: unavailable"],
+    [1, "required MCP servers failed to initialize: tidepool: unavailable"],
+    [0, "Failed to initialize session: required MCP servers failed to initialize: tidepool: unavailable"],
+  ])("署名の条件を満たさない exit(%s, %s)は到達性を止めず通常の exit として通知する", async (code, stderr) => {
+    const onSessionStoppedByResource = vi.fn();
+    const onWorkerExited = vi.fn();
+    const f = await fixture(undefined, undefined, onWorkerExited, undefined, { onSessionStoppedByResource });
+    const value = task(f.db);
+    await f.start(value);
+    f.process.processes[0]!.stderr.write(stderr);
+    f.process.emitExit(code, null);
+
+    expect(openQuarantineValues(f.db, "workerMcpReachability")).toEqual([]);
+    expect(onSessionStoppedByResource).not.toHaveBeenCalled();
+    expect(onWorkerExited.mock.calls[0]?.[1]).toMatchObject({ exit_code: code, stderr_tail: stderr });
+  });
+
+  it("thread / turn の開始や CLI のエラーだけではモデルのターンを観測したことにならない", async () => {
+    const onSessionStoppedByResource = vi.fn();
+    const f = await fixture(undefined, undefined, undefined, undefined, { onSessionStoppedByResource });
+    const value = task(f.db);
+    await f.start(value);
+    f.process.processes[0]!.stdout.write([
+      "not json",
+      ...[
+        { type: "thread.started" }, { type: "turn.started" },
+        { type: "error", message: "request failed" },
+        { type: "item.completed", item: { type: "error", message: "request failed" } },
+        { type: "turn.failed", error: { message: "request failed" } },
+      ].map((event) => JSON.stringify(event)),
+    ].join("\n"));
+    f.process.processes[0]!.stderr.write("Failed to initialize session: required MCP servers failed to initialize: tidepool: failed");
+    f.process.emitExit(1, null);
+
+    expect(onSessionStoppedByResource).toHaveBeenCalledOnce();
+  });
+
   it("spawns the pinned Codex route with isolated auth home and closed worker surfaces", async () => {
     const f = await fixture();
     const value = task(f.db);
