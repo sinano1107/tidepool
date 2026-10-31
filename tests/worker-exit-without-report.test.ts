@@ -7,7 +7,7 @@ import { CodexWorker } from "../src/codex-worker.js";
 import { executionSettingsFor } from "../src/execution-setting.js";
 import type { Provider } from "../src/provider.js";
 import type { WorkerFactory } from "../src/server.js";
-import { moveTask } from "../src/tasks.js";
+import { moveTask, registerTask } from "../src/tasks.js";
 import { closedCodexSkillsCall, FakeContainerRuntime, healthyOpenai, recordingSpawn, withHealthyUsage } from "./fakes.js";
 import {
   api,
@@ -586,6 +586,42 @@ it("Claude adapter: ターンが走った後の 401 は、Provider 認証の確�
   await settle();
 
   expect((await questions(t)).map((q: any) => q.title).sort()).toEqual([AUTH_TITLE, "worker exited without reporting: expired mid-session"]);
+  expect(await status(task.id)).toBe("blocked");
+  expect(await stoppedByResource(task.id)).toBeUndefined();
+});
+
+it.each([
+  ["work", "acceptEdits", "Sandbox is required but failed to initialize: Failed to create bridge sockets after 5 attempts. Restart to retry."],
+  ["work", "acceptEdits", "Linux sandbox HTTP bridge socket is missing (socat may have died): /tmp/claude-http.sock"],
+  ["work", "acceptEdits", "Linux sandbox SOCKS bridge socket is missing (socat may have died): /tmp/claude-socks.sock"],
+  ["review", "manual", "Sandbox is required but failed to initialize: Failed to create bridge sockets after 5 attempts. Restart to retry."],
+  ["review", "manual", "Linux sandbox HTTP bridge socket is missing (socat may have died): /tmp/claude-http.sock"],
+  ["review", "manual", "Linux sandbox SOCKS bridge socket is missing (socat may have died): /tmp/claude-socks.sock"],
+] as const)("Claude adapter: %s(%s) の Bash の sandbox 故障でその場で Harness を隔離して強制回収し、failure question も残す: %s (#2746)", async (type, mode, failure) => {
+  const proc = await bootClaude();
+  const task = registerTask(t.db, { type, assignee: "deckhand", title: "sandbox bridge failed", purpose: "inspect the repo", completion_criteria: "checked" }, t.clock.now(), ...HUMAN_WEBUI);
+  await t.clock.advance(HOUR);
+  const args = proc.calls[0]!.args;
+  expect(args[args.indexOf("--permission-mode") + 1]).toBe(mode);
+  const stdout = proc.processes[0]!.stdout;
+  const init = JSON.parse(initWithMcpServers([{ name: "tidepool", status: "connected" }]));
+  if (type === "review") init.tools = init.tools.filter((tool: string) => !["Write", "Edit", "NotebookEdit"].includes(tool));
+  stdout.write(`${JSON.stringify(init)}\n`);
+  stdout.write(`${JSON.stringify({ type: "assistant", message: { model: "claude-opus-5-5", content: [{ type: "tool_use", id: "bash-1", name: "Bash", input: { command: "echo ready" } }] } })}\n`);
+  stdout.write(`${JSON.stringify({ type: "user", message: { content: [{ type: "tool_result", tool_use_id: "bash-1", is_error: true, content: failure }] } })}\n`);
+
+  await vi.waitFor(() => expect(proc.forceReclaims).toEqual([task.id]));
+  const [quarantine] = await questions(t);
+  expect(quarantine).toMatchObject({ registrant: "tidepool", question_quarantine_kind: "harnessContainment", question_quarantine_value: "claude-code" });
+  expect(quarantine.purpose).toContain(failure);
+  expect(proc.killed).toEqual([]);
+  proc.emitExit(null, "SIGKILL");
+  await settle();
+
+  expect((await questions(t)).map((q: any) => q.title).sort()).toEqual([
+    "claude-code Harness containment is not established",
+    "worker exited without reporting: sandbox bridge failed",
+  ]);
   expect(await status(task.id)).toBe("blocked");
   expect(await stoppedByResource(task.id)).toBeUndefined();
 });

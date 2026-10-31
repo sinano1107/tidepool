@@ -2082,6 +2082,7 @@ export class ClaudeCodeWorker implements WorkerAdapter {
     const streamObserved = claudeStreamObservation();
     // init 行の照合(封じ込めと Worker MCP 到達性)は init 行1本で答えが出る(それ以降の行を JSON.parse し直す理由がない)。undefined は init 行をまだ見ていない
     let initStop: ResourceStop | null | undefined;
+    let sandboxStopped = false;
     // 行は1度だけ decode し、読み手と live だけの tool surface の検査が同じ `parsed` を読む(issue #1301)。
     // stream のループと exit の flush が同じこれを通す
     const flushStdout = readLines(child.stdout, (line) => {
@@ -2089,6 +2090,13 @@ export class ClaudeCodeWorker implements WorkerAdapter {
       observeClaudeLine(streamObserved, parsed);
       if (initStop === undefined) {
         initStop = this.checkSessionInit(task, enforcement.disableSlashCommands, parsed);
+      }
+      if (streamObserved.sandboxFailure && !sandboxStopped && !initStop) {
+        sandboxStopped = true;
+        // ADR 0331 帰結(#2703): Bash のターンは走ったので、回収後も ADR 0145 の failure question を残す。
+        const reason = `this Claude worker session reported a sandbox failure: ${streamObserved.sandboxFailure}`;
+        registerQuarantine(this.options.db, "harnessContainment", "claude-code", reason, this.options.clock.now());
+        this.containers.forceReclaim(task.id);
       }
     });
     this.running.set(task.id, child);
