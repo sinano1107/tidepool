@@ -995,8 +995,7 @@ async function probePermission(
  *  parse と skill の閉じ方だけ —— task に依る値は placeholder でよい。 */
 function placeholderSpawnConfig(
   taskType: Task["type"],
-  input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook"> &
-    Partial<Pick<Parameters<typeof spawnConfig>[0], "mcpUrl">>,
+  input: Pick<Parameters<typeof spawnConfig>[0], "workspace" | "allowedDomains" | "taskTemp" | "executable" | "skills" | "hook"> & { mcpUrl?: string },
 ): string[] {
   return spawnConfig({
     taskType,

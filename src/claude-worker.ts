@@ -1167,7 +1167,7 @@ export async function probeToolSurfaceCapability(
  *  CLI 2.1.314 と pin の 2.1.286 で同じ): verb の無い McpServer を `createStatelessMcpRouter` で出す listener に繋がれば
  *  `{name:"tidepool", status:"connected", source:"dynamic"}`、届かない port なら `status:"failed"`。sandbox の profile を
  *  運んだ経路は未観測。 */
-export const MCP_CONNECTED_STATUS = "connected";
+const MCP_CONNECTED_STATUS = "connected";
 
 /** Worker MCP 到達性の probe(ADR 0331 決定8)の Claude 側。probe 名義の一時 dir を workspace にした sandbox の profile
  *  (実 session と同じ `buildSandboxSettings`、`failIfUnavailable: true`)と、`url` の listener だけを指す MCP 設定を、
