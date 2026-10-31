@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { BOARD_ACTOR_ID, HUMAN_ACTOR_ID } from "../src/actor-id.js";
@@ -50,6 +50,7 @@ import {
   writeBoardRefs,
 } from "../src/workspace.js";
 import { afterCiRead, awaitWindow, FakeClock, FakeGitHubClient, fakeHead, holdAfterMerge, seedTierNames, UNRESOLVABLE_AGENT, unusedLanding } from "./fakes.js";
+import { startGitHttpRemote } from "./git-http-remote.js";
 import {
   commitWork,
   completedWork,
@@ -872,8 +873,8 @@ it("push の後・畳みの前に worker が写しを偽造すれば、偽造は
   expect(purpose).not.toContain("was:");
 });
 
-// ADR 0330 決定3: 着地の push は同期のまま(ADR 0243)上限で投げ、口は実 ref を読んで基準を畳む
-it("origin が返らない push は上限で何の呼び出しが何 ms で切れたかを書いて投げ、基準は予告の前の値に畳まれる", async () => {
+// ADR 0334 決定1・4: 着地の push は同期のまま(ADR 0243)無音で投げ、口は実 ref を読んで基準を畳む
+it("origin が返らない push は何秒の無音で切れたかを書いて投げ、基準は予告の前の値に畳まれる", async () => {
   const { workspace } = await makeRemoteBackedWorkspace("landing-push-hangs");
   const { db, clock } = await openBoard();
   const ref = "refs/remotes/origin/task/pushed";
@@ -882,13 +883,13 @@ it("origin が返らない push は上限で何の呼び出しが何 ms で切�
   const elsewhere = git(workspace.path, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "elsewhere");
   // 返らない origin: hook は自分の pid を残して眠る —— 投げた後に殺し、test の後始末まで生き残らせない
   const hookPid = join(workspace.repo!, "hook.pid");
-  writeFileSync(join(workspace.repo!, "hooks", "pre-receive"), `#!/bin/sh\necho $$ > "${hookPid}"\nexec sleep 5\n`);
-  chmodSync(join(workspace.repo!, "hooks", "pre-receive"), 0o755);
-  const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 500 });
+  const remote = await startGitHttpRemote(workspace.repo!, "stall-push");
+  git(workspace.path, "remote", "set-url", "origin", remote);
+  const client = new GhCliClient(new GitHubAuth(join(workspace.path, "no-token")), { timeoutMs: 1000 });
 
   await straddle(db, clock, workspace, async () => {
     const push = await client.preparePush({ path: workspace.path, branch: "task/pushed" });
-    expect(() => boardRefWriter(db, workspace)(ref, pushed, push)).toThrow(/^`git push` timed out after 500 ms/);
+    expect(() => boardRefWriter(db, workspace)(ref, pushed, push)).toThrow(/^`git push` stalled: no bytes for 1 s/);
     process.kill(Number(readFileSync(hookPid, "utf8")), "SIGKILL");
     // 畳みの後に写しが3つ目の値へ動く —— 予告の行が2値のまま残っていれば `was: |<押した値>` が載る
     git(workspace.path, "update-ref", ref, elsewhere);
@@ -4245,7 +4246,7 @@ it("GitHub の head が手元にも origin にも無い PR への人間の merge
 
   expect(error).toBeInstanceOf(DomainError);
   expect((error as Error).message).toMatch(
-    new RegExp(`^cannot merge: could not compare PR #1's head ${NOWHERE} with the task's content — .*git fetch`, "s"),
+    new RegExp(`^cannot merge: could not compare PR #1's head ${NOWHERE} with the task's content — .*git (?:-c [^ ]+ )*fetch`, "s"),
   );
   expect((error as Error).message).not.toContain(STILL_CARRYING);
   expect(pr.github.merged).toEqual([]);

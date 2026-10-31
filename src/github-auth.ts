@@ -18,8 +18,8 @@ import { parseGitHubRepo } from "./repo-access.js";
  *  Acquisition and injection are **split** because acquisition is now a network
  *  round trip while injection must stay synchronous: ADR 0066 決定5 requires
  *  `publishWorkspace` to hold zero `await` between `remote add` and the registry
- *  commit. Callers `await ensureToken(repo)` first; `env(repo)` and the `authedGit`
- *  helpers then read the cache synchronously and fail closed when it is empty. */
+ *  commit. Callers `await ensureToken(repo)` first; `env(repo)` and the `authedGitBounded`
+ *  helper then read the cache synchronously and fail closed when it is empty. */
 export class GitHubAuth {
   /** `owner/name` → the installation token the broker minted for it. No timer:
    *  the expiry is checked at the moment of use (ADR 0093 決定6). */
@@ -177,25 +177,7 @@ export const GIT_CREDENTIAL_ARGS = [
   'credential.helper=!f() { echo "username=x-access-token"; echo "password=$GH_TOKEN"; }; f',
 ] as const;
 
-/** The authenticated twin of git.ts's `git()`, for the board's git
- *  network calls (push, clone). Local plumbing keeps using the plain helper;
- *  anything that must reach GitHub as `tidepool-board[bot]` comes through here.
- *
- *  `repo` names which installation token to serve and must already be in the
- *  cache (`await auth.ensureToken(repo)`). Without an identity (`auth` absent) or
- *  without a GitHub repo to authenticate against (`repo` undefined — a
- *  non-GitHub remote) the call runs bare: no credential override, no env
- *  injection, deferring to whatever git config remains. */
-export function authedGit(
-  auth: GitHubAuth | undefined,
-  cwd: string,
-  repo: string | undefined,
-  ...args: string[]
-): string {
-  return runAuthedGit(auth, cwd, repo, args);
-}
-
-/** 盤面が GitHub へ出る往復の上限(ADR 0052 / ADR 0330 決定2): git・`gh`・仲介への往復が分け合う。black-hole した
+/** 盤面が GitHub へ出る往復の上限(ADR 0334 決定1): git は転送が止まった時間、`gh`・仲介は総時間として共有する。black-hole した
  *  接続を無界に待ってはならない —— 同期の呼び出し(git)なら実行の糸ごと止まり、ADR 0036 が復旧経路と定めた人間面まで
  *  応答しなくなる(fail-closed より悪い状態、containment.ts)。非同期の呼び出し(`gh`、仲介)なら poll が返らず止まる。
  *  timeout は「到達不能」= fail-closed 側に読む(ADR 0093 決定7: 仲介の不達は GitHub の不達と同じものとして扱う)。
@@ -204,19 +186,14 @@ export function authedGit(
  *  ローカルのバイナリを叩くのに対しこちらは実ネットワーク往復だからで、同じ数を
  *  共有すると正常な fetch を落とす。
  *
- *  registry と workspace の refresh、着地の push、`gh` が**同じ1つの上限**を共有するのは、
+ *  registry と workspace の refresh、clone、publish・registry・着地の push、`gh` が**同じ1つの上限**を共有するのは、
  *  根拠がどれも「実ネットワーク往復を無界に待ってはならない」1つだから
  *  である —— 資源ごとに数を分けると、片方だけを動かしたときに理由のほうが割れる。 */
 export const GIT_NETWORK_TIMEOUT_MS = 30_000;
 
-/** `authedGit` の上限つきの面。ネットワークへ出る refresh(registry: ADR 0052 決定2、
- *  workspace: issue #211)と着地の push(ADR 0330 決定3)が使う —— どれも詰まったら盤面の
- *  実行の糸ごと止めてはならない(`GIT_NETWORK_TIMEOUT_MS`)。
- *
- *  別関数にしてでも `runAuthedGit` を共有するのは、この module の約束
- *  ——「credentials take effect in exactly one place」—— を守るためである。
- *  呼び出し側で credential 引数を組み直せば、ambient な identity を消す責務が
- *  2箇所に分かれ、片方が欠けても誰も気づかない。 */
+/** Board-driven git network calls share credential injection and stall detection (ADR 0334).
+ *  `repo` names a token already cached by `await auth.ensureToken(repo)`. Without
+ *  an identity or GitHub repo, leave credentials to git config; the stall bound still applies. */
 export function authedGitBounded(
   auth: GitHubAuth | undefined,
   cwd: string,
@@ -227,9 +204,9 @@ export function authedGitBounded(
   try {
     return runAuthedGit(auth, cwd, repo, args, timeoutMs);
   } catch (err) {
-    // 上限超過は Node の「spawnSync git ETIMEDOUT」のままでは人間の question で何が切れたか読めない(ADR 0330 決定2)
-    if ((err as { code?: string }).code === "ETIMEDOUT") {
-      throw new Error(`\`git ${args[0]}\` timed out after ${timeoutMs} ms (in ${cwd})`, { cause: err });
+    // ADR 0334 決定4: 接続前の無音では curl 28 が無く、Operation too slow だけが出る。
+    if ((err as { stderr?: Buffer }).stderr?.toString().includes("Operation too slow")) {
+      throw new Error(`\`git ${args[0]}\` stalled: no bytes for ${Math.ceil(timeoutMs / 1000)} s (in ${cwd})`, { cause: err });
     }
     throw err;
   }
@@ -240,15 +217,15 @@ function runAuthedGit(
   cwd: string,
   repo: string | undefined,
   args: string[],
-  timeoutMs?: number,
+  timeoutMs: number,
 ): string {
   const authenticated = auth !== undefined && repo !== undefined;
   try {
-    return execFileSync("git", authenticated ? [...GIT_CREDENTIAL_ARGS, ...args] : args, {
+    const stallArgs = ["-c", "http.lowSpeedLimit=1", "-c", `http.lowSpeedTime=${Math.ceil(timeoutMs / 1000)}`];
+    return execFileSync("git", [...(authenticated ? GIT_CREDENTIAL_ARGS : []), ...stallArgs, ...args], {
       cwd,
       env: authenticated ? auth.env(repo) : undefined,
       stdio: ["ignore", "pipe", "pipe"],
-      timeout: timeoutMs,
     })
       .toString()
       .trim();
