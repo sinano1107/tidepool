@@ -1310,7 +1310,9 @@ export async function submitAnswer(
         if (dropsRefusedTarget(kind, answers[0])) break;
         const check = deps.quarantineChecks?.[kind.quarantine as QuarantineKind];
         if (!check) throw new DomainError(`this board cannot verify a ${kind.quarantine} repair`);
-        await check(kind.value);
+        const confirm = await check(kind.value);
+        // ADR 0343 決定1: 確認から回答の transaction まで await が無いので、検査の再開までに立った条件を見落とさない
+        confirm?.();
         break;
       }
       case "proposal":
