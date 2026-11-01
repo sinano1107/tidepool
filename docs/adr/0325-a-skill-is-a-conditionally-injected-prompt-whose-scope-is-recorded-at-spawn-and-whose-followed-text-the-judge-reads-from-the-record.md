@@ -1,5 +1,7 @@
 # skill は条件付きで注入される prompt であり、scope は spawn 時の記録と worker 自身の報告から引き、従った文面は transcript の投影から判事が読む
 
+**Status 追記: 決定6 の「Codex は集合も呼び出しも空」は ADR 0337 で置き換わる** —— Codex の「見た集合」は spawn 設定を当てた観測で `enabled: true` と答えた許可集合(決定2 が退けた盤面の列挙とは違い、worker に載らない名前は交差で落ちている)、従った skill は許した path を読んだ `command_execution` の行で本文は `aggregated_output`(2026-11-01、issue #2689)。
+
 **Status 追記: 決定2 の記録 `{ workspace, permitted }` と「workspace の集合で2分」は ADR 0335 決定3 で `{ workspace, host, permitted: string[] }` と記録の2列での正の分けに** —— `"all"` は廃止、`host` は同梱集合から checkout の entry 名を引いた実効集合(issue #2779)。
 
 2026-10-29 の triage → grilling(issue #2682、ADR 0324 帰結の派生)で決定。帰責の判事の prompt は「harness 同梱の skill に従った

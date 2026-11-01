@@ -1,5 +1,7 @@
 # checkout の Harness 固有の性質は (Harness, workspace) の組で止め、Codex の skill は Codex 自身に列挙させる
 
+**Status 追記: 決定3 の「すべて `enabled: false`」は ADR 0337 決定3 で「盤面が閉じた path がすべて `enabled: false`」に** —— allowlist が開いた path は封じ込めの性質に数えない。決定2 の「Codex 自身に列挙させる」は不変で、翻訳は同じ列挙の `scope` から引く(2026-11-01、issue #2689)。
+
 **Status 追記: 2026-10-21 の追記の developer 指示の marker への差し替えは ADR 0326 決定3 の配置に追随する** —— skill の観測は本文に依らず同じ設定を当てる線を保ち、盤面の文が developer 層に載ることを worker の要件にしない(2026-10-29、issue #2692)。
 
 2026-10-14 の grilling(issue #1948)で決定。Codex の封じ込め能力の preflight は、起動時に固定した既定の workspace でしか組まれて
