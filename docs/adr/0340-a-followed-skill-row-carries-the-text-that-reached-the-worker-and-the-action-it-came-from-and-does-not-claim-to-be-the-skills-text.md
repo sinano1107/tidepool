@@ -27,7 +27,9 @@
    持たず、持たせない(退けた形 (γ))。skill の文面そのものを修理する側は checkout の git と vendor の版から読む。
 6. **transcript の単位への参照の欄は Harness 中立の名 `transcript_ref` にする(#2821)。** Claude は行の uuid、Codex は item id。
    `episode_actions` / `episode_skill_calls` / `episode_markers` の3表とも同じ意味なので3表いっしょに改め、リリース前なので DDL を直接
-   書き換える。self RCA の節は `[name, text]` で畳んだまま、出所の行動を見出しの下に列挙する(全文を2度載せない)。
+   書き換える。
+7. **self RCA の節は `[name, text]` で畳んだまま、出所の行動を見出しの下に列挙する。** 同じ skill を `cat` で2度読んだ session で全文を
+   2度載せず、文が違う行(部分読み・加工・CLI の通知)は別の見出しのまま、どの読みから来たかを行動で見せる。
 
 ## 決めないこと
 
