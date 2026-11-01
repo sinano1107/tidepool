@@ -1570,13 +1570,20 @@ it("帰責の第2回の答えが schema に合わなくても attribution の行
 });
 
 /** 初回の帰責が preference で確定した異議に、起草の Board call を撃つ(`draft` は起草 client の答え)。 */
-async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["scriptDraft"]>[1], board: Partial<RetrospectiveCallDeps> = {}) {
+async function draftAfterPreference(draft: Parameters<FakeBehaviorDraftClient["scriptDraft"]>[1], workspace: () => RetrospectiveCallDeps["workspace"] = () => ({ name: "charts" })) {
   const b = objectedAfterReading();
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "preference", evidence: "taste" });
   const drafter = new FakeBehaviorDraftClient();
   drafter.scriptDraft(b.decision, draft);
-  const deps = { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" }, ...board };
+  const deps = {
+    ...noRetrospectiveCalls,
+    attributionClient: client,
+    behaviorDraftClient: drafter,
+    get workspace() {
+      return workspace();
+    },
+  };
   commitTriage(b.db, at, [], await attributeObjections(b.db, deps, b.sessionId, at));
   refireRetrospectiveCalls(b.db, deps, at);
   await new Promise((resolve) => setImmediate(resolve));
@@ -1601,32 +1608,33 @@ it("起草の答えが schema に合わなくても behavior_draft の行は残�
 const attributed = (db: ReturnType<typeof openDb>, taskId: string) =>
   listEvents(db, taskId).flatMap((e) => (e.payload.kind === "objection_attributed" ? [e.payload] : []));
 
-/** 第2回を task_ambiguity に確定させ、起草 client のある sweep を回す(`basedOn` は task の based_on_decision を書き換える setup)。 */
-async function draftAfterTaskAmbiguity(basedOn?: number) {
+/** 第2回を task_ambiguity に確定させ、起草 client のある sweep を回して、起草も memory_draft_failed も無いことを確かめる
+ *  (`danglingBasedOn` を渡すと、task の based_on_decision を存在しない event id に書き換える setup をしてから回す)。 */
+async function draftAfterTaskAmbiguity(danglingBasedOn?: number) {
   const b = awaitingSecondRound();
-  if (basedOn !== undefined) b.db.prepare("UPDATE tasks SET based_on_decision = ? WHERE id = ?").run(basedOn, b.task.id);
+  if (danglingBasedOn !== undefined) b.db.prepare("UPDATE tasks SET based_on_decision = ? WHERE id = ?").run(danglingBasedOn, b.task.id);
   const client = new FakeAttributionClient();
   client.scriptJudgment(b.decision, { cause: "task_ambiguity", evidence: "the second RCA decided it" });
   const drafter = new FakeBehaviorDraftClient();
-  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
   refireRetrospectiveCalls(b.db, { ...noRetrospectiveCalls, attributionClient: client, behaviorDraftClient: drafter, workspace: { name: "charts" } }, at);
   await new Promise((resolve) => setImmediate(resolve));
   expect(attributed(b.db, b.task.id).map((p) => p.cause)).toEqual(["task_ambiguity"]);
   expect(drafter.calls).toEqual([]);
   expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed")).toEqual([]);
-  return logged;
 }
 
 it("人間が登録した task の task_ambiguity は宛先が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
-  const logged = await draftAfterTaskAmbiguity();
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await draftAfterTaskAmbiguity();
 
   expect(logged).not.toHaveBeenCalled();
 });
 
-it("workspace の無い task の preference は置き場が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
+it("workspace を持たない task の preference は置き場が無いので起草せず、sweep の console にも何も出ない(ADR 0336 決定1 の決めた skip)", async () => {
   const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-  const b = await draftAfterPreference({ path: "review", title: "Squash", text: "Squash before merge.", addressee: "worker" }, { workspace: undefined });
+  const b = await draftAfterPreference({ path: "review", title: "Squash", text: "Squash before merge.", addressee: "worker" }, () => undefined);
 
   expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
   expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed")).toEqual([]);
@@ -1634,9 +1642,23 @@ it("workspace の無い task の preference は置き場が無いので起草せ
 });
 
 it("文面の書き手の導出が DomainError 以外で投げると、起草せず失敗 event も残さず、sweep の console に [retrospective] で届く(ADR 0336 決定3)", async () => {
-  const logged = await draftAfterTaskAmbiguity(999_999);
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  await draftAfterTaskAmbiguity(999_999);
 
   expect(logged).toHaveBeenCalledWith(expect.stringMatching(/^\[retrospective\] .*TypeError/));
+});
+
+it("置き場の導出が DomainError 以外で投げると、起草せず失敗 event も残さず、sweep の console に [retrospective] で届く(ADR 0336 決定3)", async () => {
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+  const b = await draftAfterPreference({ path: "review", title: "Squash", text: "Squash before merge.", addressee: "worker" }, () => {
+    throw new TypeError("workspace unreadable");
+  });
+
+  expect(listBoardCalls(b.db)).toEqual([ATTRIBUTION_ROW]);
+  expect(listEvents(b.db, b.task.id).filter((e) => e.payload.kind === "memory_draft_failed")).toEqual([]);
+  expect(logged).toHaveBeenCalledWith(expect.stringMatching(/^\[retrospective\] .*TypeError: workspace unreadable/));
 });
 
 it.each(["capability", "environment", "uncertain"] as const)("初回: %s に空の wrong_memory_entries が付いても cause と evidence がそのまま載り、RCA は cause に従う", async (cause) => {

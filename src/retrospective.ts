@@ -972,27 +972,15 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
   const drafts = round === "initial" ? cause === "preference" : LEARNING_CAUSES.includes(cause);
   if (!deps.behaviorDraftClient || !drafts || worker === HUMAN_ACTOR_ID) return;
   // preference の宛先は Board call が選ぶ。他の cause は導出し、文面の書き手が agent でなければ起草しない
-  let derived: ReturnType<typeof learningTarget> | null = null;
-  if (cause !== "preference") {
-    try {
-      derived = learningTarget(cause, worker, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined);
-    } catch (err) {
-      if (!(err instanceof DomainError)) throw err; // ADR 0336 決定3: 決めた skip 以外は盤面のバグの印として sweep の console へ
-      return;
-    }
-  }
+  const derived = cause === "preference" ? null : decidedSkip(() => learningTarget(cause, worker, getTextAuthor(db, taskId), cause === "missing_information" ? "behavior" : undefined));
+  if (derived === undefined) return;
   // 宛先の agent が registry から消えていれば学ぶ相手がいない —— 文面の書き手が人間のときと同じく起草しない(ADR 0173 決定4)。
   // preference の宛先は Board call が選ぶが、学ぶのは行の(停止なら session の)worker
   const learner = derived ? (derived.kind === "behavior" ? derived.addressee : null) : worker;
   if (learner !== null && deps.agentRegistered && !deps.agentRegistered(learner)) return;
   const task = getTask(db, taskId)!;
-  let scope: string | null;
-  try {
-    scope = learnedScope(db, deps, task);
-  } catch (err) {
-    if (!(err instanceof DomainError)) throw err; // ADR 0336 決定3: 決めた skip 以外は sweep の console へ
-    return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
-  }
+  const scope = decidedSkip(() => learnedScope(db, deps, task));
+  if (scope === undefined) return; // workspace の無い task は Memory の置き場が無く、何度撃っても同じ —— 宛先の無い起草と同じく何も残さない
   await singleFlight(db, `draft:${attribution.id}`, async () => {
     if (!refireDue(db, { refire: "draft", target: attribution.id }, now)) return;
     const call = boardCallSetting(db, deps.behaviorDraftClient, deps.containers);
@@ -1033,6 +1021,17 @@ async function draftCandidate(db: Db, deps: RetrospectiveCallDeps, { attribution
 
 /** 行から学んだ記憶の置き場(起草と propose_from_material が共有): 行の主題を持つ task(meta-review とその系譜)の行は盤面全体(null)、
  *  他は task の workspace(memoryScope —— 解決できなければ投げる)。meta-review は workspace を持たない仕事で、子はそれを継ぐ(ADR 0279 決定1 / ADR 0283 決定1)。 */
+/** 起草の skip の述語を走らせ、DomainError(決めた skip)なら undefined を返す。ADR 0336 決定3: それ以外の throw は
+ *  分類されない盤面のバグの印なので、飲まずに sweep の fire-and-forget の console へ通す。 */
+function decidedSkip<T>(predicate: () => T): T | undefined {
+  try {
+    return predicate();
+  } catch (err) {
+    if (err instanceof DomainError) return undefined;
+    throw err;
+  }
+}
+
 const learnedScope = (db: Db, board: { workspace?: { name: string } }, task: Task): string | null =>
   lineageSubjectOf(db, task.id) === null ? memoryScope(board, task) : null;
 
