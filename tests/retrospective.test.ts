@@ -700,6 +700,23 @@ it.each(["requirement_change", "environment"] as const)(
   },
 );
 
+it.each([
+  ["capability", {}],
+  ["task_ambiguity", { decomposedBy: "planner" }],
+  ["missing_information", { decomposedBy: "planner" }],
+] as const)("初回の帰責が %s のエントリは起草しない —— 宛先が導出できても、初回の起草は preference だけ(#2835)", async (cause, source) => {
+  const s = await objectedForDraft("not yet", { ...source, initial: { cause, evidence: "first look" } });
+  t = s.t;
+
+  await commit(t, s.task.id, "not yet");
+  await nextPoll(t);
+
+  expect((await attributions(t, s.task.id)).map((e: any) => e.payload)).toEqual([expect.objectContaining({ cause, round: "initial" })]);
+  expect(s.behaviorDraftClient.calls).toEqual([]);
+  expect(await draftsFailed(t, s.task.id)).toEqual([]);
+  expect(await memoryEntries(t)).toEqual([]);
+});
+
 it("人間が書いたエントリは preference でも起草しない", async () => {
   const s = await objectedForDraft("by hand", { human: true, initial: { cause: "preference", evidence: "taste" } });
   t = s.t;
