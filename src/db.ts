@@ -493,15 +493,15 @@ export function openDb(path: string): Db {
       UNIQUE (worker_spawned_event_id, extractor_version)
     );
 
-    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。本文は写さず、本文を持つ行を参照する —— Claude は本文を渡した合成 user 行の uuid、
-    -- Codex は許した SKILL.md を読んだ command_execution の完了行の item id(ADR 0337 決定4)。
-    -- transcript_uuid が null = その行が stream に無い呼び出し(Claude の subagent の呼び出しなど)。
+    -- skill の呼び出し1回 = 1行(ADR 0325 決定3)。届いた文は写さず、それを持つ行を参照する —— Claude は文を渡した合成 user 行の uuid、
+    -- Codex は許した path を command に含む完了・exit 0 の command_execution の item id(ADR 0340 決定1・4)。
+    -- transcript_ref が null = その行が stream に無い呼び出し(Claude の subagent の呼び出しなど)。
     CREATE TABLE IF NOT EXISTS episode_skill_calls (
       episode_id      INTEGER NOT NULL REFERENCES episodes(id),
       seq             INTEGER NOT NULL,
       position        INTEGER NOT NULL,
       name            TEXT NOT NULL,
-      transcript_uuid TEXT,
+      transcript_ref  TEXT,
       subagent        INTEGER NOT NULL CHECK (subagent IN (0, 1)),
       PRIMARY KEY (episode_id, seq)
     );
@@ -516,7 +516,7 @@ export function openDb(path: string): Db {
       -- 抽出表に載っていない tool は null = 「引数を抽出しない」であって欠測ではない
       args            TEXT,
       failed          INTEGER NOT NULL CHECK (failed IN (0, 1)),
-      transcript_uuid TEXT NOT NULL,
+      transcript_ref  TEXT NOT NULL,
       tool_use_id     TEXT NOT NULL,
       subagent        INTEGER NOT NULL CHECK (subagent IN (0, 1)),
       -- subagent 起動行にだけ付く、その subagent 自身の消費(合算外の観測)
@@ -535,7 +535,7 @@ export function openDb(path: string): Db {
       position        INTEGER,
       event_id        INTEGER,
       missing_reason  TEXT CHECK (missing_reason IN ('no_event_id', 'unmatched')),
-      transcript_uuid TEXT,
+      transcript_ref  TEXT,
       PRIMARY KEY (episode_id, seq)
     );
 

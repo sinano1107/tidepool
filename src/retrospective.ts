@@ -209,10 +209,14 @@ const followedSkill = (position: string) =>
   `each with ${fieldList({
     name: "the skill's name",
     position,
+    // ADR 0340 決定2: 出所の行動は行動列と同じ欄名で、Harness 専用の欄は置かない
+    tool: "the tool of the call it came from: Skill when the worker's CLI supplied the skill, command_execution when the worker ran a command naming the skill's file",
+    args: "that call's extracted argument: the skill's name for Skill, the command for command_execution",
     // 2.1.286 の実測: subagent の呼び出しの本文は親の session の stream に出ない
     text:
-      // ADR 0337 決定4: Codex では本文は注入でなく worker が読んだ文面なので、Harness に依らない言い方にする
-      "the skill's text as the worker received it when it used the skill (what its CLI supplied, or what it read from the skill's file); " +
+      // ADR 0340 決定1・3: 届いた文と言い、skill の文面との一致は主張しない —— 帰責の規則は足さない
+      "the text that reached the worker in that call: what its CLI supplied (a short notice when the skill was already loaded), or the " +
+      "output of the worker's own command — the whole skill, a part, or a transformation of it — so not necessarily the skill's own text; " +
       "null when the session's record could not " +
       "be read, or when a subagent invoked the skill — that text never reaches the session's record",
   } satisfies Record<keyof FollowedSkill, string>)}`;
@@ -243,10 +247,10 @@ export const ATTRIBUTION_INPUT_FIELDS = {
   human_stop: OBJECTION_HUMAN_STOP_RULE,
   written: OBJECTION_WRITTEN_RULE,
   skills_followed:
-    "the skills the worker invoked before the objected entry, or in the whole session when the entry is its completion report (skills_followed), " +
+    "the skills the worker used before the objected entry, or in the whole session when the entry is its completion report (skills_followed), " +
     followedSkill(
       "its index among the session's tool calls; null when the objected entry could not be placed among them, and the list then holds " +
-        "every skill the session invoked",
+        "every skill the session used",
     ),
 } satisfies Record<keyof AttributionInput, string>;
 
@@ -256,7 +260,7 @@ export const STOP_ATTRIBUTION_INPUT_FIELDS = {
   decision_log: `decision_log is the session's whole decision log. ${LOG_ROW_RULE}`,
   memory_read: memoryRead("the stop"),
   actions: `its action sequence (actions): actions.calls lists ${ACTIONS_FIELDS.calls}; actions.decisions ${ACTIONS_FIELDS.decisions}`,
-  skills_followed: `the skills the worker invoked in the session (skills_followed), ${followedSkill("its index in actions.calls")}`,
+  skills_followed: `the skills the worker used in the session (skills_followed), ${followedSkill("its index in actions.calls")}`,
 } satisfies Record<keyof StopAttributionInput, string>;
 
 /** 帰責の構造化出力 —— 保存する値は `cause` と、`memory` のときだけ誤った entry の id 列(ADR 0115 決定1 / ADR 0166 決定3)。
@@ -685,7 +689,7 @@ function stopSkills(db: Db, recordDir: string | undefined, spawned: EventRowOf<"
  *  (どちらにも無い名前は落とす)、`anchor` より前に従った skill を並べる。Episode が無い・読めない session は両方 null。 */
 function skillFields(
   spawned: EventRowOf<"worker_spawned">,
-  episode: Pick<Episode, "skillsSeen" | "skillCalls" | "markers" | "unrecognizedFormat"> | null,
+  episode: Pick<Episode, "skillsSeen" | "actions" | "skillCalls" | "markers" | "unrecognizedFormat"> | null,
   lines: string[] | null,
   anchor: EventRow,
 ): Pick<AttributionInput, "skills" | "skills_followed"> {

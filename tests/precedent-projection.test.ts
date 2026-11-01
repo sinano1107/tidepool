@@ -37,7 +37,7 @@ it("worker session の transcript から、tool 呼び出し1回 = 1行の行動
     ["mcp__tidepool__complete_task", null],
   ]);
   // 行動行は transcript 行への参照だけを持ち、本文は写さない(ADR 0083 追記)
-  expect(episode.actions[1]!.transcriptUuid).toBe("4b57d6e1-77c8-4184-a5aa-6d9a00544e69");
+  expect(episode.actions[1]!.transcriptRef).toBe("4b57d6e1-77c8-4184-a5aa-6d9a00544e69");
 });
 
 it("subagent 由来の行動はフラグ付きで同じ列に並び、起動した行には task_notification の消費が合算外で付く(ADR 0083 追記 2)", () => {
@@ -71,9 +71,9 @@ it("decision は行動列内の位置を持つマーカーで、結合は tool_r
   // events 6 と 7 は文言が完全に同一で id だけ違う。文言や出現順ではなく
   // event id で結ぶので、それぞれ別の位置に着く
   expect(episode.markers.filter((m) => m.kind === "decision")).toEqual([
-    { kind: "decision", position: 2, eventId: 6, missingReason: null, transcriptUuid: "54addb84-f178-4ba2-9325-e39536b05486" },
-    { kind: "decision", position: 5, eventId: 7, missingReason: null, transcriptUuid: "dc081d87-500d-47df-a578-3cb7f8126225" },
-    { kind: "decision", position: 6, eventId: 8, missingReason: null, transcriptUuid: "23678d55-b253-4ff5-811f-35861a0a6b53" },
+    { kind: "decision", position: 2, eventId: 6, missingReason: null, transcriptRef: "54addb84-f178-4ba2-9325-e39536b05486" },
+    { kind: "decision", position: 5, eventId: 7, missingReason: null, transcriptRef: "dc081d87-500d-47df-a578-3cb7f8126225" },
+    { kind: "decision", position: 6, eventId: 8, missingReason: null, transcriptRef: "23678d55-b253-4ff5-811f-35861a0a6b53" },
   ]);
 });
 
@@ -122,7 +122,7 @@ it("advisor マーカーは助言が返った結果の行に置き、失敗し�
   });
 
   expect(episode.markers).toEqual([
-    { kind: "advisor", position: 1, eventId: null, missingReason: null, transcriptUuid: "u5" },
+    { kind: "advisor", position: 1, eventId: null, missingReason: null, transcriptRef: "u5" },
   ]);
 });
 
@@ -138,7 +138,7 @@ it("compaction 境界はマーカーになる(綴りは想定 — 実物が未�
   });
 
   expect(episode.markers).toEqual([
-    { kind: "compaction", position: 1, eventId: null, missingReason: null, transcriptUuid: "u2" },
+    { kind: "compaction", position: 1, eventId: null, missingReason: null, transcriptRef: "u2" },
   ]);
 });
 
@@ -331,10 +331,10 @@ it("memory verb の tool 結果に写った memory_pulled の event id は、dec
   });
 
   expect(episode.markers).toEqual([
-    { kind: "memory", position: 0, eventId: 6, missingReason: null, transcriptUuid: "r1" },
-    { kind: "decision", position: 2, eventId: 7, missingReason: null, transcriptUuid: "r3" },
-    { kind: "memory", position: 3, eventId: 8, missingReason: null, transcriptUuid: "r4" },
-    { kind: "memory", position: null, eventId: 9, missingReason: "unmatched", transcriptUuid: null },
+    { kind: "memory", position: 0, eventId: 6, missingReason: null, transcriptRef: "r1" },
+    { kind: "decision", position: 2, eventId: 7, missingReason: null, transcriptRef: "r3" },
+    { kind: "memory", position: 3, eventId: 8, missingReason: null, transcriptRef: "r4" },
+    { kind: "memory", position: null, eventId: 9, missingReason: "unmatched", transcriptRef: null },
   ]);
   expect(entriesReadBefore(episode, events, 7)).toEqual([]);
   expect(entriesSeenBefore(episode, events, 7)).toEqual([1, 2]);
@@ -424,15 +424,15 @@ it("Codex 経路の session は stdout の item.completed から行動列を組�
     ["mcp__tidepool__complete_task", null, false],
   ]);
   // 行の参照は item の id
-  expect(episode.actions[1]).toMatchObject({ transcriptUuid: "item_7", toolUseId: "item_7" });
+  expect(episode.actions[1]).toMatchObject({ transcriptRef: "item_7", toolUseId: "item_7" });
 });
 
 it("Codex 経路でも memory_pulled / decision_logged は tool 結果の event id の完全一致で位置を持ち、D の前の read_memory が返した id が read になる(ADR 0083 追記10)", () => {
   const episode = projectCodex();
 
   expect(episode.markers).toEqual([
-    { kind: "memory", position: 1, eventId: 500, missingReason: null, transcriptUuid: "item_7" },
-    { kind: "decision", position: 2, eventId: 501, missingReason: null, transcriptUuid: "item_8" },
+    { kind: "memory", position: 1, eventId: 500, missingReason: null, transcriptRef: "item_7" },
+    { kind: "decision", position: 2, eventId: 501, missingReason: null, transcriptRef: "item_8" },
   ]);
   expect(entriesReadBefore(episode, codexEvents(), 501)).toEqual([7]);
 });
@@ -485,11 +485,11 @@ it("skill の呼び出しは Skill の行動行ごとに名前・位置・本文
   ]);
   // subagent の呼び出しの結果は commandName を持たず、本文の合成行も親の stream に出ない(固定版の実測)
   expect(episode.skillCalls).toEqual([
-    { position: 0, name: "wsbar", transcriptUuid: "4445234f-1964-4b14-9132-bde0a466ac7f", subagent: false },
-    { position: 1, name: "dataviz", transcriptUuid: "56fae6c4-4974-43ce-9fb3-33d95f251269", subagent: false },
-    { position: 3, name: "wsbar", transcriptUuid: null, subagent: true },
-    { position: 4, name: "wsbar", transcriptUuid: "84eb1696-45a2-4d45-aee9-cb3925baaf61", subagent: false },
-    { position: 5, name: "dataviz", transcriptUuid: "69f8a696-0eac-43ee-b75d-7c8cddf3cb15", subagent: false },
+    { position: 0, name: "wsbar", transcriptRef: "4445234f-1964-4b14-9132-bde0a466ac7f", subagent: false },
+    { position: 1, name: "dataviz", transcriptRef: "56fae6c4-4974-43ce-9fb3-33d95f251269", subagent: false },
+    { position: 3, name: "wsbar", transcriptRef: null, subagent: true },
+    { position: 4, name: "wsbar", transcriptRef: "84eb1696-45a2-4d45-aee9-cb3925baaf61", subagent: false },
+    { position: 5, name: "dataviz", transcriptRef: "69f8a696-0eac-43ee-b75d-7c8cddf3cb15", subagent: false },
   ]);
 });
 
@@ -502,6 +502,26 @@ it("従った skill の本文は Base directory の見出しを除いた合成�
     ["wsbar", 3, null],
     ["wsbar", 4, "Skill /wsbar is already loaded above; instructions unchanged."],
     ["dataviz", 5, "Skill /dataviz is already loaded above; instructions unchanged."],
+  ]);
+});
+
+it("Claude の従った skill の行は出所の行動として Skill と skill の名前を持ち、本文の行の無い subagent の呼び出しも、位置を置けない行への異議の position null の行も、出所の行動は持つ(ADR 0340 決定2)", () => {
+  const rows = (anchor: Pick<EventRow, "id" | "kind">) => skillsFollowed(projectSkills(), skillSession(), anchor).map((s) => [s.position, s.tool, s.args, s.text === null]);
+
+  expect(rows({ id: 0, kind: "task_completed" })).toEqual([
+    [0, "Skill", "wsbar", false],
+    [1, "Skill", "dataviz", false],
+    [3, "Skill", "wsbar", true],
+    [4, "Skill", "wsbar", false],
+    [5, "Skill", "dataviz", false],
+  ]);
+  // マーカーの無い判断の行: position は全部 null だが、出所の行動は呼び出しの位置から引ける
+  expect(rows({ id: 999, kind: "decision_logged" })).toEqual([
+    [null, "Skill", "wsbar", false],
+    [null, "Skill", "dataviz", false],
+    [null, "Skill", "wsbar", true],
+    [null, "Skill", "wsbar", false],
+    [null, "Skill", "dataviz", false],
   ]);
 });
 
@@ -547,13 +567,13 @@ it("Codex の Episode の見た集合は spawn 記録の permitted で、従っ�
 
   expect(episode.skillsSeen).toEqual(["secret-word", "skill-creator"]);
   expect(episode.skillCalls).toEqual([
-    { position: 0, name: "secret-word", transcriptUuid: "item_1", subagent: false },
-    { position: 1, name: "secret-word", transcriptUuid: "item_3", subagent: false },
+    { position: 0, name: "secret-word", transcriptRef: "item_1", subagent: false },
+    { position: 1, name: "secret-word", transcriptRef: "item_3", subagent: false },
   ]);
-  // 本文は写さず行の参照を持ち、判事の skills_followed はその行の aggregated_output を逐語で読む
+  // 本文は写さず行の参照を持ち、判事の skills_followed の届いた文はその行の aggregated_output(ADR 0340 決定1)
   expect(skillsFollowed(episode, lines, { id: 0, kind: "task_completed" })).toEqual([
-    { name: "secret-word", position: 0, text: SECRET_WORD_BODY },
-    { name: "secret-word", position: 1, text: "---\nname:" },
+    { name: "secret-word", position: 0, tool: "command_execution", args: `/bin/bash -lc 'cat ${CODEX_WS_SKILL}'`, text: SECRET_WORD_BODY },
+    { name: "secret-word", position: 1, tool: "command_execution", args: `/bin/bash -lc "python3 -c 'print(open(\\"${CODEX_WS_SKILL}\\").read()[:9])'"`, text: "---\nname:" },
   ]);
 });
 
@@ -577,14 +597,14 @@ it("Skill の結果と組まない合成行(compaction の後の要約)と失敗
     '{"type":"user","uuid":"r2","message":{"content":[{"type":"tool_result","tool_use_id":"t2","is_error":true,"content":"Unknown skill: nope"}]}}',
   ]);
 
-  expect(episode.skillCalls).toEqual([{ position: 0, name: "wsbar", transcriptUuid: "s1", subagent: false }]);
+  expect(episode.skillCalls).toEqual([{ position: 0, name: "wsbar", transcriptRef: "s1", subagent: false }]);
 });
 
 it("本文の合成行は結果の行の直後に来たときだけその呼び出しに結ぶ —— 本文の行が来なかった呼び出しは null で、後の呼び出しの本文を取らない(ADR 0325 決定3)", () => {
   const [a1, r1] = skillCall(1, "wsbar", "unused");
   const episode = projectSkills([a1!, r1!, ...skillCall(2, "dataviz", "Chart it.")]);
 
-  expect(episode.skillCalls.map((c) => [c.name, c.transcriptUuid])).toEqual([
+  expect(episode.skillCalls.map((c) => [c.name, c.transcriptRef])).toEqual([
     ["wsbar", null],
     ["dataviz", "s2"],
   ]);
